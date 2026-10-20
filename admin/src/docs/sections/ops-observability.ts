@@ -128,6 +128,19 @@ export const dbHealthDocs: DocSection = {
       type: 'p',
       text: 'A cached figure also carries its staleness in business terms. Each query names — or has inferred from its SQL and the procedure it EXECs — the tables whose newest write decides whether the figure is still true; the stamp reads "invoices changed 4m ago — newer than this figure" (amber) or "· current" beside "Updated 3m ago". Declare the sources on the query as `[{"table": "invoices", "column": "changed"}]` when the inference picks the wrong tables.'
     },
+    { type: 'h3', text: 'TTL suggestions' },
+    {
+      type: 'p',
+      text: 'The Cache health card opens with a Suggestions list: enabled queries with a cache TTL of 30 s or less that average at least 0.5 s a run and have run at least 5 times since boot. For each it shows the 1, 5 and 15 minute options side by side — time saved per day (calls the cache would answer × average run) and the staleness window the TTL introduces ("figures up to 5 min old"). The recommended option is the shortest one that earns at least 70% of the best saving. Review opens the three options; Accept sets the query\'s cache TTL through the normal edit route, so it is recorded in the activity log like any other change. Nothing is applied automatically: every accepted TTL is a window someone agreed to. Savings are an upper bound (they assume one cache key; parameters and User Scope values are part of the key, so a varying query saves less), and a card with under 6 hours of observation says so.'
+    },
+    {
+      type: 'warn',
+      text: 'A query that may write is never offered a TTL, because a cached write silently stops writing. The query text and every procedure it EXECs (followed through nested EXECs, up to 8) are checked for INSERT / UPDATE / DELETE / MERGE / DROP / dynamic SQL and system procedures; writes into #temp tables and @table variables are ignored. A procedure whose text cannot be read counts as unsafe. Withheld queries are listed under the suggestions with the reason.'
+    },
+    {
+      type: 'p',
+      text: 'Traffic Map → Hot entities has a Cache hit column for custom-query and widget rows (hit share over the last 60 s; a query with no TTL never records a hit and reads "—").'
+    },
     { type: 'h3', text: 'Shared runs and the heavy-read gate' },
     {
       type: 'p',

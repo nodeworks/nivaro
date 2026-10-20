@@ -44,6 +44,175 @@ interface CacheStatRow {
 const ms = (v: number | null | undefined) =>
   v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`
 
+interface TtlOption {
+  ttl_seconds: number
+  hits_per_day: number
+  saved_ms_per_day: number
+  staleness: string
+}
+interface TtlSuggestion {
+  id: number
+  slug: string
+  name: string
+  current_ttl: number
+  calls_per_day: number
+  avg_exec_ms: number
+  observed_hours: number
+  low_confidence: boolean
+  options: TtlOption[]
+  recommended: TtlOption
+}
+interface WithheldQuery {
+  slug: string
+  name: string
+  reason: string
+}
+
+const ttlLabel = (s: number) => (s >= 3600 ? `${s / 3600} h` : `${Math.round(s / 60)} min`)
+const perDay = (v: number) => (v >= 60_000 ? `${Math.round(v / 60_000)} min` : ms(v))
+
+/**
+ * #2446 — an offer per slow uncached query: what each TTL would save and the
+ * staleness window it introduces, side by side. Accepting PATCHes cache_ttl
+ * through the ordinary route (an activity row like any config change).
+ */
+function TtlSuggestions({
+  suggestions,
+  withheld
+}: {
+  suggestions: TtlSuggestion[]
+  withheld: WithheldQuery[]
+}) {
+  const queryClient = useQueryClient()
+  const [openSlug, setOpenSlug] = useState<string | null>(null)
+  const [picked, setPicked] = useState<number | null>(null)
+  const apply = useMutation({
+    mutationFn: ({ id, ttl }: { id: number; ttl: number }) =>
+      api.patch(`/custom-queries/${id}`, { cache_ttl: ttl }),
+    onSuccess: (_r, v) => {
+      queryClient.invalidateQueries({ queryKey: ['custom-queries'] })
+      setOpenSlug(null)
+      toast.success(`Cache TTL set to ${ttlLabel(v.ttl)}`)
+    },
+    onError: () => toast.error('Could not set the TTL')
+  })
+  if (!suggestions.length && !withheld.length) return null
+  return (
+    <div className='border-b border-slate-100 px-5 py-3 dark:border-border' data-ttl-suggestions>
+      <div className='mb-1.5 text-[12px] font-semibold text-slate-800 dark:text-foreground'>
+        Suggestions
+        <span className='ml-2 font-normal text-slate-500 dark:text-muted-foreground'>
+          slow queries that run uncached · estimates assume every viewer shares one cached result
+        </span>
+      </div>
+      <ul className='divide-y divide-slate-100 dark:divide-border'>
+        {suggestions.map((sg) => {
+          const open = openSlug === sg.slug
+          const chosen =
+            sg.options.find((o) => o.ttl_seconds === (open ? picked : null)) ?? sg.recommended
+          return (
+            <li key={sg.slug} className='py-2' data-ttl-suggestion={sg.slug}>
+              <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+                <span className='text-[12px] font-medium text-slate-800 dark:text-foreground'>
+                  {sg.name}
+                </span>
+                <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                  {ms(sg.avg_exec_ms)} a run · ~{sg.calls_per_day.toLocaleString()} calls/day
+                  {sg.low_confidence ? ` · only ${sg.observed_hours} h observed` : ''}
+                </span>
+                <span className='text-[12px] text-slate-700 dark:text-slate-300'>
+                  Set TTL {ttlLabel(sg.recommended.ttl_seconds)} — saves ~
+                  {perDay(sg.recommended.saved_ms_per_day)}/day ·{' '}
+                  <span className='font-medium text-amber-700 dark:text-amber-400'>
+                    figures may be {sg.recommended.staleness}
+                  </span>
+                </span>
+                {!open && (
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='ml-auto h-7 text-[11.5px]'
+                    aria-label={`Review TTL suggestion for ${sg.name}`}
+                    aria-expanded={open}
+                    onClick={() => {
+                      setOpenSlug(sg.slug)
+                      setPicked(sg.recommended.ttl_seconds)
+                    }}
+                  >
+                    Review
+                  </Button>
+                )}
+              </div>
+              {open && (
+                <div className='mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-border dark:bg-background'>
+                  <div className='grid gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200 sm:grid-cols-3 dark:border-border dark:bg-border'>
+                    {sg.options.map((o) => {
+                      const on = o.ttl_seconds === chosen.ttl_seconds
+                      return (
+                        <button
+                          key={o.ttl_seconds}
+                          type='button'
+                          aria-pressed={on}
+                          onClick={() => setPicked(o.ttl_seconds)}
+                          className={cn(
+                            'bg-white px-3 py-2 text-left text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan dark:bg-card',
+                            on
+                              ? 'ring-2 ring-inset ring-nvr-cyan'
+                              : 'hover:bg-slate-50 dark:hover:bg-muted'
+                          )}
+                        >
+                          <span className='block font-semibold text-slate-800 dark:text-foreground'>
+                            {ttlLabel(o.ttl_seconds)}
+                          </span>
+                          <span className='block tabular-nums text-slate-600 dark:text-slate-300'>
+                            saves ~{perDay(o.saved_ms_per_day)}/day
+                          </span>
+                          <span className='block text-amber-700 dark:text-amber-400'>
+                            figures {o.staleness}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className='mt-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                    Everyone who opens this query sees figures up to {ttlLabel(chosen.ttl_seconds)}{' '}
+                    old. Viewers can still refresh to bypass the cache. Saved as the query's cache
+                    TTL and recorded in the activity log.
+                  </p>
+                  <div className='mt-2 flex items-center gap-2'>
+                    <Button
+                      size='sm'
+                      className='h-7 bg-nvr-cyan text-[11.5px] text-white hover:bg-nvr-cyan/90'
+                      disabled={apply.isPending}
+                      onClick={() => apply.mutate({ id: sg.id, ttl: chosen.ttl_seconds })}
+                    >
+                      {apply.isPending ? 'Saving…' : `Accept ${ttlLabel(chosen.ttl_seconds)} TTL`}
+                    </Button>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='h-7 text-[11.5px]'
+                      onClick={() => setOpenSlug(null)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {withheld.length > 0 && (
+        <p className='mt-2 text-[11px] text-slate-500 dark:text-muted-foreground'>
+          No TTL offered (may write, so it must not be cached):{' '}
+          {withheld.map((w) => `${w.name} — ${w.reason}`).join('; ')}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /**
  * What each TTL actually buys (#476): hits × average execution, per query,
  * since this API process started — and the queries that never cache but take
@@ -55,9 +224,15 @@ function CacheHealthCard() {
     queryKey: ['custom-queries', 'cache-stats'],
     queryFn: () =>
       api
-        .get<{ data: { since: string; rows: CacheStatRow[]; silent: CacheStatRow[] } }>(
-          '/custom-queries/cache-stats'
-        )
+        .get<{
+          data: {
+            since: string
+            rows: CacheStatRow[]
+            silent: CacheStatRow[]
+            suggestions?: TtlSuggestion[]
+            withheld?: WithheldQuery[]
+          }
+        }>('/custom-queries/cache-stats')
         .then((r) => r.data.data),
     refetchInterval: 30_000
   })
@@ -87,6 +262,7 @@ function CacheHealthCard() {
       </button>
       {open && (
         <div className='border-t border-slate-100 dark:border-border'>
+          <TtlSuggestions suggestions={data.suggestions ?? []} withheld={data.withheld ?? []} />
           {advised.length > 0 && (
             <ul className='space-y-1 border-b border-slate-100 px-5 py-3 dark:border-border'>
               {advised.map((r) => (

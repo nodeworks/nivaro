@@ -107,7 +107,7 @@ function tablesIn(sql: string): Set<string> {
   return out
 }
 
-async function procedureText(name: string): Promise<string | null> {
+export async function procedureText(name: string): Promise<string | null> {
   if (!IDENT.test(name)) return null
   try {
     const rows = (await db.raw(

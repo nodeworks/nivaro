@@ -1,8 +1,10 @@
 import { useTrafficMap } from '../context'
 import { fmtCount, fmtMs } from '../EventTicker'
+import type { HotRow } from '../HotEntities'
 import { Section } from '../Inspector'
 import type { TrafficModel } from '../model'
 import { canvasLayers } from '../registry/canvasLayers'
+import { hotColumns } from '../registry/hotColumns'
 import { inspectorPanels } from '../registry/inspectorPanels'
 import { register } from '../registry/registry'
 import type { Selection } from '../types'
@@ -11,7 +13,8 @@ import { inPage, liveEntityExt } from './b1-shared'
 /**
  * #1111 — cache hit ratio on custom-query and widget nodes: a ring around the node's dot whose
  * filled share is the hit ratio (last 60 s), and "saved ~N ms" per hit in the inspector (the
- * median uncached time minus the median cached time).
+ * median uncached time minus the median cached time). #2446 adds a Cache hit column to Hot
+ * entities (queries and widgets; a query with no TTL never records a hit, so it reads '—').
  */
 export const CACHE_RATIO_TAP = 'cache-ratio'
 const LANES = new Set(['queries', 'widgets'])
@@ -110,4 +113,26 @@ register(inspectorPanels, {
   order: 31,
   applies: (sel) => sel.kind === 'entity' && LANES.has(sel.id.slice(0, sel.id.indexOf('/'))),
   Component: inPage(CachePanel)
+})
+
+function HitCell({ k }: { k: string }) {
+  const { model } = useTrafficMap()
+  const f = liveCache(model, k)
+  if (!f || f.hits + f.misses === 0) return <span className='text-[var(--tm-muted)]'>—</span>
+  return (
+    <span
+      className='whitespace-nowrap'
+      data-tm-hit-rate={f.ratio}
+      data-tip={`${f.hits} hits, ${f.misses} misses (last 60 s)`}
+    >
+      {Math.round(f.ratio * 100)}%
+    </span>
+  )
+}
+const PageHitCell = inPage(HitCell)
+register(hotColumns, {
+  id: 'cache-hit-rate',
+  header: 'Cache hit',
+  align: 'right',
+  cell: (row: HotRow) => (LANES.has(row.lane) ? <PageHitCell k={row.key} /> : null)
 })
