@@ -247,7 +247,15 @@ export const typedKeyboardCoordinates: KeyboardCoordinateGetter = (event, ctx) =
   const here = stops
     .filter((x) => contains(x.r, p))
     .sort((a, b) => a.r.width * a.r.height - b.r.width * b.r.height)[0]
-  const at = stops.indexOf(here ?? nearest(stops, p) ?? stops[0])
+  // An Add panel row is no stop: its first arrow lands on the first stop
+  // (down) or the last (up), not one past the stop nearest the row.
+  const at = here
+    ? stops.indexOf(here)
+    : data.add
+      ? forward
+        ? -1
+        : stops.length
+      : stops.indexOf(nearest(stops, p) ?? stops[0])
   const next = stops[at + (forward ? 1 : -1)]
   if (!next) return ctx.currentCoordinates
   const c = center(next.r)

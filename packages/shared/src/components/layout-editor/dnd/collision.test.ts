@@ -1,8 +1,20 @@
-import type { ClientRect, CollisionDetection, DroppableContainer } from '@dnd-kit/core'
+import type {
+  ClientRect,
+  CollisionDetection,
+  DroppableContainer,
+  KeyboardCoordinateGetter
+} from '@dnd-kit/core'
 import { describe, expect, it } from 'vitest'
 import { type LayoutBundle, newGroup, newPlacement, ungroupedGroup } from '../../../lib/layout-ops'
 import { type DesignTarget, targetKey } from '../design-context'
-import { type DndNodeData, type DndRole, type DropHint, dndRole, typedCollision } from './collision'
+import {
+  type DndNodeData,
+  type DndRole,
+  type DropHint,
+  dndRole,
+  typedCollision,
+  typedKeyboardCoordinates
+} from './collision'
 
 const bundle: LayoutBundle = {
   layout: { id: 1, collection: 'orders' },
@@ -182,5 +194,37 @@ describe('typedCollision', () => {
     const g1 = { kind: 'group', key: 'g1' } as const
     expect(hit(args(t1, { x: 300, y: 700 }, undefined, [pane('t2')]))).toBeNull()
     expect(hit(args(g1, { x: 300, y: 700 }, undefined, [pane('t2')]))?.id).toBe('group:c')
+  })
+})
+
+describe('typedKeyboardCoordinates', () => {
+  // An Add panel row, left of the canvas: a drag source, never a drop target.
+  const addRow = rect(-300, 0, 240, 30)
+  const addData: DndNodeData = {
+    target: { kind: 'field', field: 'vendor', group_key: '__add__' },
+    role: { kind: 'item', zone: '__add__' },
+    add: { field: 'vendor', label: 'Vendor' }
+  }
+  function step(code: string, from: ClientRect, at: { x: number; y: number }) {
+    const a = args(A, null, from)
+    const ctx = {
+      active: { id: 'field:vendor:__add__', data: { current: addData } },
+      collisionRect: from,
+      droppableRects: a.droppableRects,
+      droppableContainers: { getEnabled: () => a.droppableContainers }
+    }
+    const event = { code, preventDefault() {} } as KeyboardEvent
+    return typedKeyboardCoordinates(event, {
+      active: 'field:vendor:__add__',
+      currentCoordinates: at,
+      context: ctx
+    } as unknown as Parameters<KeyboardCoordinateGetter>[1])
+  }
+
+  it('an Add row moves to the first stop on the first arrow down, the last on arrow up', () => {
+    // Stops in reading order: a, d, e, empty g3, empty tabs t1, t2. Field a's centre is (300, 70).
+    expect(step('ArrowDown', addRow, { x: -180, y: 15 })).toEqual({ x: 301, y: 71 })
+    // Tab t2's centre is (140, 578).
+    expect(step('ArrowUp', addRow, { x: -180, y: 15 })).toEqual({ x: 139, y: 577 })
   })
 })

@@ -183,11 +183,16 @@ const INSTRUCTIONS = {
 export function LayoutDndProvider({
   bundle,
   apply,
+  onDragActive,
   children
 }: {
   bundle: LayoutBundle | null
   /** useLayoutDraft's apply: one call per drop, one undo step. */
   apply(ops: LayoutOp[], opts?: { label: string }): void
+  /** Told when a drag starts (true) and ends or is cancelled (false). Hosts
+   *  whose own Escape handler runs before dnd-kit's (registered at drag start)
+   *  leave Escape to the drag while one is on. */
+  onDragActive?: (active: boolean) => void
   children: ReactNode
 }) {
   const [store] = useState(() => new DndStore())
@@ -251,9 +256,11 @@ export function LayoutDndProvider({
   const reset = () => {
     store.set(IDLE)
     setOverlay(null)
+    onDragActive?.(false)
   }
 
   const onDragStart = ({ active, activatorEvent }: DragStartEvent) => {
+    onDragActive?.(true)
     const d = nodeData(active.data.current)
     if (!d) return
     const key = targetKey(d.target)

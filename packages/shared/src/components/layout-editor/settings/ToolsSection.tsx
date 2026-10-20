@@ -106,7 +106,9 @@ function PreviewRoleSetting({
   useEffect(() => {
     report.current?.(roleId ? preview : null)
   }, [roleId, preview])
-  // Leaving Form settings (or the editor) ends the preview: the canvas marks go too.
+  // Unmounting stops the onPreviewRole reports (canvas marks fed by them go).
+  // A shared role (previewRoleId + onPreviewRoleChange) is not ended here:
+  // the host owns it and keeps previewing after Form settings closes.
   useEffect(() => () => report.current?.(null), [])
   return (
     <Setting

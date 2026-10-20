@@ -168,7 +168,10 @@ export function orderAfterDrop(
  * order beside the section they are dropped on; fields and widgets beside a
  * field, first in a section (its header) or last in it; header tiles beside a
  * tile. Empty when the field is already in that group or the spot takes
- * nothing.
+ * nothing. A dropped slot card always joins the page order beside the
+ * top-level card it is dropped on (never inside a section); the Add panel's
+ * click places one with slotSpot instead (after the selection's top-level
+ * card), so a click and a drop can pick different spots.
  */
 export function placeAfterDrop(
   bundle: LayoutBundle,

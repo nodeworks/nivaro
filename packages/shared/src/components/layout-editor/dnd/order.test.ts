@@ -313,9 +313,10 @@ describe('placeAfterDrop', () => {
   })
 
   it('the Ungrouped zone takes fields as group_key null', () => {
-    expect(placeAfterDrop(bundle, 'vendor', field('u1', null), 'after')).toEqual([
-      { op: 'place', field: 'vendor', group_key: null, index: 1 }
-    ])
+    const ops = placeAfterDrop(bundle, 'vendor', field('u1', null), 'after')
+    expect(ops).toEqual([{ op: 'place', field: 'vendor', group_key: null, index: 1 }])
+    // The pipeline card at group_key null is in the page order, not the zone.
+    expect(zone(applyLayoutOps(bundle, ops), null)).toEqual(['u1', 'vendor', 'u2'])
   })
 
   it('never places a field twice in one group, nor onto a container', () => {

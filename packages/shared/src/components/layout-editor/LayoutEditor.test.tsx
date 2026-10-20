@@ -116,8 +116,10 @@ let widgetsFail = false
 // Per-test layout and its parent (layout 9), when not makeBundle().
 let bundleOverride: LayoutBundle | null = null
 let parentBundle: LayoutBundle | null = null
+// Per-test answer of GET /collection-layouts/preview-as-role, when not ROLE_PREVIEW.
+let rolePreviewOverride: Record<string, unknown> | null = null
 
-const ROLE_PREVIEW = {
+const ROLE_PREVIEW: Record<string, unknown> = {
   role: { id: 'r-fin', name: 'Finance', admin_access: false },
   can_read: true,
   can_update: true,
@@ -141,7 +143,8 @@ function makeClient() {
       const method = (cmd._method ?? 'GET').toUpperCase()
       if (p === '/collection-layouts/7/bundle') return stored
       if (p === '/collection-layouts/9/bundle' && parentBundle) return parentBundle
-      if (p === '/collection-layouts/preview-as-role') return { data: ROLE_PREVIEW }
+      if (p === '/collection-layouts/preview-as-role')
+        return { data: rolePreviewOverride ?? ROLE_PREVIEW }
       if (p === '/roles')
         return {
           data: [
@@ -275,6 +278,7 @@ afterEach(() => {
   Element.prototype.getBoundingClientRect = originalRect
   bundleOverride = null
   parentBundle = null
+  rolePreviewOverride = null
 })
 
 function pointer(type: string, target: EventTarget, x: number, y: number) {
@@ -547,6 +551,47 @@ describe('LayoutEditor', () => {
     ])
   })
 
+  it('Escape during a drag in overlay mode cancels the drag, not the editor', async () => {
+    mockRects()
+    const onBack = vi.fn()
+    const { calls } = await mount({ mode: 'overlay', onBack })
+    const title = node('field:title:main')
+    title.focus()
+    key('Space', title)
+    await tick()
+    key('ArrowDown')
+    await tick()
+    expect(node('field:amount:main').getAttribute('data-drop-slot')).toBe('after')
+    key('Escape', title)
+    await tick()
+    expect(onBack).not.toHaveBeenCalled()
+    expect(node('field:amount:main').hasAttribute('data-drop-slot')).toBe(false)
+    // No drag now: Escape leaves.
+    key('Escape', title)
+    expect(onBack).toHaveBeenCalledTimes(1)
+    await tick()
+    expect(opsCalls(calls)).toEqual([])
+  })
+
+  it('a pointer drag on the canvas emits one move op', async () => {
+    mockRects()
+    const { calls } = await mount()
+    pointer('pointerdown', node('field:title:main'), 100, 70)
+    pointer('pointermove', document, 106, 72)
+    await tick()
+    // Lower half of Amount: after it.
+    pointer('pointermove', document, 100, 130)
+    await tick()
+    expect(node('field:amount:main').getAttribute('data-drop-slot')).toBe('after')
+    pointer('pointerup', document, 100, 130)
+    await settle(() => opsCalls(calls).length > 0)
+    expect(opsCalls(calls)).toEqual([
+      [{ op: 'move', from: { field: 'title', group_key: 'main' }, to_group_key: 'main', index: 1 }]
+    ])
+    // dnd-kit swallows document clicks for 50 ms after a pointer drag: let it go.
+    await act(() => new Promise((r) => setTimeout(r, 60)))
+  })
+
   it('Form settings is the real panel; a toggle saves one layout_update', async () => {
     const { calls } = await mount()
     click(document.querySelector('[data-rail-settings]'))
@@ -600,6 +645,52 @@ describe('LayoutEditor', () => {
     await settle(() => !!node('field:notes:extra'))
     expect(node('field:notes:extra')).not.toBeNull()
     expect(previewBtn()?.textContent).not.toContain('Finance')
+  })
+
+  it('Preview as role marks the fields the role cannot see or change, not only its groups', async () => {
+    const b = makeBundle()
+    bundleOverride = {
+      ...b,
+      groups: b.groups.map((g) => (g.key === 'extra' ? { ...g, hidden_for_roles: '["r-fin"]' } : g))
+    }
+    // Field permissions hide Amount and lock Title; the layout hides the Extra section.
+    rolePreviewOverride = { ...ROLE_PREVIEW, hidden_fields: ['amount'], readonly_fields: ['title'] }
+    await mount()
+    const mark = (k: string) => node(k)?.querySelector('[data-design-role-tag]')
+    expect(mark('field:amount:main')).toBeNull()
+    click(document.querySelector('[data-rail-settings]'))
+    await settle(() => !!document.querySelector('[data-setting="tool.preview_as_role"]'))
+    const roleSetting = () => document.querySelector('[data-setting="tool.preview_as_role"]')
+    const option = (label: string) =>
+      Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(
+        (o) => (o.querySelector('span')?.textContent ?? o.textContent)?.trim() === label
+      )
+    click(roleSetting()?.querySelector('[aria-label="Preview as role"]') ?? null)
+    await settle(() => !!option('Finance'))
+    click(option('Finance') ?? null)
+    await settle(() => !!mark('field:amount:main'))
+    // Hidden by permissions: still on the canvas, faint, tagged, selectable.
+    expect(node('field:amount:main').getAttribute('data-role-mark')).toBe('hidden')
+    expect(mark('field:amount:main')?.textContent).toBe('Hidden for Finance')
+    // Read-only by permissions: a lock tag, not faint.
+    expect(node('field:title:main').getAttribute('data-role-mark')).toBe('readonly')
+    expect(mark('field:title:main')?.textContent).toBe('Read-only for Finance')
+    // The section the layout hides for the role is gone.
+    expect(node('field:notes:extra')).toBeNull()
+    click(node('field:amount:main'))
+    await settle(
+      () => document.querySelector('[data-editor-inspector] h3')?.textContent === 'Amount'
+    )
+    expect(document.querySelector('[data-editor-inspector] h3')?.textContent).toBe('Amount')
+    // Preview off: no marks.
+    click(document.querySelector('[data-rail-settings]'))
+    await settle(() => !!roleSetting())
+    click(roleSetting()?.querySelector('[aria-label="Preview as role"]') ?? null)
+    await settle(() => !!option('Nobody (off)'))
+    click(option('Nobody (off)') ?? null)
+    await settle(() => !mark('field:amount:main'))
+    expect(mark('field:amount:main')).toBeNull()
+    expect(node('field:amount:main').hasAttribute('data-role-mark')).toBe(false)
   })
 
   it('what a parent layout supplies never drags; the layout’s own fields do', async () => {

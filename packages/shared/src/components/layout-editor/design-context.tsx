@@ -15,6 +15,15 @@ export interface LayoutDesign {
   /** Parent layout name when the node comes from an inherited layout, else null. */
   inheritedFrom(t: DesignTarget): string | null
   dnd: DesignDnd
+  /** "Preview as role": what that role's field permissions do to the node
+   *  (hidden: faint with a tag, still selectable; read-only: a lock tag). */
+  roleMark?(t: DesignTarget): RoleMark | null
+}
+
+export interface RoleMark {
+  kind: 'hidden' | 'readonly'
+  /** The role's name, for the tag ("Hidden for Finance"). */
+  role: string
 }
 
 /**

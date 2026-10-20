@@ -14,7 +14,7 @@ import { cn } from '../../lib/utils'
 import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
-import { bundleToActiveLayout, previewForRole } from './bundle-to-active'
+import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
 import { type DesignTarget, type LayoutDesign, targetKey } from './design-context'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { EditorCanvas } from './EditorCanvas'
@@ -27,6 +27,7 @@ import { choiceLabelsFrom, type DescribeField, type Segment } from './overview/d
 import { useInvalidateLayouts, useLayoutOverview, useOverviewFields } from './overview/overview-api'
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
+import { useRolePreview } from './settings/settings-api'
 import { type LayoutDraft, layoutDraftKeys, parseBundle, useLayoutDraft } from './useLayoutDraft'
 
 /**
@@ -158,9 +159,11 @@ export function targetExists(
 /**
  * Overlay mode behaves as a modal dialog: focus moves in on open and back to
  * whatever opened it on close; Escape leaves (onBack) unless a popover or
- * menu is open, or the key is typed into a field.
+ * menu is open, the key is typed into a field, or a drag is on (`dragging`):
+ * this handler is registered before dnd-kit's, so it would run first and
+ * close the editor mid-drag instead of cancelling the drag.
  */
-function useOverlayDialog(active: boolean, onBack: () => void) {
+function useOverlayDialog(active: boolean, onBack: () => void, dragging: { current: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const backRef = useRef(onBack)
   backRef.current = onBack
@@ -169,7 +172,7 @@ function useOverlayDialog(active: boolean, onBack: () => void) {
     const opener = document.activeElement as HTMLElement | null
     ref.current?.focus()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || isTyping(e.target)) return
+      if (e.key !== 'Escape' || e.defaultPrevented || dragging.current || isTyping(e.target)) return
       if (document.querySelector('[data-radix-popper-content-wrapper], [role="menu"]')) return
       e.preventDefault()
       backRef.current()
@@ -179,7 +182,7 @@ function useOverlayDialog(active: boolean, onBack: () => void) {
       document.removeEventListener('keydown', onKey)
       if (opener?.isConnected) opener.focus()
     }
-  }, [active])
+  }, [active, dragging])
   return ref
 }
 
@@ -214,15 +217,22 @@ function Canvas({
     () => previewForRole(canvas.active, preview.roleId, showHidden),
     [canvas.active, preview.roleId, showHidden]
   )
+  // Field permissions of the previewed role (groups it loses are dropped above).
+  const { data: rolePreview = null } = useRolePreview(collection, preview.roleId)
+  const roleMark = useMemo(
+    () => (preview.roleId ? roleMarker(rolePreview) : undefined),
+    [preview.roleId, rolePreview]
+  )
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
       onSelect,
       showHidden,
       inheritedFrom: (t) => canvas.inherited.get(targetKey(t)) ?? null,
-      dnd
+      dnd,
+      roleMark
     }),
-    [selected, onSelect, showHidden, canvas.inherited, dnd]
+    [selected, onSelect, showHidden, canvas.inherited, dnd, roleMark]
   )
   return (
     <EditorCanvas
@@ -332,7 +342,11 @@ export function LayoutEditor({
   const overlay = mode === 'overlay'
   // Where the overlay mounts: resolved from a marker where it is declared.
   const [marker, setMarker] = useState<HTMLSpanElement | null>(null)
-  const dialogRef = useOverlayDialog(overlay && marker != null, onBack)
+  const dragging = useRef(false)
+  const onDragActive = useCallback((on: boolean) => {
+    dragging.current = on
+  }, [])
+  const dialogRef = useOverlayDialog(overlay && marker != null, onBack, dragging)
 
   const onSelect = useCallback((t: DesignTarget) => {
     setSelected(t)
@@ -404,7 +418,7 @@ export function LayoutEditor({
         </div>
       )}
       {/* Drag and drop spans the whole body: Add panel rows drag onto the canvas. */}
-      <LayoutDndProvider bundle={bundle} apply={draft.apply}>
+      <LayoutDndProvider bundle={bundle} apply={draft.apply} onDragActive={onDragActive}>
         <div className='flex min-h-0 flex-1 overflow-hidden'>
           <aside className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
             <div

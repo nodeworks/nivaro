@@ -82,6 +82,44 @@ describe('DesignNode', () => {
     expect(node.textContent).toContain('from Base form')
   })
 
+  it('marks what a previewed role cannot see (faint, tagged) or change (lock tag)', () => {
+    const marks: Record<string, 'hidden' | 'readonly'> = { title: 'hidden', amount: 'readonly' }
+    const d = design({
+      roleMark: (t) =>
+        t.kind === 'field' && marks[t.field] ? { kind: marks[t.field], role: 'Finance' } : null
+    })
+    const amount: DesignTarget = { kind: 'field', field: 'amount', group_key: null }
+    const notes: DesignTarget = { kind: 'field', field: 'notes', group_key: null }
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target}>
+            <span>t</span>
+          </DesignNode>
+          <DesignNode target={amount}>
+            <span>a</span>
+          </DesignNode>
+          <DesignNode target={notes}>
+            <span>n</span>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const at = (k: string) => host.querySelector(`[data-design-target="${k}"]`) as HTMLElement
+    const tag = (k: string) => at(k).querySelector('[data-design-role-tag]')
+    expect(at('field:title:').getAttribute('data-role-mark')).toBe('hidden')
+    expect(at('field:title:').className).toContain('opacity-40')
+    expect(tag('field:title:')?.textContent).toBe('Hidden for Finance')
+    expect(at('field:amount:').getAttribute('data-role-mark')).toBe('readonly')
+    expect(at('field:amount:').className).not.toContain('opacity-40')
+    expect(tag('field:amount:')?.textContent).toBe('Read-only for Finance')
+    expect(at('field:notes:').hasAttribute('data-role-mark')).toBe(false)
+    expect(tag('field:notes:')).toBeNull()
+    // Still selectable.
+    act(() => at('field:title:').click())
+    expect(d.onSelect).toHaveBeenCalledWith(target)
+  })
+
   it('shows the drop line without changing the node size', () => {
     const d = design({
       dnd: {

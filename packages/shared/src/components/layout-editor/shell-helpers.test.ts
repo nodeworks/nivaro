@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { type LayoutBundle, newGroup, newPlacement, ungroupedGroup } from '../../lib/layout-ops'
 import { fieldSpot, newGroupKey, sectionOp, slotSpot } from './add-target'
-import { bundleToActiveLayout, previewForRole } from './bundle-to-active'
+import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
 
 function bundle(): LayoutBundle {
   return {
@@ -190,5 +190,38 @@ describe('bundleToActiveLayout parent merge edge cases (as /active)', () => {
     // which the editor's first save does.
     const { active } = bundleToActiveLayout(bundle(), parent())
     expect(active.ungrouped_sort).toBe(2)
+  })
+})
+
+describe('roleMarker', () => {
+  const base = {
+    role: { id: 'r', name: 'Finance', admin_access: false },
+    can_read: true,
+    can_update: true,
+    layout: null,
+    hidden_fields: ['amount'],
+    readonly_fields: ['title'],
+    record_conditional_layouts: [],
+    note: null
+  }
+  const f = (field: string) => ({ kind: 'field' as const, field, group_key: 'main' })
+
+  it('marks hidden and read-only fields and header tiles; never slots or widgets', () => {
+    const mark = roleMarker(base)
+    expect(mark?.(f('amount'))).toEqual({ kind: 'hidden', role: 'Finance' })
+    expect(mark?.({ kind: 'header', field: 'title' })).toEqual({
+      kind: 'readonly',
+      role: 'Finance'
+    })
+    expect(mark?.(f('notes'))).toBeNull()
+    expect(mark?.({ kind: 'slot', field: '__pipeline__', group_key: null })).toBeNull()
+  })
+
+  it('a role that cannot edit sees every visible field read-only; admins and no preview mark nothing', () => {
+    const mark = roleMarker({ ...base, can_update: false, readonly_fields: [] })
+    expect(mark?.(f('notes'))).toEqual({ kind: 'readonly', role: 'Finance' })
+    expect(mark?.(f('amount'))).toEqual({ kind: 'hidden', role: 'Finance' })
+    expect(roleMarker({ ...base, role: { ...base.role, admin_access: true } })).toBeUndefined()
+    expect(roleMarker(null)).toBeUndefined()
   })
 })
