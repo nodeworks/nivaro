@@ -15,7 +15,7 @@ RUN corepack enable pnpm
 # So both install layers (the production one is ~600 MB) were rebuilt on
 # every release and every deployment downloaded them again, although the
 # dependencies had not changed. The installs read dependencies, never the
-# version: they get these copies, whose content changes only when a
+# version: they get trimmed copies (below), whose content changes only when a
 # dependency does. The real files are copied in after the install.
 FROM base AS manifests
 WORKDIR /src
@@ -27,12 +27,24 @@ COPY packages/extension-kit/package.json ./packages/extension-kit/
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/react/package.json ./packages/react/
 COPY packages/mcp/package.json ./packages/mcp/
+# Only what the installs read is kept — dependency maps, pnpm settings, bins
+# and lifecycle hooks; every other field (version, scripts, exports,
+# sideEffects, files…) is dropped, so editing one of those no longer rebuilds
+# the install layers (0.2.72: an added npm script + a sideEffects list
+# missed 17 of 24 cached steps and re-exported the whole cache).
 RUN node -e "const fs = require('fs'); \
+  const KEEP = ['name', 'private', 'packageManager', 'workspaces', 'pnpm', 'dependencies', 'devDependencies', \
+    'peerDependencies', 'peerDependenciesMeta', 'optionalDependencies', 'dependenciesMeta', 'bundleDependencies', \
+    'bundledDependencies', 'bin', 'engines', 'os', 'cpu']; \
+  const HOOKS = ['preinstall', 'install', 'postinstall', 'prepare']; \
   for (const f of ['package.json', 'api/package.json', 'admin/package.json', 'packages/sdk/package.json', \
     'packages/extension-kit/package.json', 'packages/shared/package.json', 'packages/react/package.json', \
     'packages/mcp/package.json']) { \
-    const j = JSON.parse(fs.readFileSync(f, 'utf8')); j.version = '0.0.0'; \
-    fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\\n') }"
+    const j = JSON.parse(fs.readFileSync(f, 'utf8')); const out = { version: '0.0.0' }; \
+    for (const k of KEEP) if (j[k] !== undefined) out[k] = j[k]; \
+    const hooks = Object.fromEntries(Object.entries(j.scripts || {}).filter(([k]) => HOOKS.includes(k))); \
+    if (Object.keys(hooks).length) out.scripts = hooks; \
+    fs.writeFileSync(f, JSON.stringify(out, null, 2) + '\\n') }"
 
 # ─── Stage 2: install all deps ───────────────────────────────────────────────
 FROM base AS deps

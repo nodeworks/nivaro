@@ -52,11 +52,14 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   // #236 — in-process caches (PER REPLICA — the UI says so).
   app.get('/caches', async (_req, reply) => {
     const { metadataL2Stats } = await import('../db/metadata-l2.js')
+    const { permissionCacheStats } = await import('../services/permission-cache.js')
     return reply.send({
       data: listCaches(),
       epoch: configEpochState(),
       // #2441 — the shared metadata level is cluster-wide (Redis), unlike the caches above.
-      metadata_l2: metadataL2Stats()
+      metadata_l2: metadataL2Stats(),
+      // #2442 — compiled permission cache (PERMISSION_CACHE=on), per replica: hits, misses, resets.
+      permission_cache: permissionCacheStats()
     })
   })
   // Clears here at once and moves the configuration epoch, so every other
