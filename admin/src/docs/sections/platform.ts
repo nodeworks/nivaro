@@ -309,7 +309,7 @@ export const smsConfig: DocSection = {
     },
     {
       type: 'p',
-      text: 'Settings → Microsoft carries the same protection for the other two channels. Browser push: a push to anyone whose email is not on the allowlist (emails or @domains) goes to the test person\'s browsers instead, titled `[TEST — was: <email>]`; with no test person it is dropped, and a redirected chat push loses its reply token. Teams: every card goes to the test channel\'s incoming webhook instead, titled `[TEST — was: <channel host>]`; with no test webhook it is dropped. `PUSH_TEST_MODE` / `PUSH_TEST_RECIPIENT` and `TEAMS_TEST_MODE` / `TEAMS_TEST_WEBHOOK_URL` force the mode on from the environment, like the mail and SMS variables.'
+      text: "Settings → Microsoft carries the same protection for the other two channels. Browser push: a push to anyone whose email is not on the allowlist (emails or @domains) goes to the test person's browsers instead, titled `[TEST — was: <email>]`; with no test person it is dropped, and a redirected chat push loses its reply token. Teams: every card goes to the test channel's incoming webhook instead, titled `[TEST — was: <channel host>]`; with no test webhook it is dropped. `PUSH_TEST_MODE` / `PUSH_TEST_RECIPIENT` and `TEAMS_TEST_MODE` / `TEAMS_TEST_WEBHOOK_URL` force the mode on from the environment, like the mail and SMS variables."
     },
     { type: 'h3', text: 'API' },
     {
@@ -694,32 +694,40 @@ export const collectionLayouts: DocSection = {
     { type: 'h1', id: 'collection-layouts', text: 'Collection Layouts' },
     {
       type: 'p',
-      text: 'Each registered collection can have multiple named layouts. A layout defines how fields are grouped and ordered in the item editor. One layout is marked active and used by ItemEdit automatically; others can be referenced by name via the SDK.'
+      text: 'Each registered collection can have multiple named layouts. A layout defines how fields are grouped and ordered in the item editor. One grouped layout is the default; others are picked by record rules or roles, opened by their link name (`?layout=<slug>`), or serve other views (summary, detail, PDF, addendum, grid columns).'
     },
     { type: 'h3', text: 'Managing layouts' },
     {
       type: 'p',
-      text: 'Open Data Model → select a collection → Layout tab. The left panel lists layouts for the collection. Click a layout to edit its groups and field assignments. The active layout (shown with a cyan dot) is what the item editor displays. Double-click a layout name to rename it inline.'
+      text: 'Open Data Model → select a collection → Layout tab. It opens on "Which form does each record get?" — every layout of the collection in the order the server checks them, with the conditions in plain words — and opens a layout in the layout editor from there. Admins can also edit a record\'s form from the record page with Edit layout. See Layout Editor for the overview, the editor, saving and history.'
     },
     {
       type: 'table',
       head: ['Action', 'How'],
       rows: [
-        ['Create layout', 'Click "+ Add layout" at the bottom of the left panel'],
-        ['Set active', 'Open a layout → click "Set active" in the toolbar'],
-        ['Clone layout', 'Open a layout → click "Clone" to duplicate groups + field assignments'],
-        ['Delete layout', 'Open a layout → click "Delete" (blocked if it is the only layout)'],
-        ['Rename layout', 'Double-click the layout name in the left panel']
+        [
+          'Create layout',
+          'Overview → New form (pick the kind up front); Create first form when there is none'
+        ],
+        ['Make default', 'Overview → row menu → Make default'],
+        ['Duplicate layout', 'Overview → row menu → Duplicate (or Duplicate as summary)'],
+        ['Delete layout', 'Overview → row menu → Delete (lists references first; history is kept)'],
+        ['Rename layout', 'Overview → row menu → Rename']
       ]
     },
     { type: 'h3', text: 'API' },
     {
       type: 'pre',
-      code: `GET  /api/collection-layouts?collection=articles
-POST /api/collection-layouts                    { collection, name }
-PATCH /api/collection-layouts/:id               { name?, sort? }
+      code: `GET  /api/collection-layouts?collection=articles[&layout_type=grouped]
+GET  /api/collection-layouts/active?collection=articles[&item=42|&slug=x]
+GET  /api/collection-layouts/overview?collection=articles     (admin)
+GET  /api/collection-layouts/explain?collection=articles&item=42[&role_id=]   (admin)
+POST /api/collection-layouts                    { collection, name, layout_type?, slug?, seed_fields? }
+PATCH /api/collection-layouts/:id               { any layout setting }
 POST /api/collection-layouts/:id/activate
-POST /api/collection-layouts/:id/clone          { name }
+POST /api/collection-layouts/:id/clone          { name, slug?, layout_type? }
+GET  /api/collection-layouts/:id/bundle         (admin) → { layout, groups, placements, rev }
+POST /api/collection-layouts/:id/ops            (admin) { ops, base_rev, note? }
 GET  /api/collection-layouts/:id/assignments
 PUT  /api/collection-layouts/:id/assignments    { assignments: [{field, group_key, sort}] }
 DELETE /api/collection-layouts/:id`
@@ -779,7 +787,7 @@ export const layoutQuickPicker: DocSection = {
     { type: 'h1', id: 'layout-quick-picker', text: 'Quick Picker — guided related-field entry' },
     {
       type: 'p',
-      text: 'A layout can name an ordered list of relation fields (M2O or M2M) that form its dependency chain — Funding Year → Zone → Region → Project Type → Project → Sub Type. The quick picker walks that chain one step at a time in a compact popover: each slide shows only the options still valid given the earlier picks (the same cascade filters the form\'s pickers use), a sole remaining option is picked automatically, short lists render as chips and long ones as a searchable list. Back / Next move between slides and the track above shows every step with its chosen value; click any step to revisit it.'
+      text: "A layout can name an ordered list of relation fields (M2O or M2M) that form its dependency chain — Funding Year → Zone → Region → Project Type → Project → Sub Type. The quick picker walks that chain one step at a time in a compact popover: each slide shows only the options still valid given the earlier picks (the same cascade filters the form's pickers use), a sole remaining option is picked automatically, short lists render as chips and long ones as a searchable list. Back / Next move between slides and the track above shows every step with its chosen value; click any step to revisit it."
     },
     { type: 'h3', text: 'Where it appears' },
     {
@@ -796,7 +804,7 @@ export const layoutQuickPicker: DocSection = {
         ],
         [
           'Headless hosts (@nivaro/react)',
-          'QuickPickerDialog (anchorEl → popover, otherwise a dialog) + encodePrefill / decodePrefill for the handoff; useQuickPickerSteps reads a layout\'s steps.'
+          "QuickPickerDialog (anchorEl → popover, otherwise a dialog) + encodePrefill / decodePrefill for the handoff; useQuickPickerSteps reads a layout's steps."
         ]
       ]
     },
@@ -838,10 +846,7 @@ export const layoutSummaryPanel: DocSection = {
           'summary_enabled',
           'Enables the summary sidebar for the layout and shows the Summary button on ItemEdit.'
         ],
-        [
-          'summary_show_all',
-          'Includes fields with empty values in the summary; off by default (only populated fields are listed).'
-        ]
+        ['summary_hide_empty', 'Leaves fields with no value out of the summary.']
       ]
     },
     {

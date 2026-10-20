@@ -9,6 +9,7 @@ import {
   ItemEditAuthContext,
   ItemEditForm,
   itemActionChoiceStep,
+  layoutGrantedTools,
   NavigationContext,
   NivaroProvider,
   usePublishAskContext
@@ -559,8 +560,10 @@ export function ItemEditPage() {
   const toggleExclusion = useMutation({
     mutationFn: () =>
       isExcluded
-        ? api.delete('/picker-exclusions', { data: { collection, item_id: id } })
-        : api.post('/picker-exclusions', { collection, item_id: id }),
+        ? api.delete('/picker-exclusions', {
+            data: { collection, item_id: id, layout: layoutSlug ?? null }
+          })
+        : api.post('/picker-exclusions', { collection, item_id: id, layout: layoutSlug ?? null }),
     onSuccess: () => {
       refetchExclusion()
       toast.success(isExcluded ? 'Record re-enabled in pickers' : 'Record excluded from pickers')
@@ -657,8 +660,9 @@ export function ItemEditPage() {
     void queryClient.invalidateQueries({ queryKey: ['layout-meta'] })
   }
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
-  const canSchedule = !!user?.is_admin || !!layoutMeta?.allow_schedule
-  const canDisablePickers = !!user?.is_admin || !!layoutMeta?.allow_disable_pickers
+  const granted = layoutGrantedTools(layoutMeta, !!user?.is_admin)
+  const canSchedule = granted.schedule
+  const canDisablePickers = granted.disablePickers
   const displayName = colMeta?.display_name ?? titleCase(collection ?? '')
   const allFields: CMSField[] = colMeta?.fields ?? []
   const itemStatus = (itemData as Record<string, unknown> | undefined)?._status as

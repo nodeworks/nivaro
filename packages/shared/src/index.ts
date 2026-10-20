@@ -245,6 +245,10 @@ export type { QuickPickerDialogProps } from './components/item-edit/QuickPickerD
 export { QuickPickerDialog, useQuickPickerSteps } from './components/item-edit/QuickPickerDialog'
 export { RecordChatActions } from './components/item-edit/RecordChatActions'
 export {
+  PickerExclusionToggle,
+  ScheduleChangeButton
+} from './components/item-edit/RecordGrantTools'
+export {
   RecordOutboxBanner,
   RecordOutboxHost,
   useRecordOutbox,
@@ -258,6 +262,7 @@ export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { LiveRowMark } from './components/LiveRowMark'
+export * from './components/layout-editor'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
@@ -547,6 +552,7 @@ export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-c
 export { integrationChipSummary } from './lib/integration-chip'
 export { dotsForRecord } from './lib/integration-dots'
 export * from './lib/jobs-tray'
+export { type LayoutGrantFlags, layoutGrantedTools } from './lib/layout-grants'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export * from './lib/live'
@@ -769,4 +775,3 @@ export { applyValidationRule } from './lib/validation-rules'
 export { canViewAs, registerViewAsOpener, type ViewAsOpener, viewAs } from './lib/view-as'
 export * from './lib/write-formula'
 export * from './types'
-export * from './components/layout-editor'

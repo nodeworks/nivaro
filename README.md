@@ -64,6 +64,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Polymorphic Relations (M2A) Builder** — relate a field to items from multiple collections via a junction table
 - **Virtual Collections** — SQL-view-backed read-only collections; validate SQL and query via API
 - **Collection Layouts** — multiple named field-group layouts per collection; one active layout drives ItemEdit, others accessible via SDK
+- **Layout Editor** — "which form does each record get?" overview in plain words, Test a record, and a drag-and-drop editor on the real record form (inspector, form settings, autosave with undo, history, conflict-safe saves); admins can also edit a record's form in place from any record page
 - **Field Groups / Tabs** — organise fields into collapsible sections or named tabs in the item editor
 - **Repeater Fields** — ordered arrays of structured sub-objects stored as JSON, with schema-driven sub-forms
 - **Rich Text / WYSIWYG Field Type** — ProseMirror/TipTap portable JSON content stored in standard text columns

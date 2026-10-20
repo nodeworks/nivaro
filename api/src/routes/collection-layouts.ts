@@ -76,7 +76,9 @@ export async function nextFreeSlug(
 /** Layout settings a clone carries over — every column except identity
  *  (id/collection/name/slug/sort/is_active/created_at) and the type (the
  *  clone request may change it). parent_layout_id is carried: a copy of a
- *  child inherits from the same parent, so it renders the same form. */
+ *  child inherits from the same parent, so it renders the same form.
+ *  Retired settings nothing reads (summary_show_all, allow_clone,
+ *  addendum_lock_fields) are not copied: their columns stay, unwritten. */
 const CLONE_CARRIED_COLUMNS = [
   'parent_layout_id',
   'disable_comments',
@@ -84,10 +86,8 @@ const CLONE_CARRIED_COLUMNS = [
   'tab_mode',
   'validate_before_next',
   'summary_enabled',
-  'summary_show_all',
   'ai_enabled',
   'conditions',
-  'allow_clone',
   'allow_schedule',
   'allow_disable_pickers',
   'pdf_theme',
@@ -109,7 +109,6 @@ const CLONE_CARRIED_COLUMNS = [
   'workflow_template_id',
   'single_active_addendum',
   'addendum_default_view',
-  'addendum_lock_fields',
   'record_conditions',
   'default_values',
   'create_label',
