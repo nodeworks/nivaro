@@ -1,3 +1,6 @@
+export { dndRole, typedCollision } from './dnd/collision'
+export { LayoutDndProvider, NO_DND, useLayoutDnd } from './dnd/LayoutDndProvider'
+export { dropLabel, orderAfterDrop } from './dnd/order'
 export {
   type LayoutEditorHost,
   LayoutEditorHostContext,

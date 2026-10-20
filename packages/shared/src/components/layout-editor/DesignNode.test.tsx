@@ -81,4 +81,93 @@ describe('DesignNode', () => {
     expect(node.hasAttribute('data-draggable')).toBe(false)
     expect(node.textContent).toContain('from Base form')
   })
+
+  it('shows the drop line without changing the node size', () => {
+    const d = design({
+      dnd: {
+        draggableProps: () => ({}),
+        isDragging: () => false,
+        dropSlot: () => 'before',
+        dropIndicator: () => ({ top: -6, left: 0, width: 120, height: 3 })
+      }
+    })
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target} asChild>
+            <div style={{ gridColumn: 'span 6' }}>cell</div>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    expect(node.className).not.toMatch(/border-[tb]-2/)
+    expect(node.style.gridColumn).toBe('span 6')
+    const line = node.querySelector('[data-design-drop-indicator]') as HTMLElement
+    expect(line.getAttribute('data-design-drop-indicator')).toBe('before')
+    expect(line.className).toContain('absolute')
+    expect(line.style.width).toBe('120px')
+  })
+
+  it("keeps the child's and the dnd handlers, classes and refs", () => {
+    const childClick = vi.fn()
+    const childRef = vi.fn()
+    const dndKey = vi.fn()
+    const dndRef = vi.fn()
+    const d = design({
+      dnd: {
+        draggableProps: () => ({ ref: dndRef, onKeyDown: dndKey, tabIndex: 0 }),
+        isDragging: () => false,
+        dropSlot: () => null
+      }
+    })
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target} asChild pass>
+            <button type='button' className='own' ref={childRef} onClick={childClick}>
+              tab
+            </button>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    expect(node.className).toContain('own')
+    expect(node.className).toContain('cursor-pointer')
+    expect(childRef).toHaveBeenCalledWith(node)
+    expect(dndRef).toHaveBeenCalledWith(node)
+    act(() => node.click())
+    expect(d.onSelect).toHaveBeenCalledWith(target)
+    expect(childClick).toHaveBeenCalled()
+    act(() => {
+      node.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+    })
+    expect(dndKey).toHaveBeenCalled()
+  })
+
+  it('registers a folded header copy as not draggable', () => {
+    const draggableProps = vi.fn((_t: DesignTarget, o?: { disabled?: boolean }) =>
+      o?.disabled ? {} : { 'data-draggable': 'yes' }
+    )
+    const d = design({ dnd: { draggableProps, isDragging: () => false, dropSlot: () => 'after' } })
+    const tile: DesignTarget = { kind: 'header', field: 'amount' }
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={tile}>
+            <span>row</span>
+          </DesignNode>
+          <DesignNode target={tile} data-design-copy=''>
+            <span>copy</span>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const [row, copy] = Array.from(host.querySelectorAll('[data-design-target]'))
+    expect(row.getAttribute('data-draggable')).toBe('yes')
+    expect(copy.hasAttribute('data-draggable')).toBe(false)
+    expect(copy.querySelector('[data-design-drop-indicator]')).toBeNull()
+    expect(draggableProps).toHaveBeenCalledWith(tile, { disabled: true })
+  })
 })

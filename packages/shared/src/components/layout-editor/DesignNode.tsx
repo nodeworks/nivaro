@@ -1,15 +1,64 @@
 import {
+  type CSSProperties,
   cloneElement,
   isValidElement,
   type MouseEvent,
   type ReactElement,
-  type ReactNode
+  type ReactNode,
+  type Ref
 } from 'react'
 import { cn } from '../../lib/utils'
 import type { DesignTarget, LayoutDesign } from './design-context'
 import { targetKey, useLayoutDesign } from './design-context'
 
-type ChildProps = { className?: string; children?: ReactNode }
+type ChildProps = {
+  className?: string
+  style?: CSSProperties
+  ref?: Ref<unknown>
+  children?: ReactNode
+}
+type Props = Record<string, unknown>
+
+const assignRef = (ref: unknown, el: unknown) => {
+  if (typeof ref === 'function') ref(el)
+  else if (ref && typeof ref === 'object') (ref as { current: unknown }).current = el
+}
+
+/**
+ * Merge prop sets left to right: classes join, styles merge, refs and
+ * handlers (`on…`) both run — so the dnd props, the shell's own and the
+ * child's own (asChild) never override one another.
+ */
+function mergeProps(...sets: Props[]): Props {
+  const out: Props = {}
+  for (const set of sets) {
+    for (const [k, v] of Object.entries(set)) {
+      const cur = out[k]
+      if (v === undefined) continue
+      if (cur === undefined) out[k] = v
+      else if (k === 'className') out[k] = `${cur} ${v}`
+      else if (k === 'style') out[k] = { ...(cur as object), ...(v as object) }
+      else if (k === 'ref')
+        out[k] = (el: unknown) => {
+          assignRef(cur, el)
+          assignRef(v, el)
+        }
+      else if (/^on[A-Z]/.test(k) && typeof cur === 'function' && typeof v === 'function')
+        out[k] = (...a: unknown[]) => {
+          ;(cur as (...x: unknown[]) => void)(...a)
+          ;(v as (...x: unknown[]) => void)(...a)
+        }
+      else out[k] = v
+    }
+  }
+  return out
+}
+
+// Without a provider-measured spot: a full-width line just above / below.
+const FALLBACK_INDICATOR: Record<'before' | 'after', CSSProperties> = {
+  before: { top: -5, left: 0, right: 0, height: 3 },
+  after: { bottom: -5, left: 0, right: 0, height: 3 }
+}
 
 export interface DesignNodeOptions {
   /** Inline content (inside a p/span): the shell is a span, not a div. */
@@ -41,9 +90,14 @@ export function DesignNode({
   const key = targetKey(target)
   const selected = design.selected != null && targetKey(design.selected) === key
   const parent = design.inheritedFrom(target)
+  // The folded copy of a header tile (HeaderTiles) selects but never drags:
+  // one draggable per target.
+  const copy = rest['data-design-copy'] !== undefined
+  const locked = !!parent || copy
+  const dndProps = design.dnd.draggableProps(target, locked ? { disabled: true } : undefined)
+  const dragProps = (locked ? {} : dndProps) as Props
   const dragging = design.dnd.isDragging(target)
-  const slot = design.dnd.dropSlot(target)
-  const dragProps = parent ? {} : design.dnd.draggableProps(target)
+  const slot = locked ? null : design.dnd.dropSlot(target)
 
   const child = asChild && isValidElement(children) ? (children as ReactElement<ChildProps>) : null
   const childCls = child?.props.className ?? ''
@@ -57,9 +111,8 @@ export function DesignNode({
     selected
       ? 'outline outline-2 outline-nvr-cyan'
       : 'hover:outline hover:outline-1 hover:outline-slate-300 dark:hover:outline-slate-600',
-    dragging && 'opacity-40',
-    slot === 'before' && 'border-t-2 border-nvr-cyan',
-    slot === 'after' && 'border-b-2 border-nvr-cyan'
+    'focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan',
+    dragging && 'opacity-40'
   )
 
   // Capture phase, so nothing inside (inputs, buttons, links) acts on the
@@ -75,12 +128,12 @@ export function DesignNode({
     e.preventDefault()
     e.stopPropagation()
   }
-  const props = {
-    ...rest,
-    ...dragProps,
+  const own: Props = {
     'data-design-target': key,
     'data-selected': selected ? 'true' : undefined,
     'data-design-pass': pass ? '' : undefined,
+    'data-drop-slot': slot ?? undefined,
+    className: cls,
     onClickCapture
   }
   const badge = parent ? (
@@ -88,26 +141,40 @@ export function DesignNode({
       from {parent}
     </span>
   ) : null
+  // The insertion line: absolutely placed inside the node, so showing it
+  // never moves anything (a border would grow the node and make the drop
+  // target jitter under the pointer).
+  const indicator = slot ? (
+    <span
+      aria-hidden
+      data-design-drop-indicator={slot}
+      className='pointer-events-none absolute z-30 rounded-full bg-nvr-cyan shadow-[0_0_0_2px_#fff] dark:shadow-[0_0_0_2px_#0f172a]'
+      style={design.dnd.dropIndicator?.(target) ?? FALLBACK_INDICATOR[slot]}
+    />
+  ) : null
 
   if (child) {
+    const { children: inner, ...childOwn } = child.props as Props & { children?: ReactNode }
     return cloneElement(
       child,
-      // Plain concatenation: the child's own classes are never merged away.
-      { ...props, className: [childCls, cls].filter(Boolean).join(' ') } as ChildProps,
-      badge ? (
+      // The child's own classes, style, ref and handlers are kept and merged.
+      mergeProps(childOwn, rest as Props, dragProps, own) as ChildProps,
+      badge || indicator ? (
         <>
           {badge}
-          {child.props.children}
+          {indicator}
+          {inner}
         </>
       ) : (
-        child.props.children
+        inner
       )
     )
   }
   const Tag = inline ? 'span' : 'div'
   return (
-    <Tag {...props} className={cls}>
+    <Tag {...mergeProps(rest as Props, dragProps, own)}>
       {badge}
+      {indicator}
       {children}
     </Tag>
   )
