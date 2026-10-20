@@ -12,9 +12,14 @@ import { api } from '@/lib/api'
 
 export const CLASSIC_READ_ONLY_MESSAGE = 'Read-only — use the new editor'
 
-/** Writes the rest of the page keeps making while the classic view is open — never configuration. */
-const BACKGROUND_WRITES =
-  /^\/(notifications(\/|$)|presence(\/|$)|rum(\/|$)|record-views(\/|$)|chat\/|users\/cards$|items\/batch-read$|field-rules\/(evaluate|explain)$)/
+/**
+ * The configuration the classic Layouts tab writes. A deny-list, not an
+ * allow-list: the page around it (sign-out, workspace switch, favorites,
+ * header actions) keeps writing and must keep working. The DOM guards are the
+ * primary layer; this catches what slips past them.
+ */
+const CONFIG_WRITES =
+  /^\/(collection-layouts|field-groups|field-config|fields|collections|data-model|widgets-internal|custom-actions|attribute-definitions|ai-settings|ai-design|ai-explain|item-locks\/config|draft-publish|collection-snapshots)(\/|$)/
 
 /** Whether a request may go out while the classic layout editor is open. */
 export function classicAllows(method: string | undefined, url: string | undefined): boolean {
@@ -22,7 +27,7 @@ export function classicAllows(method: string | undefined, url: string | undefine
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return true
   const path = (url ?? '').split('?')[0].replace(/^(https?:\/\/[^/]+)?\/api(?=\/)/, '')
   if (isDesignAllowedRequest({ _method: m, _path: path })) return true
-  return BACKGROUND_WRITES.test(path)
+  return !CONFIG_WRITES.test(path)
 }
 
 /** Refuse every configuration write on `instance`; returns the undo. */

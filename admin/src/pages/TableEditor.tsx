@@ -26047,7 +26047,9 @@ export function TableEditorPage() {
     if (layoutParam) setTab('groups')
   }, [layoutParam, setTab])
   const editorOpen =
-    tab === 'groups' && !!searchParams.get('layout') && searchParams.get('classic') == null
+    tab === 'groups' &&
+    /^\d+$/.test(searchParams.get('layout') ?? '') &&
+    searchParams.get('classic') == null
   const { user } = useAuth()
   const isAdmin = (user as { is_admin?: boolean } | null)?.is_admin ?? false
   const [showDrop, setShowDrop] = useState(false)

@@ -642,8 +642,17 @@ export function ItemEditPage() {
   const closeLayoutEditor = () => {
     setEditingLayoutId(null)
     // The form re-reads what it renders from: layouts, read/file views, field settings.
-    for (const key of ['active-layout', 'summary-layout', 'file-layouts', 'field-config'])
+    for (const key of [
+      'active-layout',
+      'summary-layout',
+      'file-layouts',
+      'field-config',
+      'drilldown-layout',
+      'addendum-layout'
+    ])
       void queryClient.invalidateQueries({ queryKey: [key, collection] })
+    // Keyed by layout id, not collection.
+    void queryClient.invalidateQueries({ queryKey: ['layout-meta'] })
   }
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
   const canSchedule = !!user?.is_admin || !!layoutMeta?.allow_schedule
@@ -1064,13 +1073,28 @@ export function ItemEditPage() {
                       <Button
                         variant='outline'
                         size='sm'
-                        aria-pressed={editingLayoutId != null}
                         onClick={() => setEditingLayoutId(editableLayoutId)}
                         data-tip='Edit the layout this record opens with'
                         className='rounded-none -ml-px first:ml-0'
                       >
                         <LayoutTemplate className='mr-1.5 h-3.5 w-3.5' />
                         Edit layout
+                      </Button>
+                    )}
+                    {user?.is_admin && activeLayoutData && !activeLayoutData.layout && (
+                      <Button
+                        asChild
+                        variant='outline'
+                        size='sm'
+                        className='rounded-none -ml-px first:ml-0'
+                      >
+                        <Link
+                          to={`/data-model/${collection}?tab=groups`}
+                          data-tip='No layout yet — create the first form'
+                        >
+                          <LayoutTemplate className='mr-1.5 h-3.5 w-3.5' />
+                          Edit layout
+                        </Link>
                       </Button>
                     )}
                     {id && !isNew && collection && (

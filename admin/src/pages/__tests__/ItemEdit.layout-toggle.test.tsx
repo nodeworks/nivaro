@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   user: null as { id: string; is_admin: boolean } | null,
   chunkLoads: 0,
+  noLayout: false,
   requests: [] as Array<{ method: string; url: string }>
 }))
 
@@ -67,7 +68,13 @@ function answer(config: AxiosRequestConfig): unknown {
   const url = String(config.url ?? '').split('?')[0]
   const params = (config.params ?? {}) as Record<string, unknown>
   if (url === '/collection-layouts/active')
-    return { data: { layout: { id: 7, name: 'Order form' }, groups: [], assignments: [] } }
+    return {
+      data: {
+        layout: state.noLayout ? null : { id: 7, name: 'Order form' },
+        groups: [],
+        assignments: []
+      }
+    }
   if (url === '/collection-layouts' && !params.layout_type) return { data: LAYOUTS }
   if (url === '/collections/orders') return { data: { display_name: 'Orders', fields: [] } }
   if (url.startsWith('/field-groups')) return { data: [] }
@@ -91,7 +98,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 import { NivaroProvider } from '@nivaro/shared'
 import { api } from '@/lib/api'
-import { ItemEditPage } from '@/pages/ItemEdit'
 import { ClassicLayoutsView } from '@/pages/TableEditor'
 
 // jsdom lacks what Radix and the editors measure with.
@@ -117,7 +123,7 @@ window.matchMedia ??= ((q: string) => ({
   dispatchEvent: () => false
 })) as typeof window.matchMedia
 
-function renderWith(ui: React.ReactNode) {
+function renderWith(ui: React.ReactNode, Provider: typeof NivaroProvider = NivaroProvider) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   // AppLayout's provider in the app; the classic tab's shared pickers read it.
   const client = {
@@ -129,24 +135,32 @@ function renderWith(ui: React.ReactNode) {
   }
   return render(
     <QueryClientProvider client={qc}>
-      <NivaroProvider client={client as never}>
+      <Provider client={client as never}>
         <MemoryRouter initialEntries={['/collections/orders/5']}>{ui}</MemoryRouter>
-      </NivaroProvider>
+      </Provider>
     </QueryClientProvider>
   )
 }
 
 const writes = () => state.requests.filter((r) => r.method !== 'GET')
 
-beforeEach(() => {
+// A fresh module registry per test re-runs the lazy chunk's mock factory, so
+// the load count belongs to the test, not to the order the tests run in.
+let ItemEditPage: typeof import('@/pages/ItemEdit').ItemEditPage
+let HostProvider: typeof NivaroProvider
+beforeEach(async () => {
   state.requests.length = 0
+  state.chunkLoads = 0
+  state.noLayout = false
+  vi.resetModules()
+  ItemEditPage = (await import('@/pages/ItemEdit')).ItemEditPage
+  HostProvider = (await import('@nivaro/shared')).NivaroProvider
 })
 
 describe('record page Edit layout toggle', () => {
-  // Non-admin first: the lazy chunk must not have been requested by anything before it.
   it('hides Edit layout for non-admins and never requests the editor chunk', async () => {
     state.user = { id: 'u2', is_admin: false }
-    renderWith(<ItemEditPage />)
+    renderWith(<ItemEditPage />, HostProvider)
     await screen.findByTestId('item-form')
     await waitFor(() =>
       expect(state.requests.some((r) => r.url === '/collection-layouts/active')).toBe(true)
@@ -158,9 +172,18 @@ describe('record page Edit layout toggle', () => {
     expect(state.chunkLoads).toBe(0)
   })
 
+  it('offers admins a way into the Layouts tab when the collection has no layout', async () => {
+    state.user = { id: 'u1', is_admin: true }
+    state.noLayout = true
+    renderWith(<ItemEditPage />, HostProvider)
+    const link = await screen.findByRole('link', { name: /edit layout/i })
+    expect(link.getAttribute('href')).toBe('/data-model/orders?tab=groups')
+    expect(state.chunkLoads).toBe(0)
+  })
+
   it('shows Edit layout for admins', async () => {
     state.user = { id: 'u1', is_admin: true }
-    renderWith(<ItemEditPage />)
+    renderWith(<ItemEditPage />, HostProvider)
     const toggle = await screen.findByRole('button', { name: /edit layout/i })
     expect(screen.queryByTestId('record-layout-editor')).toBeNull()
 
@@ -247,6 +270,13 @@ describe('classic layout editor', () => {
       /Read-only/
     )
     expect(writes()).toEqual([])
+    // The page around it keeps writing: sign-out, preferences.
+    await api.post('/auth/logout')
+    await api.patch('/users/me/preferences', { x: 1 })
+    expect(writes().map((w) => `${w.method} ${w.url}`)).toEqual([
+      'POST /auth/logout',
+      'PATCH /users/me/preferences'
+    ])
     // Reads still work.
     await api.get('/collection-layouts', { params: { collection: 'orders' } })
     expect(state.requests.at(-1)?.method).toBe('GET')
