@@ -23,9 +23,11 @@ import { Redis } from 'ioredis'
 import { _staticDb, db } from '../db/index.js'
 import { metadataQueryCacheStats } from '../db/metadata-query-cache.js'
 import {
+  notePermissionStatement,
   notePrincipalKind,
   permissionCacheStats,
   setPermissionCacheEnabled,
+  setPermissionCacheProcLookup,
   setPermissionCacheRedis
 } from '../services/permission-cache.js'
 import {
@@ -286,6 +288,47 @@ async function main() {
   const off = await probe(false)
   const on = await probe(true)
   console.log('one list read (can + fields + row filter + scopes):', { off, on_warm: on })
+
+  // ── 6. warm under mixed load: report-procedure EXECs between item reads ─────
+  // The statements are only CLASSIFIED (bodies read with OBJECT_DEFINITION), never run.
+  setPermissionCacheEnabled(true)
+  setPermissionCacheProcLookup(async (name) => {
+    const rows = (await db.raw('SELECT OBJECT_DEFINITION(OBJECT_ID(?)) AS body', [name])) as Array<{
+      body: string | null
+    }>
+    return rows?.[0]?.body ?? null
+  })
+  const procNames = (
+    (await db.raw(
+      "SELECT TOP 40 s.name + '.' + p.name AS name FROM sys.procedures p JOIN sys.schemas s ON s.schema_id = p.schema_id ORDER BY p.name"
+    )) as Array<{ name: string }>
+  ).map((r) => r.name)
+  const mixUsers = users.slice(0, 100)
+  const mixStatements = procNames.map((n) => `INSERT INTO #rows EXEC ${n} @p0, @p1`)
+  // First look at every procedure (unknown = may change access, once).
+  for (const sql of mixStatements) notePermissionStatement(sql, false)
+  await new Promise((r) => setTimeout(r, 2_000))
+  const before = permissionCacheStats()
+  let flagged = 0
+  const mixStart = performance.now()
+  for (let round = 0; round < 5; round++) {
+    for (const [i, base] of mixUsers.entries()) {
+      if (notePermissionStatement(mixStatements[i % mixStatements.length], false)) flagged++
+      notePermissionStatement(mixStatements[i % mixStatements.length], true)
+      await listReadWork({ ...base } as User, sample[i % sample.length])
+    }
+  }
+  const after = permissionCacheStats()
+  const delta = (k: string) => Number(after[k]) - Number(before[k])
+  console.log('warm under mixed load (5 rounds × 100 people, one report EXEC per read):', {
+    procedures: procNames.length,
+    statements_that_bumped: flagged,
+    resets: delta('resets'),
+    bumps: delta('bumps'),
+    hits: delta('hits'),
+    misses: delta('misses'),
+    ms: Math.round(performance.now() - mixStart)
+  })
 
   console.log(
     `\nRESULT: ${compared} comparisons, ${mismatches} mismatches, ${executed} executed reads; cold ${passStatements[0]} / warm ${passStatements[1]} round trips`

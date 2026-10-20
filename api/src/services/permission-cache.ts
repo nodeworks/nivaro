@@ -158,7 +158,6 @@ export function onPermissionCacheReset(fn: (userId?: string) => void): void {
 function resetLocal(userId: string | undefined, listeners: boolean, scan = true): void {
   if (userId === undefined) {
     entries.clear()
-    procTouches.clear()
     // A fill that started before this point is not stored.
     generation++
   } else {
@@ -185,6 +184,8 @@ function resetLocal(userId: string | undefined, listeners: boolean, scan = true)
  *  script or a process on another Redis wrote configuration). The caches the entries are
  *  built from are dropped too, so a refill cannot read a copy from before the write. */
 export function clearPermissionCache(): void {
+  // The epoch also moves on CREATE / ALTER PROCEDURE elsewhere: bodies are read again.
+  forgetProcedureVerdicts()
   resetLocal(undefined, enabled)
 }
 
@@ -281,7 +282,18 @@ async function readVersions(
       }
       return null
     }
-    const v = { n: String(res[0]), g: String(res[1] ?? '0'), u: String(res[2] ?? '0') }
+    if (res[1] == null || res[2] == null) {
+      // A version key that is missing (never written, expired or evicted) gets a fresh
+      // token: a placeholder like '0' could come back after another loss and revive what
+      // was stored under it. This request answers uncached.
+      if (res[1] == null) void r.set(globalKey(tenant), freshToken(), 'NX').catch(() => {})
+      if (res[2] == null)
+        void r
+          .set(userKey(tenant, uid), freshToken(), 'EX', USER_VERSION_TTL_S, 'NX')
+          .catch(() => {})
+      return null
+    }
+    const v = { n: String(res[0]), g: String(res[1]), u: String(res[2]) }
     observe(tenant, uid, v)
     return v
   } catch {
@@ -438,11 +450,24 @@ const EXEC_RE = /\bexec(?:ute)?(?:\s*(\()|\s+(?:@\w+\s*=\s*)?([\w.[\]"#@]+))/gi
 
 /** Comments and string literals removed, so neither can make or hide a write. */
 function strip(sql: string): string {
-  // One pass, left to right: whichever starts first wins, so a quote inside a comment and
-  // a comment marker inside a string are both read as what they are.
-  return sql.replace(/N?'(?:[^']|'')*'?|\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*/gi, (m) =>
-    m.startsWith('/*') || m.startsWith('--') ? ' ' : "''"
+  // One pass, left to right: whichever starts first wins, so a quote inside a comment, a
+  // comment marker inside a string and either inside a [bracketed] or "quoted" name are
+  // all read as what they are. Names are kept; strings become '' and comments a space.
+  return sql.replace(
+    /\[[^\]]*\]?|"[^"]*"?|N?'(?:[^']|'')*'?|\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*/gi,
+    (m) => {
+      if (m.startsWith('[') || m.startsWith('"')) return m
+      return m.startsWith('/*') || m.startsWith('--') ? ' ' : "''"
+    }
   )
+}
+
+/** The SQL texts handed to sp_executesql / sp_sqlexec as literals, unescaped. */
+function dynamicLiterals(sql: string): string[] {
+  const out: string[] = []
+  for (const m of sql.matchAll(/\bsp_(?:executesql|sqlexec)\s+N?'((?:[^']|'')*)'/gi))
+    out.push(m[1].replace(/''/g, "'"))
+  return out
 }
 
 /** System procedures that never write data (everything else named sp_… is looked up). */
@@ -472,7 +497,23 @@ export type StatementVerdict = { bump: boolean; procs: string[] }
 
 /** Exported for tests: what a statement does to the access inputs. `bump` = it may change
  *  them; `procs` = stored procedures it runs (their bodies decide). */
+const verdictMemo = new Map<string, StatementVerdict>()
+
 export function classifyStatement(sql: string): StatementVerdict {
+  if (!sql) return { bump: false, procs: [] }
+  // The seam, the transaction's own event and the after-statement call all ask about the
+  // same text: it is read once.
+  const memo = verdictMemo.get(sql)
+  if (memo) return memo
+  const verdict = classifyText(sql, 0)
+  if (sql.length <= 20_000) {
+    if (verdictMemo.size >= 500) verdictMemo.clear()
+    verdictMemo.set(sql, verdict)
+  }
+  return verdict
+}
+
+function classifyText(sql: string, depth: number): StatementVerdict {
   const none: StatementVerdict = { bump: false, procs: [] }
   if (!sql) return none
   const code = strip(sql)
@@ -491,13 +532,19 @@ export function classifyStatement(sql: string): StatementVerdict {
     const name = target.replace(/[[\]"]/g, '').toLowerCase()
     const leaf = name.split('.').pop() ?? name
     if (leaf === 'sp_executesql' || leaf === 'sp_sqlexec') {
-      // Its text was judged above when it is a literal; SQL held in a variable is unknown.
+      // SQL held in a variable is unknown; a literal is read like any other batch.
       const rest = code.slice((m.index ?? 0) + m[0].length)
       if (!/^\s*''/.test(rest)) return { bump: true, procs: [] }
       continue
     }
     if (READ_ONLY_SYSTEM_PROCS.has(leaf)) continue
     procs.push(name)
+  }
+  for (const inner of dynamicLiterals(sql)) {
+    if (depth >= 3) return { bump: true, procs: [] }
+    const v = classifyText(inner, depth + 1)
+    if (v.bump) return v
+    procs.push(...v.procs)
   }
   return { bump: false, procs }
 }
@@ -531,24 +578,41 @@ export function bodyTouchesAccess(body: string | null): boolean {
   return ACCESS_RE.test(body) || /\bexec(?:ute)?\b/i.test(code) || TABLE_DDL_RE.test(code)
 }
 
+function forgetProcedureVerdicts(): void {
+  procTouches.clear()
+  procGeneration++
+}
+
+function lookUpProcedure(name: string, previous: boolean | undefined): void {
+  const lookup = procLookup
+  if (!lookup || procPending.has(name)) return
+  procPending.add(name)
+  const g0 = procGeneration
+  const at = Date.now()
+  void lookup(name)
+    .then((body) => {
+      if (g0 !== procGeneration) return
+      if (procTouches.size >= 2_000) procTouches.clear()
+      const touches = bodyTouchesAccess(body)
+      procTouches.set(name, { at, touches })
+      // A body that now touches access was altered somewhere this process did not see:
+      // what ran under the old verdict may have changed access.
+      if (previous === false && touches) bumpAccessVersion()
+    })
+    .catch(() => {})
+    .finally(() => procPending.delete(name))
+}
+
+/** Verdicts survive ordinary resets; they are dropped on procedure DDL here, by the cache
+ *  console and by a configuration-epoch move. A verdict older than an entry is still used
+ *  while it is read again in the background. Unknown = may change access. */
 function procMayChangeAccess(name: string): boolean {
   const known = procTouches.get(name)
-  // A verdict lives no longer than an entry: a body altered elsewhere is read again.
-  if (known && Date.now() - known.at < PERMISSION_CACHE_TTL_MS) return known.touches
-  const lookup = procLookup
-  if (lookup && !procPending.has(name)) {
-    procPending.add(name)
-    const g0 = procGeneration
-    const at = Date.now()
-    void lookup(name)
-      .then((body) => {
-        if (g0 !== procGeneration) return
-        if (procTouches.size >= 2_000) procTouches.clear()
-        procTouches.set(name, { at, touches: bodyTouchesAccess(body) })
-      })
-      .catch(() => {})
-      .finally(() => procPending.delete(name))
+  if (known) {
+    if (Date.now() - known.at >= PERMISSION_CACHE_TTL_MS) lookUpProcedure(name, known.touches)
+    return known.touches
   }
+  lookUpProcedure(name, undefined)
   return true
 }
 
@@ -572,10 +636,7 @@ const wroteAccess = new Set<string>()
  */
 export function notePermissionStatement(sql: string, after: boolean, txId?: unknown): boolean {
   if (!enabled || !sql) return false
-  if (PROC_DDL_RE.test(sql)) {
-    procTouches.clear()
-    procGeneration++
-  }
+  if (PROC_DDL_RE.test(sql)) forgetProcedureVerdicts()
   const verdict = classifyStatement(sql)
   const bump = verdict.bump || verdict.procs.some((p) => procMayChangeAccess(p))
   if (!bump) return false
@@ -672,6 +733,7 @@ export function resetPermissionCacheForTests(): void {
   wroteAccess.clear()
   procTouches.clear()
   procPending.clear()
+  verdictMemo.clear()
   userGeneration.clear()
   lastNonceReset.clear()
   resetLocal(undefined, false)

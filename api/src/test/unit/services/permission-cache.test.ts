@@ -145,13 +145,17 @@ function makeRedis() {
   }
   // The incarnation nonce a running cluster already has.
   kv.set(NONCE, 'boot-1')
+  // …and the version tokens it already wrote for the cluster and the people in these tests.
+  kv.set(G, 'g-boot')
+  for (const id of ['test-user-id', 'other-user-id']) kv.set(U(id), `u-boot-${id}`)
   return r
 }
 let redis = makeRedis()
 
 /** Another replica moving the cluster-wide version (its own write went through its seam). */
+let remoteSeq = 0
 async function remoteBump(userId?: string) {
-  await redis.incr(userId ? U(userId.toLowerCase()) : G)
+  redis.kv.set(userId ? U(userId.toLowerCase()) : G, `remote-${++remoteSeq}`)
 }
 
 /** Each request gets a fresh user object from authenticate. */
@@ -880,15 +884,71 @@ describe('second review: remaining shapes and residuals', () => {
     expect(redis.writes.get(G)).toBe(before + 1)
   })
 
-  it('a procedure verdict lives no longer than an entry', async () => {
+  it('an old verdict is read again in the background; a flip to "touches" bumps', async () => {
     vi.useFakeTimers()
-    setPermissionCacheProcLookup(async () => 'CREATE PROCEDURE dbo.p AS SELECT 1')
+    let body = 'CREATE PROCEDURE dbo.p AS SELECT 1'
+    setPermissionCacheProcLookup(async () => body)
     notePermissionStatement('exec dbo.p', false)
     await vi.advanceTimersByTimeAsync(0)
     expect(notePermissionStatement('exec dbo.p', false)).toBe(false)
+    // Altered on another server (no DDL seen here); the verdict ages out.
+    body = 'CREATE PROCEDURE dbo.p AS DELETE FROM nivaro_policies'
     vi.advanceTimersByTime(PERMISSION_CACHE_TTL_MS + 1)
+    const before = redis.writes.get(G) ?? 0
+    expect(notePermissionStatement('exec dbo.p', false)).toBe(false) // old verdict, re-read
+    await vi.advanceTimersByTimeAsync(0)
+    expect(redis.writes.get(G)).toBe(before + 1) // the flip moved the version
     expect(notePermissionStatement('exec dbo.p', false)).toBe(true)
     setPermissionCacheProcLookup(null)
+  })
+
+  it('read-only report procedures run in turn never bump after their first look', async () => {
+    setPermissionCacheProcLookup(
+      async (name) => `CREATE PROCEDURE ${name} AS SELECT * FROM projects`
+    )
+    const reports = ['dbo.report_a', 'dbo.report_b', 'dbo.report_c']
+    for (const r of reports) notePermissionStatement(`INSERT INTO #x EXEC ${r} @p0`, false)
+    await tick()
+    // An access write elsewhere resets everything; the verdicts stay.
+    bumpAccessVersion()
+    await tick()
+    await can(freshUser(), 'read', 'articles') // this process sees that move once
+    const before = redis.writes.get(G) ?? 0
+    const resets = Number(permissionCacheStats().resets)
+    for (let i = 0; i < 30; i++) {
+      for (const r of reports) {
+        expect(notePermissionStatement(`INSERT INTO #x EXEC ${r} @p0`, false)).toBe(false)
+        expect(notePermissionStatement(`INSERT INTO #x EXEC ${r} @p0`, true)).toBe(false)
+      }
+      await can(freshUser(), 'read', 'articles')
+    }
+    expect(redis.writes.get(G) ?? 0).toBe(before)
+    expect(Number(permissionCacheStats().resets)).toBe(resets)
+    expect(Number(permissionCacheStats().hits)).toBeGreaterThan(25)
+    setPermissionCacheProcLookup(null)
+  })
+
+  it.each([
+    ["EXEC sp_executesql N'exec dbo.p'", 'procs'],
+    ["EXEC sp_executesql N'create table workflows_divisions (id int)'", 'bump'],
+    ["EXEC sp_executesql N'EXEC sp_executesql N''update nivaro_roles set x = 1'''", 'bump'],
+    ["EXEC sp_executesql N'select 1 as a'", 'none'],
+    ["select [it's] from x; update nivaro_roles set admin_access = 0", 'bump'],
+    ['select "a--b" from x; delete from nivaro_policies where id = 1', 'bump']
+  ])('%s → %s', (sql, want) => {
+    const v = classifyStatement(sql)
+    expect(v.bump ? 'bump' : v.procs.length ? 'procs' : 'none').toBe(want)
+  })
+
+  it('a missing version key gets a fresh token and the request goes uncached', async () => {
+    redis.kv.delete(U('test-user-id'))
+    const reads = state.reads
+    await can(freshUser(), 'read', 'articles')
+    expect(state.reads).toBeGreaterThan(reads)
+    expect(Number(permissionCacheStats().bypassed)).toBe(1)
+    await tick()
+    expect(redis.kv.get(U('test-user-id'))).toBeTruthy()
+    expect(redis.kv.get(U('test-user-id'))).not.toBe('0')
   })
 
   it('a body lookup that straddled a redeploy is not kept', async () => {
