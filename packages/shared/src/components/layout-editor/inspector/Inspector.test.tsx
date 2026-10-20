@@ -736,6 +736,42 @@ describe('Inspector', () => {
     )
   })
 
+  it('tabs work as a tablist: arrows move and select, the body is the tabpanel', async () => {
+    await mount(field('vendor'))
+    const list = host.querySelector('[role="tablist"]') as HTMLElement
+    const look = host.querySelector('[data-inspector-tab="look"]') as HTMLElement
+    expect(look.tabIndex).toBe(0)
+    expect(host.querySelector<HTMLElement>('[data-inspector-tab="rules"]')?.tabIndex).toBe(-1)
+    const panel = host.querySelector('[role="tabpanel"]')
+    expect(panel?.getAttribute('aria-labelledby')).toBe(look.id)
+    expect(look.getAttribute('aria-controls')).toBe(panel?.id)
+    await act(async () => {
+      list.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    })
+    await settle(30)
+    const rules = host.querySelector('[data-inspector-tab="rules"]') as HTMLElement
+    expect(rules.getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(rules)
+    await act(async () => {
+      list.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
+    })
+    await settle(30)
+    expect(
+      host.querySelector('[data-inspector-tab="advanced"]')?.getAttribute('aria-selected')
+    ).toBe('true')
+  })
+
+  it('a legacy input id shows by its current name', async () => {
+    await mount(field('vendor'), {
+      bundle: withPlacement(makeBundle(), 'vendor', {
+        overrides: { interface: 'select-dropdown-m2o' }
+      } as Partial<PlacementRow>)
+    })
+    const input = host.querySelector('[data-setting="field.interface"]')
+    expect(input?.textContent).toContain('Relation picker')
+    expect(input?.textContent).not.toContain('select-dropdown-m2o')
+  })
+
   it('says "this form only" once and marks only every-form settings', async () => {
     await mount(field('amount'))
     expect(host.querySelector('[data-scope-legend]')?.textContent).toMatch(/this form only/)
@@ -748,7 +784,8 @@ describe('Inspector', () => {
   })
 
   it('raw JSON sections start folded and open on click', async () => {
-    await mount(field('amount'))
+    // A grid: it has stored settings without an editor (a number field has none).
+    await mount(field('lines'))
     await click(host.querySelector('[data-inspector-tab="advanced"]'))
     const toggles = [...host.querySelectorAll('[data-section-toggle]')]
     expect(toggles.map((t) => t.textContent)).toEqual(

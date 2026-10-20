@@ -1,6 +1,7 @@
 import { InlineDisplaySection } from '../editors/inline-display'
+import { showsDateMode, showsInputMask, showsNumbers } from './applies'
 import { useFieldCtx } from './field-context'
-import { interfaceLabel, interfaceOptions } from './interfaces'
+import { currentInterface, interfaceLabel, interfaceOptions } from './interfaces'
 import {
   Buffered,
   Choice,
@@ -12,7 +13,7 @@ import {
   Toggle,
   useGlobalValue
 } from './kit'
-import { inlineDisplayOf, NUMERIC_TYPES, withInlineDisplay } from './model'
+import { inlineDisplayOf, withInlineDisplay } from './model'
 
 const WIDTHS = [
   { value: '12', label: 'Full' },
@@ -45,11 +46,16 @@ export function LookTab() {
   const name = info.label
   const globalLabel = info.global?.label || name
   const labelHidden = ov.label === ''
-  const isNumeric = NUMERIC_TYPES.has(info.type)
-  const isDate = ['date', 'datetime', 'timestamp'].includes(info.type) || info.iface === 'datetime'
-  const isText = info.type === 'string' || info.type === 'text'
+  const isNumeric = showsNumbers(info)
+  const isDate = showsDateMode(info)
+  const isText = showsInputMask(info)
   const ifaceOpts = interfaceOptions(info.abstractType)
-  const fieldIface = interfaceLabel(info.abstractType, info.global?.interface ?? null)
+  const fieldIface =
+    interfaceLabel(info.abstractType, info.global?.interface ?? null) ??
+    (info.global?.interface ? 'custom input' : null)
+  // An older stored id shows as the input it is today.
+  const ovIface = str(ov.interface)
+  const shownIface = currentInterface(info.abstractType, ovIface) ?? ovIface
 
   const format = useGlobalValue('field.format', str(globalOptions.format))
   const currency = useGlobalValue('field.currency', str(globalOptions.currency))
@@ -97,7 +103,8 @@ export function LookTab() {
       <Setting k='field.interface' label='Input' effect='How the field is edited on this form.'>
         <Choice
           ariaLabel='Input'
-          value={str(ov.interface)}
+          value={shownIface}
+          unknownLabel={(v) => `Custom input (${v})`}
           options={[
             { value: '', label: fieldIface ? `Field's own (${fieldIface})` : "Field's own" },
             ...ifaceOpts
@@ -157,7 +164,7 @@ export function LookTab() {
 
       {info.relKind === 'M2O' && info.relatedCollection && (
         <Section title='Show under the value'>
-          <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+          <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
             Fields of the picked record shown with it on this form.
           </p>
           <Buffered value={inline}>

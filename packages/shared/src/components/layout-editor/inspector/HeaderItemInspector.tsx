@@ -1,5 +1,18 @@
+import { X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { PlacementRow } from '../../../lib/layout-ops'
-import { Choice, JsonInput, Segmented, Setting, TextInput, useInspectorEnv } from './kit'
+import { cn } from '../../../lib/utils'
+import { effectText, inputBase, tintCard } from '../panel-style'
+import {
+  AddButton,
+  Choice,
+  JsonInput,
+  Section,
+  Segmented,
+  Setting,
+  TextInput,
+  useInspectorEnv
+} from './kit'
 import { bindingValue, withStaticBinding } from './model'
 
 export const HEADER_FORMATS = [
@@ -48,6 +61,136 @@ function checkThresholds(v: unknown): string | null {
 }
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
+
+const THRESHOLD_OP_OPTIONS = [
+  { value: 'lt', label: 'is below' },
+  { value: 'lte', label: 'is at most' },
+  { value: 'gt', label: 'is above' },
+  { value: 'gte', label: 'is at least' },
+  { value: 'eq', label: 'equals' }
+]
+
+interface ThresholdRow {
+  op: string
+  value: string
+  color: string
+}
+
+const rowsOf = (v: unknown): ThresholdRow[] =>
+  Array.isArray(v)
+    ? v.map((t) => {
+        const o = (t ?? {}) as { op?: string; value?: unknown; color?: string }
+        return {
+          op: o.op ?? 'gt',
+          value: o.value == null ? '' : String(o.value),
+          color: o.color ?? ''
+        }
+      })
+    : []
+
+/** Rows with op, value and colour; numbers stay numbers. */
+const rulesOf = (rows: ThresholdRow[]) =>
+  rows
+    .filter((r) => THRESHOLD_OPS.has(r.op) && r.value.trim() !== '' && r.color)
+    .map((r) => ({
+      op: r.op,
+      value: Number.isNaN(Number(r.value)) ? r.value : Number(r.value),
+      color: r.color
+    }))
+
+/**
+ * "Colour by value" as rules: when the value is above 0, show it red. Half
+ * filled rules stay here until complete; raw JSON is folded underneath.
+ */
+function ThresholdEditor({
+  value,
+  onChange
+}: {
+  value: unknown
+  onChange: (rules: unknown[] | null) => void
+}) {
+  const stored = JSON.stringify(rulesOf(rowsOf(value)))
+  const [rows, setRows] = useState<ThresholdRow[]>(() => rowsOf(value))
+  // Someone else's change (undo, JSON below): adopt it; our own echo keeps half rows.
+  useEffect(() => {
+    setRows((cur) =>
+      JSON.stringify(rulesOf(cur)) === stored ? cur : rowsOf(JSON.parse(stored) as unknown)
+    )
+  }, [stored])
+  const commit = (next: ThresholdRow[]) => {
+    setRows(next)
+    const rules = rulesOf(next)
+    if (JSON.stringify(rules) !== stored) onChange(rules.length ? rules : null)
+  }
+  const set = (i: number, patch: Partial<ThresholdRow>) =>
+    commit(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  return (
+    <div className='space-y-2'>
+      {rows.length === 0 ? (
+        <p className={effectText}>No rules: the value keeps the colour above.</p>
+      ) : (
+        <ul className='space-y-2'>
+          {rows.map((r, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
+            <li key={i} className={cn(tintCard, 'space-y-1.5 p-2.5')} data-threshold-row=''>
+              <div className='flex items-center gap-1.5'>
+                <span className={cn(effectText, 'shrink-0')}>When it</span>
+                <div className='min-w-0 flex-1'>
+                  <Choice
+                    ariaLabel='Comparison'
+                    value={r.op}
+                    options={THRESHOLD_OP_OPTIONS}
+                    onChange={(op) => set(i, { op })}
+                  />
+                </div>
+                <button
+                  type='button'
+                  aria-label='Remove rule'
+                  data-tip='Remove rule'
+                  onClick={() => commit(rows.filter((_, j) => j !== i))}
+                  className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
+                >
+                  <X className='h-3.5 w-3.5' />
+                </button>
+              </div>
+              <div className='flex items-center gap-1.5'>
+                <input
+                  aria-label='Value'
+                  value={r.value}
+                  placeholder='0'
+                  onChange={(e) => set(i, { value: e.target.value })}
+                  className={cn(inputBase, 'w-24 shrink-0')}
+                />
+                <span className={cn(effectText, 'shrink-0')}>show it</span>
+                <div className='min-w-0 flex-1'>
+                  <Choice
+                    ariaLabel='Colour'
+                    value={r.color}
+                    options={[{ value: '', label: 'Pick a colour…' }, ...COLORS.slice(1)]}
+                    onChange={(color) => set(i, { color })}
+                  />
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <AddButton onClick={() => setRows([...rows, { op: 'gt', value: '', color: '' }])}>
+        + Add a colour rule
+      </AddButton>
+      <Section title='Edit as JSON' collapsible className='border-t-0 pt-1'>
+        <JsonInput
+          ariaLabel='Colour by value as JSON'
+          rows={3}
+          value={stored === '[]' ? null : (JSON.parse(stored) as unknown)}
+          placeholder='[{ "op": "gt", "value": 0, "color": "red" }]'
+          validate={checkThresholds}
+          onCommit={(v) => onChange(Array.isArray(v) && v.length ? v : null)}
+        />
+      </Section>
+    </div>
+  )
+}
 
 /** A field in the header strip (group `__header__`): label + how its value reads. */
 export function HeaderItemInspector({ row, label }: { row: PlacementRow; label: string }) {
@@ -149,13 +292,9 @@ export function HeaderItemInspector({ row, label }: { row: PlacementRow; label: 
         label='Colour by value'
         effect='The first rule that matches picks the colour.'
       >
-        <JsonInput
-          ariaLabel='Colour by value'
-          rows={3}
+        <ThresholdEditor
           value={threshold}
-          placeholder='[{ "op": "gt", "value": 0, "color": "red" }]'
-          validate={checkThresholds}
-          onCommit={(v) =>
+          onChange={(v) =>
             setMeta(
               '__threshold__',
               v == null ? null : JSON.stringify(v),
