@@ -1,5 +1,5 @@
 import { Search, X } from 'lucide-react'
-import { type ComponentType, useCallback, useMemo, useState } from 'react'
+import { type ComponentType, type UIEvent, useCallback, useMemo, useState } from 'react'
 import type { LayoutBundle, LayoutOp, LayoutPatch } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
 import { PanelHeader } from '../panel-frame'
@@ -91,6 +91,16 @@ export function FormSettings({
   )
 
   const name = typeof bundle.layout.name === 'string' ? bundle.layout.name : ''
+  // A section title stuck to the top of the scroll gets a hairline under it,
+  // so the rows sliding beneath it have an edge.
+  const markStuck = (e: UIEvent<HTMLDivElement>) => {
+    const body = e.currentTarget
+    const top = body.getBoundingClientRect().top
+    for (const h of body.querySelectorAll<HTMLElement>('[data-section-title]')) {
+      const stuck = body.scrollTop > 0 && Math.abs(h.getBoundingClientRect().top - top) < 1
+      h.toggleAttribute('data-stuck', stuck)
+    }
+  }
 
   return (
     <div className='flex h-full min-h-0 flex-col' data-form-settings={kind}>
@@ -121,7 +131,11 @@ export function FormSettings({
           )}
         </div>
       </PanelHeader>
-      <div data-panel-body='' className='min-h-0 flex-1 overflow-y-auto px-4 pb-8'>
+      <div
+        data-panel-body=''
+        onScroll={markStuck}
+        className='min-h-0 flex-1 overflow-y-auto px-4 pb-8'
+      >
         {sections.length === 0 ? (
           <p className={cn('py-8 text-center', quietText)}>No setting matches “{query.trim()}”.</p>
         ) : (
@@ -138,9 +152,10 @@ export function FormSettings({
                   {/* Sticky: the section a row belongs to stays named while scrolling. */}
                   <h3
                     id={`form-settings-${section.id}`}
+                    data-section-title=''
                     className={cn(
                       groupTitle,
-                      'sticky top-0 z-10 -mx-4 bg-white px-4 pb-3 pt-4 dark:bg-card'
+                      'sticky top-0 z-10 -mx-4 border-b border-transparent bg-white px-4 pb-3 pt-4 data-[stuck]:border-slate-200 dark:bg-card dark:data-[stuck]:border-border'
                     )}
                   >
                     {section.title}

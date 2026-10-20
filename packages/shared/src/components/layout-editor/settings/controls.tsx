@@ -1,5 +1,5 @@
 import { Check, ChevronsUpDown, X } from 'lucide-react'
-import { createContext, type ReactNode, useContext, useMemo, useState } from 'react'
+import { createContext, isValidElement, type ReactNode, useContext, useMemo, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { effectText, inputBase, labelText, segOption, segTrack } from '../panel-style'
@@ -48,14 +48,18 @@ export function Setting({
   const visible = useSettingVisible(k)
   const def = settingDef(k)
   if (!visible || !def) return null
+  // Only a switch sits on the label line; every other control goes under the
+  // label at full width, as in the inspector.
+  const inline = isValidElement(control) && control.type === Toggle
   return (
     <div data-setting={k} className='space-y-1.5'>
       <div className='flex min-h-5 items-center justify-between gap-3'>
         <label htmlFor={htmlFor} className={cn(labelText, 'min-w-0')}>
           {def.label}
         </label>
-        {control && <div className='flex shrink-0 items-center'>{control}</div>}
+        {inline && <div className='flex shrink-0 items-center'>{control}</div>}
       </div>
+      {control && !inline && <div>{control}</div>}
       {children}
       <p className={quietText}>{def.effect}</p>
       {note && <div className={quietText}>{note}</div>}

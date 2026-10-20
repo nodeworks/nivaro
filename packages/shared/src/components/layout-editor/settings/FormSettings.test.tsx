@@ -298,17 +298,19 @@ describe('FormSettings', () => {
     )
   })
 
-  it('a text setting saves once, on blur, and flushes', async () => {
+  it('a text setting goes out as typed text (sent after a pause) and blur flushes it', async () => {
     const { apply, flush } = await mount(bundleOf('grouped'))
     const input = setting('layout.create_label')?.querySelector('input') ?? null
     await type(input, 'New order')
-    expect(apply).not.toHaveBeenCalled()
-    await blur(input)
+    // The draft coalesces typed text and sends it after a 600 ms pause.
     expect(apply).toHaveBeenCalledTimes(1)
     expect(apply).toHaveBeenCalledWith(
       [{ op: 'layout_update', patch: { create_label: 'New order' } }],
-      { label: 'Change New-menu label' }
+      { label: 'Change New-menu label', text: true }
     )
+    expect(flush).not.toHaveBeenCalled()
+    await blur(input)
+    expect(apply).toHaveBeenCalledTimes(1)
     expect(flush).toHaveBeenCalled()
   })
 
@@ -321,24 +323,29 @@ describe('FormSettings', () => {
     expect(input.value).toBe('a ')
     await type(input, 'a b')
     expect(input.value).toBe('a b')
-    expect(apply).not.toHaveBeenCalled()
     await blur(input)
     expect(apply).toHaveBeenLastCalledWith(
       [{ op: 'layout_update', patch: { pdf_button_label: 'a b' } }],
-      { label: 'Change Button label' }
+      { label: 'Change Button label', text: true }
     )
   })
 
-  it('Escape puts the saved value back and saves nothing', async () => {
-    const { apply } = await mount(bundleOf('grouped', { create_label: 'New order' }))
+  it('Escape puts the value from before the edit back', async () => {
+    const { apply, rerender } = await mount(bundleOf('grouped', { create_label: 'New order' }))
     const input = setting('layout.create_label')?.querySelector('input') as HTMLInputElement
     await type(input, 'Something else')
+    // The draft follows the typing.
+    await rerender(bundleOf('grouped', { create_label: 'Something else' }))
     await act(async () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
+    expect(apply).toHaveBeenLastCalledWith(
+      [{ op: 'layout_update', patch: { create_label: 'New order' } }],
+      { label: 'Change New-menu label', text: true }
+    )
+    await rerender(bundleOf('grouped', { create_label: 'New order' }))
     await blur(input)
     expect(input.value).toBe('New order')
-    expect(apply).not.toHaveBeenCalled()
   })
 
   it('link names are sanitised as typed and only sent on blur', async () => {
@@ -351,6 +358,17 @@ describe('FormSettings', () => {
     expect(apply.mock.calls.at(-1)?.[0]).toEqual([
       { op: 'layout_update', patch: { slug: 'unit_order_' } }
     ])
+  })
+
+  it('a PDF layout shows only what a PDF uses', async () => {
+    await mount(bundleOf('file'))
+    const sections = Array.from(document.querySelectorAll('[data-section]')).map((s) =>
+      s.getAttribute('data-section')
+    )
+    expect(sections).toContain('pdf')
+    expect(sections).not.toContain('layout')
+    expect(sections).not.toContain('buttons')
+    expect(sections).not.toContain('defaults')
   })
 
   it('search narrows to matching settings across sections', async () => {

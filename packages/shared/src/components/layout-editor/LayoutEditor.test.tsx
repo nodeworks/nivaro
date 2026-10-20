@@ -372,6 +372,37 @@ describe('LayoutEditor', () => {
     ])
   })
 
+  it('a typed label saves after a pause, with focus kept in the box', async () => {
+    const { calls } = await mount()
+    click(document.querySelector('[data-design-target="field:title:main"]'))
+    await settle(
+      () => !!document.querySelector('[data-editor-inspector] [data-setting="field.label"]')
+    )
+    const input = document.querySelector(
+      '[data-editor-inspector] [data-setting="field.label"] input'
+    ) as HTMLInputElement
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        input,
+        'Subject'
+      )
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // No blur: the pause alone sends it.
+    await settle(() => opsCalls(calls).length > 0)
+    expect(opsCalls(calls)).toEqual([
+      [
+        {
+          op: 'update_placement',
+          at: { field: 'title', group_key: 'main' },
+          patch: { overrides: { label: 'Subject' } }
+        }
+      ]
+    ])
+    expect(input.value).toBe('Subject')
+  })
+
   it('add panel marks placed fields and adds after selection (emits one place op)', async () => {
     const { calls } = await mount()
     click(document.querySelector('[data-design-target="field:title:main"]'))
