@@ -2,6 +2,7 @@ import { InlineDisplaySection } from '../editors/inline-display'
 import { useFieldCtx } from './field-context'
 import { interfaceLabel, interfaceOptions } from './interfaces'
 import {
+  Buffered,
   Choice,
   DraftInput,
   Section,
@@ -159,15 +160,17 @@ export function LookTab() {
           <p className='text-[11px] text-muted-foreground'>
             Fields of the picked record shown with it on this form.
           </p>
-          <div onBlurCapture={() => env.flush()}>
-            <InlineDisplaySection
-              relatedCollection={info.relatedCollection}
-              entries={inline.entries}
-              separator={inline.separator}
-              onChange={(entries) => setInline({ ...inline, entries })}
-              onSeparatorChange={(separator) => setInline({ ...inline, separator })}
-            />
-          </div>
+          <Buffered value={inline}>
+            {(shown, keep) => (
+              <InlineDisplaySection
+                relatedCollection={info.relatedCollection as string}
+                entries={shown.entries}
+                separator={shown.separator}
+                onChange={(entries) => setInline(keep({ ...shown, entries }))}
+                onSeparatorChange={(separator) => setInline(keep({ ...shown, separator }))}
+              />
+            )}
+          </Buffered>
         </Section>
       )}
 

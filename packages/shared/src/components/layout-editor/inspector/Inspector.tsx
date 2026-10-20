@@ -11,6 +11,7 @@ import {
   type PlacementRow
 } from '../../../lib/layout-ops'
 import { cn, titleCase } from '../../../lib/utils'
+import { TipLayer } from '../../TipLayer'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
 import { useLayoutEditorHost } from '../host'
 import { type ApplyOptions, parseBundle } from '../useLayoutDraft'
@@ -235,6 +236,8 @@ function titleOf(t: DesignTarget): string {
 function Shell({ children }: { children: ReactNode }) {
   return (
     <div data-inspector='' className='min-w-0 space-y-4 text-[12px]'>
+      {/* Hints are data-tip; a second TipLayer on the page stays idle. */}
+      <TipLayer />
       {children}
     </div>
   )

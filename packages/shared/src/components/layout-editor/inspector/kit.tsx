@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronDown, Globe2 } from 'lucide-react'
-import { createContext, type ReactNode, useContext, useEffect, useState } from 'react'
+import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import type { LayoutBundle, LayoutOp } from '../../../lib/layout-ops'
@@ -16,6 +16,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { Switch } from '../../ui/switch'
+import { useFocusBuffer } from '../focus-buffer'
 import type { ApplyOptions } from '../useLayoutDraft'
 
 // ── Environment every inspector part reads ──────────────────────────────────
@@ -270,7 +271,7 @@ export function Toggle({
 export const inputCls =
   'h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] text-foreground placeholder:text-slate-400 focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
 
-/** A text input that saves while typing (coalesced by the draft) and sends on blur. */
+/** A text input that saves while typing (coalesced by the draft) and sends on blur / Enter. */
 export function TextInput({
   value,
   onChange,
@@ -289,17 +290,86 @@ export function TextInput({
   ariaLabel?: string
 }) {
   const env = useContext(InspectorEnvContext)
+  const buf = useFocusBuffer(value, () => env?.flush())
   return (
     <input
       type={type}
-      value={value}
+      value={buf.value}
       disabled={disabled}
       aria-label={ariaLabel}
       placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
-      onBlur={() => env?.flush()}
+      onChange={(e) => {
+        buf.set(e.target.value)
+        onChange(e.target.value)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') env?.flush()
+      }}
+      {...buf.props}
       className={cn(inputCls, mono && 'font-mono')}
     />
+  )
+}
+
+/** A multi-line TextInput. */
+export function TextArea({
+  value,
+  onChange,
+  ariaLabel,
+  rows = 4
+}: {
+  value: string
+  onChange: (v: string) => void
+  ariaLabel?: string
+  rows?: number
+}) {
+  const env = useContext(InspectorEnvContext)
+  const buf = useFocusBuffer(value, () => env?.flush())
+  return (
+    <textarea
+      aria-label={ariaLabel}
+      rows={rows}
+      value={buf.value}
+      onChange={(e) => {
+        buf.set(e.target.value)
+        onChange(e.target.value)
+      }}
+      {...buf.props}
+      className='w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
+    />
+  )
+}
+
+/**
+ * Wraps an editor (row rules, inline display…) so it renders from what was
+ * edited while focus is inside it — see useFocusBuffer. `children` gets the
+ * value to render and `keep`, which records a change and returns it:
+ * `onChange={(r) => save(keep(next(r)), label, true)}`. Blur and Enter send.
+ */
+export function Buffered<T>({
+  value,
+  children,
+  className
+}: {
+  value: T
+  children: (value: T, keep: (v: T) => T) => ReactNode
+  className?: string
+}) {
+  const env = useContext(InspectorEnvContext)
+  const buf = useFocusBuffer(value, () => env?.flush())
+  return (
+    <div
+      className={className}
+      {...buf.props}
+      onKeyDownCapture={(e) => {
+        if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') env?.flush()
+      }}
+    >
+      {children(buf.value, (v) => {
+        buf.set(v)
+        return v
+      })}
+    </div>
   )
 }
 
@@ -317,17 +387,17 @@ export function DraftInput({
   mono?: boolean
   ariaLabel?: string
 }) {
-  const [draft, setDraft] = useState(value)
-  useEffect(() => setDraft(value), [value])
+  const buf = useFocusBuffer(value)
   return (
     <input
-      value={draft}
+      value={buf.value}
       aria-label={ariaLabel}
       placeholder={placeholder}
       onChange={(e) => {
-        setDraft(e.target.value)
+        buf.set(e.target.value)
         onCommit(e.target.value)
       }}
+      {...buf.props}
       className={cn(inputCls, mono && 'font-mono')}
     />
   )
@@ -417,7 +487,10 @@ export function JsonInput({
   const stored = value == null ? '' : JSON.stringify(value, null, 2)
   const [text, setText] = useState(stored)
   const [error, setError] = useState<string | null>(null)
+  // What is typed wins while the box has focus; the stored value shows again after.
+  const focused = useRef(false)
   useEffect(() => {
+    if (focused.current) return
     setText(stored)
     setError(null)
   }, [stored])
@@ -447,7 +520,13 @@ export function JsonInput({
         spellCheck={false}
         placeholder={placeholder}
         onChange={(e) => setText(e.target.value)}
-        onBlur={commit}
+        onFocus={() => {
+          focused.current = true
+        }}
+        onBlur={() => {
+          focused.current = false
+          commit()
+        }}
         className={cn(
           'w-full rounded-md border bg-white px-2 py-1.5 font-mono text-[11px] leading-snug text-foreground placeholder:text-slate-400 focus:outline-none dark:bg-card',
           error

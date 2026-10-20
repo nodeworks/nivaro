@@ -14,6 +14,7 @@ import {
   Section,
   Segmented,
   Setting,
+  TextArea,
   TextInput,
   Toggle,
   useInspectorEnv
@@ -209,15 +210,10 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
             />
           </Setting>
           <Setting k='group.content' label='Text'>
-            <textarea
-              aria-label='Text'
-              rows={4}
+            <TextArea
+              ariaLabel='Text'
               value={group.content ?? ''}
-              onChange={(e) =>
-                update({ content: e.target.value || null }, `Edit the text of ${name}`, true)
-              }
-              onBlur={() => env.flush()}
-              className='w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
+              onChange={(v) => update({ content: v || null }, `Edit the text of ${name}`, true)}
             />
           </Setting>
         </>

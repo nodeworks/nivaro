@@ -5,7 +5,16 @@ import {
   type PlacementRow
 } from '../../../lib/layout-ops'
 import { PdfFieldConfig } from '../editors/pdf-field-config'
-import { Choice, Section, Segmented, Setting, TextInput, Toggle, useInspectorEnv } from './kit'
+import {
+  Buffered,
+  Choice,
+  Section,
+  Segmented,
+  Setting,
+  TextInput,
+  Toggle,
+  useInspectorEnv
+} from './kit'
 import { readOverrides, withKey } from './model'
 import { useLayoutsOf } from './PickerTab'
 
@@ -137,21 +146,26 @@ export function SlotInspector({
       )}
       {field === '__pdf__' && (
         <>
-          <div onBlurCapture={() => env.flush()}>
-            <PdfFieldConfig
-              tableName={env.collection}
-              value={typeof ov.attach_to_field === 'string' ? ov.attach_to_field : null}
-              filenameTemplate={
-                typeof ov.filename_template === 'string' ? ov.filename_template : null
-              }
-              onChange={(v) =>
-                setOv('attach_to_field', v ?? undefined, 'Change where the PDF is attached')
-              }
-              onFilenameChange={(v) =>
-                setOv('filename_template', v || undefined, 'Change the PDF file name', true)
-              }
-            />
-          </div>
+          <Buffered value={typeof ov.filename_template === 'string' ? ov.filename_template : ''}>
+            {(filename, keep) => (
+              <PdfFieldConfig
+                tableName={env.collection}
+                value={typeof ov.attach_to_field === 'string' ? ov.attach_to_field : null}
+                filenameTemplate={filename || null}
+                onChange={(v) =>
+                  setOv('attach_to_field', v ?? undefined, 'Change where the PDF is attached')
+                }
+                onFilenameChange={(v) =>
+                  setOv(
+                    'filename_template',
+                    keep(v ?? '') || undefined,
+                    'Change the PDF file name',
+                    true
+                  )
+                }
+              />
+            )}
+          </Buffered>
           <Section title='Advanced'>
             <Setting
               k='pdf_button.source_layout_id'

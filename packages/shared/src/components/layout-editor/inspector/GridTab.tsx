@@ -28,6 +28,7 @@ import {
 import { useFieldCtx } from './field-context'
 import {
   AddButton,
+  Buffered,
   Choice,
   FieldMultiPicker,
   JsonInput,
@@ -538,40 +539,44 @@ export function GridTab() {
               label='Narrow row pickers by a field of this record'
               effect='Parent: a picker on this form. Row field: a picker on each row.'
             >
-              <div className='space-y-1.5' onBlurCapture={() => env.flush()}>
-                {parentCascades.map((r, i) => (
-                  <CascadeRuleRow
-                    // biome-ignore lint/suspicious/noArrayIndexKey: cascade rows are positional
-                    key={i}
-                    rule={r}
-                    parentFields={parentM2OFields}
-                    childFields={childM2OFields}
-                    onChange={(u) =>
-                      setCascades(
-                        parentCascades.map((x, j) => (j === i ? u : x)),
-                        `Change a cascade of ${name}`,
-                        true
-                      )
-                    }
-                    onRemove={() =>
-                      setCascades(
-                        parentCascades.filter((_, j) => j !== i),
-                        `Remove a cascade from ${name}`
-                      )
-                    }
-                  />
-                ))}
-                <AddButton
-                  onClick={() =>
-                    setCascades(
-                      [...parentCascades, { parent_field: '', child_field: '' }],
-                      `Add a cascade to ${name}`
-                    )
-                  }
-                >
-                  + Add cascade
-                </AddButton>
-              </div>
+              <Buffered value={parentCascades} className='space-y-1.5'>
+                {(cascades, keep) => (
+                  <>
+                    {cascades.map((r, i) => (
+                      <CascadeRuleRow
+                        // biome-ignore lint/suspicious/noArrayIndexKey: cascade rows are positional
+                        key={i}
+                        rule={r}
+                        parentFields={parentM2OFields}
+                        childFields={childM2OFields}
+                        onChange={(u) =>
+                          setCascades(
+                            keep(cascades.map((x, j) => (j === i ? u : x))),
+                            `Change a cascade of ${name}`,
+                            true
+                          )
+                        }
+                        onRemove={() =>
+                          setCascades(
+                            keep(cascades.filter((_, j) => j !== i)),
+                            `Remove a cascade from ${name}`
+                          )
+                        }
+                      />
+                    ))}
+                    <AddButton
+                      onClick={() =>
+                        setCascades(
+                          keep([...cascades, { parent_field: '', child_field: '' }]),
+                          `Add a cascade to ${name}`
+                        )
+                      }
+                    >
+                      + Add cascade
+                    </AddButton>
+                  </>
+                )}
+              </Buffered>
             </Setting>
           </Section>
 
@@ -582,80 +587,88 @@ export function GridTab() {
               effect='Each rule watches a row field and sets another when its condition holds.'
               enforced
             >
-              <div className='space-y-1.5' onBlurCapture={() => env.flush()}>
-                {rules.map((rule, i) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
-                  <div key={i} className='flex items-start gap-1'>
-                    <div
-                      className='flex shrink-0 flex-col pt-1.5'
-                      data-setting='field.row_rules.sort'
-                    >
-                      <button
-                        type='button'
-                        aria-label='Move rule up'
-                        disabled={i === 0}
+              <Buffered value={rules} className='space-y-1.5'>
+                {(list, keep) => {
+                  const save = (next: RowRuleItem[], label: string, text?: boolean) =>
+                    setRules(keep(next), label, text)
+                  return (
+                    <>
+                      {list.map((rule, i) => (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
+                        <div key={i} className='flex items-start gap-1'>
+                          <div
+                            className='flex shrink-0 flex-col pt-1.5'
+                            data-setting='field.row_rules.sort'
+                          >
+                            <button
+                              type='button'
+                              aria-label='Move rule up'
+                              disabled={i === 0}
+                              onClick={() =>
+                                save(reorder(list, i, i - 1), `Move a rule of ${name} up`)
+                              }
+                              className='text-slate-400 hover:text-nvr-cyan disabled:opacity-30'
+                            >
+                              <ChevronUp className='h-3.5 w-3.5' />
+                            </button>
+                            <button
+                              type='button'
+                              aria-label='Move rule down'
+                              disabled={i === list.length - 1}
+                              onClick={() =>
+                                save(reorder(list, i, i + 1), `Move a rule of ${name} down`)
+                              }
+                              className='text-slate-400 hover:text-nvr-cyan disabled:opacity-30'
+                            >
+                              <ChevronDown className='h-3.5 w-3.5' />
+                            </button>
+                          </div>
+                          <div className='min-w-0 flex-1'>
+                            <RowRuleRow
+                              rule={rule}
+                              childFields={ruleFields}
+                              m2oRels={childM2ORels}
+                              o2mRels={childO2MRels}
+                              parentContextFields={parentContextRich}
+                              onChange={(u) =>
+                                save(
+                                  list.map((x, j) => (j === i ? u : x)),
+                                  `Change a rule of ${name}`,
+                                  true
+                                )
+                              }
+                              onRemove={() =>
+                                save(
+                                  list.filter((_, j) => j !== i),
+                                  `Remove a rule from ${name}`
+                                )
+                              }
+                            />
+                          </div>
+                        </div>
+                      ))}
+                      <AddButton
                         onClick={() =>
-                          setRules(reorder(rules, i, i - 1), `Move a rule of ${name} up`)
-                        }
-                        className='text-slate-400 hover:text-nvr-cyan disabled:opacity-30'
-                      >
-                        <ChevronUp className='h-3.5 w-3.5' />
-                      </button>
-                      <button
-                        type='button'
-                        aria-label='Move rule down'
-                        disabled={i === rules.length - 1}
-                        onClick={() =>
-                          setRules(reorder(rules, i, i + 1), `Move a rule of ${name} down`)
-                        }
-                        className='text-slate-400 hover:text-nvr-cyan disabled:opacity-30'
-                      >
-                        <ChevronDown className='h-3.5 w-3.5' />
-                      </button>
-                    </div>
-                    <div className='min-w-0 flex-1'>
-                      <RowRuleRow
-                        rule={rule}
-                        childFields={ruleFields}
-                        m2oRels={childM2ORels}
-                        o2mRels={childO2MRels}
-                        parentContextFields={parentContextRich}
-                        onChange={(u) =>
-                          setRules(
-                            rules.map((x, j) => (j === i ? u : x)),
-                            `Change a rule of ${name}`,
-                            true
+                          save(
+                            [
+                              ...list,
+                              {
+                                trigger_field: null,
+                                trigger_op: 'nnull',
+                                target_field: '',
+                                target_type: 'relation_field'
+                              }
+                            ],
+                            `Add a rule to ${name}`
                           )
                         }
-                        onRemove={() =>
-                          setRules(
-                            rules.filter((_, j) => j !== i),
-                            `Remove a rule from ${name}`
-                          )
-                        }
-                      />
-                    </div>
-                  </div>
-                ))}
-                <AddButton
-                  onClick={() =>
-                    setRules(
-                      [
-                        ...rules,
-                        {
-                          trigger_field: null,
-                          trigger_op: 'nnull',
-                          target_field: '',
-                          target_type: 'relation_field'
-                        }
-                      ],
-                      `Add a rule to ${name}`
-                    )
-                  }
-                >
-                  + Add rule
-                </AddButton>
-              </div>
+                      >
+                        + Add rule
+                      </AddButton>
+                    </>
+                  )
+                }}
+              </Buffered>
             </Setting>
             {rules.length > 0 && (
               <div data-setting='field.row_rules_lint'>

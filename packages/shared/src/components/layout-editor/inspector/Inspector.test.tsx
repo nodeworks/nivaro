@@ -355,13 +355,14 @@ async function mount(
     bundle?: LayoutBundle
     inheritedFrom?: string | null
     navigate?: (to: string) => void
+    openLayout?: (id: number) => void
   } = {}
 ) {
   const { client, calls } = makeClient()
   const apply = vi.fn()
   const flush = vi.fn()
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  await act(async () => {
+  const draw = (bundle: LayoutBundle) =>
     root.render(
       <QueryClientProvider client={qc}>
         <NivaroProvider client={client as never}>
@@ -374,20 +375,29 @@ async function mount(
             }}
           >
             <Inspector
-              bundle={opts.bundle ?? makeBundle()}
+              bundle={bundle}
               target={target}
               apply={apply}
               flush={flush}
               collection='orders'
               inheritedFrom={opts.inheritedFrom}
+              openLayout={opts.openLayout}
             />
           </LayoutEditorHostContext.Provider>
         </NivaroProvider>
       </QueryClientProvider>
     )
+  await act(async () => {
+    draw(opts.bundle ?? makeBundle())
   })
   await settle()
-  return { apply, flush, calls }
+  /** The draft changed under the inspector (an autosave answer, undo…). */
+  const redraw = async (bundle: LayoutBundle) => {
+    await act(async () => {
+      draw(bundle)
+    })
+  }
+  return { apply, flush, calls, qc, redraw }
 }
 
 const settingsIn = () =>
@@ -420,6 +430,30 @@ const field = (f: string, g: string | null = 'main'): DesignTarget => ({
   kind: 'field',
   field: f,
   group_key: g
+})
+
+/** Types into a focused input / textarea the way React sees it. */
+async function typeInto(el: HTMLInputElement | HTMLTextAreaElement, text: string) {
+  await act(async () => {
+    el.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement
+    Object.getOwnPropertyDescriptor(proto.prototype, 'value')?.set?.call(el, text)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+async function leave(el: Element) {
+  await act(async () => {
+    el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+  })
+  await settle(20)
+}
+
+const withPlacement = (b: LayoutBundle, field: string, patch: Partial<PlacementRow>) => ({
+  ...b,
+  placements: b.placements.map((p) =>
+    p.field === field && p.group_key === 'main' ? { ...p, ...patch } : p
+  )
 })
 
 interface ParityRow {
@@ -613,5 +647,79 @@ describe('Inspector', () => {
   it('says what to do when nothing is selected', async () => {
     await mount(null)
     expect(host.textContent).toContain('Select a field, section or panel')
+  })
+
+  describe('typing is never overwritten from the draft while focused', () => {
+    it('a text setting keeps what was typed when the draft changes under it', async () => {
+      const { redraw, flush } = await mount(field('title'))
+      const input = host.querySelector('[data-setting="field.label"] input') as HTMLInputElement
+      await typeInto(input, 'Subject ')
+      // The autosave answer comes back trimmed.
+      await redraw(withPlacement(makeBundle(), 'title', { overrides: { label: 'Subject' } }))
+      expect(input.value).toBe('Subject ')
+      await leave(input)
+      expect(flush).toHaveBeenCalled()
+      expect(input.value).toBe('Subject')
+    })
+
+    it('a decimal default can be typed', async () => {
+      const { apply, redraw } = await mount(field('amount'))
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      const input = host.querySelector(
+        '[data-setting="field.default_value"] input'
+      ) as HTMLInputElement
+      await typeInto(input, '1.')
+      const [ops, opts] = apply.mock.calls.at(-1) ?? []
+      expect(ops[0]).toEqual({ op: 'layout_update', patch: { default_values: { amount: 1 } } })
+      expect(opts.text).toBe(true)
+      await redraw(makeBundle({ default_values: { amount: 1 } }))
+      expect(input.value).toBe('1.')
+      await typeInto(input, '1.5')
+      expect(apply.mock.calls.at(-1)?.[0][0].patch).toEqual({ default_values: { amount: 1.5 } })
+      await redraw(makeBundle({ default_values: { amount: 1.5 } }))
+      expect(input.value).toBe('1.5')
+    })
+
+    it('editors wrapped in Buffered keep typed text (inline display separator)', async () => {
+      const { redraw, flush } = await mount(field('vendor'))
+      const sep = host.querySelector(
+        '[data-setting="field.inline_display.separator"] input'
+      ) as HTMLInputElement
+      expect(sep.value).toBe(', ')
+      await typeInto(sep, ' / ')
+      await redraw(makeBundle())
+      expect(sep.value).toBe(' / ')
+      await leave(sep)
+      expect(flush).toHaveBeenCalled()
+      expect(sep.value).toBe(', ')
+    })
+
+    it('a section text keeps typed text', async () => {
+      const { redraw } = await mount({ kind: 'group', key: 'note_block' })
+      const area = host.querySelector(
+        '[data-setting="group.content"] textarea'
+      ) as HTMLTextAreaElement
+      await typeInto(area, 'Read this first')
+      const b = makeBundle()
+      await redraw({
+        ...b,
+        groups: b.groups.map((g) => (g.key === 'note_block' ? { ...g, content: 'Other' } : g))
+      })
+      expect(area.value).toBe('Read this first')
+    })
+
+    it('the JSON box is not reset by a draft change while focused', async () => {
+      const { redraw, apply } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      const json = host.querySelector(
+        '[data-setting="field.overrides_raw"] textarea'
+      ) as HTMLTextAreaElement
+      await typeInto(json, '{"label": "Sub')
+      await redraw(withPlacement(makeBundle(), 'title', { overrides: { note: 'x' } }))
+      expect(json.value).toBe('{"label": "Sub')
+      await leave(json)
+      expect(apply).not.toHaveBeenCalled()
+      expect(host.textContent).toContain('Not valid JSON')
+    })
   })
 })

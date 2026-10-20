@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useMemo } from 'react'
 import { Input } from '../../ui/input'
 import { SimpleSelect } from '../../ui/SimpleSelect'
+import { useFocusBuffer } from '../focus-buffer'
 import { RelationLabel } from '../pickers/relation-label'
 import { RelationPicker } from '../pickers/relation-picker'
 import { useEditorApi } from './editor-api'
@@ -216,19 +217,39 @@ export function FieldDefaultValueControl({
         abstractType === 'float' ||
         abstractType === 'number'
       control = (
-        <Input
-          value={value != null ? String(value) : ''}
-          onChange={(e) => {
-            const raw = e.target.value
-            if (raw === '') return setValue(null, true)
-            setValue(numeric && !Number.isNaN(Number(raw)) ? Number(raw) : raw, true)
-          }}
-          placeholder='No default'
-          className='h-7 text-[11px]'
-        />
+        <DefaultTextInput value={value} numeric={numeric} onChange={(v) => setValue(v, true)} />
       )
     }
   }
 
   return control
+}
+
+/** Text / number default. What is typed shows while focused ("1." stays "1."
+ *  though the stored default is the number 1). */
+function DefaultTextInput({
+  value,
+  numeric,
+  onChange
+}: {
+  value: unknown
+  numeric: boolean
+  onChange: (v: unknown) => void
+}) {
+  const buf = useFocusBuffer(value != null ? String(value) : '')
+  return (
+    <Input
+      value={buf.value}
+      onChange={(e) => {
+        const raw = e.target.value
+        buf.set(raw)
+        if (raw === '') return onChange(null)
+        onChange(numeric && !Number.isNaN(Number(raw)) ? Number(raw) : raw)
+      }}
+      {...buf.props}
+      aria-label='Default value'
+      placeholder='No default'
+      className='h-7 text-[11px]'
+    />
+  )
 }
