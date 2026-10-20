@@ -30,6 +30,15 @@ interface DiffDto {
 }
 
 /** The versions list; the editor refreshes it after every save. */
+/**
+ * A version is the state BEFORE the edit its note names ("Move field"), so
+ * Restore on it undoes that edit. Server notes already say so ("before
+ * settings change"); an editor step label gets the prefix.
+ */
+export function versionNoteLabel(note: string): string {
+  return /^before\b/i.test(note) ? note : `Before: ${note}`
+}
+
 export const versionsKey = (id: number) => ['layout-editor', 'versions', id] as const
 const bundleKey = (id: number) => ['layout-editor', 'bundle', id] as const
 
@@ -205,7 +214,7 @@ export function HistoryPanel({
               <span className='min-w-0'>
                 <span className='font-medium'>v{v.version}</span>{' '}
                 <span className='text-slate-500 dark:text-slate-400'>
-                  {v.note ? `${v.note} · ` : ''}
+                  {v.note ? `${versionNoteLabel(v.note)} · ` : ''}
                   {new Date(v.created_at).toLocaleString()}
                   {v.created_by_name ? ` · ${v.created_by_name}` : ''}
                 </span>
