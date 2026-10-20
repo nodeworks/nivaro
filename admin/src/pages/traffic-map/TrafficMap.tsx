@@ -918,7 +918,7 @@ export default function TrafficMap() {
                 <InspectorPlaceholder loading={!ready} />
               )}
             </div>
-            <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-2'>
+            <div className='mt-3.5 grid gap-3.5 min-[1100px]:grid-cols-2'>
               <EventTicker
                 events={view?.events ?? []}
                 newestT={m.events[0]?.t ?? 0}

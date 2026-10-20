@@ -9,4 +9,4 @@ import { HistoryPanel } from './HistoryPanel'
 import './RouteLatency'
 import './shared'
 
-register(pagePanels, { id: 'history', order: 90, Component: HistoryPanel })
+register(pagePanels, { id: 'history', order: 90, wide: true, Component: HistoryPanel })

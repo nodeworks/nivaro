@@ -187,7 +187,7 @@ export function HistoryPanel() {
     <section
       id='tm-history'
       aria-label='History'
-      className='min-w-0 scroll-mt-4 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:col-span-2'
+      className='min-w-0 scroll-mt-4 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
     >
       <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-[var(--tm-line-2)] px-3.5 py-2'>
         <div className='flex min-w-0 flex-wrap items-center gap-3'>

@@ -232,7 +232,7 @@ export function EventTicker({
 
   return (
     <section
-      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
+      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:flex min-[1100px]:min-h-[320px] min-[1100px]:flex-col'
       aria-label='Live events'
       id='tm-ticker'
     >
@@ -247,7 +247,13 @@ export function EventTicker({
           {total.toLocaleString()} since open
         </span>
       </div>
-      <div className='max-h-[440px] overflow-auto' data-tm-ticker='' ref={listRef}>
+      {/* side by side with Hot entities the list takes that card's height (h-0 + flex-1: it never
+          sets the row height itself), so the two cards end level */}
+      <div
+        className='max-h-[440px] overflow-auto min-[1100px]:h-0 min-[1100px]:max-h-none min-[1100px]:flex-1'
+        data-tm-ticker=''
+        ref={listRef}
+      >
         {loading && rows.length === 0 ? (
           <SkeletonRows n={8} />
         ) : rows.length === 0 ? (

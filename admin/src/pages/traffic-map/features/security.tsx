@@ -487,7 +487,7 @@ function SecurityPanel() {
   const NOTE = 'mt-2 text-[11.5px] text-[var(--tm-muted)]'
   return (
     <section
-      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:col-span-2'
+      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
       aria-label='Security'
       id='tm-security'
     >
@@ -592,4 +592,4 @@ register(toolbarItems, {
   slot: 'menu',
   Component: inPage(SecurityMenuItem)
 })
-register(pagePanels, { id: 'security', order: 6, Component: inPage(SecurityPanel) })
+register(pagePanels, { id: 'security', order: 6, wide: true, Component: inPage(SecurityPanel) })

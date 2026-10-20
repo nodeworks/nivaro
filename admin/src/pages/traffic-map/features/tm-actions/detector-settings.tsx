@@ -153,7 +153,7 @@ function DetectorSettingsPanel() {
   }
   return (
     <section
-      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:col-span-2'
+      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
       aria-label='Detector settings'
       id='tm-detectors'
     >
@@ -302,5 +302,6 @@ register(toolbarItems, {
 register(pagePanels, {
   id: 'detector-settings',
   order: 4,
+  wide: true,
   Component: inPage(DetectorSettingsPanel)
 })

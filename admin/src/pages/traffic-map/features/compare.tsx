@@ -469,7 +469,7 @@ export function ComparePanel() {
   if (frozen) return null
   return (
     <section
-      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:col-span-2'
+      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
       aria-label='Compare'
       id='tm-compare'
     >
@@ -516,4 +516,4 @@ export function ComparePanel() {
   )
 }
 
-register(pagePanels, { id: 'compare', order: 80, Component: ComparePanel })
+register(pagePanels, { id: 'compare', order: 80, wide: true, Component: ComparePanel })

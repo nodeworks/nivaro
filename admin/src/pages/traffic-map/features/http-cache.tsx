@@ -90,7 +90,7 @@ function HttpCachePanel() {
   const TD = 'px-2 py-1.5 align-top tabular-nums'
   return (
     <section
-      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:col-span-2'
+      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
       aria-label='HTTP caching'
       id='tm-http-cache'
     >
@@ -188,4 +188,4 @@ register(toolbarItems, {
   slot: 'menu',
   Component: inPage(HttpCacheMenuItem)
 })
-register(pagePanels, { id: 'http-cache', order: 7, Component: inPage(HttpCachePanel) })
+register(pagePanels, { id: 'http-cache', order: 7, wide: true, Component: inPage(HttpCachePanel) })

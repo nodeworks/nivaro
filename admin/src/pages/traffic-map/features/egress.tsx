@@ -105,7 +105,7 @@ function EgressPanel() {
   const maxRows = Math.max(1, ...(d?.readers ?? []).map((r) => r.rows))
   return (
     <section
-      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:col-span-2'
+      className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
       aria-label='Data egress'
       id='tm-egress'
     >
@@ -245,4 +245,4 @@ function EgressPanel() {
 }
 
 register(toolbarItems, { id: 'egress', order: 60, slot: 'menu', Component: inPage(EgressMenuItem) })
-register(pagePanels, { id: 'egress', order: 5, Component: inPage(EgressPanel) })
+register(pagePanels, { id: 'egress', order: 5, wide: true, Component: inPage(EgressPanel) })

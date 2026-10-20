@@ -889,7 +889,7 @@ function PeopleUxPanel() {
   const [hours, setHours] = useState(24)
   const cur = LENSES.find((l) => l.id === lens) as (typeof LENSES)[number]
   return (
-    <div className='min-w-0 min-[1100px]:col-span-2'>
+    <div className='min-w-0'>
       <PanelCard
         title='People and experience'
         id='tm-people-ux'
@@ -975,7 +975,12 @@ function AiScreens() {
   )
 }
 
-register(pagePanels, { id: 'people-ux', order: 70, Component: inMapOnly(PeopleUxPanel) })
+register(pagePanels, {
+  id: 'people-ux',
+  order: 75,
+  wide: true,
+  Component: inMapOnly(PeopleUxPanel)
+})
 register(inspectorPanels, {
   id: 'ai-screens',
   order: 50,
