@@ -425,6 +425,23 @@ describe('LayoutEditor', () => {
     const editor = document.querySelector('[data-layout-editor]') as HTMLElement
     expect(editor.parentElement).toBe(document.body)
   })
+
+  it('overlay says which layout it edits and who gets it; Done leaves', async () => {
+    const onBack = vi.fn()
+    await mount({ mode: 'overlay', onBack })
+    await settle(() => !!document.querySelector('[data-editing-banner]'))
+    const banner = document.querySelector('[data-editing-banner]') as HTMLElement
+    expect(banner.textContent).toContain('Editing Order form')
+    expect(banner.textContent).toContain('used by every record no rule catches')
+    click(banner.querySelector('button'))
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[data-editor-topbar]')?.textContent).toContain('Back to record')
+  })
+
+  it('page mode shows no editing banner', async () => {
+    await mount()
+    expect(document.querySelector('[data-editing-banner]')).toBeNull()
+  })
 })
 
 describe('isTyping', () => {

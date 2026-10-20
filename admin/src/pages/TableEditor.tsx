@@ -81,6 +81,8 @@ import {
   FieldPicker,
   FieldPickerPanel,
   IconPicker,
+  LayoutEditor,
+  LayoutOverview,
   type PickedField,
   QuickPickerStepsEditor,
   ReadPresentationEditor,
@@ -136,6 +138,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api, type CMSField, type CMSRelation } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { ClassicReadOnly } from '@/lib/classic-read-only'
 import {
   CHOICE_INTERFACES,
   type Choice,
@@ -151,6 +154,7 @@ import {
   parseJson,
   SLIDER_INTERFACES
 } from '@/lib/field-config'
+import { AdminLayoutEditorHost } from '@/lib/layout-editor-host'
 import { useGoBack } from '@/lib/nav'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import {
@@ -17726,10 +17730,15 @@ function WorkflowCombobox({
 
 function LayoutsTab({
   tableName,
-  dbColumns
+  dbColumns,
+  readOnly = false,
+  initialLayoutId = null
 }: {
   tableName: string
   dbColumns: Array<{ name: string; data_type: string }>
+  /** The classic view kept beside the new editor: nothing here may write (ClassicReadOnly). */
+  readOnly?: boolean
+  initialLayoutId?: number | null
 }) {
   const qc = useQueryClient()
   const invalidateLayouts = useCallback(
@@ -17826,15 +17835,16 @@ function LayoutsTab({
 
   // Auto-seed "Default" layout for collections that have none yet
   useEffect(() => {
+    if (readOnly) return
     if (layoutsLoaded && layouts.length === 0 && tableName) {
       api
         .post('/collection-layouts', { collection: tableName, name: 'Default', slug: 'default' })
         .then(() => qc.invalidateQueries({ queryKey: ['collection-layouts', tableName] }))
     }
-  }, [layoutsLoaded, layouts.length, tableName, qc])
+  }, [readOnly, layoutsLoaded, layouts.length, tableName, qc])
 
   const activeLayout = layouts.find((l) => l.is_active) ?? layouts[0] ?? null
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(initialLayoutId)
   const effectiveId = selectedId ?? activeLayout?.id ?? null
 
   const [adding, setAdding] = useState(false)
@@ -18039,6 +18049,7 @@ function LayoutsTab({
               >
                 <button
                   type='button'
+                  data-classic-nav=''
                   onClick={() => setSelectedId(l.id)}
                   className='flex min-w-0 flex-1 items-center gap-1.5'
                 >
@@ -18223,6 +18234,7 @@ function LayoutsTab({
             {/* Collapsed summary row */}
             <button
               type='button'
+              aria-expanded={settingsExpanded}
               onClick={() => setSettingsExpanded((v) => !v)}
               className='flex w-full items-center gap-2 px-3 py-2 text-left'
             >
@@ -19267,6 +19279,104 @@ interface RolePreviewResult {
   readonly_fields: string[]
   record_conditional_layouts: string[]
   note: string | null
+}
+
+/**
+ * The classic Layouts tab, read-only (spec §9 items 7 and 15): kept reachable
+ * for comparison while the new editor proves parity, never able to write.
+ */
+export function ClassicLayoutsView({
+  tableName,
+  dbColumns,
+  layoutId,
+  onOpenNew
+}: {
+  tableName: string
+  dbColumns: Array<{ name: string; data_type: string }>
+  layoutId: number | null
+  onOpenNew: () => void
+}) {
+  return (
+    <ClassicReadOnly onOpenNew={onOpenNew}>
+      <LayoutsTab tableName={tableName} dbColumns={dbColumns} readOnly initialLayoutId={layoutId} />
+    </ClassicReadOnly>
+  )
+}
+
+/**
+ * The Layouts tab: "Which form does each record get?" first (LayoutOverview),
+ * `?layout=<id>` opens the editor, `?classic=<id>` the old tab read-only.
+ */
+function LayoutsHost({
+  tableName,
+  dbColumns
+}: {
+  tableName: string
+  dbColumns: Array<{ name: string; data_type: string }>
+}) {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const num = (v: string | null) => (v && /^\d+$/.test(v) ? Number(v) : null)
+  const layoutId = num(searchParams.get('layout'))
+  const classic = searchParams.get('classic')
+  const go = (next: { layout?: number | null; classic?: number | 'all' | null }, replace = false) =>
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev)
+        p.set('tab', 'groups')
+        p.delete('layout')
+        p.delete('classic')
+        if (next.layout != null) p.set('layout', String(next.layout))
+        if (next.classic != null) p.set('classic', String(next.classic))
+        return p
+      },
+      { replace }
+    )
+
+  let body: ReactNode
+  if (classic != null) {
+    const id = num(classic)
+    body = (
+      <ClassicLayoutsView
+        tableName={tableName}
+        dbColumns={dbColumns}
+        layoutId={id}
+        onOpenNew={() => go({ layout: id })}
+      />
+    )
+  } else if (layoutId != null) {
+    body = (
+      <LayoutEditor
+        key={tableName}
+        collection={tableName}
+        layoutId={layoutId}
+        mode='page'
+        onBack={() => go({})}
+        onLayoutChange={(id) => go({ layout: id }, true)}
+        onOpenClassic={(id) => go({ classic: id })}
+      />
+    )
+  } else {
+    body = (
+      <div className='flex flex-col gap-2'>
+        <LayoutOverview
+          collection={tableName}
+          onOpen={(id) => go({ layout: id })}
+          onCreate={(_type, id) => go({ layout: id })}
+        />
+        <div className='flex justify-end'>
+          <button
+            type='button'
+            onClick={() => go({ classic: 'all' })}
+            className='text-[12px] text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline dark:text-muted-foreground dark:hover:text-foreground'
+          >
+            View classic editor (read-only)
+          </button>
+        </div>
+      </div>
+    )
+  }
+  // The shared editor's NivaroProvider is AppLayout's (HelpVideoHost wraps every page).
+  return <AdminLayoutEditorHost collection={tableName}>{body}</AdminLayoutEditorHost>
 }
 
 /** Preview-as-role (#86): which layout a role's member resolves and which
@@ -22576,6 +22686,7 @@ function FieldGroupsTab({
                         <button
                           key={c.id}
                           type='button'
+                          data-classic-nav=''
                           onClick={() => setPoolCategory(c.id)}
                           className={cn(
                             'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
@@ -25262,6 +25373,15 @@ export function TableEditorPage() {
     ]
     if (tabParam && known.includes(tabParam as Tab)) setTab(tabParam as Tab)
   }, [tabParam, setTab])
+  // ?layout=<id> (the new editor) and ?classic=<id> always land on the Layouts tab.
+  const layoutParam = searchParams.get('layout') ?? searchParams.get('classic')
+  useEffect(() => {
+    if (layoutParam) setTab('groups')
+  }, [layoutParam, setTab])
+  const editorOpen =
+    tab === 'groups' &&
+    /^\d+$/.test(searchParams.get('layout') ?? '') &&
+    searchParams.get('classic') == null
   const { user } = useAuth()
   const isAdmin = (user as { is_admin?: boolean } | null)?.is_admin ?? false
   const [showDrop, setShowDrop] = useState(false)
@@ -25437,8 +25557,12 @@ export function TableEditorPage() {
         </div>
       </div>
 
-      {/* Content */}
-      <div className={cn('p-6', tab === 'groups' && 'pb-32')}>
+      {/* Content — the layout editor fills it edge to edge and scrolls its own panes */}
+      <div
+        className={
+          editorOpen ? 'flex min-h-0 flex-1 flex-col' : cn('p-6', tab === 'groups' && 'pb-32')
+        }
+      >
         {isLoading || !tableData ? (
           <div className='space-y-2'>
             {Array.from({ length: 6 }).map((_, i) => (
@@ -25466,7 +25590,7 @@ export function TableEditorPage() {
               />
             )}
             {tab === 'groups' && (
-              <LayoutsTab tableName={table ?? ''} dbColumns={tableData?.columns ?? []} />
+              <LayoutsHost tableName={table ?? ''} dbColumns={tableData?.columns ?? []} />
             )}
             {tab === 'behavior' && <BehaviorTab tableName={table ?? ''} tableData={tableData} />}
             {tab === 'content' && (

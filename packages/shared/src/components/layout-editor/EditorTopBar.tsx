@@ -177,7 +177,8 @@ export function EditorTopBar({
   onPreview,
   showHidden,
   onShowHidden,
-  onBack
+  onBack,
+  backLabel = 'Layouts'
 }: {
   collection: string
   layoutId: number
@@ -194,6 +195,8 @@ export function EditorTopBar({
   showHidden: boolean
   onShowHidden: (v: boolean) => void
   onBack: () => void
+  /** What the back button returns to ("Layouts", or the record in overlay mode). */
+  backLabel?: string
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const pill = row ? rowPill(row) : null
@@ -214,7 +217,7 @@ export function EditorTopBar({
         className='inline-flex h-8 items-center gap-0.5 rounded-md pl-1 pr-2 text-[12px] text-slate-500 transition-colors hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
       >
         <ChevronLeft className='h-4 w-4' />
-        Layouts
+        {backLabel}
       </button>
       <div className='flex min-w-0 flex-1 items-center gap-2'>
         <h2 className='truncate text-[14px] font-semibold text-slate-900 dark:text-foreground'>

@@ -2009,8 +2009,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'lock_conditions',
         'input_bindings',
         'widget_id',
-        'show_approval_chain',
-        'hide_actions_when_collapsed'
+        'show_approval_chain'
       )
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
