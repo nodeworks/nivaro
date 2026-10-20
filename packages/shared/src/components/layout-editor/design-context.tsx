@@ -1,4 +1,6 @@
 import { createContext, useContext } from 'react'
+import type { ActiveLayoutData } from '../item-edit/types'
+import type { RefusedWrite } from './design-canvas'
 
 export type DesignTarget =
   | { kind: 'field'; field: string; group_key: string | null }
@@ -17,6 +19,20 @@ export interface LayoutDesign {
     isDragging(t: DesignTarget): boolean
     dropSlot(t: DesignTarget): 'before' | 'after' | null
   }
+}
+
+/**
+ * The `design` prop of every renderer the layout editor uses as its canvas
+ * (ItemEditForm, RecordReadView, RecordDrilldownSheet).
+ */
+export interface LayoutDesignProp {
+  /** The draft layout — rendered instead of the server's resolved layout. */
+  layout: ActiveLayoutData
+  /** Preview record (its values, steps and rules); null/absent = no values. */
+  record?: Record<string, unknown> | null
+  context: LayoutDesign
+  /** Something on the canvas tried to write and was refused (tests, dev tooling). */
+  onRefusedWrite?: (w: RefusedWrite) => void
 }
 
 export const LayoutDesignContext = createContext<LayoutDesign | null>(null)

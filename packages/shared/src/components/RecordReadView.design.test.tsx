@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import type { NivaroClient } from '@nivaro/sdk'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, type ReactNode } from 'react'
+import { act, type ReactNode, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { NivaroProvider } from '../context'
+import { NivaroProvider, useNivaroClient } from '../context'
+import { post } from '../lib/commands'
 import type { ActiveLayoutData } from './item-edit/types'
 import type { LayoutDesign } from './layout-editor/design-context'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
@@ -326,5 +327,35 @@ describe('design mode fixes', () => {
     expect(calls.some((c) => c.path.startsWith('/items/lines'))).toBe(false)
     expect(calls.some((c) => c.path.startsWith('/items/units_tags'))).toBe(false)
     expect(calls.some((c) => c.path.startsWith('/collections/units_tags'))).toBe(false)
+  })
+})
+
+describe('design mode read-only client', () => {
+  it('a write from inside the read view canvas is refused before it leaves', async () => {
+    const { client, calls } = mockClient()
+    const refused: Array<{ method: string; path: string }> = []
+    function Writer() {
+      const c = useNivaroClient()
+      useEffect(() => {
+        c.request(post('/comments', { text: 'x' })).catch(() => {})
+      }, [c])
+      return <span>writer</span>
+    }
+    await mount(
+      client,
+      <RecordReadView
+        collection='units'
+        renderSlot={(key) => (key === '__comments__' ? <Writer /> : null)}
+        design={{
+          layout: LAYOUT as unknown as ActiveLayoutData,
+          record: RECORD,
+          context: design(),
+          onRefusedWrite: (w) => refused.push(w)
+        }}
+      />
+    )
+    expect(host.textContent).toContain('writer')
+    expect(refused).toEqual([{ method: 'POST', path: '/comments' }])
+    expect(calls.some((c) => c.method !== 'GET')).toBe(false)
   })
 })

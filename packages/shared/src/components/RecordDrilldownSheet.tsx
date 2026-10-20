@@ -1,15 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
-import {
-  type ComponentProps,
-  type ComponentType,
-  lazy,
-  type ReactNode,
-  Suspense,
-  useCallback,
-  useMemo,
-  useState
-} from 'react'
+import { lazy, type ReactNode, Suspense, useCallback, useMemo, useState } from 'react'
 import {
   DrilldownContext,
   type DrilldownTarget,
@@ -19,7 +10,9 @@ import {
 } from '../context'
 import { get } from '../lib/commands'
 import { titleCase } from '../lib/utils'
-import type { ReadViewDesign, ReadViewLayout } from './RecordReadView'
+import { DesignCanvas } from './layout-editor/design-canvas'
+import type { LayoutDesignProp } from './layout-editor/design-context'
+import type { ReadViewLayout } from './RecordReadView'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 
 // The form and the read view load the first time a drill-down opens, not with
@@ -29,11 +22,6 @@ const ItemEditForm = lazy(() => import('./ItemEditForm').then((m) => ({ default:
 const RecordReadView = lazy(() =>
   import('./RecordReadView').then((m) => ({ default: m.RecordReadView }))
 )
-// The form's design prop has the read view's shape (layout + preview record +
-// editor context); typed here so the sheet can hand it through.
-const DesignItemEditForm = ItemEditForm as unknown as ComponentType<
-  ComponentProps<typeof ItemEditForm> & { design?: ReadViewDesign }
->
 
 // Drill-down sheet: a detailed view of any record, rendered by the SAME
 // ItemEditForm that powers ItemEdit — so tabs, containers, field widths
@@ -100,7 +88,7 @@ export function RecordDrilldownSheet({
   /** Layout editor canvas: render this draft detail layout (not the fetched
    *  one) with the preview record, inline at its sheet width instead of in a
    *  modal sheet, with no Open record link and no host override view. */
-  design?: ReadViewDesign
+  design?: LayoutDesignProp
 }) {
   const qc = useQueryClient()
   const client = useNivaroClient()
@@ -232,7 +220,7 @@ export function RecordDrilldownSheet({
       ) : (
         <DrilldownContext.Provider value={drillCtx}>
           <Suspense fallback={loadingRows}>
-            <DesignItemEditForm
+            <ItemEditForm
               key={`${current.collection}:${current.itemId}:${effectiveSlug ?? 'default'}`}
               collection={current.collection}
               itemId={current.itemId}
@@ -249,21 +237,24 @@ export function RecordDrilldownSheet({
   )
 
   // Design mode: the same strip and body in an inline frame at the layout's
-  // sheet width — a modal sheet would lock the editor's panels around it.
+  // sheet width — a modal sheet would lock the editor's panels around it —
+  // inside DesignCanvas (a client that cannot write, no realtime).
   if (design)
     return (
-      <div
-        data-design-sheet
-        className='flex h-full min-h-0 flex-col gap-0 overflow-hidden rounded-lg border border-slate-200 bg-background shadow-sm dark:border-border'
-        style={{ width: sheetWidth ?? width ?? 640, maxWidth: '100%' }}
-      >
-        <div className='flex shrink-0 flex-col border-b border-slate-200 bg-slate-50 px-4 py-2 dark:border-border dark:bg-muted/30'>
-          <div className='flex items-center justify-between gap-2 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
-            {crumb}
+      <DesignCanvas design={design.context} onRefusedWrite={design.onRefusedWrite}>
+        <div
+          data-design-sheet
+          className='flex h-full min-h-0 flex-col gap-0 overflow-hidden rounded-lg border border-slate-200 bg-background shadow-sm dark:border-border'
+          style={{ width: sheetWidth ?? width ?? 640, maxWidth: '100%' }}
+        >
+          <div className='flex shrink-0 flex-col border-b border-slate-200 bg-slate-50 px-4 py-2 dark:border-border dark:bg-muted/30'>
+            <div className='flex items-center justify-between gap-2 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
+              {crumb}
+            </div>
           </div>
+          {body}
         </div>
-        {body}
-      </div>
+      </DesignCanvas>
     )
 
   return (

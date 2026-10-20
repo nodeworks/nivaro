@@ -12,14 +12,11 @@ import { InboundRequestPopover } from './integrations/InboundRequest'
 import { FileM2MField } from './item-edit/FilePickerField'
 import { useFieldTouches } from './item-edit/HeaderFreshness'
 import { richTextToPlain } from './item-edit/helpers'
-import type { ActiveLayoutData, CMSRelation } from './item-edit/types'
+import type { CMSRelation } from './item-edit/types'
 import { UserChip } from './item-edit/UserChip'
 import { DesignNode } from './layout-editor/DesignNode'
-import {
-  type DesignTarget,
-  type LayoutDesign,
-  LayoutDesignContext
-} from './layout-editor/design-context'
+import { DesignCanvas } from './layout-editor/design-canvas'
+import type { DesignTarget, LayoutDesignProp } from './layout-editor/design-context'
 import { integrityByField, useRecordIntegrity } from './panels/RecordIntegrityBanner'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
@@ -64,17 +61,6 @@ export interface ReadViewLayout {
   }
   groups: LayoutGroup[]
   assignments: LayoutAssignment[]
-}
-/**
- * Layout editor canvas (design mode): the draft layout to render, the preview
- * record's values (or none) and the editor's selection/drag context. The read
- * view then fetches neither layout nor record, stays out of live updates, and
- * wraps every section, field, header item and slot in a selectable shell.
- */
-export interface ReadViewDesign {
-  layout: ActiveLayoutData
-  record?: Record<string, unknown> | null
-  context: LayoutDesign
 }
 interface FieldMeta {
   field: string
@@ -938,7 +924,7 @@ function ChildTable({
   )
 }
 
-export function RecordReadView({
+function RecordReadViewBody({
   collection,
   itemId: itemIdProp,
   layoutData: layoutDataProp,
@@ -955,8 +941,10 @@ export function RecordReadView({
   itemId?: string
   /** Required outside design mode. */
   layoutData?: ReadViewLayout
-  /** Layout editor canvas — see ReadViewDesign. */
-  design?: ReadViewDesign
+  /** Layout editor canvas (spec §7.3): render this draft layout with the
+   *  preview record's values; no layout, record or field-config reads, no
+   *  live updates, every section/field/header item/slot selectable. */
+  design?: LayoutDesignProp
   /** Host already pads and scrolls the body (the record form's Summary mode). */
   flush?: boolean
   /**
@@ -1824,12 +1812,22 @@ export function RecordReadView({
       {trailingSlots && <div className='mt-4'>{trailingSlots}</div>}
     </div>
   )
-  return design ? (
-    // No drilling from the canvas: relation values render as plain labels.
-    <LayoutDesignContext.Provider value={design.context}>
-      <DrilldownContext.Provider value={null}>{view}</DrilldownContext.Provider>
-    </LayoutDesignContext.Provider>
-  ) : (
-    view
+  return view
+}
+
+/**
+ * Read-only record presentation. With `design` (the layout editor's canvas)
+ * the whole view — its own hooks included — runs inside DesignCanvas: a
+ * client that cannot write, no realtime, inert inputs, selectable shells.
+ */
+export function RecordReadView(props: Parameters<typeof RecordReadViewBody>[0]) {
+  if (!props.design) return <RecordReadViewBody {...props} />
+  return (
+    <DesignCanvas design={props.design.context} onRefusedWrite={props.design.onRefusedWrite}>
+      {/* No drilling from the canvas: relation values render as plain labels. */}
+      <DrilldownContext.Provider value={null}>
+        <RecordReadViewBody {...props} />
+      </DrilldownContext.Provider>
+    </DesignCanvas>
   )
 }
