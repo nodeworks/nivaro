@@ -93,12 +93,14 @@ export function SlotInspector({
           <Toggle
             k='slot.is_visible'
             label='Show on this form'
+            effect='Off leaves the panel off this form.'
             checked={row?.is_visible ?? true}
             onChange={(v) => write({ is_visible: v }, v ? `Show ${name}` : `Hide ${name}`)}
           />
           <Toggle
             k='slot.default_expanded'
             label='Starts open'
+            effect='Off shows the panel folded until someone opens it.'
             checked={row?.default_expanded ?? field !== '__related_records__'}
             onChange={(v) =>
               write(
@@ -117,6 +119,7 @@ export function SlotInspector({
           <Toggle
             k='slot.pipeline.hide_actions_collapsed'
             label='Hide while collapsed'
+            effect='No transition buttons while the panel is folded.'
             checked={ov.hide_actions_collapsed === true}
             onChange={(v) =>
               setOv('hide_actions_collapsed', v || undefined, `Change the ${name} buttons`)
@@ -125,6 +128,7 @@ export function SlotInspector({
           <Toggle
             k='slot.pipeline.hide_actions_expanded'
             label='Hide while open'
+            effect='No transition buttons while the panel is open.'
             checked={ov.hide_actions_expanded === true}
             onChange={(v) =>
               setOv('hide_actions_expanded', v || undefined, `Change the ${name} buttons`)
@@ -191,6 +195,7 @@ export function SlotInspector({
             <Toggle
               k='pdf_button.auto_generate_on_save'
               label='Make the PDF on every save'
+              effect='Each save of the record makes a new PDF.'
               checked={ov.auto_generate_on_save === true}
               onChange={(v) =>
                 setOv('auto_generate_on_save', v || undefined, 'Change when the PDF is made')

@@ -254,7 +254,7 @@ export function CascadeFiltersEditor({
                       </PopoverContent>
                     </Popover>
                   </div>
-                  <div>
+                  <div data-setting='field.cascade_filters.filter_column'>
                     <p className='mb-1 text-[11px] text-slate-500'>
                       Filter column on
                       {relatedCollection ? ` ${relatedCollection}` : ' related table'}
@@ -375,7 +375,7 @@ export function CascadeFiltersEditor({
                     <X className='h-3.5 w-3.5' />
                   </button>
                 </div>
-                <div className='mt-1' data-setting='field.cascade_filters.filter_column'>
+                <div className='mt-1'>
                   <span className='font-mono text-[11px] text-[#6b7280]'>{rule.filter_column}</span>
                   {rule.filter_is_m2m && (
                     <span className='ml-1.5 rounded px-1 py-0.5 text-[11px] font-semibold bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'>
@@ -532,7 +532,7 @@ export function CascadeFiltersEditor({
           </div>
 
           {/* filter column */}
-          <div>
+          <div data-setting='field.cascade_filters.filter_column'>
             <p className='mb-1 text-[11px] text-slate-500'>
               Filter column on{relatedCollection ? ` ${relatedCollection}` : ' related table'}
             </p>

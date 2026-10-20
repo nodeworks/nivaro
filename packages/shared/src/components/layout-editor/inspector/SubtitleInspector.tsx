@@ -62,7 +62,11 @@ export function SubtitleInspector() {
       />
       {cfg && (
         <>
-          <Setting k='subtitle.separator' label='Between fields'>
+          <Setting
+            k='subtitle.separator'
+            label='Between fields'
+            effect='The text placed between the subtitle fields.'
+          >
             <TextInput
               ariaLabel='Between fields'
               value={cfg.separator}

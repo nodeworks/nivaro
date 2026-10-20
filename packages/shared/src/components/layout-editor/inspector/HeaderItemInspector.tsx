@@ -89,7 +89,11 @@ export function HeaderItemInspector({ row, label }: { row: PlacementRow; label: 
           }
         />
       </Setting>
-      <Setting k='header.display_format' label='Format'>
+      <Setting
+        k='header.display_format'
+        label='Format'
+        effect='How the value is written in the header.'
+      >
         <Choice
           ariaLabel='Format'
           value={str(bindingValue(row, '__display_format__')) || 'text'}
@@ -99,7 +103,7 @@ export function HeaderItemInspector({ row, label }: { row: PlacementRow; label: 
           }
         />
       </Setting>
-      <Setting k='header.color' label='Colour'>
+      <Setting k='header.color' label='Colour' effect='The colour of the value in the header.'>
         <Choice
           ariaLabel='Colour'
           value={str(bindingValue(row, '__color__'))}
@@ -107,14 +111,18 @@ export function HeaderItemInspector({ row, label }: { row: PlacementRow; label: 
           onChange={(v) => setMeta('__color__', v || null, `Change the colour of ${label}`)}
         />
       </Setting>
-      <Setting k='header.weight' label='Weight'>
+      <Setting k='header.weight' label='Weight' effect='How bold the value is.'>
         <Segmented
           value={str(bindingValue(row, '__weight__'))}
           options={WEIGHTS}
           onChange={(v) => setMeta('__weight__', v || null, `Change the weight of ${label}`)}
         />
       </Setting>
-      <Setting k='header.display_as' label='Shown as'>
+      <Setting
+        k='header.display_as'
+        label='Shown as'
+        effect='Plain text, a coloured pill or a tag.'
+      >
         <Segmented
           value={str(bindingValue(row, '__display_as__'))}
           options={DISPLAY_AS}

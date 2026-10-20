@@ -469,6 +469,7 @@ export function GridTab() {
           <Toggle
             k='field.show_line_numbers'
             label='Line numbers'
+            effect='A number at the start of each row.'
             checked={opts.show_line_numbers === true}
             onChange={(v) =>
               ctx.setOption(
@@ -481,6 +482,7 @@ export function GridTab() {
           <Toggle
             k='field.enable_reorder'
             label='Drag rows to reorder'
+            effect='People drag rows to change their order.'
             checked={opts.enable_reorder !== false}
             onChange={(v) => ctx.setOption('enable_reorder', v, `Change row reordering of ${name}`)}
           />
@@ -522,6 +524,7 @@ export function GridTab() {
             <Toggle
               k='field.allow_revision_restore'
               label='Allow restoring a row'
+              effect='Row history offers putting a row back as it was.'
               checked={row.allow_revision_restore !== false}
               onChange={(v) =>
                 ctx.setPlacement({ allow_revision_restore: v }, `Change row restore of ${name}`)
@@ -750,7 +753,11 @@ export function GridTab() {
                 }
               />
             )}
-            <Setting k='field.sort_field' label='Sort rows by'>
+            <Setting
+              k='field.sort_field'
+              label='Sort rows by'
+              effect='The order rows show in. Empty keeps the stored order.'
+            >
               <Choice
                 ariaLabel='Sort rows by'
                 value={sortField}
@@ -769,7 +776,7 @@ export function GridTab() {
                 }
               />
             </Setting>
-            <Setting k='field.sort_dir' label='Direction'>
+            <Setting k='field.sort_dir' label='Direction' effect='Smallest first or largest first.'>
               <Segmented
                 disabled={!sortField}
                 value={sortDir}
@@ -815,6 +822,7 @@ export function GridTab() {
             <Setting
               k='field.column_presets'
               label='Sets of columns people can switch between'
+              effect='Each preset is a named set of columns people pick above the grid.'
               scope='field'
             >
               <div className='space-y-1.5'>
@@ -844,7 +852,12 @@ export function GridTab() {
               </div>
             </Setting>
             {presets.length >= 2 && (
-              <Setting k='field.default_preset' label='Opens with' scope='field'>
+              <Setting
+                k='field.default_preset'
+                label='Opens with'
+                effect='The set of columns the grid opens with.'
+                scope='field'
+              >
                 <Choice
                   ariaLabel='Opens with'
                   value={defaultPreset}

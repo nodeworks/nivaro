@@ -294,7 +294,11 @@ export function RulesTab() {
           <p className='text-[11px] text-muted-foreground'>
             A button beside the field copies its value into one column of every line of a grid.
           </p>
-          <Setting k='field.apply_to_lines.grid' label='Grid'>
+          <Setting
+            k='field.apply_to_lines.grid'
+            label='Grid'
+            effect='The grid whose lines get the value.'
+          >
             <Choice
               ariaLabel='Grid'
               value={atl.grid ?? ''}
@@ -310,7 +314,11 @@ export function RulesTab() {
               }
             />
           </Setting>
-          <Setting k='field.apply_to_lines.target' label='Column'>
+          <Setting
+            k='field.apply_to_lines.target'
+            label='Column'
+            effect='The column of each line that receives the value.'
+          >
             <Choice
               ariaLabel='Column'
               disabled={!atl.grid}
@@ -322,7 +330,11 @@ export function RulesTab() {
               onChange={(v) => setAtl({ ...atl, target: v }, `Copy ${name} into a column`)}
             />
           </Setting>
-          <Setting k='field.apply_to_lines.label' label='Button label'>
+          <Setting
+            k='field.apply_to_lines.label'
+            label='Button label'
+            effect='The words on the button.'
+          >
             <TextInput
               ariaLabel='Button label'
               disabled={!atl.grid}

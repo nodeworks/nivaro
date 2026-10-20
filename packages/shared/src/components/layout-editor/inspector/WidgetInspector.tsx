@@ -78,7 +78,7 @@ export function WidgetInspector({ row }: { row: PlacementRow }) {
       <Setting
         k='widget.label_override'
         label='Title'
-        effect={def ? `Empty uses "${def.name}".` : undefined}
+        effect={def ? `Empty uses "${def.name}".` : "Empty uses the widget's own name."}
       >
         <TextInput
           ariaLabel='Title'

@@ -216,7 +216,11 @@ export function PickerTab() {
               )
             }
           />
-          <Setting k='field.drilldown.layout_id' label='Panel layout'>
+          <Setting
+            k='field.drilldown.layout_id'
+            label='Panel layout'
+            effect='The layout the side panel shows the record with.'
+          >
             <Choice
               ariaLabel='Panel layout'
               disabled={!ddEnabled}
@@ -340,6 +344,7 @@ export function PickerTab() {
           <Toggle
             k='field.allow_upload'
             label='Allow uploads'
+            effect='People can upload new files into this field.'
             scope='field'
             checked={allowUpload}
             onChange={(v) =>
@@ -354,6 +359,7 @@ export function PickerTab() {
           <Toggle
             k='field.allow_pick'
             label='Allow picking existing files'
+            effect='People can attach files that are already stored.'
             scope='field'
             checked={allowPick}
             onChange={(v) =>

@@ -255,6 +255,7 @@ function makeBundle(layout: Record<string, unknown> = {}): LayoutBundle {
         ],
         lock_conditions: JSON.stringify([
           { type: 'pipeline_state', state_keys: [] },
+          { type: 'pipeline_state', pipeline_id: 'p1', state_keys: ['open'] },
           { type: 'role', role_ids: [] }
         ])
       }),
@@ -332,7 +333,10 @@ function makeClient() {
           total: 2
         }
       if (p === '/roles') return { data: [{ id: 'r-1', name: 'Buyer' }] }
-      if (p === '/pipelines') return { data: [] }
+      if (p === '/pipelines')
+        return { data: [{ id: 'p1', name: 'Order flow', collections: ['orders'] }] }
+      if (p === '/pipelines/p1')
+        return { data: { states: [{ id: 's1', key: 'open', label: 'Open' }] } }
       if (p === '/widgets-internal')
         return {
           data: [
@@ -424,8 +428,37 @@ async function mount(
   return { apply, flush, calls, qc, redraw }
 }
 
+const CONTROL =
+  'input, textarea, button, select, [role="switch"], [role="combobox"], [role="button"]'
+const hasControl = (el: Element) => el.matches(CONTROL) || !!el.querySelector(CONTROL)
+/** Parity rows that show something rather than change it. */
+const READOUTS = new Set([
+  'group.key',
+  'field.impact',
+  'field.row_rules_lint',
+  'field.drawer_relations.hint',
+  'inspector.enforcement_note'
+])
+
+/** Keys whose marker holds a real control (or is a read-out row). */
 const settingsIn = () =>
-  [...host.querySelectorAll('[data-setting]')].map((e) => e.getAttribute('data-setting') as string)
+  [...host.querySelectorAll('[data-setting]')]
+    .filter((e) => hasControl(e) || READOUTS.has(e.getAttribute('data-setting') as string))
+    .map((e) => e.getAttribute('data-setting') as string)
+
+/** Setting rows missing their one-line effect or their scope tag. */
+const rowProblems = new Set<string>()
+const scopesSeen = new Set<string>()
+function checkRows() {
+  for (const row of host.querySelectorAll('[data-setting-row]')) {
+    const k = row.getAttribute('data-setting') as string
+    const effect = row.querySelector(':scope > [data-effect]')
+    if (!effect?.textContent?.trim()) rowProblems.add(`${k}: no effect sentence`)
+    const scope = row.querySelector(':scope > div [data-scope]')
+    if (!scope) rowProblems.add(`${k}: no scope tag`)
+    else if (hasControl(row)) scopesSeen.add(scope.getAttribute('data-scope') as string)
+  }
+}
 
 async function click(el: Element | null | undefined) {
   expect(el, 'element to click').toBeTruthy()
@@ -437,6 +470,7 @@ async function click(el: Element | null | undefined) {
 
 /** Every control on every tab (row rules expanded). */
 async function collectAll(): Promise<string[]> {
+  checkRows()
   const out = new Set(settingsIn())
   const tabs = [...host.querySelectorAll('[data-inspector-tab]')].map((t) =>
     t.getAttribute('data-inspector-tab')
@@ -445,6 +479,7 @@ async function collectAll(): Promise<string[]> {
     await click(host.querySelector(`[data-inspector-tab="${t}"]`))
     for (const h of [...host.querySelectorAll('[role="button"][aria-expanded="false"]')])
       await click(h)
+    checkRows()
     for (const k of settingsIn()) out.add(k)
   }
   return [...out]
@@ -534,12 +569,27 @@ describe('Inspector', () => {
     )
     for (const k of settingsIn()) seen.add(k)
 
+    // A cascade filter's column is picked in its add / edit form
+    await mount(field('vendor'))
+    await click(host.querySelector('[data-inspector-tab="picker"]'))
+    await click(
+      [...host.querySelectorAll('button')].find((x) =>
+        /Add (another|cascade) filter/.test(x.textContent ?? '')
+      )
+    )
+    for (const k of settingsIn()) seen.add(k)
+
+    // "This form only" / "Every form" sits on the rows of real controls.
+    if (scopesSeen.has('form') && scopesSeen.has('field')) seen.add('inspector.scope_marker')
+
     const required = (parityRows as ParityRow[]).filter(
       (r) => r.home === 'inspector' && r.status !== 'retired'
     )
     expect(required.length).toBeGreaterThan(170)
     const missing = required.map((r) => r.key).filter((k) => !seen.has(k))
     expect(missing).toEqual([])
+    // Every setting says what it does and where it applies.
+    expect([...rowProblems]).toEqual([])
   }, 60_000)
 
   it('global key asks before saving and lists affected layouts', async () => {

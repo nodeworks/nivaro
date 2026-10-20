@@ -92,9 +92,7 @@ export function PipelineStateConditionRow({
         <p className='text-[11px] text-slate-400'>No pipelines bound to this collection.</p>
       )}
       {!pipelineId && (
-        <p className='text-[11px] text-slate-400' data-setting='field.lock_conditions.state_keys'>
-          Pick a pipeline to choose its states.
-        </p>
+        <p className='text-[11px] text-slate-400'>Pick a pipeline to choose its states.</p>
       )}
       {pipelineId && states.length > 0 && (
         <div
@@ -121,9 +119,7 @@ export function PipelineStateConditionRow({
         </div>
       )}
       {pipelineId && states.length === 0 && (
-        <p className='text-[11px] text-slate-400' data-setting='field.lock_conditions.state_keys'>
-          No states defined for this pipeline.
-        </p>
+        <p className='text-[11px] text-slate-400'>No states defined for this pipeline.</p>
       )}
     </div>
   )

@@ -354,7 +354,7 @@ function FieldInspector({ row, readOnly }: { row: PlacementRow; readOnly: boolea
     <FieldCtxContext.Provider value={ctx}>
       <GlobalWriterContext.Provider value={writer}>
         <Heading title={info.label} kind={info.relKind ?? titleCase(info.type)} sub={row.field} />
-        <p data-setting='inspector.scope_marker' className='text-[11px] text-muted-foreground'>
+        <p className='text-[11px] text-muted-foreground'>
           Each setting says whether it changes this form only or every form that shows {info.label}.
         </p>
         <div role='tablist' className='flex gap-1 border-b border-slate-200 dark:border-border'>

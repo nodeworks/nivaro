@@ -114,7 +114,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
       <div data-setting='group.key' className='text-[11px] text-muted-foreground'>
         Key <span className='font-mono'>{group.key}</span>
       </div>
-      <Setting k='group.icon' label='Icon'>
+      <Setting k='group.icon' label='Icon' effect='Shown before the section title.'>
         <IconPicker
           value={group.icon ?? ''}
           onChange={(v) => update({ icon: v || null }, `Change the icon of ${name}`)}
@@ -192,13 +192,18 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
         <Toggle
           k='group.is_collapsed'
           label='Starts collapsed'
+          effect='The section opens folded; people unfold it.'
           checked={group.is_collapsed}
           onChange={(v) => update({ is_collapsed: v }, v ? `Collapse ${name}` : `Expand ${name}`)}
         />
       )}
       {type === 'content' && (
         <>
-          <Setting k='group.content_tone' label='Style'>
+          <Setting
+            k='group.content_tone'
+            label='Style'
+            effect='Note and Warning are coloured boxes; Divider is a line with the text.'
+          >
             <Segmented
               value={group.content_tone ?? 'info'}
               options={[
@@ -209,7 +214,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
               onChange={(v) => update({ content_tone: v }, `Change the style of ${name}`)}
             />
           </Setting>
-          <Setting k='group.content' label='Text'>
+          <Setting k='group.content' label='Text' effect='The words this block shows on the form.'>
             <TextArea
               ariaLabel='Text'
               value={group.content ?? ''}
@@ -239,6 +244,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
           <Toggle
             k='group.hide_when_empty'
             label='Hide when all its fields are empty'
+            effect='The section disappears while none of its fields has a value.'
             checked={group.hide_when_empty}
             onChange={(v) => update({ hide_when_empty: v }, `Change when ${name} hides`)}
           />
@@ -437,6 +443,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
           <Toggle
             k='group.summary_hide_empty'
             label='Leave out empty values'
+            effect='Fields without a value are left out of the summary line.'
             checked={group.summary_hide_empty}
             onChange={(v) => update({ summary_hide_empty: v }, `Change the summary of ${name}`)}
           />

@@ -227,8 +227,8 @@ export function Setting({
   /** Parity key (data-setting). */
   k: string
   label: ReactNode
-  /** One sentence: what this does. */
-  effect?: ReactNode
+  /** One sentence: what this does. Every setting says it. */
+  effect: ReactNode
   scope?: Scope
   /** Server-enforced only from the default form. */
   enforced?: boolean
@@ -239,7 +239,7 @@ export function Setting({
 }) {
   const w = useContext(GlobalWriterContext)
   return (
-    <div data-setting={k} className={cn('space-y-1', className)}>
+    <div data-setting={k} data-setting-row='' className={cn('space-y-1', className)}>
       <div className='flex min-h-6 items-center justify-between gap-2'>
         <span className='min-w-0 text-[12px] font-medium text-foreground'>{label}</span>
         <span className='flex shrink-0 items-center gap-2'>
@@ -248,7 +248,9 @@ export function Setting({
         </span>
       </div>
       {!inline && children}
-      {effect && <p className='text-[11px] leading-snug text-muted-foreground'>{effect}</p>}
+      <p data-effect='' className='text-[11px] leading-snug text-muted-foreground'>
+        {effect}
+      </p>
       {enforced && <EnforcementNote />}
       {scope === 'field' && w?.pending?.key === k && <GlobalConfirm />}
     </div>
@@ -267,7 +269,7 @@ export function Toggle({
 }: {
   k: string
   label: ReactNode
-  effect?: ReactNode
+  effect: ReactNode
   scope?: Scope
   enforced?: boolean
   checked: boolean

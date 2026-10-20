@@ -159,7 +159,12 @@ export function AdvancedTab() {
               )
             }
           />
-          <Setting k='field.deprecation_note' label='What callers should use instead' scope='field'>
+          <Setting
+            k='field.deprecation_note'
+            label='What callers should use instead'
+            effect='API callers see it as the deprecation reason.'
+            scope='field'
+          >
             <DraftInput
               ariaLabel='What callers should use instead'
               value={note ?? ''}
@@ -191,6 +196,7 @@ export function AdvancedTab() {
               <Toggle
                 k='field.cascade_filters.filter_via_many'
                 label='Filter through the many side'
+                effect='Matches options through a many-to-many link instead of a column on the option.'
                 scope='field'
                 checked={r.filter_via_many === true}
                 onChange={(v) =>
@@ -203,7 +209,12 @@ export function AdvancedTab() {
                   )
                 }
               />
-              <Setting k='field.cascade_filters.value_map' label='Value map' scope='field'>
+              <Setting
+                k='field.cascade_filters.value_map'
+                label='Value map'
+                effect='Turns the parent value into the option value before filtering: {"parent": "option"}.'
+                scope='field'
+              >
                 <JsonInput
                   ariaLabel='Value map'
                   rows={3}
@@ -222,6 +233,7 @@ export function AdvancedTab() {
               <Setting
                 k='field.cascade_filters.value_map_default'
                 label='Value map default'
+                effect='Used when the parent value is not in the value map.'
                 scope='field'
               >
                 <JsonInput
