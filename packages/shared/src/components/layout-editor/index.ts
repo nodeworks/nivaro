@@ -7,6 +7,7 @@ export {
   isDesignAllowedRequest,
   type RefusedWrite
 } from './design-canvas'
+export {
   type DesignTarget,
   type LayoutDesign,
   LayoutDesignContext,
