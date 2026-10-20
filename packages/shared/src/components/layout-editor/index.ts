@@ -1,4 +1,5 @@
 export { HistoryPanel } from './HistoryPanel'
+export { PdfCanvas, type PdfCanvasProps } from './canvases/PdfCanvas'
 export {
   type LayoutEditorHost,
   LayoutEditorHostContext,
