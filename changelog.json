@@ -1,10 +1,112 @@
 {
-  "generated_at": "2026-10-20T02:15:31.968Z",
+  "generated_at": "2026-10-20T05:26:57.604Z",
   "releases": [
+    {
+      "version": "0.2.72",
+      "tag": "v0.2.72",
+      "date": "2026-10-20T01:26:43-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "regenerate docs.html and docs-index after the round-2 speed merges",
+              "hash": "78e11d19"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Permission cache check: mixed-load probe on report procedures only",
+              "hash": "53b768d4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Permission cache: keep procedure verdicts warm, finish classifier",
+              "hash": "a1e2b19e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Permission cache: close remaining invalidation gaps",
+              "hash": "e60b8512"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Shared metadata cache: key on the database incarnation (#2441)",
+              "hash": "eae1f177"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "@nivaro/react: ship one file per module so apps can split it",
+              "hash": "2e5d4989"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Permission cache: harden invalidation",
+              "hash": "478576b6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Warm queue first pages after boot; stable unsorted queue pages",
+              "hash": "49d7d2ed"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Shared metadata cache in Redis (#2441)",
+              "hash": "55b1cb5c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Socket events refresh exactly what changed (#2450)",
+              "hash": "24f6039f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Compiled permission cache per person (PERMISSION_CACHE=on)",
+              "hash": "9ecf6640"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Load recharts and TipTap on first use instead of in the entry",
+              "hash": "8b9cc5f5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Export the metadata cache helpers from @nivaro/react",
+              "hash": "80055201"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Keep metadata between reloads (#2449)",
+              "hash": "50fe3a59"
+            }
+          ]
+        }
+      ],
+      "count": 14
+    },
     {
       "version": "0.2.71",
       "tag": "v0.2.71",
-      "date": "2026-10-19T22:15:14-04:00",
+      "date": "2026-10-19T22:15:32-04:00",
       "sections": [
         {
           "label": "Other",
