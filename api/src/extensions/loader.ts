@@ -66,6 +66,7 @@ import {
   type KitDeprecation,
   watchDeprecatedMembers
 } from '@nivaro/extension-kit'
+import { registerCacheWarmer } from '../services/cache-warmers.js'
 import { runLongSql } from '../services/run-long.js'
 import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
 
@@ -859,6 +860,20 @@ export function registrationMembers(
         registerTuningObserver(def, extId)
       }
     },
+    // #2445 — an extension's own expensive read, run by the cache warm (boot +
+    // 06:30) after the core queries, inside its budget. A malformed call is
+    // logged and skipped, never a throw out of register().
+    cache: {
+      registerWarm: (name, fn, o) => {
+        note('cache')
+        try {
+          const id = registerCacheWarmer(extId, name, fn, o ?? {})
+          own('cache_warmers', id)
+        } catch (err) {
+          console.warn(`[extensions] ${extId}: cache warmer skipped —`, (err as Error).message)
+        }
+      }
+    },
     seeds: {
       register: (def) => {
         note('seeds')
@@ -1187,6 +1202,7 @@ async function loadExtension(
     | 'readiness'
     | 'tasks'
     | 'tuning'
+    | 'cache'
     | 'seeds'
     | 'schema'
     | 'helpVideos'
@@ -1414,6 +1430,7 @@ export async function loadExtensions(
     | 'readiness'
     | 'tasks'
     | 'tuning'
+    | 'cache'
     | 'seeds'
     | 'schema'
     | 'helpVideos'
@@ -1569,6 +1586,7 @@ export async function loadCloudExtensions(
     | 'readiness'
     | 'tasks'
     | 'tuning'
+    | 'cache'
     | 'seeds'
     | 'schema'
     | 'helpVideos'
@@ -1761,6 +1779,7 @@ export async function scanNewExtensions(
     | 'readiness'
     | 'tasks'
     | 'tuning'
+    | 'cache'
     | 'seeds'
     | 'schema'
     | 'helpVideos'

@@ -3,8 +3,7 @@ import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { customQueryCacheKey, customQueryCacheValue } from '../services/custom-query-cache.js'
-import { applyScopeParams } from '../services/custom-query-scope.js'
+import { customQueryCacheValue } from '../services/custom-query-cache.js'
 import { cachedDefinition } from '../services/definition-cache.js'
 import { can } from '../services/permissions.js'
 import { recordCacheOutcome, recordSharedRun } from '../services/query-cache-stats.js'
@@ -34,6 +33,14 @@ import {
   readableIds,
   readOneAs
 } from '../services/widget-access.js'
+import {
+  bindWidgetParams,
+  noteWidgetParamSet,
+  planWidgetQuery,
+  runWidgetSql,
+  widgetFlightKey,
+  widgetQueryAccessError
+} from '../services/widget-query.js'
 import type { User } from '../types.js'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -488,45 +495,17 @@ async function renderWidget(
     )
     if (!cq) throw new Error('Custom query not found')
     // Mirror the access gate from POST /custom-queries/:slug/run
-    const VALID_ACCESS = new Set(['admin', 'authenticated', 'public'])
-    if (!VALID_ACCESS.has(cq.access)) {
-      const e = new Error('Forbidden')
-      ;(e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 403
-      throw e
-    }
-    if (cq.access === 'admin' && !isAdmin) {
-      const e = new Error('Forbidden')
-      ;(e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 403
-      throw e
-    }
-    if (cq.access === 'authenticated' && !user) {
-      const e = new Error('Unauthorized')
-      ;(e as NodeJS.ErrnoException & { statusCode: number }).statusCode = 401
-      throw e
-    }
+    const accessError = widgetQueryAccessError(cq, !!user, isAdmin)
+    if (accessError) throw accessError
 
-    const params: Record<string, unknown> = {}
-    let unresolvedParam = false
     // Which inputs the widget is still waiting on — the client says "waiting
     // for Project" rather than rendering the same dash a real empty result
     // gets (#536: no data vs not configured were indistinguishable).
-    const awaiting: string[] = []
-    for (const b of paramBindings) {
-      const v = inputs[b.input_key]
-      const paramKey =
-        typeof b.param === 'string' && b.param.startsWith(':') ? b.param.slice(1) : String(b.param)
-      const resolved =
-        v != null && v !== ''
-          ? v
-          : b.default_value != null && b.default_value !== ''
-            ? b.default_value
-            : null
-      if (resolved == null) {
-        unresolvedParam = true
-        if (b.input_key && !awaiting.includes(b.input_key)) awaiting.push(b.input_key)
-      }
-      params[paramKey] = resolved
-    }
+    const {
+      params: bound,
+      unresolved: unresolvedParam,
+      awaiting
+    } = bindWidgetParams(paramBindings, inputs)
     // A bound param with no value (and no default) means the widget is scoped
     // to something the record doesn't have yet (e.g. project budget before a
     // project is chosen) — running the query would return UNSCOPED results.
@@ -554,31 +533,15 @@ async function renderWidget(
       return { awaiting, rows: [] }
     }
 
+    // The warm replays the most-seen bound sets of cached widgets (#2445).
+    if (Number(cq.cache_ttl ?? 0) > 0) noteWidgetParamSet(widget.id as number, bound)
+
     // User Scopes on raw SQL: the query's scope params for this caller, as the
     // execute route applies them — BEFORE the SQL text is built and before the
     // cache key, so the statement that runs and the key it is cached under both
-    // carry the caller's scope values.
-    await applyScopeParams(
-      (cq as { scope_params?: string | null }).scope_params ?? null,
-      params,
-      user?.id,
-      isAdmin
-    )
-
-    // Use execSqlBatch directly — Knex MSSQL's execSql wraps in sp_executesql
-    // which swallows stored procedure result sets. Full literal substitution is
-    // safe for MSSQL: strings use '' quoting (backslash is not special).
-    const resolvedSql = (cq.sql_text as string).replace(/:(\w+)/g, (_, k: string) => {
-      const v = params[k]
-      if (v == null || v === '') return 'NULL'
-      if (typeof v === 'boolean') return v ? '1' : '0'
-      if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL'
-      if (v instanceof Date) {
-        if (Number.isNaN((v as Date).getTime())) return 'NULL'
-        return `'${(v as Date).toISOString().slice(0, 23).replace('T', ' ')}'`
-      }
-      return `'${String(v).replace(/'/g, "''")}'`
-    })
+    // carry the caller's scope values (services/widget-query.ts, shared with the
+    // cache warm).
+    const { cacheKey, resolvedSql } = await planWidgetQuery(cq, bound, user?.id, isAdmin)
     // Widgets used to run the query on EVERY render, ignoring the custom
     // query's own cache_ttl entirely -- a record page re-ran a multi-second
     // stored procedure each time it opened.
@@ -594,7 +557,6 @@ async function renderWidget(
     // Scope injection is what keeps sharing-by-accident safe regardless: the
     // route mixes a restricted caller's scope values INTO the params before
     // keying, so a scoped result can never land under an unscoped key.
-    const cacheKey = customQueryCacheKey(cq.slug, params)
     const cacheTtl = Number(cq.cache_ttl ?? 0)
     let cachedRows: unknown[] | null = null
     let cacheInfo: Record<string, unknown> | undefined
@@ -633,56 +595,12 @@ async function renderWidget(
       }
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
-    const knexClient = (db as any).client
-    const Driver = knexClient._driver() as {
-      Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown
-    }
     // Acquire the pool connection ONLY when the query actually runs: a cache
     // hit used to acquire here and never release (the release rode the query
     // promise's finally, which a hit never created) — one leaked connection
-    // per cached render drained staging's pool (2026-09-25).
-    const runQuery = async (): Promise<unknown[]> => {
-      const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
-      try {
-        return await new Promise<unknown[]>((resolve, reject) => {
-          let settled = false
-          const done = (fn: () => void) => {
-            if (!settled) {
-              settled = true
-              fn()
-            }
-          }
-          const req = new Driver.Request(resolvedSql, (err: Error | null) => {
-            if (err) done(() => reject(err))
-          }) as {
-            on(
-              ev: 'row',
-              h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void
-            ): unknown
-            on(ev: 'error', h: (e: Error) => void): unknown
-            once(ev: 'requestCompleted', h: () => void): unknown
-            setTimeout?: (ms: number) => void
-          }
-          // Heavy report procs outlive the connection-level 15s requestTimeout —
-          // same per-request escape hatch custom-query-exec.ts uses (a Budget
-          // Breakdown render was timing out at 15s and surfacing as a sticky
-          // "Render failed" on the record page).
-          req.setTimeout?.(120_000)
-          const collected: unknown[] = []
-          req.on('row', (cols) => {
-            const row: Record<string, unknown> = {}
-            for (const col of cols) row[col.metadata.colName] = col.value
-            collected.push(row)
-          })
-          req.once('requestCompleted', () => done(() => resolve(collected)))
-          req.on('error', (e) => done(() => reject(e)))
-          conn.execSqlBatch(req)
-        })
-      } finally {
-        await knexClient.releaseConnection(conn)
-      }
-    }
+    // per cached render drained staging's pool (2026-09-25). runWidgetSql
+    // acquires inside and releases in finally.
+    const runQuery = () => runWidgetSql(resolvedSql)
     // #2452 — concurrent misses on the same final key (scope values included)
     // share ONE run, cache_ttl 0 too, and the run holds a heavy-read slot.
     // Every caller passed this widget's access checks above on its own.
@@ -690,7 +608,7 @@ async function renderWidget(
     if (cachedRows) rows = cachedRows
     else {
       const out = await sharedGatedRead(
-        `widget|${cacheKey}`,
+        widgetFlightKey(cacheKey),
         user?.id,
         async () => {
           // Timed inside the slot: the gate wait is not execution time.

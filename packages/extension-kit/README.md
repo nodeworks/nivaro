@@ -44,6 +44,13 @@ export default defineExtension({
   `ConfigSeedDef` (checked-in configuration rows with a drift report) and
   `SchemaStepDef` (versioned DDL an extension owns, run once at load under
   the migration lock).
+- **Cache warm** — `ctx.cache.registerWarm(name, fn, { budgetMs? })`: an
+  expensive read of the extension's own (fill its Redis cache, run the query
+  that warms the database), run by the core cache warm after a boot and at
+  06:30 on weekdays, inside the warm's time budget, each with its own
+  timeout (`CacheWarmFn` gets `{ signal, budgetMs }`). Read-only; errors are
+  logged, never thrown. `createTestContext()` records them in
+  `registered.cacheWarmers`.
 - **Helpers** — `hasColumn(db, table, column)` (a per-database column probe
   for writers that must survive an unmigrated database) and
   `requesterInsertFields` / `requesterSelectColumns` for the ERP submission

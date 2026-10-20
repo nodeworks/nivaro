@@ -36,7 +36,7 @@ async function tablePresent(): Promise<boolean> {
 
 /** Fire-and-forget: a failed insert never reaches the caller. */
 export async function recordParamSet(
-  kind: 'query' | 'proc',
+  kind: 'query' | 'proc' | 'widget',
   target: string,
   params: Record<string, unknown>
 ): Promise<void> {
@@ -70,7 +70,7 @@ export async function recordParamSet(
 }
 
 export async function paramSetsFor(
-  kind: 'query' | 'proc',
+  kind: 'query' | 'proc' | 'widget',
   target: string
 ): Promise<Array<Record<string, unknown>>> {
   if (!(await tablePresent())) return []

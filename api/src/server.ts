@@ -1628,9 +1628,10 @@ export async function buildServer() {
 
       // #2445 — before business hours, pre-run the cached custom queries people
       // actually opened in the last 7 days (default + top recorded param sets)
-      // and the warm_daily ones
-      // as an unrestricted caller, plus the owner-load report: after the
-      // nightly rebuild the first dashboard met a cold buffer pool (>10 s).
+      // and the warm_daily ones as an unrestricted caller, plus the owner-load
+      // report; then widget renders + scoped execute calls as their viewers
+      // (one per scope signature) and extension warmers: after the nightly
+      // rebuild the first dashboard met a cold buffer pool (>10 s).
       app.cron.schedule(
         'cache-warm',
         '30 6 * * 1-5',
@@ -1646,7 +1647,7 @@ export async function buildServer() {
           heavy: true,
           idempotent: 'safe',
           description:
-            'Pre-runs the most-used CACHED custom queries (cache TTL above 0; default + top param sets) and every Warm daily query as an unrestricted caller, filling the cache key the execute route reads, plus the owner-load report, so the first dashboard of the day meets a warm database. It runs exactly what a viewer cache miss would run; a key cached within the hour is left alone. CACHE_WARM=off disables it.',
+            'Pre-runs the most-used CACHED custom queries (cache TTL above 0; default + top param sets) and every Warm daily query as an unrestricted caller, filling the cache key the execute route reads, plus the owner-load report; then the most-used custom-query widgets and the queries people with User Scopes run, AS one recent viewer per scope signature (their own access gate and scope values); then extension warmers. It runs exactly what a viewer cache miss would run; a key cached within the hour is left alone. CACHE_WARM=off disables it.',
           dryRun: async () => {
             const { planCacheWarm } = await import('./services/cache-warm.js')
             return planCacheWarm()
