@@ -115,6 +115,8 @@ function projectFake(assignments: Array<Record<string, unknown>>): CMSField[] {
   return rows
 }
 
+let projectDelayMs = 0
+
 function makeClient() {
   const calls: Cmd[] = []
   const client = {
@@ -125,8 +127,12 @@ function makeClient() {
       const p = cmd._path
       if (p === '/collection-layouts/active') return { data: LAYOUT }
       if (p === '/field-config/orders') return { data: FIELD_CONFIG }
-      if (p === '/field-config/orders/project')
+      if (p === '/field-config/orders/project') {
+        // Answer late, like a real round trip: the canvas must keep the last
+        // draft's rows on screen meanwhile.
+        if (projectDelayMs) await new Promise((r) => setTimeout(r, projectDelayMs))
         return { data: projectFake(cmd._body?.assignments ?? []) }
+      }
       if (p === '/collections/orders') return { data: { display_name: 'Orders' } }
       if (p === '/items/orders/1') return { data: RECORD }
       // Writes and touches answer nothing; reads an empty list (panels, tasks,
@@ -209,17 +215,17 @@ async function mount(
 ) {
   const { client, calls } = makeClient()
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  await act(async () => {
+  const render = (p: Partial<Parameters<typeof ItemEditForm>[0]>) =>
     root.render(
       <QueryClientProvider client={qc}>
         <NivaroProvider client={client as never}>
-          <ItemEditForm collection='orders' documentTitle={false} {...props} />
+          <ItemEditForm collection='orders' documentTitle={false} {...p} />
         </NivaroProvider>
       </QueryClientProvider>
     )
-  })
+  await act(async () => render(props))
   await settle(ready)
-  return { calls }
+  return { calls, rerender: (p: Partial<Parameters<typeof ItemEditForm>[0]>) => render(p) }
 }
 
 const fieldOrder = () =>
@@ -417,5 +423,59 @@ describe('ItemEditForm design mode', () => {
     expect(host.querySelector('[data-design-target="group:t2"]')).toBeNull()
     expect(host.querySelector('[data-field="amount"]')).toBeNull()
     expect(host.querySelector('[data-design-hidden]')).toBeNull()
+  })
+  it('a draft edit re-renders in place: no loader, no remount', async () => {
+    projectDelayMs = 120
+    try {
+      const context = makeDesign()
+      const record = { ...RECORD }
+      const { rerender, calls } = await mount({ design: { layout: LAYOUT, record, context } })
+      const mainBefore = host.querySelector('[data-design-target="group:main"]')
+      const inputBefore = host.querySelector('[data-field="title"] input')
+      expect(mainBefore).not.toBeNull()
+
+      // Watch every DOM change from here on for the full-page loader.
+      let sawLoader = false
+      const mo = new MutationObserver(() => {
+        if (host.textContent?.includes('Loading record')) sawLoader = true
+      })
+      mo.observe(host, { childList: true, subtree: true, characterData: true })
+
+      // Move notes into Main, then amount into Extra — two draft edits.
+      const step1: ActiveLayoutData = {
+        ...LAYOUT,
+        assignments: [
+          ...LAYOUT.assignments.filter((a) => a.field !== 'notes'),
+          { field: 'notes', sort: 2, group_key: 'main', is_visible: true }
+        ]
+      }
+      const step2: ActiveLayoutData = {
+        ...step1,
+        assignments: step1.assignments.map((a) =>
+          a.field === 'amount' ? { ...a, group_key: 'extra', sort: 0 } : a
+        )
+      }
+      for (const layout of [step1, step2]) {
+        await act(async () => rerender({ design: { layout, record, context } }))
+        // The new rows are in flight; the old ones stay on screen.
+        expect(host.textContent).not.toContain('Loading record')
+        await settle(
+          () => !!host.querySelector(`[data-design-target="field:notes:main"]`) && !sawLoader
+        )
+      }
+      mo.disconnect()
+
+      expect(sawLoader).toBe(false)
+      expect(host.querySelector('[data-design-target="field:amount:extra"]')).not.toBeNull()
+      expect(fieldOrder()).toEqual(['title', 'notes', 'amount'])
+      // Same DOM nodes: the form body was updated, never remounted.
+      expect(host.querySelector('[data-design-target="group:main"]')).toBe(mainBefore)
+      expect(host.querySelector('[data-field="title"] input')).toBe(inputBefore)
+      expect(
+        calls.filter((c) => c._path === '/field-config/orders/project').length
+      ).toBeGreaterThanOrEqual(3)
+    } finally {
+      projectDelayMs = 0
+    }
   })
 })

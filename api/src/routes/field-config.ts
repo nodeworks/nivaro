@@ -172,6 +172,9 @@ export interface LayoutFieldAssignment {
   allow_revision_restore: number | boolean | null
 }
 
+/** Relation-path placements one POST /project may carry (each walks its chain). */
+export const MAX_PROJECT_PATHS = 200
+
 const ASSIGNMENT_COLUMNS = [
   'field',
   'group_key',
@@ -549,6 +552,12 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'every assignment needs a field' })
       assignments.push(normalizeLayoutAssignment(a as Record<string, unknown>))
     }
+    // Each relation-path placement walks its relation chain — bound the work.
+    const paths = assignments.filter((a) => a.field.includes('.') && !a.field.startsWith('__'))
+    if (paths.length > MAX_PROJECT_PATHS)
+      return reply
+        .code(400)
+        .send({ error: `at most ${MAX_PROJECT_PATHS} relation-path placements` })
     return reply.send(await formatLayoutFieldRows(collection, assignments))
   })
 

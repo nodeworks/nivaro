@@ -9275,7 +9275,12 @@ function ItemEditFormView({
   // reload painted the empty form shell (comments/tasks slot chrome included)
   // for the layout round-trip, THEN swapped to the loader. isFetched is false
   // through both phases.
-  const isLoading = !fieldConfigFetched || (!isNew && itemLoading)
+  // Design mode: each draft edit is a new field-config query whose isFetched
+  // starts false while the previous answer stays on screen (placeholderData) —
+  // only the very first answer may show the loader, or every edit would swap
+  // the canvas for it and remount the form.
+  const fieldConfigReady = designOn ? fieldConfig !== undefined : fieldConfigFetched
+  const isLoading = !fieldConfigReady || (!isNew && itemLoading)
   if (isLoading) {
     // A big, centered loading state — the sparse two-skeleton layout read as a
     // blank page for the first second on record open.

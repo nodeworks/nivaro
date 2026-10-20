@@ -221,4 +221,15 @@ describe('POST /field-config/:collection/project', () => {
     expect((await projectRows(undefined)).statusCode).toBe(400)
     expect((await projectRows([{ group_key: 'main' }])).statusCode).toBe(400)
   })
+
+  it('caps relation-path placements (each walks its relation chain)', async () => {
+    const paths = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ field: `customer.f${i}`, group_key: 'main', sort: i }))
+    const over = await projectRows(paths(201))
+    expect(over.statusCode).toBe(400)
+    expect(over.json().error).toMatch(/200/)
+    // Slot keys and plain fields never count toward the cap.
+    const plain = Array.from({ length: 300 }, (_, i) => ({ field: `f${i}`, sort: i }))
+    expect((await projectRows(plain)).statusCode).toBe(200)
+  })
 })
