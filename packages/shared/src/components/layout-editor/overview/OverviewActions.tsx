@@ -220,7 +220,10 @@ export function TestRecordButton({
             <button
               type='button'
               aria-label='Pick another record'
-              onClick={() => setRecord(null)}
+              onClick={() => {
+                setRecord(null)
+                setSearch('')
+              }}
               className='text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
             >
               <X className='h-3 w-3' />

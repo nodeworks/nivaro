@@ -1,5 +1,5 @@
 import { ChevronLeft, Eye, History, Redo2, Undo2, UserRound, X } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { useRelationOptions } from '../../hooks/useRelationOptions'
@@ -8,8 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { HistoryPanel } from './HistoryPanel'
 import type { DescribeField } from './overview/describe-conditions'
-import { choiceLabelsFrom } from './overview/describe-conditions'
-import { useDisplayTemplate, useRoleNames } from './overview/overview-api'
+import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overview/overview-api'
 import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import type { LayoutDraft } from './useLayoutDraft'
@@ -200,8 +199,10 @@ export function EditorTopBar({
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const pill = row ? rowPill(row) : null
+  const rowList = useMemo(() => (row ? [row] : []), [row])
+  const choices = useRuleChoiceLabels(collection, fields, rowList)
   const segs = row
-    ? purposeSegments(row, fields, choiceLabelsFrom(fields))
+    ? purposeSegments(row, fields, choices)
     : TYPE_USE[layoutType]
       ? [{ text: TYPE_USE[layoutType] }]
       : []
