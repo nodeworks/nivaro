@@ -1,0 +1,118 @@
+import { useQuery } from '@tanstack/react-query'
+import { SimpleSelect } from '../../ui/SimpleSelect'
+import { useEditorApi } from './editor-api'
+
+export function RoleConditionRow({
+  roleIds,
+  onRoleIdsChange
+}: {
+  roleIds: string[]
+  onRoleIdsChange: (ids: string[]) => void
+}) {
+  const api = useEditorApi()
+  const { data: rolesData } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['roles-list-for-lock'],
+    queryFn: () => api.get('/roles').then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const roles = rolesData ?? []
+  return (
+    <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1'>
+      {roles.length === 0 && <p className='text-[10px] text-slate-400'>No roles found.</p>}
+      {roles.map((r) => (
+        <label
+          key={r.id}
+          className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'
+        >
+          <input
+            type='checkbox'
+            checked={roleIds.includes(r.id)}
+            onChange={(e) => {
+              if (e.target.checked) onRoleIdsChange([...roleIds, r.id])
+              else onRoleIdsChange(roleIds.filter((id) => id !== r.id))
+            }}
+            className='rounded'
+          />
+          <span className='text-slate-700'>{r.name}</span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+export function PipelineStateConditionRow({
+  collection,
+  pipelineId,
+  stateKeys,
+  onPipelineChange,
+  onStateKeysChange
+}: {
+  collection?: string
+  pipelineId?: string
+  stateKeys: string[]
+  onPipelineChange: (id: string | undefined) => void
+  onStateKeysChange: (keys: string[]) => void
+}) {
+  const api = useEditorApi()
+  const { data: pipelinesData } = useQuery<
+    Array<{ id: string; name: string; collections: string[] }>
+  >({
+    queryKey: ['pipelines-list-for-lock'],
+    queryFn: () => api.get('/pipelines').then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const bound = (pipelinesData ?? []).filter(
+    (p) => !collection || p.collections.includes(collection)
+  )
+
+  const { data: pipelineDetail } = useQuery<{
+    states: Array<{ id: string; key: string; label: string; color?: string }>
+  }>({
+    queryKey: ['pipeline-detail-lock', pipelineId],
+    queryFn: () => api.get(`/pipelines/${pipelineId}`).then((r) => r.data.data),
+    staleTime: 60_000,
+    enabled: !!pipelineId
+  })
+  const states = pipelineDetail?.states ?? []
+
+  return (
+    <div className='space-y-1.5'>
+      <SimpleSelect
+        value={pipelineId ?? ''}
+        onChange={(v) => onPipelineChange(v || undefined)}
+        className='h-6 w-full rounded border-slate-200 bg-white px-1.5 py-0.5 text-[10px]'
+        options={[
+          { value: '', label: '— Select pipeline —' },
+          ...bound.map((p) => ({ value: p.id, label: p.name }))
+        ]}
+      />
+      {bound.length === 0 && (
+        <p className='text-[10px] text-slate-400'>No pipelines bound to this collection.</p>
+      )}
+      {pipelineId && states.length > 0 && (
+        <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1'>
+          {states.map((s) => (
+            <label
+              key={s.key}
+              className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'
+            >
+              <input
+                type='checkbox'
+                checked={stateKeys.includes(s.key)}
+                onChange={(e) => {
+                  if (e.target.checked) onStateKeysChange([...stateKeys, s.key])
+                  else onStateKeysChange(stateKeys.filter((k) => k !== s.key))
+                }}
+                className='rounded'
+              />
+              <span className='text-slate-700'>{s.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      {pipelineId && states.length === 0 && (
+        <p className='text-[10px] text-slate-400'>No states defined for this pipeline.</p>
+      )}
+    </div>
+  )
+}

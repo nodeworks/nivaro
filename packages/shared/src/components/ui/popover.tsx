@@ -22,8 +22,11 @@ const PopoverAnchor = PopoverPrimitive.Anchor
 
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(({ className, align = 'center', sideOffset = 4, ...props }, ref) => {
+  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content> & {
+    /** Mount here instead of the nearest modal / body (popovers nested in a sheet). */
+    container?: HTMLElement | null
+  }
+>(({ className, align = 'center', sideOffset = 4, container: into, ...props }, ref) => {
   // A modal dialog or sheet locks scrolling to its own subtree, so a popover
   // portaled to <body> from inside one can be seen and clicked but not
   // scrolled — wheel and scrollbar both go dead. The marker below sits where
@@ -31,7 +34,7 @@ const PopoverContent = React.forwardRef<
   // inside the modal too. Another popover's content also carries
   // role="dialog" and is skipped — it is not a scroll lock.
   const [marker, setMarker] = React.useState<HTMLSpanElement | null>(null)
-  const container = React.useMemo(() => modalHostOf(marker), [marker])
+  const container = React.useMemo(() => into ?? modalHostOf(marker), [into, marker])
   return (
     <>
       <span ref={setMarker} hidden data-nvr-popover-marker='' />
