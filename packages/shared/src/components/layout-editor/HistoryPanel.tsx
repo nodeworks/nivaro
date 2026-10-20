@@ -215,6 +215,7 @@ export function HistoryPanel({
                   type='button'
                   data-tip='See what differs from the layout now'
                   data-version-diff={v.version}
+                  data-setting='tool.version_diff'
                   onClick={() => setDiffFor(v.id)}
                   className={`${btn} ${diffFor === v.id ? 'border-nvr-cyan text-nvr-navy dark:text-nvr-cyan' : ''}`}
                 >
@@ -239,6 +240,7 @@ export function HistoryPanel({
                   <button
                     type='button'
                     data-restore={v.id}
+                    data-setting='tool.version_restore'
                     data-tip='Replace the layout with this version. The current one is kept as a version first.'
                     onClick={() => setConfirming(v.id)}
                     className={btn}

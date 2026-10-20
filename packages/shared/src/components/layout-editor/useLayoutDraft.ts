@@ -44,6 +44,12 @@ export interface ApplyOptions {
   label: string
   /** Typing: coalesced per (target, setting) and sent after a 600 ms pause. */
   text?: boolean
+  /**
+   * false = saved like any other batch but no undo step is pushed and the redo
+   * stack is left alone — for changes whose inverse would be wrong (Make default:
+   * undoing would leave the kind with no default, not bring the old one back).
+   */
+  undoable?: boolean
 }
 
 export interface LayoutDraft {
@@ -383,8 +389,10 @@ export class LayoutDraftEngine {
     }
     this.clearOutcome()
     const batch = this.enqueue('do', ops, label)
-    this.pushUndo({ label, forward: ops, inverse, batchId: batch.id })
-    this.redoStack = []
+    if (opts?.undoable !== false) {
+      this.pushUndo({ label, forward: ops, inverse, batchId: batch.id })
+      this.redoStack = []
+    }
     this.refresh()
   }
 

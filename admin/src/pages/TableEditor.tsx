@@ -77,13 +77,17 @@ import {
   CollectionFieldPicker,
   CollectionFieldPickerPanel,
   DataGuideCard,
+  DefaultValuesEditor,
   FieldPicker,
   FieldPickerPanel,
   IconPicker,
   type PickedField,
+  QuickPickerStepsEditor,
+  ReadPresentationEditor,
+  RecordConditionsEditor,
   RelationLabel,
   RelationPicker,
-  seedQuickPickerSteps
+  RolesPicker
 } from '@nivaro/shared'
 import {
   createContext,
@@ -10028,256 +10032,6 @@ function LayoutPicker({
 
 type CascadeRuleCfg = { parent_field: string; child_field: string; on_unavailable?: unknown }
 
-/** Layout setting: the ordered relation fields the quick picker walks when a
- *  record is created. Empty = no quick picker. "Seed" fills it from the
- *  cascade graph (parents before children); admins reorder / drop / add. */
-/** Read-mode detail sheets: width, header band fields, hide empty values. */
-function ReadPresentationEditor({
-  layout,
-  fields,
-  onPatch
-}: {
-  layout: { sheet_width?: number | null; header_fields?: string[] | null; hide_empty?: boolean }
-  fields: Array<{ field: string; label?: string | null }>
-  onPatch: (p: {
-    sheet_width?: number | null
-    header_fields?: string[] | null
-    hide_empty?: boolean
-  }) => void
-}) {
-  const [width, setWidth] = useState(layout.sheet_width ? String(layout.sheet_width) : '')
-  const [headerText, setHeaderText] = useState((layout.header_fields ?? []).join(', '))
-  useEffect(() => {
-    setWidth(layout.sheet_width ? String(layout.sheet_width) : '')
-    setHeaderText((layout.header_fields ?? []).join(', '))
-  }, [layout.sheet_width, layout.header_fields])
-  const known = new Set(fields.map((f) => f.field))
-  return (
-    <div className='space-y-2 border-t border-slate-100 pt-2 dark:border-border'>
-      <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Read view</p>
-      <label className='flex items-center justify-between gap-2'>
-        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Sheet width (px)</span>
-        <Input
-          type='number'
-          value={width}
-          onChange={(e) => setWidth(e.target.value)}
-          onBlur={() => {
-            const n = Number(width)
-            onPatch({ sheet_width: n >= 320 && n <= 2000 ? Math.round(n) : null })
-          }}
-          placeholder='640'
-          className='h-7 w-24 text-[11.5px]'
-        />
-      </label>
-      <label className='block'>
-        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
-          Header band fields (first = title)
-        </span>
-        <Input
-          value={headerText}
-          onChange={(e) => setHeaderText(e.target.value)}
-          onBlur={() => {
-            const keys = headerText
-              .split(',')
-              .map((x) => x.trim())
-              .filter((x) => x && known.has(x))
-            onPatch({ header_fields: keys.length ? keys : null })
-          }}
-          placeholder='number, vendor, purchase_order, due_date'
-          className='mt-1 h-7 font-mono text-[11px]'
-        />
-      </label>
-      <label className='flex cursor-pointer items-center justify-between'>
-        <span className='text-[11px] text-slate-500 dark:text-slate-400'>Hide empty values</span>
-        <input
-          type='checkbox'
-          checked={!!layout.hide_empty}
-          onChange={(e) => onPatch({ hide_empty: e.target.checked })}
-          className='h-3.5 w-3.5 rounded accent-nvr-cyan'
-        />
-      </label>
-    </div>
-  )
-}
-
-function QuickPickerStepsEditor({
-  steps,
-  fields,
-  relations,
-  collection,
-  onChange
-}: {
-  steps: string[]
-  fields: Array<{
-    field: string
-    label?: string | null
-    dependency_config?: unknown
-    hidden?: boolean
-  }>
-  relations: Array<{
-    many_collection: string | null
-    many_field: string | null
-    one_collection: string | null
-    one_field: string | null
-    junction_field: string | null
-  }>
-  collection: string
-  onChange: (steps: string[]) => void
-}) {
-  const [addOpen, setAddOpen] = useState(false)
-  const labelOf = (f: string) => fields.find((x) => x.field === f)?.label || titleCase(f)
-  const eligible = fields
-    .filter(
-      (f) =>
-        !steps.includes(f.field) &&
-        relations.some(
-          (r) =>
-            (r.many_collection === collection && r.many_field === f.field && !r.junction_field) ||
-            (r.one_collection === collection && r.one_field === f.field)
-        )
-    )
-    .sort((a, b) => labelOf(a.field).localeCompare(labelOf(b.field)))
-  const move = (i: number, dir: -1 | 1) => {
-    const j = i + dir
-    if (j < 0 || j >= steps.length) return
-    const next = [...steps]
-    ;[next[i], next[j]] = [next[j], next[i]]
-    onChange(next)
-  }
-  const seed = () =>
-    onChange(
-      seedQuickPickerSteps(
-        fields,
-        relations.map((r) => ({
-          many_collection: r.many_collection ?? '',
-          many_field: r.many_field,
-          one_collection: r.one_collection,
-          one_field: r.one_field,
-          junction_field: r.junction_field
-        })),
-        collection
-      )
-    )
-  return (
-    <div className='space-y-1.5 border-t border-slate-100 pt-2 dark:border-border'>
-      <div className='flex items-center justify-between'>
-        <span
-          className='text-[11px] text-slate-500 dark:text-slate-400'
-          title='When someone creates a record with this layout, walk these fields one at a time (each step narrowed by the ones before it) before the form — and show the same walk as a strip at the top of the form.'
-        >
-          Quick picker steps
-        </span>
-        <div className='flex items-center gap-2'>
-          <button
-            type='button'
-            onClick={seed}
-            className='text-[10px] text-nvr-cyan hover:underline'
-            title='Fill from the cascade rules: parents before children'
-          >
-            Seed from cascade rules
-          </button>
-          {steps.length > 0 && (
-            <button
-              type='button'
-              onClick={() => onChange([])}
-              className='text-[10px] text-slate-400 hover:text-red-500'
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
-      {steps.length === 0 ? (
-        <p className='text-[10px] text-slate-400'>Off — no quick picker for this layout.</p>
-      ) : (
-        <ol className='space-y-0.5'>
-          {steps.map((f, i) => (
-            <li
-              key={f}
-              className='flex items-center gap-1.5 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] dark:border-border dark:bg-card'
-            >
-              <span className='w-4 text-center text-[10px] tabular-nums text-slate-400'>
-                {i + 1}
-              </span>
-              <span className='min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'>
-                {labelOf(f)}
-                <span className='ml-1 font-mono text-[10px] text-slate-400'>{f}</span>
-              </span>
-              <button
-                type='button'
-                onClick={() => move(i, -1)}
-                disabled={i === 0}
-                className='h-5 w-5 rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-20 dark:hover:bg-muted'
-                aria-label='Move up'
-              >
-                ↑
-              </button>
-              <button
-                type='button'
-                onClick={() => move(i, 1)}
-                disabled={i === steps.length - 1}
-                className='h-5 w-5 rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-20 dark:hover:bg-muted'
-                aria-label='Move down'
-              >
-                ↓
-              </button>
-              <button
-                type='button'
-                onClick={() => onChange(steps.filter((s) => s !== f))}
-                className='h-5 w-5 rounded text-slate-300 hover:bg-red-50 hover:text-red-500'
-                aria-label={`Remove ${labelOf(f)}`}
-              >
-                ✕
-              </button>
-            </li>
-          ))}
-        </ol>
-      )}
-      <Popover open={addOpen} onOpenChange={setAddOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type='button'
-            className='h-6 rounded border border-dashed border-slate-300 px-2 text-[10.5px] text-slate-500 hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:text-slate-400 dark:hover:text-nvr-cyan'
-          >
-            + Add step
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className='w-56 p-0' align='start'>
-          <Command>
-            <CommandInput placeholder='Relation field…' className='h-8 text-[12px]' />
-            <CommandList>
-              <CommandGroup>
-                {eligible.length === 0 ? (
-                  <div className='px-3 py-2 text-[11px] text-slate-400'>
-                    No more relation fields
-                  </div>
-                ) : (
-                  eligible.map((f) => (
-                    <CommandItem
-                      key={f.field}
-                      value={`${labelOf(f.field)} ${f.field}`}
-                      onSelect={() => {
-                        onChange([...steps, f.field])
-                        setAddOpen(false)
-                      }}
-                      className='text-[12px]'
-                    >
-                      {labelOf(f.field)}
-                      <span className='ml-auto font-mono text-[10px] text-slate-400'>
-                        {f.field}
-                      </span>
-                    </CommandItem>
-                  ))
-                )}
-              </CommandGroup>
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-    </div>
-  )
-}
-
 function CascadeRuleRow({
   rule,
   parentFields,
@@ -17970,271 +17724,6 @@ function WorkflowCombobox({
   )
 }
 
-function LayoutVisibilitySection({
-  selected,
-  roles,
-  onChange
-}: {
-  selected: CollectionLayout
-  roles: Array<{ id: string; name: string }>
-  onChange: (roleIds: string[]) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const roleIds = selected.conditions?.role_ids ?? []
-  const roleName = (id: string) => roles.find((r) => r.id === id)?.name ?? id
-  const available = roles.filter((r) => !roleIds.includes(r.id))
-
-  const addRole = (id: string) => {
-    if (!roleIds.includes(id)) onChange([...roleIds, id])
-    setOpen(false)
-  }
-  const removeRole = (id: string) => onChange(roleIds.filter((x) => x !== id))
-
-  return (
-    <div className='space-y-1.5'>
-      <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Visibility</span>
-      <div className='flex flex-wrap items-center gap-1.5'>
-        {roleIds.length === 0 ? (
-          <span className='text-[11px] text-slate-400 dark:text-slate-500'>
-            Visible to everyone
-          </span>
-        ) : (
-          roleIds.map((id) => (
-            <span
-              key={id}
-              className='inline-flex items-center gap-1 rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan'
-            >
-              {roleName(id)}
-              <button
-                type='button'
-                onClick={() => removeRole(id)}
-                className='hover:text-nvr-navy dark:hover:text-white'
-              >
-                <X className='h-2.5 w-2.5' />
-              </button>
-            </span>
-          ))
-        )}
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type='button'
-              disabled={available.length === 0}
-              className='inline-flex items-center gap-1 rounded border border-dashed border-slate-300 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-nvr-cyan hover:text-nvr-cyan disabled:opacity-40 dark:border-border'
-            >
-              <Plus className='h-2.5 w-2.5' />
-              Add role
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className='w-[200px] p-0' align='start'>
-            <Command>
-              <CommandInput placeholder='Search roles…' className='h-8 text-[12px]' />
-              <CommandList>
-                <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
-                  No roles
-                </CommandEmpty>
-                <CommandGroup>
-                  {available.map((r) => (
-                    <CommandItem
-                      key={r.id}
-                      value={r.name}
-                      onSelect={() => addRole(r.id)}
-                      className='text-[12px]'
-                    >
-                      {r.name}
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
-      </div>
-      <p className='text-[10px] text-slate-400 dark:text-slate-500'>
-        {roleIds.length === 0
-          ? 'Shows for all users. Restrict to specific roles below.'
-          : 'Only activates for users with the selected roles.'}
-      </p>
-    </div>
-  )
-}
-
-function safeJsonParse(raw: string): unknown {
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return null
-  }
-}
-
-/** Typed editor for one layout default value: relation fields pick records by
- *  their display labels (M2M as a chip list), select fields list their
- *  choices, booleans toggle — anything else stays a text input. */
-function LayoutDefaultValueInput({
-  tableName,
-  field,
-  value,
-  onChange,
-  fieldMeta,
-  relations
-}: {
-  tableName: string
-  field: string
-  value: unknown
-  onChange: (v: unknown) => void
-  fieldMeta: Array<{
-    field: string
-    type?: string | null
-    interface?: string | null
-    options?: unknown
-  }>
-  relations: Array<{
-    many_collection: string | null
-    many_field: string | null
-    one_collection: string | null
-    one_field: string | null
-    junction_field: string | null
-  }>
-}) {
-  const meta = fieldMeta.find((f) => f.field === field)
-  const opts =
-    typeof meta?.options === 'string'
-      ? (() => {
-          try {
-            return JSON.parse(meta.options as string) as Record<string, unknown>
-          } catch {
-            return {}
-          }
-        })()
-      : ((meta?.options ?? {}) as Record<string, unknown>)
-
-  // M2M alias: the relation whose one_field (or legacy junction-name) is this
-  // field; the target collection comes from the junction's companion leg.
-  const m2mRel =
-    relations.find(
-      (r) => r.one_collection === tableName && r.one_field === field && r.junction_field != null
-    ) ??
-    relations.find(
-      (r) =>
-        r.one_collection === tableName && r.many_collection === field && r.junction_field != null
-    )
-  const m2mTarget = m2mRel
-    ? (relations.find(
-        (cr) =>
-          cr.many_collection === m2mRel.many_collection && cr.many_field === m2mRel.junction_field
-      )?.one_collection ?? null)
-    : null
-  if (m2mRel && m2mTarget) {
-    const ids = Array.isArray(value) ? (value as Array<string | number>) : []
-    return (
-      <div className='min-w-0 flex-1 space-y-1'>
-        {ids.length > 0 && (
-          <div className='flex flex-wrap gap-1'>
-            {ids.map((id) => (
-              <span
-                key={String(id)}
-                className='inline-flex max-w-full items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'
-              >
-                <span className='truncate'>
-                  <RelationLabel relatedCollection={m2mTarget} id={id} />
-                </span>
-                <button
-                  type='button'
-                  onClick={() => onChange(ids.filter((x) => String(x) !== String(id)))}
-                  className='shrink-0 text-slate-400 hover:text-red-500'
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        <RelationPicker
-          relatedCollection={m2mTarget}
-          value={null}
-          onChange={(id) => {
-            if (id == null || id === '') return
-            if (ids.some((x) => String(x) === String(id))) return
-            onChange([...ids, id as string | number])
-          }}
-          placeholder='Add…'
-        />
-      </div>
-    )
-  }
-
-  // Plain M2O FK on this collection.
-  const m2oRel = relations.find(
-    (r) =>
-      r.many_collection === tableName &&
-      r.many_field === field &&
-      r.junction_field == null &&
-      !!r.one_collection
-  )
-  if (m2oRel?.one_collection) {
-    return (
-      <div className='min-w-0 flex-1'>
-        <RelationPicker
-          relatedCollection={m2oRel.one_collection}
-          value={value ?? null}
-          onChange={(id) => onChange(id ?? null)}
-          placeholder='Pick a record…'
-        />
-      </div>
-    )
-  }
-
-  if (meta?.type === 'boolean') {
-    return (
-      <SimpleSelect
-        value={value === true ? 'true' : value === false ? 'false' : ''}
-        onChange={(v) => onChange(v === '' ? null : v === 'true')}
-        className='h-7 min-w-0 flex-1 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-        options={[
-          { value: '', label: '—' },
-          { value: 'true', label: 'Yes' },
-          { value: 'false', label: 'No' }
-        ]}
-      />
-    )
-  }
-
-  const choices = Array.isArray(opts.choices)
-    ? (opts.choices as Array<{ text?: string; value?: unknown }>)
-    : null
-  if (meta?.interface === 'select-dropdown' && choices && choices.length > 0) {
-    return (
-      <SimpleSelect
-        value={value != null ? String(value) : ''}
-        onChange={(raw) => {
-          if (raw === '') return onChange(null)
-          const match = choices.find((c) => String(c.value) === raw)
-          onChange(match?.value ?? raw)
-        }}
-        className='h-7 min-w-0 flex-1 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-        options={[
-          { value: '', label: '—' },
-          ...choices.map((c) => ({ value: String(c.value), label: c.text ?? String(c.value) }))
-        ]}
-      />
-    )
-  }
-
-  const numeric = meta?.type === 'integer' || meta?.type === 'decimal' || meta?.type === 'float'
-  return (
-    <Input
-      value={value != null ? String(value) : ''}
-      onChange={(e) => {
-        const raw = e.target.value
-        if (raw === '') return onChange(null)
-        onChange(numeric && !Number.isNaN(Number(raw)) ? Number(raw) : raw)
-      }}
-      placeholder='value'
-      className='h-7 min-w-0 flex-1 text-[11px]'
-    />
-  )
-}
-
 function LayoutsTab({
   tableName,
   dbColumns
@@ -18494,94 +17983,26 @@ function LayoutsTab({
     setCreateLabelEditing(false)
   }, [selected?.id])
 
-  const [conditionRows, setConditionRows] = useState<
-    Array<{ field: string; op: 'eq' | 'neq' | 'nnull'; value: string }>
-  >([])
-  const [defaultValueRows, setDefaultValueRows] = useState<
-    Array<{ field: string; value: unknown }>
-  >([])
-
-  // Sync condition / default-value rows when selection changes
-  useEffect(() => {
-    const rawConditions = selected?.record_conditions
-    const parsedConditions =
-      typeof rawConditions === 'string' ? safeJsonParse(rawConditions) : rawConditions
-    setConditionRows(
-      Array.isArray(parsedConditions)
-        ? parsedConditions.map((r) => ({
-            field: r?.field ?? '',
-            op: (r?.op === 'neq' || r?.op === 'nnull' ? r.op : 'eq') as 'eq' | 'neq' | 'nnull',
-            value: r?.value != null ? String(r.value) : ''
-          }))
-        : []
-    )
-    const rawDefaults = selected?.default_values
-    const parsedDefaults =
-      typeof rawDefaults === 'string' ? safeJsonParse(rawDefaults) : rawDefaults
-    setDefaultValueRows(
-      parsedDefaults && typeof parsedDefaults === 'object' && !Array.isArray(parsedDefaults)
-        ? Object.entries(parsedDefaults as Record<string, unknown>).map(([field, value]) => ({
-            field,
-            // Keep raw: an M2M default is an id array, an FK default a real
-            // id — String() would corrupt both for the typed editors.
-            value
-          }))
-        : []
-    )
-  }, [selected?.id])
-
-  const updateConditionRow = (
-    idx: number,
-    patch: Partial<{ field: string; op: 'eq' | 'neq' | 'nnull'; value: string }>
-  ) => setConditionRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
-  const addConditionRow = () =>
-    setConditionRows((rows) => [...rows, { field: dbColumns[0]?.name ?? '', op: 'eq', value: '' }])
-  const removeConditionRow = (idx: number) =>
-    setConditionRows((rows) => rows.filter((_, i) => i !== idx))
-  const saveConditionRows = () => {
+  // Typed values in the shared rule / starting-value editors wait here until
+  // the input loses focus; every other change saves at once.
+  const pendingLayoutText = useRef<{ id: number; patch: Record<string, unknown> } | null>(null)
+  const patchSelectedLayout = (patch: Record<string, unknown>, opts?: { text: boolean }) => {
     if (!selected) return
-    const rules = conditionRows
-      .filter((r) => r.field)
-      .map((r) => ({ field: r.field, op: r.op, value: r.value }))
-    patchLayoutMut.mutate({ id: selected.id, record_conditions: rules.length ? rules : null })
-  }
-
-  const updateDefaultValueRow = (idx: number, patch: Partial<{ field: string; value: unknown }>) =>
-    setDefaultValueRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
-  const addDefaultValueRow = () =>
-    setDefaultValueRows((rows) => [...rows, { field: dbColumns[0]?.name ?? '', value: null }])
-  const removeDefaultValueRow = (idx: number) =>
-    setDefaultValueRows((rows) => rows.filter((_, i) => i !== idx))
-  const saveDefaultValueRows = () => {
-    if (!selected) return
-    const entries = defaultValueRows.filter(
-      (r) =>
-        r.field &&
-        r.value !== null &&
-        r.value !== undefined &&
-        r.value !== '' &&
-        !(Array.isArray(r.value) && r.value.length === 0)
-    )
-    patchLayoutMut.mutate({
-      id: selected.id,
-      default_values: entries.length
-        ? Object.fromEntries(entries.map((r) => [r.field, r.value]))
-        : null
-    })
-  }
-
-  // Field choices for the defaults editor: physical columns plus M2M alias
-  // fields (their defaults stage junction links on create).
-  const defaultFieldOptions = useMemo(() => {
-    const names = dbColumns.map((c) => c.name)
-    for (const r of layoutRelations) {
-      if (r.one_collection === tableName && r.junction_field != null) {
-        const alias = r.one_field ?? r.many_collection
-        if (alias && !names.includes(alias)) names.push(alias)
-      }
+    const pending =
+      pendingLayoutText.current?.id === selected.id ? pendingLayoutText.current.patch : {}
+    if (opts?.text) {
+      pendingLayoutText.current = { id: selected.id, patch: { ...pending, ...patch } }
+      return
     }
-    return names
-  }, [dbColumns, layoutRelations, tableName])
+    pendingLayoutText.current = null
+    patchLayoutMut.mutate({ id: selected.id, ...pending, ...patch } as never)
+  }
+  const flushLayoutText = () => {
+    const pending = pendingLayoutText.current
+    if (!pending) return
+    pendingLayoutText.current = null
+    patchLayoutMut.mutate({ id: pending.id, ...pending.patch } as never)
+  }
 
   return (
     <div className='flex min-h-0 gap-4'>
@@ -19110,70 +18531,18 @@ function LayoutsTab({
                           Records matching every rule open with this layout instead of the default.
                         </p>
                       </div>
-                      <div className='space-y-1.5'>
-                        {conditionRows.map((row, idx) => (
-                          // biome-ignore lint/suspicious/noArrayIndexKey: order-stable rule list
-                          <div key={idx} className='flex items-center gap-1.5'>
-                            <SimpleSelect
-                              value={row.field}
-                              onChange={(v) => updateConditionRow(idx, { field: v })}
-                              className='h-7 min-w-0 flex-1 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-                              options={[
-                                { value: '', label: 'Field…' },
-                                ...dbColumns.map((c) => ({ value: c.name, label: c.name }))
-                              ]}
-                            />
-                            <SimpleSelect
-                              value={row.op}
-                              onChange={(v) =>
-                                updateConditionRow(idx, {
-                                  op: v as 'eq' | 'neq' | 'nnull'
-                                })
-                              }
-                              className='h-7 w-24 shrink-0 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-                              options={[
-                                { value: 'eq', label: '=' },
-                                { value: 'neq', label: '≠' },
-                                { value: 'nnull', label: 'is not empty' }
-                              ]}
-                            />
-                            {row.op !== 'nnull' && (
-                              <Input
-                                value={row.value}
-                                onChange={(e) => updateConditionRow(idx, { value: e.target.value })}
-                                placeholder='value'
-                                className='h-7 min-w-0 flex-1 text-[11px]'
-                              />
-                            )}
-                            <button
-                              type='button'
-                              onClick={() => removeConditionRow(idx)}
-                              className='shrink-0 text-slate-400 hover:text-red-500'
-                            >
-                              <Trash2 className='h-3.5 w-3.5' />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className='flex items-center justify-between'>
-                        <button
-                          type='button'
-                          onClick={addConditionRow}
-                          className='flex items-center gap-1 text-[11px] text-slate-400 hover:text-nvr-cyan'
-                        >
-                          <Plus className='h-3.5 w-3.5' />
-                          Add rule
-                        </button>
-                        <Button
-                          type='button'
-                          size='sm'
-                          variant='outline'
-                          className='h-7 text-[11px]'
-                          onClick={saveConditionRows}
-                        >
-                          Save
-                        </Button>
-                      </div>
+                      <RecordConditionsEditor
+                        key={`rc-${selected.id}`}
+                        collection={tableName}
+                        value={selected.record_conditions}
+                        fields={layoutFieldMeta}
+                        columns={dbColumns}
+                        relations={layoutRelations}
+                        onBlur={flushLayoutText}
+                        onChange={(rules, opts) =>
+                          patchSelectedLayout({ record_conditions: rules }, opts)
+                        }
+                      />
                     </div>
                     <div className='space-y-2 border-t border-slate-200 pt-2 dark:border-border'>
                       <div>
@@ -19188,60 +18557,18 @@ function LayoutsTab({
                           .
                         </p>
                       </div>
-                      <div className='space-y-1.5'>
-                        {defaultValueRows.map((row, idx) => (
-                          // biome-ignore lint/suspicious/noArrayIndexKey: order-stable rule list
-                          <div key={idx} className='flex items-start gap-1.5'>
-                            <SimpleSelect
-                              value={row.field}
-                              onChange={(v) =>
-                                // A new field means the old value's shape may
-                                // not fit (ids vs text) — reset it.
-                                updateDefaultValueRow(idx, { field: v, value: null })
-                              }
-                              className='h-7 min-w-0 flex-1 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-                              options={[
-                                { value: '', label: 'Field…' },
-                                ...defaultFieldOptions.map((name) => ({ value: name, label: name }))
-                              ]}
-                            />
-                            <LayoutDefaultValueInput
-                              tableName={tableName}
-                              field={row.field}
-                              value={row.value}
-                              onChange={(v) => updateDefaultValueRow(idx, { value: v })}
-                              fieldMeta={layoutFieldMeta}
-                              relations={layoutRelations}
-                            />
-                            <button
-                              type='button'
-                              onClick={() => removeDefaultValueRow(idx)}
-                              className='mt-1.5 shrink-0 text-slate-400 hover:text-red-500'
-                            >
-                              <Trash2 className='h-3.5 w-3.5' />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className='flex items-center justify-between'>
-                        <button
-                          type='button'
-                          onClick={addDefaultValueRow}
-                          className='flex items-center gap-1 text-[11px] text-slate-400 hover:text-nvr-cyan'
-                        >
-                          <Plus className='h-3.5 w-3.5' />
-                          Add field
-                        </button>
-                        <Button
-                          type='button'
-                          size='sm'
-                          variant='outline'
-                          className='h-7 text-[11px]'
-                          onClick={saveDefaultValueRows}
-                        >
-                          Save
-                        </Button>
-                      </div>
+                      <DefaultValuesEditor
+                        key={`dv-${selected.id}`}
+                        collection={tableName}
+                        value={selected.default_values}
+                        fields={layoutFieldMeta}
+                        columns={dbColumns}
+                        relations={layoutRelations}
+                        onBlur={flushLayoutText}
+                        onChange={(values, opts) =>
+                          patchSelectedLayout({ default_values: values }, opts)
+                        }
+                      />
                     </div>
                   </>
                 )}
@@ -19863,16 +19190,21 @@ function LayoutsTab({
                       </label>
                     </div>
                     <div className='border-t border-slate-200 dark:border-border pt-2'>
-                      <LayoutVisibilitySection
-                        selected={selected}
-                        roles={roles}
-                        onChange={(roleIds) =>
-                          patchLayoutMut.mutate({
-                            id: selected.id,
-                            conditions: roleIds.length > 0 ? { role_ids: roleIds } : null
-                          })
-                        }
-                      />
+                      <div className='space-y-1.5'>
+                        <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+                          Visibility
+                        </span>
+                        <RolesPicker
+                          value={selected.conditions?.role_ids ?? []}
+                          roles={roles}
+                          onChange={(roleIds) =>
+                            patchLayoutMut.mutate({
+                              id: selected.id,
+                              conditions: roleIds.length > 0 ? { role_ids: roleIds } : null
+                            })
+                          }
+                        />
+                      </div>
                       <LayoutVersionsSection layoutId={selected.id} />
                       <LayoutReviewSection layoutId={selected.id} />
                       <ExplainButton
