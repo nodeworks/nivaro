@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { resolveOwnedByMeSource } from '../services/queues.js'
+import { span } from '../services/request-trace.js'
 import { computeStatusBatch, type SlaBatchEntry } from './sla.js'
 
 /**
@@ -67,7 +68,7 @@ export async function myWorkRoutes(app: FastifyInstance) {
 
     const [ownedResult, tasks, approvalSteps, notifications, teamTasks, requested] =
       await Promise.all([
-        resolveOwnedByMeSource(userId).catch(() => ({
+        span('my-work:owned', () => resolveOwnedByMeSource(userId)).catch(() => ({
           items: [],
           matchedCount: 0,
           truncated: false
@@ -167,17 +168,19 @@ export async function myWorkRoutes(app: FastifyInstance) {
       list.push(o.item)
       byCollection.set(o.collection, list)
     }
-    await Promise.all(
-      [...byCollection.entries()].map(async ([collection, ids]) => {
-        try {
-          const statuses = await computeStatusBatch(collection, ids)
-          for (const o of owned) {
-            if (o.collection === collection && statuses[o.item]) o.sla = statuses[o.item]
+    await span('my-work:sla', () =>
+      Promise.all(
+        [...byCollection.entries()].map(async ([collection, ids]) => {
+          try {
+            const statuses = await computeStatusBatch(collection, ids)
+            for (const o of owned) {
+              if (o.collection === collection && statuses[o.item]) o.sla = statuses[o.item]
+            }
+          } catch {
+            /* SLA is decoration — never fail the inbox */
           }
-        } catch {
-          /* SLA is decoration — never fail the inbox */
-        }
-      })
+        })
+      )
     )
     // Most urgent first: breached, warning, then by state entry recency proxy (stable).
     owned.sort(

@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { clearMetadataQueryCache } from '../db/metadata-query-cache.js'
 import { rawRows } from '../db/raw-rows.js'
+import { getTenantId } from '../db/tenant-context.js'
 import type { CMSCollection, CMSField, CMSRelation } from '../types.js'
 import { clearVirtualSqlCache } from './virtual-sql.js'
 
@@ -85,10 +86,14 @@ const META_TTL_MS = 30_000
 const collectionCache = new Map<string, { value: CMSCollection | undefined; at: number }>()
 const fieldsCache = new Map<string, { value: CMSField[]; at: number }>()
 
+// #1224 — the table's real columns, keyed per tenant (cloud shared tier).
+const physicalColumnsCache = new Map<string, { value: Set<string>; at: number }>()
+
 /** Drop cached collection/field metadata (all, or one collection). */
 export function clearMetadataCache(collection?: string): void {
   clearMetadataQueryCache()
   clearVirtualSqlCache()
+  physicalColumnsCache.clear()
   if (collection) {
     collectionCache.delete(collection)
     fieldsCache.delete(collection)
@@ -96,6 +101,33 @@ export function clearMetadataCache(collection?: string): void {
   }
   collectionCache.clear()
   fieldsCache.clear()
+}
+
+/**
+ * The columns that physically exist on `table`, LOWER-CASED (SQL Server
+ * names are case-insensitive; alias fields — M2M / O2M sides — have none),
+ * or null when they cannot be read. Cached like the
+ * other schema metadata (cleared by clearMetadataCache, META_TTL backstop);
+ * a `database` other than the module default (a transaction, a tenant
+ * handle) is never cached.
+ */
+export async function getPhysicalColumns(
+  table: string,
+  database: typeof db = db
+): Promise<Set<string> | null> {
+  const cacheable = database === db
+  const key = `${getTenantId() ?? ''}\u0000${table}`
+  const hit = cacheable ? physicalColumnsCache.get(key) : undefined
+  if (hit && Date.now() - hit.at < META_TTL_MS) return hit.value
+  try {
+    const info = (await database(table).columnInfo()) as Record<string, unknown>
+    const value = new Set(Object.keys(info).map((c) => c.toLowerCase()))
+    if (value.size === 0) return null
+    if (cacheable) physicalColumnsCache.set(key, { value, at: Date.now() })
+    return value
+  } catch {
+    return null
+  }
 }
 
 export async function getCollection(name: string): Promise<CMSCollection | undefined> {

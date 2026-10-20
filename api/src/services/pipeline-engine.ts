@@ -1,5 +1,6 @@
 import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
+import { getPhysicalColumns } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import {
   ADDENDUM_COLLECTION,
@@ -924,58 +925,99 @@ export async function resolveStateOwnersBatch(
     if (fallback) addCol(req.collection, fallback)
   }
 
+  // #1224 — the instance-owner read depends on nothing below (only the
+  // requests' instance ids), so it starts now and is awaited where its rows
+  // are first needed, instead of queueing behind the record reads.
+  const instanceIds = [
+    ...new Set(requests.map((r) => r.instanceId).filter((id): id is string => !!id))
+  ]
+  const instanceOwnerRowsPromise =
+    instanceIds.length > 0
+      ? span('owners:instance-owners', () =>
+          selectInChunks(instanceIds, 2000, (chunk) =>
+            database('nivaro_pipeline_instance_owners as io')
+              .join('nivaro_users as u', 'io.user', 'u.id')
+              .whereIn('io.instance', chunk)
+              .select('io.instance', 'io.state', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+          )
+        )
+      : Promise.resolve([])
+  // Awaited below; this only keeps an early failure elsewhere from leaving
+  // it an unhandled rejection.
+  instanceOwnerRowsPromise.catch(() => {})
+
+  // Collections resolve concurrently (#1224 — My Work asks for every bound
+  // collection at once, and each is several round trips); every map below is
+  // keyed by collection, so they never touch each other's entries. Within a
+  // collection the relations read does not wait for the records read.
   const collections = [...new Set(needsRecord.map((r) => r.collection))]
-  for (const collection of collections) {
-    const ids = [
-      ...new Set(needsRecord.filter((r) => r.collection === collection).map((r) => r.itemId))
-    ]
-    const needed = neededColsByCollection.get(collection)
-    let rows: Record<string, unknown>[] = []
-    try {
-      rows = await span('owners:records', () =>
-        selectInChunks(ids, 2000, (chunk) =>
-          database(collection)
-            .whereIn('id', chunk)
-            .select(needed ? [...needed] : '*')
-        )
-      )
-    } catch {
-      // A needed column that is actually an ALIAS (no physical column) throws —
-      // fall back to the full row rather than resolving nobody.
-      try {
-        rows = await selectInChunks(ids, 2000, (chunk) =>
-          database(collection).whereIn('id', chunk).select('*')
-        )
-      } catch {
-        rows = []
+  await Promise.all(
+    collections.map(async (collection) => {
+      const ids = [
+        ...new Set(needsRecord.filter((r) => r.collection === collection).map((r) => r.itemId))
+      ]
+      const readRecords = async (): Promise<Record<string, unknown>[]> => {
+        let needed = neededColsByCollection.get(collection)
+        // #1224 — an M2M/O2M filter's first segment is an ALIAS (no column), so
+        // the narrowed select below failed on every read of such a collection and
+        // fell back to the full row (workflows: `regions`, `divisions` — a failed
+        // statement plus an 84-column read each time). Leave aliases out up front;
+        // the row never carried them either way. Unknown columns = unchanged path.
+        if (needed) {
+          const physical = await getPhysicalColumns(collection, database)
+          if (physical?.has('id')) {
+            const real = [...needed].filter((c) => physical.has(c.toLowerCase()))
+            if (real.length < needed.size) needed = new Set(real)
+          }
+        }
+        try {
+          return await span('owners:records', () =>
+            selectInChunks(ids, 2000, (chunk) =>
+              database(collection)
+                .whereIn('id', chunk)
+                .select(needed ? [...needed] : '*')
+            )
+          )
+        } catch {
+          // A needed column that is actually an ALIAS (no physical column) throws —
+          // fall back to the full row rather than resolving nobody.
+          try {
+            return await selectInChunks(ids, 2000, (chunk) =>
+              database(collection).whereIn('id', chunk).select('*')
+            )
+          } catch {
+            return []
+          }
+        }
       }
-    }
-    const byId = new Map<string, Record<string, unknown>>()
-    for (const row of rows) byId.set(String(row.id), row)
-    recordsByCollectionAndId.set(collection, byId)
+      const readRelations = async (): Promise<RelationInfo[]> => {
+        try {
+          return (await span('owners:relations', () =>
+            database('nivaro_relations')
+              .where({ many_collection: collection })
+              .select('many_collection', 'many_field', 'one_collection')
+          )) as RelationInfo[]
+        } catch {
+          return []
+        }
+      }
+      const [rows, relations] = await Promise.all([readRecords(), readRelations()])
+      const byId = new Map<string, Record<string, unknown>>()
+      for (const row of rows) byId.set(String(row.id), row)
+      recordsByCollectionAndId.set(collection, byId)
+      relationsByCollection.set(collection, relations)
 
-    let relations: RelationInfo[] = []
-    try {
-      relations = (await span('owners:relations', () =>
-        database('nivaro_relations')
-          .where({ many_collection: collection })
-          .select('many_collection', 'many_field', 'one_collection')
-      )) as RelationInfo[]
-    } catch {
-      relations = []
-    }
-    relationsByCollection.set(collection, relations)
-
-    const dotted = [...(dottedFieldsByCollection.get(collection) ?? [])]
-    if (dotted.length > 0) {
-      resolvedByCollection.set(
-        collection,
-        await span('owners:filter-values', () =>
-          resolveFilterValues(collection, byId, dotted, database)
+      const dotted = [...(dottedFieldsByCollection.get(collection) ?? [])]
+      if (dotted.length > 0) {
+        resolvedByCollection.set(
+          collection,
+          await span('owners:filter-values', () =>
+            resolveFilterValues(collection, byId, dotted, database)
+          )
         )
-      )
-    }
-  }
+      }
+    })
+  )
 
   const winningGroupsByKey = new Map<string, OwnerGroup[]>()
   const allGroupIds = new Set<string>()
@@ -1088,22 +1130,12 @@ export async function resolveStateOwnersBatch(
     }
   }
 
-  const instanceIds = [
-    ...new Set(requests.map((r) => r.instanceId).filter((id): id is string => !!id))
-  ]
   const instanceOwnerRowsByInstance = new Map<
     string,
     Array<ResolvedOwner & { state: string | null }>
   >()
   if (instanceIds.length > 0) {
-    const rows = await span('owners:instance-owners', () =>
-      selectInChunks(instanceIds, 2000, (chunk) =>
-        database('nivaro_pipeline_instance_owners as io')
-          .join('nivaro_users as u', 'io.user', 'u.id')
-          .whereIn('io.instance', chunk)
-          .select('io.instance', 'io.state', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
-      )
-    )
+    const rows = await instanceOwnerRowsPromise
     for (const row of rows as Array<ResolvedOwner & { instance: string; state: string | null }>) {
       const list = instanceOwnerRowsByInstance.get(row.instance) ?? []
       list.push({
