@@ -240,6 +240,7 @@ import {
 import { helpVideosApi, helpVideosGuide, sdkHelpVideos } from './sections/help-videos.js'
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
+import { infrastructureInventory } from './sections/infrastructure-inventory.js'
 import { integrationObligations } from './sections/integration-obligations.js'
 import {
   integrationsConnector,
@@ -772,7 +773,8 @@ export const navSections: NavGroup[] = [
       securityRetentionPolicies,
       rowLevelSecurity,
       roleUiPermissions,
-      zeroDowntimeMigrations
+      zeroDowntimeMigrations,
+      infrastructureInventory
     ]
   },
   {
