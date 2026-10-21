@@ -5,6 +5,7 @@ import { storeEnabled } from '../services/telemetry-store.js'
 import { infrastructureEdgeRoutes } from './infrastructure-edge.js'
 import { infrastructureHostRoutes } from './infrastructure-host.js'
 import { infrastructureInventoryRoutes } from './infrastructure-inventory.js'
+import { infrastructureSwarmRoutes } from './infrastructure-swarm.js'
 
 /**
  * Infrastructure (Docker hosts, stacks, containers, the proxy, host health), read-only.
@@ -53,4 +54,5 @@ export async function infrastructureRoutes(app: FastifyInstance): Promise<void> 
   await app.register(infrastructureInventoryRoutes)
   await app.register(infrastructureEdgeRoutes)
   await app.register(infrastructureHostRoutes)
+  await app.register(infrastructureSwarmRoutes)
 }

@@ -30,6 +30,7 @@ export * from './sections/graphql.js'
 export * from './sections/help-videos.js'
 export * from './sections/ideas.js'
 export * from './sections/import-templates.js'
+export * from './sections/infrastructure.js'
 export * from './sections/infrastructure-edge.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
@@ -241,6 +242,7 @@ import {
 import { helpVideosApi, helpVideosGuide, sdkHelpVideos } from './sections/help-videos.js'
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
+import { infrastructureDocs } from './sections/infrastructure.js'
 import { infrastructureEdgeDocs } from './sections/infrastructure-edge.js'
 import { infrastructureHostGuide } from './sections/infrastructure-host.js'
 import { infrastructureInventory } from './sections/infrastructure-inventory.js'
@@ -900,6 +902,7 @@ export const navSections: NavGroup[] = [
       dbHealthDocs,
       dbTuning,
       sqlChecksDocs,
+      infrastructureDocs,
       configReviewDocs,
       opsConsoleDocs,
       opsAssistantDocs,
