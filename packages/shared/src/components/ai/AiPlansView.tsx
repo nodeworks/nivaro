@@ -14,6 +14,7 @@ import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
 import { type AiPlan, AiPlanCard, type AiPlanSubscribe } from './AiPlanCard'
 
@@ -337,14 +338,20 @@ function TaskDoAnalyticsCard() {
           `${a.total}`,
           `${a.by_kind.task} tasks · ${a.by_kind.ticket} tickets`
         ],
-        ['Ran', `${a.executed}`, `${a.records_changed} records changed`],
+        [
+          'Ran',
+          `${a.executed}`,
+          `${a.records_changed.toLocaleString()} record${a.records_changed === 1 ? '' : 's'} changed`
+        ],
         ['Rejected', `${a.rejected}`, a.failed ? `${a.failed} failed` : undefined],
         ['Rolled back', `${a.rolled_back}`],
         ['Hours saved', `≈ ${a.hours_estimated_saved}`, 'AI estimate'],
         [
           'Waiting',
           `${a.proposed}`,
-          a.awaiting_approval ? `${a.awaiting_approval} need a second approval` : undefined
+          a.awaiting_approval
+            ? `${a.awaiting_approval} need${a.awaiting_approval === 1 ? 's' : ''} a second approval`
+            : undefined
         ]
       ]
     : []
@@ -359,9 +366,14 @@ function TaskDoAnalyticsCard() {
         <span className='text-[11.5px] text-muted-foreground'>last 90 days</span>
       </div>
       {q.isLoading && (
-        <p className='flex items-center gap-1.5 px-4 py-3 text-[12px] text-muted-foreground'>
-          <Loader2 className='h-3 w-3 animate-spin' /> Loading…
-        </p>
+        <div className='grid grid-cols-2 gap-3 px-4 py-3 md:grid-cols-3 lg:grid-cols-6'>
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className='space-y-1.5'>
+              <Skeleton className='h-3 w-16' />
+              <Skeleton className='h-4 w-10' />
+            </div>
+          ))}
+        </div>
       )}
       {q.isError && (
         <p className='px-4 py-3 text-[12px] text-rose-700 dark:text-rose-400'>{errText(q.error)}</p>

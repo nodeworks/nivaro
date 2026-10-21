@@ -51,7 +51,9 @@ function Row({
         {label}
       </Label>
       {children(id)}
-      {hint && <p className='text-[11px] text-slate-500 dark:text-muted-foreground'>{hint}</p>}
+      {hint && (
+        <p className='max-w-[64ch] text-[11px] text-slate-500 dark:text-muted-foreground'>{hint}</p>
+      )}
     </div>
   )
 }
@@ -97,6 +99,7 @@ export function TaskDoSettingsBlock() {
 
   const toggle = <T extends string | number>(list: T[], v: T): T[] =>
     list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
+  const dirty = !!form && !!settings.data && JSON.stringify(form) !== JSON.stringify(settings.data)
 
   return (
     <div
@@ -113,7 +116,26 @@ export function TaskDoSettingsBlock() {
           undoable for seven days. Off until you turn it on.
         </p>
       </div>
-      {settings.isLoading || !form ? (
+      {settings.isError ? (
+        <div className='flex flex-wrap items-center gap-3 text-[12px]'>
+          <span className='text-rose-700 dark:text-rose-400'>
+            Could not load these settings
+            {(settings.error as { response?: { data?: { error?: string } } })?.response?.data?.error
+              ? `: ${(settings.error as { response?: { data?: { error?: string } } }).response!.data!.error}`
+              : '.'}
+          </span>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7'
+            onClick={() => void settings.refetch()}
+            disabled={settings.isFetching}
+          >
+            {settings.isFetching ? <Loader2 className='h-3 w-3 animate-spin' /> : null}
+            Try again
+          </Button>
+        </div>
+      ) : settings.isLoading || !form ? (
         <div className='space-y-2'>
           <Skeleton className='h-5 w-48' />
           <Skeleton className='h-5 w-64' />
@@ -151,7 +173,11 @@ export function TaskDoSettingsBlock() {
             hint='Nothing ticked = every role. The assignee (or their active delegate) must still be the one asking.'
           >
             {(id) => (
-              <div id={id} className='flex flex-wrap gap-x-4 gap-y-1.5'>
+              <fieldset
+                id={id}
+                aria-label='Roles that may use it'
+                className='flex flex-wrap gap-x-4 gap-y-1.5'
+              >
                 {(roles.data ?? []).map((r) => (
                   <div key={r.id} className='flex items-center gap-1.5'>
                     <Checkbox
@@ -183,7 +209,7 @@ export function TaskDoSettingsBlock() {
                 {roles.data?.length === 0 && (
                   <span className='text-[12px] text-muted-foreground'>No roles yet.</span>
                 )}
-              </div>
+              </fieldset>
             )}
           </Row>
           <Row
@@ -191,7 +217,11 @@ export function TaskDoSettingsBlock() {
             hint='Nothing ticked = every type. Only matters when support tickets are on.'
           >
             {(id) => (
-              <div id={id} className='flex flex-wrap gap-x-4 gap-y-1.5'>
+              <fieldset
+                id={id}
+                aria-label='Support request types that allow it'
+                className='flex flex-wrap gap-x-4 gap-y-1.5'
+              >
                 {(categories.data ?? []).map((c) => (
                   <div key={c.id} className='flex items-center gap-1.5'>
                     <Checkbox
@@ -220,10 +250,10 @@ export function TaskDoSettingsBlock() {
                 {categories.data?.length === 0 && (
                   <span className='text-[12px] text-muted-foreground'>No request types yet.</span>
                 )}
-              </div>
+              </fieldset>
             )}
           </Row>
-          <div className='grid grid-cols-2 gap-4'>
+          <div className='flex flex-wrap gap-x-8 gap-y-4'>
             <Row
               label='Second approval above'
               hint='Records a plan may change before the task creator (or an administrator) must also approve it. 0 = never.'
@@ -241,7 +271,7 @@ export function TaskDoSettingsBlock() {
                       approval_threshold: Math.max(0, Number(e.target.value) || 0)
                     })
                   }
-                  className='h-8 text-[13px]'
+                  className='h-8 w-28 text-[13px] tabular-nums'
                 />
               )}
             </Row>
@@ -256,22 +286,23 @@ export function TaskDoSettingsBlock() {
                   onChange={(e) =>
                     setForm({ ...form, daily_cap: Math.max(0, Number(e.target.value) || 0) })
                   }
-                  className='h-8 text-[13px]'
+                  className='h-8 w-28 text-[13px] tabular-nums'
                 />
               )}
             </Row>
           </div>
-          <div>
+          <div className='flex items-center gap-3'>
             <Button
               size='sm'
               variant='outline'
               onClick={() => save.mutate(form)}
-              disabled={save.isPending}
+              disabled={save.isPending || !dirty}
               data-task-do-settings-save
             >
               {save.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : null}
-              Save Let AI do this
+              Save Let AI do this settings
             </Button>
+            {dirty && <span className='text-[11.5px] text-muted-foreground'>Unsaved changes</span>}
           </div>
         </>
       )}
