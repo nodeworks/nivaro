@@ -253,9 +253,68 @@ export function WelcomeNote({
 
 // ── Jump to a date (#976) ────────────────────────────────────────────────────
 
+/** The jump-to-date picker body — used by JumpToDate's own popover and by the room
+ *  header's More menu. */
+export function JumpToDateForm({
+  onJump,
+  onDone
+}: {
+  onJump: (dateIso: string) => void
+  onDone?: () => void
+}) {
+  const [value, setValue] = useState('')
+  return (
+    <>
+      <p className='pb-1.5 text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
+        Jump to a date
+      </p>
+      <input
+        type='date'
+        value={value}
+        max={new Date().toISOString().slice(0, 10)}
+        onChange={(e) => setValue(e.target.value)}
+        className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] outline-none dark:border-border dark:bg-background dark:text-slate-100'
+        aria-label='Date'
+      />
+      <div className='mt-2 flex gap-1.5'>
+        {[
+          ['Yesterday', 1],
+          ['Last week', 7],
+          ['Last month', 30]
+        ].map(([l, d]) => (
+          <button
+            key={l as string}
+            type='button'
+            onClick={() => {
+              const t = new Date(Date.now() - (d as number) * 86_400_000)
+              t.setHours(0, 0, 0, 0)
+              onJump(t.toISOString())
+              onDone?.()
+            }}
+            className='flex-1 rounded-md border border-slate-200 px-1 py-1 text-[10.5px] text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+      <button
+        type='button'
+        disabled={!value}
+        onClick={() => {
+          const [y, m, d] = value.split('-').map(Number)
+          onJump(new Date(y, m - 1, d).toISOString())
+          onDone?.()
+        }}
+        className='mt-2 h-8 w-full rounded-md bg-nvr-cyan text-[12px] font-medium text-white disabled:opacity-40'
+      >
+        Go
+      </button>
+    </>
+  )
+}
+
 export function JumpToDate({ onJump }: { onJump: (dateIso: string) => void }) {
   const [open, setOpen] = useState(false)
-  const [value, setValue] = useState('')
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -270,50 +329,7 @@ export function JumpToDate({ onJump }: { onJump: (dateIso: string) => void }) {
         </button>
       </PopoverTrigger>
       <PopoverContent align='end' className='w-[220px] p-2.5'>
-        <p className='pb-1.5 text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
-          Jump to a date
-        </p>
-        <input
-          type='date'
-          value={value}
-          max={new Date().toISOString().slice(0, 10)}
-          onChange={(e) => setValue(e.target.value)}
-          className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] outline-none dark:border-border dark:bg-background dark:text-slate-100'
-          aria-label='Date'
-        />
-        <div className='mt-2 flex gap-1.5'>
-          {[
-            ['Yesterday', 1],
-            ['Last week', 7],
-            ['Last month', 30]
-          ].map(([l, d]) => (
-            <button
-              key={l as string}
-              type='button'
-              onClick={() => {
-                const t = new Date(Date.now() - (d as number) * 86_400_000)
-                t.setHours(0, 0, 0, 0)
-                onJump(t.toISOString())
-                setOpen(false)
-              }}
-              className='flex-1 rounded-md border border-slate-200 px-1 py-1 text-[10.5px] text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
-            >
-              {l}
-            </button>
-          ))}
-        </div>
-        <button
-          type='button'
-          disabled={!value}
-          onClick={() => {
-            const [y, m, d] = value.split('-').map(Number)
-            onJump(new Date(y, m - 1, d).toISOString())
-            setOpen(false)
-          }}
-          className='mt-2 h-8 w-full rounded-md bg-slate-900 text-[12px] font-medium text-white disabled:opacity-40 dark:bg-slate-100 dark:text-slate-900'
-        >
-          Go
-        </button>
+        <JumpToDateForm onJump={onJump} onDone={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
   )

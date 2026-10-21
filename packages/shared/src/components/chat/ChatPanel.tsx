@@ -14,10 +14,8 @@ import {
   CheckCheck,
   ChevronLeft,
   ClipboardPlus,
-  ExternalLink,
   FilePlus2,
   Hash,
-  HelpCircle,
   Info,
   Lock,
   LogOut,
@@ -136,8 +134,14 @@ import { actionsForMessage, MessageActionsMenu, useMessageActions } from './Mess
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
 import { PollCard } from './PollCard'
 import {
+  headerIconButton,
+  headerIconIdle,
+  RoomHeaderMenu,
+  type RoomNotifyMode,
+  RoomStatusMarks
+} from './RoomHeaderMenu'
+import {
   ChannelIntro,
-  JumpToDate,
   MemberCountLine,
   OutboxBubbles,
   RoomInfoDrawer,
@@ -631,18 +635,9 @@ function dateDivider(iso: string): string {
  * live record chips, attachments, reactions, cross-room search) are invisible
  * until someone tells you. One popover tells you.
  */
-function ChatTipsButton({ botName }: { botName: string | null }) {
+/** What this chat can do — shown from the room header's More menu. */
+function ChatTipsContent({ botName }: { botName: string | null }) {
   const th = useTheme()
-  const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
-  }, [open])
   // Two label treatments: things you TYPE render as code chips, PLACES in the
   // UI render as plain labels — cramming prose like "Hover a message" into a
   // fake-code chip read as buttons that did nothing.
@@ -688,63 +683,38 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
     }
   ]
   return (
-    <div ref={rootRef} className='relative flex items-center'>
-      <button
-        type='button'
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          'rounded-md p-1 transition-colors',
-          open
-            ? th.accentSoft
-            : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-        )}
-        aria-label='Chat tips'
-        title='Tips'
-        data-chat-tips
-      >
-        <HelpCircle className='h-3.5 w-3.5' strokeWidth={2} />
-      </button>
-      {open && (
-        <div
-          className={cn(
-            'absolute right-0 top-full z-30 mt-1 w-[420px] max-w-[92vw] rounded-xl border shadow-lg',
-            th.surface,
-            'border-slate-200 dark:border-border'
-          )}
-        >
-          <p className='border-b border-slate-100 px-4 py-2.5 text-[12.5px] font-semibold text-slate-800 dark:border-border/60 dark:text-slate-100'>
-            Things this chat can do
-          </p>
-          {/* Fixed label gutter — chips and place-labels align into one
-              column, descriptions read as a second clean column. */}
-          <div className='grid grid-cols-[122px_1fr] gap-x-3 gap-y-0 px-4 py-1.5'>
-            {tips.map((t) => (
-              <div
-                key={t.k}
-                className='col-span-2 grid grid-cols-subgrid border-b border-slate-100/70 py-2 last:border-b-0 dark:border-border/40'
-              >
-                {t.kind === 'code' ? (
-                  <code
-                    className={cn(
-                      'h-fit w-fit self-start whitespace-nowrap rounded px-1.5 py-0.5 text-[10.5px] font-semibold',
-                      th.accentSoft
-                    )}
-                  >
-                    {t.k}
-                  </code>
-                ) : (
-                  <span className='self-start pt-0.5 text-[11px] font-semibold leading-snug text-slate-700 dark:text-slate-200'>
-                    {t.k}
-                  </span>
+    <div data-chat-tips>
+      <p className='border-b border-slate-100 px-4 py-2.5 text-[12.5px] font-semibold text-slate-800 dark:border-border/60 dark:text-slate-100'>
+        Things this chat can do
+      </p>
+      {/* Fixed label gutter — chips and place-labels align into one
+        column, descriptions read as a second clean column. */}
+      <div className='grid grid-cols-[122px_1fr] gap-x-3 gap-y-0 px-4 py-1.5'>
+        {tips.map((t) => (
+          <div
+            key={t.k}
+            className='col-span-2 grid grid-cols-subgrid border-b border-slate-100/70 py-2 last:border-b-0 dark:border-border/40'
+          >
+            {t.kind === 'code' ? (
+              <code
+                className={cn(
+                  'h-fit w-fit self-start whitespace-nowrap rounded px-1.5 py-0.5 text-[10.5px] font-semibold',
+                  th.accentSoft
                 )}
-                <span className='text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300'>
-                  {t.v}
-                </span>
-              </div>
-            ))}
+              >
+                {t.k}
+              </code>
+            ) : (
+              <span className='self-start pt-0.5 text-[11px] font-semibold leading-snug text-slate-700 dark:text-slate-200'>
+                {t.k}
+              </span>
+            )}
+            <span className='text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300'>
+              {t.v}
+            </span>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
     </div>
   )
 }
@@ -1153,6 +1123,11 @@ export function ChatRoomView({
   const { rooms: archivedRooms } = useArchivedRooms(!roomsLoading && !activeInfo)
   const roomInfo = activeInfo ?? archivedRooms.find((r) => r.room === room) ?? null
   const archivable = canArchive(roomInfo)
+  const notifyMode: RoomNotifyMode = roomInfo?.muted
+    ? 'muted'
+    : roomInfo?.notify_mode === 'mentions'
+      ? 'mentions'
+      : 'all'
   const botName = useChatBotName()
   const [searchOpen, setSearchOpen] = useState(false)
   const [msgSearch, setMsgSearch] = useState('')
@@ -1164,7 +1139,6 @@ export function ChatRoomView({
   const msgActions = useMessageActions(room)
   const [actionsOpenId, setActionsOpenId] = useState<number | null>(null)
   const [preview, setPreview] = useState<PreviewFile | null>(null)
-  const [notifyMenuOpen, setNotifyMenuOpen] = useState(false)
   const [threadRoot, setThreadRoot] = useState<number | null>(null)
   // A root the viewer cannot read (hidden, deleted) comes back empty, so the
   // room just opens without the pane.
@@ -2019,10 +1993,11 @@ export function ChatRoomView({
         <div className='min-w-0 flex-1'>
           <p className='flex items-center gap-1 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
             <span className='truncate'>{label}</span>
+            {roomInfo && <RoomStatusMarks starred={!!roomInfo.starred} notify={notifyMode} />}
             {channel?.announce && (
               <span
-                className='shrink-0 rounded bg-slate-100 px-1 text-[9.5px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-muted dark:text-slate-300'
-                title='Announcement channel — the owner and admins post, members reply in threads'
+                className='shrink-0 rounded bg-slate-100 px-1.5 py-px text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+                data-tip='Announcement channel — the owner and admins post, members reply in threads'
               >
                 Announcements
               </span>
@@ -2044,249 +2019,21 @@ export function ChatRoomView({
           huddle={huddle}
           renderAvatar={(id, name) => <Avatar id={id} name={name} size={18} presence={false} />}
         />
-        {recordLink && (
-          <button
-            type='button'
-            onClick={() => cfg.navigate?.(recordLink)}
-            className={cn(
-              'flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors',
-              th.accentText,
-              'hover:bg-slate-100 dark:hover:bg-muted'
-            )}
-            title='Open the record this room belongs to'
-            data-chat-open-record
-          >
-            <ExternalLink className='h-3.5 w-3.5' strokeWidth={2} />
-            Open record
-          </button>
-        )}
-        {roomInfo && (
-          <button
-            type='button'
-            onClick={() => setStarred.mutate({ room, starred: !roomInfo.starred })}
-            className={cn(
-              'rounded-md p-1 transition-colors',
-              roomInfo.starred
-                ? 'text-amber-500'
-                : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-            )}
-            aria-pressed={!!roomInfo.starred}
-            aria-label={roomInfo.starred ? 'Unstar' : 'Star — keep it at the top of your list'}
-            title={
-              roomInfo.starred
-                ? 'Starred — click to unstar'
-                : 'Star — keep it at the top of your list'
-            }
-            data-chat-star={roomInfo.starred ? 'on' : 'off'}
-          >
-            <Star
-              className={cn('h-3.5 w-3.5', roomInfo.starred && 'fill-current')}
-              strokeWidth={2}
-            />
-          </button>
-        )}
-        <ChatTipsButton botName={botName} />
-        <JumpToDate
-          onJump={(d) => {
-            firstScrollRef.current = false
-            pinnedRef.current = false
-            setAnchor({ date: d })
-          }}
-        />
         <button
           type='button'
           onClick={() => {
             setSearchOpen((o) => !o)
             setMsgSearch('')
           }}
-          className={cn(
-            'rounded-md p-1 transition-colors',
-            searchOpen
-              ? th.accentSoft
-              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-          )}
+          className={cn(headerIconButton, searchOpen ? th.accentSoft : headerIconIdle)}
           aria-label='Search in this conversation'
+          aria-pressed={searchOpen}
+          data-tip='Search this conversation'
         >
           <Search className='h-3.5 w-3.5' strokeWidth={2} />
         </button>
         {roomInfo?.channel?.is_direct && (
           <GroupMembersButton channel={roomInfo.channel} onLeft={onBack} />
-        )}
-        {(room.startsWith('dm:') || roomInfo?.channel?.is_direct) && (
-          <button
-            type='button'
-            title='Start a Teams call with everyone here'
-            onClick={async () => {
-              try {
-                let emails: string[] = []
-                if (room.startsWith('dm:') && me) {
-                  const peer = dmPeer(room, me.id)
-                  if (peer) {
-                    const r = (await client.request(
-                      get<{ data: { email?: string | null } }>(`/users/${peer}`)
-                    )) as { data: { email?: string | null } }
-                    if (r.data?.email) emails = [r.data.email]
-                  }
-                } else if (roomInfo?.channel?.id) {
-                  const r = (await client.request(
-                    get<{ data: Array<{ email: string | null; user: string }> }>(
-                      `/chat/channels/${roomInfo.channel.id}/members`
-                    )
-                  )) as { data: Array<{ email: string | null; user: string }> }
-                  emails = r.data
-                    .filter((u) => u.email && u.user.toUpperCase() !== me?.id.toUpperCase())
-                    .map((u) => u.email as string)
-                }
-                if (emails.length === 0) {
-                  toast.error('No callable participants found')
-                  return
-                }
-                window.open(
-                  `https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(emails.join(','))}`,
-                  '_blank',
-                  'noopener'
-                )
-              } catch {
-                toast.error('Could not resolve participants')
-              }
-            }}
-            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-            aria-label='Start a Teams call'
-            data-chat-teams-call
-          >
-            <Video className='h-3.5 w-3.5' strokeWidth={2} />
-          </button>
-        )}
-        {roomInfo && (
-          <div className='relative flex items-center'>
-            <button
-              type='button'
-              onClick={() => setNotifyMenuOpen((o) => !o)}
-              className={cn(
-                'rounded-md p-1 transition-colors',
-                roomInfo.muted || roomInfo.notify_mode === 'mentions'
-                  ? th.accentSoft
-                  : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-              )}
-              aria-label='Notification settings for this room'
-              title={
-                roomInfo.muted
-                  ? 'Muted'
-                  : roomInfo.notify_mode === 'mentions'
-                    ? 'Mentions only'
-                    : 'All messages'
-              }
-              data-chat-notify
-            >
-              {roomInfo.muted ? (
-                <BellOff className='h-3.5 w-3.5' strokeWidth={2} />
-              ) : (
-                <Bell className='h-3.5 w-3.5' strokeWidth={2} />
-              )}
-            </button>
-            {notifyMenuOpen && (
-              <div
-                className={cn(
-                  'absolute right-0 top-full z-30 mt-1 w-[160px] overflow-hidden rounded-lg border py-1 shadow-lg',
-                  th.surface,
-                  'border-slate-200 dark:border-border'
-                )}
-              >
-                {(
-                  [
-                    ['all', 'All messages', !roomInfo.muted && roomInfo.notify_mode !== 'mentions'],
-                    [
-                      'mentions',
-                      'Mentions only',
-                      !roomInfo.muted && roomInfo.notify_mode === 'mentions'
-                    ],
-                    ['muted', 'Muted', roomInfo.muted]
-                  ] as const
-                ).map(([mode, text, active]) => (
-                  <button
-                    key={mode}
-                    type='button'
-                    onClick={() => {
-                      setNotifyMenuOpen(false)
-                      if (mode === 'muted') {
-                        setMuted.mutate({ room, muted: true })
-                      } else {
-                        if (roomInfo.muted) setMuted.mutate({ room, muted: false })
-                        setNotifyMode.mutate({ room, mode })
-                      }
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]',
-                      active
-                        ? th.accentSoft
-                        : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-muted'
-                    )}
-                  >
-                    {text}
-                    {active && <Check className='ml-auto h-3 w-3' />}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-        {roomInfo?.kind === 'entity' && roomInfo.joined && (
-          <button
-            type='button'
-            onClick={() =>
-              leave.mutate(room, {
-                onSuccess: () => {
-                  toast.success(`Left ${roomInfo.label}`, {
-                    description: "Open the record's chat again to rejoin."
-                  })
-                  onBack()
-                }
-              })
-            }
-            title="Leave this record's chat — it leaves your list; open it from the record again to rejoin"
-            aria-label="Leave this record's chat"
-            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-            data-chat-leave-room
-          >
-            <LogOut className='h-3.5 w-3.5' strokeWidth={2} />
-          </button>
-        )}
-        {roomInfo && archivable && (
-          <button
-            type='button'
-            onClick={() =>
-              setArchived.mutate(
-                { room, archived: !roomInfo.archived },
-                {
-                  onSuccess: () => {
-                    if (roomInfo.archived) toast.success('Moved back to your chats')
-                    else {
-                      toast.success('Archived for you — others in the conversation still see it', {
-                        description: 'Find it under the Archived tab.'
-                      })
-                      onBack()
-                    }
-                  }
-                }
-              )
-            }
-            title={
-              roomInfo.archived
-                ? 'Unarchive — back to your chats'
-                : 'Archive for me — hides it from my list and stops my alerts. Others in the conversation are not affected.'
-            }
-            aria-label={
-              roomInfo.archived ? 'Unarchive conversation' : 'Archive conversation for me'
-            }
-            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-            data-chat-archive={roomInfo.archived ? 'unarchive' : 'archive'}
-          >
-            {roomInfo.archived ? (
-              <ArchiveRestore className='h-3.5 w-3.5' strokeWidth={2} />
-            ) : (
-              <Archive className='h-3.5 w-3.5' strokeWidth={2} />
-            )}
-          </button>
         )}
         <button
           type='button'
@@ -2294,28 +2041,116 @@ export function ChatRoomView({
             setThreadRoot(null)
             setInfoOpen((o) => !o)
           }}
-          className={cn(
-            'rounded-md p-1 transition-colors',
-            infoOpen
-              ? th.accentSoft
-              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-          )}
+          className={cn(headerIconButton, infoOpen ? th.accentSoft : headerIconIdle)}
           aria-label='Room info — members, pinned, files and links'
-          title='Room info — members, pinned, files and links'
+          aria-pressed={infoOpen}
+          data-tip='Room info — members, pinned, files and links'
           data-chat-info-button
         >
           <Info className='h-3.5 w-3.5' strokeWidth={2} />
         </button>
-        {onOpenSettings && (
-          <button
-            type='button'
-            onClick={onOpenSettings}
-            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-            aria-label='Channel settings'
-          >
-            <Settings className='h-3.5 w-3.5' strokeWidth={2} />
-          </button>
-        )}
+        <RoomHeaderMenu
+          th={th}
+          starred={roomInfo ? !!roomInfo.starred : undefined}
+          onStar={
+            roomInfo ? () => setStarred.mutate({ room, starred: !roomInfo.starred }) : undefined
+          }
+          notify={roomInfo ? notifyMode : undefined}
+          onNotify={
+            roomInfo
+              ? (mode) => {
+                  if (mode === 'muted') {
+                    setMuted.mutate({ room, muted: true })
+                  } else {
+                    if (roomInfo.muted) setMuted.mutate({ room, muted: false })
+                    setNotifyMode.mutate({ room, mode })
+                  }
+                }
+              : undefined
+          }
+          onJump={(d) => {
+            firstScrollRef.current = false
+            pinnedRef.current = false
+            setAnchor({ date: d })
+          }}
+          onOpenRecord={recordLink ? () => cfg.navigate?.(recordLink) : undefined}
+          onTeamsCall={
+            room.startsWith('dm:') || roomInfo?.channel?.is_direct
+              ? async () => {
+                  try {
+                    let emails: string[] = []
+                    if (room.startsWith('dm:') && me) {
+                      const peer = dmPeer(room, me.id)
+                      if (peer) {
+                        const r = (await client.request(
+                          get<{ data: { email?: string | null } }>(`/users/${peer}`)
+                        )) as { data: { email?: string | null } }
+                        if (r.data?.email) emails = [r.data.email]
+                      }
+                    } else if (roomInfo?.channel?.id) {
+                      const r = (await client.request(
+                        get<{ data: Array<{ email: string | null; user: string }> }>(
+                          `/chat/channels/${roomInfo.channel.id}/members`
+                        )
+                      )) as { data: Array<{ email: string | null; user: string }> }
+                      emails = r.data
+                        .filter((u) => u.email && u.user.toUpperCase() !== me?.id.toUpperCase())
+                        .map((u) => u.email as string)
+                    }
+                    if (emails.length === 0) {
+                      toast.error('No callable participants found')
+                      return
+                    }
+                    window.open(
+                      `https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(emails.join(','))}`,
+                      '_blank',
+                      'noopener'
+                    )
+                  } catch {
+                    toast.error('Could not resolve participants')
+                  }
+                }
+              : undefined
+          }
+          onSettings={onOpenSettings}
+          archived={!!roomInfo?.archived}
+          onArchive={
+            roomInfo && archivable
+              ? () =>
+                  setArchived.mutate(
+                    { room, archived: !roomInfo.archived },
+                    {
+                      onSuccess: () => {
+                        if (roomInfo.archived) toast.success('Moved back to your chats')
+                        else {
+                          toast.success(
+                            'Archived for you — others in the conversation still see it',
+                            {
+                              description: 'Find it under the Archived tab.'
+                            }
+                          )
+                          onBack()
+                        }
+                      }
+                    }
+                  )
+              : undefined
+          }
+          onLeave={
+            roomInfo?.kind === 'entity' && roomInfo.joined
+              ? () =>
+                  leave.mutate(room, {
+                    onSuccess: () => {
+                      toast.success(`Left ${roomInfo.label}`, {
+                        description: "Open the record's chat again to rejoin."
+                      })
+                      onBack()
+                    }
+                  })
+              : undefined
+          }
+          tips={<ChatTipsContent botName={botName} />}
+        />
       </div>
       <HuddleStage
         room={room}
