@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 
 const dir = new URL('../deploy/staging/mailpit/', import.meta.url)
 const read = (f) => readFileSync(new URL(f, dir), 'utf8')
-const compose = read('compose.yml')
+const compose = read('stack.yml')
 const relay = read('relay.example.yml')
 const env = read('.env.example')
 const live = (s) => s.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
@@ -32,23 +32,31 @@ test('relay.example.yml and .env.example hold placeholders only', () => {
   }
 })
 
-test('ui-auth-file is configured from a read-only mount', () => {
-  assert.match(live(compose), /MP_UI_AUTH_FILE:|--ui-auth-file/)
-  assert.match(compose, /mailpit-ui-auth:ro/)
-  assert.match(compose, /MP_SMTP_RELAY_CONFIG:/)
-  assert.match(compose, /mailpit-relay\.yml:ro/)
+test('ui-auth-file and relay config are external Swarm secrets under /run/secrets', () => {
+  const c = live(compose)
+  assert.match(c, /MP_UI_AUTH_FILE: \/run\/secrets\//)
+  assert.match(c, /MP_SMTP_RELAY_CONFIG: \/run\/secrets\//)
+  for (const name of ['mailpit_ui_auth', 'mailpit_relay']) {
+    assert.match(c, new RegExp(`^  ${name}:\\n    external: true`, 'm'), name)
+  }
 })
 
-test('UI port 8025 is published on a variable host address, never 0.0.0.0', () => {
-  const ports = [...live(compose).matchAll(/^\s*-\s*"?([^"\n]*:8025(?::8025)?)"?\s*$/gm)].map((m) => m[1])
-  assert.ok(ports.length > 0, 'port 8025 must be published')
-  for (const p of ports) {
-    assert.match(p, /^\$\{MAILPIT_UI_BIND[^}]*\}:8025:8025$/, p)
-    assert.doesNotMatch(p, /0\.0\.0\.0/)
-  }
-  assert.doesNotMatch(live(compose), /0\.0\.0\.0/)
-  const published = live(compose).match(/^\s*ports:\n(\s+-.*\n?)+/m)?.[0] ?? ''
-  assert.doesNotMatch(published, /1025/, 'SMTP must not be published')
+test('stack file uses only stack-deploy keys and the Swarm service rules', () => {
+  const c = live(compose)
+  assert.doesNotMatch(c, /container_name:|profiles:|depends_on:|env_file:|build:|^\s*restart:/m)
+  assert.match(c, /replicas: 1\b/)
+  assert.match(c, /constraints:\n\s+- node\./)
+  assert.match(c, /restart_policy:/)
+  assert.match(c, /^\s*volumes:\n\s+- mailpit-data:\/data/m)
+})
+
+test('SMTP 1025 and the UI 8025 are never published through the ingress', () => {
+  const c = live(compose)
+  assert.doesNotMatch(c, /^\s*ports:/m, 'no active ports: key (host mode is a commented option)')
+  assert.doesNotMatch(c, /0\.0\.0\.0/)
+  // a host-mode publish, if someone enables it, must be 8025 only and mode: host
+  const commented = compose.match(/^#\s+ports:[\s\S]*?mode: host/m)?.[0] ?? ''
+  assert.doesNotMatch(commented, /1025/)
 })
 
 test('allowed/blocked recipients exist, as settings not hard-coded in compose', () => {

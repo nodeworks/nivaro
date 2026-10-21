@@ -1,4 +1,4 @@
-# Template for the Mailpit relay config. Copy to the host secrets directory and fill in.
+# Template for the Mailpit relay config. Fill in a copy on the host and load it as a Swarm secret.
 # Placeholders only: never commit a real host, user or password.
 host: relay.example.invalid
 port: 587
@@ -6,7 +6,7 @@ starttls: true
 # none | plain | login | cram-md5
 auth: plain
 username: RELAY_USERNAME
-# Prefer MP_SMTP_RELAY_PASSWORD from the host secrets env file; otherwise set it here (secrets copy only).
+# The password lives only in the secret copy of this file, never in the repo.
 password: RELAY_PASSWORD
 return-path: staging-mail@nivaro.dev
 

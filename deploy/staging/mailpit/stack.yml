@@ -1,0 +1,52 @@
+# Staging mail catcher, a service for the staging Docker Swarm stack.
+# Merge the `mailpit` service, `secrets` and `volumes` into the stack file (see docs/STAGING-MAIL.md)
+# and deploy with `docker stack deploy`. Catches every message; a real email only leaves when released by hand.
+# Variables are substituted from the shell that runs `docker stack deploy` (source .env first).
+services:
+  mailpit:
+    image: axllent/mailpit:${MAILPIT_VERSION:?set MAILPIT_VERSION to a pinned tag, e.g. v1.21.8}
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-5000}
+      MP_UI_AUTH_FILE: /run/secrets/mailpit-ui-auth
+      MP_SMTP_RELAY_CONFIG: /run/secrets/mailpit-relay.yml
+      MP_SMTP_RELAY_ALLOWED_RECIPIENTS: ${MAILPIT_ALLOWED_RECIPIENTS:?regex of domains manual releases may reach}
+      MP_SMTP_RELAY_BLOCKED_RECIPIENTS: ${MAILPIT_BLOCKED_RECIPIENTS:?regex of addresses that never get staging mail}
+      MP_SMTP_RELAY_MATCHING: ${MAILPIT_RELAY_MATCHING:-}
+      # Accept the API's SMTP auth (inbound side only; 1025 is never published).
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    volumes:
+      - mailpit-data:/data
+    secrets:
+      - source: mailpit_ui_auth
+        target: mailpit-ui-auth
+      - source: mailpit_relay
+        target: mailpit-relay.yml
+    # No `ports:`. SMTP is reached as mailpit:1025 on the stack's overlay network. The UI (8025) is
+    # reached through the stack's private reverse proxy, never the ingress (it ignores host IPs).
+    # To publish it instead, use host mode and firewall it (docs/STAGING-MAIL.md):
+    #   ports:
+    #     - target: 8025
+    #       published: 8025
+    #       protocol: tcp
+    #       mode: host
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.mailpit == true
+      restart_policy:
+        condition: any
+        delay: 5s
+
+secrets:
+  mailpit_ui_auth:
+    external: true
+    name: ${MAILPIT_UI_AUTH_SECRET:?name of the htpasswd Swarm secret}
+  mailpit_relay:
+    external: true
+    name: ${MAILPIT_RELAY_SECRET:?name of the relay config Swarm secret}
+
+volumes:
+  mailpit-data:
