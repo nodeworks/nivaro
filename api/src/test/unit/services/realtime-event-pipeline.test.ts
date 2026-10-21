@@ -208,6 +208,62 @@ describe('journaledEmit routing (#1737)', () => {
   })
 })
 
+describe('delivery acknowledgement stamps (#2477)', () => {
+  it('a sampled event keeps its stamp server-side and sends the same one over the stream', async () => {
+    const sets: unknown[][] = []
+    const redis = {
+      incr: vi.fn(async () => 50),
+      multi: () => {
+        const m = {
+          zadd: () => m,
+          zremrangebyrank: () => m,
+          expire: () => m,
+          set: (...a: unknown[]) => {
+            sets.push(a)
+            return m
+          },
+          exec: async () => []
+        }
+        return m
+      }
+    }
+    setJournalRedis(redis as never)
+    stream.active = true
+    stream.publishToStream.mockClear()
+    await journaledEmit('collection:orders', 'collection:update', { item: 1 })
+    expect(sets).toHaveLength(1)
+    expect(sets[0][0]).toBe('nvr:rt:ack:st:50')
+    const st = Number(sets[0][1])
+    expect(st).toBeGreaterThan(0)
+    expect(stream.publishToStream).toHaveBeenCalledWith(expect.anything(), {
+      self: undefined,
+      at: st
+    })
+  })
+
+  it('an unsampled event keeps nothing', async () => {
+    const sets: unknown[] = []
+    setJournalRedis({
+      incr: vi.fn(async () => 51),
+      multi: () => {
+        const m = {
+          zadd: () => m,
+          zremrangebyrank: () => m,
+          expire: () => m,
+          set: (...a: unknown[]) => {
+            sets.push(a)
+            return m
+          },
+          exec: async () => []
+        }
+        return m
+      }
+    } as never)
+    await journaledEmit('collection:orders', 'collection:update', { item: 1 })
+    expect(sets).toHaveLength(0)
+  })
+})
+
 describe('stream entries', () => {
   const entry = {
     seq: 5,

@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 import { SocketHealthTab } from './realtime/SocketHealthTab'
+import { VerifyTab } from './realtime/VerifyTab'
 
 /**
  * Realtime console (#270 diagnostics, #273 now-editing, #275 concurrency
@@ -23,6 +24,7 @@ type Tab =
   | 'concurrency'
   | 'firehose'
   | 'pipeline'
+  | 'verify'
 
 interface SocketRow {
   id: string
@@ -79,7 +81,13 @@ interface VersionGroup {
 }
 
 export default function Realtime() {
-  const [tab, setTab] = useState<Tab>('sockets')
+  // ?tab=verify opens the Verification tab (the SLO panel links there).
+  const [tab, setTab] = useState<Tab>(() =>
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('tab') === 'verify'
+      ? 'verify'
+      : 'sockets'
+  )
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
@@ -107,7 +115,8 @@ export default function Realtime() {
               ['editing', 'Now editing'],
               ['concurrency', 'Concurrency'],
               ['firehose', 'Firehose'],
-              ['pipeline', 'Event pipeline']
+              ['pipeline', 'Event pipeline'],
+              ['verify', 'Verification']
             ] as Array<[Tab, string]>
           ).map(([key, label]) => (
             <button
@@ -135,6 +144,7 @@ export default function Realtime() {
         {tab === 'concurrency' && <ConcurrencyTab />}
         {tab === 'firehose' && <FirehoseTab />}
         {tab === 'pipeline' && <PipelineTab />}
+        {tab === 'verify' && <VerifyTab />}
       </div>
     </div>
   )

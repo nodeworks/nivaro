@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis'
 import type { JournalEntry } from './event-journal.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
+import { ackSampled } from './realtime-ack-sample.js'
 import { livePayload } from './socket-transport.js'
 import { noteAdapterLag } from './traffic-taps/realtime.js'
 
@@ -123,7 +124,8 @@ export function shouldDeliver(d: DecodedStreamEntry, node: string = NODE): boole
  */
 export async function publishToStream(
   entry: JournalEntry,
-  opts: { self?: boolean } = {}
+  /** `at`: the write time to record (a sampled event's `_st`, #2477); default now. */
+  opts: { self?: boolean; at?: number } = {}
 ): Promise<boolean> {
   if (!streamActive() || !pub) return false
   try {
@@ -149,7 +151,10 @@ function deliver(d: DecodedStreamEntry): void {
   const io = getIo()
   if (!io) return
   const { entry } = d
-  io.local.to(entry.room).emit(entry.event, livePayload(entry))
+  const live = livePayload(entry)
+  // #2477 — a sampled event carries the time it was written, for client acknowledgements.
+  const payload = entry.seq != null && ackSampled(entry.seq) && d.at ? { ...live, _st: d.at } : live
+  io.local.to(entry.room).emit(entry.event, payload)
   stats.delivered++
   if (d.at) {
     stats.lastDeliveryLagMs = Math.max(0, Date.now() - d.at)

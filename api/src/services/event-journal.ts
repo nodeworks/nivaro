@@ -8,6 +8,7 @@ import {
 import { publishToStream, streamActive } from './event-stream.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
+import { ACK_STAMP_TTL_S, ackSampled, ackStampKey } from './realtime-ack-sample.js'
 import { livePayload } from './socket-transport.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
@@ -92,6 +93,9 @@ export async function journaledEmit(
   if (!io) return { seq: null, path: 'none', room }
   let seq: number | null = null
   let rseq: number | null = null
+  // #2477 — a sampled event carries the time it left (`_st`), for the clients' delivery
+  // acknowledgements; the server keeps the stamp so an ack can only echo a real one.
+  let st: number | null = null
   const t0 = observer ? performance.now() : 0
   try {
     if (_redis) {
@@ -110,26 +114,34 @@ export async function journaledEmit(
       if (!Number.isFinite(seq) || seq <= 0) throw new Error('no sequence')
       if (Number.isFinite(r) && r > 0) rseq = r
       const entry: JournalEntry = { seq, room, event, payload, ...(rseq ? { rseq } : {}) }
-      await _redis
+      const m = _redis
         .multi()
         .zadd(JOURNAL_KEY, seq, JSON.stringify(entry))
         .zremrangebyrank(JOURNAL_KEY, 0, -(JOURNAL_MAX + 1))
         .expire(JOURNAL_KEY, JOURNAL_TTL_S)
-        .exec()
+      if (ackSampled(seq)) {
+        st = Date.now()
+        m.set(ackStampKey(seq), String(st), 'EX', ACK_STAMP_TTL_S)
+      }
+      await m.exec()
     }
   } catch {
     seq = null // Redis down — emit unjournaled (fail open)
     rseq = null
+    st = null
   }
   // `_room` is the room as the client joined it (tenant prefix off), so it can key its counter.
-  const out =
+  const live =
     seq == null ? payload : livePayload({ seq, room, event, payload, ...(rseq ? { rseq } : {}) })
+  const out = st != null ? { ...live, _st: st } : live
   let path: EmitResult['path'] = 'adapter'
   if (seq != null) {
     const entry: JournalEntry = { seq, room, event, payload, ...(rseq ? { rseq } : {}) }
     recordDurable(entry) // #1673 — buffered, never awaited
     // #1737 — stream first; the local emit only once the other replicas will hear it.
-    if (streamActive() && (await publishToStream(entry, { self: opts.selfViaStream }))) {
+    // The stream entry's write time is the stamp, so other replicas send the same `_st`.
+    const pub = { self: opts.selfViaStream, ...(st != null ? { at: st } : {}) }
+    if (streamActive() && (await publishToStream(entry, pub))) {
       path = 'stream'
       if (!opts.selfViaStream) io.local.to(room).emit(event, out)
     }

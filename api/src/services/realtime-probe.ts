@@ -234,6 +234,13 @@ export async function runRealtimeProbe(
 
 async function record(app: FastifyInstance, r: ProbeResult): Promise<ProbeResult> {
   lastLocal = r
+  // #2477 — every probe that ran is one delivery sample for the delivery SLO (missed = bad).
+  if (!r.skipped) {
+    const { noteDeliverySample } = await import('./realtime-delivery-slo.js')
+    await noteDeliverySample('probe', r.arrived ? r.delivery_ms : null, {
+      redis: (app as unknown as { redis?: import('ioredis').Redis }).redis ?? null
+    })
+  }
   try {
     const redis = (app as unknown as { redis?: import('ioredis').Redis }).redis
     if (redis) {

@@ -1,3 +1,4 @@
+import { deliveryAckFor } from './delivery-ack'
 import type { CollectionUpdateEvent, RealtimeAdapter, RealtimeStatus } from './realtime'
 import { forgetSettledReads } from './request-gate'
 import { createRoomGapTracker, refetchEventsFor } from './room-gaps'
@@ -221,6 +222,9 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
       const seq = (payload as { _seq?: number } | undefined)?._seq
       if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
       gaps.observe(payload)
+      // #2477 — a sampled event asks for its receive time (the delivery SLO's real clients).
+      const ack = deliveryAckFor(payload)
+      if (ack) s.emit('rt:ack', ack)
     })
     s.on('catchup:room:events', (p: Parameters<typeof gaps.replayed>[0]) => gaps.replayed(p))
     s.on('realtime:stale', (p: { rooms?: string[]; all?: boolean }) => {

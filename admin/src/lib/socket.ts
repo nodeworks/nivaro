@@ -3,6 +3,7 @@ import {
   type CollectionUpdateEvent,
   createLeaderSocket,
   createRoomGapTracker,
+  deliveryAckFor,
   forgetSettledReads,
   measureClockOffset,
   type RealtimeAdapter,
@@ -354,6 +355,9 @@ export function getSocket(): Socket {
     const seq = (payload as { _seq?: number } | undefined)?._seq
     if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
     roomGaps.observe(payload)
+    // #2477 — a sampled event asks for its receive time (the delivery SLO's real clients).
+    const ack = deliveryAckFor(payload)
+    if (ack) socket?.emit('rt:ack', ack)
   })
   socket.on('catchup:room:events', (p: Parameters<typeof roomGaps.replayed>[0]) =>
     roomGaps.replayed(p)

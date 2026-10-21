@@ -23,6 +23,8 @@ vi.mock('@nivaro/shared', () => ({
   refetchEventsFor: () => [],
   // #2476 — the replay socket tap is exercised in packages/shared (replay-socket.test.ts).
   tapReplaySocket: () => {},
+  // #2477 — no event here is sampled for a delivery ack.
+  deliveryAckFor: () => null,
   createLeaderSocket: (
     _key: string,
     cbs: {
