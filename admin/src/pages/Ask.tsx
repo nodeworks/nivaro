@@ -67,6 +67,15 @@ interface TraceEntry {
   tool: string
   input: Record<string, unknown>
   summary: string
+  /** #2737 — served from earlier in the conversation, not queried again. */
+  reused?: boolean
+}
+
+/** #2471 — which model wrote the answer (absent when routing is off). */
+interface AnswerRouting {
+  tier: 'cheap' | 'main'
+  model: string
+  reason?: string
 }
 
 interface Proposal {
@@ -98,6 +107,7 @@ interface ChatTurn {
   cachedAt?: string | null
   /** Stopped by the person before the model finished (#688). */
   stopped?: boolean
+  routing?: AnswerRouting | null
   /** Who asked / whose access answered (shared threads, #1809). */
   author?: { id: string; name: string } | null
   /** False = an answer given with someone else's access that this reader may not see. */
@@ -118,6 +128,7 @@ interface ChatBody {
   cached?: boolean
   cached_at?: string
   stopped?: boolean
+  routing?: AnswerRouting
   /** #1833 — the stored conversation this answer was kept in. */
   conversation_id?: string
   /** #1804 — a "remember that …" note was kept instead of asking. */
@@ -216,6 +227,10 @@ function toTurn(m: ServerMessage): ChatTurn {
     playbooksUsed: Number(m.meta.playbooks_used ?? 0),
     cachedAt: typeof m.meta.cached_at === 'string' ? m.meta.cached_at : null,
     stopped: m.meta.stopped === true,
+    routing:
+      m.meta.routing && typeof m.meta.routing === 'object'
+        ? (m.meta.routing as AnswerRouting)
+        : null,
     author: m.author,
     visible: m.visible
   }
@@ -567,7 +582,8 @@ function AskPageInner() {
           requestId: data.request_id ?? null,
           playbooksUsed: data.playbooks_used ?? 0,
           cachedAt: data.cached ? (data.cached_at ?? new Date().toISOString()) : null,
-          stopped: data.stopped === true
+          stopped: data.stopped === true,
+          routing: data.routing ?? null
         }
       ])
       freshRef.current = false
@@ -604,6 +620,12 @@ function AskPageInner() {
     freshRef.current = true
     submit(question)
   }
+  // #2471 — "Try harder": the same question on the main model, naming the quick answer.
+  const tryHarderRef = useRef<{ retry_of: string | null } | null>(null)
+  function tryHarder(question: string, requestId: string | null | undefined) {
+    tryHarderRef.current = { retry_of: requestId ?? null }
+    submit(question)
+  }
 
   function submit(
     text?: string,
@@ -613,6 +635,11 @@ function AskPageInner() {
     if (!content || send.active) return
     const target = opts.conversationId !== undefined ? opts.conversationId : conversationId
     if (historyOff && target) return
+    const harder = tryHarderRef.current
+    tryHarderRef.current = null
+    const harderBody = harder
+      ? { try_harder: true, ...(harder.retry_of ? { retry_of: harder.retry_of } : {}) }
+      : {}
     const local = pending
     setPending((prev) => [...prev, { role: 'user', content, author: null, visible: true }])
     setInput('')
@@ -622,7 +649,8 @@ function AskPageInner() {
           role: t.role,
           content: t.content
         })),
-        fresh: freshRef.current
+        fresh: freshRef.current,
+        ...harderBody
       })
       return
     }
@@ -634,12 +662,14 @@ function AskPageInner() {
             messages: [{ role: 'user', content }],
             conversation_id: target,
             fresh: freshRef.current,
+            ...harderBody,
             ...(opts.command ? { command: opts.command } : {})
           }
         : {
             messages: [{ role: 'user', content }],
             save: true,
             fresh: freshRef.current,
+            ...harderBody,
             ...(opts.command ? { command: opts.command } : {})
           }
     )
@@ -1068,6 +1098,23 @@ function AskPageInner() {
                                     Stopped — this is what had arrived.
                                   </div>
                                 )}
+                                {t.routing?.tier === 'cheap' && !otherAuthor && prevQuestion && (
+                                  <div
+                                    className='mb-1.5 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400'
+                                    data-ask-quick
+                                  >
+                                    <span>Quick answer from a smaller model.</span>
+                                    <button
+                                      type='button'
+                                      className='underline decoration-dotted underline-offset-2 hover:text-slate-800 disabled:opacity-40 dark:hover:text-slate-200'
+                                      onClick={() => tryHarder(prevQuestion, t.requestId)}
+                                      disabled={send.active}
+                                      data-ask-try-harder
+                                    >
+                                      Try harder
+                                    </button>
+                                  </div>
+                                )}
                                 <AiMarkdown
                                   content={t.content}
                                   switchable
@@ -1108,6 +1155,14 @@ function AskPageInner() {
                                       >
                                         <Wrench className='h-2.5 w-2.5' />
                                         {tr.tool}: {tr.summary}
+                                        {tr.reused && (
+                                          <span
+                                            className='text-slate-400 dark:text-slate-500'
+                                            data-tip='Reused from earlier in this conversation — not queried again'
+                                          >
+                                            · reused
+                                          </span>
+                                        )}
                                       </span>
                                     ))}
                                   </div>

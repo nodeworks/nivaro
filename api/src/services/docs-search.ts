@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { excerpt, searchTerms } from './help-video-search-rank.js'
 
 // Ask AI's search_docs tool (#1803): the in-app docs — the same sections the
@@ -166,6 +168,23 @@ export function loadDocsIndex(): Promise<DocsIndexSection[]> {
       .catch(() => [] as DocsIndexSection[])
   }
   return indexPromise
+}
+
+let versionPromise: Promise<string> | null = null
+
+/**
+ * A fingerprint of docs-index.json (#2455): an Ask AI answer kept for everyone
+ * names the docs it was written from, so a regenerated index (`pnpm
+ * sync-docs`, a new release) never serves an answer quoting the old text.
+ * 'none' when the file cannot be read.
+ */
+export function docsIndexVersion(): Promise<string> {
+  if (!versionPromise) {
+    versionPromise = readFile(new URL('./docs-index.json', import.meta.url))
+      .then((buf) => createHash('sha1').update(buf).digest('hex').slice(0, 16))
+      .catch(() => 'none')
+  }
+  return versionPromise
 }
 
 export function normalizeQuery(q: string): string {

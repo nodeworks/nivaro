@@ -8,11 +8,13 @@ import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
+import { SavingsTab } from './ai-quality/SavingsTab'
 
-type Tab = 'review' | 'budgets' | 'health' | 'compare' | 'replay' | 'live'
+type Tab = 'review' | 'budgets' | 'savings' | 'health' | 'compare' | 'replay' | 'live'
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'review', label: 'Review queue' },
   { id: 'budgets', label: 'Budgets & fallback' },
+  { id: 'savings', label: 'Cost savings' },
   { id: 'health', label: 'Provider health' },
   { id: 'compare', label: 'Compare models' },
   { id: 'replay', label: 'Replay questions' },
@@ -63,6 +65,7 @@ export function AiQualityPage() {
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
         {tab === 'review' && <ReviewTab />}
         {tab === 'budgets' && <BudgetsTab />}
+        {tab === 'savings' && <SavingsTab />}
         {tab === 'health' && <HealthTab />}
         {tab === 'compare' && <CompareTab />}
         {tab === 'replay' && <ReplayTab />}

@@ -27,6 +27,10 @@ export const aiChatDocs: DocSection = {
         'Every answer shows the tool trace: exactly which queries produced it.',
         'A breakdown or a series (per state, per month, per vendor) comes with a chart: the model attaches a fenced `chart` block ({type, title, data:[{label, value}]}) that renders as a bar, line or pie under the prose.',
         'The same standalone question by the same person inside the answer-cache window (Settings → AI Features, default 15 minutes) answers from cache — the page says when it was first answered and offers "Ask again". Answers that propose an action are never cached; `fresh: true` in the request skips the cache.',
+        'An answer written only from the in-app docs (search_docs and no other tool, no page context, no remembered notes) is also kept for everyone: the next person asking the same question in the same language, with the same docs audience (administrators see more sections), gets it from cache. Any data tool keeps an answer private, and a new docs index never serves an answer quoting the old one.',
+        'Within one conversation, a read the assistant already made (same tool, same arguments, same person) is reused instead of queried again, as long as nothing in that collection changed since — the steps say "reused". A write in between, a configuration change, or 30 minutes passing makes it read again.',
+        'Tool results reach the model as compact tables (column names once, each link label once); Show the steps and exports keep the readable rows.',
+        'When an administrator switches on "Start cheap" for Ask AI (AI Quality → Cost savings), a quick answer from the smaller model says so and offers "Try harder", which asks the main model.',
         'Under a single number (an ungrouped count, sum, average, minimum or maximum) the page offers "Tell me when this goes over…": pick a threshold (goes over, reaches, drops under, falls to) or a trend watch (alerts when the series changes direction or moves outside its recent range, using the anomaly engine statistics), and how often to check (daily or hourly). The watch is re-read hourly AS YOU, so permissions and row-level security apply; you get an in-app notification when it crosses (once per crossing, not every check). "Numbers you watch" at the top of /ask lists each with its current value, change today, threshold and last alert — edit the threshold, pause or stop watching. Watches live in your own account preferences (20 at most) via `GET/POST/PATCH/DELETE /api/ai/watches` (`POST /:id/check` reads one now), and appear in your daily summary with the change since yesterday and whether they are close to the threshold. Ask "what am I watching" to have the assistant list them (my_watches).',
         'The past_state tool reads revision and pipeline history under the same read gates as the revision API: "what did this record look like on March 1" (as_of), "when did the amount change and who changed it" (changes), "how long was it in Finance Review" (time_in_state).',
         'Uses the chat model from Settings → AI Features → Model per feature; a model the gateway refuses falls back to the default model.',
@@ -91,7 +95,7 @@ POST /api/ai/plans/:id/cancel     discard, or stop a running plan before its nex
       items: [
         '/ai-plans (Home → AI Plans) lists plans with who approved them and when, their steps, impact and outcome. Everyone sees their own; administrators see every plan.',
         "Undo (administrators): a step that wrote records can be reverted record by record, but only where nothing has changed the record since — its newest revision is still the plan's write and every field still holds the value the plan wrote. Records changed since are named and left alone. Messages, chat posts, flows and tasks cannot be undone.",
-        'Make a draft flow (administrators, plans that ran to the end): the steps become flow operations, chained in order, with the records as the same ids, the original filter, or whichever record fired an update event. The flow is created switched off and opens in the tester. Record updates and creates use the new Write Records flow operation, which runs as whoever triggered the flow through the normal record rules. When nobody triggers it (a webhook, a schedule, a system event) it runs only as a \'Run as\' person named on the operation — never as the flow\'s author — and refuses without one; that person must be active, and the collection must be named, not templated.',
+        "Make a draft flow (administrators, plans that ran to the end): the steps become flow operations, chained in order, with the records as the same ids, the original filter, or whichever record fired an update event. The flow is created switched off and opens in the tester. Record updates and creates use the new Write Records flow operation, which runs as whoever triggered the flow through the normal record rules. When nobody triggers it (a webhook, a schedule, a system event) it runs only as a 'Run as' person named on the operation — never as the flow's author — and refuses without one; that person must be active, and the collection must be named, not templated.",
         "Templates: ready-made plans for common chores (close out a record's open lines, reassign a leaver's open records, move old drafts to a status, tell the owners of matching records). Fill in the blanks and the usual plan preview appears; nothing runs until you approve. Administrators add their own (blanks + steps as JSON).",
         'Data Integrity: on a run\'s field + rule filter, "Fix as a plan…" builds the confident fixes for that cluster as a plan, previewed record by record in the change report before approval.'
       ]
@@ -382,6 +386,17 @@ export const aiQualityDocs: DocSection = {
         'A fallback model (same provider) is tried when a call fails; the answer says a fallback wrote it. With none set, AI features say AI is unavailable.'
       ]
     },
+    { type: 'h2', id: 'ai-quality-savings', text: 'Cost savings' },
+    {
+      type: 'ul',
+      items: [
+        "Start cheap (off by default): pick a small model and the features that may start on it — Ask AI, record review, record summaries and field generation. The first call goes to the small model; it moves up to the feature's main model when a tool call fails, before any proposal or plan (always the main model), when the reply is not the JSON the feature asked for, or when the small model says it cannot answer. Streamed summaries and field drafts stay on the main model.",
+        '"Try harder" under a quick Ask AI answer asks the main model straight away.',
+        "What starting cheap saved: every call is logged with its model and cost; the figure is what the small model's useful calls would have cost on the main model, minus what they cost, minus any cheap calls thrown away (a question asked again on the main model, or replaced by Try harder). This month or the last 30 days.",
+        'Tool results sent to the model: per tool, the readable size and the compact size actually sent (about four characters per token), and how many results were reused from earlier in the conversation.',
+        'The figures need migration 469 (nivaro_ai_calls.meta); until it has run the switches work and the figures say so.'
+      ]
+    },
     { type: 'h2', id: 'ai-quality-tools', text: 'Compare, replay and live calls' },
     {
       type: 'p',
@@ -393,6 +408,7 @@ export const aiQualityDocs: DocSection = {
 GET  /api/ai/budget/me          caller's remaining budget (enabled:false = nothing to show)
 GET  /api/ai/budget/status      admin: spend against each cap
 GET  /api/ai/review-queue       admin: thumbs-down answers
+GET  /api/ai/quality/savings    admin: routing savings + tool payload sizes (?window=month|30d)
 PUT  /api/ai/quality/config     admin: caps + fallback model
 POST /api/ai/compare/run        admin: needs confirmed_cost_usd from /compare/estimate
 POST /api/ai/replay/run         admin: needs confirmed_cost_usd from /replay/estimate`

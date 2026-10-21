@@ -54,6 +54,8 @@ interface Turn {
   content: string
   requestId?: string | null
   stopped?: boolean
+  /** #2471 — answered by the small model ("Try harder" asks the main one). */
+  quick?: boolean
 }
 
 interface ChatDone {
@@ -61,6 +63,7 @@ interface ChatDone {
   request_id?: string | null
   stopped?: boolean
   conversation_id?: string
+  routing?: { tier: 'cheap' | 'main'; model: string }
 }
 
 interface DroppedDoc {
@@ -178,7 +181,8 @@ function AskPanelBody({
           role: 'assistant',
           content: data.reply,
           requestId: data.request_id ?? null,
-          stopped: data.stopped === true
+          stopped: data.stopped === true,
+          quick: data.routing?.tier === 'cheap'
         }
       ])
       if (data.conversation_id) setConversationId(data.conversation_id)
@@ -196,7 +200,10 @@ function AskPanelBody({
 
   const lastQuestion = [...turns].reverse().find((t) => t.role === 'user')?.content ?? ''
 
-  function ask(text?: string, opts: { fresh?: boolean } = {}) {
+  function ask(
+    text?: string,
+    opts: { fresh?: boolean; tryHarder?: { retryOf: string | null } } = {}
+  ) {
     const content = (text ?? input).trim()
     if (!content || send.active) return
     setError(null)
@@ -218,6 +225,12 @@ function AskPanelBody({
       messages: [...earlier, { role: 'user', content }],
       ...(target ? { conversation_id: target } : { save: true }),
       ...(opts.fresh ? { fresh: true } : {}),
+      ...(opts.tryHarder
+        ? {
+            try_harder: true,
+            ...(opts.tryHarder.retryOf ? { retry_of: opts.tryHarder.retryOf } : {})
+          }
+        : {}),
       ...(context ? { context } : {})
     })
   }
@@ -433,6 +446,20 @@ function AskPanelBody({
               <AiMarkdown content={t.content} className='text-[13px]' />
               <div className='flex items-center gap-2'>
                 {t.stopped && <span className='text-[11px] text-muted-foreground'>Stopped</span>}
+                {t.quick && i === turns.length - 1 && lastQuestion && (
+                  <button
+                    type='button'
+                    data-ask-panel-try-harder
+                    data-tip='Quick answer from a smaller model — ask the main one'
+                    className='text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground disabled:opacity-40'
+                    disabled={send.active}
+                    onClick={() =>
+                      ask(lastQuestion, { tryHarder: { retryOf: t.requestId ?? null } })
+                    }
+                  >
+                    Try harder
+                  </button>
+                )}
                 <AiFeedbackButtons requestId={t.requestId} />
               </div>
             </div>

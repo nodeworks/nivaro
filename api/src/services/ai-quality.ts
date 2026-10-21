@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import type { AiSettingsRow } from './ai-client.js'
 import { costOf, featureFromRoute } from './ai-log.js'
+import { normalizeRouting, type RoutingConfig } from './ai-routing.js'
 import { getIo } from './io-holder.js'
 import { currentTraceMeta } from './request-trace.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
@@ -43,6 +44,8 @@ export interface QualityConfig {
   budgets: { enabled: boolean; caps: BudgetCap[] }
   /** Second model on the SAME configured provider, tried when a call fails. */
   fallback_model: string | null
+  /** #2471 — start cheap per feature (services/ai-routing.ts); absent = off. */
+  routing?: RoutingConfig
 }
 
 export const DEFAULT_QUALITY: QualityConfig = {
@@ -80,7 +83,8 @@ export function parseQualityConfig(raw: unknown): QualityConfig {
   }
   return {
     budgets: { enabled: b.enabled === true, caps },
-    fallback_model: str(qq.fallback_model, 100)
+    fallback_model: str(qq.fallback_model, 100),
+    routing: normalizeRouting(qq.routing)
   }
 }
 
@@ -120,14 +124,18 @@ export function mergeQualityIntoModels(
   return JSON.stringify(base)
 }
 
-/** A new model map from the Settings page must not wipe the hidden quality block. */
+/**
+ * A new model map from the Settings page must not wipe the hidden blocks
+ * (`_quality`: budgets, fallback, #2471 routing): every `_` key the incoming
+ * map leaves out is kept from the stored one, a cleared map included.
+ */
 export function preserveQuality(
   incoming: unknown,
   existingRaw: string | null | undefined
 ): string | null {
-  if (incoming == null) return null
   let obj: Record<string, unknown> = {}
-  if (typeof incoming === 'string') {
+  if (incoming == null) obj = {}
+  else if (typeof incoming === 'string') {
     try {
       const p = JSON.parse(incoming)
       if (p && typeof p === 'object' && !Array.isArray(p)) obj = p as Record<string, unknown>
@@ -137,15 +145,16 @@ export function preserveQuality(
   } else if (typeof incoming === 'object' && !Array.isArray(incoming)) {
     obj = { ...(incoming as Record<string, unknown>) }
   } else return null
-  if (obj._quality === undefined) {
-    try {
-      const prev = existingRaw ? JSON.parse(existingRaw) : null
-      if (prev && typeof prev === 'object' && prev._quality) obj._quality = prev._quality
-    } catch {
-      // nothing to keep
+  try {
+    const prev = existingRaw ? JSON.parse(existingRaw) : null
+    if (prev && typeof prev === 'object' && !Array.isArray(prev)) {
+      for (const [k, v] of Object.entries(prev as Record<string, unknown>))
+        if (k.startsWith('_') && obj[k] === undefined) obj[k] = v
     }
+  } catch {
+    // nothing to keep
   }
-  return JSON.stringify(obj)
+  return Object.keys(obj).length ? JSON.stringify(obj) : null
 }
 
 // ─── budgets ─────────────────────────────────────────────────────────────────

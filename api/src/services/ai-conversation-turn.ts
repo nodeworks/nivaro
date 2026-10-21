@@ -119,6 +119,7 @@ export async function openConversationTurn(
         'stopped',
         'playbooks_used',
         'cached_at',
+        'routing',
         'remembered',
         'plans',
         'choices',

@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
+import { aiCallMetaSupported, currentAiCallMeta, serializeAiCallMeta } from './ai-call-meta.js'
 import { emitAiCallLive } from './ai-quality.js'
 import {
   type AiMessageStream,
@@ -31,6 +32,11 @@ const PRICES: Record<string, { input: number; cached: number; output: number }> 
   'claude-sonnet-4-5': { input: 3, cached: 0.3, output: 15 },
   'claude-haiku-4-5-20251001': { input: 1, cached: 0.1, output: 5 },
   'claude-haiku-4-5': { input: 1, cached: 0.1, output: 5 }
+}
+
+/** Model ids with a known list price (what a cost figure can be computed for). */
+export function pricedModels(): string[] {
+  return Object.keys(PRICES)
 }
 
 export function priceFor(model: string) {
@@ -85,9 +91,19 @@ function capJson(value: unknown, cap: number): string | null {
 
 type MessageParams = Anthropic.MessageCreateParams
 
+/** Insert one log row; `meta` (#2471 #2765, migration 469) rides only where the column exists. */
+function insertCallRow(row: Record<string, unknown>, meta: string | null): void {
+  void (async () => {
+    const withMeta = meta && (await aiCallMetaSupported()) ? { ...row, meta } : row
+    await db('nivaro_ai_calls').insert(withMeta)
+  })().catch(() => undefined)
+}
+
 /** One call's log row in flight — `ok` / `fail` each write at most once. */
 function beginAiCall(provider: AiProviderKind, params: MessageParams) {
   const meta = currentTraceMeta()
+  // Read at the START: a stream finishes outside the caller's context.
+  const callMeta = serializeAiCallMeta(currentAiCallMeta())
   const started = performance.now()
   const base = {
     created_at: new Date(),
@@ -149,8 +165,8 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
         input_tokens: input,
         output_tokens: output
       })
-      void db('nivaro_ai_calls')
-        .insert({
+      insertCallRow(
+        {
           ...base,
           model: res.model || base.model,
           status: 'ok',
@@ -163,8 +179,9 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
           stop_reason: res.stop_reason ?? null,
           tool_calls: content.filter((b) => b.type === 'tool_use').length,
           response: capJson(content, RESPONSE_CAP)
-        })
-        .catch(() => undefined)
+        },
+        callMeta
+      )
     },
     fail(err: unknown) {
       if (written) return
@@ -189,14 +206,15 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
         output_tokens: null,
         error: String((err as Error)?.message ?? err).slice(0, 200)
       })
-      void db('nivaro_ai_calls')
-        .insert({
+      insertCallRow(
+        {
           ...base,
           status: 'error',
           latency_ms: Math.round(performance.now() - started),
           error: String((err as Error)?.message ?? err).slice(0, 1000)
-        })
-        .catch(() => undefined)
+        },
+        callMeta
+      )
     }
   }
 }

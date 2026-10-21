@@ -2154,7 +2154,9 @@ export function SettingsPage() {
       ai_gateway_extract_model: aiGatewayExtractModel.trim() || null,
       ai_models: (() => {
         const clean: Record<string, string> = {}
-        for (const [k, v] of Object.entries(aiModels)) if (v.trim()) clean[k] = v.trim()
+        // Model ids only: the server keeps the hidden `_quality` block (budgets, routing).
+        for (const [k, v] of Object.entries(aiModels))
+          if (!k.startsWith('_') && typeof v === 'string' && v.trim()) clean[k] = v.trim()
         return Object.keys(clean).length ? JSON.stringify(clean) : null
       })(),
       ai_answer_cache_minutes:

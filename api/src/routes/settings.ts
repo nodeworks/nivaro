@@ -503,6 +503,16 @@ export async function settingsRoutes(app: FastifyInstance) {
       reply.raw.once('finish', () => bustObligationsEpochCache())
     }
 
+    // The model map keeps its hidden blocks (AI quality: budgets, fallback,
+    // start-cheap routing) — the Settings page only edits the model ids.
+    if ('ai_models' in patch) {
+      const { preserveQuality } = await import('../services/ai-quality.js')
+      const cur = (await db('nivaro_settings').orderBy('id', 'asc').first('ai_models')) as
+        | { ai_models?: string | null }
+        | undefined
+      patch.ai_models = preserveQuality(patch.ai_models, cur?.ai_models)
+    }
+
     // Preserve secrets if masked value re-submitted
     if (patch.anthropic_api_key === MASK) delete patch.anthropic_api_key
     if (patch.ai_gateway_client_secret === MASK) delete patch.ai_gateway_client_secret
