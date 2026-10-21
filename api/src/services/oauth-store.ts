@@ -41,6 +41,10 @@ export interface OAuthGrant {
   created_at: string
   last_used_at: string | null
   t: string
+  /** Idle review (#2497): when the owner was told the connection is unused… */
+  idle_flagged_at?: string | null
+  /** …and when they were told it will be disconnected. Both clear on the next use. */
+  idle_notice_at?: string | null
 }
 
 interface CodeRecord {
@@ -181,8 +185,14 @@ export async function consumeRefresh(redis: Redis, refresh: string): Promise<Tok
   }
 }
 
-/** An access token's record while its grant stands; touches the grant's last use (≤ once a minute). */
-export async function resolveAccessToken(redis: Redis, token: string): Promise<TokenRecord | null> {
+/**
+ * An access token's record while its grant stands, with the app's registered name; touches the
+ * grant's last use (≤ once a minute), which also clears any idle-review flag.
+ */
+export async function resolveAccessToken(
+  redis: Redis,
+  token: string
+): Promise<(TokenRecord & { client_name: string }) | null> {
   const rec = await read<TokenRecord>(redis, `${P}at:${hashToken(token)}`)
   if (!sameTenant(rec) || !rec) return null
   const grant = await read<OAuthGrant>(redis, `${P}grant:${rec.grant_id}`)
@@ -190,9 +200,11 @@ export async function resolveAccessToken(redis: Redis, token: string): Promise<T
   const last = grant.last_used_at ? Date.parse(grant.last_used_at) : 0
   if (Date.now() - last > 60_000) {
     grant.last_used_at = new Date().toISOString()
+    grant.idle_flagged_at = null
+    grant.idle_notice_at = null
     await redis.set(`${P}grant:${grant.id}`, JSON.stringify(grant))
   }
-  return rec
+  return { ...rec, client_name: grant.client_name }
 }
 
 /** Revoke one token (RFC 7009) — either kind. */
@@ -218,4 +230,45 @@ export async function revokeGrant(redis: Redis, userId: string, grantId: string)
   if (!g || g.user_id !== userId || !sameTenant(g)) return false
   await redis.multi().del(`${P}grant:${grantId}`).srem(`${P}user:${userId}`, grantId).exec()
   return true
+}
+
+/** One grant by id (this tenant's), or null. */
+export async function getGrant(redis: Redis, grantId: string): Promise<OAuthGrant | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(grantId)) return null
+  const g = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
+  return sameTenant(g) ? g : null
+}
+
+/** Set the idle-review stamps on a grant that still stands. */
+export async function setGrantIdleStamps(
+  redis: Redis,
+  grantId: string,
+  stamps: Pick<OAuthGrant, 'idle_flagged_at' | 'idle_notice_at'>
+): Promise<void> {
+  const g = await getGrant(redis, grantId)
+  if (!g) return
+  await redis.set(`${P}grant:${grantId}`, JSON.stringify({ ...g, ...stamps }))
+}
+
+/** Every connection on this tenant, across people (admin view, idle review). SCAN, never KEYS. */
+export async function listAllGrants(redis: Redis, cap = 20_000): Promise<OAuthGrant[]> {
+  const out: OAuthGrant[] = []
+  let cursor = '0'
+  do {
+    const [next, keys] = await redis.scan(cursor, 'MATCH', `${P}grant:*`, 'COUNT', 500)
+    cursor = next
+    if (keys.length) {
+      const raws = await redis.mget(...keys)
+      for (const raw of raws) {
+        if (!raw) continue
+        try {
+          const g = JSON.parse(raw) as OAuthGrant
+          if (sameTenant(g)) out.push(g)
+        } catch {
+          // skip a damaged record
+        }
+      }
+    }
+  } while (cursor !== '0' && out.length < cap)
+  return out.sort((a, b) => b.created_at.localeCompare(a.created_at))
 }

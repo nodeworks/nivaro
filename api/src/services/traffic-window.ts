@@ -9,6 +9,7 @@
  */
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import { hasMcpLogColumns, MCP_CALLER_RE, mcpCallerLabel } from './mcp-calls.js'
 import { callerKeyFor, classifyRequest, entityKey, type TrafficLane } from './traffic-entities.js'
 import type { HistoryRow } from './traffic-history.js'
 
@@ -81,7 +82,12 @@ export function summarizeWindow(
     })
     if (!c) continue
     const key = entityKey(c.lane, c.entity)
-    const caller = callerKeyFor({ authMethod: r.auth, apiKeyId: r.api_key_id, userId: r.user })
+    const caller = callerKeyFor({
+      authMethod: r.auth,
+      apiKeyId: r.api_key_id,
+      userId: r.user,
+      mcpClient: r.mcp_client
+    })
     const isErr = Number(r.status) >= 400
     // A grouped row (readWindowGrouped) stands for `n` requests; a plain log row for one.
     const w = Math.max(1, Number((r as { n?: number }).n ?? 1) || 1)
@@ -163,6 +169,7 @@ export async function readWindowRows(
   to: Date,
   cap = WINDOW_ROW_CAP
 ): Promise<{ rows: HistoryRow[]; truncated: boolean }> {
+  const mcp = await hasMcpLogColumns().catch(() => false)
   const rows = (await db('nivaro_api_logs')
     .where('created_at', '>=', from)
     .where('created_at', '<', to)
@@ -178,7 +185,8 @@ export async function readWindowRows(
       'user',
       'graphql_operation',
       'graphql_kind',
-      'created_at'
+      'created_at',
+      ...(mcp ? ['mcp_client'] : [])
     )) as HistoryRow[]
   return { rows, truncated: rows.length >= cap }
 }
@@ -193,6 +201,8 @@ export async function readWindowGrouped(
   cap = 50_000
 ): Promise<{ rows: Array<HistoryRow & { n: number }>; truncated: boolean }> {
   const errExpr = 'CASE WHEN status >= 400 THEN 1 ELSE 0 END'
+  const mcp = await hasMcpLogColumns().catch(() => false)
+  const mcpCols = mcp ? ['mcp_client'] : []
   const raw = (await db('nivaro_api_logs')
     .where('created_at', '>=', from)
     .where('created_at', '<', to)
@@ -204,6 +214,7 @@ export async function readWindowGrouped(
       'auth',
       'api_key_id',
       'user',
+      ...mcpCols,
       db.raw(errExpr)
     )
     .select(
@@ -214,6 +225,7 @@ export async function readWindowGrouped(
       'auth',
       'api_key_id',
       'user',
+      ...mcpCols,
       db.raw(`${errExpr} as err`),
       db.raw('COUNT(*) as n')
     )
@@ -228,6 +240,7 @@ export async function readWindowGrouped(
     user: (r.user as string | null) ?? null,
     graphql_operation: (r.graphql_operation as string | null) ?? null,
     graphql_kind: (r.graphql_kind as string | null) ?? null,
+    mcp_client: (r.mcp_client as string | null) ?? null,
     created_at: to,
     n: Number(r.n) || 0
   }))
@@ -295,7 +308,7 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
-/** Human labels for caller keys (`k<id>` API keys, `u<uuid>` people, cron, anon). */
+/** Human labels for caller keys (`k<id>` API keys, `u<uuid>` people, `m:<slug>` MCP, cron, anon). */
 export async function labelCallers(keys: string[]): Promise<Record<string, string>> {
   const out: Record<string, string> = { cron: 'Crons & flows', anon: 'Unauthenticated' }
   const keyIds = keys
@@ -328,7 +341,12 @@ export async function labelCallers(keys: string[]): Promise<Record<string, strin
       `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email.split('@')[0]
   }
   for (const k of keys) {
-    if (!out[k]) out[k] = k.startsWith('k') ? `API key ${k.slice(1)}` : 'Unknown user'
+    if (out[k]) continue
+    out[k] = MCP_CALLER_RE.test(k)
+      ? mcpCallerLabel(k)
+      : k.startsWith('k')
+        ? `API key ${k.slice(1)}`
+        : 'Unknown user'
   }
   return out
 }

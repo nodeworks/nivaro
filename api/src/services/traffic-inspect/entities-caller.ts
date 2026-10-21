@@ -13,6 +13,7 @@ import type { Knex } from 'knex'
 import { db } from '../../db/index.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { parseRefusal } from '../../lib/parse-refusal.js'
+import { mcpCallerLabel } from '../mcp-calls.js'
 import { callerDependencies } from '../partner-dependencies.js'
 import { activeBreakers } from '../traffic-breaker.js'
 import type { InspectCtx, InspectPeek } from '../traffic-inspect.js'
@@ -44,6 +45,9 @@ const personName = (u: { first_name?: unknown; last_name?: unknown; email?: unkn
  */
 async function logRows(c: CallerRef, from: Date, to: Date): Promise<LogRow[] | null> {
   if (c.kind === 'source' || c.kind === 'cron') return null
+  // An MCP client's rows carry its slug (migration 480); behind it the log cannot say.
+  if (c.kind === 'mcp' && !(await hasColumn('nivaro_api_logs', 'mcp_client').catch(() => false)))
+    return null
   const withRid = await hasColumn('nivaro_api_logs', 'request_id').catch(() => false)
   const q = db('nivaro_api_logs')
     .where('created_at', '>=', from)
@@ -66,6 +70,7 @@ async function logRows(c: CallerRef, from: Date, to: Date): Promise<LogRow[] | n
   }
   if (c.kind === 'key') q.where('api_key_id', c.apiKeyId).where('auth', 'api_key')
   else if (c.kind === 'person') q.whereIn('user', [c.userId, c.userId.toLowerCase()]).where(notKey)
+  else if (c.kind === 'mcp') q.where('mcp_client', c.client)
   // The map's `anon` bucket: requests that carried no credential.
   else q.whereNull('user').where(notKey)
   return (await q) as LogRow[]
@@ -206,6 +211,8 @@ function sourceNote(c: CallerRef): string | null {
     return 'Every request a cron job or flow made through the API, grouped as one caller. Pick the job in the map to see one of them.'
   if (c.kind === 'anon')
     return 'Requests that carried no credential (public forms, sign-in, health checks).'
+  if (c.kind === 'mcp')
+    return 'An AI assistant connected through the MCP server: each tool call and the requests it made into the API, for everyone who connected an app by this name.'
   if (c.kind !== 'source') return null
   if (c.source === 'cron') return 'A scheduled job. Its runs are listed below; each opens the run.'
   if (c.source === 'flow') return 'A flow. Its runs are listed below; each opens the run.'
@@ -250,6 +257,7 @@ export async function callerDetail(id: string, ctx: InspectCtx): Promise<unknown
     key?.name ??
     person?.name ??
     (c.kind === 'cron' ? 'Crons & flows' : c.kind === 'anon' ? 'Unauthenticated' : null) ??
+    (c.kind === 'mcp' ? mcpCallerLabel(c.key) : null) ??
     (c.kind === 'source' ? (runs?.label ? String(runs.label) : c.key) : c.key)
   return {
     key: c.key,

@@ -37,6 +37,10 @@ declare module 'fastify' {
     /** Set when the request authenticated with an OAuth access token (nvo_*) from a connected app. */
     oauthClientId?: string
     oauthGrantId?: string
+    /** The connected app's registered name (its grant), for the request log and Traffic Map. */
+    oauthClientName?: string
+    /** The named API key's name, for MCP callers (services/mcp-calls.ts). */
+    apiKeyName?: string
     /** An in-process tool call made by POST /api/mcp (services/mcp-config.ts). */
     mcpInner?: boolean
   }
@@ -70,6 +74,26 @@ async function enforceKeyRateLimit(
   keyId: string | number,
   limit: number
 ): Promise<void> {
+  await enforceRateLimit(req, reply, {
+    bucket: String(keyId),
+    limit,
+    code: 'API_KEY_RATE_LIMITED',
+    message: (wait) =>
+      `This API key is limited to ${limit} requests per minute. Try again in ${wait} seconds.`
+  })
+}
+
+/**
+ * The fixed one-minute window behind the per-key limit, for any bucket (MCP connections use it
+ * too, #2469). Over the limit it throws 429 with Retry-After and `retryAfter` on the error;
+ * Redis trouble lets the request through.
+ */
+export async function enforceRateLimit(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  opts: { bucket: string; limit: number; code: string; message: (waitSeconds: number) => string }
+): Promise<void> {
+  const { bucket, limit } = opts
   const nowSec = Math.floor(Date.now() / 1000)
   const windowStart = Math.floor(nowSec / KEY_WINDOW_SECONDS) * KEY_WINDOW_SECONDS
   const resetAt = windowStart + KEY_WINDOW_SECONDS
@@ -77,8 +101,8 @@ async function enforceKeyRateLimit(
   try {
     const results = await req.server.redis
       .multi()
-      .incr(`nvr:keyrl:${keyId}:${windowStart}`)
-      .expire(`nvr:keyrl:${keyId}:${windowStart}`, KEY_WINDOW_SECONDS + 5)
+      .incr(`nvr:keyrl:${bucket}:${windowStart}`)
+      .expire(`nvr:keyrl:${bucket}:${windowStart}`, KEY_WINDOW_SECONDS + 5)
       .exec()
     count = Number(results?.[0]?.[1] ?? 0)
   } catch {
@@ -91,11 +115,7 @@ async function enforceKeyRateLimit(
   if (count > limit) {
     const wait = Math.max(resetAt - nowSec, 1)
     void reply.header('Retry-After', String(wait))
-    throw httpError(
-      429,
-      `This API key is limited to ${limit} requests per minute. Try again in ${wait} seconds.`,
-      'API_KEY_RATE_LIMITED'
-    )
+    throw Object.assign(httpError(429, opts.message(wait), opts.code), { retryAfter: wait })
   }
 }
 
@@ -320,6 +340,7 @@ async function applyApiKey(
   req.apiKeyRateLimit = key.rate_limit_per_minute ?? null
   if (simulated) return
   req.apiKeyId = Number(key.id)
+  req.apiKeyName = key.name
 
   // Update last_used_at, throttled to once per 60s to avoid write amplification
   const lastUsed = key.last_used_at ? new Date(key.last_used_at).getTime() : 0
@@ -433,6 +454,7 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
         await hydrateRole(req, user)
         req.oauthClientId = rec.client_id
         req.oauthGrantId = rec.grant_id
+        if (rec.client_name) req.oauthClientName = rec.client_name
         return
       }
       // Static user token

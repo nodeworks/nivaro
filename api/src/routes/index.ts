@@ -148,6 +148,7 @@ import { mailSuppressionRoutes } from './mail-suppressions.js'
 import { mailTemplateRoutes } from './mail-templates.js'
 import { mailTypeRoutes } from './mail-types.js'
 import { mcpRoutes } from './mcp.js'
+import { mcpConnectionRoutes } from './mcp-connections.js'
 import { meNotificationRoutes } from './me-notifications.js'
 import { mergeRoutes } from './merge.js'
 import { messageActionsRoutes } from './message-actions.js'
@@ -681,6 +682,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // Hosted MCP server (Streamable HTTP) + the person's connected AI apps (OAuth grants).
   await app.register(mcpRoutes)
   await app.register(oauthConnectionRoutes)
+  await app.register(mcpConnectionRoutes, { prefix: '/mcp-connections' })
   await app.register(widgetRoutes, { prefix: '/widget' })
   await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })
   // Root-level alias for clean external embeds: <script src="https://host/api/widget.js">

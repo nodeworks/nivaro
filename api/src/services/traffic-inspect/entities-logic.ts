@@ -18,6 +18,8 @@ export type CallerRef =
   | { kind: 'source'; key: string; source: string; ref: string }
   /** The map's aggregate buckets: every cron/flow request, and requests with no caller. */
   | { kind: 'cron' | 'anon'; key: string }
+  /** #2469 — an AI assistant through /api/mcp, by client (`m:Claude_Code`). */
+  | { kind: 'mcp'; key: string; client: string }
 
 const SOURCE_RE = /^([a-z][a-z0-9_-]{0,30}):([A-Za-z0-9_.:@-]{1,160})$/
 
@@ -35,6 +37,8 @@ export function parseCallerKey(raw: string): CallerRef | null {
     const userId = key.slice(1).toUpperCase()
     return { kind: 'person', key: `u${userId}`, userId }
   }
+  const m = key.match(/^m:([A-Za-z0-9._-]{1,48})$/)
+  if (m) return { kind: 'mcp', key, client: m[1] }
   const s = key.match(SOURCE_RE)
   if (s) return { kind: 'source', key, source: s[1], ref: s[2] }
   return null

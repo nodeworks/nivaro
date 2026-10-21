@@ -25,6 +25,9 @@ describe('OAuth token audience', () => {
       ['POST', '/api/auth/masquerade'],
       ['POST', '/api/users/U1/token'],
       ['DELETE', '/api/oauth/connections/x'],
+      // #2466 / #2498 — an agent never revokes, re-limits or undoes through its own token.
+      ['DELETE', '/api/mcp-connections/mine/k1'],
+      ['POST', '/api/mcp-connections/mine/activity/7/undo'],
       ['PATCH', '/api/items/nivaro_users/U1'],
       ['POST', '/api/graphql']
     ])

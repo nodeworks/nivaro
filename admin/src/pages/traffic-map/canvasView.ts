@@ -181,6 +181,7 @@ export const APP_GROUP_LABEL: Record<string, string> = {
   'app:cron': 'Cron and sources',
   'app:people': 'People, no app header',
   'app:anon': 'No credentials',
+  'app:mcp': 'AI assistants (MCP)',
   'app:other': 'Other callers'
 }
 export function appGroupLabel(id: string): string {
@@ -197,6 +198,8 @@ export function appGroupOf(
   isSource: boolean
 ): string {
   if (isSource || caller === 'cron' || kind === 'cron' || kind === 'source') return 'app:cron'
+  // #2469 — each MCP client (`m:<name>`) is its own caller, grouped with the other assistants.
+  if (kind === 'mcp' || caller.startsWith('m:')) return 'app:mcp'
   if (kind === 'key' || kind === 'machine') return 'app:integrations'
   const app = apps.get(caller)
   if (app) return `app:${app}`

@@ -1006,6 +1006,22 @@ export async function buildServer() {
         await runMonthlyConfigReview()
       })
 
+      // Idle MCP connections (#2497): flag OAuth connections unused for 60 days to their
+      // owner, warn 7 days before 90, then disconnect (services/mcp-idle-review.ts).
+      app.cron.schedule(
+        'mcp-idle-review',
+        '15 5 * * *',
+        async () => {
+          const { runIdleReview } = await import('./services/mcp-idle-review.js')
+          await runIdleReview(app)
+        },
+        {
+          idempotent: 'safe',
+          description:
+            'Tells people about connected AI apps they have not used for a while, and disconnects ones left unused past the limit after a seven-day notice.'
+        }
+      )
+
       // Extension event outbox (#504): deliver pending rows to registered
       // handlers each minute; backoff/dead-letter semantics in the service.
       app.cron.schedule('extension-events-sweep', '* * * * *', async () => {

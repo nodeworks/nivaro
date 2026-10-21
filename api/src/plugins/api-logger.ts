@@ -3,6 +3,7 @@ import fp from 'fastify-plugin'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
+import { mcpCallerKey, mcpLogColumns, mcpStampOf } from '../services/mcp-calls.js'
 import { maskQueryString } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { requestTenantKey } from '../services/socket-tenant.js'
@@ -40,6 +41,12 @@ interface ApiLogRow {
   chain_parent?: string | null
   /** The request id (= its trace id, migration 389) — joins the row to Traffic Map events. */
   request_id?: string | null
+  /** MCP calls (#2466, migration 480, services/mcp-calls.ts) — absent on every other row. */
+  mcp_conn?: string | null
+  mcp_client?: string | null
+  mcp_tool?: string | null
+  mcp_outcome?: string | null
+  mcp_bytes?: number | null
 }
 
 // #67 — keep the JSON body of an inbound INTEGRATION write (token / api-key
@@ -198,11 +205,24 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       const withRequestId = (await hasColumn('nivaro_api_logs', 'request_id'))
         ? shaped
         : shaped.map(({ request_id: _r, ...rest }) => rest)
+      // And the MCP call columns (migration 480).
+      const withMcp = (await hasColumn('nivaro_api_logs', 'mcp_conn'))
+        ? withRequestId
+        : withRequestId.map(
+            ({
+              mcp_conn: _a,
+              mcp_client: _b,
+              mcp_tool: _c,
+              mcp_outcome: _d,
+              mcp_bytes: _e,
+              ...rest
+            }) => rest
+          )
       // #666 — which instance served it (migration 379); the SLO dashboard
       // groups by it because several instances can share one database.
       const stamped = (await hasColumn('nivaro_api_logs', 'instance'))
-        ? withRequestId.map((r) => ({ ...r, instance: INSTANCE }))
-        : withRequestId
+        ? withMcp.map((r) => ({ ...r, instance: INSTANCE }))
+        : withMcp
       // Insert in modest chunks to stay under MSSQL parameter limits
       for (let i = 0; i < stamped.length; i += 50) {
         await db('nivaro_api_logs').insert(stamped.slice(i, i + 50))
@@ -321,6 +341,9 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       })
     }
     if (shouldSkip(path, req.method)) return
+    // #2466 / #2469 — a call that came through /api/mcp (the tool call or one of its in-process
+    // calls) names its connection on the row and is its own Traffic Map caller.
+    const mcp = mcpStampOf(req, path)
     // Traffic Map (per-node aggregator): memory only, never awaits. The inner internally
     // dispatched GraphQL request carries the operation stamp, so it is counted; the outer
     // root-alias `/graphql` request is not (GraphQL counts once, with its real operation).
@@ -334,6 +357,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         authMethod: req.authMethod ?? null,
         apiKeyId: req.apiKeyId ?? null,
         userId: req.user?.id ?? null,
+        mcpCaller: mcp ? mcpCallerKey(mcp.client) : null,
         graphqlOperation: gql?.operation ?? null,
         graphqlKind: gql?.kind ?? null,
         cacheHit: hasCacheHit(req),
@@ -373,7 +397,8 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       created_at: new Date(),
       chain_id: req.chainId ?? null,
       chain_parent: req.chainParent ?? null,
-      request_id: req.requestId ?? null
+      request_id: req.requestId ?? null,
+      ...mcpLogColumns(mcp)
     }
     buffer.push(row)
     // #2544 — the same request as one structured line for the long-history telemetry store
