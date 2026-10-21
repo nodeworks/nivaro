@@ -6,7 +6,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
-import { nameConfigCollection } from '../services/config-live.js'
+import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
 import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
@@ -1339,6 +1339,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // POST /collection-layouts/:id/generate-pdf
   app.post('/:id/generate-pdf', { preHandler: authenticate }, async (req, reply) => {
+    // Renders a record through a layout: changes no configuration (any signed-in caller).
+    markConfigRead(req)
     const { id } = req.params as { id: string }
     const { collection, item_id } = req.body as { collection: string; item_id: string | number }
 
@@ -1464,6 +1466,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // POST /collection-layouts/:id/generate-and-attach
   // Generates PDF for an item and attaches it to a file M2M/O2M field on the item.
   app.post('/:id/generate-and-attach', { preHandler: authenticate }, async (req, reply) => {
+    // Writes a file onto the record, never the layout: no config flush or push.
+    markConfigRead(req)
     const { id } = req.params as { id: string }
     const { collection, item_id, attach_field, filename_template, replace_generated, addendum_id } =
       req.body as {

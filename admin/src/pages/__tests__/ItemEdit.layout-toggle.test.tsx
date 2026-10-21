@@ -12,7 +12,9 @@ const state = vi.hoisted(() => ({
   chunkLoads: 0,
   noLayout: false,
   activeStatus: 0,
-  requests: [] as Array<{ method: string; url: string }>
+  requests: [] as Array<{ method: string; url: string }>,
+  // The editor's last save, as the mocked editor hands it to onClose.
+  release: null as null | (() => void)
 }))
 
 vi.mock('react-router', async (importOriginal) => {
@@ -35,9 +37,22 @@ vi.mock('@/components/share-link-popover', () => ({ ShareLinkPopover: () => null
 vi.mock('@/components/record-layout-editor', () => {
   state.chunkLoads++
   return {
-    default: (p: { layoutId: number; recordId: string | null; onClose: () => void }) => (
+    default: (p: {
+      layoutId: number
+      recordId: string | null
+      onClose: (saved: Promise<void>) => void
+    }) => (
       <div data-testid='record-layout-editor' data-layout={p.layoutId} data-record={p.recordId}>
-        <button type='button' onClick={p.onClose}>
+        <button
+          type='button'
+          onClick={() =>
+            p.onClose(
+              new Promise<void>((r) => {
+                state.release = r
+              })
+            )
+          }
+        >
           Done
         </button>
       </div>
@@ -47,7 +62,12 @@ vi.mock('@/components/record-layout-editor', () => {
 
 vi.mock('@nivaro/shared', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@nivaro/shared')>()
-  return { ...actual, ItemEditForm: () => <div data-testid='item-form' /> }
+  return {
+    ...actual,
+    ItemEditForm: (p: { layoutEditing?: boolean }) => (
+      <div data-testid='item-form' data-layout-editing={String(!!p.layoutEditing)} />
+    )
+  }
 })
 
 // A real axios instance whose adapter answers from fixtures and records every
@@ -116,7 +136,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return { ...actual, api: axios.create({ baseURL: '/api', adapter }) }
 })
 
-import { NivaroProvider } from '@nivaro/shared'
+import { LAYOUT_PUSH_SETTLE_MS, NivaroProvider } from '@nivaro/shared'
 
 // jsdom lacks what Radix and the editors measure with.
 class NoopObserver {
@@ -232,5 +252,30 @@ describe('record page Edit layout toggle', () => {
     // the record's layout once the last save lands: record-layout-editor.test).
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     await waitFor(() => expect(screen.queryByTestId('record-layout-editor')).toBeNull())
+  })
+
+  it('keeps the record form quiet about its own layout saves until they settle (no banner on close)', async () => {
+    state.user = { id: 'u1', is_admin: true }
+    renderWith(<ItemEditPage />, HostProvider)
+    const form = () => screen.getByTestId('item-form').getAttribute('data-layout-editing')
+    fireEvent.click(await screen.findByRole('button', { name: /edit layout/i }))
+    await screen.findByTestId('record-layout-editor')
+    expect(form()).toBe('true')
+
+    // Closed with a save still in flight: its config push has not been sent yet.
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByTestId('record-layout-editor')).toBeNull())
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(form()).toBe('true')
+
+    // The save lands; the push can still arrive for the push gap, then the form listens again.
+    await act(async () => {
+      state.release?.()
+      await Promise.resolve()
+    })
+    expect(form()).toBe('true')
+    await waitFor(() => expect(form()).toBe('false'), { timeout: LAYOUT_PUSH_SETTLE_MS + 1500 })
   })
 })

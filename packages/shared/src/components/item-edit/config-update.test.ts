@@ -21,3 +21,21 @@ describe('configUpdateReaction (the "This form was changed" banner)', () => {
     expect(configUpdateReaction('invoices', 'orders', true)).toBe('ignore')
   })
 })
+
+describe('configUpdateReaction while the host has Edit layout open (layoutEditing)', () => {
+  it("the admin's own saves (naming this collection) are ignored: no banner, no refetch", () => {
+    expect(configUpdateReaction('orders', 'orders', false, true)).toBe('ignore')
+  })
+
+  it('a push naming no collection still re-reads quietly', () => {
+    expect(configUpdateReaction(undefined, 'orders', false, true)).toBe('refresh')
+  })
+
+  it('a push about another collection is still ignored', () => {
+    expect(configUpdateReaction('invoices', 'orders', false, true)).toBe('ignore')
+  })
+
+  it('defaults to off: the record page outside a layout session still shows the banner', () => {
+    expect(configUpdateReaction('orders', 'orders', false)).toBe('banner')
+  })
+})

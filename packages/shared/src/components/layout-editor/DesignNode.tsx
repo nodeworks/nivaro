@@ -138,9 +138,12 @@ export function DesignNode({
     e.stopPropagation()
   }
   // Enter selects from the keyboard too (Space is dnd-kit's pick-up key);
-  // only on the node itself, never on a control inside it.
+  // only on the node itself, never on a control inside it. A node that IS a
+  // native button (a tab or step, asChild) keeps Enter's native click: the
+  // click path above selects it and, through data-design-pass, switches to it.
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== 'Enter' || e.target !== e.currentTarget) return
+    if (e.currentTarget.tagName === 'BUTTON') return
     e.preventDefault()
     design.onSelect(target)
   }

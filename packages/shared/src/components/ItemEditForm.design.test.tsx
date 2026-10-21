@@ -594,3 +594,45 @@ describe('ItemEditForm design mode', () => {
     })
   })
 })
+
+// Config hot-push (#1740) on a record page with Edit layout open over it: the editor's own
+// saves name this collection, and the host re-reads the layout once they land, so the form
+// under the overlay neither refetches per save nor says "This form was changed" afterwards.
+describe('ItemEditForm config push while the host edits its layout', () => {
+  const push = (collection?: string) =>
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('nvr:config-update', { detail: collection ? { collection } : {} })
+      )
+    })
+  const banner = () => host.querySelector('[data-form-config-changed]')
+  const configReads = (calls: Cmd[]) =>
+    calls.filter(
+      (c) => c._path === '/field-config/orders' || c._path === '/collection-layouts/active'
+    ).length
+
+  it('layoutEditing: a push naming this collection neither shows the banner nor refetches', async () => {
+    const { calls, rerender } = await mount({ itemId: '1', layoutEditing: true })
+    const before = configReads(calls)
+    push('orders')
+    await settle(() => false)
+    expect(banner()).toBeNull()
+    expect(configReads(calls)).toBe(before)
+
+    // The session is over (the host's tail elapsed): the next push is someone else's edit.
+    await act(async () => rerender({ itemId: '1', layoutEditing: false }))
+    push('orders')
+    await settle(() => !!banner())
+    expect(banner()).not.toBeNull()
+    expect(configReads(calls)).toBeGreaterThan(before)
+  })
+
+  it('layoutEditing: a push naming no collection still re-reads quietly', async () => {
+    const { calls } = await mount({ itemId: '1', layoutEditing: true })
+    const before = configReads(calls)
+    push()
+    await settle(() => configReads(calls) > before)
+    expect(configReads(calls)).toBeGreaterThan(before)
+    expect(banner()).toBeNull()
+  })
+})

@@ -12,6 +12,7 @@ import {
   layoutGrantedTools,
   NavigationContext,
   NivaroProvider,
+  useLayoutEditingQuiet,
   usePublishAskContext
 } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -644,8 +645,13 @@ export function ItemEditPage() {
   // layout /active resolves for this record, and the editor must not jump.
   const [editingLayoutId, setEditingLayoutId] = useState<number | null>(null)
   const editableLayoutId = user?.is_admin && layoutMeta?.id != null ? Number(layoutMeta.id) : null
-  // The editor re-reads the record's layout queries itself once its last save lands.
-  const closeLayoutEditor = () => setEditingLayoutId(null)
+  // The editor re-reads the record's layout queries itself once its last save lands; until
+  // then (plus the push gap) its own config pushes leave the record form alone (N1).
+  const layoutQuiet = useLayoutEditingQuiet(editingLayoutId != null)
+  const closeLayoutEditor = (saved: Promise<void>) => {
+    setEditingLayoutId(null)
+    layoutQuiet.settle(saved)
+  }
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
   const granted = layoutGrantedTools(layoutMeta, !!user?.is_admin)
   const canSchedule = granted.schedule
@@ -1193,6 +1199,7 @@ export function ItemEditPage() {
                 }}
                 focusField={focusField}
                 showHeader={true}
+                layoutEditing={layoutQuiet.layoutEditing}
                 onBack={undefined}
                 onSaved={(newId) => {
                   if (isNew)

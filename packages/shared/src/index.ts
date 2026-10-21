@@ -227,6 +227,10 @@ export { FieldRenderer } from './components/item-edit/FieldRenderer'
 export { buildCascadeFilter, seedQuickPickerSteps } from './components/item-edit/helpers'
 export { InlineTableField } from './components/item-edit/InlineTableField'
 export {
+  LAYOUT_PUSH_SETTLE_MS,
+  useLayoutEditingQuiet
+} from './components/item-edit/layout-editing-quiet'
+export {
   type PlanGridHost,
   PlanGridHostContext,
   type PlanGridRowHistoryArgs,
