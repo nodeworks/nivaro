@@ -1,0 +1,33 @@
+# Staging mail catcher. Copy this folder into the staging deploy (see docs/STAGING-MAIL.md).
+# Catches every message; a real email only leaves when someone releases it by hand.
+services:
+  mailpit:
+    image: axllent/mailpit:${MAILPIT_VERSION:?set MAILPIT_VERSION to a pinned tag, e.g. v1.21.8}
+    restart: unless-stopped
+    # Relay credentials, if given as env, come from this host secrets file (MP_SMTP_RELAY_*).
+    env_file:
+      - ${MAILPIT_RELAY_ENV_FILE:?path to the host secrets env file}
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-5000}
+      MP_UI_AUTH_FILE: /run/secrets/mailpit-ui-auth
+      MP_SMTP_RELAY_CONFIG: /run/secrets/mailpit-relay.yml
+      MP_SMTP_RELAY_ALLOWED_RECIPIENTS: ${MAILPIT_ALLOWED_RECIPIENTS:?regex of domains manual releases may reach}
+      MP_SMTP_RELAY_BLOCKED_RECIPIENTS: ${MAILPIT_BLOCKED_RECIPIENTS:?regex of addresses that never get staging mail}
+      MP_SMTP_RELAY_MATCHING: ${MAILPIT_RELAY_MATCHING:-}
+      # Accept the API's SMTP auth (inbound side only; port 1025 is not published).
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    volumes:
+      - mailpit-data:/data
+      - ${MAILPIT_UI_AUTH_FILE:?path to the htpasswd file}:/run/secrets/mailpit-ui-auth:ro
+      - ${MAILPIT_RELAY_CONFIG_FILE:?path to the relay config file}:/run/secrets/mailpit-relay.yml:ro
+    ports:
+      # Web UI/API: private or VPN address only, never 0.0.0.0.
+      - "${MAILPIT_UI_BIND:?private address, e.g. 127.0.0.1}:8025:8025"
+    expose:
+      # SMTP: reachable from the API container on the internal network only.
+      - "1025"
+
+volumes:
+  mailpit-data:

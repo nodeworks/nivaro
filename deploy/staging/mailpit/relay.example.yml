@@ -1,0 +1,23 @@
+# Template for the Mailpit relay config. Copy to the host secrets directory and fill in.
+# Placeholders only: never commit a real host, user or password.
+host: relay.example.invalid
+port: 587
+starttls: true
+# none | plain | login | cram-md5
+auth: plain
+username: RELAY_USERNAME
+# Prefer MP_SMTP_RELAY_PASSWORD from the host secrets env file; otherwise set it here (secrets copy only).
+password: RELAY_PASSWORD
+return-path: staging-mail@nivaro.dev
+
+# Manual releases may only reach these domains (our own). Keep equal to MAILPIT_ALLOWED_RECIPIENTS.
+allowed-recipients: '@(nivaro\.dev|team-domain-one\.example|team-domain-two\.example)$'
+
+# Never mail these, in every relay mode: customer domains and the admins the help-video probes mailed.
+# Keep equal to MAILPIT_BLOCKED_RECIPIENTS.
+blocked-recipients: '@(customer-one\.example|customer-two\.example)$|^(probed-admin-one|probed-admin-two)@'
+
+# Optional: auto-relay mail for one narrow test mailbox (MP_SMTP_RELAY_MATCHING).
+# WARNING: allowed-recipients does NOT apply to auto-relay, only blocked-recipients does.
+# Keep this regex narrow (one exact mailbox).
+# matching: '^staging-tester@nivaro\.dev$'
