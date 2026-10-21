@@ -1669,6 +1669,15 @@ export async function chatRoutes(app: FastifyInstance) {
     return { data: await appCardFor(req.user!, !!req.isAdmin, path).catch(() => null) }
   })
 
+  /** A request id or trace id pasted into chat (#2762): details for
+   *  administrators, "this id was logged" for everyone else, null when it
+   *  names no request. */
+  app.get('/request-card', async (req) => {
+    const id = String((req.query as { id?: string }).id ?? '').slice(0, 64)
+    const { requestCardFor } = await import('../services/chat-request-card.js')
+    return { data: await requestCardFor(req.user!, !!req.isAdmin, id).catch(() => null) }
+  })
+
   // ── Room info (#978, #980) ────────────────────────────────────────────────
 
   app.get<{ Params: { room: string } }>('/rooms/:room/info', async (req, reply) => {
