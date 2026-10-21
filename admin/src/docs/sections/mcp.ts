@@ -61,6 +61,10 @@ export const mcpDocs: DocSection = {
         'Create, update and delete records — creates rehearse first unless told to store, deletes need an explicit confirm — and move records through their pipeline.',
         'Work with My Work, queues, comments and mentions, tasks, revision history, custom queries, notifications, files (details only, never contents) and search.',
         'Ask Nivaro’s own data assistant (Ask AI) a question.',
+        'Work the support desk: list and read support requests, claim one, reply and change its status. You see your own requests; desk members and administrators see the desk, exactly as in Support. Claim, reply and status changes rehearse first unless told to go ahead.',
+        'See the approval steps waiting on you and approve or reject one with a note. The approval chain rules apply as in the app, and a decision rehearses first unless told to go ahead.',
+        'Look up the SLA clock and the at-risk reasons for one record or a list of records. Records you cannot open are left out.',
+        'Administrators can also ask why a person cannot see a record (explain_access): which gate hid it, with reasons only and no record values.',
         'Administrators also get read-only operations tools: health and readiness, runtime and database pool, Traffic Map summary, scheduled jobs and their runs, and a CPU profile of the API. Nothing restarts, pauses or reconfigures anything.',
         'Administrators also get layout tools: describe_layout (a form in plain terms, or every form of a collection), which_form (which form a record gets for a role, and why), explain_field (why a field shows, hides or is read-only for a role on a record) and propose_layout_ops. A proposal never changes a form: it waits under Proposals in the layout editor until an administrator tries it on the canvas and keeps it, or rejects it.'
       ]

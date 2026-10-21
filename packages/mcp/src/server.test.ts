@@ -120,7 +120,12 @@ describe('createNivaroMcpServer', () => {
       // a saved query may call a procedure that writes
       'run_custom_query',
       // stores a proposal (never the layout itself)
-      'propose_layout_ops'
+      'propose_layout_ops',
+      // support / approval changes rehearse by default
+      'support_claim',
+      'support_reply',
+      'support_set_status',
+      'decide_approval'
     ])
     for (const tool of tools) {
       const a = tool.annotations

@@ -125,6 +125,14 @@ Every tool answers JSON text. A refusal answers `isError: true` with the API's o
 | `transition` | Runs one transition by id, with an optional comment; the API's role, condition and requirement checks apply. |
 | `ask_data` | A plain-language question answered by the instance's own data assistant, which queries the collections as the key's user and returns the answer plus the tool trace. Needs an AI provider configured on the instance. |
 | `my_work` | The key's user's inbox: owned records (SLA-first), tasks, team tasks, requested tasks, approval steps, unread notifications — each section cut to `limit`, with the totals. |
+| `support_tickets` | Support requests: `scope` mine (default) or desk (desk members and administrators), filtered by `status`, `assignee`, `q`. |
+| `support_ticket` | One request with its thread, history and what the user may do (`can`). |
+| `support_claim` | Picks a request up: assigned to the user, In progress. Rehearses by default (`dry_run: true`). |
+| `support_reply` | Replies on a request's thread; the other side is notified. Rehearses by default. |
+| `support_set_status` | Moves a request to open / in_progress / done / cancelled (requesters: cancel or reopen their own). Rehearses by default. |
+| `list_approvals` | Approval steps waiting on the user, directly or through their role. |
+| `decide_approval` | Approves or rejects one step with a note, through the approval service and chain rules. Rehearses by default. |
+| `sla_status` | SLA clock and at-risk rule reasons for one record (`item`) or a batch (`items`, up to 100). Records the user cannot read are left out. |
 | `list_queues` | The worklists the user can open, with the collections each reads; 25 per page. |
 | `read_queue` | One page of a queue's items (`scope` mine / unowned / claimed / all, `sort`, `page`, `limit` ≤ 100): label, state, owners, SLA status, age. |
 | `list_tasks` | A record's tasks (`collection` + `id`) or the user's own open tasks; `status` narrows either. |
@@ -159,6 +167,7 @@ When the key's user is an administrator, the `nivaro-mcp` command also registers
 | `list_cron_jobs` | Every scheduled job with its schedule, latest run and 7-day error count, plus what is running now (`failing_only` narrows). |
 | `list_job_runs` | Background-job run history, filterable by kind, job id and status. |
 | `cpu_profile` | Samples the answering replica's CPU for 1–30 seconds and summarizes where the time went. |
+| `explain_access` | Why a person (`user_id`) can or cannot see one record: each access gate (role permission, row filter, User Scopes) re-run separately. Reasons only, no record values. |
 
 None of them restarts, kills, pauses, busts a cache, writes configuration or takes a heap snapshot.
 
@@ -175,7 +184,7 @@ Registered with the admin tools. Three reads explain how a collection's forms ar
 
 ### Tool annotations
 
-Every tool carries MCP annotations so a client can decide when to ask the person first: reads are `readOnlyHint: true`; writes (`create_item`, `update_item`, `transition`, `create_task`, `complete_task`, `add_comment`, `mark_notifications_read`, `propose_layout_ops`, which stores a proposal, and `cpu_profile`, which runs work on the server) are `readOnlyHint: false`; only `delete_item` is `destructiveHint: true`. All are `openWorldHint: false` — they talk only to the configured instance.
+Every tool carries MCP annotations so a client can decide when to ask the person first: reads are `readOnlyHint: true`; writes (`create_item`, `update_item`, `transition`, `create_task`, `complete_task`, `add_comment`, `mark_notifications_read`, `support_claim`, `support_reply`, `support_set_status`, `decide_approval` (all four rehearse by default), `propose_layout_ops`, which stores a proposal, and `cpu_profile`, which runs work on the server) are `readOnlyHint: false`; only `delete_item` is `destructiveHint: true`. All are `openWorldHint: false` — they talk only to the configured instance.
 
 ## Resources
 
