@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { cn } from '../../../lib/utils'
 import { chatAvatarColor, chatInitials } from '../chat-core'
+import { huddleSpeaking } from './huddle-speaking'
 import { formatElapsed, type HuddleState, huddleStore, type LivePeer } from './huddle-store'
 
 /**
@@ -179,7 +180,7 @@ function Disc({
       <span
         className={cn(
           'flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-semibold text-[#04263b] ring-2 ring-offset-2 ring-offset-slate-50 transition-[box-shadow] duration-200 dark:ring-offset-background',
-          speaking ? 'ring-nvr-cyan' : 'ring-transparent'
+          speaking ? 'ring-emerald-500 dark:ring-emerald-400' : 'ring-transparent'
         )}
         style={{ backgroundColor: chatAvatarColor(id) }}
         role='img'
@@ -217,10 +218,10 @@ function Thumb({ stream, label }: { stream: MediaStream; label: string }) {
   )
 }
 
-const speakingOf = (x: unknown) => !!(x as { speaking?: boolean } | null)?.speaking
-
 function PipView({ me, win }: { me: PipMe | null; win: Window }) {
   const state: HuddleState = useSyncExternalStore(huddleStore.subscribe, huddleStore.getSnapshot)
+  // #2845 — who is speaking, from the same engine as the stage's rings.
+  const talk = useSyncExternalStore(huddleSpeaking.subscribe, huddleSpeaking.getSnapshot)
   const [, tick] = useState(0)
   useEffect(() => {
     // The PiP window's own timer: the hidden tab's timers are throttled.
@@ -246,11 +247,11 @@ function PipView({ me, win }: { me: PipMe | null; win: Window }) {
             user: me.id,
             name: me.name,
             muted: state.muted,
-            speaking: speakingOf(state)
+            speaking: talk.selfSpeaking
           }
         ]
       : []),
-    ...state.peers.map((p) => ({ ...p, speaking: speakingOf(p) }))
+    ...state.peers.map((p) => ({ ...p, speaking: !!talk.speaking[p.socket] }))
   ]
   const live = state.status === 'live'
   return (
@@ -322,7 +323,7 @@ function PipView({ me, win }: { me: PipMe | null; win: Window }) {
   )
 }
 
-// ── Pop-out button + the one-time offer ─────────────────────────────────────
+// ── The one-time pop-out offer (the button is a row of the call bar's ⋯) ────
 const PREF_KEY = 'nvr-huddle-pip'
 
 type PipPref = 'asked' | 'auto'
@@ -445,28 +446,6 @@ export function useHuddlePip(active: boolean, me: PipMe | null) {
 }
 
 export type HuddlePipHandle = ReturnType<typeof useHuddlePip>
-
-export function HuddlePopOutButton({ pip }: { pip: HuddlePipHandle }) {
-  if (!pip.supported) return null
-  return (
-    <button
-      type='button'
-      onClick={pip.toggle}
-      className={cn(
-        'flex h-6 w-6 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
-        pip.open
-          ? 'bg-nvr-cyan/15 text-slate-900 dark:text-slate-100'
-          : 'text-slate-500 hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
-      )}
-      aria-pressed={pip.open}
-      aria-label={pip.open ? 'Close the mini-player' : 'Pop the huddle out into a mini-player'}
-      data-tip={pip.open ? 'Close mini-player' : 'Pop out — stays on top of other windows'}
-      data-huddle-pip-toggle
-    >
-      <PictureInPicture2 className='h-3.5 w-3.5' strokeWidth={2} />
-    </button>
-  )
-}
 
 export function HuddlePipOffer({ pip }: { pip: HuddlePipHandle }) {
   if (!pip.offer || pip.open) return null

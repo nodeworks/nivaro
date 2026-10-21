@@ -145,7 +145,33 @@ export function HuddlePeopleList({
   )
 }
 
-/** The "Add people" button in the stage: pick someone, they are rung (#2844). */
+/** Pick someone to ring into the huddle (#2844): the invite popover's body, also a ⋯ menu view. */
+export function HuddleInviteList({
+  room,
+  renderAvatar,
+  onDone
+}: {
+  room: string
+  renderAvatar: (id: string, name: string | null) => ReactNode
+  onDone: () => void
+}) {
+  return (
+    <HuddlePeopleList
+      room={room}
+      selected={new Set()}
+      excludeInHuddle
+      renderAvatar={renderAvatar}
+      placeholder='Who should join?'
+      onPick={(p) => {
+        huddleCalls.invite(room, [p.id])
+        toast(`Ringing ${p.name}`, { description: 'They get a call and a notification.' })
+        onDone()
+      }}
+    />
+  )
+}
+
+/** The "Add people" button in the call bar: pick someone, they are rung (#2844). */
 export function HuddleInviteButton({
   room,
   renderAvatar,
@@ -162,8 +188,8 @@ export function HuddleInviteButton({
         <button
           type='button'
           className={cn(
-            'inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-300 dark:hover:bg-white/10',
-            open && 'bg-slate-200/70 dark:bg-white/10',
+            'flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100',
+            open && 'bg-slate-200/70 text-slate-800 dark:bg-white/10 dark:text-slate-100',
             className
           )}
           aria-label='Add people to the huddle'
@@ -171,22 +197,14 @@ export function HuddleInviteButton({
           data-huddle-invite
         >
           <UserPlus className='h-3.5 w-3.5' strokeWidth={2} />
-          Add people
         </button>
       </PopoverTrigger>
-      <PopoverContent align='start' className='w-[280px] p-1' data-huddle-invite-picker>
-        <HuddlePeopleList
-          room={room}
-          selected={new Set()}
-          excludeInHuddle
-          renderAvatar={renderAvatar}
-          placeholder='Who should join?'
-          onPick={(p) => {
-            huddleCalls.invite(room, [p.id])
-            toast(`Ringing ${p.name}`, { description: 'They get a call and a notification.' })
-            setOpen(false)
-          }}
-        />
+      <PopoverContent
+        align='end'
+        className='w-[280px] max-w-[calc(100vw-16px)] p-1'
+        data-huddle-invite-picker
+      >
+        <HuddleInviteList room={room} renderAvatar={renderAvatar} onDone={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
   )

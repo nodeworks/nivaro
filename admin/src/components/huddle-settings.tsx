@@ -246,7 +246,7 @@ export function HuddleSettingsSection() {
               )}
               <Field
                 label='coturn shared secret'
-                hint='Recommended: with `use-auth-secret` on coturn, each person gets a short-lived credential minted here. The secret never leaves the server.'
+                hint='Recommended: with use-auth-secret on coturn, each person gets a short-lived credential minted here. The secret never leaves the server.'
               >
                 {(id) => (
                   <Input
@@ -362,7 +362,7 @@ export function HuddleSettingsSection() {
                 )}
               </Field>
               <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
-                <Field label='API key' hint='From livekit.yaml `keys`.'>
+                <Field label='API key' hint='The keys entry in livekit.yaml.'>
                   {(id) => (
                     <Input
                       id={id}
@@ -431,7 +431,7 @@ export function HuddleSettingsSection() {
 
             <div className='space-y-2 rounded-lg border border-slate-200 px-4 py-3 dark:border-border'>
               <div className='flex flex-wrap items-center justify-between gap-3'>
-                <div>
+                <div className='min-w-[240px] flex-1'>
                   <p className='text-[13px] font-medium text-slate-900 dark:text-foreground'>
                     Test the connection
                   </p>
@@ -464,7 +464,7 @@ export function HuddleSettingsSection() {
             {(sfuOn || !!data?.livekit_url) && (
               <div className='space-y-2 rounded-lg border border-slate-200 px-4 py-3 dark:border-border'>
                 <div className='flex flex-wrap items-center justify-between gap-3'>
-                  <div>
+                  <div className='min-w-[240px] flex-1'>
                     <p className='text-[13px] font-medium text-slate-900 dark:text-foreground'>
                       Test the media server
                     </p>
