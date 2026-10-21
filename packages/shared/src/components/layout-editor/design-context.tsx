@@ -39,6 +39,8 @@ export interface DesignMark {
   /** Instant tooltip (data-tip) with the detail. */
   tip?: string
   highlight?: boolean
+  /** A small icon before the text (a pinned section's pin, #2628). */
+  icon?: 'pin'
 }
 
 export interface DesignOverlay {

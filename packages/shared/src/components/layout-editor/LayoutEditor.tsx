@@ -30,9 +30,11 @@ import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
+import { FindReplaceButton } from './FindReplace'
 import { useLayoutEditorHost } from './host'
 import { BulkInspector } from './inspector/BulkInspector'
 import { FormSettings, Inspector } from './inspector-slot'
+import { isTyping } from './is-typing'
 import { ARROW_DIRS, altArrowMove } from './keyboard-move'
 import { LayoutsRail } from './LayoutsRail'
 import type { DescribeField, Segment } from './overview/describe-conditions'
@@ -48,6 +50,7 @@ import type { OverviewRow } from './overview/types'
 import { PlacementsTable } from './PlacementsTable'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
+import { StructureActions, usePinMarks } from './StructureMenu'
 import { useRolePreview } from './settings/settings-api'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import {
@@ -90,16 +93,7 @@ export interface LayoutEditorProps {
   onDirtyChange?: (dirty: boolean) => void
 }
 
-export const isTyping = (el: EventTarget | null) => {
-  const t = el as HTMLElement | null
-  if (!t?.closest) return false
-  return (
-    t.isContentEditable ||
-    !!t.closest(
-      'input, textarea, select, [role="textbox"], [contenteditable]:not([contenteditable="false"])'
-    )
-  )
-}
+export { isTyping }
 
 /** ⌘Z / ⇧⌘Z / Ctrl+Y (Ctrl elsewhere) — never while typing, where the field's own undo wins.
  *  ⌘S / Ctrl+S saves, typing or not (typed text is already in the draft). */
@@ -356,6 +350,7 @@ function Canvas({
     () => (roleId ? roleMarker(rolePreview) : undefined),
     [roleId, rolePreview]
   )
+  const allMarks = usePinMarks(bundle, marks)
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
@@ -365,10 +360,10 @@ function Canvas({
       inheritedFrom: (t) => canvas.inherited.get(targetKey(t)) ?? null,
       dnd,
       roleMark,
-      marks,
+      marks: allMarks,
       overlay
     }),
-    [selected, selection, onSelect, showHidden, canvas.inherited, dnd, roleMark, marks, overlay]
+    [selected, selection, onSelect, showHidden, canvas.inherited, dnd, roleMark, allMarks, overlay]
   )
   return (
     <EditorCanvas
@@ -669,6 +664,7 @@ export function LayoutEditor({
             <>
               <ViewToggle view={view} onView={setView} />
               <AutoArrangeButton bundle={bundle} apply={draft.apply} />
+              <FindReplaceButton bundle={bundle} apply={draft.apply} collection={collection} />
             </>
           ) : null
         }
@@ -859,6 +855,13 @@ export function LayoutEditor({
           </aside>
         </div>
       </LayoutDndProvider>
+      <StructureActions
+        bundle={bundle}
+        selection={selection}
+        apply={draft.apply}
+        onSelection={setSelection}
+        rootRef={bodyRef}
+      />
       <UnsavedConfirm
         request={leaveAsk}
         count={draft.unsavedCount}

@@ -1,4 +1,4 @@
-import { EyeOff, Lock } from 'lucide-react'
+import { EyeOff, Lock, Pin } from 'lucide-react'
 import {
   type CSSProperties,
   cloneElement,
@@ -178,7 +178,8 @@ export function DesignNode({
     'data-drop-slot': slot ?? undefined,
     'data-role-mark': mark?.kind,
     // Locked nodes get no dnd attributes; they still take focus to be selected.
-    ...(locked ? { role: 'button', tabIndex: 0 } : {}),
+    // So do nodes drag and drop leaves out (a pinned section, #2628).
+    ...(locked || !('tabIndex' in dragProps) ? { role: 'button', tabIndex: 0 } : {}),
     ...(tabLike && parent ? { 'data-tip': `From ${parent}` } : {}),
     className: cls,
     onClickCapture,
@@ -215,11 +216,12 @@ export function DesignNode({
             data-design-mark=''
             data-tip={m.tip}
             className={cn(
-              'inline-flex items-center rounded px-1 text-[11px] ring-1',
+              'inline-flex items-center gap-0.5 rounded px-1 text-[11px] ring-1',
               m.tip && 'pointer-events-auto',
               MARK_TONE[m.tone]
             )}
           >
+            {m.icon === 'pin' && <Pin aria-hidden className='h-3 w-3' />}
             {m.text}
           </span>
         ))}

@@ -11,6 +11,7 @@ import {
 } from '../../../lib/layout-ops'
 import { cn, titleCase } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
+import { ArrangeButton } from '../ArrangeButton'
 import { AutoArrangeButton } from '../AutoArrange'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
 import { FIELD_HOLDERS } from '../field-zones'
@@ -345,16 +346,19 @@ function GroupPanel({
         ) : (
           <>
             <ScopeLegend />
-            {FIELD_HOLDERS.has(group.type) &&
-              env.layoutType !== 'table' &&
-              env.layoutType !== 'file' && (
-                <AutoArrangeButton
-                  bundle={env.bundle}
-                  apply={env.apply}
-                  zone={group.key}
-                  zoneLabel={group.label || titleCase(group.key)}
-                />
-              )}
+            <div className='flex flex-wrap gap-2'>
+              <ArrangeButton targets={[{ kind: 'group', key: group.key }]} />
+              {FIELD_HOLDERS.has(group.type) &&
+                env.layoutType !== 'table' &&
+                env.layoutType !== 'file' && (
+                  <AutoArrangeButton
+                    bundle={env.bundle}
+                    apply={env.apply}
+                    zone={group.key}
+                    zoneLabel={group.label || titleCase(group.key)}
+                  />
+                )}
+            </div>
             {body}
           </>
         )}

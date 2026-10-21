@@ -13,6 +13,7 @@ import {
   UNGROUPED_KEY
 } from '../../../lib/layout-ops'
 import type { DesignTarget } from '../design-context'
+import { pinLocked } from '../pin'
 
 // Typed drag and drop for the layout editor canvas (spec §7.5): what may land
 // where, measured against the live layout on every move.
@@ -66,6 +67,8 @@ export interface DropHint {
 export const TABLE_FORM_ZONES: readonly string[] = ['__apply_values__', '__create_with_defaults__']
 
 export function dndRole(bundle: LayoutBundle, t: DesignTarget): DndRole | null {
+  // A pinned section (#2628) and everything in it neither drags nor takes drops.
+  if (pinLocked(bundle, t)) return null
   switch (t.kind) {
     case 'field':
       return { kind: 'item', zone: t.group_key }

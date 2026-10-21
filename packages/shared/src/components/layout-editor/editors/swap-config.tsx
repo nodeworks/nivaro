@@ -43,7 +43,9 @@ export function SwapConfigEditor({
   })()
 
   const save = (patch: Partial<SwapCfg>) => {
+    // Keys this editor does not own (the editor-only pin, #2628) are kept.
     const next: SwapCfg = {
+      ...swapCfg,
       enabled: swapCfg?.enabled ?? false,
       primary_field: swapCfg?.primary_field ?? '',
       alternate_fields: swapCfg?.alternate_fields ?? [],
