@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { chatAvatarColorAt } from '../chat-core'
-import { drawStore, parseDrawObject } from './huddle-draw'
+import { drawStore, parseDrawObject, SOCKET_MAX_POINTS, splitForSocket } from './huddle-draw'
 import { type HuddleTransport, huddleStore } from './huddle-store'
 
 /** A transport that records emits and lets the test deliver server events. */
@@ -100,6 +100,30 @@ describe('point and draw over the socket (#2856 on the SFU)', () => {
     handlers.get('huddle:mark')?.({ room: 'ch:1', from: 'ME', t: 'pt', s: 'B', x: 0, y: 0 })
     handlers.get('huddle:mark')?.({ room: 'ch:1', t: 'pt', s: 'B', x: 0, y: 0 })
     expect([...(drawStore.getSnapshot().pointers.get('B')?.keys() ?? [])]).toEqual(['B'])
+    for (const off of offs) off()
+  })
+
+  it('splits a long stroke into socket-sized messages under the same stroke id', () => {
+    const p = Array.from({ length: (SOCKET_MAX_POINTS * 2 + 10) * 2 }, (_, i) => i / 1000)
+    const parts = splitForSocket({ t: 'st', s: 'B', id: 'k1', tool: 'pen', k: 5, p })
+    expect(parts.map((m) => (m.t === 'st' ? [m.id, m.k, m.p.length] : null))).toEqual([
+      ['k1', 5, SOCKET_MAX_POINTS * 2],
+      ['k1', 5 + SOCKET_MAX_POINTS, SOCKET_MAX_POINTS * 2],
+      ['k1', 5 + SOCKET_MAX_POINTS * 2, 20]
+    ])
+    expect(parts.flatMap((m) => (m.t === 'st' ? m.p : []))).toEqual(p)
+    const pt = { t: 'pt' as const, s: 'B', x: 0, y: 0 }
+    expect(splitForSocket(pt)).toEqual([pt])
+  })
+
+  it('pauses pointer moves (not strokes) after the server says slow down', () => {
+    const { emitted, handlers, offs } = live('sfu')
+    handlers.get('huddle:mark:slow')?.({ room: 'ch:1' })
+    drawStore.send({ t: 'pt', s: 'B', x: 0.1, y: 0.1 })
+    drawStore.send({ t: 'clr', s: 'B' })
+    expect(emitted.filter((e) => e.event === 'huddle:mark').map((e) => e.payload.t)).toEqual([
+      'clr'
+    ])
     for (const off of offs) off()
   })
 })

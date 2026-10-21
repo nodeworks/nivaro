@@ -2,6 +2,7 @@ import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
 import type { HuddleRedis, HuddleScope } from './huddle.js'
+import { invalidateHuddleMarks } from './huddle-marks.js'
 import { inSocketTenant } from './socket-tenant.js'
 
 /**
@@ -349,7 +350,10 @@ export function registerHuddleCollab(
   const records = new Map<string, { at: number; rec: { collection: string; id: string } | null }>()
 
   async function allowed(user: User, room: string): Promise<boolean> {
-    return deps.canSeeRoom(user, room).catch(() => false)
+    const ok = await deps.canSeeRoom(user, room).catch(() => false)
+    // #2856 — a refusal drops every cached huddle:mark recipient list for the room.
+    if (!ok) invalidateHuddleMarks(scope.tenantNow(), room)
+    return ok
   }
 
   function toHuddle(room: string, event: string, payload: unknown) {

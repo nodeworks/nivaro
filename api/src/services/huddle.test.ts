@@ -178,6 +178,26 @@ describe('registerHuddle', () => {
     redis = fakeRedis()
   })
 
+  it('huddle:mark recipients drop a socket the moment it leaves or is pruned (#2856)', async () => {
+    const io = fakeIo()
+    const { d } = deps(redis)
+    const [a, b, c] = ['S1', 'S2', 'S3'].map(fakeSocket)
+    for (const s of [a, b, c]) registerHuddle(io as never, s.socket as never, () => rob, scope, d)
+    for (const s of [a, b, c]) await s.fire('huddle:join', { room: 'ch:ops' })
+    const mark = async () => {
+      io.sent.length = 0
+      await a.fire('huddle:mark', { room: 'ch:ops', t: 'pt', s: 'S2', x: 0.5, y: 0.5 })
+      return io.sent.find((x) => x.event === 'huddle:mark')?.to
+    }
+    expect(await mark()).toEqual(['S2', 'S3'])
+    await c.fire('huddle:leave', { room: 'ch:ops' })
+    expect(await mark()).toEqual(['S2'])
+    // B stops pinging: the next roster read prunes it, and marks stop reaching it at once.
+    await redis.zadd('nvr:huddle:-:ch:ops', 1, 'S2')
+    await huddlePeers(redis, '', 'ch:ops')
+    expect(await mark()).toBeUndefined()
+  })
+
   it('first join starts the huddle (system line), second join sees the first as a peer', async () => {
     const io = fakeIo()
     const { d, lines } = deps(redis)
