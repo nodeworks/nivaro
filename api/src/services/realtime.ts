@@ -1,6 +1,7 @@
 import type { Server as SocketIOServer } from 'socket.io'
 import { journaledEmit } from './event-journal.js'
 import { publishCollectionTouched, publishItemEvent } from './item-events.js'
+import { noteCollectionWrite, readCachesActive } from './read-caches.js'
 import { publishSseEvent } from './sse-hub.js'
 import { noteCollectionChanged, tempCacheActive } from './traffic-actions/temp-cache.js'
 import { noteWrite } from './traffic-map.js'
@@ -35,6 +36,8 @@ export function broadcastCollectionUpdate(
   // #2273 — a Traffic Map temporary cache on this collection (or one related to it) drops its
   // answers now, before anyone can read the old ones (other replicas hear the record event).
   noteCollectionChanged(collection)
+  // #2443 / #2444 — cached list totals and display-label rows of this collection go too.
+  noteCollectionWrite(collection)
   if (extra?.action) {
     noteWrite({
       collection,
@@ -75,9 +78,10 @@ export function broadcastCollectionUpdate(
       (r) => publishItemEvent(r.seq == null ? ev : { ...ev, seq: r.seq }),
       () => publishItemEvent(ev)
     )
-  } else if (tempCacheActive()) {
+  } else if (tempCacheActive() || readCachesActive()) {
     // #2273 — no itemMutated event (a record aspect, a raw write): other replicas' temporary
-    // caches still have to hear it. Only while a cache is on; subscriptions see nothing new.
+    // caches (and list read caches, #2443/#2444) still have to hear it. Only while one holds
+    // something; subscriptions see nothing new.
     publishCollectionTouched(collection)
   }
 }

@@ -4752,7 +4752,9 @@ export function InlineTableField({
               get(`/items/${oneCollection}`, {
                 filter: JSON.stringify({ id: { _in: ids } }),
                 limit: ids.length,
-                ...(fieldsParam ? { fields: fieldsParam } : {})
+                ...(fieldsParam ? { fields: fieldsParam } : {}),
+                // #2444 — display labels: may come from the server's label row cache.
+                labels: 1
               })
             )
             .then((r) => r.data ?? [])

@@ -1030,6 +1030,7 @@ export interface QueueItemsQuery {
   group_by?: string
   group_key?: string
   group_sums?: string
+  after?: string
 }
 
 export interface ParsedQueueItemsQuery {
@@ -1040,6 +1041,8 @@ export interface ParsedQueueItemsQuery {
   /** Present only when the caller sent page or limit (pagination is opt-in). */
   page?: number
   limit?: number
+  /** #2447 — keyset cursor (`start` or a `next_cursor`); only with page/limit. */
+  after?: string
 }
 
 /**
@@ -1089,7 +1092,10 @@ export function parseQueueItemsQuery(
       sort: q.sort ?? '',
       filters,
       ...(group ? { group } : {}),
-      ...(paginationRequested ? { page, limit } : {})
+      ...(paginationRequested ? { page, limit } : {}),
+      ...(paginationRequested && typeof q.after === 'string' && q.after.length <= 2048
+        ? { after: q.after }
+        : {})
     }
   }
 }
@@ -3067,6 +3073,8 @@ export async function fetchQueueItems(
     ceiling?: number
     page?: number
     limit?: number
+    /** #2447 — cursor for a materialized queue's next page; `page` is the fallback. */
+    after?: string
     /** Mark returned rows changed-since-you-looked (#643) — the worklist
      *  asks; digests, snapshots and feeds do not pay for it. */
     withUnseen?: boolean
@@ -3087,6 +3095,8 @@ export async function fetchQueueItems(
     readOnly?: boolean
   } = {}
 ): Promise<{
+  /** #2447 — the next page's cursor when this page was read by cursor (null at the end). */
+  nextCursor?: string | null
   items: QueueItem[]
   groups?: QueueGroupSummary[]
   stats: QueueStats

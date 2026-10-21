@@ -62,6 +62,13 @@ import {
   formatMultiValue,
   formatValue
 } from '../lib/format-value'
+import {
+  createCursorBook,
+  isCursorRefusal,
+  noteNextCursor,
+  pageRequest,
+  stopCursors
+} from '../lib/keyset-pager'
 import { expandCoalesced, LIVE_ASPECTS } from '../lib/live'
 import {
   conditionFields,
@@ -536,7 +543,10 @@ function fetchRelationRow(
                 get(`/items/${collection}`, {
                   filter: JSON.stringify({ id: { _in: chunk } }),
                   limit: chunk.length,
-                  fields: '*'
+                  fields: '*',
+                  // #2444 — a display-label lookup: the server may answer it from its
+                  // short-lived label row cache (busted by this collection's writes).
+                  labels: 1
                 })
               )
               .then((r) => r.data ?? [])
@@ -4008,6 +4018,8 @@ export function CollectionBrowserView({
   const { open: openTarget, urlFor } = useItemNavigation()
 
   const [page, setPage] = useState(1)
+  // #2447 — cursors that reach the next pages of the current list (forgotten on any change).
+  const cursorBookRef = useRef(createCursorBook())
   const [search, setSearch] = useState(initialSearch)
   const appliedSearch = useDebounced(search.trim(), 350)
   const [filters, setFilters] = useState<ActiveFilter[]>(initialFilters ?? [])
@@ -4702,27 +4714,63 @@ export function CollectionBrowserView({
       conditionsParam,
       aggParam
     ],
-    queryFn: () =>
-      client.request<{
+    queryFn: async () => {
+      type Page = {
         data: Array<Record<string, unknown>>
         total: number
+        total_approx?: boolean
+        next_cursor?: string | null
         aggregates?: Record<string, number>
-      }>(
-        get(`/items/${collection}`, {
-          limit: groupBy ? 500 : effPageSize,
-          page: groupBy ? 1 : page,
-          ...(appliedSearch ? { search: appliedSearch } : {}),
-          ...(sort ? { sort } : {}),
-          ...(conditionsParam ? { conditions: conditionsParam } : {}),
-          ...(aggParam ? { agg: aggParam } : {})
-        })
-      ),
+      }
+      const base = {
+        limit: groupBy ? 500 : effPageSize,
+        ...(appliedSearch ? { search: appliedSearch } : {}),
+        ...(conditionsParam ? { conditions: conditionsParam } : {}),
+        ...(aggParam ? { agg: aggParam } : {}),
+        // #2443 — the total may be a few seconds old (shown as "about"); rows are always fresh.
+        count: 'approx'
+      }
+      const byNumber = (p: number) =>
+        client.request<Page>(
+          get(`/items/${collection}`, { ...base, page: p, ...(sort ? { sort } : {}) })
+        )
+      if (groupBy) return byNumber(1)
+      // #2447 — forward pages walk by cursor (page 200 costs what page 1 does).
+      const bookKey = JSON.stringify([
+        collection,
+        appliedSearch,
+        sort,
+        effPageSize,
+        conditionsParam,
+        aggParam
+      ])
+      const book = cursorBookRef.current
+      const ask = pageRequest(book, bookKey, page, sort)
+      if (ask.after === undefined && ask.sort === sort) return byNumber(page)
+      try {
+        const res = await client.request<Page>(
+          get(`/items/${collection}`, {
+            ...base,
+            ...(ask.after !== undefined ? { after: ask.after } : { page }),
+            ...(ask.sort ? { sort: ask.sort } : {})
+          })
+        )
+        if (ask.after !== undefined) noteNextCursor(book, bookKey, page, res.next_cursor)
+        return res
+      } catch (err) {
+        if (!isCursorRefusal(err)) throw err
+        stopCursors(book, bookKey)
+        return byNumber(page)
+      }
+    },
     enabled: !!collection && scopeGateOpen,
     placeholderData: (prev) => prev,
     retry: false
   })
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
+  // #2443 — the total came from the short-lived count cache (or the table's row count).
+  const totalApprox = !aiResult && itemsRes?.total_approx === true
   const aggregates = itemsRes?.aggregates
   const totalPages = Math.max(1, Math.ceil(total / effPageSize))
 
@@ -7544,6 +7592,7 @@ export function CollectionBrowserView({
             Clear
           </button>
           <span className='ml-auto text-[11px] text-slate-400'>
+            {totalApprox ? 'about ' : ''}
             {fmtNum(total)} item{total === 1 ? '' : 's'}
           </span>
         </div>
@@ -8778,6 +8827,11 @@ export function CollectionBrowserView({
                   {fmtNum(start)}–{fmtNum(end)}
                 </span>{' '}
                 of{' '}
+                {totalApprox && (
+                  <span data-tip='Counted a few seconds ago. The rows on screen are current.'>
+                    about{' '}
+                  </span>
+                )}
                 <span key={total} className='nvr-value-pulse-bg rounded-sm'>
                   {fmtNum(total)}
                 </span>{' '}

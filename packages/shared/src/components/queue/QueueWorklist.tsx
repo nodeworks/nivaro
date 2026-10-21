@@ -57,6 +57,7 @@ import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
 import { deliverLive, releaseLiveOwner } from '../../lib/focus-mode'
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
+import { createCursorBook, noteNextCursor, pageRequest } from '../../lib/keyset-pager'
 import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
@@ -617,6 +618,8 @@ export function QueueWorklist({
   const { navigate } = useNavigation()
   const [scope, setScope] = useState<Scope>('all')
   const [page, setPage] = useState(1)
+  // #2447 — cursors that reach the next table pages of the current view.
+  const cursorBookRef = useRef(createCursorBook())
   // Row density — shares the per-browser preference the collection browser uses.
   const [density, setDensity] = useState<'compact' | 'comfortable'>(() => {
     try {
@@ -1164,7 +1167,7 @@ export function QueueWorklist({
       .catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Label failed'))
   }
 
-  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt } = useQuery<{
+  type QueueItemsPage = {
     data: QueueItemRow[]
     /** #741: server-side group headers (table view, grouped). */
     groups?: ServerGroup[]
@@ -1182,56 +1185,70 @@ export function QueueWorklist({
     }
     truncated: boolean
     total: number
+    /** #2447 — the next page's cursor, when the server read this page by cursor. */
+    next_cursor?: string | null
     /** #502: why a view came back empty — nothing yours / filtered / unreadable. */
     empty?: { reason: string; message: string; unreadable: string[]; queue_total: number | null }
-  }>({
-    queryKey: [
-      'queue-items',
-      queueId,
-      scope,
-      sort,
-      debouncedFilterValues,
-      view === 'table' && !groupBy ? page : 'all',
-      groupBy
-    ],
-    queryFn: () =>
-      client.request(
-        get(`/queues/${queueId}/items`, {
-          scope,
-          // Last State Change is Aging read the other way round: the newest
-          // move is the least aged.
-          sort:
-            sort === 'state_entered'
-              ? '-aging_hours'
-              : sort === '-state_entered'
-                ? 'aging_hours'
-                : sort,
-          filters: JSON.stringify(apiFilters),
-          // Table + group: headers only (rows load per group on expand, #741).
-          // Kanban renders the full matching set, grouped client-side.
-          ...(serverGrouped
-            ? {
-                group_by: groupBy,
-                ...(groupSumPaths.length ? { group_sums: groupSumPaths.join(',') } : {})
-              }
-            : view === 'table'
-              ? { page, limit }
-              : {})
-        })
-      ),
-    // Wait for display_config AND scope seeding so the first fetch uses the
-    // configured defaults and already carries the viewer's restricted filters.
-    // #477: the key reads the DEBOUNCED filters (350ms) while seeding writes
-    // the live ones — the gate opened before the debounce caught up, so the
-    // first fetch went out WITHOUT the seeded scope and refired ~350ms later
-    // with it (3.3s + 8.7s of work for one page). The first fetch now also
-    // waits for the debounced copy to settle; later typing still debounces.
-    enabled:
-      !!queueId && displayReady && scopeGateOpen && (firstFetchedRef.current || filtersSettled),
-    // Keep the previous page rendered while a sort/filter/page change refetches —
-    // swapping to skeletons collapsed the table height and jittered the page.
-    placeholderData: (prev) => prev
-  })
+  }
+  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt } =
+    useQuery<QueueItemsPage>({
+      queryKey: [
+        'queue-items',
+        queueId,
+        scope,
+        sort,
+        debouncedFilterValues,
+        view === 'table' && !groupBy ? page : 'all',
+        groupBy
+      ],
+      queryFn: async () => {
+        // #2447 — table pages walk forward by cursor when the server can (a materialized
+        // queue on a plain-column sort); the page number always rides along as the fallback.
+        const paged = !serverGrouped && view === 'table'
+        const bookKey = JSON.stringify([queueId, scope, sort, apiFilters, limit])
+        const after = paged
+          ? pageRequest(cursorBookRef.current, bookKey, page, '').after
+          : undefined
+        const res = await client.request<QueueItemsPage>(
+          get(`/queues/${queueId}/items`, {
+            scope,
+            // Last State Change is Aging read the other way round: the newest
+            // move is the least aged.
+            sort:
+              sort === 'state_entered'
+                ? '-aging_hours'
+                : sort === '-state_entered'
+                  ? 'aging_hours'
+                  : sort,
+            filters: JSON.stringify(apiFilters),
+            // Table + group: headers only (rows load per group on expand, #741).
+            // Kanban renders the full matching set, grouped client-side.
+            ...(serverGrouped
+              ? {
+                  group_by: groupBy,
+                  ...(groupSumPaths.length ? { group_sums: groupSumPaths.join(',') } : {})
+                }
+              : view === 'table'
+                ? { page, limit, ...(after ? { after } : {}) }
+                : {})
+          })
+        )
+        if (after) noteNextCursor(cursorBookRef.current, bookKey, page, res.next_cursor)
+        return res
+      },
+      // Wait for display_config AND scope seeding so the first fetch uses the
+      // configured defaults and already carries the viewer's restricted filters.
+      // #477: the key reads the DEBOUNCED filters (350ms) while seeding writes
+      // the live ones — the gate opened before the debounce caught up, so the
+      // first fetch went out WITHOUT the seeded scope and refired ~350ms later
+      // with it (3.3s + 8.7s of work for one page). The first fetch now also
+      // waits for the debounced copy to settle; later typing still debounces.
+      enabled:
+        !!queueId && displayReady && scopeGateOpen && (firstFetchedRef.current || filtersSettled),
+      // Keep the previous page rendered while a sort/filter/page change refetches —
+      // swapping to skeletons collapsed the table height and jittered the page.
+      placeholderData: (prev) => prev
+    })
 
   if (data && !firstFetchedRef.current) firstFetchedRef.current = true
   // Lifecycle trace (#477) — every items fetch this worklist makes, with the

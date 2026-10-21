@@ -115,7 +115,8 @@ const BATCH_QUERY_KEYS = new Set([
   'search',
   'after',
   'count',
-  'conditions'
+  'conditions',
+  'labels'
 ])
 
 export interface BatchableRead {

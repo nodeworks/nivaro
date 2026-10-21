@@ -1,5 +1,5 @@
 import type { Knex } from 'knex'
-import { db } from '../db/index.js'
+import { db, isMssql } from '../db/index.js'
 import { businessHoursElapsed } from '../routes/sla.js'
 import type { User } from '../types.js'
 import { getSlaScheduleSync } from './business-hours.js'
@@ -12,6 +12,12 @@ import {
   queueGatesFor
 } from './queue-access.js'
 import { applyIntegrationsToCache, integrationsFilterBuckets } from './queue-integrations.js'
+import {
+  applyQueueKeyset,
+  type QueueKeysetPlan,
+  queueKeysetPlan,
+  queueNextCursor
+} from './queue-keyset.js'
 import {
   applyTypedExtraPredicate,
   decodeCachedExtra,
@@ -724,10 +730,14 @@ export async function fetchMaterializedQueueItems(
     filters?: Record<string, unknown>
     page?: number
     limit?: number
+    /** #2447 — `start` or the previous page's `nextCursor`; `page` is the fallback. */
+    after?: string
     withUnseen?: boolean
     group?: { by: string; key?: string | null; sums?: string[] }
   } = {}
 ): Promise<{
+  /** #2447 — present when the page was read by cursor: the next page's cursor (null at the end). */
+  nextCursor?: string | null
   items: QueueItem[]
   groups?: QueueGroupSummary[]
   stats: QueueStats
@@ -910,6 +920,8 @@ export async function fetchMaterializedQueueItems(
 
   let rows: FullRow[]
   let total: number
+  let keyset: QueueKeysetPlan | null = null
+  let nextCursor: string | null = null
   let jsFilteredStats: QueueStats | null = null
   let stateCounts: Record<string, number> = {}
 
@@ -1043,12 +1055,29 @@ export async function fetchMaterializedQueueItems(
 
     const limit = options.limit ?? total
     const rowsQuery = base.clone().select(FULL_ROW_COLUMNS)
+    // #2447 — a cursor walk starts after the previous page's last row (same ORDER BY).
+    keyset =
+      options.limit != null && !groupHeadersOnly
+        ? queueKeysetPlan(queueId, sort, options.after)
+        : null
+    if (keyset) {
+      applyQueueKeyset(rowsQuery, keyset, isMssql())
+      if (limit > 0) rowsQuery.limit(limit)
+    }
     // limit=0 (e.g. an unpaginated Kanban request against a zero-row materialized queue,
     // where total===0) would produce an invalid `OFFSET 0 FETCH NEXT 0 ROWS ONLY` against
     // MSSQL — skip the pagination clauses entirely; the WHERE clause already matches
     // nothing, so the result set is empty either way.
-    if (limit > 0) rowsQuery.offset((page - 1) * limit).limit(limit)
+    else if (limit > 0) rowsQuery.offset((page - 1) * limit).limit(limit)
     rows = groupHeadersOnly ? [] : ((await rowsQuery) as FullRow[])
+    if (keyset) {
+      nextCursor = queueNextCursor(
+        queueId,
+        keyset,
+        rows as unknown as Array<Record<string, unknown>>,
+        limit
+      )
+    }
   }
 
   const ownerRows =
@@ -1164,6 +1193,7 @@ export async function fetchMaterializedQueueItems(
   return {
     items,
     ...(groups ? { groups } : {}),
+    ...(keyset ? { nextCursor } : {}),
     stats,
     filteredStats,
     stateCounts,

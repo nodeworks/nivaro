@@ -213,7 +213,12 @@ export async function itemsRoutes(app: FastifyInstance) {
       search: q.search,
       filter: parsedFilter,
       ...(q.after !== undefined ? { after: String(q.after) } : {}),
-      ...(q.count === '0' || q.count === 'false' ? { count: false } : {})
+      ...(q.count === '0' || q.count === 'false'
+        ? { count: false }
+        : q.count === 'approx'
+          ? { count: 'approx' as const }
+          : {}),
+      ...(q.labels === '1' || q.labels === 'true' ? { labels: true } : {})
     }
     try {
       const result = await readItems(

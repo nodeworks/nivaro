@@ -19,6 +19,7 @@ import { resolveWorkspace } from './middleware/workspace.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { chainPlugin } from './plugins/chain.js'
 import { cronPlugin } from './plugins/cron.js'
+import { registerEtags } from './plugins/etag.js'
 import { graphqlPlugin } from './plugins/graphql.js'
 import { legacyCompatRoutes } from './plugins/legacy-compat.js'
 import { metricsPlugin } from './plugins/metrics.js'
@@ -176,6 +177,8 @@ export async function buildServer() {
     void reply.header('content-length', Buffer.byteLength(body))
     return body
   })
+  // #2439 — per-viewer ETag + 304 on record / metadata / layout reads; ahead of the request log.
+  registerEtags(app)
   await app.register(apiLoggerPlugin)
   // #1088 — Prometheus /api/metrics + per-route request histograms.
   await app.register(metricsPlugin)

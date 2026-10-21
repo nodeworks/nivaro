@@ -29,6 +29,10 @@ export const apiOverview: DocSection = {
     },
     {
       type: 'note',
+      text: 'Record reads (`GET /api/items/<collection>/<id>`), collection, field, relation and layout reads carry a weak `ETag`. Send it back in `If-None-Match` and an unchanged answer comes back as `304 Not Modified` with no body; browsers do this on their own. The server still checks permissions and reads the data on every request, so the answer is never stale. The tag is per person: two people who see different fields never share one.'
+    },
+    {
+      type: 'note',
       text: 'The admin keeps metadata (collections, fields, relations, layouts, settings) in the browser between reloads so a reload paints at once and refreshes in the background. Records are never stored. The copy is keyed by person, `config_epoch` and app version, expires after 24 hours, and is wiped on sign-out or when a different person signs in. Headless hosts opt in with `<NivaroProvider persistMetadata={{ userId, epoch, version }}>` and call `wipeMetadataCache()` on sign-out.'
     },
     { type: 'h2', id: 'api-auth-token', text: 'Static token (scripts / SDK)' },
@@ -271,7 +275,16 @@ export const apiItems: DocSection = {
           'none',
           'Keyset paging. `start` for the first page, then the `next_cursor` of the page before. Replaces offset and page.'
         ],
-        ['count', '1', 'When 0, the count query is skipped and `total` answers null.'],
+        [
+          'count',
+          '1',
+          'When 0, the count query is skipped and `total` answers null. When `approx`, a total counted in the last 30 seconds by the same query may answer instead, and `total_approx: true` says so. The rows are always read fresh. An unfiltered list reads the row count SQL Server keeps for the table. When the caller’s access rules look at another table (teams, owners, scopes), the total is always counted live.'
+        ],
+        [
+          'labels',
+          '0',
+          'When 1 on an `id _in` lookup (a list resolving the labels of linked records), rows read in the last 30 seconds by the same query may answer without a database read. A write to the collection through the API clears them at once; a write by a stored procedure or script shows when they expire. Ignored for any other filter, and when the caller’s access rules look at another table.'
+        ],
         ['search', 'none', 'Fulltext search across string/text fields.'],
         ['picker', '0', 'When 1, applies picker filters and exclusions; used by relation pickers.'],
         ['translate', '0', 'When 1, includes `_translations` map for each translatable field.']
@@ -367,7 +380,7 @@ export const apiItems: DocSection = {
     { type: 'h3', text: 'Walking a large collection (`after`)' },
     {
       type: 'p',
-      text: 'Offset paging pays for every row it skips, and rows written during the walk shift the pages. A cursor names the last row of the page just read, so the next page costs the same however far the walk is, and a write elsewhere moves nothing. Send `after=start` for the first page and the `next_cursor` of each page for the next. `next_cursor` is null on the last page.'
+      text: 'Offset paging pays for every row it skips, and rows written during the walk shift the pages. A cursor names the last row of the page just read, so the next page costs the same however far the walk is, and a write elsewhere moves nothing. Send `after=start` for the first page and the `next_cursor` of each page for the next. `next_cursor` is null on the last page. The collection browser and queue worklists page forward this way on their own, and ask by page number for a page they have no cursor for (the last page, a jump). `GET /api/queues/:id/items` takes `after` beside `page` too: a materialized queue in its default order or sorted by label, state, collection or at-risk reads the page by cursor and answers `next_cursor`; any other queue or sort pages by number and answers none. When a total is approximate the collection browser reads "of about 85,603 records".'
     },
     {
       type: 'pre',
