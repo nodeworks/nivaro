@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ADMIN_TOOL_NAMES,
   createNivaroMcpServer,
+  INFRA_TOOL_NAMES,
   keyIsAdmin,
   LAYOUT_TOOL_NAMES,
   TOOL_NAMES
@@ -81,7 +82,7 @@ describe('createNivaroMcpServer', () => {
     const { mcp } = await connect(client)
     const tools = await mcp.listTools()
     expect(tools.tools.map((t) => t.name).sort()).toEqual([...TOOL_NAMES].sort())
-    for (const name of [...ADMIN_TOOL_NAMES, ...LAYOUT_TOOL_NAMES]) {
+    for (const name of [...ADMIN_TOOL_NAMES, ...LAYOUT_TOOL_NAMES, ...INFRA_TOOL_NAMES]) {
       expect(tools.tools.map((t) => t.name)).not.toContain(name)
     }
     const resources = await mcp.listResources()
@@ -98,7 +99,7 @@ describe('createNivaroMcpServer', () => {
     const { mcp } = await connect(client, { adminTools: true })
     const tools = await mcp.listTools()
     expect(tools.tools.map((t) => t.name).sort()).toEqual(
-      [...TOOL_NAMES, ...ADMIN_TOOL_NAMES, ...LAYOUT_TOOL_NAMES].sort()
+      [...TOOL_NAMES, ...ADMIN_TOOL_NAMES, ...LAYOUT_TOOL_NAMES, ...INFRA_TOOL_NAMES].sort()
     )
     await mcp.close()
   })

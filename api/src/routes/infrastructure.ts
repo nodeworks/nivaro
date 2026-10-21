@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { dockerGet, dockerHosts, forEachDockerHost } from '../services/docker-source.js'
 import { storeEnabled } from '../services/telemetry-store.js'
+import { infrastructureAiRoutes } from './infrastructure-ai.js'
 import { infrastructureEdgeRoutes } from './infrastructure-edge.js'
 import { infrastructureHostRoutes } from './infrastructure-host.js'
 import { infrastructureInventoryRoutes } from './infrastructure-inventory.js'
@@ -55,4 +56,5 @@ export async function infrastructureRoutes(app: FastifyInstance): Promise<void> 
   await app.register(infrastructureEdgeRoutes)
   await app.register(infrastructureHostRoutes)
   await app.register(infrastructureSwarmRoutes)
+  await app.register(infrastructureAiRoutes)
 }

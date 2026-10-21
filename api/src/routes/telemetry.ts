@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
+import type { HealthStore } from '../services/infra-swarm/health.js'
 import { clientGoneSignal } from '../services/read-gate.js'
 import { type AskTurn, askTelemetry, TelemetryAskError } from '../services/telemetry-ai.js'
 import { telemetryStatus } from '../services/telemetry-status.js'
@@ -58,7 +59,8 @@ export async function telemetryRoutes(app: FastifyInstance): Promise<void> {
     try {
       const out = await askTelemetry(String(req.body?.question ?? ''), req.user!, {
         history: Array.isArray(req.body?.history) ? req.body.history : [],
-        signal: clientGoneSignal(reply.raw)
+        signal: clientGoneSignal(reply.raw),
+        redis: app.redis as unknown as HealthStore
       })
       return { data: out }
     } catch (err) {

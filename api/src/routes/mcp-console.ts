@@ -151,8 +151,12 @@ export async function mcpConsoleRoutes(app: FastifyInstance) {
     const mcp = await connect(req, base(app, req))
     try {
       const { tools } = await mcp.client.listTools()
-      const { ADMIN_TOOL_NAMES, LAYOUT_TOOL_NAMES } = await import('@nivaro/mcp')
-      const adminOnly = new Set<string>([...ADMIN_TOOL_NAMES, ...LAYOUT_TOOL_NAMES])
+      const { ADMIN_TOOL_NAMES, INFRA_TOOL_NAMES, LAYOUT_TOOL_NAMES } = await import('@nivaro/mcp')
+      const adminOnly = new Set<string>([
+        ...ADMIN_TOOL_NAMES,
+        ...LAYOUT_TOOL_NAMES,
+        ...INFRA_TOOL_NAMES
+      ])
       return {
         admin_tools: mcpToolOptions(req).adminTools,
         chat_access: mcpToolOptions(req).chatAccess,
