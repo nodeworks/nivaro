@@ -52,6 +52,7 @@ import { registerLayoutCrossformRoutes } from './layout-crossform.js'
 import { layoutHistoryRoutes } from './layout-history.js'
 import { layoutMergeRoutes } from './layout-merge.js'
 import { applyTemplateToNewLayout, layoutReuseRoutes, loadFormTemplate } from './layout-reuse.js'
+import { layoutStagedRoutes } from './layout-staged.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, roleAllows, slugify }
 
@@ -2270,4 +2271,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // Named versions, version bundles, section last-changed, scheduled changes.
   await layoutHistoryRoutes(app)
+
+  // Staged edits (#2589): a person's unsaved steps, kept on the server until they Save.
+  await layoutStagedRoutes(app)
 }

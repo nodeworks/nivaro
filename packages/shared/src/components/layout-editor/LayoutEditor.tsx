@@ -65,7 +65,7 @@ import {
 import { WIDTH_LABELS } from './field-zones'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
-import { useDraftRecovery } from './draft-recovery'
+import { stagedTip, useDraftRecovery } from './draft-recovery'
 import { canvasRenderer, EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { noteKey, notesOf } from './editor-notes'
@@ -113,9 +113,11 @@ import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
 import { useRailCopy } from './reuse/useRailCopy'
+import { StagedByOthers } from './StagedChip'
 import { StructureActions, usePinMarks } from './StructureMenu'
 import { useRolePreview } from './settings/settings-api'
 import { layoutKindOf } from './settings/settings-registry'
+import { useStagedDraft, useStagedWriter } from './staged-api'
 import { ImpactButton, TestingButton } from './testing/TestingPanels'
 import { MenuSeparator, ToolButton } from './toolbar-kit'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
@@ -946,9 +948,21 @@ export function LayoutEditor({
       el?.focus({ preventScroll: true })
     })
   }, [])
-  // A draft left behind by a crash or a closed tab (#2653).
+  // A staged draft (#2589): kept on the server for its author, and offered back here after a
+  // crash, a closed tab or another browser (#2653).
   const me = useMyUserId()
-  const recovery = useDraftRecovery(draft, currentId, me)
+  const stagedQ = useStagedDraft(currentId)
+  const stagedWriter = useStagedWriter()
+  const staged = useMemo(
+    () => ({
+      settled: stagedQ.isFetched || stagedQ.isError,
+      draft: stagedQ.data?.data ?? null,
+      available: stagedQ.data?.available ?? !stagedQ.isError,
+      writer: stagedWriter
+    }),
+    [stagedQ.isFetched, stagedQ.isError, stagedQ.data, stagedWriter]
+  )
+  const recovery = useDraftRecovery(draft, currentId, me, staged)
 
   // Form settings' "Preview as role" and the top bar's role are one choice.
   const onPreviewRoleChange = useCallback(
@@ -1077,20 +1091,24 @@ export function LayoutEditor({
         onReviewChanges={compareState.toggleReview}
         reviewing={compareState.compare?.kind === 'unsaved'}
         onOpenUnsaved={setListAnchor}
+        pendingTip={stagedTip(recovery.sync)}
         presence={
-          <PresenceAvatars
-            peers={peers}
-            describe={(key) => {
-              const t = targetFromKey(key)
-              return t && bundle && targetExists(t, bundle, parent)
-                ? describeTarget(t, bundle, fields)
-                : null
-            }}
-            onJump={(key) => {
-              const t = targetFromKey(key)
-              if (t) jumpTo(t)
-            }}
-          />
+          <>
+            <PresenceAvatars
+              peers={peers}
+              describe={(key) => {
+                const t = targetFromKey(key)
+                return t && bundle && targetExists(t, bundle, parent)
+                  ? describeTarget(t, bundle, fields)
+                  : null
+              }}
+              onJump={(key) => {
+                const t = targetFromKey(key)
+                if (t) jumpTo(t)
+              }}
+            />
+            <StagedByOthers others={stagedQ.data?.others ?? []} />
+          </>
         }
         onSelectField={(field) =>
           onSelect({

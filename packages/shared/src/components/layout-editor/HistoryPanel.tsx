@@ -4,9 +4,10 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import type { LayoutBundle } from '../../lib/layout-ops'
+import type { LayoutBundle, LayoutOp } from '../../lib/layout-ops'
 import { ExplainDiffButton } from './assist/ExplainDiff'
 import { fetchVersionBundle, useVersionNaming } from './history-api'
+import { RestorePieceButton } from './RestorePiece'
 import { SessionHistory } from './SessionHistory'
 import { slotName } from './slot-names'
 import { layoutDraftKeys, parseSaveFailure, type SessionSteps } from './useLayoutDraft'
@@ -142,7 +143,10 @@ export function HistoryPanel({
   onDiscardUnsaved,
   session,
   onJump,
-  onShowOnCanvas
+  onShowOnCanvas,
+  bundle,
+  onApply,
+  fieldLabel
 }: {
   layoutId: number
   onRestored?: () => void
@@ -154,6 +158,10 @@ export function HistoryPanel({
   onJump?: (delta: number) => void
   /** Draw the difference between a version and the editor's layout on the canvas (#2591). */
   onShowOnCanvas?: (base: LayoutBundle, label: string) => void
+  /** The editor's draft + its apply: restore one section or field of a version (#2716). */
+  bundle?: LayoutBundle | null
+  onApply?: (ops: LayoutOp[], label: string) => void
+  fieldLabel?: (field: string) => string
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -391,6 +399,17 @@ export function HistoryPanel({
                   >
                     {canvasFor === v.id ? '…' : 'Canvas'}
                   </button>
+                )}
+                {bundle && onApply && (
+                  <RestorePieceButton
+                    layoutId={layoutId}
+                    version={v}
+                    bundle={bundle}
+                    onApply={onApply}
+                    fieldLabel={fieldLabel}
+                    onDone={onRestored}
+                    className={btn}
+                  />
                 )}
                 {confirming === v.id ? (
                   <>
