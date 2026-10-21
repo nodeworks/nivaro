@@ -817,6 +817,33 @@ describe('LayoutEditor', () => {
     expect(node('field:title:main').getAttribute('aria-roledescription')).toBe('draggable')
   })
 
+  it('an override of the parent is tagged on the canvas (#2635)', async () => {
+    const b = makeBundle()
+    bundleOverride = { ...b, layout: { ...b.layout, parent_layout_id: 9 } }
+    parentBundle = {
+      layout: { id: 9, collection: 'orders', name: 'Base form', layout_type: 'grouped' },
+      groups: [{ ...newGroup('main', 'Main', 'section', null), id: 5, sort: 0 }],
+      placements: [{ ...newPlacement('amount', 'main'), id: 50, sort: 0 }],
+      rev: 'p0'
+    }
+    await mount()
+    await settle(() => !!node('field:amount:main')?.textContent?.includes('Overrides parent'))
+    expect(node('group:main').querySelector('[data-design-mark]')?.textContent).toBe(
+      'Overrides parent'
+    )
+    expect(node('field:title:main').querySelector('[data-design-mark]')).toBeNull()
+  })
+
+  it('States and Roles open the matrices', async () => {
+    await mount()
+    click(document.querySelector('[data-editor-view="states"]'))
+    await settle(() => !!document.querySelector('[data-field-state-matrix]'))
+    click(document.querySelector('[data-editor-view="roles"]'))
+    await settle(() => !!document.querySelector('[data-role-section-matrix]'))
+    click(document.querySelector('[data-editor-view="canvas"]'))
+    await settle(() => !!node('field:title:main'))
+  })
+
   it('page mode shows no editing banner', async () => {
     await mount()
     expect(document.querySelector('[data-editing-banner]')).toBeNull()

@@ -49,6 +49,7 @@ import {
   overridePlacementOps,
   SUBTITLE_FIELD
 } from './model'
+import { OverrideNotice } from './OverrideNotice'
 import { PickerTab } from './PickerTab'
 import { RulesTab } from './RulesTab'
 import { SlotInspector } from './SlotInspector'
@@ -122,7 +123,8 @@ export function Inspector(props: InspectorProps) {
     bundle.layout.parent_layout_id != null ? Number(bundle.layout.parent_layout_id) : null
   const parentName =
     props.inheritedFrom ?? (target ? (design?.inheritedFrom(target) ?? null) : null)
-  const { data: parent } = useLayoutBundle(parentId, missing)
+  // Also for the layout's own nodes: an override of the parent's gets Reset to parent.
+  const { data: parent } = useLayoutBundle(parentId)
   const parentRow = missing && parent && at ? findPlacement(parent, at.field, at.group_key) : null
   const parentGroup =
     missing && parent && target?.kind === 'group'
@@ -205,11 +207,20 @@ export function Inspector(props: InspectorProps) {
     )
   }
 
+  const overrideNotice = !missing ? (
+    <OverrideNotice
+      bundle={bundle}
+      parent={parent}
+      target={target}
+      title={titleOf(target)}
+      apply={apply}
+    />
+  ) : null
   return (
     <Shell>
       <InspectorEnvContext.Provider value={env}>
         {target.kind === 'group' ? (
-          group && <GroupPanel key={group.key} group={group} />
+          group && <GroupPanel key={group.key} group={group} notice={overrideNotice} />
         ) : missing ? (
           <>
             <PanelHeader title={titleOf(target)} />
@@ -220,7 +231,12 @@ export function Inspector(props: InspectorProps) {
             </PanelBody>
           </>
         ) : (
-          <PlacementInspector key={targetKey(target)} target={target} row={row} />
+          <PlacementInspector
+            key={targetKey(target)}
+            target={target}
+            row={row}
+            notice={overrideNotice}
+          />
         )}
       </InspectorEnvContext.Provider>
     </Shell>
