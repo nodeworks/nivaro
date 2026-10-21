@@ -18,6 +18,7 @@ import { CSS } from '@dnd-kit/utilities'
 import {
   AlertTriangle,
   Check,
+  Columns2,
   FileStack,
   GripVertical,
   MoreHorizontal,
@@ -31,6 +32,15 @@ import { del, patch, post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
+import {
+  CompareForms,
+  CrossformFindings,
+  defaultComparePair,
+  FindFieldButton,
+  LayoutThumb,
+  type LayoutThumbData,
+  useCrossform
+} from '../crossform'
 import {
   type ChoiceLabels,
   type DescribeField,
@@ -371,6 +381,8 @@ interface RowProps {
   tested: boolean
   /** The collection's only layout: it is the fallback for every record. */
   only: boolean
+  /** Sketch of the form (#2664); none for grid-column layouts. */
+  thumb?: LayoutThumbData
   onOpen: (id: number) => void
   onChanged: () => void
   drag?: {
@@ -381,7 +393,7 @@ interface RowProps {
   }
 }
 
-function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }: RowProps) {
+function RowView({ row, fields, choices, tested, only, thumb, onOpen, onChanged, drag }: RowProps) {
   const client = useNivaroClient()
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState(row.name)
@@ -435,6 +447,7 @@ function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }
           </div>
         </td>
         <td className={cell}>
+          {thumb && <LayoutThumb thumb={thumb} name={row.name} className='float-right ml-3' />}
           <div className='flex flex-wrap items-center gap-1.5'>
             {renaming ? (
               <input
@@ -732,6 +745,11 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
   useEffect(() => setOtherOrder(null), [data])
   // biome-ignore lint/correctness/useExhaustiveDependencies: a test result belongs to one collection
   useEffect(() => setExplain(null), [collection])
+  // Two forms side by side (#2659), in place of the list.
+  const [compare, setCompare] = useState<[number, number] | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a comparison belongs to one collection
+  useEffect(() => setCompare(null), [collection])
+  const crossform = useCrossform(collection, rows.length > 0)
 
   const created = (type: LayoutType, id: number) => {
     invalidate()
@@ -799,6 +817,19 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
     }
   }
 
+  if (compare)
+    return (
+      <CompareForms
+        collection={collection}
+        rows={rows}
+        aId={compare[0]}
+        bId={compare[1]}
+        onChange={(a, b) => setCompare([a, b])}
+        onOpen={onOpen}
+        onClose={() => setCompare(null)}
+      />
+    )
+
   const renderRow = (row: OverviewRow, draggable?: boolean) => {
     const common = {
       row,
@@ -806,6 +837,7 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
       choices,
       tested: explain?.layout_id === row.layout_id,
       only: rows.length === 1,
+      thumb: crossform.data?.thumbs[String(row.layout_id)],
       onOpen,
       onChanged: invalidate
     }
@@ -827,6 +859,18 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
         </p>
       </div>
       {rows.length > 0 && <TestRecordButton collection={collection} onResult={setExplain} />}
+      {rows.length > 0 && <FindFieldButton collection={collection} onOpen={onOpen} />}
+      {defaultComparePair(rows) && (
+        <button
+          type='button'
+          className={btnOutline}
+          data-tip='Two forms side by side, with their differences'
+          onClick={() => setCompare(defaultComparePair(rows))}
+        >
+          <Columns2 className='h-3.5 w-3.5' />
+          Compare
+        </button>
+      )}
       <NewFormButton collection={collection} onCreated={created} />
     </header>
   )
@@ -890,6 +934,11 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
   } else {
     body = (
       <div>
+        <CrossformFindings
+          collection={collection}
+          onOpen={onOpen}
+          onCompare={(a, b) => setCompare([a, b])}
+        />
         {SECTIONS.map((s) => {
           const list = bySection.get(s.id) ?? []
           if (!list.length && s.id !== 'forms') return null

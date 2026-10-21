@@ -40,6 +40,7 @@ import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layo
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
+import { registerLayoutCrossformRoutes } from './layout-crossform.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, slugify }
 
@@ -577,6 +578,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { collectionFieldAccess } = await import('../services/layout-field-access.js')
     return reply.send({ data: { roles: await collectionFieldAccess(collection) } })
   })
+
+  // Across forms: label differences, near copies, thumbnails, find a field (#2631 #2658 #2660 #2664).
+  registerLayoutCrossformRoutes(app)
 
   // ─── Overview + explain (layout editor) ──────────────────────────────────
   // "Which form does each kind of record get?" — every layout of the
