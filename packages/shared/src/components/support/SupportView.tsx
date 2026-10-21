@@ -6,11 +6,12 @@ import { del, get, patch, post } from '../../lib/commands'
 import { useLiveOps } from '../../lib/live-ops'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { SupportAnalytics } from './SupportAnalytics'
 import { SupportRequestDialog } from './SupportRequestDialog'
 import { StatusPill, TicketDetailSheet } from './TicketDetailSheet'
 import type { SupportCategory, SupportSummary, SupportTicket } from './types'
 
-type Tab = 'mine' | 'desk' | 'types'
+type Tab = 'mine' | 'desk' | 'analytics' | 'types'
 type DeskFilter = 'unassigned' | 'me' | 'open' | 'closed'
 
 function ago(iso: string | null | undefined): string {
@@ -97,7 +98,7 @@ export function SupportView({
     queryKey: ['support-tickets', params],
     queryFn: () =>
       client.request<{ data: SupportTicket[]; total: number }>(get('/support/tickets', params)),
-    enabled: tab !== 'types'
+    enabled: tab !== 'types' && tab !== 'analytics'
   })
 
   const openTicket = (id: number | null) => {
@@ -108,6 +109,7 @@ export function SupportView({
   const tabs: Array<{ key: Tab; label: string; count?: number }> = [
     { key: 'mine', label: 'My requests', count: summary?.mine_open },
     ...(desk ? [{ key: 'desk' as Tab, label: 'Desk', count: summary?.unassigned }] : []),
+    ...(desk ? [{ key: 'analytics' as Tab, label: 'Analytics' }] : []),
     ...(isAdmin ? [{ key: 'types' as Tab, label: 'Request types' }] : [])
   ]
 
@@ -150,6 +152,8 @@ export function SupportView({
 
       {tab === 'types' ? (
         <SupportTypesEditor />
+      ) : tab === 'analytics' ? (
+        <SupportAnalytics />
       ) : (
         <>
           <div className='mt-4 flex flex-wrap items-center gap-2'>

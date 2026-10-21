@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { deadClickReport } from '../services/rum-dead-clicks.js'
 import { parseBrowser, screenClass } from '../services/traffic-inspect/people-ux-logic.js'
 
 /**
@@ -143,6 +144,13 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
       .sort((a, z) => z.bursts - a.bursts)
       .slice(0, 25)
     return { rage, data, total_events: rows.length }
+  })
+
+  /** Worst dead-click / rage-click elements per route (#1314), with a sample replay link where a
+   *  recording covers the latest click. Counts only. `?days=` 1–14 (default 7). */
+  app.get('/dead-clicks', { preHandler: requireAdmin }, async (req) => {
+    const days = Math.min(14, Math.max(1, Number((req.query as { days?: string }).days) || 7))
+    return { data: await deadClickReport(days), days }
   })
 
   /** Slowest dashboard widgets (#1353): p75 fetch / paint / total per catalog key, for one role

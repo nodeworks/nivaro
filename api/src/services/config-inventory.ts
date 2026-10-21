@@ -329,6 +329,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_report_annotations',
   'nivaro_job_runs',
   'nivaro_rum_events',
+  'nivaro_search_log', // #1581 search analytics (migration 485)
   'nivaro_login_events',
   'nivaro_extension_events',
   'nivaro_legal_holds',

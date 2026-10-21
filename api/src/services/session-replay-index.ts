@@ -701,7 +701,12 @@ export interface ReplaySearchHit {
   /** Span of the primary match (epoch ms). */
   first_ms: number
   last_ms: number
-  matches: Array<{ kind: IndexKind; key: string; first_ms: number; last_ms: number }>
+  matches: Array<{
+    kind: IndexKind | 'outcome'
+    key: string
+    first_ms: number
+    last_ms: number
+  }>
 }
 
 export async function searchReplayIndex(q: ReplaySearchQuery): Promise<ReplaySearchHit[]> {

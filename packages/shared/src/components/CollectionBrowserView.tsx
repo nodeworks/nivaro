@@ -76,6 +76,7 @@ import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-
 import { isOwnWrite } from '../lib/own-writes'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
+import { logSearch, logSearchOpen } from '../lib/search-log'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -4725,6 +4726,30 @@ export function CollectionBrowserView({
   const aggregates = itemsRes?.aggregates
   const totalPages = Math.max(1, Math.ceil(total / effPageSize))
 
+  // #1581 — log what was searched (text, count, time; never the rows) and, in
+  // openRow, which row was opened from it.
+  const searchStartRef = useRef(Date.now())
+  const searchLogRef = useRef<{ key: string; id: Promise<number | null> } | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: restart the clock when the search changes
+  useEffect(() => {
+    searchStartRef.current = Date.now()
+  }, [collection, appliedSearch])
+  useEffect(() => {
+    if (!collection || appliedSearch.length < 2 || !itemsRes || isFetching || aiResult) return
+    const key = `${collection}\u0000${appliedSearch}`
+    if (searchLogRef.current?.key === key) return
+    searchLogRef.current = {
+      key,
+      id: logSearch(client, {
+        surface: 'collection',
+        collection,
+        query: appliedSearch,
+        result_count: itemsRes.total ?? itemsRes.data?.length ?? 0,
+        duration_ms: Date.now() - searchStartRef.current
+      })
+    }
+  }, [client, collection, appliedSearch, itemsRes, isFetching, aiResult])
+
   // #1835 — Ask AI from this page: the list, its filters and the rows on
   // screen ("which of these are late?"). Ids and filters only.
   usePublishAskContext(
@@ -5964,6 +5989,13 @@ export function CollectionBrowserView({
     }, 250)
   }
   const openRow = (id: string | number) => {
+    if (searchLogRef.current?.key === `${collection}\u0000${appliedSearch}`) {
+      void logSearchOpen(client, searchLogRef.current.id, {
+        type: 'record',
+        collection,
+        item: id === 'new' ? null : id
+      })
+    }
     if (onOpenItem) onOpenItem(id)
     else openTarget({ collection, itemId: String(id) })
   }

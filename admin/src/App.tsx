@@ -310,6 +310,9 @@ const PageViewPage = lazy(() =>
 const ApiAnalyticsPage = lazy(() =>
   import('@/pages/ApiAnalytics').then((m) => ({ default: m.ApiAnalyticsPage }))
 )
+const SearchAnalyticsPage = lazy(() =>
+  import('@/pages/SearchAnalytics').then((m) => ({ default: m.SearchAnalyticsPage }))
+)
 const ChatAnalyticsPage = lazy(() =>
   import('@/pages/ChatAnalytics').then((m) => ({ default: m.ChatAnalyticsPage }))
 )
@@ -681,6 +684,7 @@ export default function App() {
                   <Route path='ai-knowledge' element={<AiKnowledgePage />} />
                   <Route path='ai-plans' element={<AiPlansPage />} />
                   <Route path='chat-analytics' element={<ChatAnalyticsPage />} />
+                  <Route path='search-analytics' element={<SearchAnalyticsPage />} />
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='telemetry' element={<TelemetryPage />} />
                   <Route path='db-health' element={<DbHealthPage />} />

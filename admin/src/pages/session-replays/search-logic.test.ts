@@ -14,7 +14,10 @@ describe('replay search params (#1374)', () => {
       collection: 'orders',
       item: '1042',
       field: '',
-      selector: ''
+      selector: '',
+      outcome: '',
+      route: '',
+      days: ''
     })
   })
 
@@ -24,8 +27,36 @@ describe('replay search params (#1374)', () => {
     expect(wantsSearchTab(new URLSearchParams('recording=abc&t=10'))).toBe(false)
   })
 
+  it('an outcome search (#1315) carries its window; the window alone is nothing', () => {
+    const base = {
+      collection: '',
+      item: '',
+      field: '',
+      selector: '',
+      outcome: '',
+      route: '',
+      days: '30'
+    }
+    expect(searchQueryString(base)).toBe('')
+    expect(searchQueryString({ ...base, outcome: '5xx' })).toBe('outcome=5xx&days=30')
+    expect(searchQueryString({ ...base, route: '/x', days: '30' })).toBe('route=%2Fx')
+    expect(wantsSearchTab(new URLSearchParams('outcome=4xx'))).toBe(true)
+    expect(wantsSearchTab(new URLSearchParams('days=7'))).toBe(false)
+    expect(matchLabel({ kind: 'outcome', key: 'GET /api/x → 500', first_ms: 0, last_ms: 0 })).toBe(
+      'GET /api/x → 500'
+    )
+  })
+
   it('builds the endpoint query only when it can be answered', () => {
-    const base = { collection: '', item: '', field: '', selector: '' }
+    const base = {
+      collection: '',
+      item: '',
+      field: '',
+      selector: '',
+      outcome: '',
+      route: '',
+      days: ''
+    }
     expect(searchQueryString(base)).toBe('')
     expect(searchQueryString({ ...base, item: '1042' })).toBe('')
     expect(searchQueryString({ ...base, collection: 'orders', item: '1042' })).toBe(

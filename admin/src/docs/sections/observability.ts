@@ -146,6 +146,17 @@ GET /api/partner-dependencies/:key                       // key = key:<id> | use
 GET /api/partner-dependencies/:key/openapi.json?download=1
 GET /api/partner-dependencies/:key/schema.graphql?download=1`
     },
+    { type: 'h2', id: 'api-analytics-dead-clicks', text: 'Dead and rage clicks' },
+    {
+      type: 'p',
+      text: 'Under the real-user timings, API Analytics lists the buttons and links people click with nothing happening (a dead click: no page change or screen change within a second, three in ten seconds) or click repeatedly (a rage click), grouped by page and ranked by how often. Each line shows the dead and rage counts, how many people hit it and a Watch link to the replay of the latest one when a recording covers that moment (recordings expire with retention, so older lines can say No replay). Counts only; the element is named by its tag, test id and visible label.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/rum/dead-clicks?days=7   // admin; days 1-14
+// { data: { routes: [{ route, total, elements: [{ element, dead, rage, total, people, last_at,
+//   replay: { recording, t } | null }] }], total_events }, days }`
+    },
     { type: 'h2', id: 'api-analytics-widget-timing', text: 'Per-widget timing on dashboards' },
     {
       type: 'p',

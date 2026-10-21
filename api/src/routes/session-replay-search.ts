@@ -5,6 +5,11 @@ import {
   replayIndexKeys,
   searchReplayIndex
 } from '../services/session-replay-index.js'
+import {
+  OUTCOMES,
+  type Outcome,
+  searchReplayByOutcome
+} from '../services/session-replay-outcome.js'
 
 /**
  * Session replay search (#1374, #1372) over nivaro_replay_index — which
@@ -14,6 +19,7 @@ import {
  * every read of a recording.
  *
  *   GET /session-recordings/search?collection=&item=&field=&selector=&route=&limit=
+ *   GET /session-recordings/search?outcome=4xx|5xx|client_error&route=&user=&days=  (#1315)
  *   GET /session-recordings/search/keys?kind=field|record|route|selector&q=
  */
 
@@ -33,9 +39,27 @@ export async function sessionReplaySearchRoutes(app: FastifyInstance) {
       field?: string
       selector?: string
       route?: string
+      outcome?: string
+      user?: string
+      days?: string
       limit?: string
     }
   }>('/search', { preHandler: requireAdmin }, async (req, reply) => {
+    // #1315 — a failed-request / client-error filter resolves through the logs, not the index.
+    if (req.query.outcome) {
+      if (!OUTCOMES.includes(req.query.outcome as Outcome)) {
+        return reply.code(400).send({ error: `outcome must be one of ${OUTCOMES.join(', ')}` })
+      }
+      return reply.send({
+        data: await searchReplayByOutcome({
+          outcome: req.query.outcome as Outcome,
+          route: str(req.query.route),
+          user: str(req.query.user, 64),
+          days: Number(req.query.days) || undefined,
+          limit: Number(req.query.limit) || 100
+        })
+      })
+    }
     const q = {
       collection: str(req.query.collection, 64),
       item: str(req.query.item, 200),
