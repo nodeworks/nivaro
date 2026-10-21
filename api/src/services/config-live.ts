@@ -60,19 +60,62 @@ export function announceConfigChanged(
 }
 
 /**
- * The collection a config write names: the body or query's `collection`, or the path segment
- * after `/fields/` or `/collections/` (never a numeric id). null = "any form may be affected".
+ * Config-route POSTs that only read — the layout editor's draft projection and the form-rule
+ * evaluators — mark themselves (markConfigRead) so the config-write hook flushes no cache and
+ * pushes nothing for them (any signed-in caller reaches the evaluators; a push per call would
+ * re-fetch every open form). Opt-in per handler, never by URL: a PATCH on a field that happens
+ * to be named `project` is still a write.
+ */
+export function markConfigRead(req: object): void {
+  ;(req as { nvrConfigRead?: boolean }).nvrConfigRead = true
+}
+
+/** Whether a successful request was a read-only POST that marked itself (see markConfigRead). */
+export function isConfigRead(req: { method: string; nvrConfigRead?: unknown }): boolean {
+  return req.method === 'POST' && req.nvrConfigRead === true
+}
+
+/** Routes whose writes can change collection/field/layout metadata. */
+const META_ROUTES =
+  /^\/api\/(data-model|collections|field-config|collection-layouts|field-groups)\b/
+
+/**
+ * Whether a request (that succeeded) may have changed form configuration: any non-GET under a
+ * metadata route, except a read-only POST that marked itself. The config-write hook
+ * (routes/index.ts) flushes the metadata caches and sends config:update for these.
+ */
+export function isConfigWrite(req: {
+  method: string
+  url: string
+  nvrConfigRead?: unknown
+}): boolean {
+  // Reads, and CORS preflights, change nothing.
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return false
+  return META_ROUTES.test(req.url) && !isConfigRead(req)
+}
+
+/** Lets a write keyed by id (a layout, a group) name the collection it changed. */
+export function nameConfigCollection(req: object, collection: unknown): void {
+  if (typeof collection === 'string' && collection)
+    (req as { nvrConfigCollection?: string }).nvrConfigCollection = collection
+}
+
+/**
+ * The collection a config write names: the one the route set with nameConfigCollection, the
+ * body or query's `collection`, or the path segment after `/fields/` or `/collections/` (never
+ * a numeric id). null = "any form may be affected".
  */
 export function collectionHint(req: {
   url: string
   body?: unknown
   query?: unknown
+  nvrConfigCollection?: unknown
 }): string | null {
   const pick = (v: unknown) =>
     typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) && !/^\d+$/.test(v) ? v : null
   const body = req.body as { collection?: unknown } | null | undefined
   const query = req.query as { collection?: unknown } | null | undefined
-  const direct = pick(body?.collection) ?? pick(query?.collection)
+  const direct = pick(req.nvrConfigCollection) ?? pick(body?.collection) ?? pick(query?.collection)
   if (direct) return direct
   const m = req.url.split('?')[0].match(/^\/api\/(?:data-model\/)?(?:fields|collections)\/([^/]+)/)
   return m ? pick(m[1]) : null

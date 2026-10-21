@@ -119,6 +119,7 @@ vi.mock('../../../services/layout-versions.js', () => ({
 }))
 
 import { collectionLayoutsRoutes } from '../../../routes/collection-layouts.js'
+import { collectionHint } from '../../../services/config-live.js'
 import {
   applyLayoutOps,
   type LayoutBundle,
@@ -167,8 +168,13 @@ describe('applyLayoutOps (api twin)', () => {
   }
 })
 
+/** The collection the config:update push would name for the last request (routes/index.ts). */
+let lastHint: string | null = null
 async function call(method: 'GET' | 'POST', url: string, payload?: unknown) {
   const app = Fastify({ logger: false })
+  app.addHook('onResponse', async (req) => {
+    lastHint = collectionHint(req)
+  })
   app.register(collectionLayoutsRoutes, { prefix: '/collection-layouts' })
   await app.ready()
   const res = await app.inject({ method, url, payload: payload as Record<string, unknown> })
@@ -290,6 +296,13 @@ describe('POST /collection-layouts/:id/ops', () => {
     expect(body.rev).toBe((await bundle()).rev)
   })
 
+  it("names the layout's collection for the config push (open record pages of it react)", async () => {
+    lastHint = null
+    const res = await ops([{ op: 'group_update', key: 'main', patch: { label: 'General' } }])
+    expect(res.statusCode).toBe(200)
+    expect(lastHint).toBe('orders')
+  })
+
   it('rejects ops against a stale rev', async () => {
     const before = JSON.stringify(fake.tables)
     const res = await ops(
@@ -324,6 +337,20 @@ describe('POST /collection-layouts/:id/ops', () => {
     expect(res.statusCode).toBe(400)
     expect(res.json()).toMatchObject({ op_index: 1 })
     expect(groups().find((g) => g.key === 'main')?.label).toBe('main')
+  })
+
+  it("refuses a rename onto another layout's name with a readable op error, not a 500", async () => {
+    const res = await ops([
+      { op: 'group_update', key: 'main', patch: { label: 'X' } },
+      { op: 'layout_update', patch: { name: 'other' } }
+    ])
+    // 400 with the op, not 409: the editor reads 409 as "someone else saved".
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({
+      error: 'A layout with that name already exists',
+      op_index: 1
+    })
+    expect(fake.tables.nivaro_collection_layouts[0].name).toBe('Main')
   })
 
   it('coalesces snapshots within 2 minutes per layout+user', async () => {

@@ -5,12 +5,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // its unsaved DRAFT through it. It must answer exactly what GET answers once
 // those placements are the saved layout: one formatter, never a client copy.
 
+const caller = vi.hoisted(() => ({ admin: true }))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async (req: { user?: unknown; isAdmin?: boolean }) => {
     req.user = { id: 'u1', role: 'R' }
     req.isAdmin = false
   }),
-  requireAdmin: vi.fn(async () => {})
+  requireAdmin: vi.fn(
+    async (_req: unknown, reply: { code: (n: number) => { send: (b: unknown) => unknown } }) => {
+      if (!caller.admin) return reply.code(403).send({ error: 'Forbidden' })
+    }
+  )
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
 vi.mock('../../../services/rollups.js', () => ({ bustRollupContributorCache: vi.fn() }))
@@ -130,9 +135,20 @@ vi.mock('../../../db/index.js', () => {
 })
 
 import { fieldConfigRoutes } from '../../../routes/field-config.js'
+import { isConfigWrite } from '../../../services/config-live.js'
 
+/** What the config-write hook (routes/index.ts) decided for the last request. */
+let lastWasConfigWrite: boolean | null = null
 function buildApp() {
   const app = Fastify({ logger: false })
+  app.addHook('onResponse', async (req) => {
+    // Mounted under /field-config here; under /api/field-config in the real app.
+    lastWasConfigWrite = isConfigWrite({
+      method: req.method,
+      url: `/api${req.url}`,
+      nvrConfigRead: (req as { nvrConfigRead?: unknown }).nvrConfigRead
+    })
+  })
   app.register(fieldConfigRoutes, { prefix: '/field-config' })
   return app
 }
@@ -160,7 +176,10 @@ async function projectRows(assignments: unknown) {
   })
 }
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  vi.clearAllMocks()
+  caller.admin = true
+})
 
 describe('POST /field-config/:collection/project', () => {
   it('answers exactly what GET answers for the same placements (twin, alias grid, overrides)', async () => {
@@ -215,6 +234,31 @@ describe('POST /field-config/:collection/project', () => {
       group_key: null
     })
     expect(rows.some((r) => r.field === 'lines')).toBe(false)
+  })
+
+  it('flushes no config cache and pushes nothing (a read that marks itself)', async () => {
+    lastWasConfigWrite = null
+    const res = await projectRows(draftOf(LAYOUTS[1]))
+    expect(res.statusCode).toBe(200)
+    expect(lastWasConfigWrite).toBe(false)
+  })
+
+  it('a PATCH or PUT on the same path is still a config write (a field named "project")', async () => {
+    for (const method of ['PATCH', 'PUT'] as const) {
+      lastWasConfigWrite = null
+      await buildApp().inject({
+        method,
+        url: '/field-config/orders/project',
+        payload: { label: 'Project' }
+      })
+      expect(lastWasConfigWrite).toBe(true)
+    }
+  })
+
+  it('is for administrators only (the design canvas is admin-only)', async () => {
+    caller.admin = false
+    const res = await projectRows(draftOf(LAYOUTS[1]))
+    expect(res.statusCode).toBe(403)
   })
 
   it('rejects a body without an assignments array or with a nameless placement', async () => {

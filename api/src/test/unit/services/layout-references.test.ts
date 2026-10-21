@@ -24,7 +24,11 @@ vi.mock('../../../db/index.js', () => {
   }
 })
 
-import { bustLayoutReferences, findLayoutReferences } from '../../../services/layout-references.js'
+import {
+  bustLayoutReferences,
+  findLayoutReferences,
+  layoutReferencesMemoSize
+} from '../../../services/layout-references.js'
 
 beforeEach(() => {
   bustLayoutReferences()
@@ -56,6 +60,20 @@ describe('findLayoutReferences memo', () => {
       vi.advanceTimersByTime(30_001)
       await findLayoutReferences('things')
       expect(calls.n).toBe(first * 2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops expired entries on read, so the memo does not grow per collection forever', async () => {
+    vi.useFakeTimers()
+    try {
+      await findLayoutReferences('a')
+      await findLayoutReferences('b')
+      expect(layoutReferencesMemoSize()).toBe(2)
+      vi.advanceTimersByTime(30_001)
+      await findLayoutReferences('c')
+      expect(layoutReferencesMemoSize()).toBe(1)
     } finally {
       vi.useRealTimers()
     }

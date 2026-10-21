@@ -1087,6 +1087,8 @@ export function ItemEditPage() {
                         Edit layout
                       </Button>
                     )}
+                    {/* /active answers 404 both for a collection with no layout and for a
+                        ?layout= slug that names none: only the first is "create the first form". */}
                     {user?.is_admin && activeLayoutData && !activeLayoutData.layout && (
                       <Button
                         asChild
@@ -1096,10 +1098,19 @@ export function ItemEditPage() {
                       >
                         <Link
                           to={`/data-model/${collection}?tab=groups`}
-                          data-tip='No layout yet — create the first form'
+                          data-tip={
+                            layoutSlug
+                              ? "This link names a form that doesn't exist — see this collection's forms"
+                              : 'No layout yet — create the first form'
+                          }
+                          aria-label={
+                            layoutSlug
+                              ? "This link names a form that doesn't exist. See this collection's forms"
+                              : undefined
+                          }
                         >
                           <LayoutTemplate className='mr-1.5 h-3.5 w-3.5' />
-                          Edit layout
+                          {layoutSlug ? 'Form not found' : 'Edit layout'}
                         </Link>
                       </Button>
                     )}

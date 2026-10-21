@@ -1,3 +1,11 @@
+import {
+  Combobox,
+  DataGuideCard,
+  IconPicker,
+  LayoutEditor,
+  LayoutOverview,
+  TipLayer
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -16,27 +24,10 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select'
-import { SimpleSelect } from '@/components/ui/simple-select'
-
-import {
-  Combobox,
-  DataGuideCard,
-  IconPicker,
-  LayoutEditor,
-  LayoutOverview,
-  TipLayer
-} from '@nivaro/shared'
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
@@ -63,6 +54,14 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
@@ -8730,37 +8729,13 @@ function AttributesTab({ tableName }: { tableName: string }) {
   )
 }
 
-// ─── Layout tab ──────────────────────────────────────────────────────────────
-
-// ── Friendly type badge colors (used in Layout tab chips) ─────────────────────
-
-// ── FieldImpactPopover — "what references this field?" ───────────────────────
-
-// ── FieldSettingsPopover ──────────────────────────────────────────────────────
-
-// ── SortableFieldChip ─────────────────────────────────────────────────────────
-
-// ── SortableUngroupedZone ─────────────────────────────────────────────────────
-
-// ── SortableGroupCard ─────────────────────────────────────────────────────────
-
-// ── DroppableFieldZone ────────────────────────────────────────────────────────
-
 // ─── Layouts tab ─────────────────────────────────────────────────────────────
-
-// ── LayoutTab ─────────────────────────────────────────────────────────────────
 
 /**
  * The Layouts tab: "Which form does each record get?" first (LayoutOverview),
  * `?layout=<id>` opens the editor.
  */
-function LayoutsHost({
-  tableName,
-  dbColumns
-}: {
-  tableName: string
-  dbColumns: Array<{ name: string; data_type: string }>
-}) {
+function LayoutsHost({ tableName }: { tableName: string }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const num = (v: string | null) => (v && /^\d+$/.test(v) ? Number(v) : null)
   const layoutId = num(searchParams.get('layout'))
@@ -10564,7 +10539,7 @@ export function TableEditorPage() {
               <>
                 {/* The moved layout editors show their hints with data-tip. */}
                 <TipLayer />
-                <LayoutsHost tableName={table ?? ''} dbColumns={tableData?.columns ?? []} />
+                <LayoutsHost tableName={table ?? ''} />
               </>
             )}
             {tab === 'behavior' && <BehaviorTab tableName={table ?? ''} tableData={tableData} />}

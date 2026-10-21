@@ -370,6 +370,44 @@ describe('PATCH /collection-layouts/:id', () => {
     expect((await call('PATCH', '/1', { slug: 'main' })).statusCode).toBe(200)
   })
 
+  it('PATCH refuses a name another layout of the collection holds with a 409, not a 500', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [
+        layout({ id: 1, name: 'Main form' }),
+        layout({ id: 2, name: 'Other' }),
+        layout({ id: 3, collection: 'elsewhere', name: 'Free name' })
+      ]
+    })
+    const res = await call('PATCH', '/2', { name: 'main FORM' })
+    expect(res.statusCode).toBe(409)
+    expect(res.json().error).toBe('A layout with that name already exists')
+    expect(rowOf(2).name).toBe('Other')
+    // Its own name, and a name used only in another collection, are fine.
+    expect((await call('PATCH', '/1', { name: 'Main form' })).statusCode).toBe(200)
+    expect((await call('PATCH', '/2', { name: 'Free name' })).statusCode).toBe(200)
+  })
+
+  it('PATCH answers a rename that lost a race on the unique index with a 409', async () => {
+    fake.reset({ nivaro_collection_layouts: [layout({ id: 1 })] })
+    const real = fake.db.transaction
+    fake.db.transaction = async () => {
+      throw Object.assign(new Error('Violation of UNIQUE KEY constraint'), { number: 2627 })
+    }
+    try {
+      const res = await call('PATCH', '/1', { name: 'Raced' })
+      expect(res.statusCode).toBe(409)
+      expect(res.json().error).toBe('A layout with that name already exists')
+    } finally {
+      fake.db.transaction = real
+    }
+  })
+
+  it('PATCH, bundle and ops refuse a non-numeric id with a 400', async () => {
+    expect((await call('PATCH', '/abc', { name: 'x' })).statusCode).toBe(400)
+    expect((await call('GET', '/abc/bundle')).statusCode).toBe(400)
+    expect((await call('POST', '/1e3/ops', { ops: [], base_rev: 'r' })).statusCode).toBe(400)
+  })
+
   it('PATCH leaves a legacy slug re-sent unchanged as stored', async () => {
     fake.reset({
       nivaro_collection_layouts: [layout({ id: 1, slug: 'Cost (Q1)/R&D' }), layout({ id: 2 })]
@@ -628,6 +666,75 @@ describe('DELETE /collection-layouts/:id', () => {
 })
 
 describe('restoreLayoutVersion', () => {
+  it('a version of a deleted layout answers 404 instead of failing on the FK', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [layout({ id: 1 })],
+      nivaro_field_groups: [{ id: 10, layout_id: 1, key: 'general', sort: 0 }],
+      nivaro_layout_field_assignments: [],
+      nivaro_layout_versions: []
+    })
+    await snapshotLayoutVersion(1, 'v1', 'u')
+    const version = fake.tables.nivaro_layout_versions[0]
+    fake.tables.nivaro_collection_layouts = []
+    fake.tables.nivaro_field_groups = []
+
+    await expect(restoreLayoutVersion(1, Number(version.id), 'u')).resolves.toEqual({
+      status: 404,
+      error: 'This layout no longer exists'
+    })
+    expect(fake.tables.nivaro_field_groups).toHaveLength(0)
+    expect(fake.tables.nivaro_layout_versions).toHaveLength(1)
+  })
+
+  it('refuses a version whose layout belonged to another collection', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [layout({ id: 1, collection: 'other' })],
+      nivaro_field_groups: [],
+      nivaro_layout_field_assignments: [],
+      nivaro_layout_versions: []
+    })
+    await snapshotLayoutVersion(1, 'v1', 'u')
+    const version = fake.tables.nivaro_layout_versions[0]
+    rowOf(1).collection = 'c'
+    const result = await restoreLayoutVersion(1, Number(version.id), 'u')
+    expect(result).toMatchObject({ status: 409 })
+  })
+
+  it('keeps the current slug and name when another layout took the old ones', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [
+        layout({ id: 1, slug: 'main', name: 'Main' }),
+        layout({ id: 2, slug: 'spare', name: 'Spare' })
+      ],
+      nivaro_field_groups: [],
+      nivaro_layout_field_assignments: [],
+      nivaro_layout_versions: []
+    })
+    await snapshotLayoutVersion(1, 'v1', 'u')
+    const version = fake.tables.nivaro_layout_versions[0]
+    // Since the version: layout 1 was renamed and re-slugged, layout 2 took the old ones.
+    Object.assign(rowOf(1), { slug: 'primary', name: 'Primary' })
+    Object.assign(rowOf(2), { slug: 'main', name: 'Main' })
+
+    await restoreLayoutVersion(1, Number(version.id), 'u')
+    expect(rowOf(1)).toMatchObject({ slug: 'primary', name: 'Primary' })
+    expect(rowOf(2)).toMatchObject({ slug: 'main', name: 'Main' })
+  })
+
+  it('restores the old slug when it is still free', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [layout({ id: 1, slug: 'main' }), layout({ id: 2 })],
+      nivaro_field_groups: [],
+      nivaro_layout_field_assignments: [],
+      nivaro_layout_versions: []
+    })
+    await snapshotLayoutVersion(1, 'v1', 'u')
+    const version = fake.tables.nivaro_layout_versions[0]
+    rowOf(1).slug = 'primary'
+    await restoreLayoutVersion(1, Number(version.id), 'u')
+    expect(rowOf(1).slug).toBe('main')
+  })
+
   it('restore unhooks kept groups from a later container before removing it', async () => {
     fake.reset({
       nivaro_collection_layouts: [layout({ id: 1, is_active: 1 })],

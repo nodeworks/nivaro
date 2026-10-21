@@ -1,9 +1,7 @@
-import {
-  type PickReason,
-  parseConditions,
-  parseRecordConditions,
-  type RecordConditionRule
-} from '../routes/collection-layouts.js'
+// Type-only from the route: the route imports this module, so a value import back would be a
+// cycle (TDZ at boot). The parsers live in services/layout-patch.
+import type { PickReason } from '../routes/collection-layouts.js'
+import { parseConditions, parseRecordConditions, type RecordConditionRule } from './layout-patch.js'
 
 /**
  * "Which form does each kind of record get?" — the Layouts overview. One row

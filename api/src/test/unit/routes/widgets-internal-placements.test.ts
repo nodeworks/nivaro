@@ -60,6 +60,14 @@ describe('GET /widgets-internal/:id/placements', () => {
     expect(seen.where).toContainEqual(['a.widget_id', 5])
   })
 
+  it('answers 400 for an id that is not a number (an unsaved widget row)', async () => {
+    auth.admin = true
+    seen.table = ''
+    const res = await get('/widgets-internal/new/placements')
+    expect(res.statusCode).toBe(400)
+    expect(seen.table).toBe('')
+  })
+
   it('is admin only', async () => {
     auth.admin = false
     const res = await get('/widgets-internal/5/placements')

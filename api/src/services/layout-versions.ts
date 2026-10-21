@@ -130,6 +130,12 @@ export interface RestoreResult {
   restored_groups: number
 }
 
+/** A restore that cannot run: the layout is gone, or the version belongs to another collection. */
+export interface RestoreRefusal {
+  status: 404 | 409
+  error: string
+}
+
 /**
  * Restore a version. Captures a "before restore" snapshot FIRST so the
  * restore itself is reversible, then applies id-preserving.
@@ -138,12 +144,22 @@ export async function restoreLayoutVersion(
   layoutId: number,
   versionId: number,
   userId?: string | null
-): Promise<RestoreResult | null> {
+): Promise<RestoreResult | RestoreRefusal | null> {
   const row = (await db('nivaro_layout_versions')
     .where({ id: versionId, layout_id: layoutId })
     .first()) as { snapshot: string; version: number } | undefined
   if (!row) return null
   const snap = JSON.parse(row.snapshot) as Snapshot
+
+  // History outlives its layout (migration 456): a deleted layout has nothing to restore into.
+  const current = (await db('nivaro_collection_layouts')
+    .where({ id: layoutId })
+    .first('id', 'collection', 'slug', 'name')) as
+    | { id: number; collection: string; slug: string | null; name: string }
+    | undefined
+  if (!current) return { status: 404, error: 'This layout no longer exists' }
+  if (snap.layout.collection != null && String(snap.layout.collection) !== current.collection)
+    return { status: 409, error: 'This version belongs to a layout of another collection' }
 
   await snapshotLayoutVersion(layoutId, `before restore of v${row.version}`, userId)
 
@@ -158,6 +174,22 @@ export async function restoreLayoutVersion(
     is_active: wasActive,
     ...layoutCols
   } = snap.layout
+  // A slug or name another layout of the collection took since this version stays as it is
+  // now: ?layout= links and queue item_layout must keep naming one layout, and names are unique.
+  const others = (await db('nivaro_collection_layouts')
+    .where({ collection: current.collection })
+    .whereNot({ id: layoutId })
+    .select('slug', 'name')) as Array<{ slug: string | null; name: string | null }>
+  const taken = (col: 'slug' | 'name', v: unknown) =>
+    typeof v === 'string' &&
+    others.some(
+      (o) =>
+        String(o[col] ?? '')
+          .trimEnd()
+          .toLowerCase() === v.trimEnd().toLowerCase()
+    )
+  if (taken('slug', layoutCols.slug)) layoutCols.slug = current.slug
+  if (taken('name', layoutCols.name)) layoutCols.name = current.name
   const keepGroupIds = new Set(
     snap.groups
       .map((g) => g.id)

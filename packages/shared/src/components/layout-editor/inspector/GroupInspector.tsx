@@ -68,10 +68,12 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
 
   const children = env.bundle.groups.filter((g) => g.parent_key === group.key)
   const containers = env.bundle.groups.filter((g) => g.type === 'container' && g.key !== group.key)
-  const typeOptions = (group.parent_key ? ['tab'] : Object.keys(TYPE_LABELS)).map((t) => ({
-    value: t,
-    label: TYPE_LABELS[t]
-  }))
+  // A tabs holder shows only its tabs and a text block only its text, so a group that holds
+  // fields is not offered either (the save refuses it too: the fields would show nowhere).
+  const holdsFields = env.bundle.placements.some((p) => p.group_key === group.key)
+  const typeOptions = (group.parent_key ? ['tab'] : Object.keys(TYPE_LABELS))
+    .filter((t) => t === type || !(holdsFields && (t === 'container' || t === 'content')))
+    .map((t) => ({ value: t, label: TYPE_LABELS[t] }))
   const sectionLike = type === 'section' || type === 'metadata' || type === 'tab'
 
   // Fields of the collection, by label (pickers + condition builder)
@@ -124,7 +126,9 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
         effect={
           type === 'container' && children.length
             ? 'Move its tabs out before changing what this is.'
-            : 'What this part of the form is.'
+            : holdsFields && !group.parent_key
+              ? 'What this part of the form is. To make it a tabs holder or a text block, move its fields out first.'
+              : 'What this part of the form is.'
         }
       >
         <Choice

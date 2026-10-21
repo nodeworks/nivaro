@@ -6,12 +6,16 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
+import { nameConfigCollection } from '../services/config-live.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
 import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
 import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
 import {
   isLayoutType,
+  isRowId,
+  isUniqueViolation,
+  LAYOUT_NAME_TAKEN,
   LAYOUT_TYPES,
   type LayoutPatchBody,
   normalizeLayoutPatch,
@@ -134,7 +138,8 @@ const CLONE_CARRIED_COLUMNS = [
 ] as const
 
 // Fetch the DB-ordered layout candidates for a collection (is_active desc,
-// sort asc — the idiom both role- and record-condition tie-breaking rely on).
+// sort asc, id asc — the idiom both role- and record-condition tie-breaking
+// rely on; id makes equal sorts resolve the way the overview names them).
 async function fetchLayoutsForCollection(collection: string) {
   // Record-form resolution only — file/table/detail/addendum layouts must
   // never win the active-layout race for the editing form (an is_active
@@ -142,7 +147,7 @@ async function fetchLayoutsForCollection(collection: string) {
   return db('nivaro_collection_layouts')
     .where({ collection })
     .where((b) => b.where({ layout_type: 'grouped' }).orWhereNull('layout_type'))
-    .orderByRaw('is_active desc, sort asc')
+    .orderByRaw('is_active desc, sort asc, id asc')
 }
 
 // Union of field names referenced by any candidate layout's record_conditions.
@@ -904,11 +909,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'tab_mode',
         'validate_before_next',
         'summary_enabled',
-        'summary_show_all',
         'summary_hide_empty',
         'ai_enabled',
         'conditions',
-        'allow_clone',
         'allow_schedule',
         'allow_disable_pickers',
         'layout_type',
@@ -1046,8 +1049,10 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // PATCH /collection-layouts/:id
   app.patch('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    if (!isRowId(id)) return reply.code(400).send({ error: 'id must be a number' })
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    nameConfigCollection(req, existing.collection)
 
     await snapshotLayoutVersion(Number(id), 'before settings change', req.user?.id)
 
@@ -1060,24 +1065,31 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (Object.keys(patch).length === 0 && body.is_active === undefined)
       return reply.code(400).send({ error: 'No fields to update' })
 
-    await db.transaction(async (trx: Knex.Transaction) => {
-      await lockLayout(trx, id)
-      if (Object.keys(patch).length > 0)
-        await trx('nivaro_collection_layouts').where({ id }).update(patch)
-      // is_active only changes through the activate rule (one default per
-      // type). An active layout moved to another type takes that type's
-      // default with it, so the new type never ends up with two.
-      const type = (patch.layout_type as string | undefined) ?? existing.layout_type
-      const typeChanged =
-        patch.layout_type !== undefined && patch.layout_type !== (existing.layout_type ?? 'grouped')
-      if (
-        body.is_active === true ||
-        (body.is_active === undefined && typeChanged && existing.is_active)
-      )
-        await activateLayout(trx, { id, collection: existing.collection, layout_type: type })
-      else if (body.is_active === false)
-        await trx('nivaro_collection_layouts').where({ id }).update({ is_active: 0 })
-    })
+    try {
+      await db.transaction(async (trx: Knex.Transaction) => {
+        await lockLayout(trx, id)
+        if (Object.keys(patch).length > 0)
+          await trx('nivaro_collection_layouts').where({ id }).update(patch)
+        // is_active only changes through the activate rule (one default per
+        // type). An active layout moved to another type takes that type's
+        // default with it, so the new type never ends up with two.
+        const type = (patch.layout_type as string | undefined) ?? existing.layout_type
+        const typeChanged =
+          patch.layout_type !== undefined &&
+          patch.layout_type !== (existing.layout_type ?? 'grouped')
+        if (
+          body.is_active === true ||
+          (body.is_active === undefined && typeChanged && existing.is_active)
+        )
+          await activateLayout(trx, { id, collection: existing.collection, layout_type: type })
+        else if (body.is_active === false)
+          await trx('nivaro_collection_layouts').where({ id }).update({ is_active: 0 })
+      })
+    } catch (err: unknown) {
+      // A rename that raced another into the same name (UNIQUE collection + name).
+      if (isUniqueViolation(err)) return reply.code(409).send({ error: LAYOUT_NAME_TAKEN })
+      throw err
+    }
     const updated = parseLayoutRow(await db('nivaro_collection_layouts').where({ id }).first())
 
     await logActivity({
@@ -1096,6 +1108,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    nameConfigCollection(req, existing.collection)
 
     const countRow = await db('nivaro_collection_layouts')
       .where({ collection: existing.collection })
@@ -1199,6 +1212,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    nameConfigCollection(req, existing.collection)
 
     // Activation is scoped to the layout's type: one active 'grouped' layout
     // (ItemEdit default) and one active 'detail' layout (drill-down default)
@@ -1746,6 +1760,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const source = await db('nivaro_collection_layouts').where({ id }).first()
     if (!source) return reply.code(404).send({ error: 'Not found' })
+    nameConfigCollection(req, source.collection)
 
     const body = req.body as { name: string; slug?: string | null; layout_type?: string }
     if (!body.name) return reply.code(400).send({ error: 'name is required' })
@@ -1936,6 +1951,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { id, versionId } = req.params as { id: string; versionId: string }
     const result = await restoreLayoutVersion(Number(id), Number(versionId), req.user?.id)
     if (!result) return reply.code(404).send({ error: 'Version not found' })
+    if ('error' in result) return reply.code(result.status).send({ error: result.error })
+    const restored = await db('nivaro_collection_layouts')
+      .where({ id: Number(id) })
+      .first('collection')
+    nameConfigCollection(req, restored?.collection)
     await logActivity({
       action: 'layout-version-restore',
       user: req.user?.id,
@@ -1952,6 +1972,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const layout = await db('nivaro_collection_layouts').where({ id }).first()
     if (!layout) return reply.code(404).send({ error: 'Not found' })
+    nameConfigCollection(req, layout.collection)
 
     // The editor auto-saves this route on a 400ms debounce — snapshot the
     // CURRENT state first so a bad drag is one restore away. Deduped, so the
@@ -1980,11 +2001,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'assignments array required' })
 
     // Upsert by (layout_id, field, group_key): a field may sit in two groups
-    // (header strip + body) and both placements survive. (#774): a save used to DELETE every row and
-    // re-insert, so assignment ids churned on each 400ms auto-save (version
-    // restores had to match by field, and any column the insert map forgot —
-    // hide_actions_when_collapsed — was silently dropped). Rows keep their
-    // id now; only what left the payload is deleted; every column is carried.
+    // (header strip + body) and both placements survive.
+    // #774: a save used to DELETE every row and re-insert, so assignment ids
+    // churned on each 400ms auto-save (version restores had to match by field,
+    // and any column the insert map forgot was silently dropped). Rows keep
+    // their id now; only what left the payload is deleted; every column is carried.
     const keyOf = (field: string, groupKey: string | null | undefined) =>
       `${field}\u0000${groupKey ?? ''}`
     const wanted = new Map<string, (typeof body.assignments)[number]>()
@@ -2065,6 +2086,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // as the editor edits them, with the rev its next ops batch must name.
   app.get('/:id/bundle', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    if (!isRowId(id)) return reply.code(400).send({ error: 'id must be a number' })
     const bundle = await loadLayoutBundle(db, Number(id))
     if (!bundle) return reply.code(404).send({ error: 'Not found' })
     return reply.send(bundle)
@@ -2075,6 +2097,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // base_rev, 400 { error, op_index } when an op is refused.
   app.post('/:id/ops', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    if (!isRowId(id)) return reply.code(400).send({ error: 'id must be a number' })
     const body = (req.body ?? {}) as { ops?: unknown; base_rev?: unknown; note?: unknown }
     if (!Array.isArray(body.ops)) return reply.code(400).send({ error: 'ops array required' })
     if (body.ops.length > 500) return reply.code(400).send({ error: 'At most 500 ops per batch' })
@@ -2090,6 +2113,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       req.user?.id
     )
     if (result.status === 404) return reply.code(404).send({ error: 'Not found' })
+    // Open record pages of THIS collection hear the change (config:update names it).
+    if ('bundle' in result) nameConfigCollection(req, result.bundle.layout.collection)
     if (result.status === 409)
       return reply.code(409).send({ error: 'stale', bundle: result.bundle })
     if (result.status === 400)

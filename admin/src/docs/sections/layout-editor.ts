@@ -114,7 +114,7 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: '"Schedule button for everyone" and "Hide-from-pickers button for everyone" give people who may edit the record "Schedule a change…" and "Disable in pickers" (administrators always have both). Nivaro admin shows them in the record header; the shared record form shows them in its More menu when the host turns on `showGrantedTools` (efp-new does). The server checks the same grant for both. A non-admin must be able to see the record (otherwise the answer is Not found), the form that record opens with for them must have the setting on, and they must be allowed to update this record — the update rules of their role for the collection, its row filter and any tree permission, not just access to the collection. A form opened with a `?layout=` link counts only when it is a record form their role may open and its record rules match this record; naming any other form never grants the tool. Scheduling also checks every field in the change: each must be one the person may update, otherwise the request is refused naming the field. People who are not administrators see the scheduled changes on a record only when they can see the record, with values of fields they may not read left out, and may cancel only their own changes on records they can still update.'
+      text: '"Schedule button for everyone" and "Hide-from-pickers button for everyone" give people who may edit the record "Schedule a change…" and "Disable in pickers" (administrators always have both). Nivaro admin shows them in the record header; the shared record form shows them in its More menu when the host turns on `showGrantedTools` (efp-new does). The server checks the same grant for both. A non-admin must be able to see the record (otherwise the answer is Not found), the form that record opens with for them must have the setting on, and they must be allowed to update this record — the update rules of their role for the collection, its row filter and any tree permission, not just access to the collection. A form opened with a `?layout=` link counts only when it is a record form their role may open and its record rules match this record; naming any other form never grants the tool. Scheduling also checks every field in the change: each must be one the person may update, and a registered field with its own column that is not read-only, computed or an audit stamp; otherwise the request is refused naming the field. People who are not administrators see the scheduled changes on a record only when they can see the record, with values of fields they may not read left out, and may cancel only their own changes on records they can still update.'
     },
     { type: 'h3', text: 'Add panel' },
     {
@@ -164,7 +164,7 @@ export const layoutEditor: DocSection = {
     { type: 'h2', id: 'layout-editor-record-page', text: 'Edit layout from a record' },
     {
       type: 'p',
-      text: "On a record page an admin sees Edit layout in the record header (Nivaro admin ItemEdit and efp-new RecordDetail). It switches that page's form into design mode on the layout this record resolved to, with the layouts list, inspector and add panel as side panels over the page. The editor keeps the layout it opened on even if a save changes which layout the record resolves to. Back to record closes it, and the record re-reads its layout. When the collection has no layout yet, the button links to the Layout tab to create the first form."
+      text: "On a record page an admin sees Edit layout in the record header (Nivaro admin ItemEdit and efp-new RecordDetail). It switches that page's form into design mode on the layout this record resolved to, with the layouts list, inspector and add panel as side panels over the page. The editor keeps the layout it opened on even if a save changes which layout the record resolves to. Back to record closes it, and the record re-reads its layout. When the collection has no layout yet, the button links to the Layout tab to create the first form. When the page's ?layout= link names a form that doesn't exist, the button says Form not found and links to the collection's forms instead."
     },
     {
       type: 'p',
@@ -204,11 +204,11 @@ GET  /api/collection-layouts/:id/bundle
 POST /api/collection-layouts/:id/ops  { ops: LayoutOp[], base_rev, note? }
      → the new bundle (applied all or nothing, at most 500 ops)
      409 { error: 'stale', bundle }       // someone saved since base_rev
-     400 { error, op_index }              // an op was refused
+     400 { error, op_index }              // an op was refused (also a rename onto a taken name)
 
-POST /api/field-config/:collection/project  { assignments: [...] }
+POST /api/field-config/:collection/project  { assignments: [...] }   // administrators
      // the field rows GET /field-config would return if these placements were saved
-     // (read-only: the canvas renders unsaved drafts through it)
+     // (read-only: the canvas renders unsaved drafts through it; flushes no cache, pushes nothing)
 
 GET  /api/widgets-internal/:id/placements
      → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`
@@ -225,7 +225,10 @@ GET  /api/widgets-internal/:id/placements
           'group_create',
           '`{ op, key, label, group_type, parent_key, index, patch? }` — section, tab or step'
         ],
-        ['group_update', '`{ op, key, patch }`'],
+        [
+          'group_update',
+          '`{ op, key, patch }` — a group holding fields cannot become a container or a text block'
+        ],
         ['group_move', '`{ op, key, parent_key, index }` — also moves slot cards on the page'],
         ['group_remove', "`{ op, key, placements: 'ungroup' | 'delete' }`"],
         ['layout_update', '`{ op, patch }` — any setting PATCH /collection-layouts/:id accepts']

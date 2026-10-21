@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { nameConfigCollection } from '../services/config-live.js'
 import { lockLayout } from '../services/layout-activation.js'
 import { snapshotLayoutVersion } from '../services/layout-versions.js'
 
@@ -125,6 +126,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     const existing = await db('nivaro_field_groups').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    nameConfigCollection(req, existing.collection)
 
     const body = req.body as Partial<{
       key: string
@@ -212,6 +214,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     const existing = await db('nivaro_field_groups').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    nameConfigCollection(req, existing.collection)
 
     await db.transaction(async (trx) => {
       if (existing.layout_id) {

@@ -736,6 +736,35 @@ describe('Inspector', () => {
     )
   })
 
+  it('a section holding fields is not offered as a tabs holder or a text block, and says why', async () => {
+    const kinds = async () => {
+      await click(host.querySelector('[data-setting="group.type"] button'))
+      const labels = [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent)
+      await act(async () => {
+        document.activeElement?.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+        )
+      })
+      return labels
+    }
+    await mount({ kind: 'group', key: 'main' })
+    expect(host.querySelector('[data-setting="group.type"]')?.textContent).toContain(
+      'move its fields out first'
+    )
+    expect(await kinds()).toEqual(['Section', 'Tab or step', 'Record info (read-only)'])
+
+    // An empty section may become either.
+    const bundle = makeBundle()
+    await mount(
+      { kind: 'group', key: 'main' },
+      { bundle: { ...bundle, placements: bundle.placements.filter((p) => p.group_key !== 'main') } }
+    )
+    expect(host.querySelector('[data-setting="group.type"]')?.textContent).not.toContain(
+      'move its fields out'
+    )
+    expect(await kinds()).toContain('Text block')
+  })
+
   it('tabs work as a tablist: arrows move and select, the body is the tabpanel', async () => {
     await mount(field('vendor'))
     const list = host.querySelector('[role="tablist"]') as HTMLElement
