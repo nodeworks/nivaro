@@ -1,5 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { History, LayoutTemplate, ListChecks, Loader2, Undo2, Workflow } from 'lucide-react'
+import {
+  History,
+  LayoutTemplate,
+  ListChecks,
+  Loader2,
+  Sparkles,
+  Undo2,
+  Workflow
+} from 'lucide-react'
 import { useState } from 'react'
 import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
@@ -284,13 +292,97 @@ function PlanHistory({
         {selected ? (
           <PlanDetail key={selected} id={selected} isAdmin={isAdmin} subscribe={subscribe} />
         ) : (
-          <div className='flex h-full flex-col items-center justify-center gap-2 text-center text-muted-foreground'>
-            <History className='h-6 w-6' />
-            <p className='text-[12.5px]'>Pick a plan to see its steps, changes and outcome.</p>
+          <div className='flex h-full flex-col gap-4'>
+            {isAdmin && <TaskDoAnalyticsCard />}
+            <div className='flex flex-1 flex-col items-center justify-center gap-2 text-center text-muted-foreground'>
+              <History className='h-6 w-6' />
+              <p className='text-[12.5px]'>Pick a plan to see its steps, changes and outcome.</p>
+            </div>
           </div>
         )}
       </div>
     </div>
+  )
+}
+
+interface TaskDoAnalytics {
+  total: number
+  by_kind: { task: number; ticket: number }
+  executed: number
+  rejected: number
+  failed: number
+  rolled_back: number
+  awaiting_approval: number
+  proposed: number
+  hours_estimated_saved: number
+  records_changed: number
+}
+
+/** Plans drafted from tasks and tickets (#2866) — the last 90 days. */
+function TaskDoAnalyticsCard() {
+  const client = useNivaroClient()
+  const q = useQuery({
+    queryKey: ['ai-plans', 'task-do-analytics'],
+    queryFn: () =>
+      client
+        .request<{ data: TaskDoAnalytics }>(get('/ai/task-do/analytics', { days: 90 }))
+        .then((r) => r.data),
+    staleTime: 60_000
+  })
+  const a = q.data
+  const cells: Array<[string, string, string?]> = a
+    ? [
+        [
+          'From tasks / tickets',
+          `${a.total}`,
+          `${a.by_kind.task} tasks · ${a.by_kind.ticket} tickets`
+        ],
+        ['Ran', `${a.executed}`, `${a.records_changed} records changed`],
+        ['Rejected', `${a.rejected}`, a.failed ? `${a.failed} failed` : undefined],
+        ['Rolled back', `${a.rolled_back}`],
+        ['Hours saved', `≈ ${a.hours_estimated_saved}`, 'AI estimate'],
+        [
+          'Waiting',
+          `${a.proposed}`,
+          a.awaiting_approval ? `${a.awaiting_approval} need a second approval` : undefined
+        ]
+      ]
+    : []
+  return (
+    <section
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-task-do-analytics
+    >
+      <div className='flex items-center gap-2 border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+        <Sparkles className='h-4 w-4 text-slate-400' />
+        <h2 className='text-[13px] font-semibold text-foreground'>Let AI do this</h2>
+        <span className='text-[11.5px] text-muted-foreground'>last 90 days</span>
+      </div>
+      {q.isLoading && (
+        <p className='flex items-center gap-1.5 px-4 py-3 text-[12px] text-muted-foreground'>
+          <Loader2 className='h-3 w-3 animate-spin' /> Loading…
+        </p>
+      )}
+      {q.isError && (
+        <p className='px-4 py-3 text-[12px] text-rose-700 dark:text-rose-400'>{errText(q.error)}</p>
+      )}
+      {a && a.total === 0 && (
+        <p className='px-4 py-3 text-[12px] text-muted-foreground'>
+          No plans drafted from tasks or tickets yet. Turn it on under Settings → AI Features.
+        </p>
+      )}
+      {a && a.total > 0 && (
+        <div className='grid grid-cols-2 gap-px bg-slate-200 dark:bg-border md:grid-cols-3 lg:grid-cols-6'>
+          {cells.map(([k, v, hint]) => (
+            <div key={k} className='bg-white px-3 py-2 dark:bg-card'>
+              <p className='text-[11px] text-muted-foreground'>{k}</p>
+              <p className='text-[15px] font-semibold tabular-nums text-foreground'>{v}</p>
+              {hint && <p className='truncate text-[10.5px] text-muted-foreground'>{hint}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -342,12 +434,15 @@ function PlanDetail({
       </div>
       <AiPlanCard plan={p} subscribe={subscribe} className='mt-0 bg-white dark:bg-card' />
       {isAdmin && (p.made_steps?.length ?? 0) > 0 && <UndoPanel id={id} />}
+      {!isAdmin && p.source?.kind === 'task-do' && (p.made_steps?.length ?? 0) > 0 && (
+        <UndoPanel id={id} base='/ai/task-do/plans' />
+      )}
       {isAdmin && p.status === 'executed' && <FlowPanel id={id} flowId={p.flow_id ?? null} />}
     </div>
   )
 }
 
-function UndoPanel({ id }: { id: string }) {
+function UndoPanel({ id, base = '/ai/plans' }: { id: string; base?: string }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [confirm, setConfirm] = useState<string | null>(null)
@@ -357,14 +452,14 @@ function UndoPanel({ id }: { id: string }) {
     queryKey: ['ai-plans', 'undo', id],
     queryFn: () =>
       client
-        .request<{ data: { steps: UndoStep[] } }>(get(`/ai/plans/${encodeURIComponent(id)}/undo`))
+        .request<{ data: { steps: UndoStep[] } }>(get(`${base}/${encodeURIComponent(id)}/undo`))
         .then((r) => r.data.steps)
   })
   const run = (stepId: string | null) => {
     setBusy(true)
     void client
       .request<{ data: { undone: number; skipped: number; failed: number; errors: string[] } }>(
-        post(`/ai/plans/${encodeURIComponent(id)}/undo`, stepId ? { step_id: stepId } : {})
+        post(`${base}/${encodeURIComponent(id)}/undo`, stepId ? { step_id: stepId } : {})
       )
       .then((r) => {
         const d = r.data

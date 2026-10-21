@@ -32,6 +32,7 @@ import { DirectorySyncCard } from '@/components/directory-sync-card'
 import { HuddleSettingsSection } from '@/components/huddle-settings'
 import { ObligationsArmingPreview } from '@/components/obligations-arming-preview'
 import { SessionReplaySettingsSection } from '@/components/session-replay-settings'
+import { TaskDoSettingsBlock } from '@/components/task-do-settings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -3188,6 +3189,7 @@ export function SettingsPage() {
                       className='h-8 text-[13px]'
                     />
                   </Field>
+                  <TaskDoSettingsBlock />
                 </SectionWrap>
               )}
 

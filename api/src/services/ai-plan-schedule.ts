@@ -10,6 +10,7 @@ import {
   httpError,
   isExpired,
   loadPlan,
+  needsSecondApproval,
   PLAN_ACTION_TYPE,
   type PlanView,
   parseDoc,
@@ -42,6 +43,8 @@ export async function schedulePlan(user: User, id: string, runAtRaw: unknown): P
   if (status !== 'proposed' && status !== 'paused') {
     throw httpError(`A ${status} plan cannot be scheduled`, 409)
   }
+  const gate = needsSecondApproval(doc)
+  if (gate) throw httpError(gate, 409)
   const runAt = new Date(String(runAtRaw ?? ''))
   if (Number.isNaN(runAt.getTime())) throw httpError('run_at must be a date and time', 400)
   const lead = runAt.getTime() - Date.now()

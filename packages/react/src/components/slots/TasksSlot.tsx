@@ -1,3 +1,4 @@
+import { TaskDoButton } from '@nivaro/shared'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useOptionalNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
@@ -289,6 +290,7 @@ export function TasksSlot({
                         )}
                       </div>
                     </div>
+                    <TaskDoButton task={t} compact onTaskChanged={() => void fetchTasks()} />
                     <button
                       type='button'
                       data-nf-icon-btn

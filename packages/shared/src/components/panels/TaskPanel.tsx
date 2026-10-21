@@ -17,6 +17,7 @@ import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { invalidateRecordTasks, OPEN_TASK_STATUSES } from '../../lib/record-tasks'
 import { cn, formatDate, formatRelative } from '../../lib/utils'
+import { TaskDoButton } from '../ai/TaskDo'
 import { Button } from '../ui/button'
 import { Checkbox } from '../ui/checkbox'
 import {
@@ -866,6 +867,7 @@ export function TaskPanel({
 
   const rowActions = (t: Task, done: boolean) => (
     <div className='flex shrink-0 items-center gap-0.5'>
+      {!done && <TaskDoButton task={t} compact onTaskChanged={invalidate} />}
       <button
         type='button'
         onClick={() => setHistoryOf(historyOf === t.id ? null : t.id)}
