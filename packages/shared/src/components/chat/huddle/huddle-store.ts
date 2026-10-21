@@ -14,6 +14,9 @@
  * (`on` / `emit`), which admin and portals already mount.
  */
 
+import { huddleLive } from './huddle-live'
+import { aggregateQuality, type LinkSummary, summarizeStats } from './huddle-quality'
+
 export interface HuddlePeer {
   socket: string
   user: string
@@ -143,6 +146,9 @@ class HuddleStore {
   private ping: ReturnType<typeof setInterval> | null = null
   /** One hidden <audio> per peer, owned here so sound survives any room view unmounting. */
   private audio = new Map<string, HTMLAudioElement>()
+  /** #2849 — the latest stats per peer link (sampled on each ping) and the ICE failures seen. */
+  private linkStats = new Map<string, LinkSummary>()
+  private iceFailed = 0
 
   // ── React plumbing ────────────────────────────────────────────────────────
   subscribe = (l: Listener) => {
@@ -181,6 +187,7 @@ class HuddleStore {
     if (this.transport === transport) return
     for (const off of this.offs) off()
     this.transport = transport
+    huddleLive.attach(transport)
     this.offs = [
       transport.on('huddle:peers', (p: { room: string; peers: HuddlePeer[] }) => this.onPeers(p)),
       transport.on('huddle:joined', (p: { room: string; self: string; peers: HuddlePeer[] }) =>
@@ -214,6 +221,8 @@ class HuddleStore {
     const active = this.state.status === 'joining' || this.state.status === 'live'
     if (this.state.room === room && active) return
     if (this.state.room && active) this.leave()
+    this.linkStats.clear()
+    this.iceFailed = 0
     this.set({ room, status: 'joining', error: null, startedAt: null })
     try {
       this.mic = await navigator.mediaDevices.getUserMedia({
@@ -239,7 +248,14 @@ class HuddleStore {
 
   leave(): void {
     const room = this.state.room
-    if (room) this.transport?.emit('huddle:leave', { room })
+    if (room) {
+      // Sent before the leave, on the same socket, so the server tallies it into the session.
+      const report = aggregateQuality([...this.linkStats.values()], this.iceFailed)
+      if (report && this.state.status === 'live') {
+        this.transport?.emit('huddle:quality', { room, ...report })
+      }
+      this.transport?.emit('huddle:leave', { room })
+    }
     this.teardown()
   }
 
@@ -274,6 +290,7 @@ class HuddleStore {
     if (this.ping) clearInterval(this.ping)
     this.ping = setInterval(() => {
       if (this.state.room) this.transport?.emit('huddle:ping', { room: this.state.room })
+      void this.sampleQuality()
     }, PING_MS)
     if (this.state.muted || this.state.sharing) {
       this.transport?.emit('huddle:state', {
@@ -400,9 +417,22 @@ class HuddleStore {
               ? 'failed'
               : 'connecting'
       })
-      if (s === 'failed') pc.restartIce?.()
+      if (s === 'failed') {
+        this.iceFailed++
+        pc.restartIce?.()
+      }
     }
     return link
+  }
+
+  private async sampleQuality() {
+    for (const [socket, link] of this.links) {
+      try {
+        this.linkStats.set(socket, summarizeStats(await link.pc.getStats()))
+      } catch {
+        /* a closed link has no stats */
+      }
+    }
   }
 
   private playAudio(socket: string, stream: MediaStream) {

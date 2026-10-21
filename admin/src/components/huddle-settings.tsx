@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { type IceProbeResult, type IceServerDto, probeIce } from '@/lib/ice-probe'
+import { HuddleTurnHealth } from './huddle-turn-health'
 
 /**
  * Settings → Huddles (#2457): whether huddles run, and the STUN/TURN servers
@@ -331,6 +332,8 @@ export function HuddleSettingsSection() {
               )}
               {test.data && <ProbeOutcome r={test.data} />}
             </div>
+
+            <HuddleTurnHealth disabled={dirty} />
           </div>
         )}
       </div>

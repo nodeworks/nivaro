@@ -128,7 +128,9 @@ import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
 import { offHoursNote } from './chat-local-time'
 import { useMessageWindow } from './chat-window'
 import { HuddleControls } from './huddle/HuddleControls'
+import { HuddleLiveBadge } from './huddle/HuddleLiveBadge'
 import { HuddleStage } from './huddle/HuddleStage'
+import { useHuddleLive } from './huddle/huddle-live'
 import { useHuddle } from './huddle/useHuddle'
 import { actionsForMessage, MessageActionsMenu, useMessageActions } from './MessageActions'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
@@ -3200,6 +3202,7 @@ export function ChatRoomList({
     [cfg.onlineUsers]
   )
   const bot = useChatBotInfo()
+  const huddleLive = useHuddleLive()
   const [search, setSearch] = useState('')
   const q = useDebouncedValue(search.trim(), 250)
   // Cross-room message search rides the same box: type ≥2 chars and matching
@@ -3465,6 +3468,7 @@ export function ChatRoomList({
                       {r.muted && (
                         <BellOff className='h-3 w-3 shrink-0 text-slate-300' strokeWidth={2} />
                       )}
+                      <HuddleLiveBadge count={huddleLive.countFor(r.room)} label={r.label} />
                       {draftRooms.has(r.room) && (
                         <PencilLine
                           className='h-3 w-3 shrink-0 text-slate-400'

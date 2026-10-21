@@ -56,6 +56,12 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Closes open tasks whose “done when” condition the record now meets (catches writes the after-save check never sees).',
   'ai-spend-rollup':
     'Nightly — rolls the AI call log up per day, model, feature and person (the log itself is pruned after 30 days) so month-on-month spend survives, then tells admins once a month when the projection passes a budget or last month by the set percentage.',
+  'huddle-turn-probe':
+    'Every 5 minutes — a real TURN allocation (and a STUN lookup) against each server set in Settings → Huddles, with the credential a browser would get. Three failures in a row raise an issue. Skipped when no server is configured.',
+  'huddle-sessions-sweep':
+    'Every 5 minutes — closes the record of a huddle whose last browser vanished without leaving, so the Huddles tab in Chat Analytics counts it and the live badges clear.',
+  'huddle-sessions-prune':
+    'Daily — deletes huddle session records (counts and timings only) older than 180 days.',
   'ai-model-catalogue':
     'Nightly — asks the AI provider or gateway which models it answers for. New and retired ids land on AI quality; a new one runs a Compare and a small replay of saved questions; a retired id still in the settings warns admins. Never switches a model.',
   'ai-watch-checks':
