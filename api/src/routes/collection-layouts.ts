@@ -49,6 +49,7 @@ import { registerLayoutAnalysisRoutes } from './layout-analysis.js'
 import { layoutBulkRoutes } from './layout-bulk.js'
 import { registerLayoutCrossformRoutes } from './layout-crossform.js'
 import { layoutHistoryRoutes } from './layout-history.js'
+import { layoutMergeRoutes } from './layout-merge.js'
 import { applyTemplateToNewLayout, layoutReuseRoutes, loadFormTemplate } from './layout-reuse.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, roleAllows, slugify }
@@ -2258,6 +2259,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // One change on many layouts + recorded macros (#2639 / #2662 / #2663).
   await layoutBulkRoutes(app)
+
+  // Merge two forms + the layout change log (#2661 / #2719).
+  await layoutMergeRoutes(app)
 
   // Named versions, version bundles, section last-changed, scheduled changes.
   await layoutHistoryRoutes(app)

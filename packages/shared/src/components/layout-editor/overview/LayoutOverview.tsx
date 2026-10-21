@@ -43,6 +43,7 @@ import {
   type LayoutThumbData,
   useCrossform
 } from '../crossform'
+import { MergeFormsButton } from '../crossform/MergeForms'
 import { overviewLoops } from '../explain/overview-loops'
 import type { RuleFieldRow } from '../explain/rule-graph'
 import { useFieldRuleRows } from '../explain/use-explain'
@@ -61,6 +62,7 @@ import {
   sortWorstFirst,
   useOverviewAnalysis
 } from './analysis'
+import { ChangeLogButton } from './ChangeLogButton'
 import {
   type ChoiceLabels,
   type DescribeField,
@@ -1135,10 +1137,12 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
             icon={<MoreHorizontal className='h-4 w-4' />}
             iconOnly
             align='end'
-            tip='Changes to every form'
+            tip='Changes to every form, merging forms, the change log'
             data={{ 'data-overview-more': '' }}
           >
             <BulkChangesButton collection={collection} />
+            <MergeFormsButton collection={collection} />
+            <ChangeLogButton collection={collection} />
           </BarMenu>
         )}
         <NewFormButton collection={collection} onCreated={created} />

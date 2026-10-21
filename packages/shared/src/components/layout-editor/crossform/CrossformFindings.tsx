@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { btnOutline, btnPrimary } from '../overview/OverviewActions'
 import { apiFailure } from '../overview/overview-api'
 import {
@@ -10,11 +11,12 @@ import {
   useInvalidateAfterCrossWrite
 } from './crossform-api'
 import { linkParentOps, unifyLabelOps } from './crossform-model'
+import { MergePanel } from './MergeForms'
 
 // Overview findings across the forms of a collection, as rows of the
 // overview's findings strip: a field labelled differently on different forms
 // (#2631, unify in one click per field) and forms that are near copies of
-// each other (#2660, compare or link to a parent).
+// each other (#2660, compare, link to a parent or merge into one, #2661).
 
 const btnSmall =
   'inline-flex h-7 items-center whitespace-nowrap rounded-md border border-slate-200 bg-white px-2 text-[12px] font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
@@ -116,6 +118,7 @@ export function DuplicateRow({
   const client = useNivaroClient()
   const refresh = useInvalidateAfterCrossWrite(collection)
   const [asking, setAsking] = useState(false)
+  const [merging, setMerging] = useState(false)
   const [busy, setBusy] = useState(false)
   const parent = pair.parent_id === pair.a.id ? pair.a : pair.b
   const child = parent === pair.a ? pair.b : pair.a
@@ -179,6 +182,27 @@ export function DuplicateRow({
             Make {parent.name} the parent…
           </button>
         )}
+        <Popover open={merging} onOpenChange={setMerging}>
+          <PopoverTrigger asChild>
+            <button type='button' data-duplicate-merge='' className={btnSmall}>
+              Merge into one…
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align='start'
+            data-merge-panel=''
+            className='max-h-[min(80vh,720px)] w-[480px] max-w-[calc(100vw-24px)] overflow-y-auto overscroll-contain p-4'
+          >
+            {merging && (
+              <MergePanel
+                collection={collection}
+                keepId={parent.id}
+                foldId={child.id}
+                onDone={() => setMerging(false)}
+              />
+            )}
+          </PopoverContent>
+        </Popover>
       </div>
       {asking && (
         <div className='mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-700 dark:border-border dark:bg-muted/40 dark:text-foreground'>
