@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { markConfigRead } from '../services/config-live.js'
 import { bustRollupContributorCache } from '../services/rollups.js'
 
 function parseJsonSafe(val: unknown): unknown {
@@ -542,6 +543,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
   // answer if these placements were the saved layout (the layout editor's
   // canvas renders its unsaved draft through it). A read: writes nothing.
   app.post('/:collection/project', { preHandler: requireAdmin }, async (req, reply) => {
+    markConfigRead(req)
     const { collection } = req.params as { collection: string }
     const list = (req.body as { assignments?: unknown } | null)?.assignments
     if (!Array.isArray(list) || list.length > 2000)
@@ -750,6 +752,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
   // POST /field-config/:collection/evaluate-visibility
   app.post('/:collection/evaluate-visibility', { preHandler: authenticate }, async (req, reply) => {
+    markConfigRead(req)
     const { collection } = req.params as { collection: string }
     const { values } = req.body as { values: Record<string, unknown> }
 
@@ -789,6 +792,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
   // POST /field-config/:collection/evaluate-defaults
   app.post('/:collection/evaluate-defaults', { preHandler: authenticate }, async (req, reply) => {
+    markConfigRead(req)
     const { collection } = req.params as { collection: string }
     const { trigger_field, values } = req.body as {
       trigger_field: string
@@ -820,6 +824,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
   // POST /field-config/:collection/evaluate-lock
   app.post('/:collection/evaluate-lock', { preHandler: authenticate }, async (req, reply) => {
+    markConfigRead(req)
     const { collection } = req.params as { collection: string }
     const { values } = req.body as { values: Record<string, unknown> }
 
@@ -846,6 +851,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
   // POST /field-config/:collection/cascade
   app.post('/:collection/cascade', { preHandler: authenticate }, async (req, reply) => {
+    markConfigRead(req)
     const { collection } = req.params as { collection: string }
     const { changed_field, values } = req.body as {
       changed_field: string

@@ -9,7 +9,7 @@ vi.mock('../../../services/tenant-rooms.js', () => ({ currentTenantKey: () => ''
 
 import {
   collectionHint,
-  isConfigReadPost,
+  isConfigWrite,
   nameConfigCollection
 } from '../../../services/config-live.js'
 
@@ -57,24 +57,37 @@ describe('collectionHint — writes keyed by id', () => {
   })
 })
 
-describe('isConfigReadPost', () => {
-  it('the draft projection and the rule evaluators change no configuration', () => {
-    for (const p of [
-      'project',
-      'evaluate-visibility',
-      'evaluate-defaults',
-      'evaluate-lock',
-      'cascade'
-    ]) {
-      expect(isConfigReadPost(`/api/field-config/orders/${p}`)).toBe(true)
-      expect(isConfigReadPost(`/api/field-config/orders/${p}?x=1`)).toBe(true)
+describe('isConfigWrite', () => {
+  const req = (method: string, url: string, read = false) => ({
+    method,
+    url,
+    ...(read ? { nvrConfigRead: true } : {})
+  })
+
+  it('a read-only POST that marked itself flushes nothing', () => {
+    expect(isConfigWrite(req('POST', '/api/field-config/orders/project', true))).toBe(false)
+    expect(isConfigWrite(req('POST', '/api/field-config/orders/cascade?x=1', true))).toBe(false)
+  })
+
+  it('the same path is a write for any other method, marked or not', () => {
+    for (const m of ['PATCH', 'PUT', 'DELETE']) {
+      // A field named "project" or "cascade": PATCH /field-config/:collection/:field.
+      expect(isConfigWrite(req(m, '/api/field-config/orders/project'))).toBe(true)
+      expect(isConfigWrite(req(m, '/api/field-config/orders/cascade', true))).toBe(true)
     }
   })
 
-  it('real config writes still count', () => {
-    expect(isConfigReadPost('/api/field-config/orders/status')).toBe(false)
-    expect(isConfigReadPost('/api/field-config/orders/project/extra')).toBe(false)
-    expect(isConfigReadPost('/api/collection-layouts/12/ops')).toBe(false)
-    expect(isConfigReadPost('/api/field-groups/3')).toBe(false)
+  it('an unmarked POST is a write, whatever its path says', () => {
+    expect(isConfigWrite(req('POST', '/api/field-config/orders/project'))).toBe(true)
+    expect(isConfigWrite(req('POST', '/api/collection-layouts/12/ops'))).toBe(true)
+    expect(isConfigWrite(req('DELETE', '/api/field-groups/3'))).toBe(true)
+  })
+
+  it('reads and other routes are never config writes', () => {
+    expect(isConfigWrite(req('GET', '/api/field-config/orders'))).toBe(false)
+    expect(isConfigWrite(req('HEAD', '/api/field-config/orders'))).toBe(false)
+    expect(isConfigWrite(req('OPTIONS', '/api/collection-layouts/12/ops'))).toBe(false)
+    expect(isConfigWrite(req('POST', '/api/items/orders'))).toBe(false)
+    expect(isConfigWrite({ ...req('POST', '/api/roles'), nvrConfigRead: true })).toBe(false)
   })
 })

@@ -135,9 +135,20 @@ vi.mock('../../../db/index.js', () => {
 })
 
 import { fieldConfigRoutes } from '../../../routes/field-config.js'
+import { isConfigWrite } from '../../../services/config-live.js'
 
+/** What the config-write hook (routes/index.ts) decided for the last request. */
+let lastWasConfigWrite: boolean | null = null
 function buildApp() {
   const app = Fastify({ logger: false })
+  app.addHook('onResponse', async (req) => {
+    // Mounted under /field-config here; under /api/field-config in the real app.
+    lastWasConfigWrite = isConfigWrite({
+      method: req.method,
+      url: `/api${req.url}`,
+      nvrConfigRead: (req as { nvrConfigRead?: unknown }).nvrConfigRead
+    })
+  })
   app.register(fieldConfigRoutes, { prefix: '/field-config' })
   return app
 }
@@ -223,6 +234,25 @@ describe('POST /field-config/:collection/project', () => {
       group_key: null
     })
     expect(rows.some((r) => r.field === 'lines')).toBe(false)
+  })
+
+  it('flushes no config cache and pushes nothing (a read that marks itself)', async () => {
+    lastWasConfigWrite = null
+    const res = await projectRows(draftOf(LAYOUTS[1]))
+    expect(res.statusCode).toBe(200)
+    expect(lastWasConfigWrite).toBe(false)
+  })
+
+  it('a PATCH or PUT on the same path is still a config write (a field named "project")', async () => {
+    for (const method of ['PATCH', 'PUT'] as const) {
+      lastWasConfigWrite = null
+      await buildApp().inject({
+        method,
+        url: '/field-config/orders/project',
+        payload: { label: 'Project' }
+      })
+      expect(lastWasConfigWrite).toBe(true)
+    }
   })
 
   it('is for administrators only (the design canvas is admin-only)', async () => {
