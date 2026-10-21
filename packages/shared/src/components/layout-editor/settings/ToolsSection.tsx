@@ -9,6 +9,7 @@ import { useLayoutEditorHost } from '../host'
 import { useRoleNames } from '../overview/overview-api'
 import { labelText, tintCard } from '../panel-style'
 import { RelationPicker } from '../pickers/relation-picker'
+import { CostLimitSetting } from '../testing/CostLimitSetting'
 import { PickList, quietText, Setting, smallBtn, useSettingVisible } from './controls'
 import type { SectionProps } from './section-props'
 import { type RolePreview, useRolePreview } from './settings-api'
@@ -30,6 +31,7 @@ export function ToolsSection(props: ToolsSectionProps) {
       <PreviewRoleSetting {...props} />
       <SlotSetting k='tool.describe' layoutId={id} />
       <SlotSetting k='tool.ai_review' layoutId={id} />
+      <CostLimitSetting {...props} />
       <HistorySetting layoutId={id} />
       <DriftSetting layoutId={id} />
     </>

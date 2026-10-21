@@ -11,8 +11,8 @@ import type { DescribeField } from './overview/describe-conditions'
 import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overview/overview-api'
 import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
-import { unsavedText } from './UnsavedConfirm'
 import type { PreviewDevice } from './preview/preview-model'
+import { unsavedText } from './UnsavedConfirm'
 import type { LayoutDraft } from './useLayoutDraft'
 
 // The editor's top bar: which layout this is and when it is used, Preview as,
@@ -278,7 +278,9 @@ export function EditorTopBar({
   onBack,
   backLabel = 'Layouts',
   tools,
-  previewExtra
+  previewExtra,
+  testing,
+  beforeSave
 }: {
   collection: string
   layoutId: number
@@ -303,6 +305,10 @@ export function EditorTopBar({
   tools?: ReactNode
   /** More preview modes inside the Preview as popover. */
   previewExtra?: ReactNode
+  /** The Test popover (test records, new-record walkthrough, form cost), after History. */
+  testing?: ReactNode
+  /** Beside Save while changes wait for it (Check impact). */
+  beforeSave?: ReactNode
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const unsaved = draft.unsavedCount ?? 0
@@ -396,6 +402,7 @@ export function EditorTopBar({
           )}
         </PopoverContent>
       </Popover>
+      {testing}
       {draft.setAutosave && (
         <BarSwitch
           label='Autosave'
@@ -410,6 +417,7 @@ export function EditorTopBar({
         />
       )}
       <StatusChip draft={draft} />
+      {draft.save && !draft.autosave && unsaved > 0 && beforeSave}
       {draft.save && !draft.autosave && (
         <button
           type='button'

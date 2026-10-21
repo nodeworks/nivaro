@@ -49,6 +49,7 @@ import { PlacementsTable } from './PlacementsTable'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
 import { useRolePreview } from './settings/settings-api'
+import { ImpactButton, TestingButton } from './testing/TestingPanels'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import {
   type LayoutDraft,
@@ -670,6 +671,32 @@ export function LayoutEditor({
               <ViewToggle view={view} onView={setView} />
               <AutoArrangeButton bundle={bundle} apply={draft.apply} />
             </>
+          ) : null
+        }
+        testing={
+          bundle ? (
+            <TestingButton
+              collection={collection}
+              layoutId={currentId}
+              bundle={bundle}
+              parent={parent}
+              apply={draft.apply}
+              dirty={draft.dirty}
+              fields={fields}
+            />
+          ) : null
+        }
+        beforeSave={
+          bundle ? (
+            <ImpactButton
+              collection={collection}
+              layoutId={currentId}
+              bundle={bundle}
+              parent={parent}
+              apply={draft.apply}
+              dirty={draft.dirty}
+              fields={fields}
+            />
           ) : null
         }
         previewExtra={

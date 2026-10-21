@@ -473,6 +473,15 @@ export const SETTINGS: SettingDef[] = [
     types: ALL
   },
   {
+    key: 'tool.cost_limit',
+    section: 'tools',
+    label: 'Form cost limit',
+    effect:
+      'Test and Check impact warn when opening a record on this form takes more requests than this.',
+    types: ON_SCREEN_RECORD,
+    keywords: 'requests pickers grids widgets queries slow'
+  },
+  {
     key: 'tool.layout_drift',
     section: 'tools',
     label: 'Layout drift',

@@ -130,6 +130,7 @@ import { itemsRoutes } from './items.js'
 import { jobRunRoutes } from './job-runs.js'
 import { journeyRoutes } from './journeys.js'
 import { lastTouchRoutes } from './last-touch.js'
+import { layoutTestingRoutes } from './layout-testing.js'
 import { legalHoldRoutes } from './legal-holds.js'
 import { lineageRoutes } from './lineage.js'
 import { mailRoutes } from './mail.js'
@@ -589,6 +590,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(fieldConfigRoutes, { prefix: '/field-config' })
   await app.register(fieldGroupsRoutes, { prefix: '/field-groups' })
   await app.register(collectionLayoutsRoutes, { prefix: '/collection-layouts' })
+  await app.register(layoutTestingRoutes, { prefix: '/collection-layouts' })
   await app.register(virtualCollectionsRoutes, { prefix: '/virtual-collections' })
   await app.register(recordTemplatesRoutes, { prefix: '/record-templates' })
   await app.register(collectionPresetsRoutes, { prefix: '/collection-presets' })

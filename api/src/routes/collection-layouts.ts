@@ -28,6 +28,7 @@ import {
   slugify
 } from '../services/layout-patch.js'
 import { findLayoutReferences } from '../services/layout-references.js'
+import { shownConditions } from '../services/layout-testing.js'
 import {
   diffLayoutVersions,
   getLayoutVersion,
@@ -140,7 +141,7 @@ const CLONE_CARRIED_COLUMNS = [
 // Fetch the DB-ordered layout candidates for a collection (is_active desc,
 // sort asc, id asc — the idiom both role- and record-condition tie-breaking
 // rely on; id makes equal sorts resolve the way the overview names them).
-async function fetchLayoutsForCollection(collection: string) {
+export async function fetchLayoutsForCollection(collection: string) {
   // Record-form resolution only — file/table/detail/addendum layouts must
   // never win the active-layout race for the editing form (an is_active
   // file layout used to hijack the whole record page).
@@ -693,7 +694,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     })
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
 
-    layout.conditions = parseConditions(layout.conditions)
+    layout.conditions = shownConditions(parseConditions(layout.conditions), !!req.isAdmin)
     layout.record_conditions = parseRecordConditions(layout.record_conditions)
     layout.default_values = parseDefaultValues(layout.default_values)
     layout.quick_picker = parseQuickPicker(layout.quick_picker)
@@ -961,7 +962,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       roleAllows(row, req.user?.role ?? null, !!req.isAdmin)
     )
     for (const row of rows) {
-      row.conditions = parseConditions(row.conditions)
+      row.conditions = shownConditions(parseConditions(row.conditions), !!req.isAdmin)
       row.record_conditions = parseRecordConditions(row.record_conditions)
       row.default_values = parseDefaultValues(row.default_values)
       row.quick_picker = parseQuickPicker(row.quick_picker)
@@ -1045,7 +1046,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!row || !roleAllows(row, req.user?.role ?? null, !!req.isAdmin)) {
       return reply.code(404).send({ error: 'Not found' })
     }
-    row.conditions = parseConditions(row.conditions)
+    row.conditions = shownConditions(parseConditions(row.conditions), !!req.isAdmin)
     row.record_conditions = parseRecordConditions(row.record_conditions)
     row.default_values = parseDefaultValues(row.default_values)
     row.quick_picker = parseQuickPicker(row.quick_picker)

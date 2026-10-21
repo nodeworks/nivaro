@@ -187,6 +187,27 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'History lists the saved versions of the layout — one per editing burst, sections included — with who saved and the change\'s name. "What the last save changed" shows the newest difference first; any version can be compared with the layout now. Restore replaces the layout with that version exactly (sections added since are removed) after keeping the current one as a version first. Versions survive a layout delete.'
     },
+    {
+      type: 'h3',
+      id: 'layout-editor-testing',
+      text: 'Test records, new-record walkthrough, form cost'
+    },
+    {
+      type: 'p',
+      text: "Test in the top bar has three tabs. Test records: pin up to 5 records that cover the form's important cases, each as a role or as an administrator. They are stored with the layout (versioned with it, never sent to non-admins). Re-check runs the live resolver, the same one as Test a record, for each one against your draft and shows which form it gets, how many fields it sees and what changed: against the last save while changes wait for Save, otherwise against your previous check."
+    },
+    {
+      type: 'p',
+      text: 'New record acts out creating a record on this form as a role, step by step, and stops where the form would stop them: at Next when the form validates each step, otherwise at Save. A required field blocks when the role may not write it, it is locked or read-only, or its step or section is hidden for the values you pick under "Values they enter". Required fields the form never shows are listed under "Saves without". Nothing is written.'
+    },
+    {
+      type: 'p',
+      text: "Cost estimates how many requests a record page fires when it opens on this form: one per picker, three per inline grid, one per widget, panel, relation-path or remote-options field, plus the page's own reads. It warns above the Form cost limit (Form settings → AI review, previews, version history; default 40). It complements form-ready timing, which is measured after release."
+    },
+    {
+      type: 'p',
+      text: 'Check impact, beside Save while changes wait, runs the same check before you save and lists what changes for the pinned records ("Record 284212 loses the Zone field", "lands on another form") and the form cost against its limit. It only reads.'
+    },
     { type: 'h3', text: 'Inherited layouts' },
     {
       type: 'p',
@@ -255,6 +276,15 @@ POST /api/field-config/:collection/project  { assignments: [...] }   // administ
 GET  /api/collection-layouts/field-access?collection=orders      // administrators
      → { data: { roles: [{ role: { id, name, admin_access }, can_read, can_update,
                            hidden_fields, readonly_fields }] } }   // every role's field permissions
+
+POST /api/collection-layouts/:id/test-records   // administrators; reads only
+     { records: [{ item, role_id? }], draft?: { record_conditions, conditions, is_active, sort, layout_type }, fields?: [...] }
+     → { data: { results: [{ item, role_id, found, role, saved: { layout_id, name, why }, draft: {...},
+                             values: { <field>: value }, access }] } }   // at most 10 records
+
+POST /api/collection-layouts/:id/walkthrough-access   { role_id?, draft? }   // administrators
+     → { data: { role, role_may_open, can_create, create_fields, hidden_fields,
+                 new_record_form: { layout_id, name, why }, column_defaults } }
 
 GET  /api/widgets-internal/:id/placements
      → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`
