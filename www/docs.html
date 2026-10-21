@@ -14003,6 +14003,9 @@ MIGRATION_LOCK_TIMEOUT_MS=60000   # how long a starting instance waits for the l
             <li>On SIGTERM the server stops accepting new connections, lets in-flight requests finish, then exits — rolling deploys never cut requests mid-flight.</li>
           </ul>
           <div class="doc-note">With MIGRATION_SAFE_MODE unset, startup behaves as before (migrate then listen) — appropriate for single-instance deployments.</div>
+          <h3 class="doc-h3">Waiting for the database and Redis</h3>
+          <p class="doc-p">After a host reboot the database and Redis may come back after the API. Before migrating, startup probes both (<code class="doc-code">select 1</code> and a Redis PING) with backoff — 1 s, 2 s, 4 s … up to 15 s between tries — and logs what it is waiting for. If either is still unreachable when the budget runs out, the process exits non-zero so the orchestrator restarts it. Pair it with a restart policy that never gives up (<code class="doc-code">restart: unless-stopped</code> in Compose, <code class="doc-code">restart_policy: condition: any</code> with no <code class="doc-code">max_attempts</code> in Swarm).</p>
+          <pre class="doc-pre"><code>BOOT_DEPS_WAIT_MS=120000   # how long startup waits for the database and Redis (0 = no wait)</code></pre>
           <!-- /SYNC:zero-downtime-migrations -->
         </div>
 

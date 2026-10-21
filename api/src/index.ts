@@ -21,6 +21,11 @@ import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
 import {
+  bootDependencyProbes,
+  bootDepsBudgetMs,
+  waitForDependencies
+} from './services/boot-dependencies.js'
+import {
   bootPhase,
   bootReport,
   markBootPhase,
@@ -32,6 +37,26 @@ import { startDevExtensionWatch } from './services/dev-extension-watch.js'
 import { NIVARO_VERSION } from './version.js'
 
 async function main() {
+  // After a host reboot the database and Redis may come back after this
+  // process: wait for them with backoff rather than crash-looping until the
+  // orchestrator's restart budget runs out (services/boot-dependencies.ts).
+  if (!process.env.CLOUD_META_DB_URL) {
+    const budgetMs = bootDepsBudgetMs()
+    if (budgetMs > 0) {
+      const failing = await bootPhase('Dependencies', async () =>
+        waitForDependencies(await bootDependencyProbes(config.REDIS_URL), {
+          budgetMs,
+          log: (m) => console.log(m)
+        })
+      )
+      if (failing.length > 0) {
+        console.error(`Boot dependencies unreachable after ${budgetMs} ms: ${failing.join(', ')}`)
+        await closeDb().catch(() => {})
+        process.exit(1)
+      }
+    }
+  }
+
   // Hook registrations query the DB immediately at startup — skip in cloud mode.
   // In cloud mode, per-tenant hooks fire per-request via the tenant middleware.
   if (!process.env.CLOUD_META_DB_URL) {
