@@ -8,6 +8,7 @@ import {
   type SelectOptions,
   targetKey
 } from '../design-context'
+import { isTyping } from '../is-typing'
 import type { DescribeField } from '../overview/describe-conditions'
 import type { FindHit } from './find'
 import { buildOutline } from './tree'
@@ -16,17 +17,6 @@ import { useViewPref } from './view-prefs'
 // The editor's way-finding state (#2620 find, #2621 outline, #2622
 // breadcrumb, #2626 shortcut sheet, #2627 compact + expand / collapse all)
 // and the two keys that open it: ⌘F / Ctrl+F and ?.
-
-const isTypingIn = (el: EventTarget | null) => {
-  const t = el as HTMLElement | null
-  if (!t?.closest) return false
-  return (
-    t.isContentEditable ||
-    !!t.closest(
-      'input, textarea, select, [role="textbox"], [contenteditable]:not([contenteditable="false"])'
-    )
-  )
-}
 
 /** Wait for a canvas node to paint (a step or tab switch, a section unfolding). */
 function whenOnCanvas(
@@ -166,7 +156,7 @@ export function useEditorNav({
         setFindSeq((n) => n + 1)
         return
       }
-      if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey && !isTypingIn(target)) {
+      if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey && !isTyping(target)) {
         e.preventDefault()
         setFindOpen(false)
         setShortcutsOpen((o) => !o)
