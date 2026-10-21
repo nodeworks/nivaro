@@ -1,4 +1,4 @@
-import { ChevronLeft, Eye, History, Redo2, Undo2, UserRound, X } from 'lucide-react'
+import { ChevronLeft, Eye, History, Redo2, Save, Undo2, UserRound, X } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
@@ -11,10 +11,11 @@ import type { DescribeField } from './overview/describe-conditions'
 import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overview/overview-api'
 import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
+import { unsavedText } from './UnsavedConfirm'
 import type { LayoutDraft } from './useLayoutDraft'
 
 // The editor's top bar: which layout this is and when it is used, Preview as,
-// Show hidden, History, Undo / Redo and the one save status.
+// Show hidden, History, Undo / Redo, Autosave, the one save status and Save.
 
 export interface PreviewAs {
   record: { id: string; label: string } | null
@@ -29,27 +30,46 @@ const inputCls =
   'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-muted-foreground'
 const labelCls = 'mb-1 block text-[11.5px] font-semibold text-slate-600 dark:text-muted-foreground'
 
-function StatusChip({ draft }: { draft: Pick<LayoutDraft, 'status' | 'error'> }) {
+function StatusChip({
+  draft
+}: {
+  draft: Pick<LayoutDraft, 'status' | 'error'> & Partial<Pick<LayoutDraft, 'unsavedCount'>>
+}) {
   const { status, error } = draft
+  const unsaved = draft.unsavedCount ?? 0
+  const pendingOnly = unsaved > 0 && (status === 'idle' || status === 'saved')
   const text =
     status === 'saving'
       ? 'Saving…'
       : status === 'error'
         ? (error ?? 'Not saved')
         : status === 'conflict'
-          ? 'Reloaded — someone else saved'
-          : 'Saved'
+          ? unsaved > 0
+            ? 'Not saved — someone else saved'
+            : 'Reloaded — someone else saved'
+          : pendingOnly
+            ? unsavedText(unsaved)
+            : 'Saved'
   return (
     <span
       role='status'
       data-save-status={status}
-      data-tip={status === 'error' && error ? error : undefined}
+      data-unsaved={unsaved}
+      data-tip={
+        (status === 'error' || status === 'conflict') && error
+          ? error
+          : pendingOnly
+            ? 'Only you see these changes until you save (⌘S)'
+            : undefined
+      }
       className={cn(
         'inline-flex max-w-[260px] items-center truncate whitespace-nowrap rounded-full px-2 py-px text-[11px] font-semibold',
         status === 'saving' &&
           'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground',
         (status === 'saved' || status === 'idle') &&
+          !pendingOnly &&
           'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+        pendingOnly && 'bg-nvr-cyan/10 text-slate-700 dark:text-foreground',
         status === 'error' && 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
         status === 'conflict' &&
           'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
@@ -57,6 +77,52 @@ function StatusChip({ draft }: { draft: Pick<LayoutDraft, 'status' | 'error'> })
     >
       {text}
     </span>
+  )
+}
+
+/** The top bar's small on/off switches (Show hidden, Autosave). */
+function BarSwitch({
+  icon,
+  label,
+  tip,
+  on,
+  onChange,
+  data
+}: {
+  icon?: ReactNode
+  label: string
+  tip: string
+  on: boolean
+  onChange: (on: boolean) => void
+  data?: Record<string, string>
+}) {
+  return (
+    <label
+      className='inline-flex h-8 cursor-pointer items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'
+      data-tip={tip}
+    >
+      {icon}
+      {label}
+      <button
+        type='button'
+        role='switch'
+        aria-checked={on}
+        aria-label={label}
+        onClick={() => onChange(!on)}
+        {...data}
+        className={cn(
+          'relative h-4 w-7 shrink-0 rounded-full transition-colors',
+          on ? 'bg-nvr-cyan' : 'bg-slate-300 dark:bg-border'
+        )}
+      >
+        <span
+          className={cn(
+            'absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
+            on ? 'translate-x-3.5' : 'translate-x-0.5'
+          )}
+        />
+      </button>
+    </label>
   )
 }
 
@@ -189,18 +255,21 @@ export function EditorTopBar({
   draft: Pick<
     LayoutDraft,
     'status' | 'error' | 'undo' | 'redo' | 'canUndo' | 'canRedo' | 'undoLabel' | 'redoLabel'
-  >
+  > &
+    Partial<Pick<LayoutDraft, 'autosave' | 'setAutosave' | 'unsavedCount' | 'save' | 'discard'>>
   preview: PreviewAs
   onPreview: (v: PreviewAs) => void
   showHidden: boolean
   onShowHidden: (v: boolean) => void
-  onBack: () => void
+  /** Leave; `anchor` is the back button (an unsaved-changes confirm sits beside it). */
+  onBack: (anchor?: HTMLElement) => void
   /** What the back button returns to ("Layouts", or the record in overlay mode). */
   backLabel?: string
   /** Editing tools the host adds after Undo / Redo (view toggle, auto-arrange). */
   tools?: ReactNode
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
+  const unsaved = draft.unsavedCount ?? 0
   const pill = row ? rowPill(row) : null
   const rowList = useMemo(() => (row ? [row] : []), [row])
   const choices = useRuleChoiceLabels(collection, fields, rowList)
@@ -217,7 +286,7 @@ export function EditorTopBar({
     >
       <button
         type='button'
-        onClick={onBack}
+        onClick={(e) => onBack(e.currentTarget)}
         className='inline-flex h-8 items-center gap-0.5 rounded-md pl-1 pr-2 text-[12px] text-slate-500 transition-colors hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
       >
         <ChevronLeft className='h-4 w-4' />
@@ -258,31 +327,13 @@ export function EditorTopBar({
       </div>
       {tools}
       <PreviewAsButton collection={collection} value={preview} onChange={onPreview} />
-      <label
-        className='inline-flex h-8 cursor-pointer items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'
-        data-tip='Show fields and sections the preview would hide, faintly, so you can select them'
-      >
-        <Eye className='h-3.5 w-3.5' />
-        Show hidden
-        <button
-          type='button'
-          role='switch'
-          aria-checked={showHidden}
-          aria-label='Show hidden'
-          onClick={() => onShowHidden(!showHidden)}
-          className={cn(
-            'relative h-4 w-7 shrink-0 rounded-full transition-colors',
-            showHidden ? 'bg-nvr-cyan' : 'bg-slate-300 dark:bg-border'
-          )}
-        >
-          <span
-            className={cn(
-              'absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
-              showHidden ? 'translate-x-3.5' : 'translate-x-0.5'
-            )}
-          />
-        </button>
-      </label>
+      <BarSwitch
+        icon={<Eye className='h-3.5 w-3.5' />}
+        label='Show hidden'
+        tip='Show fields and sections the preview would hide, faintly, so you can select them'
+        on={showHidden}
+        onChange={onShowHidden}
+      />
       <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
         <PopoverTrigger asChild>
           <button type='button' className={btn} aria-label='History'>
@@ -295,11 +346,47 @@ export function EditorTopBar({
           className='max-h-[min(70vh,560px)] w-[400px] overflow-y-auto overscroll-contain p-0'
         >
           {historyOpen && (
-            <HistoryPanel layoutId={layoutId} onRestored={() => setHistoryOpen(false)} />
+            <HistoryPanel
+              layoutId={layoutId}
+              onRestored={() => setHistoryOpen(false)}
+              unsavedCount={unsaved}
+              onDiscardUnsaved={draft.discard}
+            />
           )}
         </PopoverContent>
       </Popover>
+      {draft.setAutosave && (
+        <BarSwitch
+          label='Autosave'
+          tip={
+            draft.autosave
+              ? 'Every change saves as you make it, until you close the editor'
+              : 'Off: changes wait for Save. On: every change saves as you make it, until you close the editor'
+          }
+          on={!!draft.autosave}
+          onChange={draft.setAutosave}
+          data={{ 'data-autosave-switch': '' }}
+        />
+      )}
       <StatusChip draft={draft} />
+      {draft.save && !draft.autosave && (
+        <button
+          type='button'
+          data-editor-save=''
+          disabled={unsaved === 0}
+          onClick={() => void draft.save?.()}
+          data-tip={unsaved > 0 ? `Save ${unsavedText(unsaved)} (⌘S)` : 'Nothing to save'}
+          className={cn(
+            'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12.5px] font-medium transition-opacity disabled:pointer-events-none disabled:opacity-40',
+            unsaved > 0
+              ? 'bg-nvr-cyan text-white hover:opacity-90'
+              : 'border border-slate-200 text-slate-700 dark:border-border dark:text-foreground'
+          )}
+        >
+          <Save className='h-3.5 w-3.5' />
+          Save
+        </button>
+      )}
     </header>
   )
 }

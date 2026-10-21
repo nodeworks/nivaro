@@ -2104,7 +2104,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!isRowId(id)) return reply.code(400).send({ error: 'id must be a number' })
     const body = (req.body ?? {}) as { ops?: unknown; base_rev?: unknown; note?: unknown }
     if (!Array.isArray(body.ops)) return reply.code(400).send({ error: 'ops array required' })
-    if (body.ops.length > 500) return reply.code(400).send({ error: 'At most 500 ops per batch' })
+    // One manual Save carries a whole editing session (#2619); the write is a diff, not per op.
+    if (body.ops.length > 5000) return reply.code(400).send({ error: 'At most 5000 ops per batch' })
     if (typeof body.base_rev !== 'string')
       return reply.code(400).send({ error: 'base_rev required' })
     const result = await runLayoutOps(

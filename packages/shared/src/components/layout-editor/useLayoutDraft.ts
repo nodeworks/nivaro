@@ -18,9 +18,19 @@
  *   (its fields, with their full settings).
  * - A refetch never replaces the draft while anything is pending or typed; a
  *   refetched bundle with a new rev (someone else saved) clears undo/redo.
+ *
+ * Two modes (#2619). Autosave (above) sends every change as it is made.
+ * Manual — the default every time the editor opens — holds changes as unsaved
+ * steps folded into the draft locally; `save()` sends them all as ONE batch
+ * (ops in order, note = their labels). Text folds at once (no pause needed)
+ * and a burst in one box stays one step until blur. Unsaved steps undo by
+ * popping (no request); undoing a saved step adds its inverse as an unsaved
+ * step. A 409 on Save rebases: the unsaved steps are folded onto the fresh
+ * bundle and kept for another Save; when one no longer fits, the draft stays
+ * as it is in 'conflict' until the admin saves again or discards.
  */
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -54,6 +64,20 @@ export interface ApplyOptions {
 
 export interface LayoutDraft {
   bundle: LayoutBundle | null
+  /** Every change saves as it is made. Off (the default each time the editor opens): Save. */
+  autosave: boolean
+  /** Turning autosave on with unsaved changes saves them now. */
+  setAutosave(on: boolean): void
+  /** Changes made since the last Save (manual mode). */
+  unsavedCount: number
+  /** The unsaved changes as one ops list, in order (what Save would send). */
+  unsavedOps(): LayoutOp[]
+  /** Send every unsaved change as one batch; resolves once it landed or failed. */
+  save(): Promise<void>
+  /** Drop the unsaved changes: back to the last bundle the server confirmed. */
+  discard(): void
+  /** unsavedCount > 0 */
+  dirty: boolean
   apply(ops: LayoutOp[], opts?: ApplyOptions): void
   undo(): void
   redo(): void
@@ -112,6 +136,19 @@ export function touchesOverview(ops: LayoutOp[] | null): boolean {
 
 export const TEXT_DEBOUNCE_MS = 600
 export const CONFLICT_MESSAGE = 'Someone else changed this layout — reloaded'
+export const rebasedMessage = (n: number) =>
+  `Someone else saved — your ${n} ${n === 1 ? 'change was' : 'changes were'} kept on top; Save again`
+export const REBASE_FAILED_MESSAGE =
+  'Someone else saved this layout and some of your changes no longer fit'
+const NOTE_MAX = 250
+
+/** The ops note of one Save: the step's label, or "3 changes: a, b, c" (truncated). */
+export function saveNote(labels: string[]): string {
+  if (labels.length === 0) return 'Save'
+  if (labels.length === 1) return labels[0].slice(0, NOTE_MAX)
+  const s = `${labels.length} changes: ${labels.join(', ')}`
+  return s.length > NOTE_MAX ? `${s.slice(0, NOTE_MAX - 1)}…` : s
+}
 const UNDO_LIMIT = 100
 
 // ── Response parsing (the one place that knows the endpoint envelopes) ──────
@@ -322,13 +359,17 @@ export function inverseOps(bundle: LayoutBundle, ops: LayoutOp[]): LayoutOp[] {
 
 // ── Draft engine ────────────────────────────────────────────────────────────
 
-type BatchKind = 'do' | 'undo' | 'redo'
+/** 'save' = one manual Save: its `parts` are the unsaved steps it carries. */
+type BatchKind = 'do' | 'undo' | 'redo' | 'save'
 interface Batch {
   id: number
   kind: BatchKind
   ops: LayoutOp[]
   /** The step's label, sent as the ops `note` (History shows it). */
   note: string
+  parts?: Batch[]
+  /** Manual-mode text step: the (target, setting) keys it edits, while its burst is open. */
+  textKey?: string
 }
 interface Step {
   label: string
@@ -353,7 +394,19 @@ export interface DraftTransport {
   notify(message: string): void
 }
 
-type View = Omit<LayoutDraft, 'apply' | 'undo' | 'redo' | 'flush' | 'whenIdle' | 'isLoading'>
+type View = Omit<
+  LayoutDraft,
+  | 'apply'
+  | 'undo'
+  | 'redo'
+  | 'flush'
+  | 'whenIdle'
+  | 'isLoading'
+  | 'setAutosave'
+  | 'unsavedOps'
+  | 'save'
+  | 'discard'
+>
 
 /** Split a text apply into single-setting update ops keyed by (target, setting). */
 function textEdits(ops: LayoutOp[]): Array<{ key: string; op: LayoutOp }> | null {
@@ -385,18 +438,29 @@ export class LayoutDraftEngine {
   private server: LayoutBundle | null = null
   private draft: LayoutBundle | null = null
   private queue: Batch[] = []
+  /** Manual mode: steps folded into the draft, not sent yet (oldest first). */
+  private unsaved: Batch[] = []
   private inFlight = false
   private text = new Map<string, TextEdit>()
   private undoStack: Step[] = []
   private redoStack: Step[] = []
   private outcome: 'idle' | 'saved' | 'error' | 'conflict' = 'idle'
   private error: string | null = null
+  /** A Save refused as stale whose steps no longer fit: the server's layout now. */
+  private conflictBundle: LayoutBundle | null = null
+  /** Undo / redo as they were when the first unsaved step was made: Discard puts them back. */
+  private checkpoint: { undo: Step[]; redo: Step[] } | null = null
+  private autosave: boolean
   private nextId = 1
   private listeners = new Set<() => void>()
   private idleWaiters: Array<() => void> = []
   private view: View
 
-  constructor(private transport: DraftTransport) {
+  constructor(
+    private transport: DraftTransport,
+    opts: { autosave?: boolean } = {}
+  ) {
+    this.autosave = opts.autosave ?? false
     this.view = this.buildView()
   }
 
@@ -410,13 +474,14 @@ export class LayoutDraftEngine {
   getView = (): View => this.view
 
   /**
-   * A fetched bundle. Ignored while anything is pending, so typing is never
-   * overwritten. Our own saves arrive here with the rev we already hold; a new
-   * rev means someone else saved, and the undo steps (index-based inverses of
-   * the old state) would undo over their change — so the history goes.
+   * A fetched bundle. Ignored while anything is pending or unsaved, so typing
+   * and unsaved steps are never overwritten (Save rebases them on a 409). Our
+   * own saves arrive here with the rev we already hold; a new rev means
+   * someone else saved, and the undo steps (index-based inverses of the old
+   * state) would undo over their change — so the history goes.
    */
   receive(bundle: LayoutBundle) {
-    if (this.pending()) return
+    if (this.isBusy()) return
     if (this.server && this.server.rev === bundle.rev) return
     if (this.server) {
       this.undoStack = []
@@ -431,9 +496,10 @@ export class LayoutDraftEngine {
     if (!this.draft || ops.length === 0) return
     const label = opts?.label ?? 'Edit'
     const edits = opts?.text ? textEdits(ops) : null
-    if (edits) return this.applyText(edits, label)
+    if (edits) return this.autosave ? this.applyText(edits, label) : this.stageText(edits, label)
 
     this.flushText()
+    this.markCheckpoint()
     const pre = this.draft
     let inverse: LayoutOp[]
     try {
@@ -444,7 +510,7 @@ export class LayoutDraftEngine {
       return
     }
     this.clearOutcome()
-    const batch = this.enqueue('do', ops, label)
+    const batch = this.add('do', ops, label)
     if (opts?.undoable !== false) {
       this.pushUndo({ label, forward: ops, inverse, batchId: batch.id })
       this.redoStack = []
@@ -456,8 +522,18 @@ export class LayoutDraftEngine {
   // longer fits the draft is discarded with an error, not retried.
   undo() {
     this.flushText()
+    this.markCheckpoint()
     const step = this.undoStack.pop()
     if (!step || !this.draft) return
+    // Manual mode: the newest unsaved step simply goes (no request, nothing to save).
+    const last = this.unsaved[this.unsaved.length - 1]
+    if (!this.autosave && last && last.id === step.batchId) {
+      this.unsaved.pop()
+      this.clearOutcome()
+      this.redoStack.push(step)
+      this.refresh()
+      return
+    }
     try {
       applyLayoutOps(this.draft, step.inverse)
     } catch (e) {
@@ -465,13 +541,14 @@ export class LayoutDraftEngine {
       return
     }
     this.clearOutcome()
-    step.batchId = this.enqueue('undo', step.inverse, `Undo ${step.label}`).id
+    step.batchId = this.add('undo', step.inverse, `Undo ${step.label}`).id
     this.redoStack.push(step)
     this.refresh()
   }
 
   redo() {
     this.flushText()
+    this.markCheckpoint()
     const step = this.redoStack.pop()
     if (!step || !this.draft) return
     try {
@@ -482,19 +559,92 @@ export class LayoutDraftEngine {
       return
     }
     this.clearOutcome()
-    step.batchId = this.enqueue('redo', step.forward, `Redo ${step.label}`).id
+    step.batchId = this.add('redo', step.forward, `Redo ${step.label}`).id
     this.undoStack.push(step)
     this.refresh()
   }
 
-  /** Send every pending text edit now (blur, unmount, before another op). */
+  /** Send every pending text edit now (blur, unmount, before another op). Manual
+   *  mode: ends the open text burst, so the next keystroke is a new step. */
   flushText() {
+    this.closeText()
     for (const key of [...this.text.keys()]) this.flushTextKey(key)
   }
 
-  /** Anything typed, queued or in flight. */
+  /** Anything typed, queued, in flight or unsaved (an engine worth keeping). */
   isBusy() {
-    return this.pending()
+    return this.pending() || this.unsaved.length > 0
+  }
+
+  setAutosave(on: boolean) {
+    if (on === this.autosave) return
+    this.flushText()
+    this.autosave = on
+    if (on && this.unsaved.length > 0) void this.save()
+    else this.emit()
+  }
+
+  unsavedOps(): LayoutOp[] {
+    return this.unsaved.flatMap((b) => b.ops)
+  }
+
+  /**
+   * Every unsaved step as one batch against the current rev. Resolves once
+   * nothing is in flight (saved, failed or rebased alike) — `unsavedOps()` is
+   * empty afterwards only when it landed.
+   */
+  save(): Promise<void> {
+    this.flushText()
+    if (this.unsaved.length > 0) {
+      const parts = this.unsaved
+      this.unsaved = []
+      // Changes made while this Save is out checkpoint afresh; a refused Save
+      // gives its steps back and Discard then rolls them back one by one.
+      this.checkpoint = null
+      // A Save still waiting behind another takes the new steps too.
+      const waiting =
+        this.queue.length > (this.inFlight ? 1 : 0) ? this.queue[this.queue.length - 1] : undefined
+      if (waiting?.kind === 'save') {
+        const all = [...(waiting.parts ?? []), ...parts]
+        waiting.parts = all
+        waiting.ops = all.flatMap((b) => b.ops)
+        waiting.note = saveNote(all.map((b) => b.note))
+      } else
+        this.queue.push({
+          id: this.nextId++,
+          kind: 'save',
+          ops: parts.flatMap((b) => b.ops),
+          note: saveNote(parts.map((b) => b.note)),
+          parts
+        })
+      this.conflictBundle = null
+      this.clearOutcome()
+      this.refresh()
+    }
+    return this.whenIdle(60_000)
+  }
+
+  /** Drop the unsaved steps: the draft, Undo and Redo go back to the last save. */
+  discard() {
+    this.closeText()
+    if (this.unsaved.length === 0 && !this.conflictBundle) return
+    if (this.checkpoint) {
+      this.undoStack = this.checkpoint.undo
+      this.redoStack = this.checkpoint.redo
+      this.checkpoint = null
+    } else for (const batch of [...this.unsaved].reverse()) this.rollback(batch)
+    this.unsaved = []
+    if (this.conflictBundle) {
+      // "Reload": the server's layout as it is now; the old history no longer fits it.
+      this.server = this.conflictBundle
+      this.conflictBundle = null
+      this.undoStack = []
+      this.redoStack = []
+      this.transport.saved(this.server, null)
+    }
+    this.outcome = 'idle'
+    this.error = null
+    this.refresh()
   }
 
   whenIdle(timeoutMs = 15_000): Promise<void> {
@@ -540,6 +690,52 @@ export class LayoutDraftEngine {
     this.refresh()
   }
 
+  /**
+   * Manual-mode typing folds at once. Keystrokes in the same box(es) replace
+   * the open step's ops, so a burst is one unsaved change and one undo step,
+   * back to the value before its first keystroke.
+   */
+  private stageText(edits: Array<{ key: string; op: LayoutOp }>, label: string) {
+    const draft = this.draft as LayoutBundle
+    const ops = edits.map((e) => e.op)
+    this.markCheckpoint()
+    const textKey = edits.map((e) => e.key).join('\u0001')
+    try {
+      applyLayoutOps(draft, ops)
+    } catch (e) {
+      this.fail(messageOf(e))
+      return
+    }
+    this.clearOutcome()
+    const last = this.unsaved[this.unsaved.length - 1]
+    const top = this.undoStack[this.undoStack.length - 1]
+    if (last?.textKey === textKey && top?.batchId === last.id) {
+      last.ops = ops
+      top.forward = ops
+    } else {
+      this.closeText()
+      const batch = this.add('do', ops, label)
+      batch.textKey = textKey
+      this.pushUndo({ label, forward: ops, inverse: inverseOps(draft, ops), batchId: batch.id })
+    }
+    this.redoStack = []
+    this.refresh()
+  }
+
+  /** Before the first unsaved step changes Undo / Redo: remember them for Discard. */
+  private markCheckpoint() {
+    if (this.autosave || this.unsaved.length > 0) return
+    this.checkpoint = {
+      undo: this.undoStack.map((s) => ({ ...s })),
+      redo: this.redoStack.map((s) => ({ ...s }))
+    }
+  }
+
+  private closeText() {
+    const last = this.unsaved[this.unsaved.length - 1]
+    if (last?.textKey) last.textKey = undefined
+  }
+
   private flushTextKey(key: string) {
     const edit = this.text.get(key)
     if (!edit) return
@@ -555,8 +751,16 @@ export class LayoutDraftEngine {
     this.refresh()
   }
 
+  /** A step: sent now (autosave) or held as unsaved (manual). */
+  private add(kind: BatchKind, ops: LayoutOp[], note: string): Batch {
+    if (this.autosave) return this.enqueue(kind, ops, note)
+    const batch: Batch = { id: this.nextId++, kind, ops, note }
+    this.unsaved.push(batch)
+    return batch
+  }
+
   private enqueue(kind: BatchKind, ops: LayoutOp[], note: string): Batch {
-    const batch = { id: this.nextId++, kind, ops, note }
+    const batch: Batch = { id: this.nextId++, kind, ops, note }
     this.queue.push(batch)
     return batch
   }
@@ -583,6 +787,10 @@ export class LayoutDraftEngine {
 
   /** A batch the server refused: forget its step (or hand an undo/redo back). */
   private rollback(batch: Batch) {
+    if (batch.kind === 'save') {
+      for (const part of [...(batch.parts ?? [])].reverse()) this.rollback(part)
+      return
+    }
     const take = (stack: Step[]) => {
       const i = stack.findIndex((s) => s.batchId === batch.id)
       return i < 0 ? null : stack.splice(i, 1)[0]
@@ -612,7 +820,53 @@ export class LayoutDraftEngine {
     this.transport.notify(CONFLICT_MESSAGE)
   }
 
-  /** Draft = server bundle + queued batches + typed text; then send the next batch. */
+  /**
+   * A Save refused as stale: fold every step it (and anything queued after it)
+   * carried onto the server's layout. All fit → they stay unsaved on top of it,
+   * with fresh inverses; undo of already-saved steps goes (it was relative to
+   * the old state). One does not fit → the draft stays as it was, in
+   * 'conflict', until Save again or Discard (which takes the server's layout).
+   */
+  private rebase(fresh: LayoutBundle | null) {
+    const steps = [
+      ...this.queue.flatMap((b) => (b.kind === 'save' ? (b.parts ?? []) : [b])),
+      ...this.unsaved
+    ]
+    this.queue = []
+    this.unsaved = steps
+    this.checkpoint = null
+    this.closeText()
+    if (!fresh) {
+      this.transport.reload()
+      this.outcome = 'conflict'
+      this.error = REBASE_FAILED_MESSAGE
+      return
+    }
+    const inverses = new Map<number, LayoutOp[]>()
+    let b = fresh
+    try {
+      for (const s of steps) {
+        inverses.set(s.id, inverseOps(b, s.ops))
+        b = applyLayoutOps(b, s.ops)
+      }
+    } catch (e) {
+      this.conflictBundle = fresh
+      this.outcome = 'conflict'
+      this.error = `${REBASE_FAILED_MESSAGE} (${humanizeOpError(messageOf(e))})`
+      return
+    }
+    this.server = fresh
+    this.conflictBundle = null
+    this.transport.saved(fresh, null)
+    this.undoStack = this.undoStack.filter((s) => inverses.has(s.batchId))
+    for (const s of this.undoStack) s.inverse = inverses.get(s.batchId) ?? s.inverse
+    this.redoStack = []
+    this.outcome = 'idle'
+    this.error = null
+    this.transport.notify(rebasedMessage(steps.length))
+  }
+
+  /** Draft = server bundle + queued batches + unsaved steps + typed text; then send the next batch. */
   private refresh() {
     this.recompute()
     this.pump()
@@ -622,23 +876,31 @@ export class LayoutDraftEngine {
   private recompute() {
     if (!this.server) return
     let b = this.server
-    const kept: Batch[] = []
-    for (const [i, batch] of this.queue.entries()) {
-      try {
-        b = applyLayoutOps(b, batch.ops)
-        kept.push(batch)
-      } catch (e) {
-        // In flight: the server decides. Queued: it no longer fits what was saved.
-        if (i === 0 && this.inFlight) kept.push(batch)
-        else {
-          this.rollback(batch)
-          // A server refusal said first stays the message shown.
-          this.error ??= messageOf(e)
-          this.outcome = 'error'
+    const fold = (batches: Batch[], inFlightFirst: boolean) => {
+      const kept: Batch[] = []
+      const restored: Batch[] = []
+      for (const [i, batch] of batches.entries()) {
+        try {
+          b = applyLayoutOps(b, batch.ops)
+          kept.push(batch)
+        } catch (e) {
+          // In flight: the server decides. Queued: it no longer fits what was saved.
+          if (i === 0 && inFlightFirst) kept.push(batch)
+          else if (batch.kind === 'save') restored.push(...(batch.parts ?? []))
+          else {
+            this.rollback(batch)
+            // A server refusal said first stays the message shown.
+            this.error ??= messageOf(e)
+            this.outcome = 'error'
+          }
         }
       }
+      return { kept, restored }
     }
-    this.queue = kept
+    const q = fold(this.queue, this.inFlight)
+    this.queue = q.kept
+    // A queued Save that no longer fits goes back to unsaved, step by step.
+    this.unsaved = fold([...q.restored, ...this.unsaved], false).kept
     for (const [key, t] of this.text) {
       try {
         b = applyLayoutOps(b, [t.op])
@@ -664,8 +926,15 @@ export class LayoutDraftEngine {
       })
       .catch((err) => {
         const failure = parseSaveFailure(err)
-        if (failure.status === 409) this.conflict(failure.bundle)
-        else {
+        if (failure.status === 409 && batch.kind === 'save') this.rebase(failure.bundle)
+        else if (failure.status === 409) this.conflict(failure.bundle)
+        else if (batch.kind === 'save') {
+          // A refused Save keeps every change it carried, unsaved, to fix or discard.
+          this.queue.shift()
+          this.unsaved = [...(batch.parts ?? []), ...this.unsaved]
+          this.error = failure.message
+          this.outcome = 'error'
+        } else {
           this.queue.shift()
           this.rollback(batch)
           this.error = failure.message
@@ -683,6 +952,9 @@ export class LayoutDraftEngine {
     const lastText = [...this.text.values()].pop()
     return {
       bundle: this.draft,
+      autosave: this.autosave,
+      unsavedCount: this.unsaved.length,
+      dirty: this.unsaved.length > 0,
       canUndo: this.undoStack.length > 0 || this.text.size > 0,
       canRedo: this.redoStack.length > 0,
       undoLabel: lastText?.label ?? top?.label ?? null,
@@ -712,6 +984,8 @@ export interface LayoutDraftOptions {
    * batches it left in flight, so callers can refresh what reads the layout.
    */
   onSaved?: (bundle: LayoutBundle, ops: LayoutOp[] | null) => void
+  /** Start with autosave on (default off). Kept across layout switches until unmount. */
+  autosave?: boolean
 }
 
 interface Live {
@@ -721,17 +995,19 @@ interface Live {
 }
 
 /**
- * Engines with unsent or in-flight work, per query cache and layout. A layout
- * opened again (A → B → A) while its last save is still going reuses that
- * engine instead of starting a second one from the pre-save cache, whose next
- * batch would carry a stale rev and come back as a false conflict.
+ * Engines with unsent, unsaved or in-flight work, per query cache and layout.
+ * A layout opened again (A → B → A) while its last save is still going reuses
+ * that engine instead of starting a second one from the pre-save cache, whose
+ * next batch would carry a stale rev and come back as a false conflict. An
+ * editor closed with unsaved changes (a route change no prompt could stop)
+ * finds them again when the layout reopens.
  */
 const engines = new WeakMap<
   QueryClient,
   Map<number, { engine: LayoutDraftEngine; live: { current: Live } }>
 >()
 
-function engineFor(layoutId: number, current: Live) {
+function engineFor(layoutId: number, current: Live, autosave: boolean) {
   let byId = engines.get(current.qc)
   if (!byId) {
     byId = new Map()
@@ -741,26 +1017,29 @@ function engineFor(layoutId: number, current: Live) {
   if (existing?.engine.isBusy()) return existing
   const key = layoutDraftKeys.bundle(layoutId)
   const live = { current }
-  const engine = new LayoutDraftEngine({
-    send: async (ops, baseRev, note) => {
-      const res = await live.current.client.request<unknown>(
-        post(`/collection-layouts/${layoutId}/ops`, { ops, base_rev: baseRev, note })
-      )
-      const bundle = parseBundle(res)
-      if (!bundle) throw new Error('The server answered without the saved layout')
-      return bundle
+  const engine = new LayoutDraftEngine(
+    {
+      send: async (ops, baseRev, note) => {
+        const res = await live.current.client.request<unknown>(
+          post(`/collection-layouts/${layoutId}/ops`, { ops, base_rev: baseRev, note })
+        )
+        const bundle = parseBundle(res)
+        if (!bundle) throw new Error('The server answered without the saved layout')
+        return bundle
+      },
+      saved: (bundle, ops) => {
+        live.current.qc.setQueryData(key, bundle)
+        live.current.onSaved?.(bundle, ops)
+      },
+      reload: () => {
+        void live.current.qc.invalidateQueries({ queryKey: key })
+      },
+      notify: (message) => {
+        toast.warning(message)
+      }
     },
-    saved: (bundle, ops) => {
-      live.current.qc.setQueryData(key, bundle)
-      live.current.onSaved?.(bundle, ops)
-    },
-    reload: () => {
-      void live.current.qc.invalidateQueries({ queryKey: key })
-    },
-    notify: (message) => {
-      toast.warning(message)
-    }
-  })
+    { autosave }
+  )
   const entry = { engine, live }
   byId.set(layoutId, entry)
   return entry
@@ -791,6 +1070,8 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
   const client = useNivaroClient()
   const qc = useQueryClient()
   const query = useLayoutBundle(layoutId)
+  // Autosave is per editing session: it survives a layout switch, not a remount.
+  const [autosaveOn, setAutosaveOn] = useState(opts.autosave ?? false)
 
   const engineRef = useRef<{
     id: number
@@ -799,7 +1080,11 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
     live: { current: Live }
   } | null>(null)
   if (!engineRef.current || engineRef.current.id !== layoutId || engineRef.current.qc !== qc) {
-    engineRef.current = { id: layoutId, qc, ...engineFor(layoutId, { client, qc, ...opts }) }
+    engineRef.current = {
+      id: layoutId,
+      qc,
+      ...engineFor(layoutId, { client, qc, onSaved: opts.onSaved }, autosaveOn)
+    }
   }
   // Latest client/cache/callback for the engine's transport, without rebuilding the engine.
   engineRef.current.live.current = { client, qc, onSaved: opts.onSaved }
@@ -810,6 +1095,11 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
   useEffect(() => {
     if (query.data) engine.receive(query.data)
   }, [engine, query.data])
+
+  // A reused engine (reopened layout) takes this session's mode.
+  useEffect(() => {
+    engine.setAutosave(autosaveOn)
+  }, [engine, autosaveOn])
 
   // Typed text still waiting for its pause goes out when the editor closes or
   // switches layout (useSyncExternalStore drops the old engine's listener).
@@ -823,6 +1113,16 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
   const redo = useCallback(() => engine.redo(), [engine])
   const flush = useCallback(() => engine.flushText(), [engine])
   const whenIdle = useCallback((timeoutMs?: number) => engine.whenIdle(timeoutMs), [engine])
+  const setAutosave = useCallback(
+    (on: boolean) => {
+      setAutosaveOn(on)
+      engine.setAutosave(on)
+    },
+    [engine]
+  )
+  const unsavedOps = useCallback(() => engine.unsavedOps(), [engine])
+  const save = useCallback(() => engine.save(), [engine])
+  const discard = useCallback(() => engine.discard(), [engine])
 
   // A bundle that never loaded is an error, not an empty idle editor.
   const loadFailed = !view.bundle && query.error != null
@@ -837,6 +1137,10 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
     redo,
     flush,
     whenIdle,
+    setAutosave,
+    unsavedOps,
+    save,
+    discard,
     isLoading: query.isLoading
   }
 }

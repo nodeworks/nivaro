@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, LayoutGrid, Plus, Table2 } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import {
@@ -43,6 +44,7 @@ import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { PlacementsTable } from './PlacementsTable'
 import { useRolePreview } from './settings/settings-api'
+import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import {
   type LayoutDraft,
   layoutDraftKeys,
@@ -57,6 +59,8 @@ import {
  * the right, and a top bar with Preview as, Show hidden, History, Undo / Redo
  * and the save status. One editor for every host: the Layouts tab (`page`)
  * and a record page's Edit layout mode (`overlay`, over the whole page).
+ * Changes wait for Save unless the top bar's Autosave is on (#2619); leaving
+ * with unsaved changes asks first (Save / Discard / Keep editing).
  */
 export interface LayoutEditorProps {
   collection: string
@@ -77,6 +81,8 @@ export interface LayoutEditorProps {
    *  the editor is declared in (its scroll/pointer lock would make a body
    *  portal dead), else document.body. */
   portalContainer?: HTMLElement | null
+  /** Unsaved changes appeared / went — for hosts that guard their own navigation. */
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 export const isTyping = (el: EventTarget | null) => {
@@ -90,12 +96,19 @@ export const isTyping = (el: EventTarget | null) => {
   )
 }
 
-/** ⌘Z / ⇧⌘Z / Ctrl+Y (Ctrl elsewhere) — never while typing, where the field's own undo wins. */
+/** ⌘Z / ⇧⌘Z / Ctrl+Y (Ctrl elsewhere) — never while typing, where the field's own undo wins.
+ *  ⌘S / Ctrl+S saves, typing or not (typed text is already in the draft). */
 function useUndoKeys(draft: LayoutDraft) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return
       const k = e.key.toLowerCase()
+      if (k === 's' && !e.shiftKey) {
+        e.preventDefault()
+        if (draft.autosave) draft.flush()
+        else void draft.save()
+        return
+      }
       const redo = (k === 'z' && e.shiftKey) || (k === 'y' && !e.shiftKey)
       if (k !== 'z' && !redo) return
       if (isTyping(e.target)) return
@@ -105,7 +118,7 @@ function useUndoKeys(draft: LayoutDraft) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [draft.undo, draft.redo])
+  }, [draft.undo, draft.redo, draft.autosave, draft.flush, draft.save])
 }
 
 /**
@@ -146,9 +159,9 @@ function useAltArrowKeys(
   }, [bundle, selection, apply, dragging, onMoved])
 }
 
-/** Unsent typing or a batch still in flight: warn before the tab closes, send what can be sent. */
+/** Unsent typing, a batch in flight or unsaved changes: warn before the tab closes, send what can be sent. */
 function useLeaveGuard(draft: LayoutDraft) {
-  const busy = draft.status === 'saving'
+  const busy = draft.status === 'saving' || draft.dirty
   useEffect(() => {
     if (!busy) return
     const onBefore = (e: BeforeUnloadEvent) => {
@@ -199,6 +212,47 @@ function usePreviewRecord(collection: string, id: string | null) {
     enabled: id != null,
     staleTime: 30_000
   })
+}
+
+/**
+ * In-app links clicked while there are unsaved changes (a sidebar item, a
+ * breadcrumb): held, and `ask` decides; `go` follows the link after all. Works
+ * in every host without a data router (admin's BrowserRouter has no
+ * useBlocker): React Router's Link skips a click whose default was prevented.
+ */
+function useLinkGuard(dirty: boolean, ask: (go: () => void, anchor: HTMLElement) => void) {
+  const askRef = useRef(ask)
+  askRef.current = ask
+  useEffect(() => {
+    if (!dirty) return
+    let passing = false
+    const onClick = (e: MouseEvent) => {
+      if (passing || e.defaultPrevented || e.button !== 0) return
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null
+      if (!a || (a.target && a.target !== '_self') || a.hasAttribute('download')) return
+      let url: URL
+      try {
+        url = new URL(a.href, window.location.href)
+      } catch {
+        return
+      }
+      if (url.origin !== window.location.origin) return
+      if (url.pathname + url.search === window.location.pathname + window.location.search) return
+      e.preventDefault()
+      e.stopPropagation()
+      askRef.current(() => {
+        passing = true
+        try {
+          a.click()
+        } finally {
+          passing = false
+        }
+      }, a)
+    }
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
+  }, [dirty])
 }
 
 /** Is `t` still on the layout (or supplied by its parent)? Undo, redo and other
@@ -324,7 +378,7 @@ function EditingBanner({
   row: OverviewRow | undefined
   rows: OverviewRow[]
   fields: DescribeField[]
-  onDone: () => void
+  onDone: (anchor?: HTMLElement) => void
 }) {
   const choices = useRuleChoiceLabels(collection, fields, rows)
   const { data: count } = useApproxRecordCount(collection, row, rows)
@@ -351,7 +405,7 @@ function EditingBanner({
       </p>
       <button
         type='button'
-        onClick={onDone}
+        onClick={(e) => onDone(e.currentTarget)}
         className='inline-flex h-7 shrink-0 items-center rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90'
       >
         Done
@@ -412,7 +466,8 @@ export function LayoutEditor({
   mode,
   onLayoutChange,
   previewRecordId = null,
-  portalContainer
+  portalContainer,
+  onDirtyChange
 }: LayoutEditorProps) {
   const host = useLayoutEditorHost()
   const [currentId, setCurrentId] = useState(layoutId)
@@ -444,14 +499,53 @@ export function LayoutEditor({
   useUndoKeys(draft)
   useLeaveGuard(draft)
 
+  // Unsaved changes: anything that leaves asks first, beside what asked.
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const [leaveAsk, setLeaveAsk] = useState<LeaveRequest | null>(null)
+  const dirtyRef = useRef(draft.dirty)
+  dirtyRef.current = draft.dirty
+  const guard = useCallback((what: string, go: () => void, anchor?: HTMLElement | null) => {
+    if (!dirtyRef.current) return go()
+    const fallback =
+      bodyRef.current?.querySelector<HTMLElement>('[data-editor-save]') ??
+      bodyRef.current?.querySelector<HTMLElement>('[data-editor-topbar]') ??
+      null
+    setLeaveAsk({ what, go, anchor: anchor ?? fallback })
+  }, [])
+  const confirmSave = useCallback(async () => {
+    await draft.save()
+    return draft.unsavedOps().length === 0
+  }, [draft.save, draft.unsavedOps])
+  useLinkGuard(draft.dirty, (go, anchor) => guard('leave this page', go, anchor))
+  useEffect(() => {
+    onDirtyChange?.(draft.dirty)
+  }, [draft.dirty, onDirtyChange])
+  // Closed by something no confirm could stop (a route change): the changes stay
+  // with this layout's draft and come back when it is opened again.
+  // Read live: Discard and the close it allows land in one render.
+  const unsavedOpsRef = useRef(draft.unsavedOps)
+  unsavedOpsRef.current = draft.unsavedOps
+  useEffect(
+    () => () => {
+      if (unsavedOpsRef.current().length > 0)
+        toast.warning('Unsaved layout changes kept — open the layout again to save or discard them')
+    },
+    []
+  )
+
   // Leaving sends typed text now; once the queue drains, the layouts lists
   // refresh for real (saves while editing only marked most of them stale).
   const invalidateLayouts = useInvalidateLayouts(collection)
-  const leave = useCallback(() => {
+  const leaveNow = useCallback(() => {
     const saved = draft.whenIdle()
     void saved.then(() => invalidateLayouts())
     onBack(saved)
   }, [draft.whenIdle, invalidateLayouts, onBack])
+  const leave = useCallback(
+    (anchor?: HTMLElement | null) =>
+      guard(mode === 'overlay' ? 'go back to the record' : 'leave this layout', leaveNow, anchor),
+    [guard, leaveNow, mode]
+  )
 
   // Undo, redo or another writer removed what was selected: it is not any more.
   useEffect(() => {
@@ -467,7 +561,7 @@ export function LayoutEditor({
   const onDragActive = useCallback((on: boolean) => {
     dragging.current = on
   }, [])
-  const dialogRef = useOverlayDialog(overlay && marker != null, leave, dragging)
+  const dialogRef = useOverlayDialog(overlay && marker != null, () => leave(), dragging)
 
   const onSelect = useCallback((t: DesignTarget, opts?: SelectOptions) => {
     setSelection((cur) => nextSelection(cur, t, opts))
@@ -485,10 +579,20 @@ export function LayoutEditor({
   const openLayout = (id: number) => {
     setPanel('inspector')
     if (id === currentId) return
-    draft.flush()
-    setSelection([])
-    setCurrentId(id)
-    onLayoutChange?.(id)
+    // The rail row (or inspector link) that asked has focus; the confirm sits beside it.
+    const active = document.activeElement
+    const anchor =
+      active instanceof HTMLElement && bodyRef.current?.contains(active) ? active : null
+    guard(
+      'open another layout',
+      () => {
+        draft.flush()
+        setSelection([])
+        setCurrentId(id)
+        onLayoutChange?.(id)
+      },
+      anchor
+    )
   }
 
   const layoutName = String(bundle?.layout.name ?? row?.name ?? '')
@@ -509,7 +613,10 @@ export function LayoutEditor({
     : {}
   const body: ReactNode = (
     <div
-      ref={overlay ? dialogRef : undefined}
+      ref={(el) => {
+        bodyRef.current = el
+        if (overlay) dialogRef.current = el
+      }}
       data-layout-editor=''
       data-mode={mode}
       {...dialogProps}
@@ -550,6 +657,27 @@ export function LayoutEditor({
           fields={fields}
           onDone={leave}
         />
+      )}
+      {draft.status === 'conflict' && draft.dirty && (
+        <div
+          role='alert'
+          data-unsaved-conflict=''
+          className='flex shrink-0 items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-[12.5px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+        >
+          <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
+          <p className='m-0 min-w-0 flex-1'>
+            {draft.error ?? 'Someone else saved this layout'}. Save again to try once more, or
+            reload their version.
+          </p>
+          <button
+            type='button'
+            data-unsaved-reload=''
+            onClick={draft.discard}
+            className='inline-flex h-7 shrink-0 items-center rounded-md border border-amber-300 px-2.5 text-[12px] font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15'
+          >
+            Reload (discard my {unsavedText(draft.unsavedCount)})
+          </button>
+        </div>
       )}
       {warning && (
         <div
@@ -682,6 +810,13 @@ export function LayoutEditor({
           </aside>
         </div>
       </LayoutDndProvider>
+      <UnsavedConfirm
+        request={leaveAsk}
+        count={draft.unsavedCount}
+        onSave={confirmSave}
+        onDiscard={draft.discard}
+        onKeep={() => setLeaveAsk(null)}
+      />
     </div>
   )
 
