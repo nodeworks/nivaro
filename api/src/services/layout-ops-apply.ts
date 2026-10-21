@@ -532,6 +532,7 @@ function applyOne(d: Draft, op: LayoutOp, i: number): void {
     const g = d.groups.find((x) => x.key === groupKey)
     if (!g || g.key === UNGROUPED_KEY) fail(`No group "${groupKey}"`)
     if ((g as GroupRow).type === 'container') fail('Fields go in the tabs of a container')
+    if ((g as GroupRow).type === 'content') fail('A text block holds text, not fields')
   }
   // A parent must be a container, and only tabs sit in one.
   const checkParent = (parentKey: string | null, childType: string) => {
@@ -610,6 +611,13 @@ function applyOne(d: Draft, op: LayoutOp, i: number): void {
         if (g.parent_key !== null && patch.type !== 'tab') fail('Only tabs go inside a container')
         if (g.type === 'container' && d.groups.some((x) => x.parent_key === g.key))
           fail('Move the tabs out of this container first')
+        // A container shows only its tabs and a text block only its text: fields left in
+        // either would stay saved but show nowhere.
+        if (
+          (patch.type === 'container' || patch.type === 'content') &&
+          zoneMembers(d, g.key).length
+        )
+          fail('Move the fields out of this section first')
       }
       Object.assign(g, patch)
       return

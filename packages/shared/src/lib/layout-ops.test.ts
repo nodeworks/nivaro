@@ -42,3 +42,32 @@ describe('applyLayoutOps (golden fixtures)', () => {
     })
   }
 })
+
+describe('applyLayoutOps — kind changes never strand fields', () => {
+  const base = cases.find((c) => c.name.startsWith('error: a section cannot'))
+    ?.before as LayoutBundle
+  const messageOf = (ops: LayoutOp[]) => {
+    try {
+      applyLayoutOps(base, ops)
+    } catch (e) {
+      return (e as Error).message
+    }
+    return null
+  }
+
+  it('says why a section with fields cannot become a container or a text block', () => {
+    for (const type of ['container', 'content'])
+      expect(messageOf([{ op: 'group_update', key: 'main', patch: { type } }])).toBe(
+        'Move the fields out of this section first'
+      )
+  })
+
+  it('says why a field cannot go into a text block', () => {
+    expect(
+      messageOf([
+        { op: 'group_update', key: 'empty', patch: { type: 'content' } },
+        { op: 'place', field: 'g', group_key: 'empty', index: 0 }
+      ])
+    ).toBe('A text block holds text, not fields')
+  })
+})
