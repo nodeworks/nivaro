@@ -7,6 +7,7 @@ import { Input } from '../../ui/input'
 import { Label } from '../../ui/label'
 import { tintCard } from '../panel-style'
 import { useEditorApi } from './editor-api'
+import { editorQueryKeys } from './editor-queries'
 import type { RowRuleItem } from './row-rule-row'
 
 /**
@@ -169,7 +170,7 @@ export function RowRuleTester({
     ms: number
   } | null>(null)
   const { data: rels = [] } = useQuery<CMSRelation[]>({
-    queryKey: ['relations-for', childCollection],
+    queryKey: editorQueryKeys.relationsFor(childCollection),
     queryFn: () =>
       api.get(`/data-model/relations/for/${childCollection}`).then((r) => r.data.data ?? r.data)
   })

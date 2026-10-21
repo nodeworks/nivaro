@@ -7,6 +7,7 @@ import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '.
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { tintCard } from '../panel-style'
 import { useEditorApi } from './editor-api'
+import { editorQueryKeys } from './editor-queries'
 
 export type RowRuleSource = {
   source_type: 'relation_field' | 'o2m_first' | 'o2m_filtered' | 'parent_m2o'
@@ -348,7 +349,7 @@ export function PrecedenceSourceRow({
     : null
 
   const { data: intermediateRelsRaw } = useQuery({
-    queryKey: ['relations-for-intermediate', intermediateCollection],
+    queryKey: editorQueryKeys.relationsFor(intermediateCollection),
     queryFn: () =>
       api
         .get<{
@@ -968,7 +969,7 @@ export function RowRuleRow({
 
   // Fetch relations on the related collection so we can detect 2nd-level M2O hops
   const { data: relCollRelations } = useQuery({
-    queryKey: ['relations-for', relatedCollection],
+    queryKey: editorQueryKeys.relationsFor(relatedCollection),
     queryFn: () =>
       api
         .get<{

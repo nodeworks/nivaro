@@ -1066,6 +1066,19 @@ describe('Inspector', () => {
     expect(host.querySelector('[data-inspector-tab]')).not.toBeNull()
   })
 
+  it('moved editors read fields under their own key, whatever shape other screens cached', async () => {
+    // Queues keeps the response BODY under ['field-config', c]; TableEditor the array.
+    const seed = (qc: QueryClient) => {
+      qc.setQueryData(['field-config', 'vendors'], { data: [{ field: 'name' }] })
+      qc.setQueryData(['field-config', 'order_lines'], [{ field: 'amount' }])
+    }
+    const { qc } = await mount(field('vendor'), { seed })
+    await settle()
+    expect(host.querySelector('[data-setting="field.inline_display.separator"]')).not.toBeNull()
+    expect(qc.getQueryData(['field-config', 'vendors'])).toEqual({ data: [{ field: 'name' }] })
+    expect(qc.getQueryData(['layout-editor', 'field-list', 'vendors'])).toEqual(expect.any(Array))
+  })
+
   describe('cascade filters edited on the Picker and Advanced tabs', () => {
     const pickerClear = () =>
       host.querySelector(
