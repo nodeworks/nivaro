@@ -6,6 +6,7 @@ import { type HuddleRedis, huddlePeers, huddleRoomKind } from '../services/huddl
 import {
   getHuddleSettings,
   iceServersFor,
+  iceServersFrom,
   maskHuddleSettings,
   saveHuddleSettings
 } from '../services/huddle-settings.js'
@@ -18,6 +19,8 @@ import { currentTenantKey } from '../services/tenant-rooms.js'
  *   GET  /presence?room= who is in the room's huddle (canSeeRoom-gated, like every room read)
  *   GET  /settings       admin: this instance's STUN/TURN settings, secrets masked
  *   PATCH /settings      admin: save; a masked secret re-submitted keeps the stored value
+ *   GET  /settings/test-ice  admin: the SAVED servers with a two-minute TURN credential, for
+ *                        the Settings → Huddles connection test (works while huddles are off)
  */
 export async function chatHuddleRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
@@ -40,6 +43,12 @@ export async function chatHuddleRoutes(app: FastifyInstance) {
 
   app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => {
     return reply.send({ data: maskHuddleSettings(await getHuddleSettings()) })
+  })
+
+  app.get('/settings/test-ice', { preHandler: requireAdmin }, async (req, reply) => {
+    const saved = await getHuddleSettings()
+    const iceServers = iceServersFrom({ ...saved, turn_ttl_s: 120 }, String(req.user!.id))
+    return reply.send({ data: { iceServers } })
   })
 
   app.patch('/settings', { preHandler: requireAdmin }, async (req, reply) => {

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CircleAlert, CircleCheck, CircleDashed, Loader2 } from 'lucide-react'
 import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -8,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
+import { type IceProbeResult, type IceServerDto, probeIce } from '@/lib/ice-probe'
 
 /**
  * Settings → Huddles (#2457): whether huddles run, and the STUN/TURN servers
@@ -103,6 +105,18 @@ export function HuddleSettingsSection() {
     },
     onError: (e: { response?: { data?: { error?: string } } }) =>
       toast.error(e.response?.data?.error ?? 'Could not save huddle settings')
+  })
+
+  const test = useMutation({
+    mutationFn: async (): Promise<IceProbeResult & { stun: boolean; turn: boolean }> => {
+      const r = await api.get<{ data: { iceServers: IceServerDto[] } }>(
+        '/chat/huddle/settings/test-ice'
+      )
+      const servers = r.data.data.iceServers
+      const stun = servers.some((x) => x.urls.some((u) => u.startsWith('stun')))
+      const turn = servers.some((x) => x.urls.some((u) => u.startsWith('turn')))
+      return { ...(await probeIce(servers)), stun, turn }
+    }
   })
 
   const hasTurn = !!form?.turn.trim()
@@ -286,9 +300,105 @@ export function HuddleSettingsSection() {
                 Discard changes
               </Button>
             </div>
+
+            <div className='space-y-2 rounded-lg border border-slate-200 px-4 py-3 dark:border-border'>
+              <div className='flex flex-wrap items-center justify-between gap-3'>
+                <div>
+                  <p className='text-[13px] font-medium text-slate-900 dark:text-foreground'>
+                    Test the connection
+                  </p>
+                  <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                    Asks the saved servers for a relay from this browser. Nobody is called.
+                  </p>
+                </div>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  onClick={() => test.mutate()}
+                  disabled={dirty || test.isPending}
+                  data-tip={
+                    dirty ? 'Save your changes first — the test uses the saved servers' : undefined
+                  }
+                >
+                  {test.isPending && <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' />}
+                  {test.isPending ? 'Testing…' : 'Test connection'}
+                </Button>
+              </div>
+              {test.isError && (
+                <ProbeLine tone='bad'>
+                  The test could not start. Reload the page and try again.
+                </ProbeLine>
+              )}
+              {test.data && <ProbeOutcome r={test.data} />}
+            </div>
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function ProbeLine({
+  tone,
+  children
+}: {
+  tone: 'good' | 'warn' | 'bad' | 'none'
+  children: React.ReactNode
+}) {
+  const Icon = tone === 'good' ? CircleCheck : tone === 'none' ? CircleDashed : CircleAlert
+  return (
+    <p
+      className={
+        tone === 'good'
+          ? 'flex items-start gap-1.5 text-[12px] text-emerald-700 dark:text-emerald-300'
+          : tone === 'warn'
+            ? 'flex items-start gap-1.5 text-[12px] text-amber-700 dark:text-amber-300'
+            : tone === 'bad'
+              ? 'flex items-start gap-1.5 text-[12px] text-red-700 dark:text-red-300'
+              : 'flex items-start gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'
+      }
+      role='status'
+      data-huddle-probe={tone}
+    >
+      <Icon className='mt-px h-3.5 w-3.5 shrink-0' strokeWidth={2} />
+      <span>{children}</span>
+    </p>
+  )
+}
+
+function ProbeOutcome({ r }: { r: IceProbeResult & { stun: boolean; turn: boolean } }) {
+  if (r.error) return <ProbeLine tone='bad'>{r.error}</ProbeLine>
+  if (!r.stun && !r.turn)
+    return (
+      <ProbeLine tone='none'>
+        No servers are saved, so only people on the same network can reach each other.
+      </ProbeLine>
+    )
+  return (
+    <div className='space-y-1'>
+      {r.turn &&
+        (r.relay ? (
+          <ProbeLine tone='good'>
+            The relay works: the TURN server accepted the credential and gave this browser{' '}
+            <span className='font-mono'>{r.relay}</span> ({r.ms} ms).
+          </ProbeLine>
+        ) : (
+          <ProbeLine tone='bad'>
+            No relay came back. Check the TURN address, that the shared secret matches
+            turnserver.conf, and that UDP 3478 and the relay ports (49152–49252) are open from this
+            network.
+          </ProbeLine>
+        ))}
+      {r.stun &&
+        (r.srflx ? (
+          <ProbeLine tone='good'>
+            STUN answered: this browser is seen as <span className='font-mono'>{r.srflx}</span>.
+          </ProbeLine>
+        ) : (
+          <ProbeLine tone={r.relay ? 'warn' : 'bad'}>
+            STUN did not answer. Check the STUN address and UDP 3478.
+          </ProbeLine>
+        ))}
     </div>
   )
 }
