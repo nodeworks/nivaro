@@ -338,6 +338,9 @@ const E2eRecorderPage = lazy(() => import('@/pages/E2eRecorder'))
 const TelemetryPage = lazy(() =>
   import('@/pages/Telemetry').then((m) => ({ default: m.TelemetryPage }))
 )
+const InfrastructurePage = lazy(() =>
+  import('@/pages/Infrastructure').then((m) => ({ default: m.InfrastructurePage }))
+)
 const HealthDashboardPage = lazy(() =>
   import('@/pages/HealthDashboard').then((m) => ({ default: m.HealthDashboardPage }))
 )
@@ -697,6 +700,7 @@ export default function App() {
                   <Route path='search-analytics' element={<SearchAnalyticsPage />} />
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='telemetry' element={<TelemetryPage />} />
+                  <Route path='infrastructure' element={<InfrastructurePage />} />
                   <Route path='db-health' element={<DbHealthPage />} />
                   <Route path='ops-console' element={<OpsConsolePage />} />
                   <Route path='ops-tasks' element={<OpsTasks />} />

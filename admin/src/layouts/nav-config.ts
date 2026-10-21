@@ -20,6 +20,7 @@ import {
   ClipboardList,
   Clock,
   Code2,
+  Container,
   Contrast,
   Database,
   DatabaseZap,
@@ -578,6 +579,13 @@ export const navCategories: NavCategory[] = [
         to: '/telemetry',
         section: 'Health',
         keywords: 'grafana traces logs metrics uptime alerts backups monitoring'
+      },
+      {
+        icon: Container,
+        label: 'Infrastructure',
+        to: '/infrastructure',
+        section: 'Health',
+        keywords: 'docker swarm stacks containers services volumes images traefik hosts reboot'
       },
       { icon: Radio, label: 'Realtime', to: '/realtime', section: 'Health', keywords: 'sockets' },
       {

@@ -123,6 +123,7 @@ import { importsRoutes } from './imports.js'
 import { inactiveUserLinkRoutes } from './inactive-user-links.js'
 import { inboundMappingsRoutes, inboundRoutes } from './inbound-mappings.js'
 import { indexAdvisorRoutes } from './index-advisor.js'
+import { infrastructureRoutes } from './infrastructure.js'
 import { integrationContractRoutes } from './integration-contracts.js'
 import { integrationEventsRoutes } from './integration-events.js'
 import { integrationHealthRoutes } from './integration-health.js'
@@ -652,6 +653,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(remindersRoutes, { prefix: '/reminders' })
   await app.register(opsDbRoutes, { prefix: '/ops-db' })
   await app.register(telemetryRoutes, { prefix: '/telemetry' })
+  await app.register(infrastructureRoutes, { prefix: '/infrastructure' })
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })
   await app.register(opsLogsRoutes, { prefix: '/ops-logs' })
   await app.register(opsAssistantRoutes, { prefix: '/ops-assistant' })
