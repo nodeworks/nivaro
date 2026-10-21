@@ -66,6 +66,7 @@ import { clearMetadataCache } from '../services/collections.js'
 import { loadLayoutBundle } from '../services/layout-ops.js'
 import { meaningPass, registerLayoutAssistRoutes } from './ai-design-assist.js'
 import { aiDesignFormRoutes } from './ai-design-forms.js'
+import { registerLayoutChatRoutes } from './ai-design-layouts.js'
 import { aiDesignRuleRoutes } from './ai-design-rules.js'
 
 /**
@@ -101,6 +102,9 @@ export async function aiDesignRoutes(app: FastifyInstance) {
 
   // AI form building (#2668-#2672): compose, slim version, sections by meaning.
   await app.register(aiDesignFormRoutes)
+
+  // Layout facts, proposals, ask, find a setting, explain a diff (#2694 #2695 #2676 #2693).
+  registerLayoutChatRoutes(app)
 
   // ── Layout review (#1920) + apply (#1964) ──────────────────────────────────
 

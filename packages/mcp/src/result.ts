@@ -23,7 +23,9 @@ const DETAIL_KEYS = [
   'remaining',
   'fields_changed',
   'reasons',
-  'allow_free_text'
+  'allow_free_text',
+  'dropped',
+  'op_index'
 ] as const
 
 export interface ToolFailure {

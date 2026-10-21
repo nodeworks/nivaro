@@ -20,6 +20,7 @@ import { registerAccountTools } from './tools/account.js'
 import { registerAdminTools } from './tools/admin.js'
 import { registerCollectionTools } from './tools/collections.js'
 import { registerItemTools } from './tools/items.js'
+import { registerLayoutTools } from './tools/layouts.js'
 import { registerLookupTools } from './tools/lookup.js'
 import { registerPipelineTools } from './tools/pipeline.js'
 import { registerRecordTools } from './tools/record.js'
@@ -38,7 +39,8 @@ export interface NivaroMcpOptions {
   /** Custom fetch (tests, proxies). */
   fetch?: typeof fetch
   /**
-   * Also register the read-only admin/ops tools (ADMIN_TOOL_NAMES). Default false. Pass
+   * Also register the read-only admin/ops tools (ADMIN_TOOL_NAMES) and the layout tools
+   * (LAYOUT_TOOL_NAMES). Default false. Pass
    * true only for an administrator's key — the API refuses them to anyone else anyway.
    */
   adminTools?: boolean
@@ -95,6 +97,18 @@ export const ADMIN_TOOL_NAMES = [
   'cpu_profile'
 ] as const
 
+/**
+ * Layout tools (#2694), registered with the admin tools: three reads and
+ * propose_layout_ops, which stores a proposal an administrator reviews in the
+ * layout editor — it never changes a layout.
+ */
+export const LAYOUT_TOOL_NAMES = [
+  'describe_layout',
+  'which_form',
+  'explain_field',
+  'propose_layout_ops'
+] as const
+
 /** The SDK client the server uses: the key as bearer, every call tagged as MCP traffic. */
 export function createNivaroMcpClient(options: {
   url: string
@@ -149,7 +163,10 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   registerWorkTools(server, client)
   registerRecordTools(server, client)
   registerLookupTools(server, client)
-  if (options.adminTools === true) registerAdminTools(server, client)
+  if (options.adminTools === true) {
+    registerAdminTools(server, client)
+    registerLayoutTools(server, client)
+  }
   registerResources(server, client)
 
   return { server, client }
@@ -167,5 +184,6 @@ export { describeFailure, maskToken } from './result.js'
 export { registerAdminTools, summarizeTraffic } from './tools/admin.js'
 export type { CollectionSchema, CollectionSummary, FieldSummary } from './tools/collections.js'
 export { summarizeCollection, summarizeSchema } from './tools/collections.js'
+export { registerLayoutTools } from './tools/layouts.js'
 export type { PipelineStateView } from './tools/pipeline.js'
 export { buildPipelineView } from './tools/pipeline.js'

@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import type { LayoutBundle } from '../../lib/layout-ops'
+import { ExplainDiffButton } from './assist/ExplainDiff'
 import { fetchVersionBundle, useVersionNaming } from './history-api'
 import { SessionHistory } from './SessionHistory'
 import { layoutDraftKeys, parseSaveFailure, type SessionSteps } from './useLayoutDraft'
@@ -283,6 +284,15 @@ export function HistoryPanel({
           </div>
           {diffLoading && <p className='mt-1 text-slate-500'>Comparing…</p>}
           {diff && <DiffBody diff={diff} />}
+          {/* Why it differs, in words (#2693): the same diff plus the History notes between. */}
+          {diff && diff.total > 0 && diffId != null && (
+            <ExplainDiffButton
+              key={String(diffId)}
+              className='mt-2'
+              a={{ layout_id: layoutId, version: diffId }}
+              b={{ layout_id: layoutId, version: 'current' }}
+            />
+          )}
         </div>
       )}
       {restore.isError && (

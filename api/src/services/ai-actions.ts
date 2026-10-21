@@ -384,6 +384,12 @@ export async function executeProposal(
   if (row.user !== user.id) {
     throw Object.assign(new Error('Only the proposer can approve this'), { statusCode: 403 })
   }
+  if (row.action_type === 'layout_ops') {
+    // A layout proposal (#2694) is applied in the layout editor, through its draft.
+    throw Object.assign(new Error('This is a layout proposal — review it in the layout editor'), {
+      statusCode: 400
+    })
+  }
   if (row.action_type === 'plan') {
     // A plan runs step by step through its own routes (services/ai-plans.ts).
     throw Object.assign(new Error('This is a plan — run it from its plan card'), {

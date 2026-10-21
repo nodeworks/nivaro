@@ -422,6 +422,25 @@ export const layoutEditor: DocSection = {
       type: 'note',
       text: 'The AI gets field names, labels, descriptions and the form layout. It never gets record values. An uploaded file is read once and never stored. The lighter version reads only which fields were changed, never the values. If the AI rebuild leaves a step or section still holding fields, it is kept and named.'
     },
+    { type: 'h3', id: 'layout-editor-ask', text: 'Ask about this form' },
+    {
+      type: 'p',
+      text: 'Ask in the top bar opens a panel on the right for questions such as "Why can\'t Finance see Zone on record 284212?" or "Which form does record 284212 get?". The AI answers with the same engines the editor shows: which form a record gets for a role (Test a record), the role\'s field permissions, where the field sits, the section rules (hidden or read-only for roles, shows when) and the checks. It reads your unsaved draft, changes nothing, and never sees record values: a section rule comes back as matched or not. Each answer lists the fields, records and forms it looked at; click one to select the field, preview the record or open the form. Administrators only; it needs AI to be set up.'
+    },
+    { type: 'h3', id: 'layout-editor-find-setting', text: 'Find a setting by asking' },
+    {
+      type: 'p',
+      text: 'Ask "Where do I turn off comments?" in the Ask panel and it lists the matching controls, each with where it lives (Form settings section or inspector tab) and a Show me button. Show me opens that panel, selects a field or section the control applies to when it is an inspector control, switches to its tab and highlights the control. The words of the question are matched first; only when they do not place it does the AI pick from the same list. Without AI the closest word matches are shown. In Form settings, a search typed as a question, or one nothing matches, offers Look everywhere, which asks the same way.'
+    },
+    { type: 'h3', id: 'layout-editor-proposals', text: 'Proposals from assistants' },
+    {
+      type: 'p',
+      text: 'A connected assistant (Claude or ChatGPT over the MCP connector, or Claude Code) can propose changes to a form with the propose_layout_ops tool. A proposal never changes the form: Proposals in the top bar shows how many wait, who proposed each one and through which app, the note, and every change in plain words. Try on canvas applies it to your draft as one undo step (nothing is saved until Save, unless Autosave is on); Keep marks it applied, Take back undoes it, and Reject closes it. A proposal that no longer fits the form says why and cannot be tried.'
+    },
+    {
+      type: 'p',
+      text: 'Explain in words, under a comparison, says what the differences mean for the people filling the form, using the History notes of the saves in between (administrators, with AI set up). The exact differences and the notes stay one click away, and without AI they are what you get. Compare two forms and Merge two forms use the same explanation for two different layouts.'
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
@@ -854,7 +873,22 @@ GET  /api/layout-inspect/:collection/translations
 POST /api/layout-inspect/picker-preview
      { collection: <target>, steps: [{ key, label, filter }], fields?, sort? }
      → { data: { total, steps: [{ key, label, count, applies }], excluded, offered,
-                 picker_filter, with_picker_filter, rows } }`
+                 picker_filter, with_picker_filter, rows } }
+
+// Layout AI helpers (administrators; nothing here writes a layout)
+GET  /api/ai-design/layouts/:id/describe              // the form in plain terms
+GET  /api/ai-design/layouts/which-form?collection=orders&item=284212&role=Finance
+GET  /api/ai-design/layouts/explain-field?collection=orders&field=zone&role=Finance&item=284212
+     → { data: { verdict: 'shown' | 'shown read-only' | 'hidden' | 'not on the form' | 'cannot open the record',
+                 reasons: [...], layout: { id, name } } }
+POST /api/ai-design/layouts/:id/proposals { ops, note }   // store a proposal (201), never applied
+     400 { error, dropped, op_index }                     // unknown names are dropped and listed
+GET  /api/ai-design/layouts/:id/proposals[?status=all]
+POST /api/ai-design/layouts/:id/proposals/:pid/resolve { outcome: 'applied' | 'rejected' }
+POST /api/ai-design/layouts/:id/ask { question, history?, draft? }  → { data: { answer, cites } }
+POST /api/ai-design/layouts/find-setting { question, candidates: [{ key, label, where }] }
+POST /api/ai-design/layouts/explain-diff { a: { layout_id, version? }, b: { layout_id, version? }, ai? }
+     → { data: { sentences, notes, summary, points } }   // version: id | 'newest'; none = now`
     },
     {
       type: 'table',

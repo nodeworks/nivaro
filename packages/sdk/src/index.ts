@@ -49,6 +49,7 @@ export * from './commands/files.js'
 export * from './commands/help-videos.js'
 export * from './commands/import-templates.js'
 export * from './commands/infra.js'
+export * from './commands/layout-ai.js'
 export * from './commands/layout-editor.js'
 export * from './commands/ops.js'
 export * from './commands/queues.js'
@@ -626,7 +627,16 @@ export function aggregateItems(
   if (query.filter) params.filter = JSON.stringify(query.filter)
   if (query.search) params.search = query.search
   if (query.countAll) params.countAll = 1
-  for (const key of ['groupBy', 'count', 'countDistinct', 'sum', 'avg', 'min', 'max', 'sort'] as const) {
+  for (const key of [
+    'groupBy',
+    'count',
+    'countDistinct',
+    'sum',
+    'avg',
+    'min',
+    'max',
+    'sort'
+  ] as const) {
     const list = query[key]
     if (list?.length) params[key] = list.join(',')
   }
@@ -1843,7 +1853,11 @@ export interface NivaroClient {
     operationName?: string
   ): Promise<T>
   upload(file: File, opts?: { folder?: string; title?: string }): Promise<FileUploadResult>
-  importParse(templateId: string, file: File | Blob, fileName?: string): Promise<ImportParseResponse>
+  importParse(
+    templateId: string,
+    file: File | Blob,
+    fileName?: string
+  ): Promise<ImportParseResponse>
   fileUrl(fileId: string): string
   setToken(token: string | null): void
   getToken(): string | undefined
