@@ -128,12 +128,11 @@ import { useDraftRooms } from './chat-drafts'
 import { EmojiButton, EmojiGlyph, useCustomEmoji } from './chat-emoji'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
 import { offHoursNote } from './chat-local-time'
-import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
 import { HuddleControls } from './huddle/HuddleControls'
 import { HuddleStage } from './huddle/HuddleStage'
 import { useHuddle } from './huddle/useHuddle'
+import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
 import { PollCard } from './PollCard'
-import { ClipPlayer, clipInfo } from './ScreenClip'
 import {
   ChannelIntro,
   JumpToDate,
@@ -143,6 +142,7 @@ import {
   ThreadPane,
   WelcomeNote
 } from './RoomParts'
+import { ClipPlayer, clipInfo } from './ScreenClip'
 
 /**
  * Nivaro chat UI — a complete team panel (Online tab, grouped rooms, live
