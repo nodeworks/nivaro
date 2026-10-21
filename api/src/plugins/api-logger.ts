@@ -214,6 +214,10 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
           .where('created_at', '<', cutoff)
           .delete()
           .catch(() => {})
+        // Search log (#1581) is personal data — its own, shorter retention.
+        await import('../services/search-analytics.js')
+          .then((m) => m.pruneSearchLog())
+          .catch(() => {})
         // Outbound call log + flight recorder (#626): counter rows 31 days
         // (per-API SLOs), recorded bodies 24 hours, side traffic by kind.
         await import('../services/outbound-recorder.js')

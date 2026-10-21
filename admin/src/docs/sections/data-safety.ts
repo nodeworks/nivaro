@@ -400,7 +400,8 @@ componentDidCatch(error, info) {
         'Only field names (the data-field a form row carries) are indexed, never what was typed: inputs are masked before they leave the browser, and the index never reads values or page text.',
         'Selectors are built from stable hooks only (data-testid, data-field, data-cbv-* and fixed ids), so the same element matches across recordings.',
         'Indexing runs after the upload has been answered and never slows it down. Recordings uploaded before the index existed are not searchable.',
-        'Index rows are deleted with their recording, by retention or by Delete.'
+        'Index rows are deleted with their recording, by retention or by Delete.',
+        'What went wrong: the Search tab also takes a page and an outcome — a failed request (4xx), a server error (5xx) or an error reported by the browser — within the last day, 7 or 30 days. Each failing request in the API log (or client error report) is matched to the person’s recording that was running at that moment, and the recording opens five seconds before the first failure (`GET /api/session-recordings/search?outcome=4xx|5xx|client_error&route=&days=`). Request bodies are never shown; a hit lists the method, path and status.'
       ]
     },
     {

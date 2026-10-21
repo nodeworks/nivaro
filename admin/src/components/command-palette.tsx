@@ -1,7 +1,7 @@
 import { openAskPanel } from '@nivaro/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowRight, CornerDownLeft, FileText, History, Plus, Search, Sparkles } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import {
@@ -173,14 +173,22 @@ export function CommandPalette() {
     }
   }, [open])
 
+  // #1581 — search analytics: what was typed, how many results, how long, what was opened.
+  const searchMsRef = useRef(0)
+  const searchLogRef = useRef<{ key: string; id: Promise<number | null> } | null>(null)
   const { data: searchData, isFetching } = useQuery({
     queryKey: ['global-search', debouncedQuery],
-    queryFn: () =>
-      api
+    queryFn: () => {
+      const started = Date.now()
+      return api
         .get<{ data: GlobalSearchResponse }>('/global-search', {
           params: { q: debouncedQuery }
         })
-        .then((r) => r.data.data),
+        .then((r) => {
+          searchMsRef.current = Date.now() - started
+          return r.data.data
+        })
+    },
     enabled: open && debouncedQuery.length >= 2,
     staleTime: 15_000
   })
@@ -243,7 +251,50 @@ export function CommandPalette() {
     if (open) setRecents(readRecents())
   }, [open])
 
+  // One log row per settled query per open; the row remembers what was picked.
+  useEffect(() => {
+    if (!open || isFetching || !searchData || debouncedQuery.length < 2) return
+    const key = debouncedQuery
+    if (searchLogRef.current?.key === key) return
+    const count =
+      (searchData.records?.length ?? 0) +
+      (searchData.actions?.length ?? 0) +
+      (debouncedQuery.length >= 4 ? (searchData.semantic?.length ?? 0) : 0) +
+      allPages.filter((p) => matchesQuery(p, debouncedQuery)).length
+    searchLogRef.current = {
+      key,
+      id: api
+        .post<{ data: { id: number | null } }>('/search-analytics/log', {
+          surface: 'palette',
+          query: debouncedQuery,
+          result_count: count,
+          duration_ms: searchMsRef.current
+        })
+        .then((r) => r.data.data.id)
+        .catch(() => null)
+    }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: allPages is derived from stable inputs
+  }, [open, isFetching, searchData, debouncedQuery])
+  useEffect(() => {
+    if (!open) searchLogRef.current = null
+  }, [open])
+
   function go(path: string, label?: string) {
+    const logged = searchLogRef.current
+    if (logged && q.length >= 2) {
+      const rec = /^\/collections\/([^/?#]+)\/([^/?#]+)$/.exec(path)
+      void logged.id
+        .then((id) =>
+          id == null
+            ? null
+            : api.post(`/search-analytics/log/${id}/open`, {
+                type: rec && rec[2] !== 'new' ? 'record' : 'page',
+                collection: rec?.[1] ?? null,
+                item: rec && rec[2] !== 'new' ? rec[2] : null
+              })
+        )
+        .catch(() => {})
+    }
     if (label) pushRecent({ label, path })
     setOpen(false)
     navigate(path)

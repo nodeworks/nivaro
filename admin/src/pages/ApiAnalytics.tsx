@@ -8,7 +8,7 @@ import {
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { BarChart2 } from 'lucide-react'
 import React, { Fragment, useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ExplainButton } from '@/components/explain-button'
 import { SlowTracesPanel } from '@/components/slow-traces'
@@ -448,6 +448,9 @@ export function ApiAnalyticsPage() {
         <div className='mt-6'>
           <RumPanel />
         </div>
+        <div className='mt-6'>
+          <DeadClickPanel />
+        </div>
         <div className='mt-6 scroll-mt-4' ref={requestsRef} id='api-request-log'>
           <NivaroProvider client={sharedClient}>
             <ApiRequestLog
@@ -821,6 +824,124 @@ function RumPanel() {
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  )
+}
+
+/** Worst dead-click and rage-click elements per route (#1314): where people click and nothing
+ *  happens, with a replay link where a recording covers the latest click. Counts only. */
+function DeadClickPanel() {
+  const [days, setDays] = useState(7)
+  const { data, isLoading } = useQuery({
+    queryKey: ['rum-dead-clicks', days],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            routes: Array<{
+              route: string
+              total: number
+              elements: Array<{
+                element: string
+                dead: number
+                rage: number
+                total: number
+                people: number
+                last_at: string
+                replay: { recording: string; t: number } | null
+              }>
+            }>
+          }
+        }>('/rum/dead-clicks', { params: { days } })
+        .then((r) => r.data.data)
+  })
+  const routes = data?.routes ?? []
+  return (
+    <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <div className='flex items-center justify-between'>
+        <div>
+          <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+            Dead and rage clicks
+          </p>
+          <p className='mt-0.5 text-[11.5px] text-slate-500'>
+            Buttons and links people click repeatedly with nothing happening, worst first per page.
+          </p>
+        </div>
+        <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+          {[1, 7, 14].map((d) => (
+            <button
+              key={d}
+              type='button'
+              onClick={() => setDays(d)}
+              className={
+                days === d
+                  ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
+                  : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-500'
+              }
+            >
+              {d}d
+            </button>
+          ))}
+        </span>
+      </div>
+      {isLoading ? (
+        <p className='mt-3 text-[12px] text-slate-400'>Loading…</p>
+      ) : routes.length === 0 ? (
+        <p className='mt-3 text-[12px] text-slate-400'>
+          No dead or rage clicks in this window. They are reported when someone clicks the same
+          control three times in a few seconds without any response.
+        </p>
+      ) : (
+        <div className='mt-3 space-y-3' data-dead-clicks>
+          {routes.map((r) => (
+            <div key={r.route}>
+              <p className='flex items-baseline justify-between gap-3 text-[12px]'>
+                <span className='truncate font-mono text-[11.5px] font-medium text-slate-800 dark:text-foreground'>
+                  {r.route}
+                </span>
+                <span className='shrink-0 tabular-nums text-slate-500'>{r.total} bursts</span>
+              </p>
+              <table className='mt-1 w-full text-[12px] tabular-nums'>
+                <tbody>
+                  {r.elements.map((e) => (
+                    <tr key={e.element} className='border-t border-slate-100 dark:border-border'>
+                      <td className='max-w-[360px] truncate py-1 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-slate-200'>
+                        {e.element}
+                      </td>
+                      <td className='py-1 pr-3 text-right text-slate-600 dark:text-slate-300'>
+                        {e.dead} dead
+                      </td>
+                      <td className='py-1 pr-3 text-right text-slate-600 dark:text-slate-300'>
+                        {e.rage} rage
+                      </td>
+                      <td className='py-1 pr-3 text-right text-slate-500'>
+                        {e.people} {e.people === 1 ? 'person' : 'people'}
+                      </td>
+                      <td className='py-1 text-right'>
+                        {e.replay ? (
+                          <Link
+                            to={`/session-replays?recording=${e.replay.recording}&t=${e.replay.t}`}
+                            className='text-[11.5px] font-medium text-nvr-cyan hover:underline'
+                          >
+                            Watch
+                          </Link>
+                        ) : (
+                          <span
+                            className='text-[11px] text-slate-400'
+                            data-tip='No recording covers the latest click'
+                          >
+                            No replay
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   )

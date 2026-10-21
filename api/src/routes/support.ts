@@ -5,6 +5,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { readOne } from '../services/items.js'
 import { cleanAppLabel } from '../services/page-at.js'
+import { DEFAULT_TARGETS, loadSupportAnalytics } from '../services/support-analytics.js'
 import {
   canSeeTicket,
   canWorkDesk,
@@ -420,6 +421,32 @@ export async function supportRoutes(app: FastifyInstance) {
       )
     }
     return reply.send({ data: { mine_open: mine, desk, unassigned, assigned_to_me: assigned } })
+  })
+
+  // GET /analytics?days=&first_response_hours=&resolution_hours= (#1424) — the desk's numbers.
+  //   Administrators see every team; a team member sees the tickets routed to their teams.
+  app.get<{
+    Querystring: { days?: string; first_response_hours?: string; resolution_hours?: string }
+  }>('/analytics', async (req, reply) => {
+    const viewer = viewerOf(req)
+    if (!(await canWorkDesk(viewer))) return reply.code(403).send({ error: 'Forbidden' })
+    const days = Math.min(365, Math.max(1, Math.trunc(Number(req.query.days)) || 30))
+    const target = (v: string | undefined, d: number) => {
+      const n = Number(v)
+      return Number.isFinite(n) && n > 0 && n <= 24 * 90 ? n : d
+    }
+    const data = await loadSupportAnalytics({
+      days,
+      teamIds: viewer.isAdmin ? null : await teamIdsOf(viewer.id),
+      targets: {
+        first_response_hours: target(
+          req.query.first_response_hours,
+          DEFAULT_TARGETS.first_response_hours
+        ),
+        resolution_hours: target(req.query.resolution_hours, DEFAULT_TARGETS.resolution_hours)
+      }
+    })
+    return reply.send({ data })
   })
 
   // GET /tickets?scope=mine|desk&status=open|closed|all|<status>&category=&assignee=me|unassigned&q=&page=&limit=

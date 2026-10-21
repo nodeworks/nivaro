@@ -8,12 +8,38 @@ export interface ReplaySearchParams {
   item: string
   field: string
   selector: string
+  /** #1315 — a failed-request filter: '' | '4xx' | '5xx' | 'client_error'. */
+  outcome: string
+  /** Route pattern the recording visited ('/collections/orders/:id'). */
+  route: string
+  /** Look-back days for an outcome search. */
+  days: string
 }
 
-export const SEARCH_PARAM_KEYS = ['collection', 'item', 'field', 'selector'] as const
+export const SEARCH_PARAM_KEYS = [
+  'collection',
+  'item',
+  'field',
+  'selector',
+  'outcome',
+  'route',
+  'days'
+] as const
+
+export const OUTCOME_OPTIONS = [
+  { value: '', label: 'Any outcome' },
+  { value: '4xx', label: 'Request failed (4xx)' },
+  { value: '5xx', label: 'Server error (5xx)' },
+  { value: 'client_error', label: 'Error in the browser' }
+]
+export const OUTCOME_DAYS = [
+  { value: '1', label: 'Last day' },
+  { value: '7', label: 'Last 7 days' },
+  { value: '30', label: 'Last 30 days' }
+]
 
 export interface ReplayMatch {
-  kind: 'route' | 'record' | 'field' | 'selector'
+  kind: 'route' | 'record' | 'field' | 'selector' | 'outcome'
   key: string
   first_ms: number
   last_ms: number
@@ -43,14 +69,17 @@ export function readSearchParams(p: URLSearchParams): ReplaySearchParams {
     collection: p.get('collection')?.trim() ?? '',
     item: p.get('item')?.trim() ?? '',
     field: p.get('field')?.trim() ?? '',
-    selector: p.get('selector')?.trim() ?? ''
+    selector: p.get('selector')?.trim() ?? '',
+    outcome: p.get('outcome')?.trim() ?? '',
+    route: p.get('route')?.trim() ?? '',
+    days: p.get('days')?.trim() ?? ''
   }
 }
 
 /** True when the URL asks for the Search tab (a ?tab=search or any search key). */
 export function wantsSearchTab(p: URLSearchParams): boolean {
   if (p.get('tab') === 'search') return true
-  return SEARCH_PARAM_KEYS.some((k) => !!p.get(k)?.trim())
+  return SEARCH_PARAM_KEYS.some((k) => k !== 'days' && !!p.get(k)?.trim())
 }
 
 /**
@@ -59,9 +88,12 @@ export function wantsSearchTab(p: URLSearchParams): boolean {
  */
 export function searchQueryString(q: ReplaySearchParams): string {
   if (q.item && !q.collection) return ''
-  if (!q.collection && !q.field && !q.selector) return ''
+  if (!q.collection && !q.field && !q.selector && !q.outcome && !q.route) return ''
   const out = new URLSearchParams()
-  for (const k of SEARCH_PARAM_KEYS) if (q[k]) out.set(k, q[k])
+  for (const k of SEARCH_PARAM_KEYS) {
+    // The look-back only means something to an outcome search.
+    if (q[k] && (k !== 'days' || q.outcome)) out.set(k, q[k])
+  }
   return out.toString()
 }
 
@@ -84,6 +116,8 @@ export function matchLabel(m: ReplayMatch): string {
       return `In field ${m.key}`
     case 'selector':
       return `Touched ${m.key}`
+    case 'outcome':
+      return m.key
     default:
       return `Visited ${m.key}`
   }

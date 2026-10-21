@@ -105,6 +105,19 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
     {
       type: 'p',
       text: 'Global search is built into AppLayout header and available on every admin page. No SDK method needed — it is UI-only and uses the same backend search as collection browser keyword filtering.'
+    },
+    { type: 'h2', id: 'global-search-analytics', text: 'Search analytics' },
+    {
+      type: 'p',
+      text: 'Administrators can see what people search for under Usage → Search Analytics (`/search-analytics`). Searches typed into Cmd+K and into a collection list’s search box are logged with the query text, how many results came back, how long it took and, when the person opens one, whether it was a record or a page (the collection and id, never the record’s content). The page lists the top searches, searches that found nothing, searches where results appeared but nothing was opened, and slow searches, with a link beside each empty search to try it in the list, check which fields the list searches, or ask the assistant where the thing lives.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Search text is personal data: only administrators can read it, and rows are deleted after 60 days (`SEARCH_LOG_RETENTION_DAYS`, 1–3650). The search results themselves are never stored.',
+        'Stored in `nivaro_search_log` (migration 485). `GET /api/search-analytics/summary?days=` (admin); signed-in clients log with `POST /api/search-analytics/log` and add the opened result with `POST /api/search-analytics/log/:id/open` (only the person who ran the search can).',
+        'Searches under two characters are not logged. The same words searched in two different collections are listed separately, since each has its own fix.'
+      ]
     }
   ]
 }

@@ -14,11 +14,14 @@ import { PlayAll } from '@/components/replay-player/PlayAll'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { formatDate, formatFileSize } from '@/lib/utils'
 import {
   collectionsFromRecordKeys,
   matchLabel,
+  OUTCOME_DAYS,
+  OUTCOME_OPTIONS,
   type ReplayHit,
   type ReplaySearchParams,
   readSearchParams,
@@ -151,13 +154,47 @@ export function ReplaySearchTab() {
             className='mt-1 h-8 w-64 font-mono text-[12px]'
           />
         </label>
+        <label htmlFor='replay-search-route' className='text-[11.5px] text-slate-500'>
+          Page
+          <Input
+            id='replay-search-route'
+            value={draft.route}
+            onChange={set('route')}
+            placeholder='/collections/orders/:id'
+            className='mt-1 h-8 w-56 font-mono text-[12px]'
+          />
+        </label>
+        <div className='text-[11.5px] text-slate-500'>
+          <span id='replay-search-outcome-label'>What went wrong</span>
+          <SimpleSelect
+            value={draft.outcome}
+            onChange={(v) => setDraft((d) => ({ ...d, outcome: v }))}
+            options={OUTCOME_OPTIONS}
+            ariaLabel='What went wrong'
+            className='mt-1 h-8 w-48 text-[12.5px]'
+          />
+        </div>
+        {draft.outcome && (
+          <div className='text-[11.5px] text-slate-500'>
+            <span>Within</span>
+            <SimpleSelect
+              value={draft.days || '7'}
+              onChange={(v) => setDraft((d) => ({ ...d, days: v }))}
+              options={OUTCOME_DAYS}
+              ariaLabel='Look-back window'
+              className='mt-1 h-8 w-36 text-[12.5px]'
+            />
+          </div>
+        )}
         <Button type='submit' size='sm' className='h-8 gap-1.5' disabled={draftInvalid}>
           <Search className='h-3.5 w-3.5' /> Search
         </Button>
       </form>
       <p className='mt-2 text-[11.5px] text-slate-400'>
         Recordings are indexed as they upload: pages visited, records opened, the <em>names</em> of
-        fields typed into (never what was typed) and the elements clicked.
+        fields typed into (never what was typed) and the elements clicked. “What went wrong” finds
+        recordings that were running when a request failed or the browser reported an error, and
+        opens at the first one.
         {applied.item && applied.collection ? null : ' Add a record id to follow one record.'}
       </p>
 
@@ -166,7 +203,8 @@ export function ReplaySearchTab() {
           <div className='py-10 text-center text-slate-400'>
             <Search className='mx-auto h-6 w-6 opacity-40' />
             <p className='mt-2 text-[12.5px]'>
-              Search by collection and record id, by field name or by selector.
+              Search by collection and record id, by field name, by selector, by page or by what
+              went wrong.
             </p>
           </div>
         ) : isError ? (
@@ -185,15 +223,19 @@ export function ReplaySearchTab() {
                 {hits.length} recording{hits.length === 1 ? '' : 's'}
               </h3>
               {/* #1398 — one record followed across every recording that opened it. */}
-              {applied.collection && applied.item && !applied.field && !applied.selector && (
-                <Button
-                  size='sm'
-                  className='h-7 gap-1.5 text-[12px]'
-                  onClick={() => setPlayingAll(true)}
-                >
-                  <ListVideo className='h-3.5 w-3.5' /> Play all
-                </Button>
-              )}
+              {applied.collection &&
+                applied.item &&
+                !applied.field &&
+                !applied.selector &&
+                !applied.outcome && (
+                  <Button
+                    size='sm'
+                    className='h-7 gap-1.5 text-[12px]'
+                    onClick={() => setPlayingAll(true)}
+                  >
+                    <ListVideo className='h-3.5 w-3.5' /> Play all
+                  </Button>
+                )}
             </div>
             <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
               {hits.map((hit, i) => (

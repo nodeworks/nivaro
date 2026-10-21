@@ -215,6 +215,7 @@ import { schemaRoutes } from './schema.js'
 import { schemaSnapshotRoutes } from './schema-snapshot.js'
 import { scimRoutes } from './scim.js'
 import { searchRoutes } from './search.js'
+import { searchAnalyticsRoutes } from './search-analytics.js'
 import { securityRoutes, securitySelfRoutes } from './security.js'
 import { semanticSearchRoutes } from './semantic-search.js'
 import { sequenceRoutes } from './sequences.js'
@@ -536,6 +537,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(externalApiObservabilityRoutes, { prefix: '/external-apis' })
   await app.register(webhooksRoutes, { prefix: '/webhooks' })
   await app.register(searchRoutes, { prefix: '/search' })
+  await app.register(searchAnalyticsRoutes, { prefix: '/search-analytics' })
   await app.register(commentsRoutes, { prefix: '/comments' })
   await app.register(customQueriesRoutes, { prefix: '/custom-queries' })
   await app.register(userScopesRoutes)

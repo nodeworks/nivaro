@@ -66,6 +66,7 @@ import {
   Scale,
   ScanSearch,
   ScrollText,
+  Search,
   SearchCheck,
   SearchCode,
   ServerCog,
@@ -466,6 +467,13 @@ export const navCategories: NavCategory[] = [
         keywords: 'glossary data guide docs gaps ask ai suggestions'
       },
       { icon: MessagesSquare, label: 'Chat Analytics', to: '/chat-analytics', section: 'Usage' },
+      {
+        icon: Search,
+        label: 'Search Analytics',
+        to: '/search-analytics',
+        section: 'Usage',
+        keywords: 'cmd+k zero results queries'
+      },
       {
         icon: Clapperboard,
         label: 'Session Replays',
