@@ -227,6 +227,37 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
           </Setting>
         </>
       )}
+      {(type === 'section' || type === 'tab') && (
+        <>
+          <Setting
+            k='group.content'
+            label='Intro'
+            effect='A short note at the top: what to fill in here and why. Empty shows none.'
+          >
+            <TextArea
+              ariaLabel='Intro'
+              value={group.content ?? ''}
+              onChange={(v) => update({ content: v || null }, `Edit the intro of ${name}`, true)}
+            />
+          </Setting>
+          {!!group.content?.trim() && (
+            <Setting
+              k='group.content_tone'
+              label='Intro style'
+              effect='Note is a quiet box; Warning is amber.'
+            >
+              <Segmented
+                value={group.content_tone === 'warn' ? 'warn' : 'info'}
+                options={[
+                  { value: 'info', label: 'Note' },
+                  { value: 'warn', label: 'Warning' }
+                ]}
+                onChange={(v) => update({ content_tone: v }, `Change the intro style of ${name}`)}
+              />
+            </Setting>
+          )}
+        </>
+      )}
 
       {sectionLike && (
         <>

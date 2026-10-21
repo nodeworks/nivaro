@@ -93,13 +93,51 @@ export function LayoutContentBlock({ group }: { group: FieldGroup }) {
             // biome-ignore lint/suspicious/noArrayIndexKey: static paragraph list
             key={i}
             className={`whitespace-pre-wrap text-[12.5px] leading-relaxed ${
-              warn ? 'text-amber-700 dark:text-amber-300/90' : 'text-slate-600 dark:text-muted-foreground'
+              warn
+                ? 'text-amber-700 dark:text-amber-300/90'
+                : 'text-slate-600 dark:text-muted-foreground'
             }`}
           >
             {renderInline(p)}
           </p>
         ))}
       </div>
+    </div>
+  )
+}
+
+/**
+ * A section's or step's intro notice (#2678): the group's own `content` /
+ * `content_tone` shown at the top of its body — what to fill in here and why.
+ * Same look as a text block, without the title (the section header names it).
+ */
+export function SectionIntro({ group, className }: { group: FieldGroup; className?: string }) {
+  const text = (group.content ?? '').trim()
+  if (!text || group.type === 'content' || group.content_tone === 'divider') return null
+  const warn = group.content_tone === 'warn'
+  return (
+    <div
+      data-section-intro={group.key}
+      className={`flex gap-2 rounded-lg border px-3 py-2 ${
+        warn
+          ? 'border-amber-200 bg-amber-50/70 dark:border-amber-500/30 dark:bg-amber-500/10'
+          : 'border-slate-200 bg-slate-50/70 dark:border-border dark:bg-muted/40'
+      } ${className ?? ''}`}
+    >
+      {warn ? (
+        <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500' />
+      ) : (
+        <Info className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400' />
+      )}
+      <p
+        className={`min-w-0 whitespace-pre-wrap text-[12.5px] leading-relaxed ${
+          warn
+            ? 'text-amber-700 dark:text-amber-300/90'
+            : 'text-slate-600 dark:text-muted-foreground'
+        }`}
+      >
+        {renderInline(text)}
+      </p>
     </div>
   )
 }

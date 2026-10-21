@@ -21,6 +21,7 @@ import { aiRoutes } from './ai.js'
 import { aiAskContextRoutes } from './ai-ask-context.js'
 import { aiConversationRoutes } from './ai-conversations.js'
 import { aiDesignRoutes } from './ai-design.js'
+import { aiDesignTextRoutes } from './ai-design-text.js'
 import { aiExplainRoutes } from './ai-explain.js'
 import { aiFieldFillRoutes } from './ai-field-fill.js'
 import { aiKnowledgeRoutes } from './ai-knowledge.js'
@@ -430,6 +431,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(aiMemoryRoutes, { prefix: '/ai' })
   await app.register(aiDesignRoutes, { prefix: '/ai-design' })
   await app.register(aiFieldFillRoutes, { prefix: '/ai' })
+  await app.register(aiDesignTextRoutes, { prefix: '/ai-design' })
   await app.register(activityRoutes, { prefix: '/activity' })
   await app.register(cronRoutes, { prefix: '/cron' })
   await app.register(jobRunRoutes, { prefix: '/job-runs' })

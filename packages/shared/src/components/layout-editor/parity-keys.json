@@ -639,6 +639,15 @@
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "tool.ai_text",
+    "label": "AI wording: glossary terms, section intros, placeholders, choice labels, plain language, translation drafts",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "detail", "summary"]
+  },
+  {
     "key": "tool.describe",
     "label": "Describe this layout",
     "home": "form_settings",

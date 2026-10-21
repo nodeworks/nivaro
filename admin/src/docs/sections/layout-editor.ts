@@ -360,6 +360,30 @@ export const layoutEditor: DocSection = {
         'Rules tab → Checks → Suggest checks: patterns, ranges and lengths learned from the values stored today, each with how many existing values it would refuse. Nothing is applied until you pick a check and confirm the every-form change. Without AI the pattern-based checks still appear.'
       ]
     },
+    { type: 'h3', id: 'layout-editor-ai-wording', text: 'AI wording' },
+    {
+      type: 'p',
+      text: 'Form settings → AI review → AI wording (administrators) checks the words on the form. Each tool lists its changes as sentences with a checkbox; Apply sends the ticked ones through the editor as one undo step, and nothing is saved until Save. A change whose text was edited since you asked is greyed out — run the tool again.'
+    },
+    {
+      type: 'ul',
+      items: [
+        "Glossary terms — every label, help text and section name that uses another word for a term in the AI knowledge glossary (CAR for PUB'd), listed with where it shows, and rewritten to the term on this form.",
+        "Section intros — a one- or two-sentence note at the top of each step or section saying what to fill in and why. It is the section's Intro in the inspector, shown as a note or a warning.",
+        'Placeholders — example text for empty inputs from the shape of stored values (PO-######, typical amounts). Values never reach the AI, and an example that equals or contains a stored value is refused.',
+        "Choice labels — readable labels for coded choices such as $t:pending_approval or IN_PROGRESS. Per row, put them on this form only or on the field, which changes every form that uses the field's own list straight away (that one is not part of Undo).",
+        'Plain language — a plain-language score from 0 to 100 for every label, help text and intro, worst first, with a simpler rewrite that must score higher. Glossary terms do not count as unexplained abbreviations.',
+        'Translations — label and help drafts for a language set under Settings → Localization. Drafts are marked as drafts until someone approves them (Approve or Approve all); approved translations are never redrafted.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Without AI, Glossary terms, Placeholders, Choice labels and Plain language still work from rules; Section intros and Translations need AI.'
+    },
+    {
+      type: 'p',
+      text: "API (administrators): `GET /api/ai-design/layouts/:id/text/locales` and `POST /api/ai-design/layouts/:id/text/:tool` (tool = glossary, intros, placeholders, choices, reading or translate; translate takes `{ locale }`) answer proposals and never write. `POST /api/ai-design/layouts/:id/text/choices/field` with `{ field, choices: [{ value, text }] }` relabels the field's own choices and is logged with the old ones. Translations are stored on the placement as `overrides.i18n[locale] = { label, help, draft: true }`."
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
