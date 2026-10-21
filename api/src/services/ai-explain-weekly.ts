@@ -1,5 +1,7 @@
 import { db } from '../db/index.js'
 import { type ExplainFacts, explainFacts, GATHERERS } from './ai-explain.js'
+import { parseQualityConfig } from './ai-quality.js'
+import { weeklySpendFacts } from './ai-spend.js'
 import type { DigestSection } from './daily-digest.js'
 
 /**
@@ -149,6 +151,12 @@ export async function gatherOpsWeekly(): Promise<ExplainFacts> {
       { c?: number } | null
     ]
   const snaps = [...storage].reverse()
+  // #2473 — month-to-date AI spend and the month-end projection
+  const aiSpend = await db('nivaro_settings')
+    .orderBy('id', 'asc')
+    .first('ai_models')
+    .then((row) => weeklySpendFacts(parseQualityConfig((row as { ai_models?: string })?.ai_models)))
+    .catch(() => null)
   return {
     title: 'Operations this week',
     facts: {
@@ -164,13 +172,15 @@ export async function gatherOpsWeekly(): Promise<ExplainFacts> {
       failed_background_jobs: failedJobs,
       failed_imports: failedImports,
       failed_partner_pushes: partners,
-      storage: snaps.length >= 2 ? { first: snaps[0], last: snaps[snaps.length - 1] } : snaps
+      storage: snaps.length >= 2 ? { first: snaps[0], last: snaps[snaps.length - 1] } : snaps,
+      ...(aiSpend ? { ai_spend: aiSpend } : {})
     },
     instructions:
-      'Write a short Monday operations summary for administrators in 2-4 short paragraphs: what was deployed or changed (migrations, configuration), the slowest routes, jobs/imports/partner pushes that failed, and growth in storage. Skip anything the facts do not show. Put it in "summary"; steps may list up to 3 things worth a look.',
+      'Write a short Monday operations summary for administrators in 2-4 short paragraphs: what was deployed or changed (migrations, configuration), the slowest routes, jobs/imports/partner pushes that failed, growth in storage, and AI spend (spent so far, the month-end projection against last month, anything over a budget). Skip anything the facts do not show. Put it in "summary"; steps may list up to 3 things worth a look.',
     links: [
       { label: 'Open background jobs', href: '/background-jobs' },
-      { label: 'Open API analytics', href: '/api-analytics' }
+      { label: 'Open API analytics', href: '/api-analytics' },
+      { label: 'Open AI quality', href: '/ai-quality?tab=spend' }
     ]
   }
 }

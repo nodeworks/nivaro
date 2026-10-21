@@ -1,5 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
+import { NIVARO_VERSION } from '../version.js'
+import { applyUsage, measureParts, type PartTokens, serializeParts } from './ai-prompt-parts.js'
 import { emitAiCallLive } from './ai-quality.js'
 import {
   type AiMessageStream,
@@ -33,8 +35,36 @@ const PRICES: Record<string, { input: number; cached: number; output: number }> 
   'claude-haiku-4-5': { input: 1, cached: 0.1, output: 5 }
 }
 
+/** Prices an admin set in AI quality (#2764); they beat the built-in list. */
+let priceOverrides: Record<string, { input: number; cached: number; output: number }> = {}
+
+export function setPriceOverrides(
+  prices: Record<string, { input: number; cached: number; output: number }> | null | undefined
+): void {
+  priceOverrides = prices ?? {}
+}
+
 export function priceFor(model: string) {
-  return PRICES[model] ?? PRICES[model.replace(/-\d{8}$/, '')] ?? null
+  const base = model.replace(/-\d{8}$/, '')
+  return priceOverrides[model] ?? priceOverrides[base] ?? PRICES[model] ?? PRICES[base] ?? null
+}
+
+/** The prompt_parts column arrives with migration 470; probe once, retry after a minute. */
+let partsColumn: { ok: boolean; at: number } | null = null
+async function promptPartsSupported(): Promise<boolean> {
+  if (partsColumn && (partsColumn.ok || Date.now() - partsColumn.at < 60_000)) return partsColumn.ok
+  const ok = await db.schema.hasColumn('nivaro_ai_calls', 'prompt_parts').catch(() => false)
+  partsColumn = { ok, at: Date.now() }
+  return ok
+}
+
+/** Part sizes for the request, or null — a counting failure must never fail the call. */
+function partsOf(params: MessageParams): PartTokens[] | null {
+  try {
+    return measureParts(params)
+  } catch {
+    return null
+  }
 }
 
 export function costOf(
@@ -107,6 +137,7 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
       REQUEST_CAP
     )
   }
+  const parts = partsOf(params)
   let written = false
   return {
     ok(res: Anthropic.Message) {
@@ -149,8 +180,21 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
         input_tokens: input,
         output_tokens: output
       })
-      void db('nivaro_ai_calls')
-        .insert({
+      const stored =
+        parts &&
+        serializeParts(
+          applyUsage(parts, {
+            input,
+            cacheRead: cached,
+            cacheWrite: usage?.cache_creation_input_tokens ?? null,
+            inputIncludesCache: provider === 'gateway-openai'
+          }),
+          NIVARO_VERSION
+        )
+      void (async () => {
+        const withParts = stored && (await promptPartsSupported())
+        await db('nivaro_ai_calls').insert({
+          ...(withParts ? { prompt_parts: stored } : {}),
           ...base,
           model: res.model || base.model,
           status: 'ok',
@@ -164,7 +208,7 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
           tool_calls: content.filter((b) => b.type === 'tool_use').length,
           response: capJson(content, RESPONSE_CAP)
         })
-        .catch(() => undefined)
+      })().catch(() => undefined)
     },
     fail(err: unknown) {
       if (written) return
@@ -189,14 +233,18 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
         output_tokens: null,
         error: String((err as Error)?.message ?? err).slice(0, 200)
       })
-      void db('nivaro_ai_calls')
-        .insert({
+      void (async () => {
+        const withParts = parts && (await promptPartsSupported())
+        await db('nivaro_ai_calls').insert({
+          ...(withParts
+            ? { prompt_parts: serializeParts(applyUsage(parts, {}), NIVARO_VERSION) }
+            : {}),
           ...base,
           status: 'error',
           latency_ms: Math.round(performance.now() - started),
           error: String((err as Error)?.message ?? err).slice(0, 1000)
         })
-        .catch(() => undefined)
+      })().catch(() => undefined)
     }
   }
 }

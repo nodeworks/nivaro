@@ -7,6 +7,7 @@ import {
   canSeeReplay,
   capApplies,
   classifyCause,
+  DEFAULT_QUALITY,
   evaluateBudgets,
   isProviderFailure,
   normalizeCap,
@@ -26,8 +27,8 @@ const cap = (o: Partial<BudgetCap> = {}): BudgetCap => ({
   ...o
 })
 const cfg = (caps: BudgetCap[], enabled = true): QualityConfig => ({
-  budgets: { enabled, caps },
-  fallback_model: null
+  ...DEFAULT_QUALITY,
+  budgets: { enabled, caps }
 })
 const subj = { userId: 'U1', roleId: 'R1', feature: 'chat' }
 

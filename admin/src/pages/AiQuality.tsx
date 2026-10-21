@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ShieldCheck } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -8,11 +9,29 @@ import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
+import { ModelsTab } from './ai-quality/ModelsTab'
+import { PromptCostTab } from './ai-quality/PromptCostTab'
+import { SpendTab } from './ai-quality/SpendTab'
+import { ToolsTab } from './ai-quality/ToolsTab'
 
-type Tab = 'review' | 'budgets' | 'health' | 'compare' | 'replay' | 'live'
+type Tab =
+  | 'review'
+  | 'spend'
+  | 'budgets'
+  | 'prompts'
+  | 'tools'
+  | 'models'
+  | 'health'
+  | 'compare'
+  | 'replay'
+  | 'live'
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'review', label: 'Review queue' },
+  { id: 'spend', label: 'Spend' },
   { id: 'budgets', label: 'Budgets & fallback' },
+  { id: 'prompts', label: 'Prompt cost' },
+  { id: 'tools', label: 'Tool reliability' },
+  { id: 'models', label: 'Models' },
   { id: 'health', label: 'Provider health' },
   { id: 'compare', label: 'Compare models' },
   { id: 'replay', label: 'Replay questions' },
@@ -29,7 +48,15 @@ const cardCls = 'rounded-lg border border-slate-200 bg-white p-4 dark:border-bor
 
 /** AI Quality — review queue, budgets, provider health, model comparison, replay, live calls. */
 export function AiQualityPage() {
-  const [tab, setTab] = useState<Tab>('review')
+  const [params, setParams] = useSearchParams()
+  const asked = params.get('tab') as Tab | null
+  const [tab, setTabState] = useState<Tab>(
+    TABS.some((t) => t.id === asked) ? (asked as Tab) : 'review'
+  )
+  const setTab = (t: Tab) => {
+    setTabState(t)
+    setParams({ tab: t }, { replace: true })
+  }
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
       <header className='flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
@@ -39,7 +66,8 @@ export function AiQualityPage() {
         <div>
           <h1 className='text-base font-semibold'>AI Quality</h1>
           <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-            Poor answers to fix, spend limits, provider health, and trying another model first.
+            Poor answers to fix, what AI costs and where it goes, provider health, and trying
+            another model first.
           </p>
         </div>
       </header>
@@ -62,7 +90,11 @@ export function AiQualityPage() {
       </nav>
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
         {tab === 'review' && <ReviewTab />}
+        {tab === 'spend' && <SpendTab />}
         {tab === 'budgets' && <BudgetsTab />}
+        {tab === 'prompts' && <PromptCostTab />}
+        {tab === 'tools' && <ToolsTab />}
+        {tab === 'models' && <ModelsTab />}
         {tab === 'health' && <HealthTab />}
         {tab === 'compare' && <CompareTab />}
         {tab === 'replay' && <ReplayTab />}

@@ -91,7 +91,7 @@ POST /api/ai/plans/:id/cancel     discard, or stop a running plan before its nex
       items: [
         '/ai-plans (Home → AI Plans) lists plans with who approved them and when, their steps, impact and outcome. Everyone sees their own; administrators see every plan.',
         "Undo (administrators): a step that wrote records can be reverted record by record, but only where nothing has changed the record since — its newest revision is still the plan's write and every field still holds the value the plan wrote. Records changed since are named and left alone. Messages, chat posts, flows and tasks cannot be undone.",
-        'Make a draft flow (administrators, plans that ran to the end): the steps become flow operations, chained in order, with the records as the same ids, the original filter, or whichever record fired an update event. The flow is created switched off and opens in the tester. Record updates and creates use the new Write Records flow operation, which runs as whoever triggered the flow through the normal record rules. When nobody triggers it (a webhook, a schedule, a system event) it runs only as a \'Run as\' person named on the operation — never as the flow\'s author — and refuses without one; that person must be active, and the collection must be named, not templated.',
+        "Make a draft flow (administrators, plans that ran to the end): the steps become flow operations, chained in order, with the records as the same ids, the original filter, or whichever record fired an update event. The flow is created switched off and opens in the tester. Record updates and creates use the new Write Records flow operation, which runs as whoever triggered the flow through the normal record rules. When nobody triggers it (a webhook, a schedule, a system event) it runs only as a 'Run as' person named on the operation — never as the flow's author — and refuses without one; that person must be active, and the collection must be named, not templated.",
         "Templates: ready-made plans for common chores (close out a record's open lines, reassign a leaver's open records, move old drafts to a status, tell the owners of matching records). Fill in the blanks and the usual plan preview appears; nothing runs until you approve. Administrators add their own (blanks + steps as JSON).",
         'Data Integrity: on a run\'s field + rule filter, "Fix as a plan…" builds the confident fixes for that cluster as a plan, previewed record by record in the change report before approval.'
       ]
@@ -387,9 +387,42 @@ export const aiQualityDocs: DocSection = {
       type: 'p',
       text: 'Compare runs one prompt on two models; Replay re-runs up to 50 recent Ask AI questions as their askers (read-only, no proposals) on a candidate model. Both show a cost estimate you confirm first, are logged as admin activity and count against budgets. Live calls streams each finished AI call (feature, model, person, cost, status) while the tab is open.'
     },
+    { type: 'h2', id: 'ai-quality-spend', text: 'Spend, forecast and the bill' },
+    {
+      type: 'ul',
+      items: [
+        'Spend shows this month so far and a projected month end per model, feature and person, with last month beside it. The projection adds the last seven finished days’ pace to what is already spent.',
+        'Admins get one notice a month when the projection passes a daily budget (counted over the whole month) or last month by a percentage you set. The same figures ride the Monday operations summary.',
+        'Last month survives the 30-day call log because a nightly job rolls the log up per day.',
+        'Log against the bill: enter or import (CSV lines month,model,usd) what the provider charged. A gap means calls that never reached the log, or prices that drifted; set the billed price per million tokens and new calls are costed with it.'
+      ]
+    },
+    { type: 'h2', id: 'ai-quality-prompt-cost', text: 'Prompt cost' },
+    {
+      type: 'p',
+      text: 'Tokens each part of a request carried (tool definitions, system rules, data guides, glossary, collection lists, playbooks, attachments, history, the question), counted from what was actually sent and scaled to the provider’s own count. Per feature you see the biggest parts and how much was served from cache (only the stable start of a prompt can be); a table by release shows bloat as it ships.'
+    },
+    { type: 'h2', id: 'ai-quality-tool-board', text: 'Tool reliability' },
+    {
+      type: 'p',
+      text: 'Per Ask AI tool: calls, error rate, empty results, retries after an error (and how many worked, each a wasted round), answers where zero rows were read as “none”, rounds per answer and time. Open a row for its recent failing calls and slowest runs.'
+    },
+    { type: 'h2', id: 'ai-quality-models', text: 'Model catalogue' },
+    {
+      type: 'p',
+      text: 'A nightly check asks the provider which models it offers (its list where it has one, otherwise a one-token probe per known model). New and retired models are listed. A new model automatically runs Compare and a small replay of saved questions so the side-by-side is waiting; a model still named in the settings that was retired raises a readiness warning and tells admins. Nothing ever switches a model by itself.'
+    },
     {
       type: 'pre',
-      code: `GET  /api/ai/health              provider reachable / slow / failing
+      code: `GET  /api/ai/spend/forecast     admin: month so far, projection, last month, alerts
+GET  /api/ai/spend/reconcile    admin: logged vs billed per month and model
+PUT  /api/ai/spend/settings     admin: prices, alert percentage, catalogue switches
+PUT  /api/ai/spend/bills        admin: bills (JSON or CSV)
+GET  /api/ai/prompt-cost        admin: tokens per prompt part per feature and release
+GET  /api/ai/tool-reliability   admin: per-tool board
+GET  /api/ai/catalogue          admin: models and side-by-sides
+POST /api/ai/catalogue/check    admin: check now (202)
+GET  /api/ai/health              provider reachable / slow / failing
 GET  /api/ai/budget/me          caller's remaining budget (enabled:false = nothing to show)
 GET  /api/ai/budget/status      admin: spend against each cap
 GET  /api/ai/review-queue       admin: thumbs-down answers
