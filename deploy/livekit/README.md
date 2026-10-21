@@ -57,7 +57,11 @@ Nothing here needs to reach the database or Redis.
 
 - Rooms auto-create on first join and close five minutes after the last person
   leaves (`room.empty_timeout`).
-- Join tokens are minted by the Nivaro API, last ten minutes, and name one room.
+- Join tokens are minted by the Nivaro API, last five minutes, and name one room
+  of one huddle session (a later huddle in the same chat room is a new LiveKit
+  room). Leaving, dropping out of presence or losing access to the chat room
+  removes the person from the LiveKit room through RoomService; the room is
+  deleted when the huddle ends, so the API host must reach 7880 for that too.
   Rotating the secret: change `keys`, restart LiveKit, paste the new secret
   under Settings. Running huddles reconnect on their next join.
 - `docker compose logs -f livekit` is JSON; `level: debug` in `livekit.yaml`

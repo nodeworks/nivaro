@@ -7,8 +7,11 @@ import {
   mintLiveKitToken,
   probeLiveKit,
   SFU_TOKEN_TTL_S,
+  sfuDeleteRoom,
   sfuIdentity,
+  sfuRemoveParticipant,
   sfuRoomName,
+  sfuTokenDecision,
   verifyLiveKitToken
 } from './huddle-sfu.js'
 
@@ -38,14 +41,19 @@ describe('decideHuddleMode (#2859)', () => {
 
 describe('sfuRoomName', () => {
   it('is opaque, deterministic and tenant-scoped; the raw key never appears', () => {
-    const a = sfuRoomName('acme', 'ch:ops')
-    expect(a).toBe(sfuRoomName('acme', 'ch:ops'))
+    const a = sfuRoomName('acme', 'ch:ops', 'sess1')
+    expect(a).toBe(sfuRoomName('acme', 'ch:ops', 'sess1'))
     expect(a).toMatch(/^nvr-[0-9a-f]{32}$/)
     expect(a).not.toContain('ops')
-    expect(sfuRoomName('other', 'ch:ops')).not.toBe(a)
-    expect(sfuRoomName(null, 'ch:ops')).toBe(sfuRoomName('', 'ch:ops'))
-    expect(sfuRoomName(null, 'ch:ops')).not.toBe(a)
-    expect(sfuRoomName(null, 'ord:ORD-1')).not.toBe(sfuRoomName(null, 'ord:ORD-2'))
+    expect(a).not.toContain('sess1')
+    expect(sfuRoomName('other', 'ch:ops', 'sess1')).not.toBe(a)
+    expect(sfuRoomName(null, 'ch:ops', 'sess1')).toBe(sfuRoomName('', 'ch:ops', 'sess1'))
+    expect(sfuRoomName(null, 'ch:ops', 'sess1')).not.toBe(a)
+    expect(sfuRoomName(null, 'ord:ORD-1', 's')).not.toBe(sfuRoomName(null, 'ord:ORD-2', 's'))
+  })
+
+  it('a new huddle session in the same room is a different LiveKit room', () => {
+    expect(sfuRoomName('acme', 'ch:ops', 'sess1')).not.toBe(sfuRoomName('acme', 'ch:ops', 'sess2'))
   })
 })
 
@@ -93,29 +101,104 @@ describe('mintLiveKitToken', () => {
     expect(verifyLiveKitToken('nope', apiSecret, NOW)).toBeNull()
   })
 
-  it('mintJoinToken: identity is person + socket, room is the hashed name, 10 minutes', () => {
+  it('mintJoinToken: identity is person + socket, room is the session-bound hash, 5 minutes, no data channel', () => {
     const r = mintJoinToken({
       apiKey,
       apiSecret,
       tenant: 't1',
       room: 'ch:ops',
+      session: 'sess1',
       userId: 'U-ROB',
       socket: 'S1',
       name: 'Rob',
       now: NOW
     })
     expect(r.identity).toBe(sfuIdentity('U-ROB', 'S1'))
-    expect(r.room).toBe(sfuRoomName('t1', 'ch:ops'))
-    expect(r.ttl_s).toBe(600)
+    expect(r.room).toBe(sfuRoomName('t1', 'ch:ops', 'sess1'))
+    expect(r.ttl_s).toBe(300)
+    expect(SFU_TOKEN_TTL_S).toBe(300)
     const claims = verifyLiveKitToken(r.token, apiSecret, NOW)
+    expect(claims?.exp).toBe(1_700_000_000 + 300)
     expect(claims?.video).toEqual({
       room: r.room,
       roomJoin: true,
       canPublish: true,
-      canSubscribe: true
+      canSubscribe: true,
+      canPublishData: false
     })
+    expect(claims?.video.roomAdmin).toBeUndefined()
     expect(claims?.sub).toBe('U-ROB#S1')
     expect(JSON.stringify(claims)).not.toContain('ch:ops')
+  })
+})
+
+describe('sfuTokenDecision (the /sfu-token gate)', () => {
+  const peers = [{ socket: 'S1', user: 'U1', name: 'Rob' }]
+  const base = { enabled: true, sfu: true, mode: 'sfu' as const, session: 'sess', peers }
+
+  it('mints only for a huddle that is on the SFU, to a listed socket of that person', () => {
+    expect(sfuTokenDecision({ ...base, userId: 'U1', socket: 'S1' })).toEqual({
+      ok: true,
+      me: peers[0],
+      session: 'sess'
+    })
+  })
+  it('refuses outside sfu mode (a mesh huddle has no LiveKit room)', () => {
+    expect(sfuTokenDecision({ ...base, mode: 'mesh', userId: 'U1', socket: 'S1' })).toMatchObject({
+      ok: false,
+      status: 409
+    })
+    expect(sfuTokenDecision({ ...base, session: null, userId: 'U1', socket: 'S1' })).toMatchObject({
+      ok: false,
+      status: 409
+    })
+  })
+  it('refuses a socket not in the roster, or listed as someone else', () => {
+    expect(sfuTokenDecision({ ...base, userId: 'U1', socket: 'S9' })).toMatchObject({ status: 409 })
+    expect(sfuTokenDecision({ ...base, userId: 'U2', socket: 'S1' })).toMatchObject({ status: 409 })
+  })
+  it('404 while huddles are off or no SFU is configured', () => {
+    expect(sfuTokenDecision({ ...base, sfu: false, userId: 'U1', socket: 'S1' })).toMatchObject({
+      status: 404
+    })
+    expect(sfuTokenDecision({ ...base, enabled: false, userId: 'U1', socket: 'S1' })).toMatchObject(
+      {
+        status: 404
+      }
+    )
+  })
+})
+
+describe('server-side eviction (RoomService)', () => {
+  const s = { livekit_url: 'wss://m.example', livekit_api_key: 'k', livekit_api_secret: 'sec' }
+  function capture(status = 200) {
+    const calls: Array<{ url: string; body: unknown; grant: unknown }> = []
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const auth = String((init.headers as Record<string, string>).authorization)
+      const claims = verifyLiveKitToken(auth.replace('Bearer ', ''), 'sec')
+      calls.push({ url, body: JSON.parse(String(init.body)), grant: claims?.video })
+      return new Response('{}', { status })
+    }) as unknown as typeof fetch
+    return { calls, fetchImpl }
+  }
+
+  it('RemoveParticipant names the room + identity with a roomAdmin-only token', async () => {
+    const { calls, fetchImpl } = capture()
+    await sfuRemoveParticipant(s, 'nvr-room', 'U1#S1', fetchImpl)
+    expect(calls[0].url).toBe('https://m.example/twirp/livekit.RoomService/RemoveParticipant')
+    expect(calls[0].body).toEqual({ room: 'nvr-room', identity: 'U1#S1' })
+    expect(calls[0].grant).toMatchObject({ room: 'nvr-room', roomAdmin: true, roomJoin: false })
+  })
+
+  it('DeleteRoom closes the session room; a 404 (already gone) is fine, a 500 throws', async () => {
+    const { calls, fetchImpl } = capture()
+    await sfuDeleteRoom(s, 'nvr-room', fetchImpl)
+    expect(calls[0].url).toBe('https://m.example/twirp/livekit.RoomService/DeleteRoom')
+    expect(calls[0].body).toEqual({ room: 'nvr-room' })
+    await expect(sfuDeleteRoom(s, 'r', capture(404).fetchImpl)).resolves.toBeUndefined()
+    await expect(sfuRemoveParticipant(s, 'r', 'i', capture(500).fetchImpl)).rejects.toThrow(
+      'HTTP 500'
+    )
   })
 })
 
