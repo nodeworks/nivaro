@@ -471,6 +471,37 @@ GET /api/collection-layouts/why?collection=&item=
      // as the viewer; 404 when they cannot read the record; \`hidden\` for administrators only`
     },
 
+    { type: 'h2', id: 'layout-editor-follow', text: 'Owner, watching and sharing a form' },
+    {
+      type: 'ul',
+      items: [
+        'Watch: the bell in the editor top bar. While it is on you get a notification (your Profile → Notification rules decide the channels, category Watch) whenever someone saves a change to the form or restores one of its versions. It says who saved, what changed in counts (for example "2 fields moved, 1 section added") and the version note, and opens the editor with History showing. You never hear about your own saves. A watch is listed with your other notification subscriptions, where you can also remove it.',
+        'Owner: Share → Owner names the business owner of a form. The overview shows "Owner: …" under the form. The owner hears about every saved change even without watching, and is told first; change requests about the form go to the owner first too.',
+        'Preview link: Share → Preview link makes a read-only link that lasts 7, 14, 30 or 90 days, for people who are not administrators. It shows the last saved version of the form, with only the fields you may read, and never shows record data. Anyone with the link can leave a comment on a field or on the whole form; comments appear under Share → Comments from previews (the count shows on the Share button), where Select this field finds the field on the canvas and Resolve removes the comment. Turn off ends a link for everyone.'
+      ]
+    },
+    { type: 'h2', id: 'layout-editor-whats-new', text: "What's new on this form" },
+    {
+      type: 'p',
+      text: 'The first time someone opens a record form after it changed, a short note at the top of the form lists what is new, what moved to another section and what is no longer on the form, with who changed it and when. It only names fields that person may read. Dismissing it hides it for that person until the next change; the person who saved the change never sees it, and nothing shows the very first time someone opens a form.'
+    },
+    { type: 'h2', id: 'layout-editor-flows', text: 'React to form changes in flows and webhooks' },
+    {
+      type: 'p',
+      text: 'Every saved change fires the flow trigger Form Layout Changed (`layout.updated`), so a flow can, for example, post the change to a Teams channel. Webhooks receive it when they name the source Form layouts (saved changes): the delivery is an update event whose data carries `event: "layout.updated"`.'
+    },
+    {
+      type: 'pre',
+      code: `// layout.updated payload (flow trigger data; webhook body data)
+{
+  "layout_id": 12, "layout_name": "Purchase order", "collection": "orders",
+  "op_summary": "2 fields moved, 1 section added", "op_count": 3,
+  "note": "Group the dates",            // the version note, or null
+  "user_id": "…", "user_name": "Ada Lovelace",
+  "history_url": "https://…/data-model/orders?tab=groups&layout=12&history=1"
+}`
+    },
+
     { type: 'h2', id: 'layout-editor-warning', text: 'Instances whose layouts are replaced' },
     {
       type: 'p',
@@ -572,6 +603,21 @@ POST /api/ai-design/layouts/:id/entry-order  { bundle? }   // the draft; proposa
      → { data: { change_sets: [{ title, steps, ops, group_key, why }], dropped, checked } }
 POST /api/ai-design/layouts/:id/sensitive  { bundle? }
      → { data: { findings: [{ field, class, seen_by, broad, suggest, section, change_set }], note } }
+
+GET  /api/layout-collab/:id                       // administrators
+     → { data: { owner: { id, name } | null, watching, watchers: [{ id, name }] } }
+PUT  /api/layout-collab/:id/watch  { on }          // administrators — watch or stop watching
+PUT  /api/layout-collab/:id/owner  { user_id }     // administrators — null clears the owner
+GET  /api/layout-collab/owners                     // administrators → { data: { <layout id>: { id, name } } }
+GET  /api/layout-collab/:id/whats-new              // anyone who may read the collection
+     → { data: { rev, lines: string[] | null, mark, changed_at?, changed_by? } }
+POST /api/layout-collab/:id/whats-new/seen  { rev } // dismiss (or remember a first open)
+GET|POST /api/layout-collab/:id/preview-links  { days }   // administrators; 201 { data: { token, path, expires_at, … } }
+DELETE   /api/layout-collab/preview-links/:linkId         // administrators — turn a link off
+GET      /api/layout-collab/:id/preview-comments          // administrators
+DELETE   /api/layout-collab/:id/preview-comments/:commentId
+GET  /api/form-preview/:token                      // public page (expiring token)
+POST /api/form-preview/:token/comments  { field, name, text }   // public; 20 per 10 minutes per address
 
 GET  /api/widgets-internal/:id/placements
      → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`

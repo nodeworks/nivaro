@@ -23,7 +23,7 @@ import { activateLayout } from './layout-activation.js'
 
 const KEEP = 30
 
-interface Snapshot {
+export interface Snapshot {
   layout: Record<string, unknown>
   groups: Array<Record<string, unknown>>
   assignments: Array<Record<string, unknown>>
@@ -48,7 +48,7 @@ async function buildSnapshot(
   return { layout, groups, assignments }
 }
 
-function hashSnapshot(snap: Snapshot): string {
+export function hashSnapshot(snap: Snapshot): string {
   // Dates serialize inconsistently between capture paths; the content that
   // matters is structure + config, so timestamps are dropped from the hash.
   const strip = (r: Record<string, unknown>) => {

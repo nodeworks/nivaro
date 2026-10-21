@@ -867,6 +867,13 @@ export function LayoutEditor({
             }}
           />
         }
+        onSelectField={(field) =>
+          onSelect({
+            kind: 'field',
+            field,
+            group_key: bundle?.placements.find((p) => p.field === field)?.group_key ?? null
+          })
+        }
         tools={
           <>
             {bundle && arrangeable && (

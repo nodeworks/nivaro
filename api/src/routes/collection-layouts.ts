@@ -10,6 +10,7 @@ import { markConfigRead, nameConfigCollection } from '../services/config-live.js
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
 import { stripEditorNotes } from '../services/layout-editor-notes.js'
+import { afterLayoutSaved } from '../services/layout-notify.js'
 import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
 import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
 import {
@@ -2046,6 +2047,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       comment: `restored ${result.restored_assignments} assignments, ${result.restored_groups} groups`,
       req
     })
+    afterLayoutSaved(app, {
+      layoutId: Number(id),
+      userId: req.user?.id,
+      summary: 'an earlier version restored'
+    })
     return reply.send({ data: result })
   })
 
@@ -2212,7 +2218,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       return reply
         .code(400)
         .send({ error: result.error, op_index: result.op_index, code: result.code })
-    if (result.changed)
+    if (result.changed) {
       await logActivity({
         action: 'update',
         user: req.user?.id,
@@ -2221,6 +2227,20 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         comment: `layout editor: ${body.ops.length} change(s)`,
         req
       })
+      // Owner + watchers told, flows on layout.updated run, webhooks called (#2655 #2667).
+      afterLayoutSaved(app, {
+        layoutId: Number(id),
+        userId: req.user?.id,
+        ops: body.ops,
+        // The change note's reason (#2654) when the save carried one, else the batch note.
+        note:
+          typeof body.reason === 'string' && body.reason.trim()
+            ? body.reason
+            : typeof body.note === 'string'
+              ? body.note
+              : null
+      })
+    }
     return reply.send(result.bundle)
   })
 

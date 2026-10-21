@@ -107,6 +107,7 @@ import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { matchesVisibleWhen } from '../lib/visible-when'
 import { CopyAsButton } from './CopyAsButton'
+import { FormWhatsNew } from './FormWhatsNew'
 import { showFormVideosButton } from './help-videos/viewer/format'
 import { HelpVideoButton } from './help-videos/viewer/HelpVideoButton'
 import {
@@ -11475,6 +11476,9 @@ function ItemEditFormView({
                                       </div>
                                     )}
 
+                                    {!designOn && layoutId != null && (
+                                      <FormWhatsNew layoutId={layoutId} />
+                                    )}
                                     {viewAsOpen && (
                                       <ViewAsRoleBar
                                         roles={viewAs.roles}

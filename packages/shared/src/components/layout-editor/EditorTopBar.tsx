@@ -7,6 +7,7 @@ import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { AiChangeCheck } from './ai/ChangeCheck'
+import { ShareButton, WatchButton } from './collab/FormFollowShare'
 import { CommandPalette } from './commands/CommandPalette'
 import { HistoryPanel } from './HistoryPanel'
 import type { DescribeField } from './overview/describe-conditions'
@@ -300,7 +301,8 @@ export function EditorTopBar({
   more,
   formMap,
   presence,
-  onOpenUnsaved
+  onOpenUnsaved,
+  onSelectField
 }: {
   collection: string
   layoutId: number
@@ -349,8 +351,15 @@ export function EditorTopBar({
   presence?: ReactNode
   /** Opens the unsaved-changes list from the unsaved count (#2629). */
   onOpenUnsaved?: (anchor: HTMLElement) => void
+  /** Select a field on the canvas (a preview comment's "Select this field"). */
+  onSelectField?: (field: string) => void
 }) {
-  const [historyOpen, setHistoryOpen] = useState(false)
+  // A save notice links here with ?history=1 (#2655): History opens on arrival.
+  const [historyOpen, setHistoryOpen] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('history') === '1'
+  )
   const unsaved = draft.unsavedCount ?? 0
   const pill = row ? rowPill(row) : null
   const rowList = useMemo(() => (row ? [row] : []), [row])
@@ -425,6 +434,8 @@ export function EditorTopBar({
       />
       {checks}
       {formMap}
+      <WatchButton layoutId={layoutId} />
+      <ShareButton layoutId={layoutId} fields={fields} onSelectField={onSelectField} />
       <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
         <PopoverTrigger asChild>
           <button type='button' className={btn} aria-label='History'>

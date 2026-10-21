@@ -33,6 +33,7 @@ import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
 import { BulkChangesButton } from '../bulk/BulkChangesButton'
+import { OwnerLine } from '../collab/OwnerLine'
 import {
   CompareForms,
   CrossformFindings,
@@ -580,6 +581,7 @@ function RowView({
           <div className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
             {row.section === 'unused' ? `${shapeLine(row)}, used by nothing` : shapeLine(row)}
           </div>
+          <OwnerLine layoutId={row.layout_id} />
           {row.warnings.map((w) => (
             <div
               key={w}
