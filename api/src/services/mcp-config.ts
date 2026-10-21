@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
+import { OAUTH_CHAT_SCOPE } from '../lib/oauth.js'
 
 /**
  * Remote MCP settings (env only):
@@ -94,5 +95,88 @@ export function oauthAudienceRefusal(req: FastifyRequest): string | null {
   const m = req.method.toUpperCase()
   if (m !== 'GET' && m !== 'HEAD' && OAUTH_NO_WRITE.test(path))
     return 'A connected app cannot use this route'
+  return null
+}
+
+// ─── Chat consent (#2492) ──────────────────────────────────────────────────
+
+/**
+ * The API-key scope entry that lets an AI assistant use chat through MCP:
+ * `{ collection: '$chat', actions: ['read'] | ['read', 'create'] }`. Never
+ * implied by `*` — a key made before chat tools existed does not gain them.
+ */
+export const CHAT_KEY_SCOPE = '$chat'
+
+export type McpChatAccess = 'none' | 'read' | 'post'
+
+type KeyScope = { collection: string; actions: string[] }
+
+/** What a key's scope list allows in chat. */
+export function keyChatAccess(scopes: KeyScope[] | null | undefined): McpChatAccess {
+  const entry = (scopes ?? []).find((s) => s?.collection === CHAT_KEY_SCOPE)
+  const actions = Array.isArray(entry?.actions) ? entry.actions : []
+  if (actions.includes('*') || actions.includes('create')) return 'post'
+  return actions.includes('read') ? 'read' : 'none'
+}
+
+/**
+ * The chat tools a connection gets: an OAuth connection the person allowed chat
+ * for may read and post; an API key gets what its `$chat` scope says; anything
+ * else (static tokens, sessions, masquerade) gets none.
+ */
+export function mcpChatAccess(req: FastifyRequest): McpChatAccess {
+  if (req.authMethod === 'oauth')
+    return req.oauthScopes?.includes(OAUTH_CHAT_SCOPE) ? 'post' : 'none'
+  if (req.authMethod === 'api_key' || req.authMethod === 'key_sim')
+    return keyChatAccess(req.apiKeyScopes)
+  return 'none'
+}
+
+/** Administrator tools: an administrator who is not on a collection-scoped key. */
+export const mcpAdminTools = (req: FastifyRequest) => !!req.isAdmin && !req.user?.api_key_scopes
+
+const CHAT_PATH = /^\/api\/chat(\/|$)/
+
+/** An OAuth connection without the chat scope is refused on every chat route. */
+export function oauthScopeRefusal(req: FastifyRequest, scopes: string[]): string | null {
+  if (CHAT_PATH.test(normalizedPath(req.url ?? '')) && !scopes.includes(OAUTH_CHAT_SCOPE))
+    return 'This connection was not allowed to use chat'
+  return null
+}
+
+/** How long an app name shown on a chat message may be. */
+export const APP_LABEL_MAX = 60
+
+/** A registrant- or admin-chosen name made safe to show: no control characters, capped. */
+function cleanAppName(raw: string | undefined, fallback: string): string {
+  const s = [...String(raw ?? '')]
+    .filter((c) => {
+      const code = c.charCodeAt(0)
+      return code >= 0x20 && code !== 0x7f
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return (s || fallback).slice(0, APP_LABEL_MAX)
+}
+
+/**
+ * The app a chat message was posted through, from server-known facts only
+ * (#2492): every post made with an OAuth access token carries the connected
+ * app's registered name, every post made with an API key (or as one) the key's
+ * name — whatever headers the caller sends. Sessions and static tokens are the
+ * person themselves: null. `ref` names the credential so an administrator can
+ * trace the message (the client id or key id rides the activity row); the name
+ * itself is the registrant's choice and is only ever shown as app text.
+ */
+export function mcpAppLabel(req: FastifyRequest): { name: string; ref: string } | null {
+  if (req.authMethod === 'oauth' && req.oauthClientId)
+    return {
+      name: cleanAppName(req.oauthClientName, 'Connected app'),
+      ref: `oauth client ${req.oauthClientId}`
+    }
+  const keyId = req.apiKeyId ?? req.apiKeySimulatedId
+  if ((req.authMethod === 'api_key' || req.authMethod === 'key_sim') && keyId != null)
+    return { name: cleanAppName(req.apiKeyName, 'API key'), ref: `api key ${keyId}` }
   return null
 }

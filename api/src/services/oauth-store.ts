@@ -95,23 +95,34 @@ export async function getClient(redis: Redis, clientId: string): Promise<OAuthCl
   return c
 }
 
-/** The person's grant for this client (reused on a second consent), else a new one. */
+/**
+ * The person's grant for this client (reused on a second consent), else a new one.
+ * The grant carries the scope chosen on THIS consent: a second consent that leaves
+ * chat unticked takes chat away from the connection's existing tokens too.
+ */
 export async function upsertGrant(
   redis: Redis,
   userId: string,
-  client: OAuthClient
+  client: OAuthClient,
+  scope: string = OAUTH_SCOPE
 ): Promise<OAuthGrant> {
   const ids = await redis.smembers(`${P}user:${userId}`)
   for (const id of ids) {
     const g = await read<OAuthGrant>(redis, `${P}grant:${id}`)
-    if (g && g.client_id === client.client_id && sameTenant(g)) return g
+    if (g && g.client_id === client.client_id && sameTenant(g)) {
+      if (g.scope !== scope) {
+        g.scope = scope
+        await redis.set(`${P}grant:${g.id}`, JSON.stringify(g))
+      }
+      return g
+    }
   }
   const grant: OAuthGrant = {
     id: randomUUID(),
     user_id: userId,
     client_id: client.client_id,
     client_name: client.client_name,
-    scope: OAUTH_SCOPE,
+    scope,
     created_at: new Date().toISOString(),
     last_used_at: null,
     t: currentTenantKey()
@@ -181,8 +192,20 @@ export async function consumeRefresh(redis: Redis, refresh: string): Promise<Tok
   }
 }
 
-/** An access token's record while its grant stands; touches the grant's last use (≤ once a minute). */
-export async function resolveAccessToken(redis: Redis, token: string): Promise<TokenRecord | null> {
+/** The scope a grant carries now (the base scope for a grant stored before scopes). */
+export async function grantScope(redis: Redis, grantId: string): Promise<string> {
+  const grant = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
+  return grant?.scope || OAUTH_SCOPE
+}
+
+/**
+ * An access token's record while its grant stands, with the grant's CURRENT scope
+ * and the app's name; touches the grant's last use (≤ once a minute).
+ */
+export async function resolveAccessToken(
+  redis: Redis,
+  token: string
+): Promise<(TokenRecord & { scope: string; client_name: string }) | null> {
   const rec = await read<TokenRecord>(redis, `${P}at:${hashToken(token)}`)
   if (!sameTenant(rec) || !rec) return null
   const grant = await read<OAuthGrant>(redis, `${P}grant:${rec.grant_id}`)
@@ -192,7 +215,7 @@ export async function resolveAccessToken(redis: Redis, token: string): Promise<T
     grant.last_used_at = new Date().toISOString()
     await redis.set(`${P}grant:${grant.id}`, JSON.stringify(grant))
   }
-  return rec
+  return { ...rec, scope: grant.scope || OAUTH_SCOPE, client_name: grant.client_name }
 }
 
 /** Revoke one token (RFC 7009) — either kind. */

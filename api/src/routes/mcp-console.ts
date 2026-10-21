@@ -154,6 +154,7 @@ export async function mcpConsoleRoutes(app: FastifyInstance) {
       const adminOnly = new Set<string>([...ADMIN_TOOL_NAMES, ...LAYOUT_TOOL_NAMES])
       return {
         admin_tools: mcpToolOptions(req).adminTools,
+        chat_access: mcpToolOptions(req).chatAccess,
         tools: (tools as ToolInfo[]).map((t) => ({
           name: t.name,
           title: t.title ?? null,

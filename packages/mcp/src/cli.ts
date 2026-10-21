@@ -9,13 +9,14 @@
  * request bodies are never logged. stdout is the MCP channel — only stderr
  * carries diagnostics.
  *
- * At startup it asks the instance who the key is: an administrator's key also
- * gets the read-only admin/ops tools. When that call fails the server still
- * starts, with the everyday tools only.
+ * At startup it asks the instance what the key may use: an administrator's key
+ * also gets the read-only admin/ops tools, and a key with a `$chat` scope the
+ * chat tools. When that call fails the server still starts, with the everyday
+ * tools only.
  *
  * Exit codes: 0 clean shutdown · 1 usage.
  */
-import { createNivaroMcpClient, keyIsAdmin, serveStdio } from './index.js'
+import { createNivaroMcpClient, keyCapabilities, serveStdio } from './index.js'
 import { maskToken } from './result.js'
 
 const argv = process.argv.slice(2)
@@ -58,10 +59,16 @@ if (!token) {
 
 try {
   const client = createNivaroMcpClient({ url, token })
-  const adminTools = await keyIsAdmin(client)
-  await serveStdio({ url, client, adminTools })
+  const { adminTools, chatAccess } = await keyCapabilities(client)
+  await serveStdio({ url, client, adminTools, chatAccess })
+  const extras = [
+    adminTools ? 'admin tools' : '',
+    chatAccess !== 'none' ? `chat ${chatAccess}` : ''
+  ]
+    .filter(Boolean)
+    .join(', ')
   process.stderr.write(
-    `nivaro-mcp: serving ${url} as ${maskToken(token)}${adminTools ? ' (admin tools on)' : ''}\n`
+    `nivaro-mcp: serving ${url} as ${maskToken(token)}${extras ? ` (${extras} on)` : ''}\n`
   )
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err)

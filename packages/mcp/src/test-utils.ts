@@ -34,7 +34,10 @@ export function apiError(status: number, body: Record<string, unknown>) {
   return Object.assign(new Error(String(body.error ?? 'failed')), { status, response: body })
 }
 
-export async function connect(client: NivaroClient, options: { adminTools?: boolean } = {}) {
+export async function connect(
+  client: NivaroClient,
+  options: { adminTools?: boolean; chatAccess?: 'none' | 'read' | 'post' } = {}
+) {
   const { server } = createNivaroMcpServer({ url: 'http://nivaro.test', client, ...options })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
   const mcp = new Client({ name: 'test', version: '0.0.0' })

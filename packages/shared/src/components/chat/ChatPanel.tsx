@@ -9,6 +9,7 @@ import {
   Bell,
   BellOff,
   Bookmark,
+  Bot,
   Check,
   CheckCheck,
   ChevronLeft,
@@ -1858,6 +1859,16 @@ export function ChatRoomView({
           )}
           <p className='mt-0.5 flex items-center justify-end gap-1 text-[10px] text-slate-500 dark:text-slate-400'>
             {!mine && <span className='mr-auto' />}
+            {m.via_app && (
+              <span
+                className='inline-flex max-w-[16rem] items-center gap-0.5 font-normal'
+                data-tip={`Posted for ${mine ? 'you' : (m.sender_name ?? 'this person')} through an app or API key named "${m.via_app}". The name is the app's own, not a person.`}
+                data-chat-message-via-app
+              >
+                <Bot className='h-3 w-3 shrink-0' aria-hidden />
+                <span className='truncate'>via app · {m.via_app}</span>
+              </span>
+            )}
             {m.edited_at && !deleted && <span className='italic'>(edited)</span>}
             {new Date(m.date_created).toLocaleTimeString('en-US', {
               hour: 'numeric',

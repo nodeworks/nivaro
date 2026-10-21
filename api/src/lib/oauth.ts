@@ -5,8 +5,32 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 
-/** The one scope: the connected app acts as the signed-in person, with their permissions. */
+/** The base scope: the connected app acts as the signed-in person, with their permissions. */
 export const OAUTH_SCOPE = 'nivaro'
+
+/**
+ * Chat (#2492): read the person's conversations and post in them. Never part of
+ * the base scope — the person ticks it on the consent page, and a connection
+ * without it gets no chat tools and is refused on /api/chat.
+ */
+export const OAUTH_CHAT_SCOPE = 'chat'
+
+export const OAUTH_SCOPES = [OAUTH_SCOPE, OAUTH_CHAT_SCOPE] as const
+
+/** The scope tokens in a space-separated scope string (empty tokens dropped). */
+export function scopeTokens(scope: string | null | undefined): string[] {
+  return (scope ?? '').split(/\s+/).filter(Boolean)
+}
+
+/** Whether every token in a requested scope is one Nivaro offers. */
+export function offeredScope(scope: string | null | undefined): boolean {
+  return scopeTokens(scope).every((s) => (OAUTH_SCOPES as readonly string[]).includes(s))
+}
+
+/** The scope a grant carries: the base scope, plus chat when the person allowed it. */
+export function grantedScope(chat: boolean): string {
+  return chat ? `${OAUTH_SCOPE} ${OAUTH_CHAT_SCOPE}` : OAUTH_SCOPE
+}
 
 /** Access tokens start `nvo_`, refresh tokens `nvor_` — authenticate routes on the prefix. */
 export const ACCESS_PREFIX = 'nvo_'

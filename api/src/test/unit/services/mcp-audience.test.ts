@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CHAT_KEY_SCOPE,
+  keyChatAccess,
   MCP_INNER_HEADER,
   markMcpInnerRequest,
+  mcpAppLabel,
+  mcpChatAccess,
   mcpInnerHeaderValue,
   normalizedPath,
-  oauthAudienceRefusal
+  oauthAudienceRefusal,
+  oauthScopeRefusal
 } from '../../../services/mcp-config.js'
 
 type Req = Parameters<typeof oauthAudienceRefusal>[0]
@@ -62,5 +67,71 @@ describe('OAuth token audience', () => {
     await markMcpInnerRequest(forged)
     expect(forged.mcpInner).toBeUndefined()
     expect(forged.headers[MCP_INNER_HEADER]).toBeUndefined()
+  })
+})
+
+describe('chat consent (#2492)', () => {
+  const r = (o: Record<string, unknown>) => o as unknown as Req
+
+  it('a key gets chat only from an explicit $chat scope, never from *', () => {
+    expect(keyChatAccess([{ collection: '*', actions: ['*'] }])).toBe('none')
+    expect(keyChatAccess([{ collection: CHAT_KEY_SCOPE, actions: ['read'] }])).toBe('read')
+    expect(keyChatAccess([{ collection: CHAT_KEY_SCOPE, actions: ['read', 'create'] }])).toBe(
+      'post'
+    )
+    expect(keyChatAccess(undefined)).toBe('none')
+  })
+
+  it('an OAuth connection needs the chat scope; static tokens and sessions get none', () => {
+    expect(mcpChatAccess(r({ authMethod: 'oauth', oauthScopes: ['nivaro', 'chat'] }))).toBe('post')
+    expect(mcpChatAccess(r({ authMethod: 'oauth', oauthScopes: ['nivaro'] }))).toBe('none')
+    expect(
+      mcpChatAccess(
+        r({ authMethod: 'api_key', apiKeyScopes: [{ collection: '$chat', actions: ['read'] }] })
+      )
+    ).toBe('read')
+    expect(mcpChatAccess(r({ authMethod: 'token' }))).toBe('none')
+    expect(mcpChatAccess(r({ authMethod: 'session' }))).toBe('none')
+  })
+
+  it('refuses every chat route to a connection without the chat scope', () => {
+    for (const u of ['/api/chat/rooms', '/api/chat/messages?room=global', '/api/Chat/messages'])
+      expect(oauthScopeRefusal(r({ url: u }), ['nivaro']), u).toMatch(/not allowed to use chat/)
+    expect(oauthScopeRefusal(r({ url: '/api/chat/rooms' }), ['nivaro', 'chat'])).toBeNull()
+    expect(oauthScopeRefusal(r({ url: '/api/chatter' }), ['nivaro'])).toBeNull()
+    expect(oauthScopeRefusal(r({ url: '/api/items/workflows' }), ['nivaro'])).toBeNull()
+  })
+
+  it('labels every OAuth / API-key post from server-known facts, never from headers', () => {
+    const h = (app?: string) => (app ? { 'x-nivaro-app': app } : {})
+    expect(
+      mcpAppLabel(
+        r({ headers: h(), authMethod: 'oauth', oauthClientId: 'nvc_1', oauthClientName: 'ChatGPT' })
+      )
+    ).toEqual({ name: 'ChatGPT', ref: 'oauth client nvc_1' })
+    // A key holder cannot drop the label by leaving the MCP header off — or spoofing another.
+    for (const app of [undefined, 'mcp', 'admin'])
+      expect(
+        mcpAppLabel(r({ headers: h(app), authMethod: 'api_key', apiKeyId: 12, apiKeyName: 'ERP' }))
+      ).toEqual({ name: 'ERP', ref: 'api key 12' })
+    // A self-registered name is cleaned and capped; it stays app text.
+    const long = mcpAppLabel(
+      r({
+        headers: h(),
+        authMethod: 'oauth',
+        oauthClientId: 'nvc_2',
+        oauthClientName: `Rob\u0000 Lee${' x'.repeat(80)}`
+      })
+    )
+    expect(long?.name.startsWith('Rob Lee')).toBe(true)
+    expect(long?.name.length).toBe(60)
+    expect(
+      mcpAppLabel(r({ headers: h(), authMethod: 'oauth', oauthClientId: 'nvc_3' }))?.name
+    ).toBe('Connected app')
+    // The person themselves: never labelled, header or not.
+    expect(mcpAppLabel(r({ headers: h('mcp'), authMethod: 'session' }))).toBeNull()
+    expect(mcpAppLabel(r({ headers: h('mcp'), authMethod: 'token' }))).toBeNull()
+    // An OAuth flag without a client id is not trusted.
+    expect(mcpAppLabel(r({ headers: h(), authMethod: 'oauth' }))).toBeNull()
   })
 })

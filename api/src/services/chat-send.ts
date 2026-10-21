@@ -67,6 +67,13 @@ export interface PostChatActor {
   system?: boolean
   /** Already checked by the caller (flows validate their own room). */
   skipVisibility?: boolean
+  /**
+   * The connected app (an AI assistant over MCP, #2492) that wrote it for the
+   * person: stored in `via_app` and shown beside the message.
+   */
+  viaApp?: string | null
+  /** The credential behind viaApp ("oauth client nvc_…", "api key 12") — kept on the activity row. */
+  viaRef?: string | null
 }
 
 export interface ChatRow {
@@ -88,6 +95,8 @@ export interface ChatRow {
   time_refs: TimeRef[]
   masquerade_admin?: string | null
   masquerade_admin_name?: string | null
+  /** The connected app that posted it for the sender (#2492). */
+  via_app?: string | null
   /** A retry that matched an earlier send — nothing was re-sent. */
   duplicate?: boolean
 }
@@ -102,7 +111,9 @@ const OPTIONAL = [
   'client_id',
   'mentions',
   'time_refs',
-  'masquerade_admin'
+  'masquerade_admin',
+  // migration 478 (#2492)
+  'via_app'
 ] as const
 type OptionalCol = (typeof OPTIONAL)[number]
 
@@ -239,10 +250,17 @@ async function postInner(
   }
   const cols = await chatColumns()
   const senderId = actor.senderId !== undefined ? actor.senderId : (user?.id ?? null)
-  const senderName =
+  const viaApp = actor.viaApp ? String(actor.viaApp).trim().slice(0, 60) || null : null
+  const baseSenderName =
     actor.senderName !== undefined
       ? actor.senderName
       : nameOf(user as unknown as Record<string, unknown>)
+  // Where migration 478 has not run, the app's name rides the sender name so the
+  // message still says who wrote it.
+  const senderName =
+    viaApp && !cols.has('via_app')
+      ? `${baseSenderName ?? 'Someone'} (via app · ${viaApp})`
+      : baseSenderName
   const system = !!actor.system
   const clientId = input.clientId ? String(input.clientId).slice(0, 64) : null
 
@@ -360,6 +378,7 @@ async function postInner(
   if (cols.has('client_id') && clientId) insert.client_id = clientId
   if (cols.has('mentions') && mentionIds.length) insert.mentions = JSON.stringify(mentionIds)
   if (cols.has('time_refs') && timeRefs.length) insert.time_refs = JSON.stringify(timeRefs)
+  if (cols.has('via_app') && viaApp) insert.via_app = viaApp
 
   const [inserted] = await db('chat_messages').insert(insert).returning('id')
   const id = Number(
@@ -392,7 +411,8 @@ async function postInner(
     mentions: mentionIds,
     time_refs: timeRefs,
     masquerade_admin: masq,
-    masquerade_admin_name: masqName
+    masquerade_admin_name: masqName,
+    via_app: viaApp
   }
 
   // chat_messages is accountability='activity'; this raw insert bypasses the
@@ -402,7 +422,7 @@ async function postInner(
     user: senderId,
     collection: 'chat_messages',
     item: String(id),
-    comment: `room ${room}${parentId ? ` · thread ${parentId}` : ''}${urgent ? ' · urgent' : ''}`
+    comment: `room ${room}${parentId ? ` · thread ${parentId}` : ''}${urgent ? ' · urgent' : ''}${viaApp ? ` · via app ${viaApp}${actor.viaRef ? ` (${actor.viaRef})` : ''}` : ''}`
   })
   if (urgent) {
     void logActivity({
@@ -466,7 +486,8 @@ export function toRow(r: Record<string, unknown>): ChatRow {
     no_preview: !!r.no_preview,
     client_id: r.client_id ? String(r.client_id) : null,
     mentions: parseJsonList(r.mentions),
-    time_refs: parseJsonList<TimeRef>(r.time_refs)
+    time_refs: parseJsonList<TimeRef>(r.time_refs),
+    via_app: r.via_app ? String(r.via_app) : null
   }
 }
 

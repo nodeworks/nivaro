@@ -43,6 +43,7 @@ import {
   upsertMembership
 } from '../services/chat-send.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
+import { mcpAppLabel } from '../services/mcp-config.js'
 import {
   loadVisibleMessage,
   nonAdminsFor,
@@ -326,13 +327,17 @@ export async function chatRoutes(app: FastifyInstance) {
       client_id?: string | null
       no_preview?: boolean
     }
+    const via = mcpAppLabel(req)
     try {
       const row = await postChatMessage(
         app,
         {
           user: req.user!,
           isAdmin: !!req.isAdmin,
-          masqueradeAdminId: req.masqueradeAdminId ?? null
+          masqueradeAdminId: req.masqueradeAdminId ?? null,
+          // Every post made with an OAuth token or an API key names that credential (#2492).
+          viaApp: via?.name ?? null,
+          viaRef: via?.ref ?? null
         },
         {
           room: String(b.room ?? ''),
@@ -703,12 +708,15 @@ export async function chatRoutes(app: FastifyInstance) {
     let posted: number | null = null
     if (out.post) {
       try {
+        const via = mcpAppLabel(req)
         const row = await postChatMessage(
           app,
           {
             user: req.user!,
             isAdmin: !!req.isAdmin,
-            masqueradeAdminId: req.masqueradeAdminId ?? null
+            masqueradeAdminId: req.masqueradeAdminId ?? null,
+            viaApp: via?.name ?? null,
+            viaRef: via?.ref ?? null
           },
           { room, message: out.post }
         )
@@ -736,13 +744,16 @@ export async function chatRoutes(app: FastifyInstance) {
       closes_at?: string | null
       parent_id?: number | null
     }
+    const via = mcpAppLabel(req)
     try {
       const out = await createPoll(
         app,
         {
           user: req.user!,
           isAdmin: !!req.isAdmin,
-          masqueradeAdminId: req.masqueradeAdminId ?? null
+          masqueradeAdminId: req.masqueradeAdminId ?? null,
+          viaApp: via?.name ?? null,
+          viaRef: via?.ref ?? null
         },
         {
           room: String(b.room ?? ''),

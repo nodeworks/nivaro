@@ -68,6 +68,8 @@ export interface ChatMessage {
   reactions?: ChatReaction[]
   /** The admin who was masquerading as the sender when it was sent. */
   masquerade_admin_name?: string | null
+  /** The connected app (an AI assistant over MCP) that posted it for the sender (#2492). */
+  via_app?: string | null
   /** Thread reply (#927): the root it answers. Null on the timeline. */
   parent_id?: number | null
   /** Quoted message (#928). */

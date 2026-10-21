@@ -13,7 +13,7 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { createNivaro, type NivaroClient, readMe } from '@nivaro/sdk'
+import { createNivaro, type NivaroClient, readMcpCapabilities, readMe } from '@nivaro/sdk'
 import { identifyingFetch, tagToolCalls } from './identify.js'
 import { registerRecordResource, type SubscriptionHost } from './record-resource.js'
 import { registerResources } from './resources.js'
@@ -21,7 +21,9 @@ import { registerAccessTools } from './tools/access.js'
 import { registerAccountTools } from './tools/account.js'
 import { registerAdminTools } from './tools/admin.js'
 import { registerApprovalTools } from './tools/approvals.js'
+import { type ChatAccess, registerChatTools } from './tools/chat.js'
 import { registerCollectionTools } from './tools/collections.js'
+import { registerDashboardTools } from './tools/dashboards.js'
 import { registerItemTools } from './tools/items.js'
 import { registerLayoutTools } from './tools/layouts.js'
 import { registerLookupTools } from './tools/lookup.js'
@@ -54,6 +56,13 @@ export interface NivaroMcpOptions {
    * notifications/resources/updated later passes one (the hosted endpoint's live mode).
    */
   subscriptions?: SubscriptionHost
+  /**
+   * Chat tools (#2492, CHAT_TOOL_NAMES): 'read' lists rooms and reads messages,
+   * 'post' also posts. Default 'none' — a connection gets chat only when it was
+   * allowed chat (the OAuth chat scope, or an API key's `$chat` scope); the API
+   * refuses chat to an OAuth connection without it anyway.
+   */
+  chatAccess?: ChatAccess
 }
 
 export interface NivaroMcp {
@@ -99,7 +108,17 @@ export const TOOL_NAMES = [
   'support_set_status',
   'list_approvals',
   'decide_approval',
-  'sla_status'
+  'sla_status',
+  'list_dashboards',
+  'read_dashboard',
+  'run_report'
+] as const
+
+/** Chat tools (#2492): the first two with chatAccess 'read', all three with 'post'. */
+export const CHAT_TOOL_NAMES = [
+  'list_chat_rooms',
+  'read_chat_messages',
+  'post_chat_message'
 ] as const
 
 /** The read-only admin/ops tools, registered only with `adminTools: true`. */
@@ -138,6 +157,25 @@ export function createNivaroMcpClient(options: {
   return createNivaro(url, { token: options.token, fetch: identifyingFetch(options.fetch) })
 }
 
+/**
+ * Which optional tool sets the key gets, from the instance (GET /api/mcp/capabilities).
+ * An instance without that route answers as before: admin tools from whoami, no chat.
+ */
+export async function keyCapabilities(
+  client: NivaroClient
+): Promise<{ adminTools: boolean; chatAccess: ChatAccess }> {
+  try {
+    const res = await client.request(readMcpCapabilities())
+    const chat = res.data?.chat
+    return {
+      adminTools: res.data?.admin_tools === true,
+      chatAccess: chat === 'read' || chat === 'post' ? chat : 'none'
+    }
+  } catch {
+    return { adminTools: await keyIsAdmin(client), chatAccess: 'none' }
+  }
+}
+
 /** Whether the key's user is an administrator, from whoami. False when it cannot tell. */
 export async function keyIsAdmin(client: NivaroClient): Promise<boolean> {
   try {
@@ -168,6 +206,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
         'Start with list_collections / describe_collection to learn names and fields,',
         'read_items / aggregate_items to look at data, and list_pipeline_state before a transition.',
         'my_work is the place to start for what needs doing; search finds records by text, find_people finds user ids and @handles.',
+        'list_dashboards, read_dashboard and run_report give dashboard and report figures exactly as the user sees them.',
         'create_item rehearses by default; pass dry_run: false to store. delete_item needs confirm: true.',
         "Refusals come back as JSON with the API's message and code — never retry a refused write unchanged."
       ].join(' ')
@@ -179,12 +218,16 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   registerCollectionTools(server, client)
   registerItemTools(server, client)
   registerPipelineTools(server, client)
-  registerWorkTools(server, client)
+  const chatAccess: ChatAccess =
+    options.chatAccess === 'read' || options.chatAccess === 'post' ? options.chatAccess : 'none'
+  registerWorkTools(server, client, { chat: chatAccess !== 'none' })
   registerRecordTools(server, client)
   registerLookupTools(server, client)
   registerSupportTools(server, client)
   registerApprovalTools(server, client)
   registerStatusTools(server, client)
+  registerDashboardTools(server, client)
+  registerChatTools(server, client, chatAccess)
   if (options.adminTools === true) {
     registerAdminTools(server, client)
     registerAccessTools(server, client)
@@ -208,8 +251,11 @@ export type { SubscriptionHost, SubscriptionRefusal } from './record-resource.js
 export { parseRecordUri, RECORD_URI_TEMPLATE, recordUri } from './record-resource.js'
 export { describeFailure, maskToken } from './result.js'
 export { registerAdminTools, summarizeTraffic } from './tools/admin.js'
+export type { ChatAccess } from './tools/chat.js'
+export { registerChatTools } from './tools/chat.js'
 export type { CollectionSchema, CollectionSummary, FieldSummary } from './tools/collections.js'
 export { summarizeCollection, summarizeSchema } from './tools/collections.js'
+export { compactFigure, registerDashboardTools } from './tools/dashboards.js'
 export { registerLayoutTools } from './tools/layouts.js'
 export type { PipelineStateView } from './tools/pipeline.js'
 export { buildPipelineView } from './tools/pipeline.js'

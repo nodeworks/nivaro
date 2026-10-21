@@ -1,7 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { authenticate } from '../middleware/authenticate.js'
+import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import {
   MCP_INNER_HEADER,
+  type McpChatAccess,
+  mcpAdminTools,
+  mcpChatAccess,
   mcpHttpEnabled,
   mcpInnerHeaderValue,
   mcpOAuthEnabled,
@@ -96,9 +99,17 @@ export function injectFetch(
  * Which tools a caller gets — one rule for /api/mcp and the admin MCP console, so the console
  * lists exactly what a connected app signed in as that admin would see.
  */
-export function mcpToolOptions(req: FastifyRequest): { adminTools: boolean } {
-  // Administrator tools only for an administrator who is not on a collection-scoped key.
-  return { adminTools: !!req.isAdmin && !req.user?.api_key_scopes }
+export function mcpToolOptions(req: FastifyRequest): {
+  adminTools: boolean
+  chatAccess: McpChatAccess
+} {
+  return {
+    // Administrator tools only for an administrator who is not on a collection-scoped key.
+    adminTools: mcpAdminTools(req),
+    // Chat tools only for a connection allowed chat (#2492): the OAuth chat scope or a
+    // key's $chat scope. Without it the server never registers them.
+    chatAccess: mcpChatAccess(req)
+  }
 }
 
 let mcpModules: Promise<{
@@ -166,6 +177,16 @@ export async function mcpRoutes(app: FastifyInstance) {
         )
       }
     }
+  })
+
+  /**
+   * GET /api/mcp/capabilities — which optional tool sets this credential gets. The
+   * npm stdio server asks at startup (an OAuth connection never needs to: the
+   * hosted endpoint above decides for it).
+   */
+  app.get('/mcp/capabilities', { preHandler: requireAuth }, async (req) => {
+    const { adminTools, chatAccess } = mcpToolOptions(req)
+    return { data: { admin_tools: adminTools, chat: chatAccess } }
   })
 
   // GET (the event stream) and DELETE (end the session) exist only inside a live session;

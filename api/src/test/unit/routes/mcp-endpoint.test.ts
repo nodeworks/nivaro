@@ -4,18 +4,26 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 process.env.MCP_PUBLIC_URL = 'https://nivaro.example'
 
 // The endpoint authenticates like any route; here a fixed token stands for a person.
-vi.mock('../../../middleware/authenticate.js', () => ({
-  authenticate: async (req: {
-    headers: Record<string, string>
-    user?: unknown
-    isAdmin?: boolean
-  }) => {
-    if (req.headers.authorization !== 'Bearer good-token') {
-      throw Object.assign(new Error('Invalid token'), { statusCode: 401 })
-    }
-    req.user = { id: 'U1' }
-    req.isAdmin = false
+const fakeAuth = async (req: {
+  headers: Record<string, string>
+  user?: unknown
+  isAdmin?: boolean
+  authMethod?: string
+  oauthScopes?: string[]
+}) => {
+  const auth = req.headers.authorization
+  if (auth !== 'Bearer good-token' && auth !== 'Bearer chat-token') {
+    throw Object.assign(new Error('Invalid token'), { statusCode: 401 })
   }
+  req.user = { id: 'U1' }
+  req.isAdmin = false
+  // chat-token stands for an OAuth connection the person allowed chat for (#2492).
+  req.authMethod = 'oauth'
+  req.oauthScopes = auth === 'Bearer chat-token' ? ['nivaro', 'chat'] : ['nivaro']
+}
+vi.mock('../../../middleware/authenticate.js', () => ({
+  authenticate: fakeAuth,
+  requireAuth: fakeAuth
 }))
 
 const { mcpRoutes } = await import('../../../routes/mcp.js')
@@ -96,6 +104,29 @@ describe('POST /api/mcp', () => {
     expect(JSON.stringify(call.json().result)).toContain('pat@example.com')
     // The tool call reached the API with the caller's own credential.
     expect(seen.at(-1)).toBe('Bearer good-token')
+  })
+
+  it('offers chat tools only to a connection allowed chat (#2492)', async () => {
+    const names = async (auth: string) =>
+      (
+        (await rpc({ jsonrpc: '2.0', id: 4, method: 'tools/list' }, auth)).json().result
+          .tools as Array<{ name: string }>
+      ).map((t) => t.name)
+    const plain = await names('Bearer good-token')
+    expect(plain).toContain('read_dashboard')
+    expect(plain).not.toContain('list_chat_rooms')
+    expect(plain).not.toContain('post_chat_message')
+    const chat = await names('Bearer chat-token')
+    expect(chat).toContain('list_chat_rooms')
+    expect(chat).toContain('post_chat_message')
+  })
+
+  it('answers the stdio server which tool sets the credential gets', async () => {
+    const res = await app.inject({
+      url: '/api/mcp/capabilities',
+      headers: { authorization: 'Bearer chat-token' }
+    })
+    expect(res.json()).toEqual({ data: { admin_tools: false, chat: 'post' } })
   })
 
   it('has no standalone stream (stateless)', async () => {
