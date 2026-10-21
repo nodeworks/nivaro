@@ -16,6 +16,8 @@ import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
 import { AutoArrangeButton } from './AutoArrange'
+import { BulkChangesButton } from './bulk/BulkChangesButton'
+import { useMacroRecorder } from './bulk/useMacroRecorder'
 import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
 import {
   type DesignMark,
@@ -493,7 +495,8 @@ export function LayoutEditor({
   const [currentId, setCurrentId] = useState(layoutId)
   useEffect(() => setCurrentId(layoutId), [layoutId])
   const onSaved = useSavedRefresh(collection)
-  const draft = useLayoutDraft(currentId, { onSaved })
+  // Record / Stop (#2663) sees every apply; the draft saves as before.
+  const { draft, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add'>('layouts')
@@ -665,12 +668,20 @@ export function LayoutEditor({
         onBack={leave}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
         tools={
-          bundle && arrangeable ? (
-            <>
-              <ViewToggle view={view} onView={setView} />
-              <AutoArrangeButton bundle={bundle} apply={draft.apply} />
-            </>
-          ) : null
+          <>
+            {bundle && arrangeable && (
+              <>
+                <ViewToggle view={view} onView={setView} />
+                <AutoArrangeButton bundle={bundle} apply={draft.apply} />
+              </>
+            )}
+            <BulkChangesButton
+              collection={collection}
+              layoutId={currentId}
+              dirty={draft.dirty}
+              recorder={recorder}
+            />
+          </>
         }
         previewExtra={
           <PreviewModes

@@ -31,6 +31,7 @@ import { del, patch, post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
+import { BulkChangesButton } from '../bulk/BulkChangesButton'
 import {
   type ChoiceLabels,
   type DescribeField,
@@ -826,6 +827,7 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
           Read top to bottom: records are matched the same way.
         </p>
       </div>
+      {rows.length > 0 && <BulkChangesButton collection={collection} />}
       {rows.length > 0 && <TestRecordButton collection={collection} onResult={setExplain} />}
       <NewFormButton collection={collection} onCreated={created} />
     </header>
