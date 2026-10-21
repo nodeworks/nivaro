@@ -1,6 +1,6 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
@@ -189,6 +189,15 @@ export function RecordCompareDialog({
     staleTime: 60_000
   })
 
+  // Focus moves into the dialog on open and back to the opener on close, so
+  // keyboard and screen-reader users land in it rather than on the page behind.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
+    dialogRef.current?.focus()
+    return () => opener?.focus?.()
+  }, [])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -237,10 +246,12 @@ export function RecordCompareDialog({
       data-record-compare
     >
       <div
+        ref={dialogRef}
         role='dialog'
         aria-modal='true'
         aria-label={`Compare ${ids.length} records`}
-        className='nvr-pop-in flex max-h-[88vh] w-full max-w-[1100px] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-xl'
+        tabIndex={-1}
+        className='nvr-pop-in flex outline-none max-h-[88vh] w-full max-w-[1100px] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-xl'
       >
         <div className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2.5'>
           <span className='text-[14px] font-semibold text-foreground'>
