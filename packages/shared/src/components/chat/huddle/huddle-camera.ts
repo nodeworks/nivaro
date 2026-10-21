@@ -1,3 +1,4 @@
+import type { SfuSession } from './huddle-sfu'
 import { type HuddleExtension, type HuddlePeer, huddleStore } from './huddle-store'
 
 /**
@@ -12,6 +13,11 @@ import { type HuddleExtension, type HuddlePeer, huddleStore } from './huddle-sto
  * limit pauses its own sending (replaceTrack(null), no renegotiation) and says
  * "Video paused to keep the call smooth"; it resumes by itself when a place
  * frees up.
+ *
+ * In a large huddle (#2859, LiveKit SFU) the camera is published once as its
+ * own Camera-source track; the others receive it labelled, so it fills the
+ * camera tile and never the screen slot. The same four-camera rule pauses it
+ * there by muting the publication.
  */
 
 export const MAX_LIVE_CAMERAS = 4
@@ -48,6 +54,8 @@ class CameraStore {
   private state: CameraState = OFF
   private listeners = new Set<Listener>()
   private senders = new Map<string, RTCRtpSender>()
+  /** The SFU link my camera is published on (#2859), while the huddle is large. */
+  private sfu: SfuSession | null = null
   subscribe = (l: Listener) => {
     this.listeners.add(l)
     return () => {
@@ -103,6 +111,14 @@ class CameraStore {
     // The roster learns the stream id first, so the others file the track as a camera.
     huddleStore.send('huddle:state', { camera: stream.id })
     huddleStore.forEachLink((socket, pc) => this.addTo(socket, pc))
+    const sfu = huddleStore.sfuSession()
+    if (sfu) this.publishOn(sfu)
+  }
+
+  private publishOn(session: SfuSession) {
+    this.sfu = session
+    const track = this.track()
+    if (track) void session.publishCamera(track, this.state.paused).catch(() => null)
   }
 
   stop(): void {
@@ -119,6 +135,7 @@ class CameraStore {
       }
     })
     this.senders.clear()
+    void this.sfu?.unpublishCamera().catch(() => null)
     this.set({ ...OFF })
     huddleStore.send('huddle:state', { camera: null })
   }
@@ -153,6 +170,7 @@ class CameraStore {
     if (paused === this.state.paused) return
     const track = paused ? null : this.track()
     for (const sender of this.senders.values()) void sender.replaceTrack(track).catch(() => null)
+    void this.sfu?.setCameraPaused(paused).catch(() => null)
     this.set({ paused })
   }
 
@@ -166,9 +184,11 @@ class CameraStore {
       // A rejoin is a new server socket: the old senders went with the old links.
       if (this.state.stream) huddleStore.send('huddle:state', { camera: this.state.stream.id })
     },
+    sfu: (session) => this.publishOn(session),
     teardown: () => {
       for (const t of this.state.stream?.getTracks() ?? []) t.stop()
       this.senders.clear()
+      this.sfu = null
       this.set({ ...OFF })
     }
   }

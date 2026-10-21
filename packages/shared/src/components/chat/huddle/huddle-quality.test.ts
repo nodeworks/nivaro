@@ -1,43 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateQuality, summarizeStats } from './huddle-quality'
+import { aggregateQuality, linkSummaryOf } from './huddle-quality'
 
-const report = (items: any[]) => new Map(items.map((i) => [i.id, i]))
-
-describe('summarizeStats', () => {
-  it('finds the relay pair, rtt and loss', () => {
-    const r = summarizeStats(
-      report([
-        { id: 't', type: 'transport', selectedCandidatePairId: 'p' },
-        {
-          id: 'p',
-          type: 'candidate-pair',
-          localCandidateId: 'l',
-          remoteCandidateId: 'r',
-          currentRoundTripTime: 0.08
-        },
-        { id: 'l', type: 'local-candidate', candidateType: 'relay' },
-        { id: 'r', type: 'remote-candidate', candidateType: 'host' },
-        { id: 'a', type: 'inbound-rtp', kind: 'audio', packetsLost: 5, packetsReceived: 95 }
-      ])
-    )
-    expect(r).toEqual({ relay: true, lost: 5, received: 95, rttMs: 80 })
+describe('linkSummaryOf', () => {
+  it('reads the sampler’s path, rtt and running loss totals', () => {
+    expect(linkSummaryOf({ path: 'relay', rtt: 80 }, { lost: 5, received: 95 })).toEqual({
+      relay: true,
+      lost: 5,
+      received: 95,
+      rttMs: 80
+    })
   })
-  it('falls back to the nominated pair; direct links are not relay', () => {
-    const r = summarizeStats(
-      report([
-        {
-          id: 'p',
-          type: 'candidate-pair',
-          nominated: true,
-          state: 'succeeded',
-          localCandidateId: 'l',
-          remoteCandidateId: 'r'
-        },
-        { id: 'l', type: 'local-candidate', candidateType: 'srflx' },
-        { id: 'r', type: 'remote-candidate', candidateType: 'host' }
-      ])
-    )
-    expect(r.relay).toBe(false)
+  it('direct links are not relay; an unmeasured pair is unknown', () => {
+    expect(linkSummaryOf({ path: 'direct', rtt: null }, { lost: 0, received: 0 }).relay).toBe(false)
+    expect(linkSummaryOf({ path: null, rtt: null }, { lost: 0, received: 0 })).toEqual({
+      relay: null,
+      lost: 0,
+      received: 0,
+      rttMs: null
+    })
   })
 })
 

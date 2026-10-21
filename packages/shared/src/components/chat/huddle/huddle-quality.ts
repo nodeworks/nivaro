@@ -4,6 +4,7 @@
  * average packet loss and round-trip time. Numbers only; the server clamps them again and
  * stores totals per huddle, never per person.
  */
+import type { PeerQuality, StatsCursor } from './huddle-audio-logic'
 
 export interface LinkSummary {
   /** The selected candidate pair used a relay (null = no selected pair was found). */
@@ -20,39 +21,20 @@ export interface QualityReport {
   avg_rtt: number | null
 }
 
-type StatsLike = { forEach(cb: (value: any) => void): void; get?(id: string): any }
-
-/** One peer connection's stats → the few numbers the report needs (pure). */
-export function summarizeStats(report: StatsLike): LinkSummary {
-  const byId = new Map<string, any>()
-  const all: any[] = []
-  report.forEach((v) => {
-    all.push(v)
-    if (v?.id) byId.set(v.id, v)
-  })
-  let selectedId: string | null = null
-  for (const v of all)
-    if (v.type === 'transport' && v.selectedCandidatePairId) selectedId = v.selectedCandidatePairId
-  let pair: any = selectedId ? byId.get(selectedId) : null
-  if (!pair)
-    pair = all.find((v) => v.type === 'candidate-pair' && v.nominated && v.state === 'succeeded')
-  let relay: boolean | null = null
-  let rttMs: number | null = null
-  if (pair) {
-    const local = byId.get(pair.localCandidateId)
-    const remote = byId.get(pair.remoteCandidateId)
-    relay = local?.candidateType === 'relay' || remote?.candidateType === 'relay'
-    if (typeof pair.currentRoundTripTime === 'number') rttMs = pair.currentRoundTripTime * 1000
+/**
+ * One link as the quality sampler last measured it (huddle-link-quality.ts, both media
+ * modes) → the few numbers the report needs (pure). Loss counts are the running totals.
+ */
+export function linkSummaryOf(
+  q: Pick<PeerQuality, 'path' | 'rtt'>,
+  cursor: Pick<StatsCursor, 'lost' | 'received'>
+): LinkSummary {
+  return {
+    relay: q.path == null ? null : q.path === 'relay',
+    lost: cursor.lost,
+    received: cursor.received,
+    rttMs: q.rtt == null ? null : q.rtt
   }
-  let lost = 0
-  let received = 0
-  for (const v of all) {
-    if (v.type === 'inbound-rtp' && (v.kind ?? v.mediaType) === 'audio') {
-      lost += Math.max(0, Number(v.packetsLost) || 0)
-      received += Math.max(0, Number(v.packetsReceived) || 0)
-    }
-  }
-  return { relay, lost, received, rttMs }
 }
 
 /** Several links + the ICE failures seen → one report, or null when there is nothing to say. */

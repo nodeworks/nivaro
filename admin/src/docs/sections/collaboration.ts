@@ -876,10 +876,11 @@ export const collabChat: DocSection = {
     {
       type: 'ul',
       items: [
-        'Who is in a huddle, mute and share state, and the "started / ended" lines never move: they stay with this instance. The media server carries sound and shared screens only, and sees rooms by an opaque name (a hash of the room key), never the channel or record name.',
+        'Who is in a huddle, mute and share state, and the "started / ended" lines never move: they stay with this instance. The media server carries sound, cameras and shared screens only, and sees rooms by an opaque name (a hash of the room key), never the channel or record name.',
         'Each person gets a five-minute join token minted here, only for a room they can see, only while the huddle is on the media server, and only once they are listed in its huddle. Leaving, dropping out of the roster or losing access to the room also removes the person from the media server straight away, and the media room is closed when the huddle ends — a later huddle in the same room is a new one. The API secret signs those tokens and never leaves the server (it shows masked under Settings).',
         '**Test media server** on the same page lists the server’s rooms with the saved key and secret: a pass proves the address is reachable from this instance and the pair matches. The `deploy/livekit` folder in the repository holds a compose file, a `livekit.yaml` template that points LiveKit at the same TURN server as the huddles, and the ports to open (TCP 7880/7881, UDP 50000–60000).',
-        'The LiveKit client library downloads only when a huddle first goes large; mesh-only instances never fetch it.'
+        'The LiveKit client library downloads only when a huddle first goes large; mesh-only instances never fetch it.',
+        'Everything a small huddle does works in a large one: cameras (still the first four live), point and draw on a shared screen, reactions, raised hands, notes, Follow me, mute, switching microphone or speaker, speaking rings, picture-in-picture, ringing and scheduled huddles, and the connection bars with the "your connection is poor" banner. On the media server the marks you draw travel through this instance to the others in the huddle (never stored), and the bars and the banner judge your own link to the media server, since one upload serves everyone.'
       ]
     },
     { type: 'h3', id: 'collab-chat-huddle-audio', text: 'Sound, devices and connection' },

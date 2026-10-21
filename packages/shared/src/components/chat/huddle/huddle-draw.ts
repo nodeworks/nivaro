@@ -1,4 +1,4 @@
-import { chatAvatarColor } from '../chat-core'
+import { chatAvatarColor, chatAvatarColorAt, chatAvatarColorIndex } from '../chat-core'
 import { type HuddleExtension, huddleStore } from './huddle-store'
 
 /**
@@ -12,6 +12,13 @@ import { type HuddleExtension, huddleStore } from './huddle-store'
  * every message names the screen it belongs to by its owner's socket id, with
  * coordinates normalised to 0–1 over the shared picture so any size of view
  * lines up. Who drew is the channel's peer — never a field in the message.
+ *
+ * In a large huddle (#2859, LiveKit SFU) there is no mesh and the SFU token
+ * cannot publish data, so the same messages ride the chat socket instead
+ * (`huddle:mark`, api huddle-marks.ts): the server relays them to the others
+ * in the roster, sets who drew from the sending socket, and stores nothing.
+ * The message adds a colour index (a slot of the avatar palette); rendering
+ * is the same.
  */
 
 export const DRAW_CHANNEL_ID = 23
@@ -57,13 +64,18 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 /** Validate one channel message; anything off-shape is dropped (it came from another browser). */
 export function parseDrawMsg(raw: unknown): DrawMsg | null {
   if (typeof raw !== 'string' || raw.length > MAX_MESSAGE) return null
-  let m: Record<string, unknown>
   try {
-    m = JSON.parse(raw) as Record<string, unknown>
+    return parseDrawObject(JSON.parse(raw))
   } catch {
     return null
   }
-  if (!m || typeof m !== 'object' || typeof m.s !== 'string' || !ID.test(m.s)) return null
+}
+
+/** The same check on a decoded message (the socket path, #2859). Twin: api huddle-marks.ts. */
+export function parseDrawObject(raw: unknown): DrawMsg | null {
+  if (!raw || typeof raw !== 'object') return null
+  const m = raw as Record<string, unknown>
+  if (typeof m.s !== 'string' || !ID.test(m.s)) return null
   if (m.t === 'clr') return { t: 'clr', s: m.s }
   if (m.t === 'pt') {
     if (!finite(m.x) || !finite(m.y)) return null
@@ -134,24 +146,31 @@ class DrawStore {
     for (const l of this.listeners) l()
   }
 
-  private who(from: string): { name: string; color: string } {
+  private who(from: string, colorIndex?: number): { name: string; color: string } {
     const s = huddleStore.getSnapshot()
-    if (from === s.self) return { name: 'You', color: drawColor(this.selfUser || from) }
+    if (from === s.self) return { name: 'You', color: drawColor(this.myUser() || from) }
     const p = s.peers.find((x) => x.socket === from)
-    return { name: p?.name || 'Someone', color: drawColor(p?.user || from) }
+    const sent = colorIndex == null ? null : chatAvatarColorAt(colorIndex)
+    return { name: p?.name || 'Someone', color: sent ?? drawColor(p?.user || from) }
   }
   /** My user id, for my own colour (the store only knows my socket). */
   selfUser = ''
+  private myUser(): string {
+    if (this.selfUser) return this.selfUser
+    const s = huddleStore.getSnapshot()
+    if (!s.room || !s.self) return ''
+    return huddleStore.roster(s.room)?.find((p) => p.socket === s.self)?.user ?? ''
+  }
 
-  /** Apply one message from `from` (a peer's socket, or mine). */
-  apply(from: string, msg: DrawMsg, now = Date.now()) {
+  /** Apply one message from `from` (a peer's socket, or mine); `colorIndex` = the socket path's. */
+  apply(from: string, msg: DrawMsg, now = Date.now(), colorIndex?: number) {
     if (msg.t === 'clr') {
       if (!this.marks.has(msg.s) && !this.pointers.has(msg.s)) return
       this.marks.delete(msg.s)
       this.pointers.delete(msg.s)
       return this.changed()
     }
-    const { name, color } = this.who(from)
+    const { name, color } = this.who(from, colorIndex)
     if (msg.t === 'pt') {
       let on = this.pointers.get(msg.s)
       if (!on) {
@@ -216,9 +235,15 @@ class DrawStore {
 
   /** Send to every peer and show it here at once. */
   send(msg: DrawMsg) {
-    const self = huddleStore.getSnapshot().self
+    const snap = huddleStore.getSnapshot()
+    const self = snap.self
     if (!self) return
     this.apply(self, msg)
+    // #2859: on the SFU the marks ride the socket; the server relays them to the roster.
+    if (snap.mode === 'sfu') {
+      huddleStore.send('huddle:mark', { ...msg, c: chatAvatarColorIndex(this.myUser() || self) })
+      return
+    }
     const wire = JSON.stringify(msg)
     for (const ch of this.channels.values()) {
       if (ch.readyState !== 'open') continue
@@ -233,6 +258,34 @@ class DrawStore {
   nextStrokeId(): string {
     this.seq += 1
     return `${Date.now().toString(36)}${this.seq}`
+  }
+
+  /** A mark relayed over the socket (#2859): the server named the sender; the rest is checked. */
+  private onSocketMark(p: Record<string, unknown> | null) {
+    const s = huddleStore.getSnapshot()
+    if (!p || s.status !== 'live' || p.room !== s.room) return
+    const from = p.from
+    if (typeof from !== 'string' || !ID.test(from) || from === s.self) return
+    const msg = parseDrawObject(p)
+    if (msg) this.apply(from, msg, Date.now(), typeof p.c === 'number' ? p.c : undefined)
+  }
+
+  /** People who left the roster take their marks with them (the SFU has no unlink). */
+  private dropGone() {
+    const s = huddleStore.getSnapshot()
+    if (!s.room || s.mode !== 'sfu') return
+    const here = new Set((huddleStore.roster(s.room) ?? []).map((p) => p.socket))
+    if (!here.size) return
+    const gone = new Set<string>()
+    for (const [screen, list] of this.marks) {
+      if (!here.has(screen)) gone.add(screen)
+      for (const m of list) if (!here.has(m.from)) gone.add(m.from)
+    }
+    for (const [screen, on] of this.pointers) {
+      if (!here.has(screen)) gone.add(screen)
+      for (const from of on.keys()) if (!here.has(from)) gone.add(from)
+    }
+    for (const from of gone) this.dropFrom(from)
   }
 
   private dropFrom(from: string) {
@@ -250,6 +303,10 @@ class DrawStore {
   }
 
   readonly ext: HuddleExtension = {
+    attach: (transport) => [
+      transport.on('huddle:mark', (p) => this.onSocketMark(p)),
+      huddleStore.subscribeRosters(() => this.dropGone())
+    ],
     link: (socket, pc) => {
       if (typeof pc.createDataChannel !== 'function') return
       let ch: RTCDataChannel

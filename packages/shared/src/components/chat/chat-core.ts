@@ -1407,9 +1407,19 @@ const AVATAR_COLORS = [
 ]
 
 export function chatAvatarColor(id: string): string {
+  return AVATAR_COLORS[chatAvatarColorIndex(id)]
+}
+
+/** The palette slot behind chatAvatarColor (#2856: huddle marks carry the slot, not the hex). */
+export function chatAvatarColorIndex(id: string): number {
   let h = 0
   for (const c of id) h = (h * 31 + c.charCodeAt(0)) | 0
-  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length]
+  return Math.abs(h) % AVATAR_COLORS.length
+}
+
+/** The palette colour in slot `i`, or null for a slot that does not exist. */
+export function chatAvatarColorAt(i: number): string | null {
+  return Number.isInteger(i) && i >= 0 && i < AVATAR_COLORS.length ? AVATAR_COLORS[i] : null
 }
 
 export function chatInitials(name: string | null): string {

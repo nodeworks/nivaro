@@ -21,8 +21,14 @@
  */
 import { loadDevicePrefs, micConstraints } from './huddle-device-prefs'
 import { huddleLive } from './huddle-live'
-import { aggregateQuality, type LinkSummary, summarizeStats } from './huddle-quality'
-import { MESH_OVERLAP_MS, SfuSession, type SfuTokenConfig } from './huddle-sfu'
+import { aggregateQuality, type LinkSummary } from './huddle-quality'
+import {
+  MESH_OVERLAP_MS,
+  SfuSession,
+  type SfuSource,
+  type SfuStats,
+  type SfuTokenConfig
+} from './huddle-sfu'
 
 export interface HuddlePeer {
   socket: string
@@ -78,6 +84,8 @@ export interface HuddleExtension {
   joined?(): void
   /** I left the huddle, or was removed. */
   teardown?(): void
+  /** #2858: the huddle moved to the SFU and my microphone is published there. */
+  sfu?(session: SfuSession): void
 }
 
 export interface HuddleState {
@@ -183,7 +191,7 @@ class HuddleStore {
   private ping: ReturnType<typeof setInterval> | null = null
   /** One hidden <audio> per peer, owned here so sound survives any room view unmounting. */
   private audio = new Map<string, HTMLAudioElement>()
-  /** #2849 — the latest stats per peer link (sampled on each ping) and the ICE failures seen. */
+  /** #2849 — the latest stats per peer link (from the quality sampler) and the ICE failures seen. */
   private linkStats = new Map<string, LinkSummary>()
   private iceFailed = 0
   /** #2859: the SFU link while the huddle is large; mesh links close once it carries audio. */
@@ -194,6 +202,8 @@ class HuddleStore {
   private sfuAudio = new Set<string>()
   /** Every video stream each peer sends (screen and camera), live or muted, by stream id. */
   private remoteVideo = new Map<string, Map<string, { stream: MediaStream; live: boolean }>>()
+  /** #2858: on the SFU each video arrives labelled — the camera and the screen, per peer. */
+  private sfuVideo = new Map<string, { camera: MediaStream | null; screen: MediaStream | null }>()
   private exts = new Set<HuddleExtension>()
   private extOffs = new Map<HuddleExtension, Array<() => void>>()
   /** Called just before Leave goes out (#2854: a pending note edit is sent first). */
@@ -387,6 +397,7 @@ class HuddleStore {
     this.sfu?.disconnect()
     this.sfu = null
     this.sfuAudio.clear()
+    this.sfuVideo.clear()
     for (const [socket, link] of this.links) this.closeLink(socket, link)
     for (const socket of [...this.audio.keys()]) this.dropAudio(socket)
     this.remoteVideo.clear()
@@ -414,7 +425,6 @@ class HuddleStore {
     if (this.ping) clearInterval(this.ping)
     this.ping = setInterval(() => {
       if (this.state.room) this.transport?.emit('huddle:ping', { room: this.state.room })
-      void this.sampleQuality()
     }, PING_MS)
     if (this.state.muted || this.state.sharing) {
       this.transport?.emit('huddle:state', {
@@ -440,6 +450,9 @@ class HuddleStore {
     // Their audio element goes with them, whichever way the sound came (mesh or SFU).
     for (const socket of [...this.audio.keys()]) {
       if (!peers.some((x) => x.socket === socket)) this.dropAudio(socket)
+    }
+    for (const socket of [...this.sfuVideo.keys()]) {
+      if (!peers.some((x) => x.socket === socket)) this.sfuVideo.delete(socket)
     }
     // A link whose tracks arrived before the roster named the peer: pick them up now.
     for (const peer of peers) {
@@ -501,9 +514,11 @@ class HuddleStore {
       session = new SfuSession()
       this.sfu = session
       await session.connect(cfg, {
-        onTrack: (socket, kind, stream) => this.onSfuTrack(socket, kind, stream),
-        onTrackEnd: (socket, kind) =>
-          this.updatePeer(socket, kind === 'video' ? { video: null } : { audio: null }),
+        onTrack: (socket, source, stream) => this.onSfuTrack(socket, source, stream),
+        onTrackEnd: (socket, source) => this.onSfuTrackEnd(socket, source),
+        onReconnecting: () => {
+          if (this.sfu === session) this.iceFailed++
+        },
         onDisconnected: () => {
           if (this.sfu !== session) return
           this.leave()
@@ -520,6 +535,8 @@ class HuddleStore {
       if (this.state.muted) void session.setMicMuted(true)
       const screen = this.state.localScreen?.getVideoTracks()[0]
       if (screen && this.state.sharing) await session.publishScreen(screen)
+      // #2858: the camera (and anything else riding the media) follows the call onto the SFU.
+      for (const ext of this.exts) ext.sfu?.(session)
     } catch {
       if (this.state.room !== room) return
       this.leave()
@@ -534,8 +551,24 @@ class HuddleStore {
     this.meshCloseTimer = setTimeout(() => this.closeMeshLinks(), MESH_OVERLAP_MS)
   }
 
-  private onSfuTrack(socket: string, kind: 'audio' | 'video', stream: MediaStream) {
-    if (kind === 'video') {
+  /** The SFU's labelled video for a peer (#2858): camera tile and shared screen, apart. */
+  private sfuVideoOf(socket: string) {
+    let v = this.sfuVideo.get(socket)
+    if (!v) {
+      v = { camera: null, screen: null }
+      this.sfuVideo.set(socket, v)
+    }
+    return v
+  }
+
+  private onSfuTrack(socket: string, source: SfuSource, stream: MediaStream) {
+    if (source === 'camera') {
+      this.sfuVideoOf(socket).camera = stream
+      this.updatePeer(socket, { camera: stream })
+      return
+    }
+    if (source === 'screen') {
+      this.sfuVideoOf(socket).screen = stream
       this.updatePeer(socket, { video: stream })
       return
     }
@@ -549,7 +582,22 @@ class HuddleStore {
     if (!waiting && this.links.size) this.closeMeshLinks()
   }
 
-  /** Close the mesh after the switch: the SFU streams already own the audio elements. */
+  private onSfuTrackEnd(socket: string, source: SfuSource) {
+    if (source === 'mic') return this.updatePeer(socket, { audio: null })
+    const v = this.sfuVideo.get(socket)
+    if (source === 'camera') {
+      if (v) v.camera = null
+      this.updatePeer(socket, { camera: null })
+    } else {
+      if (v) v.screen = null
+      this.updatePeer(socket, { video: null })
+    }
+  }
+
+  /**
+   * Close the mesh after the switch: the SFU streams already own the audio elements, and
+   * the tiles show what the SFU delivers (a mesh-only video would be a frozen frame).
+   */
   private closeMeshLinks() {
     if (this.meshCloseTimer) clearTimeout(this.meshCloseTimer)
     this.meshCloseTimer = null
@@ -557,9 +605,16 @@ class HuddleStore {
     this.set({
       peers: this.state.peers.map((p) => ({
         ...p,
-        connection: this.sfuAudio.has(p.socket) ? 'connected' : 'connecting'
+        connection: this.sfuAudio.has(p.socket) ? 'connected' : 'connecting',
+        video: this.sfuVideo.get(p.socket)?.screen ?? null,
+        camera: this.sfuVideo.get(p.socket)?.camera ?? null
       }))
     })
+  }
+
+  /** The SFU link while the huddle is large and connected (#2858 camera, #2848 stats). */
+  sfuSession(): SfuSession | null {
+    return this.state.mode === 'sfu' && this.sfu?.connected ? this.sfu : null
   }
 
   private onDenied(p: { room: string | null; reason: string }) {
@@ -657,16 +712,6 @@ class HuddleStore {
       }
     }
     return link
-  }
-
-  private async sampleQuality() {
-    for (const [socket, link] of this.links) {
-      try {
-        this.linkStats.set(socket, summarizeStats(await link.pc.getStats()))
-      } catch {
-        /* a closed link has no stats */
-      }
-    }
   }
 
   /** A peer's video track: a screen share, or (#2858) the camera the roster names. */
@@ -841,6 +886,26 @@ class HuddleStore {
       pc: l.pc,
       screenSender: l.screenSender
     }))
+  }
+
+  /**
+   * What the one quality sampler reads (#2848/#2849), in either mode: the mesh's peer
+   * connections, or (#2859) the SFU link's per-person and own-uplink stats. While the
+   * mesh is closing after a switch the SFU is the one that counts.
+   */
+  async qualitySources(): Promise<
+    | { mode: 'mesh'; links: ReturnType<HuddleStore['peerLinks']> }
+    | { mode: 'sfu'; sfu: SfuStats | null }
+  > {
+    if (this.state.mode === 'sfu') {
+      return { mode: 'sfu', sfu: this.sfu ? await this.sfu.stats().catch(() => null) : null }
+    }
+    return { mode: 'mesh', links: this.peerLinks() }
+  }
+
+  /** The sampler's latest summary of one link, kept for the leave-time report (#2849). */
+  recordLinkStats(socket: string, summary: LinkSummary) {
+    if (this.state.status === 'live') this.linkStats.set(socket, summary)
   }
 
   /** Swap the microphone on every link in place (replaceTrack: no renegotiation). */
