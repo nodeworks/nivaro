@@ -784,6 +784,18 @@ export const collabChat: DocSection = {
       type: 'p',
       text: 'Chat search also finds messages by meaning, listed after the exact matches and limited to rooms you can see. The room info drawer’s Files and Links tabs are searchable and each link has a Show jump. The @mention picker lists people who are online first.'
     },
+    { type: 'h2', id: 'collab-chat-rooms-extras', text: 'Emoji, drafts, @here and quiet channels' },
+    {
+      type: 'ul',
+      items: [
+        'Custom emoji: an admin adds images (PNG, GIF, JPEG or WebP, up to 256 KB) under the picker’s Workspace tab and gives each a shortcode. `:shortcode:` in a message and in a reaction shows the image. A removed emoji shows as its text again. The image files are private to the emoji list, they never appear in the file library for other people.',
+        'Drafts: unsent text in a room is saved about a second and a half after you stop typing and appears in another browser or device. Rooms with a draft show a pencil in the list. Sending or emptying the box removes it, and drafts untouched for 30 days are deleted. Attachments and thread replies are not synced.',
+        '@channel and @here: in a channel’s settings, choose whether the owner and admins, every member, or only admins may use them. @here still notifies only members who are online, up to 300.',
+        'DM time hint: the DM header shows the other person’s local time, from their profile time zone or else the zone their browser reported. While you type outside their working hours (08:00 to 18:00 on weekdays unless they set `working_hours` in preferences) a quiet note says what time it is for them.',
+        'Quiet channels: a channel with no posts for 90 days (Admin > Chat analytics > Channels sets the number, 0 turns it off) sends its owner one notification. The owner sees Archive or Keep open at the top of the channel. Keep restarts the clock. Archived channels stay searchable and can be reopened in their settings. Admins see the waiting and archived lists in the same tab.',
+        'Membership history: owners and admins see who joined, left, was added or removed, and by whom, under the members panel. Admins see every channel’s changes in Chat analytics > Channels. `GET /api/chat/channels/:id/membership-history` and `GET /api/chat/admin/membership-history` return the same events.'
+      ]
+    },
     { type: 'h2', id: 'collab-chat-assistant', text: 'The assistant in rooms' },
     {
       type: 'p',

@@ -6,7 +6,14 @@ import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { linkTo } from './app-links.js'
-import { canSeeRoom, channels, generalChannel, parseRoom } from './chat.js'
+import {
+  canSeeRoom,
+  channels,
+  generalChannel,
+  type MentionPolicy,
+  mayBroadcastMention,
+  parseRoom
+} from './chat.js'
 import { recordChatSend, recordChatSendFailure } from './chat-health.js'
 import { parseTimeRefs, type TimeRef } from './chat-time-refs.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
@@ -426,6 +433,12 @@ async function postInner(
     // Sending is also reading; writing in an archived room brings it back.
     if (user && String(user.id).toUpperCase() === String(senderId).toUpperCase()) {
       await touchWatermark(String(senderId), room)
+      // The unsent text is now a message (#2474) — drop the synced draft everywhere.
+      if (!row.parent_id) {
+        void import('./chat-drafts.js')
+          .then((m) => m.clearDraft(String(senderId), room))
+          .catch(() => {})
+      }
       await db('nivaro_chat_memberships')
         .where({ user: String(senderId), room })
         .whereNotNull('archived_at')
@@ -534,11 +547,13 @@ async function fanOut(
       ? 'here'
       : null
   if (bullhorn && parsedRoom.kind === 'channel') {
-    const ch = (await db('nivaro_chat_channels')
-      .where({ key: parsedRoom.channelKey })
-      .first('created_by', 'name')) as { created_by?: string | null; name?: string } | undefined
-    const allowed =
-      actor.isAdmin || String(ch?.created_by ?? '').toUpperCase() === senderId.toUpperCase()
+    const ch = (await db('nivaro_chat_channels').where({ key: parsedRoom.channelKey }).first()) as
+      | { created_by?: string | null; name?: string; mention_policy?: string | null }
+      | undefined
+    const allowed = mayBroadcastMention(
+      { created_by: ch?.created_by ?? null, mention_policy: ch?.mention_policy as MentionPolicy },
+      { id: senderId, isAdmin: actor.isAdmin }
+    )
     if (allowed) {
       let members = (
         (await db('nivaro_chat_memberships').where({ room }).select('user')) as Array<{

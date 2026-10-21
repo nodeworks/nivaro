@@ -610,6 +610,10 @@ export interface ChannelMeta {
   links?: Array<{ label: string; url: string }>
   welcome_note?: string | null
   default_roles?: string[]
+  /** Who may use @channel / @here (#2483); null = the owner and admins. */
+  mention_policy?: 'owner' | 'members' | 'admins' | null
+  /** Set while the owner has an unanswered idle-archive suggestion (#2485). */
+  archive_suggested_at?: string | null
 }
 
 interface ServerRoom {
@@ -866,6 +870,7 @@ export function useChannelAdmin(channelId: number | null) {
       links?: Array<{ label: string; url: string }>
       welcome_note?: string | null
       default_roles?: string[]
+      mention_policy?: 'owner' | 'members' | 'admins' | null
     }) => client.request(patch2(`/chat/channels/${channelId}`, patch)),
     onSuccess: refresh
   })
@@ -1052,6 +1057,35 @@ export function useSetMyPreferences() {
       void qc.invalidateQueries({ queryKey: ['presence-online'] })
     }
   })
+}
+
+/**
+ * Record the browser's time zone on the person's preferences once per tab
+ * session (#2484): the fallback for the local-time hint in someone's DM header
+ * when they never chose a profile zone. Written only when it differs.
+ */
+export function useRecordBrowserTimezone(): void {
+  const prefs = useMyPreferences()
+  const setPrefs = useSetMyPreferences()
+  const loaded = Object.keys(prefs).length > 0
+  // biome-ignore lint/correctness/useExhaustiveDependencies: write once per change of the stored value
+  useEffect(() => {
+    if (!loaded) return
+    let zone = ''
+    try {
+      zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+    } catch {
+      return
+    }
+    if (!zone || prefs.browser_timezone === zone) return
+    try {
+      if (sessionStorage.getItem('nvr-browser-tz') === zone) return
+      sessionStorage.setItem('nvr-browser-tz', zone)
+    } catch {
+      /* storage blocked — the equality check above still stops repeat writes */
+    }
+    setPrefs.mutate({ browser_timezone: zone })
+  }, [loaded, prefs.browser_timezone])
 }
 
 export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {

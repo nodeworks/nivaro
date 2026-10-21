@@ -958,6 +958,44 @@ export async function usersRoutes(app: FastifyInstance) {
         patch.timezone = null
       }
     }
+    if ('browser_timezone' in body) {
+      // The zone the browser reported at sign-in (#2484) — the fallback for a DM's
+      // local-time hint when the person never chose a profile zone.
+      const tz = body.browser_timezone
+      if (tz !== null && typeof tz !== 'string') {
+        return reply
+          .code(400)
+          .send({ error: 'browser_timezone must be an IANA zone string or null' })
+      }
+      if (typeof tz === 'string') {
+        try {
+          new Intl.DateTimeFormat('en-US', { timeZone: tz })
+        } catch {
+          return reply.code(400).send({ error: `Unknown timezone "${tz}"` })
+        }
+      }
+      patch.browser_timezone = tz
+    }
+    if ('working_hours' in body) {
+      // Local working hours (#2484): `{ start: 'HH:MM', end: 'HH:MM' }`; null = the default 08:00-18:00 on weekdays.
+      const wh = body.working_hours as { start?: unknown; end?: unknown } | null
+      const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/
+      if (wh === null) {
+        patch.working_hours = null
+      } else if (
+        !wh ||
+        typeof wh !== 'object' ||
+        !hhmm.test(String(wh.start)) ||
+        !hhmm.test(String(wh.end)) ||
+        String(wh.start) >= String(wh.end)
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "working_hours must be { start: 'HH:MM', end: 'HH:MM' } or null" })
+      } else {
+        patch.working_hours = { start: String(wh.start), end: String(wh.end) }
+      }
+    }
     if ('custom_status' in body) {
       // Presence status (#33): free text + emoji beside the idle state,
       // self-clearing at expires_at. null clears immediately.

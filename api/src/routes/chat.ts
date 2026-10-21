@@ -16,22 +16,13 @@ import {
   generalChannel,
   listDirectory,
   listRooms,
+  MENTION_POLICIES,
   parseRoom,
   saveGeneralSettings
 } from '../services/chat.js'
 import { botUserId, chatBotName } from '../services/chat-bot.js'
+import { customEmojiExists } from '../services/chat-emoji.js'
 import { recordChatDelivery } from '../services/chat-health.js'
-import { clearRoomTypeCache, roomForRecord, roomRecordFacts } from '../services/chat-records.js'
-import {
-  ChatSendError,
-  chatColumns,
-  parseJsonList,
-  postChatMessage,
-  changeChatMessage,
-  redeemReplyToken,
-  touchWatermark,
-  upsertMembership
-} from '../services/chat-send.js'
 import {
   castVote,
   closeDuePolls,
@@ -39,7 +30,18 @@ import {
   createPoll,
   loadPolls
 } from '../services/chat-polls.js'
+import { clearRoomTypeCache, roomForRecord, roomRecordFacts } from '../services/chat-records.js'
 import { dropEmbedding, indexChatMessage, searchByMeaning } from '../services/chat-semantic.js'
+import {
+  ChatSendError,
+  changeChatMessage,
+  chatColumns,
+  parseJsonList,
+  postChatMessage,
+  redeemReplyToken,
+  touchWatermark,
+  upsertMembership
+} from '../services/chat-send.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
 import {
   loadVisibleMessage,
@@ -51,6 +53,7 @@ import {
 } from '../services/ops-room-guard.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { announceChatRead } from '../services/user-sync.js'
+import { registerChatExtras } from './chat-extras.js'
 
 /**
  * Chat (`/api/chat`).
@@ -64,6 +67,9 @@ export async function chatRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
   const forbidden = { error: 'That conversation is not available to you' }
+
+  // Custom emoji, draft sync, archive suggestions, membership history.
+  registerChatExtras(app)
 
   // ── Rooms ─────────────────────────────────────────────────────────────────
 
@@ -463,7 +469,8 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!msg) return reply.code(404).send({ error: 'Not found' })
     if (!(await canSeeRoom(req.user!, String(msg.room)))) return reply.code(403).send(forbidden)
     const emoji = String((req.body as { emoji?: string })?.emoji ?? '')
-    if (!REACTION_EMOJI.has(emoji)) return reply.code(400).send({ error: 'Unknown reaction' })
+    if (!REACTION_EMOJI.has(emoji) && !(await customEmojiExists(emoji)))
+      return reply.code(400).send({ error: 'Unknown reaction' })
 
     const existing = await db('nivaro_chat_reactions')
       .where({ message_id: msg.id, user: req.user!.id, emoji })
@@ -1283,7 +1290,20 @@ export async function chatRoutes(app: FastifyInstance) {
     for (const f of ['name', 'topic', 'visibility', 'role']) {
       if (b[f] !== undefined) patch[f] = b[f]
     }
-    if (b.is_archived !== undefined) patch.is_archived = !!b.is_archived
+    if (b.is_archived !== undefined) {
+      patch.is_archived = !!b.is_archived
+      // Reopening restarts the idle clock and clears any pending suggestion (#2485).
+      if (
+        !b.is_archived &&
+        row.is_archived &&
+        (await hasColumn('nivaro_chat_channels', 'archive_kept_at'))
+      ) {
+        patch.archive_kept_at = new Date()
+        patch.archive_suggested_at = null
+      }
+      if (b.is_archived && (await hasColumn('nivaro_chat_channels', 'archive_suggested_at')))
+        patch.archive_suggested_at = null
+    }
     if (b.icon !== undefined || b.color !== undefined) {
       const look = channelLookPatch(b)
       if ('error' in look) return reply.code(400).send({ error: look.error })
@@ -1519,13 +1539,28 @@ export async function chatRoutes(app: FastifyInstance) {
       })
     if (b.dry_run) return { data: { would_add: toAdd.length, skipped, source } }
     for (const u of toAdd) await upsertMembership(u, room, { last_read_at: new Date() })
-    void logActivity({
-      action: 'chat-channel-member-add',
-      user: req.user?.id ?? null,
-      collection: 'nivaro_chat_channels',
-      item: row.auditItem,
-      comment: `${toAdd.length} added from ${source} to #${row.key}`
-    })
+    // One history line per person (#2784) while the batch is small; a large batch keeps the single summary line.
+    if (toAdd.length > 0 && toAdd.length <= 200) {
+      const actorId = req.user?.id ?? null
+      void (async () => {
+        for (const u of toAdd)
+          await logActivity({
+            action: 'chat-channel-member-add',
+            user: actorId,
+            collection: 'nivaro_chat_channels',
+            item: row.auditItem,
+            comment: `${u} added to #${row.key} from ${source}`
+          }).catch(() => {})
+      })()
+    } else {
+      void logActivity({
+        action: 'chat-channel-member-add',
+        user: req.user?.id ?? null,
+        collection: 'nivaro_chat_channels',
+        item: row.auditItem,
+        comment: `${toAdd.length} added from ${source} to #${row.key}`
+      })
+    }
     return { data: { added: toAdd.length, skipped, source } }
   })
 
@@ -2074,6 +2109,16 @@ async function channelExtrasPatch(
   isAdmin: boolean
 ): Promise<{ patch: Record<string, unknown> } | { error: string }> {
   const patch: Record<string, unknown> = {}
+  if (
+    b.mention_policy !== undefined &&
+    (await hasColumn('nivaro_chat_channels', 'mention_policy'))
+  ) {
+    // Who may use @channel / @here (#2483). Blank = the default, owner and admins.
+    const v = b.mention_policy === null || b.mention_policy === '' ? null : String(b.mention_policy)
+    if (v !== null && !(MENTION_POLICIES as readonly string[]).includes(v))
+      return { error: 'mention_policy must be owner, members or admins' }
+    patch.mention_policy = v === 'owner' ? null : v
+  }
   if (!(await hasColumn('nivaro_chat_channels', 'announce'))) return { patch }
   if (b.announce !== undefined) patch.announce = !!b.announce
   if (b.description !== undefined)

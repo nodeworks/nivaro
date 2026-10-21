@@ -14,6 +14,7 @@ import { useApiFetchConfig, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, formatDateTime, formatRelative } from '../../lib/utils'
 import { TipLayer } from '../TipLayer'
+import { ChannelsAdminTab } from './ChannelArchive'
 import { useUserSearch } from './chat-core'
 
 /**
@@ -115,7 +116,12 @@ interface MessageDetail {
   versions?: Array<{
     version: number
     text: string
-    attachments: Array<{ id: string | number; name: string | null; type: string | null; size: number | null }>
+    attachments: Array<{
+      id: string | number
+      name: string | null
+      type: string | null
+      size: number | null
+    }>
     changed_at: string
     changed_by: string | null
     changed_by_name: string | null
@@ -1251,7 +1257,7 @@ function MessageDetailPanel({
 }
 
 export function ChatAnalyticsView() {
-  const [tab, setTab] = useState<'overview' | 'messages'>('overview')
+  const [tab, setTab] = useState<'overview' | 'messages' | 'channels'>('overview')
   const [room, setRoom] = useState<{ room: string; label: string } | null>(null)
   return (
     <div className='space-y-4' data-chat-analytics>
@@ -1260,7 +1266,8 @@ export function ChatAnalyticsView() {
         {(
           [
             ['overview', 'Overview'],
-            ['messages', 'Messages']
+            ['messages', 'Messages'],
+            ['channels', 'Channels']
           ] as const
         ).map(([k, l]) => (
           <button
@@ -1288,6 +1295,8 @@ export function ChatAnalyticsView() {
             setTab('messages')
           }}
         />
+      ) : tab === 'channels' ? (
+        <ChannelsAdminTab />
       ) : (
         <Messages room={room} onRoomChange={setRoom} />
       )}
