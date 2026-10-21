@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { Parser } from 'expr-eval'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
-import { config } from '../config.js'
 import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { hooks } from '../hooks/registry.js'
@@ -40,6 +39,7 @@ import {
 } from './help-video-files.js'
 import { enforceContracts } from './integration-contracts.js'
 import { type AggregateRow, type AggregateSpec, runAggregate } from './item-aggregates.js'
+import { keysetSecret } from './keyset-secret.js'
 import {
   aliasReadable,
   m2aIdKey,
@@ -52,6 +52,15 @@ import {
 import { applyRowFilter, can, getAllowedFields, getRowFilter, isAdminRole } from './permissions.js'
 import { enforcePickerRules } from './picker-rules.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
+import {
+  getCachedRows,
+  getCachedTotal,
+  labelLookupIds,
+  putCachedRows,
+  putCachedTotal,
+  readEpoch,
+  statementHash
+} from './read-caches.js'
 import { broadcastCollectionUpdate } from './realtime.js'
 import { attachRecordInstance, splitInstanceField } from './record-instance.js'
 import {
@@ -1323,7 +1332,9 @@ async function expandRelations(
   collection: string,
   nested: Record<string, string[]>,
   depth: number,
-  workspaceId?: string
+  workspaceId?: string,
+  /** #2444 — a list page: flat M2O expansions may reuse cached display-label rows. */
+  listRead = false
 ): Promise<void> {
   if (depth > 4 || items.length === 0 || Object.keys(nested).length === 0) return
 
@@ -1408,7 +1419,6 @@ async function expandRelations(
     // Batch fetch — cap at 1000 unique FKs
     const batchValues = [...fkSet].slice(0, 1000)
     const relQ = db(relCollection)
-      .whereIn('id', batchValues)
       .select(selectCols as string[])
       .limit(1000)
     // A record pointing at a help-video recording never expands it.
@@ -1421,7 +1431,30 @@ async function expandRelations(
     await applyWorkspaceScope(relQ, relCollection, workspaceId)
     if (rowFilter) applyRowFilter(relQ, rowFilter, user)
 
-    let relItems = (await relQ) as Record<string, unknown>[]
+    // #2444 — a list page's flat expansion (display labels): the statement without its id
+    // list keys the row cache, so only ids not seen within the last seconds are read. Rows
+    // still pass decryption below for this caller.
+    const flat =
+      listRead &&
+      Object.keys(subNested).length === 0 &&
+      !subState.wantsState &&
+      !subInstance.instance &&
+      subToMany.length === 0
+    let relItems: Record<string, unknown>[]
+    if (flat) {
+      const sig = relQ.toSQL()
+      const signature = statementHash(sig.sql, sig.bindings ?? [])
+      const epoch = readEpoch(relCollection)
+      const cached = getCachedRows(relCollection, signature, batchValues)
+      const fetched = cached.missing.length
+        ? ((await relQ.clone().whereIn('id', cached.missing)) as Record<string, unknown>[])
+        : []
+      putCachedRows(relCollection, signature, cached.missing, fetched, epoch)
+      relItems = [...cached.hits.values()].filter((r): r is Record<string, unknown> => r != null)
+      relItems.push(...fetched)
+    } else {
+      relItems = (await relQ.clone().whereIn('id', batchValues)) as Record<string, unknown>[]
+    }
 
     // Decrypt encrypted fields on expanded items
     relItems = await Promise.all(relItems.map((r) => decryptItemFields(relCollection, r)))
@@ -3187,10 +3220,6 @@ const KEYSET_DATE_TYPES = new Set([
   'time'
 ])
 
-function keysetSecret(): string {
-  return config.SESSION_SECRET || process.env.ENCRYPTION_KEY || 'nivaro-keyset'
-}
-
 async function planKeyset(
   collection: string,
   sort: string[],
@@ -3307,6 +3336,29 @@ async function readItemsAtDepth(
 
 const toManyDepth = new AsyncLocalStorage<number>()
 
+/** #2443 — the count statement carries no gate at all: the whole table is the answer. */
+function isUngatedCount(collection: string, sql: { sql: string; bindings?: readonly unknown[] }) {
+  if (!isMssql() || (sql.bindings?.length ?? 0) > 0) return false
+  return sql.sql === dbRead(collection).count('* as count').toSQL().sql
+}
+
+/** SQL Server's own row count of a table (heap or clustered index); null when unknown. */
+async function partitionRowCount(collection: string): Promise<number | null> {
+  try {
+    const rows = rawRows<{ n: number | string | null }>(
+      await dbRead.raw(
+        `SELECT SUM(p.rows) AS n FROM sys.partitions p
+          WHERE p.object_id = OBJECT_ID(?) AND p.index_id IN (0, 1)`,
+        [collection]
+      )
+    )
+    const n = rows[0]?.n
+    return n == null ? null : Number(n)
+  } catch {
+    return null
+  }
+}
+
 export async function readItems(
   user: User,
   collection: string,
@@ -3346,6 +3398,12 @@ export async function readItems(
   }
 
   const { fields = ['*'], filter = {}, limit = 25, offset = 0, page, search } = query
+  // #2444 — a relation cell's `id _in` lookup: the id list is applied after the cache is asked
+  // (below), every other gate exactly as for any list read.
+  const labelIds = labelLookupIds(query, {
+    conditions,
+    agg: (req?.query as Record<string, string> | undefined)?.agg
+  })
   // Before the cursor plan: a keyset over a credential is an oracle too.
   assertNoSensitivePaths(collection, filter, query.sort ?? [], conditions)
   await assertReadableSystemPaths(user, collection, filter, query.sort ?? [], conditions)
@@ -3483,7 +3541,7 @@ export async function readItems(
     })
   }
 
-  if (Object.keys(filter).length) applyFilters(q, filter, collection, rels)
+  if (Object.keys(filter).length && !labelIds) applyFilters(q, filter, collection, rels)
 
   if (sort.length) {
     await applySorts(q, sort, collection, rels)
@@ -3499,7 +3557,7 @@ export async function readItems(
     whereNotHelpVideoFile(q, `${collection}.id`)
     whereNotHelpVideoFile(countQ, `${collection}.id`)
   }
-  if (Object.keys(filter).length) applyFilters(countQ, filter, collection, rels)
+  if (Object.keys(filter).length && !labelIds) applyFilters(countQ, filter, collection, rels)
 
   // Row-level workspace isolation (no-op when no workspaceId passed or no column)
   await applyWorkspaceScope(q, collection, workspaceId)
@@ -3658,14 +3716,68 @@ export async function readItems(
   }
 
   const skipCount = query.count === false
-  const [rawData, countRows, sumRows] = await span('query+count', () =>
-    Promise.all([
-      q,
-      skipCount ? Promise.resolve([{ count: null }]) : countQ,
-      sumQ ?? Promise.resolve(null)
-    ])
-  )
-  const total = skipCount ? null : Number((countRows[0] as { count: string | number }).count)
+  let rawData: unknown[]
+  let total: number | null
+  let totalApprox = false
+  let sumRows: unknown[] | null
+  if (labelIds) {
+    // #2444 — countQ carries every gate of this read and no id list: with the projection it
+    // names exactly which rows any id can come back as, so it keys the row cache.
+    const sigSql = countQ.toSQL()
+    const signature = statementHash(
+      `${sigSql.sql}|${JSON.stringify(selectFields)}`,
+      sigSql.bindings ?? []
+    )
+    const epoch = readEpoch(collection)
+    const cached = getCachedRows(collection, signature, labelIds)
+    const fetched = cached.missing.length
+      ? ((await span('query', () =>
+          q.clone().whereIn(`${collection}.id`, cached.missing)
+        )) as Record<string, unknown>[])
+      : []
+    putCachedRows(collection, signature, cached.missing, fetched, epoch)
+    const byId = new Map(fetched.map((r) => [String(r.id).toLowerCase(), r]))
+    rawData = labelIds
+      .map((id) =>
+        cached.hits.has(id) ? cached.hits.get(id) : (byId.get(id.toLowerCase()) ?? null)
+      )
+      .filter((r): r is Record<string, unknown> => r != null)
+    total = skipCount ? null : rawData.length
+    sumRows = null
+  } else {
+    // #2443 — `count=approx`: a total up to a few seconds old may stand in for the COUNT(*).
+    const approx = query.count === 'approx' && !skipCount
+    const countSql = approx ? countQ.toSQL() : null
+    const statement = countSql ? statementHash(countSql.sql, countSql.bindings ?? []) : ''
+    const epoch = approx ? readEpoch(collection) : ''
+    const cachedTotal = approx ? getCachedTotal(collection, statement) : null
+    const countPromise: Promise<number | null> = skipCount
+      ? Promise.resolve(null)
+      : cachedTotal != null
+        ? Promise.resolve(cachedTotal)
+        : (async () => {
+            // An unfiltered list of a big table: the row count SQL Server keeps per partition.
+            const estimate =
+              approx && countSql && isUngatedCount(collection, countSql)
+                ? await partitionRowCount(collection)
+                : null
+            if (estimate != null) {
+              totalApprox = true
+              putCachedTotal(collection, statement, estimate, epoch)
+              return estimate
+            }
+            const n = Number(((await countQ) as Array<{ count: string | number }>)[0]?.count)
+            if (approx) putCachedTotal(collection, statement, n, epoch)
+            return n
+          })()
+    if (cachedTotal != null) totalApprox = true
+    const [rows, n, sums] = await span('query+count', () =>
+      Promise.all([q, countPromise, sumQ ?? Promise.resolve(null)])
+    )
+    rawData = rows as unknown[]
+    total = n
+    sumRows = sums as unknown[] | null
+  }
 
   let nextCursor: string | null = null
   if (keyset) {
@@ -3732,7 +3844,7 @@ export async function readItems(
   // Expand M2O relations for dotted fields (e.g. 'category.name', 'category.*')
   if (Object.keys(nestedFieldMap).length > 0 && data.length > 0) {
     await span('expand-relations', () =>
-      expandRelations(user, data, collection, nestedFieldMap, 0, workspaceId)
+      expandRelations(user, data, collection, nestedFieldMap, 0, workspaceId, true)
     )
   }
 
@@ -3759,6 +3871,8 @@ export async function readItems(
     limit,
     offset: effectiveOffset,
     ...(aggregates ? { aggregates } : {}),
+    // #2443 — the total came from the list-total cache or the partition row count.
+    ...(totalApprox ? { total_approx: true } : {}),
     ...(keyset ? { next_cursor: nextCursor } : {}),
     // Aliases whose lists were cut at the per-record limit.
     ...(truncatedRelations.length ? { truncated_relations: truncatedRelations } : {})

@@ -1277,7 +1277,7 @@ export async function queuesRoutes(app: FastifyInstance) {
     // One parser for the route and the cache warm's replayed first pages.
     const parsed = parseQueueItemsQuery(req.query as QueueItemsQuery)
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
-    const { scope, sort, filters: parsedFilters, group, page, limit } = parsed.value
+    const { scope, sort, filters: parsedFilters, group, page, limit, after } = parsed.value
 
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
       | QueueRow
@@ -1293,6 +1293,7 @@ export async function queuesRoutes(app: FastifyInstance) {
       withUnseen: true,
       group,
       ...(page !== undefined ? { page, limit } : {}),
+      ...(after !== undefined ? { after } : {}),
       readGate: {
         signal: clientGoneSignal(reply.raw),
         onWait: (ms) => gateServerTiming(reply, { waitedMs: ms })
@@ -1323,6 +1324,8 @@ export async function queuesRoutes(app: FastifyInstance) {
       available_values: result.availableValues,
       truncated: result.truncated,
       total: result.total,
+      // #2447 — only when the page was read by cursor; otherwise the client keeps paging by number.
+      ...(result.nextCursor !== undefined ? { next_cursor: result.nextCursor } : {}),
       ...(empty ? { empty } : {})
     })
   })

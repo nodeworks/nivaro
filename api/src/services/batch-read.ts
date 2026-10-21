@@ -47,7 +47,8 @@ export const BATCH_READ_QUERY_KEYS = new Set([
   'search',
   'after',
   'count',
-  'conditions'
+  'conditions',
+  'labels'
 ])
 
 function list(v: unknown): string[] | undefined {
@@ -126,6 +127,11 @@ export function parseBatchRead(input: BatchReadInput, index: number): BatchReadP
           ...(raw.after != null ? { after: String(raw.after) } : {}),
           ...(raw.count === '0' || raw.count === 'false' || raw.count === 0 || raw.count === false
             ? { count: false }
+            : raw.count === 'approx'
+              ? { count: 'approx' as const }
+              : {}),
+          ...(raw.labels === '1' || raw.labels === 'true' || raw.labels === 1 || raw.labels === true
+            ? { labels: true }
             : {})
         }
       : {})

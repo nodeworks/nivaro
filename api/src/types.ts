@@ -184,8 +184,12 @@ export interface ItemsQuery {
   /** Keyset paging: `start` (or empty) for the first page, then the
    *  `next_cursor` of the page before. Replaces offset/page when given. */
   after?: string
-  /** false = skip the count query; `total` answers null. */
-  count?: boolean
+  /** false = skip the count query; `total` answers null. 'approx' (#2443) = a total up to a
+   *  few seconds old may answer from the list-total cache (flagged `total_approx`). */
+  count?: boolean | 'approx'
+  /** #2444 — a display-label lookup (`filter={"id":{"_in":[…]}}`): rows may come from the
+   *  short-lived label row cache. Ignored for any other shape. */
+  labels?: boolean
   /** Answer grouped aggregates over the matching rows instead of the rows. */
   aggregate?: import('./services/item-aggregates.js').AggregateSpec
 }
