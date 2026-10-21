@@ -1,10 +1,673 @@
 {
-  "generated_at": "2026-10-20T18:30:48.795Z",
+  "generated_at": "2026-10-21T01:41:07.467Z",
   "releases": [
+    {
+      "version": "0.2.76",
+      "tag": "v0.2.76",
+      "date": "2026-10-20T21:40:54-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "fold the record Summary rail while editing a layout",
+              "hash": "f761f928"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "Form settings in the inspector's frame and look",
+              "hash": "b5c77bc1"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "inspector panel cleanup — fixed header, padding, quiet scope",
+              "hash": "b1c8bdc4"
+            },
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "layout editor docs; granted record tools outside admin",
+              "hash": "5b7f7e0a"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "wire the real inspector into the editor",
+              "hash": "8f913244"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "wire drag and drop and Form settings into the editor",
+              "hash": "878c43f1"
+            },
+            {
+              "section": "Added",
+              "scope": "react",
+              "text": "layout-editor subpath export",
+              "hash": "df05c7ea"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "table columns canvas",
+              "hash": "1f3f148e"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "host the new layout editor; record-page edit mode",
+              "hash": "4afce542"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "inspector",
+              "hash": "6c838132"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "mark moved editor controls with their setting keys",
+              "hash": "d310b4e0"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "form settings",
+              "hash": "49baf017"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "editor shell",
+              "hash": "31ee604e"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "typed drag and drop with overlay and insertion slots",
+              "hash": "c3cf3f58"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "PDF canvas",
+              "hash": "35813371"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "history panel",
+              "hash": "e51ea9f7"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "draft state with autosave and undo",
+              "hash": "82b74fbd"
+            },
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "atomic layout ops endpoint with a shared client twin",
+              "hash": "6294b217"
+            },
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "overview and explain endpoints that mirror /active",
+              "hash": "74140507"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "read view design mode",
+              "hash": "61d427ca"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "ItemEditForm design mode",
+              "hash": "6b8c6221"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "who-gets-which-form overview",
+              "hash": "635d358c"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "design-mode context and node shell",
+              "hash": "3b57e471"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "collection-layouts",
+              "text": "PDF generation is not a config write",
+              "hash": "1cbf8d22"
+            },
+            {
+              "section": "Fixed",
+              "scope": "config-live",
+              "text": "field settings and table writes name their collection",
+              "hash": "9f65c3ae"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "Enter on a canvas tab switches to it again",
+              "hash": "586a05b2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "no \"form changed\" banner from your own layout saves",
+              "hash": "99955efb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "two contrast nits from the final design check",
+              "hash": "0d4dea88"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "read-only config POSTs opt out by flag, not by URL",
+              "hash": "3e0077c8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "missing ?layout= form says so; TableEditor leftovers; docs",
+              "hash": "5b03417a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "banner rule in one tested function; design markers only in design",
+              "hash": "eb598056"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "non-admins schedule only registered, writable fields",
+              "hash": "d3b4f4bc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "layout routes name their collection and refuse bad input cleanly",
+              "hash": "8f7386ee"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-ops",
+              "text": "refuse a kind change that would strand a group's fields",
+              "hash": "ad1b0c55"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "config push skips read POSTs; layout writes name their collection",
+              "hash": "eaf6e916"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "Summary rail strip rides the scroll, says Summary, folds when narrow",
+              "hash": "b915917e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "Form settings rows match the inspector; text saves on pause",
+              "hash": "982ea481"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "inspector offers only what applies, in plain words",
+              "hash": "f0986bd0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "panel look — dark tint cards, AA segments, one type scale",
+              "hash": "f8a563c3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "readable save errors, capitalized Add panel entries, 'Before:' history labels",
+              "hash": "9284d727"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "rule sentences name related records; overlay banner counts records; test search resets",
+              "hash": "a034956d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "no 'form was changed' banner in design mode",
+              "hash": "73b7fcc0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "drops on a step or tab go first; step drag preview is a readable card",
+              "hash": "77d79f51"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "copies stay off the New menu; first form is default; the only layout can't be deleted",
+              "hash": "6a2a916b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "scheduled-changes",
+              "text": "close the unfilterable-value read, honour a * policy",
+              "hash": "0dbdeef2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "scheduled-changes",
+              "text": "gate on the record, its layout grant and field permissions",
+              "hash": "e8c49823"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "table layouts take fields in Apply values and Create with defaults",
+              "hash": "484d9352"
+            },
+            {
+              "section": "Fixed",
+              "scope": "picker-exclusions",
+              "text": "authorize on the record's own layout and item-level update",
+              "hash": "1f4cd933"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "Escape mid-drag, Add-row keyboard start, role field marks",
+              "hash": "bd3d482a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "cascade rules from the draft; slots keep their fold; one meta key",
+              "hash": "6a58caa5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "inherited view browsable; slots keep their place",
+              "hash": "5377271a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "every setting says what it does; markers on controls",
+              "hash": "4b7aa50a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "a report widget's config asks before saving",
+              "hash": "06f3a3a8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "every-form changes merge into one confirm",
+              "hash": "dacbe734"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "zero-layout Edit layout link reads the real 404",
+              "hash": "6300ad37"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "table canvas zones take fields, header matches the grid",
+              "hash": "d9798ea4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "typed text is never overwritten while focused",
+              "hash": "b7ecf69c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "classic read-only guard denies config writes only; record-page layout edit follow-ups",
+              "hash": "f1cdf607"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "moved editors — keys, errors, tips, dark mode",
+              "hash": "94a0d700"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "restore export in barrel after merge",
+              "hash": "2d440ec7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "Make default asks first and is not an undo step",
+              "hash": "42fc6df4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "no drop without a line; NO_DND turns drag off",
+              "hash": "a70b1c8e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "form settings text, field lists, make default",
+              "hash": "aab303ba"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "drops do what the line shows",
+              "hash": "6d906cc1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "shell review round 1; /active returns col_span",
+              "hash": "3f1781e3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "draft load errors, other writers and flush",
+              "hash": "af743f20"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "a tab switch never throws when scrollTo is missing",
+              "hash": "d462b5be"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "history diff refetches on every open",
+              "hash": "e08744a0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "PDF preview uses host API config and sample values",
+              "hash": "9e69153f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "history panel always diffs the live newest save",
+              "hash": "8dd3cc7d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layouts",
+              "text": "ops review round 1 - snapshots, restore nesting, slot order, locks",
+              "hash": "2117e355"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared,api",
+              "text": "draft edits re-render the canvas in place; cap project paths",
+              "hash": "3877fe79"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layouts",
+              "text": "overview says what the renderer and resolver actually do",
+              "hash": "9ab89288"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared,api",
+              "text": "design mode reads draft rows from the server; no write attempts",
+              "hash": "402cbca7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "read view design mode null layout and drilling",
+              "hash": "7aacf8fa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "overview sentences match /active; rename saves once",
+              "hash": "45ec3543"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layouts",
+              "text": "restore unhooks later containers; keep re-sent legacy slugs",
+              "hash": "2ba72848"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layouts",
+              "text": "keep twin placements; version group edits",
+              "hash": "70faf628"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layouts",
+              "text": "save every layout setting, store slugs, exact restore, safe delete",
+              "hash": "504cfb35"
+            }
+          ]
+        },
+        {
+          "label": "Changed",
+          "entries": [
+            {
+              "section": "Changed",
+              "scope": "layouts",
+              "text": "retire the classic layout editor",
+              "hash": "37eaf3d1"
+            },
+            {
+              "section": "Changed",
+              "scope": "admin",
+              "text": "classic Layouts tab uses the shared settings editors",
+              "hash": "36dabaeb"
+            },
+            {
+              "section": "Changed",
+              "scope": "layout-editor",
+              "text": "move field and group editors to shared",
+              "hash": "2cefa167"
+            },
+            {
+              "section": "Changed",
+              "scope": "shared",
+              "text": "one design prop type; read view on DesignCanvas",
+              "hash": "e26e77c3"
+            },
+            {
+              "section": "Changed",
+              "scope": "layout-editor",
+              "text": "host contract; move pickers to shared",
+              "hash": "ec90811a"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "sdk",
+              "text": "point the older picker-exclusion commands at their layout-aware twins",
+              "hash": "d3719bba"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "SDK layout editor section",
+              "hash": "0cdbebfb"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "layout editor close, PDF preview, inherited steps, keyboard select",
+              "hash": "90a43995"
+            },
+            {
+              "section": "Documentation",
+              "scope": "layout-editor",
+              "text": "name the one-line swap to the real dnd layer",
+              "hash": "6da3124e"
+            },
+            {
+              "section": "Documentation",
+              "scope": "layouts",
+              "text": "parity keys for the layout editor rebuild",
+              "hash": "3348386b"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "layout editor commands, ops types and layout-gated record tools",
+              "hash": "ca77b727"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout canvas: test that a drop on a step or tab button lands first in it",
+              "hash": "6e2338e4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor panel: readable remove buttons, tester table and rail label",
+              "hash": "c524bb5b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Form settings: PDF rows, a keyboard pick list, link names kept on close",
+              "hash": "4f20908f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a JSON box saves valid JSON when it goes away while focused",
+              "hash": "7a36c936"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout canvases: PDF preview after the last save, PDF labels, column moves",
+              "hash": "30b51b68"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design canvas: a widget placed in two tabs is two targets",
+              "hash": "0b5d5530"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layouts overview: undo a refused reorder, say a failed default, count per viewer",
+              "hash": "a98d690f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout canvas: Enter selects a node; inherited steps get a dot, not a chip",
+              "hash": "98c0c659"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: editors read fields and relations under their own keys",
+              "hash": "364eb699"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: lazy overview refresh, leave after the last save, one draft per layout",
+              "hash": "687a1500"
+            },
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "fix seven failing suites that had drifted from their code",
+              "hash": "3237f6b1"
+            },
+            {
+              "section": "Other",
+              "scope": "chat",
+              "text": "Online page line carries its path as data-tip",
+              "hash": "2fd95511"
+            },
+            {
+              "section": "Other",
+              "scope": "layout-editor",
+              "text": "parity rows from review; global keys both ways",
+              "hash": "25d6708f"
+            },
+            {
+              "section": "Other",
+              "scope": "layout-editor",
+              "text": "restyle moved editors for light and dark",
+              "hash": "9322172f"
+            },
+            {
+              "section": "Other",
+              "scope": "layouts",
+              "text": "pin the slot-card ordering rule beside both ops twins",
+              "hash": "08d1095e"
+            }
+          ]
+        }
+      ],
+      "count": 105
+    },
     {
       "version": "0.2.75",
       "tag": "v0.2.75",
-      "date": "2026-10-20T14:30:36-04:00",
+      "date": "2026-10-20T14:30:48-04:00",
       "sections": [
         {
           "label": "Other",
