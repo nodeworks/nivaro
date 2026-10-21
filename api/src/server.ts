@@ -12,6 +12,7 @@ import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
 import { describeDbRefusal, errorText } from './lib/db-refusal.js'
+import { applyEarlyHints, loadEarlyHints } from './lib/early-hints.js'
 import { adminAssetCacheControl } from './lib/static-cache.js'
 import { scopeRefusalBody } from './middleware/authenticate.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
@@ -587,6 +588,14 @@ export async function buildServer() {
   // ─── Serve admin static build (release image) ────────────────────────────
   const adminBuildPath = join(import.meta.dirname, '../../admin/dist')
   if (existsSync(adminBuildPath)) {
+    // #2440 — 103 Early Hints + Link for the entry script, stylesheet and fonts (EARLY_HINTS)
+    const earlyHints = loadEarlyHints(adminBuildPath)
+    if (earlyHints.length) {
+      app.addHook('onRequest', async (req, reply) => {
+        const path = req.url.split('?')[0]
+        if (path === '/' || path === '/index.html') applyEarlyHints(req, reply, earlyHints)
+      })
+    }
     await app.register(fastifyStatic, {
       root: adminBuildPath,
       prefix: '/',
@@ -610,6 +619,7 @@ export async function buildServer() {
       if (/^\/api([/?]|$)/.test(req.url) || req.url.startsWith('/socket.io')) {
         return reply.code(404).send({ error: 'Not found' })
       }
+      applyEarlyHints(req, reply, earlyHints)
       reply.sendFile('index.html')
     })
   }

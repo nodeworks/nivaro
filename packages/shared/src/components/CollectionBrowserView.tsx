@@ -81,6 +81,7 @@ import {
 } from '../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
+import { prefetchRecord, useIdleNextPage } from '../lib/prefetch'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { logSearch, logSearchOpen } from '../lib/search-log'
@@ -4699,6 +4700,65 @@ export function CollectionBrowserView({
     .filter((k) => !k.includes('.') && !k.startsWith('__'))
     .sort()
     .join(',')
+  const itemsPageKey = (p: number) => [
+    'cbv-items',
+    collection,
+    appliedSearch,
+    sort,
+    groupBy ? 'grouped' : p,
+    groupBy ? 500 : effPageSize,
+    conditionsParam,
+    aggParam
+  ]
+  const fetchItemsPage = async (p: number) => {
+    type Page = {
+      data: Array<Record<string, unknown>>
+      total: number
+      total_approx?: boolean
+      next_cursor?: string | null
+      aggregates?: Record<string, number>
+    }
+    const base = {
+      limit: groupBy ? 500 : effPageSize,
+      ...(appliedSearch ? { search: appliedSearch } : {}),
+      ...(conditionsParam ? { conditions: conditionsParam } : {}),
+      ...(aggParam ? { agg: aggParam } : {}),
+      // #2443 — the total may be a few seconds old (shown as "about"); rows are always fresh.
+      count: 'approx'
+    }
+    const byNumber = (n: number) =>
+      client.request<Page>(
+        get(`/items/${collection}`, { ...base, page: n, ...(sort ? { sort } : {}) })
+      )
+    if (groupBy) return byNumber(1)
+    // #2447 — forward pages walk by cursor (page 200 costs what page 1 does).
+    const bookKey = JSON.stringify([
+      collection,
+      appliedSearch,
+      sort,
+      effPageSize,
+      conditionsParam,
+      aggParam
+    ])
+    const book = cursorBookRef.current
+    const ask = pageRequest(book, bookKey, p, sort)
+    if (ask.after === undefined && ask.sort === sort) return byNumber(p)
+    try {
+      const res = await client.request<Page>(
+        get(`/items/${collection}`, {
+          ...base,
+          ...(ask.after !== undefined ? { after: ask.after } : { page: p }),
+          ...(ask.sort ? { sort: ask.sort } : {})
+        })
+      )
+      if (ask.after !== undefined) noteNextCursor(book, bookKey, p, res.next_cursor)
+      return res
+    } catch (err) {
+      if (!isCursorRefusal(err)) throw err
+      stopCursors(book, bookKey)
+      return byNumber(p)
+    }
+  }
   const {
     data: itemsRes,
     isLoading,
@@ -4707,70 +4767,27 @@ export function CollectionBrowserView({
     refetch,
     error
   } = useQuery({
-    queryKey: [
-      'cbv-items',
-      collection,
-      appliedSearch,
-      sort,
-      groupBy ? 'grouped' : page,
-      groupBy ? 500 : effPageSize,
-      conditionsParam,
-      aggParam
-    ],
-    queryFn: async () => {
-      type Page = {
-        data: Array<Record<string, unknown>>
-        total: number
-        total_approx?: boolean
-        next_cursor?: string | null
-        aggregates?: Record<string, number>
-      }
-      const base = {
-        limit: groupBy ? 500 : effPageSize,
-        ...(appliedSearch ? { search: appliedSearch } : {}),
-        ...(conditionsParam ? { conditions: conditionsParam } : {}),
-        ...(aggParam ? { agg: aggParam } : {}),
-        // #2443 — the total may be a few seconds old (shown as "about"); rows are always fresh.
-        count: 'approx'
-      }
-      const byNumber = (p: number) =>
-        client.request<Page>(
-          get(`/items/${collection}`, { ...base, page: p, ...(sort ? { sort } : {}) })
-        )
-      if (groupBy) return byNumber(1)
-      // #2447 — forward pages walk by cursor (page 200 costs what page 1 does).
-      const bookKey = JSON.stringify([
-        collection,
-        appliedSearch,
-        sort,
-        effPageSize,
-        conditionsParam,
-        aggParam
-      ])
-      const book = cursorBookRef.current
-      const ask = pageRequest(book, bookKey, page, sort)
-      if (ask.after === undefined && ask.sort === sort) return byNumber(page)
-      try {
-        const res = await client.request<Page>(
-          get(`/items/${collection}`, {
-            ...base,
-            ...(ask.after !== undefined ? { after: ask.after } : { page }),
-            ...(ask.sort ? { sort: ask.sort } : {})
-          })
-        )
-        if (ask.after !== undefined) noteNextCursor(book, bookKey, page, res.next_cursor)
-        return res
-      } catch (err) {
-        if (!isCursorRefusal(err)) throw err
-        stopCursors(book, bookKey)
-        return byNumber(page)
-      }
-    },
+    queryKey: itemsPageKey(page),
+    queryFn: () => fetchItemsPage(page),
     enabled: !!collection && scopeGateOpen,
     placeholderData: (prev) => prev,
     // #2490 — a collection whose live record events are off polls instead (visible tabs only).
     refetchInterval: bc.live_events === 'off' ? 30_000 : false,
     retry: false
+  })
+  // #2448 — idle next page: once this page is in and another exists, fetch it while the
+  // browser is idle so paging forward paints at once (the normal refetch replaces it).
+  useIdleNextPage({
+    qc,
+    enabled:
+      !!collection &&
+      scopeGateOpen &&
+      !groupBy &&
+      !isFetching &&
+      !!itemsRes &&
+      page * effPageSize < (itemsRes.total ?? 0),
+    queryKey: itemsPageKey(page + 1),
+    queryFn: () => fetchItemsPage(page + 1)
   })
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
@@ -6024,21 +6041,14 @@ export function CollectionBrowserView({
     }
   }
 
-  // Hover prefetch (#210): warm ItemEditForm's record query so opening the
-  // row paints instantly. 250ms debounce so sweeping the cursor down the
-  // table doesn't fire a request per row.
+  // Hover prefetch (#210, #2448): warm the record page's readOne AND its layout so opening
+  // the row paints instantly. 250ms debounce so sweeping the cursor down the table doesn't
+  // fire a request per row; the shared per-minute budget caps the rest.
   const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const prefetchRecord = (id: unknown) => {
+  const prefetchRow = (id: unknown) => {
     if (prefetchTimer.current) clearTimeout(prefetchTimer.current)
     prefetchTimer.current = setTimeout(() => {
-      void qc.prefetchQuery({
-        queryKey: ['item', collection, String(id)],
-        queryFn: () =>
-          client
-            .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
-            .then((r) => r.data),
-        staleTime: 30_000
-      })
+      prefetchRecord(qc, client, collection, String(id))
     }, 250)
   }
   const openRow = (id: string | number) => {
@@ -8354,7 +8364,7 @@ export function CollectionBrowserView({
                           key={String(id)}
                           {...askDrag({ collection, id: String(id) })}
                           onClick={() => openRow(id)}
-                          onMouseEnter={() => prefetchRecord(id)}
+                          onMouseEnter={() => prefetchRow(id)}
                           data-row-key={String(id)}
                           title={
                             rowChanges.titleFor(String(id)) ??

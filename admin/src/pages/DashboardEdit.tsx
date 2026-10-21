@@ -1,5 +1,6 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
+  BackgroundRunOffer,
   CumulativeFlowChart,
   type CumulativeFlowData,
   liveQueryMeta,
@@ -330,7 +331,25 @@ function WidgetCard({
       ) : (
         <div className='flex flex-1 items-center justify-center'>
           {isLoading ? (
-            <Loader2 className='h-5 w-5 animate-spin text-slate-300' />
+            <div className='flex w-full flex-col items-center gap-3'>
+              <Loader2 className='h-5 w-5 animate-spin text-slate-300' />
+              {/* #2759 — a known-slow widget can finish on the server */}
+              <NivaroProvider client={presetClient}>
+                <BackgroundRunOffer
+                  className='justify-center text-center'
+                  pending
+                  request={{
+                    method: 'GET',
+                    url: `/dashboards/widgets/${widget.id}/data${
+                      globalFilters.length ? `?extra_filters=${encodeURIComponent(filtersKey)}` : ''
+                    }`
+                  }}
+                  label={widget.title || 'Dashboard widget'}
+                  queryKey={['widget-data', widget.id, filtersKey]}
+                  select={(b) => (b as { data?: unknown } | null)?.data ?? null}
+                />
+              </NivaroProvider>
+            </div>
           ) : !data ? (
             <p className='text-[12px] text-slate-400'>No data</p>
           ) : widget.type === 'count' ||

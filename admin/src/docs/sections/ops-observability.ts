@@ -258,7 +258,7 @@ export const opsConsoleDocs: DocSection = {
       type: 'ul',
       items: [
         'Pre-announce — once the start is under 24 hours away, a warning banner appears for everyone with a countdown and the local start–end times.',
-        'Start — a per-minute sweep flips maintenance mode on at the boundary, carrying the window\u2019s presentation and its end time as the expected-back time. Non-admin writes are refused while it is on, the banner switches to a non-dismissable notice (or the full page takes over), and the alert engines (ops monitors, alert definitions, report alerts) pause — their skipped evaluations are not queued up, they simply do not run.',
+        'Start — a per-minute sweep flips maintenance mode on at the boundary, carrying the window’s presentation and its end time as the expected-back time. Non-admin writes are refused while it is on, the banner switches to a non-dismissable notice (or the full page takes over), and the alert engines (ops monitors, alert definitions, report alerts) pause — their skipped evaluations are not queued up, they simply do not run.',
         'End — the sweep flips maintenance mode off and runs a smoke check (database, Redis, migrations, registered collections, and a self-request). Only when it passes is the "Maintenance complete" all-clear broadcast sent; a failed check raises a high-severity issue instead and holds the all-clear.',
         'Cancel — deleting an active window turns maintenance mode off immediately. The smoke check can also be run by hand at any time from the same card.'
       ]
@@ -460,6 +460,28 @@ GET /api/environments/env-presence         → every registered API, compared`
           'Hours development rows stay in the request log; 0 keeps them.'
         ]
       ]
+    },
+    { type: 'h2', id: 'deploys-early-hints', text: 'Early Hints (103) on the release image' },
+    {
+      type: 'p',
+      text: 'The release image can answer a page load with a 103 Early Hints response before the page itself: it names the entry script and its preloaded chunks, the stylesheet, the font origins and any font the entry stylesheet loads, so the browser starts fetching them while the HTML is still on its way. The list is read from the built index.html when the API starts, so it always names the files of the running build. The same list rides the page response as a `Link` header, which a CDN in front can turn into its own 103.'
+    },
+    {
+      type: 'table',
+      head: ['EARLY_HINTS', 'What is sent'],
+      rows: [
+        [
+          'unset / `off`',
+          'Nothing (the default — whether a 103 passes through depends on the proxy in front).'
+        ],
+        ['`link`', 'Only the `Link` header on the page response.'],
+        ['`on`', 'The 103 as well, to HTTP/1.1 and newer clients. HTTP/1.0 clients never get one.']
+      ]
+    },
+    { type: 'h2', id: 'page-speed-prefetch', text: 'Prefetch on hover and intent' },
+    {
+      type: 'p',
+      text: 'Resting the pointer on a list row or a record link fetches that record and the form layout it opens with, so the record page paints at once. Resting on a menu link (or tabbing to it) loads that screen’s code. While the browser is idle, a list also fetches its next page. A prefetched copy is at most a few seconds old and the page’s normal refresh replaces it. A tab makes at most 30 prefetch requests a minute, so sweeping the mouse down a long table never floods the API, and nothing is prefetched when the browser asks to save data.'
     }
   ]
 }

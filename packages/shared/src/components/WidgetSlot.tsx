@@ -77,6 +77,7 @@ import {
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
 import { affixesFor, formatWidgetValue } from '../lib/widget-value-format'
+import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { type CacheInfo, CacheStamp, type CustomQueryEnvelope, cacheStampTip } from './CacheStamp'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
@@ -1090,6 +1091,8 @@ export function WidgetSlot({
   // Bumped by review_list's onRefetch after a group PATCH settles — included
   // (undebounced) in the render effect's deps to force an immediate refetch.
   const [refetchTick, setRefetchTick] = useState(0)
+  // #2759 — the last render request, so a slow one can be handed to the server as-is.
+  const [renderRequest, setRenderRequest] = useState<Record<string, unknown> | null>(null)
   // Set just before a render so that one request skips the cache.
   const forceRenderRef = useRef(false)
   const refreshWidget = useCallback(() => {
@@ -1352,6 +1355,7 @@ export function WidgetSlot({
           ;(body as Record<string, unknown>).refresh = true
           forceRenderRef.current = false
         }
+        setRenderRequest(body)
         // Through the client when there is one so the host's request gate
         // holds a hidden tab's render (the costliest call on a record page).
         let renderJson: { data: Record<string, unknown> }
@@ -1642,11 +1646,37 @@ export function WidgetSlot({
     </div>
   )
 
+  // #2759 — a known-slow render offers to finish on the server (only with a client: the
+  // run is started and read back through it).
+  const bgOffer = client ? (
+    <BackgroundRunOffer
+      className='mt-2'
+      pending={renderLoading && !!widget}
+      request={
+        renderRequest
+          ? { method: 'POST', url: `/widgets-internal/${widgetId}/render`, body: renderRequest }
+          : null
+      }
+      label={title || 'Widget'}
+      onResult={(b) => {
+        const d = (b as { data?: Record<string, unknown> } | null)?.data
+        if (!d) return
+        hasRenderDataRef.current = true
+        setRenderData(d)
+        setRenderLoading(false)
+        setLoading(false)
+        setError(null)
+      }}
+      onGone={() => setRefetchTick((t) => t + 1)}
+    />
+  ) : null
+
   // Host-provided chrome (group sections, container tabs) → body only.
   if (frameless) {
     return (
       <div>
         {loading && bodySkeleton}
+        {loading && bgOffer}
         {error && <p className='text-[12px] text-red-500'>{error}</p>}
         {!loading && !error && renderData && widget && renderTypedBody()}
       </div>
@@ -1670,6 +1700,7 @@ export function WidgetSlot({
       {open && (
         <div className='border-t border-slate-100 px-4 py-3 dark:border-border'>
           {loading && bodySkeleton}
+          {loading && bgOffer}
           {error && <p className='text-[12px] text-red-500'>{error}</p>}
           {!loading && !error && renderData && widget && renderTypedBody()}
         </div>
