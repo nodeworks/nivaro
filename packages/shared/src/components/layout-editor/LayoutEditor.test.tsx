@@ -223,7 +223,13 @@ const opsCalls = (calls: Cmd[]) =>
     .map((c) => c._body?.ops as LayoutOp[])
 
 async function mount(
-  opts: { mode?: 'page' | 'overlay'; inDialog?: boolean; onBack?: () => void } = {}
+  opts: {
+    mode?: 'page' | 'overlay'
+    inDialog?: boolean
+    onBack?: () => void
+    /** Most tests watch each change reach the server: turn Autosave on (default off in the app). */
+    autosave?: boolean
+  } = {}
 ) {
   const { client, calls } = makeClient()
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -244,6 +250,9 @@ async function mount(
             <button type='button' data-opener=''>
               Edit layout
             </button>
+            <a href='/elsewhere' data-host-link=''>
+              Elsewhere
+            </a>
             {open && editor}
           </div>
         </NivaroProvider>
@@ -253,6 +262,10 @@ async function mount(
   ;(document.querySelector('[data-opener]') as HTMLElement).focus()
   await act(async () => render(true))
   await settle(() => canvasFields().length >= 3)
+  if (opts.autosave ?? true) {
+    click(document.querySelector('[data-autosave-switch]'))
+    await settle(() => !document.querySelector('[data-editor-save]'))
+  }
   return { calls, close: () => act(() => render(false)) }
 }
 
@@ -807,6 +820,96 @@ describe('LayoutEditor', () => {
   it('page mode shows no editing banner', async () => {
     await mount()
     expect(document.querySelector('[data-editing-banner]')).toBeNull()
+  })
+})
+
+describe('LayoutEditor — Save (autosave off)', () => {
+  const addVendor = async () => {
+    click(document.querySelector('[data-editor-tab="add"]'))
+    await settle(() => !!document.querySelector('[data-add-field="vendor"]'))
+    click(document.querySelector('[data-add-field="vendor"]'))
+    await settle(
+      () => document.querySelector('[data-save-status]')?.getAttribute('data-unsaved') === '1'
+    )
+  }
+  const saveBtn = () => document.querySelector('[data-editor-save]') as HTMLButtonElement
+
+  it('holds changes until Save; the top bar counts them; Save sends one batch', async () => {
+    const { calls } = await mount({ autosave: false })
+    const sw = document.querySelector('[data-autosave-switch]')
+    expect(sw?.getAttribute('aria-checked')).toBe('false')
+    expect(saveBtn().disabled).toBe(true)
+    await addVendor()
+    expect(opsCalls(calls)).toHaveLength(0)
+    expect(document.querySelector('[data-save-status]')?.textContent).toBe('1 unsaved change')
+    expect(saveBtn().disabled).toBe(false)
+    click(saveBtn())
+    await settle(() => opsCalls(calls).length === 1)
+    await settle(
+      () => document.querySelector('[data-save-status]')?.getAttribute('data-unsaved') === '0'
+    )
+    expect(opsCalls(calls)[0]).toEqual([
+      expect.objectContaining({ op: 'place', field: 'vendor', group_key: 'main' })
+    ])
+    expect(saveBtn().disabled).toBe(true)
+  })
+
+  it('Cmd+S saves', async () => {
+    const { calls } = await mount({ autosave: false })
+    await addVendor()
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', metaKey: true, bubbles: true }))
+    })
+    await settle(() => opsCalls(calls).length === 1)
+    expect(opsCalls(calls)).toHaveLength(1)
+  })
+
+  it('leaving with unsaved changes asks first: Keep editing stays, Discard leaves unsaved', async () => {
+    const onBack = vi.fn()
+    const { calls } = await mount({ mode: 'overlay', onBack, autosave: false })
+    await addVendor()
+    const done = () => document.querySelector('[data-editing-banner] button') as HTMLElement
+    click(done())
+    await settle(() => !!document.querySelector('[data-unsaved-confirm]'))
+    expect(onBack).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-unsaved-confirm]')?.textContent).toContain(
+      '1 unsaved change'
+    )
+    click(document.querySelector('[data-unsaved-action="keep"]'))
+    await settle(() => !document.querySelector('[data-unsaved-confirm]'))
+    expect(onBack).not.toHaveBeenCalled()
+
+    click(done())
+    await settle(() => !!document.querySelector('[data-unsaved-confirm]'))
+    click(document.querySelector('[data-unsaved-action="discard"]'))
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(opsCalls(calls)).toHaveLength(0)
+  })
+
+  it('Save in the confirm saves, then leaves', async () => {
+    const onBack = vi.fn()
+    const { calls } = await mount({ onBack, autosave: false })
+    await addVendor()
+    click(document.querySelector('[data-editor-topbar] button'))
+    await settle(() => !!document.querySelector('[data-unsaved-confirm]'))
+    click(document.querySelector('[data-unsaved-action="save"]'))
+    await settle(() => onBack.mock.calls.length === 1)
+    expect(opsCalls(calls)).toHaveLength(1)
+  })
+
+  it('an in-app link clicked with unsaved changes is held for the confirm', async () => {
+    await mount({ autosave: false })
+    await addVendor()
+    const link = document.querySelector('[data-host-link]') as HTMLAnchorElement
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
+    act(() => {
+      link.dispatchEvent(ev)
+    })
+    expect(ev.defaultPrevented).toBe(true)
+    await settle(() => !!document.querySelector('[data-unsaved-confirm]'))
+    expect(document.querySelector('[data-unsaved-confirm]')?.textContent).toContain(
+      'leave this page'
+    )
   })
 })
 

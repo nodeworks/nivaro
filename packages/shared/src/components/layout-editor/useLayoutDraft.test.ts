@@ -22,6 +22,8 @@ import {
   inverseOps,
   type LayoutDraft,
   type LayoutDraftOptions,
+  rebasedMessage,
+  saveNote,
   touchesOverview,
   useLayoutDraft
 } from './useLayoutDraft'
@@ -141,16 +143,19 @@ let draft: LayoutDraft
 let qc: QueryClient
 let probeId = 7
 let probeOnSaved: LayoutDraftOptions['onSaved']
+// The autosave suites below run with autosave on; the manual suite turns it off.
+let probeAutosave = true
 let rendered: (() => void) | null = null
 
 function Probe() {
-  draft = useLayoutDraft(probeId, { onSaved: probeOnSaved })
+  draft = useLayoutDraft(probeId, { onSaved: probeOnSaved, autosave: probeAutosave })
   return null
 }
 
 beforeEach(() => {
   probeId = 7
   probeOnSaved = undefined
+  probeAutosave = true
   h.toast.mockClear()
   host = document.createElement('div')
   document.body.appendChild(host)
@@ -640,6 +645,263 @@ describe('useLayoutDraft — leaving, refreshing, reopening', () => {
     expect(h.toast).not.toHaveBeenCalled()
     expect(fieldsIn(server.current, 'main')).toEqual(['title'])
     expect(fieldsIn(server.current, 'details')).toEqual([])
+  })
+})
+
+describe('useLayoutDraft — manual save (autosave off, the default)', () => {
+  beforeEach(() => {
+    probeAutosave = false
+  })
+  const moveStatusFirst: LayoutOp = {
+    op: 'move',
+    from: { field: 'status', group_key: 'main' },
+    to_group_key: 'main',
+    index: 0
+  }
+  const removeNotes: LayoutOp = { op: 'remove', at: { field: 'notes', group_key: 'details' } }
+  const wait = (ms: number) =>
+    act(async () => {
+      await new Promise((r) => setTimeout(r, ms))
+    })
+  const labelOf = (field: string) =>
+    draft.bundle?.placements.find((p) => p.field === field)?.label_override
+
+  it('holds changes locally until Save, then sends them as one batch', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    expect(draft.autosave).toBe(false)
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    act(() => draft.apply([removeNotes], { label: 'Remove Notes' }))
+    await wait(30)
+    expect(server.posts).toHaveLength(0)
+    expect(draft.dirty).toBe(true)
+    expect(draft.unsavedCount).toBe(2)
+    expect(draft.unsavedOps()).toEqual([moveStatusFirst, removeNotes])
+    expect(fieldsIn(draft.bundle, 'main')).toEqual(['status', 'title'])
+    expect(draft.status).toBe('idle')
+
+    await act(async () => {
+      await draft.save()
+    })
+    expect(server.posts).toHaveLength(1)
+    expect(server.posts[0]).toEqual({
+      ops: [moveStatusFirst, removeNotes],
+      base_rev: 'r1',
+      note: '2 changes: Move Status, Remove Notes'
+    })
+    expect(draft.dirty).toBe(false)
+    expect(draft.unsavedOps()).toEqual([])
+    expect(draft.status).toBe('saved')
+    expect(draft.bundle).toEqual(server.current)
+    // Saved steps still undo, as an unsaved change of their own.
+    expect(draft.undoLabel).toBe('Remove Notes')
+  })
+
+  it('a typing burst is one unsaved change until blur; nothing waits for a pause', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    const at = { field: 'title', group_key: 'main' }
+    for (const value of ['P', 'PO', 'PO number'])
+      act(() =>
+        draft.apply([{ op: 'update_placement', at, patch: { label_override: value } }], {
+          label: 'Rename field',
+          text: true
+        })
+      )
+    expect(draft.unsavedCount).toBe(1)
+    expect(labelOf('title')).toBe('PO number')
+    act(() => draft.flush())
+    act(() =>
+      draft.apply([{ op: 'update_placement', at, patch: { label_override: 'PO no.' } }], {
+        label: 'Rename field',
+        text: true
+      })
+    )
+    expect(draft.unsavedCount).toBe(2)
+    await wait(700)
+    expect(server.posts).toHaveLength(0)
+    // Undo pops the newest burst, then the first: back to before the first keystroke.
+    act(() => draft.undo())
+    expect(labelOf('title')).toBe('PO number')
+    act(() => draft.undo())
+    expect(labelOf('title')).toBe(null)
+    expect(draft.dirty).toBe(false)
+    expect(server.posts).toHaveLength(0)
+  })
+
+  it('unsaved steps undo and redo locally; a saved step undoes as an unsaved change', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    const original = content(draft.bundle)
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    act(() => draft.undo())
+    expect(content(draft.bundle)).toEqual(original)
+    expect(draft.dirty).toBe(false)
+    expect(draft.canRedo).toBe(true)
+    act(() => draft.redo())
+    expect(draft.unsavedCount).toBe(1)
+    expect(fieldsIn(draft.bundle, 'main')).toEqual(['status', 'title'])
+    await act(async () => {
+      await draft.save()
+    })
+    expect(server.posts).toHaveLength(1)
+
+    act(() => draft.undo())
+    expect(content(draft.bundle)).toEqual(original)
+    expect(draft.unsavedCount).toBe(1)
+    expect(server.posts).toHaveLength(1)
+    await act(async () => {
+      await draft.save()
+    })
+    expect(server.posts[1].note).toBe('Undo Move Status')
+    expect(content(server.current)).toEqual(original)
+    expect(draft.canRedo).toBe(true)
+  })
+
+  it('a stale Save rebases the unsaved steps onto the newer layout and keeps them', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    server.otherWriter([removeNotes])
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    await act(async () => {
+      await draft.save()
+    })
+    expect(h.toast).toHaveBeenCalledWith(rebasedMessage(1))
+    expect(draft.status).not.toBe('conflict')
+    expect(draft.dirty).toBe(true)
+    expect(fieldsIn(draft.bundle, 'details')).toEqual([])
+    expect(fieldsIn(draft.bundle, 'main')).toEqual(['status', 'title'])
+    // Undo still pops the kept step.
+    expect(draft.undoLabel).toBe('Move Status')
+
+    await act(async () => {
+      await draft.save()
+    })
+    expect(server.posts.map((p) => p.base_rev)).toEqual(['r1', 'r2'])
+    expect(draft.dirty).toBe(false)
+    expect(fieldsIn(server.current, 'main')).toEqual(['status', 'title'])
+    expect(fieldsIn(server.current, 'details')).toEqual([])
+  })
+
+  it('a stale Save whose steps no longer fit keeps the draft in conflict; Discard reloads', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    server.otherWriter([removeNotes])
+    act(() =>
+      draft.apply(
+        [
+          {
+            op: 'move',
+            from: { field: 'notes', group_key: 'details' },
+            to_group_key: 'main',
+            index: 0
+          }
+        ],
+        { label: 'Move Notes' }
+      )
+    )
+    const mine = draft.bundle
+    await act(async () => {
+      await draft.save()
+    })
+    expect(draft.status).toBe('conflict')
+    expect(draft.dirty).toBe(true)
+    expect(draft.bundle).toEqual(mine)
+
+    act(() => draft.discard())
+    expect(draft.dirty).toBe(false)
+    expect(draft.status).toBe('idle')
+    expect(draft.bundle).toEqual(server.current)
+    expect(draft.canUndo).toBe(false)
+  })
+
+  it('a refused Save keeps every change unsaved and says why', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    server.failNext(400, { error: 'Field "due" does not exist', op_index: 1 })
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    await act(async () => {
+      await draft.save()
+    })
+    expect(draft.status).toBe('error')
+    expect(draft.error).toBe('Field "due" does not exist')
+    expect(draft.unsavedOps()).toEqual([moveStatusFirst])
+    expect(fieldsIn(draft.bundle, 'main')).toEqual(['status', 'title'])
+    expect(draft.undoLabel).toBe('Move Status')
+  })
+
+  it('turning autosave on saves what is unsaved; then every change sends at once', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    act(() => draft.setAutosave(true))
+    await settle(() => draft.status === 'saved')
+    expect(draft.autosave).toBe(true)
+    expect(server.posts).toHaveLength(1)
+    expect(draft.dirty).toBe(false)
+    act(() => draft.apply([removeNotes], { label: 'Remove Notes' }))
+    await settle(() => draft.status === 'saved' && server.posts.length === 2)
+    act(() => draft.setAutosave(false))
+    act(() =>
+      draft.apply([{ op: 'layout_update', patch: { tab_mode: 'steps' } }], { label: 'Steps' })
+    )
+    await wait(30)
+    expect(server.posts).toHaveLength(2)
+    expect(draft.unsavedCount).toBe(1)
+  })
+
+  it('a refetch never replaces unsaved changes', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    server.otherWriter([removeNotes])
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: ['layout-editor', 'bundle', 7] })
+    })
+    await wait(30)
+    expect(draft.bundle?.rev).toBe('r1')
+    expect(fieldsIn(draft.bundle, 'details')).toEqual(['notes'])
+    expect(draft.dirty).toBe(true)
+  })
+
+  it('discard drops unsaved steps and gives a saved step its undo back', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    await act(async () => {
+      await draft.save()
+    })
+    const saved = content(draft.bundle)
+    act(() => draft.undo())
+    act(() => draft.apply([removeNotes], { label: 'Remove Notes' }))
+    expect(draft.unsavedCount).toBe(2)
+    act(() => draft.discard())
+    expect(draft.dirty).toBe(false)
+    expect(content(draft.bundle)).toEqual(saved)
+    expect(draft.undoLabel).toBe('Move Status')
+    expect(server.posts).toHaveLength(1)
+  })
+
+  it('reopening a layout closed with unsaved changes finds them again', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    probeId = 8
+    await act(async () => rendered?.())
+    probeId = 7
+    await act(async () => rendered?.())
+    expect(draft.unsavedCount).toBe(1)
+    expect(fieldsIn(draft.bundle, 'main')).toEqual(['status', 'title'])
+  })
+})
+
+describe('saveNote', () => {
+  it('names one step, counts several and stays under the note column', () => {
+    expect(saveNote(['Move Status'])).toBe('Move Status')
+    expect(saveNote(['A', 'B'])).toBe('2 changes: A, B')
+    const long = saveNote(Array.from({ length: 80 }, (_, i) => `Change number ${i}`))
+    expect(long.length).toBeLessThanOrEqual(250)
+    expect(long.endsWith('…')).toBe(true)
   })
 })
 

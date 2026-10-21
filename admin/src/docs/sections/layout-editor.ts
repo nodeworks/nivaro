@@ -101,7 +101,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-scope', text: 'This form only vs every form' },
     {
       type: 'p',
-      text: 'Every setting says where it applies. Most are this form only: they save on the layout, autosave and can be undone. Some live on the field itself (format, currency, unit, mask, cascade filters, column presets, grid totals, file options, deprecation) and change every form that shows the field; a widget\'s own settings change every form that places it. Those are marked "every form", sit outside Undo and History, and save only after an inline confirm ("Save for every form") that names what else they affect.'
+      text: 'Every setting says where it applies. Most are this form only: they save with the layout (on Save, or at once with Autosave on) and can be undone. Some live on the field itself (format, currency, unit, mask, cascade filters, column presets, grid totals, file options, deprecation) and change every form that shows the field; a widget\'s own settings change every form that places it. Those are marked "every form", sit outside Undo and History, and save only after an inline confirm ("Save for every form") that names what else they affect.'
     },
     {
       type: 'note',
@@ -134,11 +134,23 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-saving', text: 'Saving, undo and conflicts' },
     {
       type: 'p',
-      text: 'Every change saves itself. The status chip reads Saving… then Saved. Undo and Redo (⌘Z / ⇧⌘Z, Ctrl+Y) step back through this session\'s changes, each named ("Undo Move Status"). Text in the inspector commits when you pause or leave the box, never per keystroke, and a refresh never overwrites what you are typing.'
+      text: 'Changes wait for Save. The form shows each change at once, but nobody else sees it until you press Save (or ⌘S / Ctrl+S); the top bar counts them ("3 unsaved changes") and Save turns blue while there is something to save. One Save sends every change together, and History names them.'
     },
     {
       type: 'p',
-      text: 'Changes go to the server as small operations against the revision the editor last saw. If another admin (or you in another tab) saved in between, the server refuses the batch; the editor reloads the layout, clears Undo and the chip reads "Reloaded — someone else saved". Nothing is silently overwritten. A refused change rolls back on screen and says why.'
+      text: 'Autosave (the switch in the top bar) saves every change as you make it instead; the status chip reads Saving… then Saved. It is off each time the editor opens and stays as you set it until you close the editor. Turning it on saves anything unsaved straight away.'
+    },
+    {
+      type: 'p',
+      text: "Leaving with unsaved changes asks first, beside what you clicked: Save, Discard or Keep editing. That covers Back, Done, Escape, opening another layout in the rail and links elsewhere in the app; closing or reloading the browser tab gets the browser's own warning. If the editor closes some other way (the browser's back button), the changes stay with that layout: open it again to save or discard them."
+    },
+    {
+      type: 'p',
+      text: 'Undo and Redo (⌘Z / ⇧⌘Z, Ctrl+Y) step back through this session\'s changes, saved or not, each named ("Undo Move Status"). Undoing an unsaved change just takes it away; undoing a saved one is a new change to save (or saves at once with Autosave). Typing in one box counts as one change until you leave the box, and a refresh never overwrites what you are typing or anything unsaved.'
+    },
+    {
+      type: 'p',
+      text: 'Changes go to the server as small operations against the revision the editor last saw. If another admin (or you in another tab) saved in between: with Save, your changes are laid on top of theirs and kept for you to Save again; if one no longer fits (they removed what it changed), a banner offers Reload, which discards your changes and shows their version. With Autosave, the editor reloads the layout, clears Undo and the chip reads "Reloaded — someone else saved". Nothing is silently overwritten. A refused Save keeps your changes and says why. Restoring a version from History drops unsaved changes.'
     },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
@@ -156,7 +168,7 @@ export const layoutEditor: DocSection = {
       type: 'ul',
       items: [
         'Table layouts (the columns a collection shows when it is a grid inside another record) edit on a columns strip that looks like the real grid header: column order and width, plus the Apply values and Create with defaults zones.',
-        'File (PDF) layouts edit their sections in form style, labelled as the PDF prints them; Preview with sample values waits for the last change to save, then renders the real PDF in a new tab. Theme, cover, logo, page size, orientation and button label live in Form settings → PDF, which has its own Preview PDF.',
+        'File (PDF) layouts edit their sections in form style, labelled as the PDF prints them; Preview with sample values waits for the last change to save (unsaved changes are not in it — Save first), then renders the real PDF in a new tab. Theme, cover, logo, page size, orientation and button label live in Form settings → PDF, which has its own Preview PDF.',
         'Summary and detail layouts edit on the read view they render as, with the same selection and drag handles.'
       ]
     },

@@ -523,12 +523,15 @@ describe('FormSettings', () => {
   it('Make default leaves undo as it was', async () => {
     const start = bundleOf('grouped')
     let rev = 1
-    const engine = new LayoutDraftEngine({
-      send: async (ops, _base) => ({ ...applyLayoutOps(start, ops), rev: `r${++rev}` }),
-      saved: () => {},
-      reload: () => {},
-      notify: () => {}
-    })
+    const engine = new LayoutDraftEngine(
+      {
+        send: async (ops, _base) => ({ ...applyLayoutOps(start, ops), rev: `r${++rev}` }),
+        saved: () => {},
+        reload: () => {},
+        notify: () => {}
+      },
+      { autosave: true }
+    )
     engine.receive(start)
     await mount(start, { apply: (ops, o) => engine.apply(ops, o) })
     await click(setting('layout.disable_tasks')?.querySelector('[role="switch"]') ?? null)

@@ -121,10 +121,15 @@ function DiffBody({ diff }: { diff: DiffDto }) {
 
 export function HistoryPanel({
   layoutId,
-  onRestored
+  onRestored,
+  unsavedCount = 0,
+  onDiscardUnsaved
 }: {
   layoutId: number
   onRestored?: () => void
+  /** Unsaved editor changes: a restore drops them (they were made on the old layout). */
+  unsavedCount?: number
+  onDiscardUnsaved?: () => void
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -159,6 +164,8 @@ export function HistoryPanel({
       client.request(post(`/collection-layouts/${layoutId}/versions/${versionId}/restore`)),
     onSuccess: () => {
       setConfirming(null)
+      // Before the refetch: the draft never takes a fetched layout over unsaved changes.
+      onDiscardUnsaved?.()
       void qc.invalidateQueries({ queryKey: bundleKey(layoutId) })
       void qc.invalidateQueries({ queryKey: versionsKey(layoutId) })
       void qc.invalidateQueries({ queryKey: ['layout-editor', 'version-diff', layoutId] })
@@ -238,9 +245,18 @@ export function HistoryPanel({
                       data-restore-confirm={v.id}
                       disabled={restore.isPending}
                       onClick={() => restore.mutate(v.id)}
+                      data-tip={
+                        unsavedCount > 0
+                          ? `Your ${unsavedCount} unsaved ${unsavedCount === 1 ? 'change is' : 'changes are'} dropped`
+                          : undefined
+                      }
                       className='rounded bg-nvr-cyan px-1.5 py-0.5 text-[11px] text-white disabled:opacity-60'
                     >
-                      {restore.isPending ? 'Restoring…' : 'Yes, restore'}
+                      {restore.isPending
+                        ? 'Restoring…'
+                        : unsavedCount > 0
+                          ? 'Restore, drop unsaved'
+                          : 'Yes, restore'}
                     </button>
                     <button type='button' onClick={() => setConfirming(null)} className={btn}>
                       Cancel
