@@ -17,8 +17,22 @@ const state = vi.hoisted(() => ({
   inserts: 0,
   updates: 0,
   rows: [] as Record<string, unknown>[],
-  existing: undefined as Record<string, unknown> | undefined
+  existing: undefined as Record<string, unknown> | undefined,
+  // nivaro_fields rows for 'orders' and the table's physical columns.
+  fields: [] as Array<Record<string, unknown>>,
+  columns: new Set<string>()
 }))
+
+const FIELDS = [
+  { field: 'id', readonly: true, computed_type: null, special: null },
+  { field: 'status', readonly: false, computed_type: null, special: null },
+  { field: 'notes', readonly: false, computed_type: null, special: null },
+  { field: 'budget', readonly: false, computed_type: null, special: null },
+  { field: 'locked', readonly: true, computed_type: null, special: null },
+  { field: 'total', readonly: false, computed_type: 'rollup', special: null },
+  { field: 'user_created', readonly: false, computed_type: null, special: ['user-created'] },
+  { field: 'lines', readonly: false, computed_type: null, special: null }
+]
 
 vi.mock('../../../db/index.js', () => {
   const chain = (table: string) => {
@@ -52,6 +66,10 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   requireAdmin: async () => undefined
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+vi.mock('../../../services/collections.js', () => ({
+  getFields: vi.fn(async () => state.fields),
+  getPhysicalColumns: vi.fn(async () => state.columns)
+}))
 vi.mock('../../../services/permissions.js', () => ({
   can: vi.fn(async () => state.canUpdate),
   getAllowedFields: vi.fn(async (_u: unknown, action: string) =>
@@ -99,6 +117,9 @@ beforeEach(() => {
   state.updates = 0
   state.rows = []
   state.existing = undefined
+  state.fields = FIELDS.map((f) => ({ ...f }))
+  // 'lines' is an alias (o2m): registered, but no column.
+  state.columns = new Set(['id', 'status', 'notes', 'budget', 'locked', 'total', 'user_created'])
 })
 
 describe('POST /scheduled-changes', () => {
@@ -170,6 +191,24 @@ describe('POST /scheduled-changes', () => {
     expect(state.inserts).toBe(1)
   })
 
+  it.each([
+    ['an unregistered column', 'secret_flag'],
+    ['an alias (no column of its own)', 'lines'],
+    ['a read-only field', 'locked'],
+    ['a computed field', 'total'],
+    ['an audit stamp', 'user_created']
+  ])('refuses %s, even under a "*" update policy', async (_what, key) => {
+    state.updateFields = ['*']
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/scheduled-changes',
+      payload: body({ status: 'closed', [key]: 'x' })
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toContain(`"${key}"`)
+    expect(state.inserts).toBe(0)
+  })
+
   it('ignores a layout pin that is not a string', async () => {
     state.layout = null
     const res = await (await app()).inject({
@@ -189,7 +228,7 @@ describe('POST /scheduled-changes', () => {
     const res = await (await app()).inject({
       method: 'POST',
       url: '/api/scheduled-changes',
-      payload: body({ budget: 5 })
+      payload: body({ budget: 5, locked: true, user_created: 'U9' })
     })
     expect(res.statusCode).toBe(201)
     expect(state.resolveArgs).toHaveLength(0)

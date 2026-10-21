@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { getFields, getPhysicalColumns } from '../services/collections.js'
 import { canUpdateItem, readOne } from '../services/items.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { recordToolRefusal } from '../services/record-tool-gate.js'
@@ -30,6 +31,31 @@ function formatChange(row: Record<string, unknown>, readable: Set<string> | null
       Object.entries(changes as Record<string, unknown>).filter(([k]) => readable.has(k))
     )
   }
+}
+
+/** Stamped by the items service itself: never a value someone schedules. */
+const AUDIT_SPECIALS = new Set(['user-created', 'user-updated', 'date-created', 'date-updated'])
+
+/**
+ * The first key a non-admin may not schedule: execution writes each key straight to its
+ * column (no hooks, activity or rollups), so only a registered field with a column of its own
+ * that is not read-only, computed or an audit stamp qualifies. null = all may be scheduled.
+ */
+async function unschedulableKey(collection: string, keys: string[]): Promise<string | null> {
+  if (keys.length === 0) return null
+  const [fields, columns] = await Promise.all([
+    getFields(collection),
+    getPhysicalColumns(collection)
+  ])
+  const byName = new Map(fields.map((f) => [f.field, f]))
+  for (const key of keys) {
+    const f = byName.get(key)
+    // Unregistered, or an alias (o2m, m2m, presentation): no column of its own.
+    if (!f || !columns?.has(key.toLowerCase())) return key
+    if (f.readonly || f.computed_type) return key
+    if ((f.special ?? []).some((s) => AUDIT_SPECIALS.has(s) || s === 'alias')) return key
+  }
+  return null
 }
 
 export async function scheduledChangesRoutes(app: FastifyInstance) {
@@ -130,6 +156,12 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
         if (blocked) {
           return reply.code(403).send({ error: `You may not change the field "${blocked}"` })
         }
+      }
+      const unschedulable = await unschedulableKey(body.collection, Object.keys(body.changes ?? {}))
+      if (unschedulable) {
+        return reply
+          .code(400)
+          .send({ error: `The field "${unschedulable}" can't be changed on a schedule` })
       }
     }
     const PROTECTED_FIELDS = [
