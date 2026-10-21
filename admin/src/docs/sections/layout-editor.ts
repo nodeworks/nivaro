@@ -292,6 +292,19 @@ GET  /api/layout-usage/co-changes/:collection → { data: { revisions, fields, p
       text: 'Usage is kept per form per day (nivaro_layout_usage_daily, nivaro_layout_usage_seen) and deleted after 180 days by the nightly layout-usage-prune job. Only counts are stored; people and records are counted, never listed.'
     },
 
+    { type: 'h2', id: 'layout-editor-reuse', text: 'Reusing forms and sections' },
+    {
+      type: 'ul',
+      items: [
+        'Copy a section to another layout: drag a section from the canvas onto a layout in the Layouts list, or select it and use Copy to layout… in the inspector (which also reaches other collections). It lands at the end of that layout with its tabs, fields and settings. Fields already on that form stay where they are.',
+        'Section library: select a section and use Save to library…. Saved sections show under Add → Section library on every collection; a click adds one after the selection as one undo step. Remove one with the × beside it — forms keep their copies.',
+        'Layout templates: ⋯ → Save as template… in the editor saves the whole form (sections, panels, header, how it behaves). New form → Start with → Template makes a new form from one. Rules for who gets a form, defaults and links to other layouts stay behind.',
+        "Another collection: fields with no field of the same name get their closest match (by name or label), which you can change or set to Leave out. Step conditions, skip-if-filled, field swaps, lock conditions and grid bindings are written in the other collection's terms and are left out.",
+        'New form → Start with → Field list: paste names (one per line or separated by commas) or upload a CSV or text file. Names are matched to fields by name or label, with close spellings marked "?"; names with no match are left out. The form gets one section with the matched fields in that order.',
+        "New form from this record: Test a record on the overview, or the editor's ⋯ while previewing a record (also from a record's Edit layout), makes a form with one section holding the fields that record has filled in, in field order. New form → Start with → A record does the same."
+      ]
+    },
+
     { type: 'h2', id: 'layout-editor-warning', text: 'Instances whose layouts are replaced' },
     {
       type: 'p',
@@ -323,8 +336,21 @@ GET  /api/collection-layouts/health?collection=orders
 GET  /api/collection-layouts/coverage?collection=orders[&fresh=1]
      → { data: { sampled, limit, no_form, rule_error, rows: [{ layout_id, records, rule_matches }] } }
 
-POST /api/collection-layouts  { collection, name, layout_type?, slug?, seed_fields?: true }
-     // seed_fields: one section "Main" holding every visible field ("Create first form")
+POST /api/collection-layouts  { collection, name, layout_type?, slug?, seed_fields?: true | string[],
+                                template_id?, field_map? }
+     // seed_fields: one section "Main" holding every visible field ("Create first form"),
+     // or exactly the named fields in that order; template_id: a saved form template
+     // (field_map renames its fields, { source: target | null })
+
+GET    /api/collection-layouts/templates?kind=form|section   → { data: [{ id, kind, name, fields, ... }] }
+POST   /api/collection-layouts/templates  { kind, name, description?, layout_id, group_key?, bundle? }
+PATCH  /api/collection-layouts/templates/:id  { name?, description? }
+DELETE /api/collection-layouts/templates/:id
+POST   /api/collection-layouts/blocks/plan  { source: { template_id } | { layout_id, group_key },
+                                              target_collection, target_bundle, field_map?, index? }
+     → { ops, already, unmapped, dropped }   // read-only; the editor applies the ops
+POST   /api/collection-layouts/:id/copy-section  { source_layout_id, group_key, field_map? }
+     → { bundle, group_key, already, unmapped, dropped }   // applied through :id's ops
 
 GET  /api/collection-layouts/:id/bundle
      → { layout, groups, placements, rev }

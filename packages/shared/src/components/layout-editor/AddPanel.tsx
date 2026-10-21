@@ -18,6 +18,7 @@ import type { DesignTarget } from './design-context'
 import type { AddSource } from './dnd/collision'
 import { useAddDragSource } from './dnd/node'
 import { useOverviewFields } from './overview/overview-api'
+import { LibraryRows } from './reuse/LibraryRows'
 import { slotName } from './slot-names'
 import { fillText, useFieldFillRates } from './usage/usage-api'
 import type { ApplyOptions } from './useLayoutDraft'
@@ -350,6 +351,17 @@ export function AddPanel({
             }}
           />
         </>
+      )}
+
+      {to === 'form' && (
+        <LibraryRows
+          bundle={bundle}
+          collection={collection}
+          selected={selected}
+          apply={apply}
+          onSelect={onSelect}
+          matches={matches}
+        />
       )}
 
       <p className={head}>Fields</p>

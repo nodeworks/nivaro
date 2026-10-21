@@ -1,10 +1,11 @@
 import { SlidersHorizontal } from 'lucide-react'
-import { useMemo } from 'react'
+import { type ReactNode, useMemo } from 'react'
 import { cn } from '../../lib/utils'
 import { Skeleton } from '../ui/skeleton'
+import { useRailDrop } from './dnd/rail-drop'
 import { useLayoutOverview, useOverviewFields, useRuleChoiceLabels } from './overview/overview-api'
 import { Pill, purposeSegments, rowPill, Sentence } from './overview/purpose'
-import type { OverviewSection } from './overview/types'
+import type { OverviewRow, OverviewSection } from './overview/types'
 
 // The editor's left list: every layout of the collection, grouped as the
 // overview groups them, each with its purpose in words, plus Form settings.
@@ -18,18 +19,78 @@ const RAIL_SECTIONS: Array<{ id: OverviewSection; title: string }> = [
 
 const head = 'px-2 pb-1 pt-3 text-[11.5px] font-semibold text-slate-500 dark:text-muted-foreground'
 
+/** One layout in the rail; while a section is dragged (#2584) it takes the drop as a copy. */
+function RailRow({
+  row,
+  current,
+  settingsOpen,
+  unused,
+  dropTarget,
+  onOpen,
+  children
+}: {
+  row: OverviewRow
+  current: boolean
+  settingsOpen: boolean
+  unused: boolean
+  dropTarget: boolean
+  onOpen: (layoutId: number) => void
+  children: ReactNode
+}) {
+  const drop = useRailDrop(row.layout_id, current || !dropTarget)
+  const on = current && !settingsOpen
+  const pill = rowPill(row)
+  return (
+    <button
+      ref={drop.ref}
+      type='button'
+      data-rail-layout={row.layout_id}
+      data-rail-drop={drop.over ? 'over' : drop.armed ? 'armed' : undefined}
+      aria-current={current ? 'page' : undefined}
+      onClick={() => onOpen(row.layout_id)}
+      className={cn(
+        'flex flex-col gap-px rounded-md px-2 py-1.5 text-left transition-colors',
+        on ? 'bg-accent' : 'hover:bg-muted',
+        current && settingsOpen && 'bg-muted',
+        drop.armed &&
+          'outline-dashed outline-1 -outline-offset-1 outline-slate-300 dark:outline-border',
+        drop.over && 'bg-nvr-cyan/10 outline-nvr-cyan dark:outline-nvr-cyan'
+      )}
+    >
+      <span
+        className={cn(
+          'flex min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-slate-900 dark:text-foreground',
+          unused && 'font-medium text-slate-500 dark:text-muted-foreground'
+        )}
+      >
+        <span className='truncate'>{row.name}</span>
+        {pill && <Pill tone={pill.tone}>{pill.text}</Pill>}
+        {drop.over && (
+          <span className='ml-auto shrink-0 text-[11px] font-medium text-[#0089ad] dark:text-nvr-cyan'>
+            Copy here
+          </span>
+        )}
+      </span>
+      {children}
+    </button>
+  )
+}
+
 export function LayoutsRail({
   collection,
   currentId,
   onOpen,
   settingsOpen,
-  onSettings
+  onSettings,
+  dropTargets = false
 }: {
   collection: string
   currentId: number
   onOpen: (layoutId: number) => void
   settingsOpen: boolean
   onSettings: () => void
+  /** Rows take a section dragged from the canvas (copied there, #2584). */
+  dropTargets?: boolean
 }) {
   const { data, isLoading } = useLayoutOverview(collection)
   const { data: fields = [] } = useOverviewFields(collection)
@@ -45,37 +106,21 @@ export function LayoutsRail({
         return (
           <div key={s.id} className='flex flex-col gap-0.5'>
             <p className={head}>{s.title}</p>
-            {list.map((row) => {
-              const on = row.layout_id === currentId && !settingsOpen
-              const pill = rowPill(row)
-              return (
-                <button
-                  key={row.layout_id}
-                  type='button'
-                  data-rail-layout={row.layout_id}
-                  aria-current={row.layout_id === currentId ? 'page' : undefined}
-                  onClick={() => onOpen(row.layout_id)}
-                  className={cn(
-                    'flex flex-col gap-px rounded-md px-2 py-1.5 text-left transition-colors',
-                    on ? 'bg-accent' : 'hover:bg-muted',
-                    row.layout_id === currentId && settingsOpen && 'bg-muted'
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'flex min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-slate-900 dark:text-foreground',
-                      s.id === 'unused' && 'font-medium text-slate-500 dark:text-muted-foreground'
-                    )}
-                  >
-                    <span className='truncate'>{row.name}</span>
-                    {pill && <Pill tone={pill.tone}>{pill.text}</Pill>}
-                  </span>
-                  <span className='line-clamp-2 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground [&_b]:font-medium [&_b]:text-slate-600 dark:[&_b]:text-muted-foreground'>
-                    <Sentence segs={purposeSegments(row, fields, choices)} />
-                  </span>
-                </button>
-              )
-            })}
+            {list.map((row) => (
+              <RailRow
+                key={row.layout_id}
+                row={row}
+                current={row.layout_id === currentId}
+                settingsOpen={settingsOpen}
+                unused={s.id === 'unused'}
+                dropTarget={dropTargets}
+                onOpen={onOpen}
+              >
+                <span className='line-clamp-2 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground [&_b]:font-medium [&_b]:text-slate-600 dark:[&_b]:text-muted-foreground'>
+                  <Sentence segs={purposeSegments(row, fields, choices)} />
+                </span>
+              </RailRow>
+            ))}
           </div>
         )
       })}

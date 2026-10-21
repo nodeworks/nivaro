@@ -50,6 +50,8 @@ import type { OverviewRow } from './overview/types'
 import { PlacementsTable } from './PlacementsTable'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
+import { FormMoreMenu } from './reuse/FormMoreMenu'
+import { useRailCopy } from './reuse/useRailCopy'
 import { useRolePreview } from './settings/settings-api'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import { UsagePanel } from './usage/UsagePanel'
@@ -649,6 +651,9 @@ export function LayoutEditor({
     )
   }
 
+  // #2584: a section dropped on a layout in the rail is copied there.
+  const copyToLayout = useRailCopy(collection, bundle, overview?.rows ?? [], openLayout)
+
   const layoutName = String(bundle?.layout.name ?? row?.name ?? '')
   const layoutType = String(bundle?.layout.layout_type ?? row?.layout_type ?? 'grouped')
   // Forms and read views lay fields out on the 12-column grid: the placements
@@ -719,6 +724,14 @@ export function LayoutEditor({
             />
           )
         }
+        more={
+          <FormMoreMenu
+            collection={collection}
+            bundle={bundle}
+            previewRecord={preview.record}
+            onOpenLayout={openLayout}
+          />
+        }
       />
       {overlay && (
         <EditingBanner
@@ -762,7 +775,12 @@ export function LayoutEditor({
         </div>
       )}
       {/* Drag and drop spans the whole body: Add panel rows drag onto the canvas. */}
-      <LayoutDndProvider bundle={bundle} apply={draft.apply} onDragActive={onDragActive}>
+      <LayoutDndProvider
+        bundle={bundle}
+        apply={draft.apply}
+        onDragActive={onDragActive}
+        onDropOnLayout={copyToLayout}
+      >
         <div className='flex min-h-0 flex-1 overflow-hidden'>
           <aside className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
             <div
@@ -832,6 +850,7 @@ export function LayoutEditor({
                   onOpen={openLayout}
                   settingsOpen={panel === 'settings'}
                   onSettings={() => setPanel('settings')}
+                  dropTargets
                 />
               )}
             </div>

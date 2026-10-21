@@ -8,6 +8,7 @@ import { post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
+import { BLANK_SEED, NewFormStart, type StartSeed } from '../reuse/NewFormStart'
 import { apiFailure, fetchExplain, useDisplayTemplate, useRoleNames } from './overview-api'
 import type { ExplainResponse, LayoutType } from './types'
 
@@ -40,7 +41,16 @@ const labelCls = 'mb-1 block text-[11.5px] font-semibold text-slate-600 dark:tex
 /** Create a layout of a chosen type; returns the new id. */
 export async function createLayout(
   client: ReturnType<typeof useNivaroClient>,
-  body: { collection: string; name: string; layout_type: LayoutType; seed_fields?: boolean }
+  body: {
+    collection: string
+    name: string
+    layout_type: LayoutType
+    /** true: every visible field; a list: those fields, in order (#2585 / #2616). */
+    seed_fields?: boolean | string[]
+    /** #2594: start from a saved form template. */
+    template_id?: number
+    field_map?: Record<string, string | null>
+  }
 ): Promise<number | null> {
   const res = await client.request<{ data?: { id?: number } | null; id?: number }>(
     post('/collection-layouts', body)
@@ -62,6 +72,8 @@ export function NewFormButton({
   const [name, setName] = useState(DEFAULT_NAMES.grouped)
   const [nameTouched, setNameTouched] = useState(false)
   const [busy, setBusy] = useState(false)
+  // What the form starts with (#2585 / #2594 / #2616); blank by default.
+  const [seed, setSeed] = useState<StartSeed>(BLANK_SEED)
 
   const pick = (t: LayoutType) => {
     setType(t)
@@ -70,16 +82,26 @@ export function NewFormButton({
 
   const create = async () => {
     const trimmed = name.trim()
-    if (!trimmed || busy) return
+    if (!trimmed || busy || !seed.ready) return
     setBusy(true)
+    const kind = (seed.layout_type as LayoutType | undefined) ?? type
     try {
-      const id = await createLayout(client, { collection, name: trimmed, layout_type: type })
+      const id = await createLayout(client, {
+        collection,
+        name: trimmed,
+        layout_type: kind,
+        ...(seed.seed_fields ? { seed_fields: seed.seed_fields } : {}),
+        ...(seed.template_id != null
+          ? { template_id: seed.template_id, field_map: seed.field_map }
+          : {})
+      })
       if (id == null) throw new Error('No id came back')
       setOpen(false)
       setNameTouched(false)
       setName(DEFAULT_NAMES.grouped)
       setType('grouped')
-      onCreated(type, id)
+      setSeed(BLANK_SEED)
+      onCreated(kind, id)
     } catch (err) {
       toast.error(apiFailure(err, 'Could not create the layout').message)
     } finally {
@@ -95,7 +117,10 @@ export function NewFormButton({
           New form
         </button>
       </PopoverTrigger>
-      <PopoverContent align='end' className='w-[320px] p-3'>
+      <PopoverContent
+        align='end'
+        className='max-h-[min(80vh,640px)] w-[340px] overflow-y-auto overscroll-contain p-3'
+      >
         <p className={labelCls}>What kind?</p>
         <div role='radiogroup' aria-label='Layout kind' className='flex flex-col gap-0.5'>
           {LAYOUT_TYPES.map((t) => (
@@ -134,6 +159,7 @@ export function NewFormButton({
             className={inputCls}
           />
         </label>
+        <NewFormStart collection={collection} onChange={setSeed} />
         <div className='mt-3 flex justify-end gap-2'>
           <button type='button' className={btnOutline} onClick={() => setOpen(false)}>
             Cancel
@@ -141,7 +167,7 @@ export function NewFormButton({
           <button
             type='button'
             className={btnPrimary}
-            disabled={!name.trim() || busy}
+            disabled={!name.trim() || busy || !seed.ready}
             onClick={() => void create()}
           >
             {busy ? 'Creating…' : 'Create'}
@@ -153,6 +179,7 @@ export function NewFormButton({
 }
 
 export interface ExplainResult extends ExplainResponse {
+  recordId: string | number
   recordLabel: string
   roleName: string | null
 }
@@ -193,6 +220,7 @@ export function TestRecordButton({
       })
       onResult({
         ...res,
+        recordId: record.id,
         recordLabel: record.label,
         roleName: roles.find((r) => r.id === roleId)?.name ?? null
       })

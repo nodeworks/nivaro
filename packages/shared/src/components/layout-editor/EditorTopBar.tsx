@@ -280,7 +280,8 @@ export function EditorTopBar({
   backLabel = 'Layouts',
   tools,
   previewExtra,
-  checks
+  checks,
+  more
 }: {
   collection: string
   layoutId: number
@@ -316,6 +317,8 @@ export function EditorTopBar({
   previewExtra?: ReactNode
   /** The Checks (lint) button, beside History. */
   checks?: ReactNode
+  /** The ⋯ menu (Save as template, New form from this record). */
+  more?: ReactNode
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const unsaved = draft.unsavedCount ?? 0
@@ -411,6 +414,7 @@ export function EditorTopBar({
           )}
         </PopoverContent>
       </Popover>
+      {more}
       {draft.setAutosave && (
         <BarSwitch
           label='Autosave'

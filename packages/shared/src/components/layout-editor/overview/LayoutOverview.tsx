@@ -31,6 +31,7 @@ import { del, patch, post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
+import { FormFromRecordButton } from '../reuse/FormFromRecordButton'
 import {
   AnalysisButtons,
   AnalysisProvider,
@@ -661,17 +662,22 @@ function explainWords(
 }
 
 function ExplainStrip({
+  collection,
   result,
   rows,
   fields,
   choices,
-  onClear
+  onClear,
+  onMade
 }: {
+  collection: string
   result: ExplainResult
   rows: OverviewRow[]
   fields: DescribeField[]
   choices: ChoiceLabels
   onClear: () => void
+  /** A form was made from the tested record (#2585). */
+  onMade: (layoutId: number) => void
 }) {
   const nameOf = (id: number | null) =>
     rows.find((r) => r.layout_id === id)?.name ?? (id == null ? 'no layout' : `layout ${id}`)
@@ -695,6 +701,12 @@ function ExplainStrip({
             </>
           )}
         </div>
+        <FormFromRecordButton
+          collection={collection}
+          recordId={result.recordId}
+          recordLabel={result.recordLabel}
+          onMade={onMade}
+        />
         <button
           type='button'
           aria-label='Clear test'
@@ -982,11 +994,13 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
         />
         {explain && (
           <ExplainStrip
+            collection={collection}
             result={explain}
             rows={rows}
             fields={fields}
             choices={choices}
             onClear={() => setExplain(null)}
+            onMade={(id) => created('grouped', id)}
           />
         )}
         <div className='min-h-0 flex-1 overflow-y-auto'>{body}</div>

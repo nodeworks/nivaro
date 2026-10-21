@@ -33,14 +33,9 @@ import {
 import { createPortal } from 'react-dom'
 import { type LayoutBundle, type LayoutOp, UNGROUPED_KEY } from '../../../lib/layout-ops'
 import { type DesignDnd, type DesignTarget, targetKey } from '../design-context'
-import {
-  type DndNodeData,
-  type DropHint,
-  nodeData,
-  typedCollision,
-  typedKeyboardCoordinates
-} from './collision'
+import { type DndNodeData, type DropHint, nodeData, typedKeyboardCoordinates } from './collision'
 import { DndStore, DndStoreContext, IDLE, NO_DND } from './node'
+import { copyableGroup, railAwareCollision, railDropData } from './rail-drop'
 
 export { NO_DND }
 
@@ -199,6 +194,7 @@ export function LayoutDndProvider({
   bundle,
   apply,
   onDragActive,
+  onDropOnLayout,
   children
 }: {
   bundle: LayoutBundle | null
@@ -208,6 +204,8 @@ export function LayoutDndProvider({
    *  whose own Escape handler runs before dnd-kit's (registered at drag start)
    *  leave Escape to the drag while one is on. */
   onDragActive?: (active: boolean) => void
+  /** #2584: a section was dropped on a layout in the Layouts rail — copy it there. */
+  onDropOnLayout?: (groupKey: string, layoutId: number) => void
   children: ReactNode
 }) {
   const [store] = useState(() => new DndStore())
@@ -216,6 +214,12 @@ export function LayoutDndProvider({
   store.bundle = bundle
   const applyRef = useRef(apply)
   applyRef.current = apply
+  const dropOnLayoutRef = useRef(onDropOnLayout)
+  dropOnLayoutRef.current = onDropOnLayout
+  // Rail rows take a dragged section only when the host copies (onDropOnLayout).
+  const [collision] = useState(() =>
+    railAwareCollision((d) => !!dropOnLayoutRef.current && copyableGroup(store.bundle, d) != null)
+  )
 
   // Nodes read the store through useDesignDndNode; these serve anything else
   // that asks (an inspector, a toolbar).
@@ -333,6 +337,11 @@ export function LayoutDndProvider({
   }
 
   const track = ({ active, over, collisions }: DragMoveEvent) => {
+    // Over a layout in the rail: that row lights up, no line on the form.
+    if (over && railDropData(over.data.current)) {
+      store.set({ overKey: String(over.id), side: null, indicator: null })
+      return
+    }
     const plan = planFor(active, over, collisions)
     // No line where a drop would do nothing.
     if (!plan || plan.ops.length === 0 || !over) {
@@ -361,6 +370,13 @@ export function LayoutDndProvider({
   }
 
   const onDragEnd = ({ active, over, collisions }: DragEndEvent) => {
+    const rail = railDropData(over?.data.current)
+    if (rail) {
+      const key = copyableGroup(store.bundle, nodeData(active.data.current))
+      reset()
+      if (key) dropOnLayoutRef.current?.(key, rail.railLayoutId)
+      return
+    }
     const plan = planFor(active, over, collisions)
     const b = store.bundle
     reset()
@@ -384,7 +400,7 @@ export function LayoutDndProvider({
       <DndApiContext.Provider value={dnd}>
         <DndContext
           sensors={sensors}
-          collisionDetection={typedCollision}
+          collisionDetection={collision}
           measuring={MEASURING}
           autoScroll={AUTO_SCROLL}
           accessibility={{ announcements, screenReaderInstructions: INSTRUCTIONS }}
