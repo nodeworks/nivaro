@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis'
 import type { JournalEntry } from './event-journal.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
+import { livePayload } from './socket-transport.js'
 import { noteAdapterLag } from './traffic-taps/realtime.js'
 
 /**
@@ -148,8 +149,7 @@ function deliver(d: DecodedStreamEntry): void {
   const io = getIo()
   if (!io) return
   const { entry } = d
-  const payload = entry.seq == null ? entry.payload : { ...entry.payload, _seq: entry.seq }
-  io.local.to(entry.room).emit(entry.event, payload)
+  io.local.to(entry.room).emit(entry.event, livePayload(entry))
   stats.delivered++
   if (d.at) {
     stats.lastDeliveryLagMs = Math.max(0, Date.now() - d.at)

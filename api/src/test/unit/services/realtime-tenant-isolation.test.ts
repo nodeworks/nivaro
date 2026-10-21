@@ -56,18 +56,29 @@ function inTenant<T>(db: Knex, id: string, fn: () => Promise<T>): Promise<T> {
 /** A Redis double: one shared sequence and one shared sorted-set journal. */
 function sharedRedis() {
   let seq = 0
+  const rooms: Record<string, number> = {}
   const journal: Array<{ seq: number; raw: string }> = []
   return {
     incr: vi.fn(async () => ++seq),
     multi: () => {
+      // #2462 — the sequence and the room counter come from one transaction.
+      const results: Array<[null, number]> = []
       const m = {
+        incr: (key: string) => {
+          if (key === 'nvr:ev:seq') results.push([null, ++seq])
+          else {
+            rooms[key] = (rooms[key] ?? 0) + 1
+            results.push([null, rooms[key]])
+          }
+          return m
+        },
         zadd: (_k: string, s: number, raw: string) => {
           journal.push({ seq: s, raw })
           return m
         },
         zremrangebyrank: () => m,
         expire: () => m,
-        exec: async () => []
+        exec: async () => results
       }
       return m
     },

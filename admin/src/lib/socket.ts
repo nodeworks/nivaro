@@ -2,10 +2,12 @@ import {
   type ClockSample,
   type CollectionUpdateEvent,
   createLeaderSocket,
+  createRoomGapTracker,
   forgetSettledReads,
   measureClockOffset,
   type RealtimeAdapter,
   type RealtimeStatus,
+  refetchEventsFor,
   relayLiveEvent,
   setServerClockOffset
 } from '@nivaro/shared'
@@ -38,6 +40,9 @@ import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
  * - Session end (#1719) and room access changes (#1720) surface as window events; the
  *   connection state (#1725) feeds the reconnect banner and stale marks; `time:sync` (#2132)
  *   sets the server clock offset.
+ * - Missed events while connected (#2462): a room whose own counter (`_rseq`) skips is caught up
+ *   alone (`catchup:room`); `realtime:stale` (#2460, the server held this tab's broadcasts while
+ *   it was too far behind) refetches the rooms it names.
  */
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
@@ -69,6 +74,25 @@ function caughtUp(refreshed: string | null, resumed: NonNullable<RealtimeStatus[
   catchupTimer = null
   setStatus({ state: 'live', refreshed, resumed })
 }
+
+/**
+ * Hand a replayed or synthetic event to this tab's listeners as if it had arrived live: the
+ * socket's own listeners and, on the leader tab, every tab's feed (live packets reach the feed
+ * through `onAny`, which a replay never passes).
+ */
+function relayLocal(event: string, payload: Record<string, unknown>) {
+  for (const l of socket?.listeners(event) ?? []) l(payload)
+  if (RELAYED_EVENTS.has(event)) leaderDeliver?.(event, payload)
+}
+function refetchRooms(rooms: string[]) {
+  for (const ev of refetchEventsFor(rooms)) relayLocal(ev.event, ev.payload)
+  window.dispatchEvent(new CustomEvent('nvr:realtime-stale', { detail: { rooms } }))
+}
+const roomGaps = createRoomGapTracker({
+  request: (req) => socket?.emit('catchup:room', req),
+  dispatch: relayLocal,
+  refetch: refetchRooms
+})
 
 /**
  * #1719 — the server ended the sign-in this socket was opened under (logout in another tab, a
@@ -269,6 +293,8 @@ export function getSocket(): Socket {
     window.dispatchEvent(new CustomEvent('nvr:access-changed', { detail: p }))
   })
   socket.on('auth:ok', () => {
+    // A new server socket: room counters start over (the reconnect catch-up covers the gap).
+    roomGaps.reset()
     const engine = socket?.io.engine
     const transportName = () =>
       (engine?.transport?.name as RealtimeStatus['transport'] | undefined) ?? null
@@ -324,24 +350,36 @@ export function getSocket(): Socket {
   socket.onAny((_event, payload) => {
     const seq = (payload as { _seq?: number } | undefined)?._seq
     if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
+    roomGaps.observe(payload)
+  })
+  socket.on('catchup:room:events', (p: Parameters<typeof roomGaps.replayed>[0]) =>
+    roomGaps.replayed(p)
+  )
+  socket.on('realtime:stale', (p: { rooms?: string[]; all?: boolean }) => {
+    const rooms = Array.isArray(p?.rooms) ? p.rooms.filter((r) => typeof r === 'string') : []
+    roomGaps.reset(rooms)
+    if (p?.all) {
+      window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
+      window.dispatchEvent(new CustomEvent('nvr:realtime-stale', { detail: { rooms, all: true } }))
+    } else if (rooms.length) refetchRooms(rooms)
   })
   socket.on(
     'catchup:events',
     (p: { events?: Array<{ seq: number; event: string; payload: Record<string, unknown> }> }) => {
       for (const ev of p?.events ?? []) {
         if (ev.seq > lastSeq) lastSeq = ev.seq
-        // Re-dispatch into local listeners as if it arrived live.
-        for (const l of socket?.listeners(ev.event) ?? []) {
-          l({ ...ev.payload, _seq: ev.seq })
-        }
+        // Re-dispatch into local listeners (and the leader's feed) as if it arrived live.
+        relayLocal(ev.event, { ...ev.payload, _seq: ev.seq })
       }
       caughtUp(null, 'replayed')
     }
   )
-  socket.on('catchup:full', () => {
+  socket.on('catchup:full', (p?: { reason?: string }) => {
     window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
     caughtUp(
-      'Live updates resumed. The connection was gone too long to replay each change, so the lists and records on this page were reloaded.',
+      p?.reason === 'slow-consumer'
+        ? 'Live updates resumed. This tab fell too far behind to send each change, so the lists and records on this page were reloaded.'
+        : 'Live updates resumed. The connection was gone too long to replay each change, so the lists and records on this page were reloaded.',
       'reloaded'
     )
   })
@@ -446,6 +484,7 @@ function ensureLeaderSocket() {
         const so = getSocket()
         if (event === '__join_collection') {
           joinedCollections.add(String(payload))
+          roomGaps.reset([`collection:${String(payload)}`])
           if (so.connected) so.emit('collection:join', { collection: payload })
           else syncSse()
         } else if (event === '__join_watch') {

@@ -27,6 +27,14 @@ const { stopMasquerade, setServerClockOffset, readMasquerade } = vi.hoisted(() =
 vi.mock('@/lib/masquerade', () => ({ readMasquerade, stopMasquerade }))
 vi.mock('@/lib/page-context', () => ({ clientVersion: () => ({}) }))
 vi.mock('@nivaro/shared', () => ({
+  // #2462 — the room gap tracker is exercised in packages/shared (room-gaps.test.ts).
+  createRoomGapTracker: () => ({
+    observe: () => {},
+    replayed: () => {},
+    reset: () => {},
+    stats: () => ({ gaps: 0, missed: 0, replayed: 0, refetched: 0 })
+  }),
+  refetchEventsFor: () => [],
   createLeaderSocket: (
     _key: string,
     cbs: { becomeLeader: (deliver: unknown, emit: { current: unknown }) => void }

@@ -187,6 +187,9 @@ export interface CollectionBrowserConfig {
   /** Registry bulk actions (keys) the bar shows; null/absent = every active
    *  action the viewer may run. Defined in Data Model → Settings → Bulk actions. */
   bulk_actions?: string[] | null
+  /** #2490 — live record events: 'on' (default), 'batched' (one id list per 2 s window) or
+   *  'off' (none — this list polls every 30 s instead). */
+  live_events?: 'on' | 'batched' | 'off'
 }
 
 interface CMSRelation {
@@ -4718,6 +4721,8 @@ export function CollectionBrowserView({
       ),
     enabled: !!collection && scopeGateOpen,
     placeholderData: (prev) => prev,
+    // #2490 — a collection whose live record events are off polls instead (visible tabs only).
+    refetchInterval: bc.live_events === 'off' ? 30_000 : false,
     retry: false
   })
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])

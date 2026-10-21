@@ -11,6 +11,7 @@ vi.mock('../../../services/event-journal.js', () => ({
 vi.mock('../../../services/item-events.js', () => ({ publishItemEvent: vi.fn() }))
 vi.mock('../../../services/sse-hub.js', () => ({ publishSseEvent: vi.fn() }))
 vi.mock('../../../services/traffic-map.js', () => ({ noteWrite: vi.fn() }))
+vi.mock('../../../services/collections.js', () => ({ getCollection: vi.fn(async () => undefined) }))
 
 import { broadcastCollectionUpdate } from '../../../services/realtime.js'
 

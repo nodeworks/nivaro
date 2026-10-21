@@ -12,6 +12,7 @@ import {
 } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
+import { readSocketHealth, socketBufferState } from '../services/socket-health.js'
 import {
   INSPECT_RING,
   inspectedEvents,
@@ -133,7 +134,9 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
       rooms: hit.sock.rooms,
       recording: events !== null,
       ring: INSPECT_RING,
-      events: events ?? []
+      events: events ?? [],
+      // #2460 / #2488 — bytes waiting to be sent to this client and whether it is held back.
+      buffer: socketBufferState(id, hit.scope)
     }
   }
 
@@ -158,6 +161,15 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(404).send({ error: 'Client not connected to this node' })
     stopInspect(id)
     return { data: { recording: false } }
+  })
+
+  /**
+   * Socket health (#2460 slow consumers, #2488 write buffers, #2779 handler timings, #2462
+   * room gaps): every replica's figures merged through Redis, the caller's tenant only.
+   */
+  app.get('/health', async () => {
+    const { liveModeStats } = await import('../services/collection-live-mode.js')
+    return { data: { ...(await readSocketHealth(tenantScope())), live_modes: liveModeStats() } }
   })
 
   // #1730 — start the byte counters over (after trimming a heavy broadcast, to see the effect).

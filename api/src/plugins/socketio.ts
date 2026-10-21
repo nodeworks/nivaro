@@ -47,6 +47,16 @@ import {
   sweepSockets,
   userWithApiKey
 } from '../services/socket-access.js'
+import {
+  type EngineConnLike,
+  instrumentHandlers,
+  markResync,
+  noteRoomGap,
+  type SocketBuffer,
+  startSocketHealth,
+  takeResync,
+  trackSocket
+} from '../services/socket-health.js'
 import { inSocketTenant, socketTenant, socketTrafficStore } from '../services/socket-tenant.js'
 import {
   type Coalescer,
@@ -58,6 +68,7 @@ import {
   isInspected,
   noteCoalesced,
   noteInspected,
+  noteInspectedHandler,
   noteTenantSocket,
   recordOutbound,
   splitTenantRoom
@@ -428,6 +439,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     perMessageDeflate: socketCompressionOn() ? { threshold: 1024 } : false
   })
   _ioRef = io
+  // #2460 / #2488 / #2779 / #2462 — buffer growth samples and this process's figures for the
+  // Realtime console, published to Redis every 10 s so every replica's view merges.
+  startSocketHealth(app.redis ?? null)
 
   const pubClient = new Redis(app.redis.options)
   const subClient = new Redis(app.redis.options)
@@ -599,6 +613,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         noteTenantSocket(tenantKey, 1, t.slug)
       })
     }
+    // #2779 — every inbound event handler registered on this socket from here on is timed
+    // (total and event-loop time); an inspected socket also records each call in its ring.
+    instrumentHandlers(
+      socket,
+      () => tenantKey,
+      (handler, ms) => {
+        if (isInspected(socket.id)) noteInspectedHandler(socket.id, handler, ms)
+      }
+    )
 
     // Cloud: shared room names (chat, pulse, presence, watch) are per tenant (tenant-rooms.ts,
     // `t:<tenant>:`). `scopedRoom` resolves the socket's tenant first (null = none: join
@@ -638,8 +661,49 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           ? p.byteLength
           : 0
     let coalescer: Coalescer | null = null
+    // #2460 — slow-consumer handling: over the soft limit this socket's room broadcasts are held
+    // (one `realtime:stale` names the rooms once it caught up); past the hard limit it is closed
+    // with its backlog dropped and its tab reloads on reconnect instead of replaying.
+    const buffer: SocketBuffer = trackSocket({
+      id: socket.id,
+      conn: socket.conn as unknown as EngineConnLike,
+      tenant: () => tenantKey,
+      info: () => {
+        const meta = socketMeta.get(socket.id)
+        return {
+          user: meta?.user?.name ?? null,
+          app: meta?.app ?? null,
+          transport: meta?.transport ?? null,
+          rooms: socket.rooms
+        }
+      },
+      sendRaw: (encoded) => origWrite(encoded, {}),
+      drop: () => {
+        try {
+          const transport = (
+            socket.conn as unknown as {
+              transport?: { name?: string; socket?: { terminate?: () => void } }
+            }
+          ).transport
+          if (transport?.name === 'websocket' && transport.socket?.terminate)
+            transport.socket.terminate()
+          else (socket.conn as unknown as { close(discard?: boolean): void }).close(true)
+        } catch {
+          socket.disconnect(true)
+        }
+      },
+      onHardLimit: (waiting) => {
+        const meta = socketMeta.get(socket.id)
+        app.log.warn(
+          { socketId: socket.id, waiting, app: meta?.app ?? null },
+          'Socket closed: too far behind (slow consumer)'
+        )
+        void markResync(meta?.user?.id ?? null, meta?.version?.tab ?? null)
+      }
+    })
     const sendCoalesced = (payload: Record<string, unknown>) => {
       const encoded = encodeEvent('collection:update', payload)
+      if (buffer.intercept(encoded, `collection:${String(payload.collection ?? '')}`, false)) return
       recordOutbound(
         'collection:update',
         `collection:${String(payload.collection ?? '')}`,
@@ -659,11 +723,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           sizeOf(encoded)
         )
       origWrite(encoded, {})
+      buffer.check()
     }
     client.writeToEngine = (encoded, opts) => {
       const list = Array.isArray(encoded) ? encoded : [encoded]
       const room = broadcastRoom
       for (const p of list) {
+        if (buffer.intercept(p, room, !!opts?.volatile)) continue
         if (typeof p === 'string') {
           if (coalescer && !opts?.volatile) {
             const payload = collectionUpdateOf(p)
@@ -683,6 +749,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         }
         origWrite(p, opts)
       }
+      buffer.check()
     }
 
     // Zombie socket reaper (#310): a connection that never authenticates is
@@ -732,6 +799,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         }
         const version = clientVersionFromHello(payload)
         if (version.build || version.api || version.tab) meta.version = version
+        // #2460 — this tab was closed for falling too far behind: reload, never replay.
+        if (meta.user && version.tab) {
+          void takeResync(meta.user.id, version.tab).then((owed) => {
+            if (!owed || !socket.connected) return
+            socket.data.nvrResync = true
+            socket.emit('catchup:full', { reason: 'slow-consumer' })
+          })
+        }
       }
     )
 
@@ -755,6 +830,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       inSocketTenant(socket, async (payload: { cursor?: number }) => {
         const cursor = Number(payload?.cursor)
         if (!Number.isFinite(cursor) || cursor < 0) return
+        // #2460 — already told to reload (closed as a slow consumer): no replay on top.
+        if (socket.data.nvrResync) {
+          socket.data.nvrResync = false
+          socket.emit('catchup:full', { reason: 'slow-consumer' })
+          return
+        }
         try {
           const { replaySince } = await import('../services/event-journal.js')
           const rooms = new Set([...socket.rooms].filter((r) => r !== socket.id))
@@ -766,6 +847,41 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           socket.emit('catchup:full', {})
         }
       })
+    )
+
+    // #2462 — a connected client saw one room's sequence skip: replay that room alone from the
+    // last position it had there. Only a room this socket is in; a few per 10 s per socket.
+    let roomCatchups = { since: Date.now(), n: 0 }
+    socket.on(
+      'catchup:room',
+      inSocketTenant(
+        socket,
+        async (payload: { room?: unknown; cursor?: unknown; missed?: unknown }) => {
+          const room = typeof payload?.room === 'string' ? payload.room.slice(0, 300) : ''
+          const cursor = Number(payload?.cursor)
+          if (!room || !Number.isFinite(cursor) || cursor < 0) return
+          const now = Date.now()
+          if (now - roomCatchups.since > 10_000) roomCatchups = { since: now, n: 0 }
+          if (++roomCatchups.n > 10) return
+          const scoped = cloud ? scopedRoomNow(room) : room
+          if (!scoped || !socket.rooms.has(scoped)) return
+          try {
+            const { replaySince } = await import('../services/event-journal.js')
+            const result = await replaySince(cursor, new Set([scoped]))
+            noteRoomGap(
+              tenantKey,
+              scoped,
+              Number(payload?.missed),
+              result.full ? 'full' : 'replayed'
+            )
+            socket.emit('catchup:room:events', { room, full: result.full, events: result.events })
+          } catch (err) {
+            app.log.debug({ err }, 'room catch-up failed')
+            noteRoomGap(tenantKey, scoped, Number(payload?.missed), 'full')
+            socket.emit('catchup:room:events', { room, full: true, events: [] })
+          }
+        }
+      )
     )
 
     // Admin watch rooms (#271 jobs, #276 traffic, #279 monitors).
@@ -1466,6 +1582,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('disconnect', () => {
       noteSocket('disconnect')
       coalescer?.dispose()
+      buffer.dispose()
       if (tenantKey) noteTenantSocket(tenantKey, -1)
       clearInterval(rttTimer)
       socketMeta.delete(socket.id)

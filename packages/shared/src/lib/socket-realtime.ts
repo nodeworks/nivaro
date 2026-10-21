@@ -1,5 +1,6 @@
 import type { CollectionUpdateEvent, RealtimeAdapter, RealtimeStatus } from './realtime'
 import { forgetSettledReads } from './request-gate'
+import { createRoomGapTracker, refetchEventsFor } from './room-gaps'
 
 /**
  * A RealtimeAdapter over one Socket.io connection the HOST already holds (#2027, #1751) — what a
@@ -25,6 +26,9 @@ import { forgetSettledReads } from './request-gate'
  *   `nvr:config-update`; `client:force-refresh` → `nvr:force-refresh` (the window events admin's
  *   socket raises, so shared banners and forms behave the same in every host).
  * - Connection state for the reconnect banner and stale marks (`status` / `onStatus`).
+ * - Missed events while connected (#2462): a room whose own counter (`_rseq`) skips is caught up
+ *   alone (`catchup:room`); `realtime:stale` (#2460 — the server held this socket's broadcasts
+ *   while it was too far behind) refetches the rooms it names and raises `nvr:realtime-stale`.
  *
  * The socket is duck-typed (socket.io-client's `Socket` fits), so this package takes no
  * dependency on socket.io-client. It never decides what a viewer may see: every room is gated by
@@ -139,9 +143,29 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     if (socket?.connected) socket.emit(event, payload)
   }
 
+  /** Hand one event to this socket's listeners, as if it had arrived live. */
+  const relay = (event: string, payload: Record<string, unknown>) => {
+    for (const l of socket?.listeners?.(event) ?? []) l(payload)
+  }
+  const refetchRooms = (rooms: string[]) => {
+    for (const ev of refetchEventsFor(rooms)) relay(ev.event, ev.payload)
+    dispatch('nvr:realtime-stale', { rooms })
+  }
+  const gaps = createRoomGapTracker({
+    request: (req) => send('catchup:room', req),
+    dispatch: relay,
+    refetch: refetchRooms
+  })
+
   const collections = new RoomRefs(
-    (c) => send('collection:join', { collection: c }),
-    (c) => send('collection:leave', { collection: c })
+    (c) => {
+      gaps.reset([`collection:${c}`])
+      send('collection:join', { collection: c })
+    },
+    (c) => {
+      gaps.reset([`collection:${c}`])
+      send('collection:leave', { collection: c })
+    }
   )
   const watch = new RoomRefs(
     (r) => send('admin:join', { room: r }),
@@ -159,6 +183,8 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     // Attached to a socket that is already up: its next auth:ok is a reconnect (catch up).
     everAuthed = s.connected
     s.on('auth:ok', () => {
+      // A new server socket: room counters start over (the reconnect catch-up covers the gap).
+      gaps.reset()
       collections.rejoinAll()
       watch.rejoinAll()
       ops.rejoinAll()
@@ -194,6 +220,16 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     s.onAny?.((_event, payload) => {
       const seq = (payload as { _seq?: number } | undefined)?._seq
       if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
+      gaps.observe(payload)
+    })
+    s.on('catchup:room:events', (p: Parameters<typeof gaps.replayed>[0]) => gaps.replayed(p))
+    s.on('realtime:stale', (p: { rooms?: string[]; all?: boolean }) => {
+      const rooms = Array.isArray(p?.rooms) ? p.rooms.filter((r) => typeof r === 'string') : []
+      gaps.reset(rooms)
+      if (p?.all) {
+        if (windowOn('catchupFull')) dispatch(WINDOW_EVENT_NAMES.catchupFull, {})
+        dispatch('nvr:realtime-stale', { rooms, all: true })
+      } else if (rooms.length) refetchRooms(rooms)
     })
     s.on(
       'catchup:events',
@@ -206,10 +242,12 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
         caughtUp(null, 'replayed')
       }
     )
-    s.on('catchup:full', () => {
+    s.on('catchup:full', (p?: { reason?: string }) => {
       if (windowOn('catchupFull')) dispatch(WINDOW_EVENT_NAMES.catchupFull, {})
       caughtUp(
-        'Live updates resumed. The connection was gone too long to replay each change, so the lists and records on this page were reloaded.',
+        p?.reason === 'slow-consumer'
+          ? 'Live updates resumed. This tab fell too far behind to send each change, so the lists and records on this page were reloaded.'
+          : 'Live updates resumed. The connection was gone too long to replay each change, so the lists and records on this page were reloaded.',
         'reloaded'
       )
     })
