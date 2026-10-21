@@ -32,10 +32,12 @@ import { inBackgroundPool } from '../../../db/pool-context.js'
 import { backgroundRunsRoutes } from '../../../routes/background-runs.js'
 import {
   __resetBackgroundRuns,
+  claimRunSlot,
   estimateRead,
   matchReplayable,
   noteReadDuration,
-  recordReadDuration
+  recordReadDuration,
+  releaseRunSlot
 } from '../../../services/background-runs.js'
 import { markCacheHit } from '../../../services/traffic-map.js'
 
@@ -324,6 +326,27 @@ describe('runs', () => {
     expect(bob.statusCode).toBe(202)
   })
 
+  it('parallel starts cannot pass the cap together; an ended run frees its slot', async () => {
+    hold()
+    const all = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        start('alice', { method: 'POST', url: '/custom-queries/q/execute', body: { p: i } })
+      )
+    )
+    const codes = all.map((r) => r.statusCode)
+    expect(codes.filter((c) => c === 202)).toHaveLength(3)
+    expect(codes.filter((c) => c === 429)).toHaveLength(5)
+    route.release()
+    for (const r of all.filter((x) => x.statusCode === 202)) await settle(app, r.json().data.id)
+    await new Promise((res) => setTimeout(res, 5))
+    const again = await start('alice', {
+      method: 'POST',
+      url: '/custom-queries/q/execute',
+      body: { p: 'after' }
+    })
+    expect(again.statusCode).toBe(202)
+  })
+
   it('refuses reads that are not replayable and links that leave the app', async () => {
     const bad = await start('alice', { method: 'POST', url: '/items/projects', body: {} })
     expect(bad.statusCode).toBe(400)
@@ -340,5 +363,60 @@ describe('runs', () => {
       payload: { method: 'POST', url: '/custom-queries/q/execute' }
     })
     expect(anon.statusCode).toBe(401)
+  })
+})
+
+describe('run slots (atomic cap)', () => {
+  // A Redis stand-in whose SET NX is atomic, as Redis is.
+  function fakeRedis() {
+    const store = new Map<string, string>()
+    return {
+      store,
+      set: vi.fn(async (k: string, v: string, _ex: string, _ttl: number, _nx: string) => {
+        if (store.has(k)) return null
+        store.set(k, v)
+        return 'OK'
+      }),
+      eval: vi.fn(async (_script: string, _n: number, k: string, v: string) => {
+        if (store.get(k) !== v) return 0
+        store.delete(k)
+        return 1
+      })
+    }
+  }
+
+  it('hands out three slots per person across replicas, then none', async () => {
+    const redis = fakeRedis() as never
+    const got = await Promise.all(
+      ['r1', 'r2', 'r3', 'r4', 'r5'].map((id) => claimRunSlot(redis, 'alice', id))
+    )
+    expect(got.filter((n) => n != null).sort()).toEqual([0, 1, 2])
+    expect(got.filter((n) => n == null)).toHaveLength(2)
+    expect(await claimRunSlot(redis, 'bob', 'b1')).toBe(0)
+  })
+
+  it('a release frees only the slot the run still holds', async () => {
+    const r = fakeRedis()
+    const redis = r as never
+    const slot = (await claimRunSlot(redis, 'alice', 'r1')) as number
+    await releaseRunSlot(redis, 'alice', slot, 'someone-else')
+    expect(r.store.size).toBe(1)
+    await releaseRunSlot(redis, 'alice', slot, 'r1')
+    expect(r.store.size).toBe(0)
+  })
+
+  it('without Redis (or with it down) the process’s own slots still cap', async () => {
+    const down = {
+      set: vi.fn(async () => {
+        throw new Error('down')
+      }),
+      eval: vi.fn(async () => {
+        throw new Error('down')
+      })
+    } as never
+    const got = await Promise.all(['a', 'b', 'c', 'd'].map((id) => claimRunSlot(down, 'carol', id)))
+    expect(got.filter((n) => n == null)).toHaveLength(1)
+    const got2 = await Promise.all(['e', 'f', 'g', 'h'].map((id) => claimRunSlot(null, 'dan', id)))
+    expect(got2.filter((n) => n == null)).toHaveLength(1)
   })
 })

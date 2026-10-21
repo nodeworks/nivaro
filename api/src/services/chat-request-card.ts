@@ -1,6 +1,7 @@
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Request id cards for chat (#2762). Someone pastes a request id (a uuid —
@@ -65,15 +66,24 @@ export function shapeRequestCard(
   return { kind: 'request', id, details: isAdmin ? found : null }
 }
 
-// The same id is often pasted into a busy room: one lookup per id per minute.
+// The same id is often pasted into a busy room: one lookup per id per minute,
+// per tenant (cloud: the lookup reads the tenant's own request log, so one
+// tenant's answer never serves another).
 const MEMO_MS = 60_000
 const memo = new Map<string, { at: number; v: RequestCardDetails | null }>()
 
+export const requestMemoKey = (id: string, tenant: string = currentTenantKey()): string =>
+  `${tenant}|${id}`
+
 async function lookup(id: string): Promise<RequestCardDetails | null> {
-  const hit = memo.get(id)
+  const tenant = currentTenantKey()
+  const memoKey = requestMemoKey(id, tenant)
+  const hit = memo.get(memoKey)
   if (hit && Date.now() - hit.at < MEMO_MS) return hit.v
   const { getTrace } = await import('./request-trace.js')
-  const trace = getTrace(id)
+  // The kept-trace ring is process-wide and carries no tenant: in a tenant,
+  // only the tenant's request log describes an id.
+  const trace = tenant ? null : getTrace(id)
   let v: RequestCardDetails | null = null
   const { findRequestRow, traceAbsence } = await import('./traffic-inspect/request.js')
   const found = await findRequestRow(id, null).catch(() => null)
@@ -120,7 +130,7 @@ async function lookup(id: string): Promise<RequestCardDetails | null> {
       trace_url: traceUrlFor(id)
     }
   }
-  memo.set(id, { at: Date.now(), v })
+  memo.set(memoKey, { at: Date.now(), v })
   if (memo.size > 1000) memo.delete(memo.keys().next().value as string)
   return v
 }

@@ -306,18 +306,32 @@ export async function canSeeRecordRoom(
   item: string,
   isAdmin?: boolean
 ): Promise<boolean> {
+  return (await visibleRecordIds(user, collection, [item], isAdmin)).length > 0
+}
+
+/**
+ * The records (of `items`) whose room `user` may sit in — `canSeeRecordRoom` for a whole page
+ * of rows in one gate compile + one batched read (presence on list rows). Returns the given
+ * ids as given; nothing on a gate error.
+ */
+export async function visibleRecordIds(
+  user: User,
+  collection: string,
+  items: string[],
+  isAdmin?: boolean
+): Promise<string[]> {
+  if (items.length === 0) return []
   try {
     const admin = isAdmin ?? (await roleIsAdmin(user.role))
-    if (admin) return true
-    if (!(await can(user, 'read', collection))) return false
-    if (isSystemCollection(collection)) return true
+    if (admin) return items
+    if (!(await can(user, 'read', collection))) return []
+    if (isSystemCollection(collection)) return items
     const gates = await compileAccessGates(user, collection)
-    const seen = await visibleIds(gates, [item])
-    const want = String(item).toLowerCase()
-    for (const id of seen) if (id.toLowerCase() === want) return true
-    return false
+    const seen = new Set<string>()
+    for (const id of await visibleIds(gates, items.map(String))) seen.add(id.toLowerCase())
+    return items.filter((i) => seen.has(String(i).toLowerCase()))
   } catch {
-    return false
+    return []
   }
 }
 

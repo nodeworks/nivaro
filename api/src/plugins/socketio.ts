@@ -52,7 +52,8 @@ import {
   sessionRoom,
   sha,
   sweepSockets,
-  userWithApiKey
+  userWithApiKey,
+  visibleRecordIds
 } from '../services/socket-access.js'
 import {
   type EngineConnLike,
@@ -1485,29 +1486,24 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
     // ── Presence on list rows (#2486) ───────────────────────────────────────
     // A list watches the rows on its page; viewer changes arrive as `presence:rows` instead
-    // of a 30 s count poll. Gated per collection by the read permission (the rows themselves
-    // already passed the list's read gate); capped per socket; ids only.
+    // of a 30 s count poll. Gated per RECORD by the record read gate (role, row filter, user
+    // scopes — the record:join answer, one batched read per message), so guessed ids of rows
+    // the person cannot open are never watched; capped per socket; ids only.
     const watchedRows = new Set<string>()
-    const watchableCollections = new Map<string, Promise<boolean>>()
-    const mayWatch = (user: User, collection: string): Promise<boolean> => {
-      let p = watchableCollections.get(collection)
-      if (!p) {
-        p = db('nivaro_roles')
-          .where({ id: user.role })
-          .first('admin_access')
-          .then((role) => !!role?.admin_access || can(user, 'read', collection))
-          .catch(() => false)
-        watchableCollections.set(collection, p)
-      }
-      return p
-    }
+    let watcherIsAdmin: Promise<boolean> | null = null
     const onPresenceWatch = async (payload: { collection?: string; items?: unknown }) => {
       const user = authenticatedUser
       const collection = payload?.collection
       if (!user || typeof collection !== 'string' || !collection) return
-      const items = parseWatchItems(payload?.items)
-      if (items.length === 0 || watchedRows.size + items.length > PRESENCE_WATCH_MAX) return
-      if (!(await mayWatch(user, collection))) return
+      const asked = parseWatchItems(payload?.items)
+      if (asked.length === 0 || watchedRows.size + asked.length > PRESENCE_WATCH_MAX) return
+      watcherIsAdmin ??= db('nivaro_roles')
+        .where({ id: user.role })
+        .first('admin_access')
+        .then((role) => !!role?.admin_access)
+        .catch(() => false)
+      const items = await visibleRecordIds(user, collection, asked, await watcherIsAdmin)
+      if (items.length === 0) return
       if (process.env.CLOUD_META_DB_URL && !recordTenant) {
         const t = await socketTenant(socket)
         if (!t) return

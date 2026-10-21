@@ -14,9 +14,11 @@ import {
   type OutputField,
   parseHelpSheet
 } from '../services/layout-output.js'
+import { roleAllows } from '../services/layout-patch.js'
 import { htmlToPdf } from '../services/pdf-layout.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { resolvePathValues } from '../services/queues.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import type { User } from '../types.js'
 
 /**
@@ -30,7 +32,9 @@ import type { User } from '../types.js'
  *
  * Template / blank form follow what the caller may create; the export reads
  * through the items service, so row filters, field access and scopes bind as
- * for any list.
+ * for any list. Every route serves only a form the caller may open (a grouped
+ * layout their role is allowed, the GET /:id answer); a linked record's label
+ * replaces its id only where the caller may read that record.
  */
 
 const EXPORT_CAP = 5000
@@ -44,6 +48,7 @@ interface LayoutHead {
   layout_type: string | null
   pdf_page_size: string | null
   pdf_orientation: string | null
+  conditions?: unknown
 }
 
 const slugName = (s: string) => s.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'form'
@@ -52,10 +57,49 @@ async function loadHead(idParam: string): Promise<LayoutHead | null> {
   if (!/^\d{1,10}$/.test(idParam)) return null
   const row = (await db('nivaro_collection_layouts')
     .where({ id: Number(idParam) })
-    .first('id', 'collection', 'name', 'layout_type', 'pdf_page_size', 'pdf_orientation')) as
-    | LayoutHead
-    | undefined
+    .first(
+      'id',
+      'collection',
+      'name',
+      'layout_type',
+      'pdf_page_size',
+      'pdf_orientation',
+      'conditions'
+    )) as LayoutHead | undefined
   return row ?? null
+}
+
+/**
+ * May the caller use this layout's structure? A grouped form whose role
+ * allow-list admits them — forms restricted to other roles answer 404, as
+ * GET /collection-layouts/:id does. Admins always pass.
+ */
+export function mayUseLayout(
+  head: LayoutHead,
+  user: Pick<User, 'role'>,
+  isAdmin: boolean
+): boolean {
+  const type = head.layout_type == null ? 'grouped' : String(head.layout_type)
+  if (type !== 'grouped') return false
+  return roleAllows(head as unknown as Record<string, unknown>, user.role ?? null, isAdmin)
+}
+
+/**
+ * The linked ids (of `ids`, records of `target`) the caller may read: role
+ * read permission, then the row filter and user scopes. Ids come back as given.
+ */
+export async function readableLinkIds(
+  user: User,
+  target: string,
+  ids: string[],
+  isAdmin: boolean
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set()
+  if (!(await can(user, 'read', target))) return new Set()
+  const gates = await compileAccessGates(user, target, { actingAdmin: isAdmin })
+  const seen = new Set<string>()
+  for (const id of await visibleIds(gates, ids)) seen.add(id.toLowerCase())
+  return new Set(ids.filter((i) => seen.has(i.toLowerCase())))
 }
 
 async function collectionLabel(collection: string): Promise<string> {
@@ -94,7 +138,8 @@ export async function registerLayoutOutputRoutes(app: FastifyInstance): Promise<
     const { id } = req.params as { id: string }
     const user = req.user as User
     const head = await loadHead(id)
-    if (!head) return reply.code(404).send({ error: 'Layout not found' })
+    if (!head || !mayUseLayout(head, user, !!req.isAdmin))
+      return reply.code(404).send({ error: 'Layout not found' })
     if (!(await can(user, 'create', head.collection)))
       return reply.code(403).send({ error: 'Forbidden' })
     const form = await fieldsFor(user, head, 'create', false)
@@ -127,7 +172,8 @@ export async function registerLayoutOutputRoutes(app: FastifyInstance): Promise<
     const { id } = req.params as { id: string }
     const user = req.user as User
     const head = await loadHead(id)
-    if (!head) return reply.code(404).send({ error: 'Layout not found' })
+    if (!head || !mayUseLayout(head, user, !!req.isAdmin))
+      return reply.code(404).send({ error: 'Layout not found' })
     const body = (req.body ?? {}) as {
       ids?: unknown
       filter?: unknown
@@ -169,21 +215,37 @@ export async function registerLayoutOutputRoutes(app: FastifyInstance): Promise<
 
     // A column that points at another record exports that record's label, not its id.
     if (rows.length > 0) {
+      // Only where the caller may read the linked record (permission, row filter,
+      // scopes): an unreadable link keeps its stored id.
       const pointers = (await db('nivaro_relations')
         .where({ many_collection: head.collection })
         .whereNotNull('one_collection')
         .whereNull('junction_field')
-        .select('many_field')) as Array<{ many_field: string }>
-      const pointerFields = new Set(pointers.map((p) => p.many_field))
+        .select('many_field', 'one_collection')) as Array<{
+        many_field: string
+        one_collection: string
+      }>
+      const targetOf = new Map(pointers.map((p) => [p.many_field, p.one_collection]))
       const rowIds = rows.map((r) => String(r.id))
       const cache = new Map()
       await Promise.all(
         form.fields
-          .filter((f) => pointerFields.has(f.path))
+          .filter((f) => targetOf.has(f.path))
           .map(async (f) => {
             try {
+              const linked = [
+                ...new Set(rows.map((r) => r[f.path]).filter((v) => v != null && v !== ''))
+              ].map(String)
+              const readable = await readableLinkIds(
+                user,
+                targetOf.get(f.path) as string,
+                linked,
+                !!req.isAdmin
+              )
+              if (readable.size === 0) return
               const byRow = await resolvePathValues(head.collection, rowIds, [f.path], cache)
               for (const r of rows) {
+                if (r[f.path] == null || !readable.has(String(r[f.path]))) continue
                 const v = byRow.get(String(r.id))?.value
                 if (v) r[f.path] = v
               }
@@ -221,7 +283,8 @@ export async function registerLayoutOutputRoutes(app: FastifyInstance): Promise<
     const { id } = req.params as { id: string }
     const user = req.user as User
     const head = await loadHead(id)
-    if (!head) return reply.code(404).send({ error: 'Layout not found' })
+    if (!head || !mayUseLayout(head, user, !!req.isAdmin))
+      return reply.code(404).send({ error: 'Layout not found' })
     if (!(await can(user, 'create', head.collection)))
       return reply.code(403).send({ error: 'Forbidden' })
     const form = await fieldsFor(user, head, 'create', false)

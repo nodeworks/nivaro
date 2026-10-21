@@ -142,13 +142,17 @@ async function cutToRecipient(
 /**
  * The fields an email card shows for `collection` (the active grouped layout):
  * the chosen email section when the layout has one, else null (the caller then
- * falls back to the header strip). With a recipient, cut to their access.
+ * falls back to the header strip). Cut to the recipient's access. A card built
+ * without a recipient (shared by every addressee of one send) never shows the
+ * section: it may hold fields some of them cannot read, so it is the header
+ * strip, which every card already showed.
  */
 export async function emailSummaryFields(
   collection: string,
   itemId: string,
   recipientUserId?: string | null
 ): Promise<SummaryAssignment[] | null> {
+  if (!recipientUserId) return null
   const layout = (await db('nivaro_collection_layouts')
     .where({ collection, layout_type: 'grouped', is_active: true })
     .orderBy('sort')
@@ -166,14 +170,8 @@ export async function emailSummaryFields(
     >
   ])
   if (!groups.some((g) => g.key === key)) return null // the section was deleted: header strip
-  const recipient = recipientUserId ? await loadRecipient(recipientUserId) : null
-  if (recipientUserId && !recipient) return []
-  const list = sectionAssignments(
-    groups,
-    rows,
-    key,
-    recipient?.role ?? null,
-    recipient ? await isAdminRole(recipient) : true
-  )
-  return recipient ? cutToRecipient(collection, itemId, list, recipient) : list
+  const recipient = await loadRecipient(recipientUserId)
+  if (!recipient) return []
+  const list = sectionAssignments(groups, rows, key, recipient.role, await isAdminRole(recipient))
+  return cutToRecipient(collection, itemId, list, recipient)
 }

@@ -49,7 +49,8 @@ import {
   type SocketBind,
   sessionRoom,
   sha,
-  sweepSockets
+  sweepSockets,
+  visibleRecordIds
 } from '../../../services/socket-access.js'
 import type { User } from '../../../types.js'
 
@@ -268,6 +269,24 @@ describe('room gates (#1720)', () => {
   it('refuses on a gate error rather than guessing', async () => {
     vi.mocked(can).mockRejectedValueOnce(new Error('db down'))
     expect(await canSeeRecordRoom(ANA, 'orders', '7', false)).toBe(false)
+  })
+
+  it('visibleRecordIds keeps only the rows the record gate passes, as given (#2486)', async () => {
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set(['ABC-1', '9']))
+    expect(await visibleRecordIds(ANA, 'orders', ['abc-1', '7', '9'], false)).toEqual([
+      'abc-1',
+      '9'
+    ])
+    expect(vi.mocked(visibleIds).mock.calls.at(-1)?.[1]).toEqual(['abc-1', '7', '9'])
+  })
+  it('visibleRecordIds: nothing without read permission or on a gate error; all for admins', async () => {
+    vi.mocked(can).mockResolvedValueOnce(false)
+    expect(await visibleRecordIds(ANA, 'orders', ['1', '2'], false)).toEqual([])
+    vi.mocked(visibleIds).mockRejectedValueOnce(new Error('db down'))
+    expect(await visibleRecordIds(ANA, 'orders', ['1'], false)).toEqual([])
+    vi.mocked(visibleIds).mockClear()
+    expect(await visibleRecordIds(ANA, 'orders', ['1', '2'], true)).toEqual(['1', '2'])
+    expect(visibleIds).not.toHaveBeenCalled()
   })
 
   it('recheckSocketRooms leaves exactly the rooms that no longer pass', async () => {

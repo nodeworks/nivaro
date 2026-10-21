@@ -276,6 +276,55 @@ async function indexRun(redis: RedisLike | null | undefined, run: BackgroundRun)
   await kvSet(redis, key, JSON.stringify(next), RUN_TTL_S)
 }
 
+// ── Per-person run slots ────────────────────────────────────────────────────
+// MAX_RUNNING_PER_USER numbered slots, each claimed with one atomic SET NX (Redis, so every
+// replica shares them; in-process without Redis — a synchronous check-and-set), so parallel
+// starts cannot all pass a count read. A slot is released when its run ends and expires on its
+// own after SLOT_TTL_S, so a process that died mid-run never strands one.
+const SLOT_TTL_S = 30 * 60
+const slotKey = (user: string, n: number) => `nvr:bgrun:slot:${tenantPart()}:${user}:${n}`
+const RELEASE_IF_OWNER =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+
+function memClaim(key: string, runId: string): boolean {
+  if (memGet(key) != null) return false
+  memSet(key, runId, SLOT_TTL_S)
+  return true
+}
+
+/** Claim a free slot for `runId`; the slot number, or null when all are taken. */
+export async function claimRunSlot(
+  redis: RedisLike | null | undefined,
+  user: string,
+  runId: string
+): Promise<number | null> {
+  for (let n = 0; n < MAX_RUNNING_PER_USER; n++) {
+    const key = slotKey(user, n)
+    if (redis) {
+      try {
+        if ((await redis.set(key, runId, 'EX', SLOT_TTL_S, 'NX')) === 'OK') return n
+        continue
+      } catch {
+        /* Redis down: this process's own slots decide */
+      }
+    }
+    if (memClaim(key, runId)) return n
+  }
+  return null
+}
+
+/** Release `runId`'s slot (only while it still holds it). */
+export async function releaseRunSlot(
+  redis: RedisLike | null | undefined,
+  user: string,
+  slot: number,
+  runId: string
+): Promise<void> {
+  const key = slotKey(user, slot)
+  if (memGet(key) === runId) mem.delete(key)
+  if (redis) await redis.eval(RELEASE_IF_OWNER, 1, key, runId).catch(() => {})
+}
+
 async function userRunIds(redis: RedisLike | null | undefined, user: string): Promise<string[]> {
   const raw = await kvGet(redis, userIndexKey(user))
   try {
@@ -417,15 +466,21 @@ export async function startBackgroundRun(
   const mine = await listRuns(redis, user)
   const same = mine.find((r) => r.status === 'running' && r.fingerprint === fingerprint)
   if (same) return { run: same, joined: true }
-  if (mine.filter((r) => r.status === 'running').length >= MAX_RUNNING_PER_USER)
+  // The cap is the slot claim (atomic), not the list read above.
+  const runId = randomUUID()
+  const slot = await claimRunSlot(redis, user, runId)
+  if (slot == null)
     throw new BackgroundRunError(
       429,
       `You already have ${MAX_RUNNING_PER_USER} runs in the background — wait for one to finish`
     )
 
-  const estimate = await estimateRead(target.kind, target.subject, redis)
+  const estimate = await estimateRead(target.kind, target.subject, redis).catch(async (err) => {
+    await releaseRunSlot(redis, user, slot, runId)
+    throw err
+  })
   const run: BackgroundRun = {
-    id: randomUUID(),
+    id: runId,
     user,
     kind: target.kind,
     subject: target.subject,
@@ -442,8 +497,13 @@ export async function startBackgroundRun(
     error: null,
     result_kept: false
   }
-  await saveRun(redis, run)
-  await indexRun(redis, run)
+  try {
+    await saveRun(redis, run)
+    await indexRun(redis, run)
+  } catch (err) {
+    await releaseRunSlot(redis, user, slot, runId)
+    throw err
+  }
   emitJobProgress(user, trayEvent(run))
 
   const headers: Record<string, string> = { 'accept-encoding': 'identity' }
@@ -458,9 +518,11 @@ export async function startBackgroundRun(
   // After this response: the replay must not hold the start request open.
   setImmediate(() => {
     void runInBackgroundPool(() =>
-      replay(app, run, { headers, payload, remoteAddress }).catch((err) => {
-        app.log?.warn?.({ err, run: run.id }, 'Background run failed')
-      })
+      replay(app, run, { headers, payload, remoteAddress })
+        .catch((err) => {
+          app.log?.warn?.({ err, run: run.id }, 'Background run failed')
+        })
+        .finally(() => releaseRunSlot(redis, user, slot, runId))
     )
   })
   return { run, joined: false }

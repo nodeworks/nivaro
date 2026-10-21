@@ -6,7 +6,9 @@ vi.mock('../../../services/permissions.js', () => ({
   isAdminRole: vi.fn()
 }))
 
+import { db } from '../../../db/index.js'
 import {
+  emailSummaryFields,
   normalizeEmailSection,
   sectionAssignments
 } from '../../../services/layout-email-section.js'
@@ -77,6 +79,14 @@ describe('email section (#2725)', () => {
     expect(sectionAssignments(hidden, ROWS, 'main', 'role-x', false)).toEqual([])
     // An administrator is shown everything.
     expect(sectionAssignments(hidden, ROWS, 'main', 'role-x', true).length).toBeGreaterThan(0)
+  })
+
+  it('a card built without a recipient never shows the section (header strip)', async () => {
+    vi.mocked(db).mockClear()
+    expect(await emailSummaryFields('orders', '7')).toBeNull()
+    expect(await emailSummaryFields('orders', '7', null)).toBeNull()
+    expect(await emailSummaryFields('orders', '7', '')).toBeNull()
+    expect(db).not.toHaveBeenCalled()
   })
 
   it('an unknown section yields nothing', () => {
