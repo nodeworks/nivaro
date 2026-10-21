@@ -54,6 +54,7 @@ import { chaosRoutes } from './chaos.js'
 import { chatPushReplyRoutes, chatRoutes } from './chat.js'
 import { chatAdminRoutes } from './chat-admin.js'
 import { chatHuddleRoutes } from './chat-huddle.js'
+import { chatHuddleSfuRoutes } from './chat-huddle-sfu.js'
 import { collectionDesignerRoutes } from './collection-designer.js'
 import { collectionLayoutsRoutes } from './collection-layouts.js'
 import { collectionPresetsRoutes } from './collection-presets.js'
@@ -512,6 +513,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(chatPushReplyRoutes, { prefix: '/chat-push' })
   await app.register(chatAdminRoutes, { prefix: '/chat/admin' })
   await app.register(chatHuddleRoutes, { prefix: '/chat/huddle' })
+  await app.register(chatHuddleSfuRoutes, { prefix: '/chat/huddle' })
   await app.register(dataModelRoutes, { prefix: '/data-model' })
   // Same prefix, auth-only: the read-only relation lookup every record form needs
   await app.register(dataModelReadRoutes, { prefix: '/data-model' })

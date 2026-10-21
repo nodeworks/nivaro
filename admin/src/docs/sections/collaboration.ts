@@ -846,6 +846,20 @@ export const collabChat: DocSection = {
         'Hosts that mount no realtime adapter, or browsers without WebRTC, simply never show the button.'
       ]
     },
+    { type: 'h3', id: 'collab-chat-huddles-large', text: 'Large huddles' },
+    {
+      type: 'p',
+      text: 'Peer to peer, every person in a huddle uploads one audio stream per listener, which stops working past a handful of people. An administrator can add a self-hosted LiveKit media server under Settings → Huddles → Large huddles (address, API key, API secret). Huddles still start peer to peer; the join that takes one past "Move to the media server above" (default 5 people) moves everyone over — each browser then uploads once and the server fans it out. The move takes a moment and nobody hears a gap: the old links stay open for up to three seconds while the new ones come up. A huddle that moved stays on the media server until it ends. With a media server the cap on people per huddle defaults to 25 (up to 100); without one it stays 8 (up to 16).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Who is in a huddle, mute and share state, and the "started / ended" lines never move: they stay with this instance. The media server carries sound and shared screens only, and sees rooms by an opaque name (a hash of the room key), never the channel or record name.',
+        'Each person gets a ten-minute join token minted here, only for a room they can see and only once they are listed in its huddle. The API secret signs those tokens and never leaves the server (it shows masked under Settings).',
+        '**Test media server** on the same page lists the server’s rooms with the saved key and secret: a pass proves the address is reachable from this instance and the pair matches. The `deploy/livekit` folder in the repository holds a compose file, a `livekit.yaml` template that points LiveKit at the same TURN server as the huddles, and the ports to open (TCP 7880/7881, UDP 50000–60000).',
+        'The LiveKit client library downloads only when a huddle first goes large; mesh-only instances never fetch it.'
+      ]
+    },
     {
       type: 'p',
       text: 'A screen clip is a short recording — up to 60 seconds of your screen and microphone — made from the clapperboard button in the composer and sent like any other attachment. The button becomes the clock while it records; Stop, the 60 s mark or the browser’s "Stop sharing" ends it. The clip arrives with a poster frame and plays inline in the message. It is an ordinary file in the file manager (tagged `chat-clip`), not a help video.'

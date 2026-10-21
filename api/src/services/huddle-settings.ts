@@ -20,7 +20,12 @@ import { instanceKey } from './instance-key.js'
 
 export const HUDDLE_OVERRIDE_KEY = 'huddle'
 export const HUDDLE_MASK = '••••••'
+/** Mesh audio: every extra person costs every browser a stream, so the cap is low. */
 const MAX_PARTICIPANTS_CAP = 16
+/** With an SFU (#2859) each browser uploads once, so the cap can be a real room. */
+const SFU_MAX_PARTICIPANTS_CAP = 100
+const SFU_DEFAULT_MAX = 25
+const DEFAULT_SWITCH_AT = 5
 const DEFAULT_TTL_S = 3600
 
 export interface HuddleSettings {
@@ -38,8 +43,16 @@ export interface HuddleSettings {
   turn_secret: string | null
   /** Lifetime of a minted credential, seconds. */
   turn_ttl_s: number
-  /** Soft cap on people in one huddle (mesh audio; 2–16). */
+  /** Soft cap on people in one huddle (mesh 2–16, default 8; with an SFU 2–100, default 25). */
   max_participants: number
+  /** Large huddles (#2859): a LiveKit SFU browsers move to above `switch_at` people.
+   *  `wss://` url; null = mesh only. */
+  livekit_url: string | null
+  livekit_api_key: string | null
+  /** Signs the per-person LiveKit access tokens; never leaves the server. */
+  livekit_api_secret: string | null
+  /** A huddle whose participant count would EXCEED this moves to the SFU. */
+  switch_at: number
 }
 
 export const HUDDLE_DEFAULTS: HuddleSettings = {
@@ -50,10 +63,28 @@ export const HUDDLE_DEFAULTS: HuddleSettings = {
   turn_credential: null,
   turn_secret: null,
   turn_ttl_s: DEFAULT_TTL_S,
-  max_participants: 8
+  max_participants: 8,
+  livekit_url: null,
+  livekit_api_key: null,
+  livekit_api_secret: null,
+  switch_at: DEFAULT_SWITCH_AT
 }
 
+const SECRET_KEYS: ReadonlySet<keyof HuddleSettings> = new Set([
+  'turn_credential',
+  'turn_secret',
+  'livekit_api_secret'
+])
+
 const URL_RE = /^(stuns?|turns?):[^\s]+$/i
+const LIVEKIT_URL_RE = /^wss?:\/\/[^\s/?#]+(?::\d+)?(?:\/[^\s]*)?$/i
+
+/** The SFU path exists only with a url, a key and a secret. */
+export function sfuConfigured(
+  s: Pick<HuddleSettings, 'livekit_url' | 'livekit_api_key' | 'livekit_api_secret'>
+): boolean {
+  return !!(s.livekit_url && s.livekit_api_key && s.livekit_api_secret)
+}
 
 function urlList(raw: unknown, scheme: RegExp): string[] {
   const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,]/) : []
@@ -79,6 +110,16 @@ export function normalizeHuddleSettings(raw: unknown): HuddleSettings {
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
   const ttl = Number(src.turn_ttl_s)
   const max = Number(src.max_participants)
+  const switchAt = Number(src.switch_at)
+  const livekitUrl = text(src.livekit_url, 300)
+  const sfu = {
+    livekit_url: livekitUrl && LIVEKIT_URL_RE.test(livekitUrl) ? livekitUrl : null,
+    livekit_api_key: text(src.livekit_api_key, 200),
+    livekit_api_secret: text(src.livekit_api_secret)
+  }
+  // The participant cap depends on how media travels: mesh or SFU.
+  const cap = sfuConfigured(sfu) ? SFU_MAX_PARTICIPANTS_CAP : MAX_PARTICIPANTS_CAP
+  const defaultMax = sfuConfigured(sfu) ? SFU_DEFAULT_MAX : HUDDLE_DEFAULTS.max_participants
   return {
     enabled: src.enabled !== false,
     stun_urls: urlList(src.stun_urls, /^stuns?:/i),
@@ -91,9 +132,12 @@ export function normalizeHuddleSettings(raw: unknown): HuddleSettings {
         ? Math.min(86_400, Math.max(60, Math.round(ttl)))
         : DEFAULT_TTL_S,
     max_participants:
-      Number.isFinite(max) && max > 0
-        ? Math.min(MAX_PARTICIPANTS_CAP, Math.max(2, Math.round(max)))
-        : HUDDLE_DEFAULTS.max_participants
+      Number.isFinite(max) && max > 0 ? Math.min(cap, Math.max(2, Math.round(max))) : defaultMax,
+    ...sfu,
+    switch_at:
+      Number.isFinite(switchAt) && switchAt > 0
+        ? Math.min(SFU_MAX_PARTICIPANTS_CAP, Math.max(2, Math.round(switchAt)))
+        : DEFAULT_SWITCH_AT
   }
 }
 
@@ -102,13 +146,16 @@ export function maskHuddleSettings(s: HuddleSettings): HuddleSettings {
   return {
     ...s,
     turn_credential: s.turn_credential ? HUDDLE_MASK : null,
-    turn_secret: s.turn_secret ? HUDDLE_MASK : null
+    turn_secret: s.turn_secret ? HUDDLE_MASK : null,
+    livekit_api_secret: s.livekit_api_secret ? HUDDLE_MASK : null
   }
 }
 
 /**
  * Merge an admin's patch over what is stored. A secret field carrying the mask
- * keeps the stored value; null or '' clears it.
+ * keeps the stored value; null or '' clears it. A patch that configures the SFU
+ * for the first time without naming a cap lets the cap re-default (8 → 25):
+ * the mesh default was never a choice about an SFU.
  */
 export function mergeHuddlePatch(stored: HuddleSettings, patch: unknown): HuddleSettings {
   const p =
@@ -118,8 +165,16 @@ export function mergeHuddlePatch(stored: HuddleSettings, patch: unknown): Huddle
   const next: Record<string, unknown> = { ...stored }
   for (const k of Object.keys(HUDDLE_DEFAULTS) as Array<keyof HuddleSettings>) {
     if (!(k in p)) continue
-    if ((k === 'turn_credential' || k === 'turn_secret') && p[k] === HUDDLE_MASK) continue
+    if (SECRET_KEYS.has(k) && p[k] === HUDDLE_MASK) continue
     next[k] = p[k]
+  }
+  if (
+    !sfuConfigured(stored) &&
+    sfuConfigured(next as unknown as HuddleSettings) &&
+    !('max_participants' in p) &&
+    stored.max_participants === HUDDLE_DEFAULTS.max_participants
+  ) {
+    next.max_participants = undefined
   }
   return normalizeHuddleSettings(next)
 }

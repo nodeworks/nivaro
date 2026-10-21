@@ -16,7 +16,8 @@ import { type IceProbeResult, type IceServerDto, probeIce } from '@/lib/ice-prob
  * browsers use to reach each other. Per instance (GET/PATCH
  * /chat/huddle/settings), because a laptop, staging and production each have
  * their own network. Secrets come back masked and a masked value re-submitted
- * keeps what is stored.
+ * keeps what is stored. Large huddles (#2859): an optional LiveKit media server
+ * huddles move to above a size, with a reachability + credential probe.
  */
 
 interface HuddleSettingsDto {
@@ -28,7 +29,19 @@ interface HuddleSettingsDto {
   turn_secret: string | null
   turn_ttl_s: number
   max_participants: number
+  livekit_url: string | null
+  livekit_api_key: string | null
+  livekit_api_secret: string | null
+  switch_at: number
 }
+
+type SfuProbe =
+  | { ok: true; ms: number; rooms: number }
+  | {
+      ok: false
+      reason: 'not-configured' | 'bad-url' | 'unreachable' | 'unauthorized' | 'error'
+      detail?: string
+    }
 
 function Field({
   label,
@@ -61,6 +74,10 @@ type HuddleForm = {
   secret: string
   ttl: string
   max: string
+  livekitUrl: string
+  livekitKey: string
+  livekitSecret: string
+  switchAt: string
 }
 
 function toForm(d: HuddleSettingsDto): HuddleForm {
@@ -72,8 +89,17 @@ function toForm(d: HuddleSettingsDto): HuddleForm {
     credential: d.turn_credential ?? '',
     secret: d.turn_secret ?? '',
     ttl: String(d.turn_ttl_s),
-    max: String(d.max_participants)
+    max: String(d.max_participants),
+    livekitUrl: d.livekit_url ?? '',
+    livekitKey: d.livekit_api_key ?? '',
+    livekitSecret: d.livekit_api_secret ?? '',
+    switchAt: String(d.switch_at)
   }
+}
+
+/** All three together make a media server (the secret may be the mask: it is still stored). */
+function sfuReady(f: HuddleForm): boolean {
+  return !!f.livekitUrl.trim() && !!f.livekitKey.trim() && !!f.livekitSecret
 }
 
 export function HuddleSettingsSection() {
@@ -96,7 +122,15 @@ export function HuddleSettingsSection() {
         turn_credential: form?.credential ?? '',
         turn_secret: form?.secret ?? '',
         turn_ttl_s: Number(form?.ttl),
-        max_participants: Number(form?.max)
+        // An untouched cap stays out of the patch, so configuring a media server for the
+        // first time lets it re-default from the mesh 8 to 25.
+        ...(form && data && form.max !== String(data.max_participants)
+          ? { max_participants: Number(form.max) }
+          : {}),
+        livekit_url: form?.livekitUrl.trim() ?? '',
+        livekit_api_key: form?.livekitKey.trim() ?? '',
+        livekit_api_secret: form?.livekitSecret ?? '',
+        switch_at: Number(form?.switchAt)
       }),
     onSuccess: (r) => {
       qc.setQueryData(['huddle-settings'], r.data.data)
@@ -119,7 +153,13 @@ export function HuddleSettingsSection() {
     }
   })
 
+  const testSfu = useMutation({
+    mutationFn: () =>
+      api.get<{ data: SfuProbe }>('/chat/huddle/settings/test-sfu').then((r) => r.data.data)
+  })
+
   const hasTurn = !!form?.turn.trim()
+  const sfuOn = !!form && sfuReady(form)
   const update = (patch: Partial<HuddleForm>) => setForm((f) => (f ? { ...f, ...patch } : f))
   const dirty = !!data && !!form && JSON.stringify(toForm(data)) !== JSON.stringify(form)
 
@@ -271,20 +311,107 @@ export function HuddleSettingsSection() {
             <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
               <Field
                 label='People per huddle'
-                hint='Audio is sent peer to peer, so every extra person costs every browser a stream. 2 – 16; 8 is a sensible cap.'
+                hint={
+                  sfuOn
+                    ? 'With a media server each browser uploads once. 2 – 100; 25 is the default.'
+                    : 'Audio is sent peer to peer, so every extra person costs every browser a stream. 2 – 16; 8 is a sensible cap.'
+                }
               >
                 {(id) => (
                   <Input
                     id={id}
                     type='number'
                     min={2}
-                    max={16}
+                    max={sfuOn ? 100 : 16}
                     value={form.max}
                     onChange={(e) => update({ max: e.target.value })}
                     className='h-8 text-[12px]'
                   />
                 )}
               </Field>
+            </div>
+
+            <div className='space-y-4 border-t border-slate-200 pt-5 dark:border-border'>
+              <div>
+                <p className='text-[13px] font-medium text-slate-900 dark:text-foreground'>
+                  Large huddles
+                </p>
+                <p className='mt-0.5 max-w-[70ch] text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                  Peer to peer, every person uploads one stream per listener, which stops working
+                  past a handful of people. A self-hosted LiveKit media server takes over above a
+                  size: each browser uploads once and the server fans it out. Huddles start peer to
+                  peer and move over without a gap; who is in them stays with this instance. Leave
+                  empty to keep huddles small.
+                </p>
+              </div>
+              <Field
+                label='Media server address'
+                hint='The LiveKit websocket address browsers connect to, e.g. wss://media.example.com. The deploy bundle in deploy/livekit sets one up next to your TURN server.'
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={form.livekitUrl}
+                    onChange={(e) => update({ livekitUrl: e.target.value })}
+                    placeholder='wss://media.example.com'
+                    autoComplete='off'
+                    spellCheck={false}
+                    className='h-8 font-mono text-[12px]'
+                  />
+                )}
+              </Field>
+              <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
+                <Field label='API key' hint='From livekit.yaml `keys`.'>
+                  {(id) => (
+                    <Input
+                      id={id}
+                      value={form.livekitKey}
+                      onChange={(e) => update({ livekitKey: e.target.value })}
+                      autoComplete='off'
+                      spellCheck={false}
+                      className='h-8 font-mono text-[12px]'
+                    />
+                  )}
+                </Field>
+                <Field
+                  label='API secret'
+                  hint='Signs each person’s ten-minute join token here. It never reaches a browser.'
+                >
+                  {(id) => (
+                    <Input
+                      id={id}
+                      type='password'
+                      value={form.livekitSecret}
+                      onChange={(e) => update({ livekitSecret: e.target.value })}
+                      autoComplete='off'
+                      className='h-8 font-mono text-[12px]'
+                    />
+                  )}
+                </Field>
+              </div>
+              <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
+                <Field
+                  label='Move to the media server above'
+                  hint={
+                    sfuOn
+                      ? `A huddle with more than ${form.switchAt || '5'} people moves over; one that moved stays there until it ends.`
+                      : 'Takes effect once the address, key and secret are set. 5 is a good size for a mesh.'
+                  }
+                >
+                  {(id) => (
+                    <Input
+                      id={id}
+                      type='number'
+                      min={2}
+                      max={100}
+                      value={form.switchAt}
+                      onChange={(e) => update({ switchAt: e.target.value })}
+                      disabled={!sfuOn}
+                      className='h-8 text-[12px]'
+                    />
+                  )}
+                </Field>
+              </div>
             </div>
 
             <div className='flex items-center gap-2 border-t border-slate-200 pt-4 dark:border-border'>
@@ -331,6 +458,40 @@ export function HuddleSettingsSection() {
               )}
               {test.data && <ProbeOutcome r={test.data} />}
             </div>
+
+            {(sfuOn || !!data?.livekit_url) && (
+              <div className='space-y-2 rounded-lg border border-slate-200 px-4 py-3 dark:border-border'>
+                <div className='flex flex-wrap items-center justify-between gap-3'>
+                  <div>
+                    <p className='text-[13px] font-medium text-slate-900 dark:text-foreground'>
+                      Test the media server
+                    </p>
+                    <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                      Asks the saved server to list its rooms with the saved key and secret. Nothing
+                      is created.
+                    </p>
+                  </div>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    onClick={() => testSfu.mutate()}
+                    disabled={dirty || testSfu.isPending}
+                    data-tip={
+                      dirty ? 'Save your changes first — the test uses the saved server' : undefined
+                    }
+                  >
+                    {testSfu.isPending && <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' />}
+                    {testSfu.isPending ? 'Testing…' : 'Test media server'}
+                  </Button>
+                </div>
+                {testSfu.isError && (
+                  <ProbeLine tone='bad'>
+                    The test could not start. Reload the page and try again.
+                  </ProbeLine>
+                )}
+                {testSfu.data && <SfuOutcome r={testSfu.data} />}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -364,6 +525,47 @@ function ProbeLine({
       <span>{children}</span>
     </p>
   )
+}
+
+function SfuOutcome({ r }: { r: SfuProbe }) {
+  if (r.ok)
+    return (
+      <ProbeLine tone='good'>
+        The media server answered in {r.ms} ms and the key and secret match
+        {r.rooms ? ` — ${r.rooms} room${r.rooms === 1 ? '' : 's'} open right now` : ''}.
+      </ProbeLine>
+    )
+  switch (r.reason) {
+    case 'not-configured':
+      return <ProbeLine tone='none'>No media server is saved.</ProbeLine>
+    case 'bad-url':
+      return (
+        <ProbeLine tone='bad'>
+          The address must start with <span className='font-mono'>wss://</span> (or{' '}
+          <span className='font-mono'>ws://</span> on a laptop).
+        </ProbeLine>
+      )
+    case 'unauthorized':
+      return (
+        <ProbeLine tone='bad'>
+          The server answered but refused the key and secret. Check both against the{' '}
+          <span className='font-mono'>keys</span> entry in livekit.yaml.
+        </ProbeLine>
+      )
+    case 'unreachable':
+      return (
+        <ProbeLine tone='bad'>
+          No answer from the server{r.detail ? ` (${r.detail.toLowerCase()})` : ''}. Check the
+          address, that LiveKit is running, and that TCP 7880 is open from this instance.
+        </ProbeLine>
+      )
+    default:
+      return (
+        <ProbeLine tone='bad'>
+          The server answered with an error{r.detail ? ` (${r.detail})` : ''}.
+        </ProbeLine>
+      )
+  }
 }
 
 function ProbeOutcome({ r }: { r: IceProbeResult & { stun: boolean; turn: boolean } }) {

@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
-import { getHuddleSettings } from './huddle-settings.js'
+import { getHuddleSettings, sfuConfigured } from './huddle-settings.js'
+import { decideHuddleMode, type HuddleMode } from './huddle-sfu.js'
 import { inSocketTenant } from './socket-tenant.js'
 
 /**
@@ -21,8 +22,9 @@ import { inSocketTenant } from './socket-tenant.js'
  * Events (client → server): huddle:join {room}, huddle:leave {room},
  * huddle:signal {room, to, data}, huddle:state {room, muted?, screen?},
  * huddle:ping {room}. Server → client: huddle:joined {room, self, peers},
- * huddle:peers {room, peers} (to the huddle AND everyone with the room open),
- * huddle:signal {room, from, user, data}, huddle:denied {room, reason}.
+ * huddle:peers {room, peers, mode} (to the huddle AND everyone with the room open),
+ * huddle:signal {room, from, user, data}, huddle:denied {room, reason},
+ * huddle:mode {room, mode} (#2859: the huddle outgrew the mesh — move to the SFU).
  * Payloads carry ids, names and SDP only — never message text.
  */
 
@@ -60,7 +62,7 @@ export interface HuddleRedis {
 
 function keys(tenant: string | null, room: string) {
   const base = `nvr:huddle:${tenant || '-'}:${room}`
-  return { set: base, meta: `${base}:m`, start: `${base}:start` }
+  return { set: base, meta: `${base}:m`, start: `${base}:start`, mode: `${base}:mode` }
 }
 
 /** Rooms a huddle may run in: channels, General and record rooms (DMs are not in v1). */
@@ -118,12 +120,28 @@ async function touch(redis: HuddleRedis, tenant: string | null, room: string, so
   await redis.expire(k.set, KEY_TTL_S)
   await redis.expire(k.meta, KEY_TTL_S)
   await redis.expire(k.start, KEY_TTL_S)
+  await redis.expire(k.mode, KEY_TTL_S)
+}
+
+/** How the room's huddle carries media right now (#2859); mesh until it outgrew it. */
+export async function huddleMode(
+  redis: HuddleRedis,
+  tenant: string | null,
+  room: string
+): Promise<HuddleMode> {
+  return (await redis.get(keys(tenant, room).mode)) === 'sfu' ? 'sfu' : 'mesh'
 }
 
 export interface HuddleDeps {
   redis: HuddleRedis
   canSeeRoom(user: User, room: string): Promise<boolean>
-  settings(): Promise<{ enabled: boolean; max_participants: number }>
+  settings(): Promise<{
+    enabled: boolean
+    max_participants: number
+    /** #2859: an SFU is configured, and the size above which a huddle moves to it. */
+    sfu?: boolean
+    switch_at?: number
+  }>
   /** Post a platform line in the room (chat-send.ts). */
   postLine(room: string, text: string): Promise<void>
   warn(obj: Record<string, unknown>, msg: string): void
@@ -133,7 +151,10 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
   return {
     redis: app.redis as unknown as HuddleRedis,
     canSeeRoom: (user, room) => canSeeRoomReal(user, room),
-    settings: () => getHuddleSettings(),
+    settings: async () => {
+      const s = await getHuddleSettings()
+      return { ...s, sfu: sfuConfigured(s) }
+    },
     async postLine(room, text) {
       const { postChatMessage } = await import('./chat-send.js')
       await postChatMessage(
@@ -184,7 +205,8 @@ export function registerHuddle(
   async function broadcast(room: string) {
     const tenant = scope.tenantNow()
     const peers = await huddlePeers(deps.redis, tenant, room)
-    const payload = { room, peers }
+    const mode = peers.length ? await huddleMode(deps.redis, tenant, room) : 'mesh'
+    const payload = { room, peers, mode }
     const chat = scope.scopedRoomNow(`chat:${room}`)
     if (chat) io.to(chat).emit('huddle:peers', payload)
     // People in the huddle with the room closed still need the list.
@@ -223,11 +245,24 @@ export function registerHuddle(
       if (name) socket.join(name)
       const first = peers.length === 0
       if (first) await deps.redis.set(k.start, String(since), 'EX', KEY_TTL_S)
+      // #2859: one more person than the mesh comfortably carries → everyone moves to the SFU.
+      const before = first ? 'mesh' : await huddleMode(deps.redis, tenant, r)
+      const count = peers.length + (already ? 0 : 1)
+      const mode = decideHuddleMode(before, count, {
+        sfu: !!settings.sfu,
+        switch_at: settings.switch_at ?? Number.POSITIVE_INFINITY
+      })
+      if (mode !== before) await deps.redis.set(k.mode, mode, 'EX', KEY_TTL_S)
       socket.emit('huddle:joined', {
         room: r,
         self: socket.id,
-        peers: peers.filter((p) => p.socket !== socket.id)
+        peers: peers.filter((p) => p.socket !== socket.id),
+        mode
       })
+      if (mode !== before) {
+        const h = scope.scopedRoomNow(`huddle:${r}`)
+        if (h) io.to(h).emit('huddle:mode', { room: r, mode })
+      }
       await broadcast(r)
       if (first) await deps.postLine(r, `${nameOf(user) ?? 'Someone'} started a huddle`)
     } catch (err) {
@@ -248,7 +283,7 @@ export function registerHuddle(
       const left = await broadcast(room)
       if (left.length === 0) {
         const start = await deps.redis.get(k.start)
-        await deps.redis.del(k.start, k.meta, k.set)
+        await deps.redis.del(k.start, k.meta, k.set, k.mode)
         const ms = start ? Date.now() - Number(start) : 0
         await deps.postLine(room, `Huddle ended after ${formatHuddleDuration(ms)}`)
       }

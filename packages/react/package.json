@@ -85,6 +85,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.0.0",
     "cmdk": "^1.0.0",
+    "livekit-client": "^2.23.0",
     "lucide-react": "^0.460.0",
     "recharts": "^3.8.1",
     "tailwind-merge": "^2.0.0",
