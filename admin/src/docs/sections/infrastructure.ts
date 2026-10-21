@@ -10,6 +10,10 @@ export const infrastructureDocs: DocSection = {
       text: 'The Infrastructure page at /infrastructure (Operations → Health) shows the Docker hosts this instance runs on: stacks and containers, rolling updates, healthchecks, the swarm itself and its secrets. It is read-only and for administrators. Nivaro never mounts the Docker socket: a deployment runs a socket proxy that allows GET requests only, on an internal network, and names it in DOCKER_HOSTS (name=url pairs, comma-separated) or DOCKER_API_URL. Each host is read separately, so a host that does not answer shows its error and the others still render. In cloud mode the page is off.'
     },
     {
+      type: 'p',
+      text: 'The tabs are grouped: Overview; Workloads (Stacks, Containers, Updates, Health); Swarm (Swarm, Secrets); Hosts (Hosts, Resources, Reboot, Logs); Images and storage (Volumes, Images, Provenance); Proxy and build (Proxy, GitLab). On a wide screen they sit in one strip with a thin rule between groups, and the strip scrolls when it does not fit. On a narrow screen a single button shows the current view and opens the grouped list, which you can also type into. Every Docker-backed tab shows one section per host with the host name and its status on the right; a host that does not answer says so in that place. Long lists (a host with hundreds of containers, many images) show the first rows with a button for the rest.'
+    },
+    {
       type: 'note',
       text: 'Tabs that read swarm services, tasks, nodes or secrets need the matching sections switched on in the proxy (INFO, CONTAINERS, SERVICES, TASKS, NODES, SECRETS). Keep SWARM and CONFIGS off: Nivaro never reads them, because the swarm section returns the join tokens and the configs section returns config contents. A section the proxy refuses is reported on the tab; everything else still shows. Whatever the Engine answers, environment variables, join and unlock keys, credential-looking label values and secret command-line arguments are removed on the server before anything is cached or sent to the page.'
     },
