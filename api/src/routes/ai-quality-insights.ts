@@ -32,6 +32,7 @@ import {
   parseBillsCsv,
   spendTableOk
 } from '../services/ai-spend.js'
+import { tenantState } from '../services/ai-tenant-state.js'
 import { loadToolReliability } from '../services/ai-tool-reliability.js'
 
 /**
@@ -63,7 +64,8 @@ async function saveCfg(next: QualityConfig): Promise<boolean> {
 const clampDays = (v: unknown, def: number, max: number) =>
   Math.min(max, Math.max(1, Math.round(Number(v)) || def))
 
-let partsColumn: boolean | null = null
+const partsColumnState = tenantState<{ v: boolean | null }>(() => ({ v: null }))
+const checkingState = tenantState(() => ({ running: false }))
 
 export async function aiQualityInsightRoutes(app: FastifyInstance) {
   registerCatalogueReadiness()
@@ -180,12 +182,11 @@ export async function aiQualityInsightRoutes(app: FastifyInstance) {
     { preHandler: requireAdmin },
     async (req) => {
       const days = clampDays(req.query?.days, 14, 30)
-      if (partsColumn !== true)
-        partsColumn = await db.schema
-          .hasColumn('nivaro_ai_calls', 'prompt_parts')
-          .catch(() => false)
-      const empty = { days, ready: !!partsColumn, calls_measured: 0, features: [], releases: [] }
-      if (!partsColumn) return { data: empty }
+      const col = partsColumnState()
+      if (col.v !== true)
+        col.v = await db.schema.hasColumn('nivaro_ai_calls', 'prompt_parts').catch(() => false)
+      const empty = { days, ready: !!col.v, calls_measured: 0, features: [], releases: [] }
+      if (!col.v) return { data: empty }
       const since = new Date(Date.now() - days * 86_400_000)
       const rows = (await db('nivaro_ai_calls')
         .where('created_at', '>=', since)
@@ -268,16 +269,16 @@ export async function aiQualityInsightRoutes(app: FastifyInstance) {
     }
   })
 
-  let checking = false
   /** Check now — answers 202 and runs behind the response (a new model also runs its trial). */
   app.post('/catalogue/check', { preHandler: requireAdmin }, async (req, reply) => {
-    if (checking) return reply.code(409).send({ error: 'A check is already running' })
-    checking = true
+    const checking = checkingState()
+    if (checking.running) return reply.code(409).send({ error: 'A check is already running' })
+    checking.running = true
     await logActivity({ action: 'ai-catalogue-check-now', user: req.user!.id, req })
     void runCatalogueCheck()
       .catch(() => undefined)
       .finally(() => {
-        checking = false
+        checking.running = false
       })
     return reply.code(202).send({ data: { started: true } })
   })

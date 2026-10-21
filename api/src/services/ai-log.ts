@@ -10,6 +10,7 @@ import {
   makeMessageStream,
   type StreamOptions
 } from './ai-stream.js'
+import { tenantState } from './ai-tenant-state.js'
 import { currentTraceMeta } from './request-trace.js'
 import { noteAiCall } from './traffic-taps/ai.js'
 
@@ -36,25 +37,26 @@ const PRICES: Record<string, { input: number; cached: number; output: number }> 
 }
 
 /** Prices an admin set in AI quality (#2764); they beat the built-in list. */
-let priceOverrides: Record<string, { input: number; cached: number; output: number }> = {}
+type Prices = Record<string, { input: number; cached: number; output: number }>
+const priceState = tenantState<{ prices: Prices }>(() => ({ prices: {} }))
 
-export function setPriceOverrides(
-  prices: Record<string, { input: number; cached: number; output: number }> | null | undefined
-): void {
-  priceOverrides = prices ?? {}
+export function setPriceOverrides(prices: Prices | null | undefined): void {
+  priceState().prices = prices ?? {}
 }
 
 export function priceFor(model: string) {
   const base = model.replace(/-\d{8}$/, '')
-  return priceOverrides[model] ?? priceOverrides[base] ?? PRICES[model] ?? PRICES[base] ?? null
+  const overrides = priceState().prices
+  return overrides[model] ?? overrides[base] ?? PRICES[model] ?? PRICES[base] ?? null
 }
 
 /** The prompt_parts column arrives with migration 470; probe once, retry after a minute. */
-let partsColumn: { ok: boolean; at: number } | null = null
+const partsColumnState = tenantState<{ v: { ok: boolean; at: number } | null }>(() => ({ v: null }))
 async function promptPartsSupported(): Promise<boolean> {
-  if (partsColumn && (partsColumn.ok || Date.now() - partsColumn.at < 60_000)) return partsColumn.ok
+  const st = partsColumnState()
+  if (st.v && (st.v.ok || Date.now() - st.v.at < 60_000)) return st.v.ok
   const ok = await db.schema.hasColumn('nivaro_ai_calls', 'prompt_parts').catch(() => false)
-  partsColumn = { ok, at: Date.now() }
+  st.v = { ok, at: Date.now() }
   return ok
 }
 

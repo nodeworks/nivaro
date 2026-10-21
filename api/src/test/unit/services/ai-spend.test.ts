@@ -213,3 +213,21 @@ describe('AI spend reconciliation (#2764)', () => {
     expect(normalizeCatalogue({ auto_trial_max_usd: 'x' }).auto_trial_max_usd).toBe(1)
   })
 })
+
+describe('per-tenant state (cloud mode)', () => {
+  it('keeps price overrides apart per tenant', async () => {
+    const { vi } = await import('vitest')
+    vi.resetModules()
+    let tenant = 'a'
+    vi.doMock('../../../services/tenant-rooms.js', () => ({ currentTenantKey: () => tenant }))
+    const log = await import('../../../services/ai-log.js')
+    log.setPriceOverrides({ 'model-x': { input: 1, cached: 1, output: 2 } })
+    tenant = 'b'
+    expect(log.priceFor('model-x')).toBeNull()
+    log.setPriceOverrides({ 'model-x': { input: 9, cached: 9, output: 9 } })
+    expect(log.priceFor('model-x')?.input).toBe(9)
+    tenant = 'a'
+    expect(log.priceFor('model-x')?.input).toBe(1)
+    vi.doUnmock('../../../services/tenant-rooms.js')
+  })
+})

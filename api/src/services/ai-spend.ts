@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { priceFor } from './ai-log.js'
 import type { BudgetCap, QualityConfig } from './ai-quality.js'
+import { tenantState } from './ai-tenant-state.js'
 import { getApp } from './io-holder.js'
 
 /**
@@ -50,8 +51,9 @@ export function daysInMonth(month: string): number {
 
 // ─── storage probes ──────────────────────────────────────────────────────────
 
-const probes = new Map<string, { ok: boolean; at: number }>()
+const probeState = tenantState(() => new Map<string, { ok: boolean; at: number }>())
 async function tableOk(name: string): Promise<boolean> {
+  const probes = probeState()
   const hit = probes.get(name)
   if (hit && (hit.ok || Date.now() - hit.at < 60_000)) return hit.ok
   const ok = await db.schema.hasTable(name).catch(() => false)
@@ -164,19 +166,22 @@ export async function rollupSpendDays(now = new Date()): Promise<{ days: number 
   return { days }
 }
 
-let lastEnsure = 0
-let ensuring: Promise<unknown> | null = null
+const ensureState = tenantState<{ last: number; ensuring: Promise<unknown> | null }>(() => ({
+  last: 0,
+  ensuring: null
+}))
 /** Lazy catch-up for readers: at most one pass per process per ten minutes. */
 export async function ensureRolledUp(): Promise<void> {
-  if (Date.now() - lastEnsure < 600_000) return
-  if (!ensuring)
-    ensuring = rollupSpendDays()
+  const st = ensureState()
+  if (Date.now() - st.last < 600_000) return
+  if (!st.ensuring)
+    st.ensuring = rollupSpendDays()
       .catch(() => undefined)
       .finally(() => {
-        lastEnsure = Date.now()
-        ensuring = null
+        st.last = Date.now()
+        st.ensuring = null
       })
-  await ensuring
+  await st.ensuring
 }
 
 // ─── reading ─────────────────────────────────────────────────────────────────

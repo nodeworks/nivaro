@@ -14,6 +14,7 @@ import { costOf } from './ai-log.js'
 import { parseQualityConfig, type QualityConfig } from './ai-quality.js'
 import { executeReplay, loadReplayCandidates, type ReplayRun, replayRuns } from './ai-replay.js'
 import { notifyAdminsOnce } from './ai-spend.js'
+import { tenantState } from './ai-tenant-state.js'
 import { registerReadinessCheck } from './readiness.js'
 import { runInTrace } from './request-trace.js'
 
@@ -69,11 +70,12 @@ export interface TrialSummary {
   }
 }
 
-let tableProbe: { ok: boolean; at: number } | null = null
+const tableProbeState = tenantState<{ v: { ok: boolean; at: number } | null }>(() => ({ v: null }))
 export async function catalogueTableOk(): Promise<boolean> {
-  if (tableProbe && (tableProbe.ok || Date.now() - tableProbe.at < 60_000)) return tableProbe.ok
+  const st = tableProbeState()
+  if (st.v && (st.v.ok || Date.now() - st.v.at < 60_000)) return st.v.ok
   const ok = await db.schema.hasTable('nivaro_ai_model_catalogue').catch(() => false)
-  tableProbe = { ok, at: Date.now() }
+  st.v = { ok, at: Date.now() }
   return ok
 }
 
@@ -173,10 +175,10 @@ export interface CheckResult {
   trial: string | null
   note?: string
 }
-let lastCheck: CheckResult | null = null
-export const lastCatalogueCheck = () => lastCheck
+const lastCheckState = tenantState<{ v: CheckResult | null }>(() => ({ v: null }))
+export const lastCatalogueCheck = () => lastCheckState().v
 const finish = (r: CheckResult): CheckResult => {
-  lastCheck = r
+  lastCheckState().v = r
   return r
 }
 
