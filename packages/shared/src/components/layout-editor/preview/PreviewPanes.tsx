@@ -240,7 +240,9 @@ export function PreviewPanes({
       )
     }
     if (parts.length === 0) return undefined
-    return (t: DesignTarget) => parts.flatMap((p) => p(t))
+    // Preview tags rank with the role mark when a node has more tags than fit.
+    return (t: DesignTarget) =>
+      parts.flatMap((p) => p(t)).map((m): DesignMark => ({ ...m, kind: m.kind ?? 'preview' }))
   }, [compare, stateInfo, state, changes])
 
   const overlay = useMemo(() => {

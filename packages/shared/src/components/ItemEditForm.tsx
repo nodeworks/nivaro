@@ -205,7 +205,7 @@ import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordGraphSheet } from './RecordGraph'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
-import { SuggestFormChangeDialog } from './support/SuggestFormChangeDialog'
+import { SuggestFormChange } from './support/SuggestFormChange'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
 
 let formulaCtxHydrated = false
@@ -5996,6 +5996,8 @@ function ItemEditFormView({
   const [supportOpen, setSupportOpen] = useState(false)
   // Suggest a form change (#2609) — about the form, not this record's data.
   const [suggestOpen, setSuggestOpen] = useState(false)
+  // The More (or folded tools) button the suggestion was picked from: its popover sits there.
+  const [suggestAnchor, setSuggestAnchor] = useState<HTMLElement | null>(null)
   const [templateName, setTemplateName] = useState('')
   const [templateShared, setTemplateShared] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
@@ -10343,7 +10345,7 @@ function ItemEditFormView({
                                             </button>
                                             <button
                                               type='button'
-                                              title='Ask the administrators to change something on this record'
+                                              data-tip='Ask the administrators to change something on this record'
                                               data-request-change
                                               data-nvr-menu-close
                                               onClick={() => setSupportOpen(true)}
@@ -10355,10 +10357,22 @@ function ItemEditFormView({
                                             {!isAdmin && !isNew && itemId && (
                                               <button
                                                 type='button'
-                                                title='Tell the administrators how this form could work better'
+                                                data-tip='Tell the administrators how this form could work better'
                                                 data-suggest-form-change-open
                                                 data-nvr-menu-close
-                                                onClick={() => setSuggestOpen(true)}
+                                                onClick={(e) => {
+                                                  // The row's menu closes with this click: anchor to its button.
+                                                  setSuggestAnchor(
+                                                    document.querySelector<HTMLElement>(
+                                                      '[data-nvr-header-tools-btn][aria-expanded="true"]'
+                                                    ) ??
+                                                      document.querySelector<HTMLElement>(
+                                                        '[data-nvr-header-menu-btn][aria-expanded="true"]'
+                                                      ) ??
+                                                      e.currentTarget
+                                                  )
+                                                  setSuggestOpen(true)
+                                                }}
                                                 className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
                                               >
                                                 <MessageSquarePlus className='h-3.5 w-3.5' />
@@ -10869,9 +10883,10 @@ function ItemEditFormView({
                                   />
                                 )}
                                 {!isAdmin && !isNew && itemId && (
-                                  <SuggestFormChangeDialog
+                                  <SuggestFormChange
                                     open={suggestOpen}
                                     onOpenChange={setSuggestOpen}
+                                    anchor={suggestAnchor}
                                     collection={collection}
                                     item={String(itemId)}
                                     layoutId={layoutMeta?.id != null ? Number(layoutMeta.id) : null}

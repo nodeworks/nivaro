@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { cn, formatRelative } from '../../../lib/utils'
 import { useLayoutEditorHost } from '../host'
+import { LoadError } from '../load-error'
 import { apiFailure } from '../overview/overview-api'
 import { type ChangeRequest, opsKeys, resolveChangeRequest, useChangeRequests } from './ops-api'
 
@@ -28,7 +29,7 @@ export function ChangeRequestsPanel({
   layoutId: number
   className?: string
 }) {
-  const { data, isLoading, isError } = useChangeRequests(collection)
+  const { data, isLoading, isError, refetch } = useChangeRequests(collection)
   const here = (data ?? []).filter((r) => r.layout_id === layoutId)
   const elsewhere = (data ?? []).filter((r) => r.layout_id !== layoutId)
   return (
@@ -36,15 +37,13 @@ export function ChangeRequestsPanel({
       {isLoading ? (
         <Loader2 className='h-3.5 w-3.5 animate-spin text-slate-400' />
       ) : isError ? (
-        <p className='text-[12px] text-red-600 dark:text-red-400'>
-          Could not read the suggestions.
-        </p>
+        <LoadError what='the suggested changes' onRetry={() => void refetch()} />
       ) : here.length === 0 && elsewhere.length === 0 ? (
         <p
           className='text-[12px] text-slate-500 dark:text-muted-foreground'
           data-change-requests-empty
         >
-          No open suggestions. People send them from a record’s More menu → Suggest a form change.
+          No suggested changes. People send them from a record’s More menu → Suggest a form change.
         </p>
       ) : (
         <>

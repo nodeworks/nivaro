@@ -9,9 +9,11 @@ import { useChangeRequests } from './ops-api'
 import { PromotePanel } from './PromotePanel'
 
 /**
- * Form settings → Tools: suggestions people sent about this form (#2609), what
+ * Form settings → Tools: changes people suggested for this form (#2609), what
  * relies on it (#2613) and comparing it with another environment (#2593).
- * Each opens in place; the suggestions open by themselves when there are some.
+ * Each opens in place; the suggestions open by themselves when there are
+ * some, and when they could not be read (so the failure is seen, not an
+ * empty count).
  */
 export function LayoutOpsBlocks({
   collection,
@@ -22,30 +24,30 @@ export function LayoutOpsBlocks({
   layoutId: number
   name: string
 }) {
-  const { data: requests = [] } = useChangeRequests(collection)
+  const { data: requests = [], isError } = useChangeRequests(collection)
   const mine = requests.filter((r) => r.layout_id === layoutId).length
   return (
     <>
       <Block
         id='change_requests'
-        label='Suggestions from people'
+        label='Suggested changes · from people'
         count={mine}
         effect='What people asked to change on this form, from a record’s More menu.'
-        defaultOpen={mine > 0}
+        defaultOpen={mine > 0 || isError}
       >
         <ChangeRequestsPanel collection={collection} layoutId={layoutId} />
       </Block>
       <Block
         id='dependencies'
-        label='What relies on this layout'
-        effect='Queues, grids, links, forms, files and extension code that open this layout.'
+        label='What relies on this form'
+        effect='Queues, grids, links, forms, files and extension code that open this form.'
       >
         <DependencyDiagram layoutId={layoutId} compact />
       </Block>
       <Block
         id='promote'
         label='Compare with another environment'
-        effect='Bring another environment’s copy of this layout here, after seeing what changes.'
+        effect='Bring another environment’s copy of this form here, after seeing what changes.'
       >
         <PromotePanel layoutId={layoutId} layoutName={name} />
       </Block>

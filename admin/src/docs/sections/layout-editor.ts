@@ -44,6 +44,8 @@ export const layoutEditor: DocSection = {
     {
       type: 'ul',
       items: [
+        'The header holds Test a record, Find a field (on every form), Analyze ▾ (Check coverage, Worst first, Compare forms…), ⋯ (Every form) and New form. When people suggested changes, the line under the title says how many; click it for the forms they are about.',
+        'One strip under the header gathers what needs a look across the forms: "4 things need a look" with a chip per kind — rule loops, placements that point at nothing, forms missing translations, fields labelled differently, near copies. A chip opens its rows; the heading opens them all. The last coverage check sits at the strip\'s end ("Coverage: 2 forms get no records") with Check again.',
         'New form — asks for the kind up front (form, summary, detail, PDF, addendum, grid columns), then opens it in the editor.',
         'Row menu — Open, Rename, Duplicate, Duplicate as summary, Make default, Delete.',
         'No layouts yet — the empty state explains what a form layout is and offers Create first form, which seeds one section "Main" holding every visible field of the collection.'
@@ -61,13 +63,13 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'Each form carries a health score from 0 to 100. It loses points for many fields, many steps, fields nobody sees and the problems the Checks panel finds; hover the score to see what cost it points. Worst first sorts each section by score — turn it off to read the matching order again.'
+      text: 'Each form carries a health score from 0 to 100. It loses points for many fields, many steps, fields nobody sees and what the Problems panel finds; it reads "Health 72" with a coloured dot, and hovering it shows what cost it points. Analyze → Worst first sorts each section by score — turn it off to read the matching order again. Analyze → Check coverage runs the coverage check; its result sits at the end of the strip under the header.'
     },
 
     { type: 'h2', id: 'layout-editor-editor', text: 'The editor' },
     {
       type: 'p',
-      text: 'Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar carries the layout name and purpose, Preview as, History, Undo / Redo and the save status.'
+      text: 'Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar is one row: ‹ Forms, the form’s name and who else has it open, Undo / Redo, the view (Canvas, Table, States, Roles) and Rules, Preview ▾, Tools ▾, AI ▾, the Problems count, History, ⋯, the save status and Save ▾. Tools holds Auto-arrange, Find on this form, Find and replace, Outline, Compact / Expand all / Collapse all, Show how full each field is, Every form, Form map and Keyboard shortcuts. AI holds Rebuild or lighter version, Test as a role, Review the look, Tune from autofill, Ask…, Type a change… and Suggested changes (its count shows on AI). ⋯ holds Test, Share & watchers, Watch this form, Save as template, New form from this record and Download this form. On a narrow screen the view switch shows icons only and the Preview summary and the Rules, Tools and AI labels drop away, so the bar never wraps.'
     },
     { type: 'h3', id: 'layout-editor-canvas', text: 'Canvas' },
     {
@@ -159,10 +161,10 @@ export const layoutEditor: DocSection = {
     {
       type: 'ul',
       items: [
-        'Find (⌘F / Ctrl+F in the editor, or the search button in the top bar) finds a field, panel, step, tab or section by label or key. Picking a match opens the step or tab it sits on, unfolds its section, scrolls to it and selects it. Hidden fields and fields a rule hides are found too; picking one turns on Show hidden when the form would not show it.',
-        'Outline (the tree button in the top bar) lists the header strip, steps, tabs, sections and their fields beside the canvas. Clicking a row selects it on the canvas, and selecting on the canvas marks its row. Drag rows to reorder: the same moves as dragging on the canvas, one Undo step each. Parts that come from a parent layout show but do not move. The outline stays open for you until you close it.',
+        'Find on this form (⌘F / Ctrl+F in the editor, or Tools → Find on this form) finds a field, panel, step, tab or section by label or key. Picking a match opens the step or tab it sits on, unfolds its section, scrolls to it and selects it. Hidden fields and fields a rule hides are found too; picking one turns on Show hidden when the form would not show it.',
+        'Outline (Tools → Outline) lists the header strip, steps, tabs, sections and their fields beside the canvas. Clicking a row selects it on the canvas, and selecting on the canvas marks its row. Drag rows to reorder: the same moves as dragging on the canvas, one Undo step each. Parts that come from a parent layout show but do not move. The outline stays open for you until you close it.',
         "The inspector's header shows where the selection sits, for example Field · Flow › Billing. Click a part to select that step, tab or section.",
-        'The canvas view button has Compact canvas (smaller spacing and inputs in the editor only, kept for you in this browser; the record page is unchanged), Expand all (every section open and every step and tab laid out one under another) and Collapse all (every section folded; steps and tabs back to one at a time).',
+        'Tools has Compact canvas (smaller spacing and inputs in the editor only, kept for you in this browser; the record page is unchanged), Expand all (every section open and every step and tab laid out one under another) and Collapse all (every section folded; steps and tabs back to one at a time).',
         'Press ? (when not typing) or the keyboard button for every shortcut, grouped by area: undo and redo, duplicate, moving with Alt+arrows or Space, find, the command palette and save.'
       ]
     },
@@ -185,7 +187,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-find-replace', text: 'Find and replace in labels' },
     {
       type: 'p',
-      text: "Replace in the top bar searches this form's field labels, section names, text blocks and help text, for example Oracle to Fusion. Where the form sets no label or help text of its own, the collection's is searched too; replacing it gives this form its own. Every match is listed with its before and after and a tick box; Replace changes the ticked ones as one Undo step."
+      text: "Find and replace (Tools) searches this form's field labels, section names, text blocks and help text, for example Oracle to Fusion. Where the form sets no label or help text of its own, the collection's is searched too; replacing it gives this form its own. Every match is listed with its before and after and a tick box; Replace changes the ticked ones as one Undo step."
     },
     { type: 'h3', id: 'layout-editor-inherited', text: 'Inherited layouts' },
     {
@@ -224,11 +226,11 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-saving', text: 'Saving, undo and conflicts' },
     {
       type: 'p',
-      text: 'Changes wait for Save. The form shows each change at once, but nobody else sees it until you press Save (or ⌘S / Ctrl+S); the top bar counts them ("3 unsaved changes") and Save turns blue while there is something to save. One Save sends every change together, and History names them.'
+      text: 'Changes wait for Save. The form shows each change at once, but nobody else sees it until you press Save (or ⌘S / Ctrl+S); the top bar counts them ("3 unsaved changes") and Save turns blue while there is something to save. The arrow beside Save opens the Save menu: Review changes on canvas, What changes, AI review, Schedule… and Autosave. One Save sends every change together, and History names them.'
     },
     {
       type: 'p',
-      text: 'Autosave (the switch in the top bar) saves every change as you make it instead; the status chip reads Saving… then Saved. It is off each time the editor opens and stays as you set it until you close the editor. Turning it on saves anything unsaved straight away.'
+      text: 'Autosave (Save ▾ → Autosave) saves every change as you make it instead; the status chip reads Saving… then Saved. It is off each time the editor opens and stays as you set it until you close the editor. Turning it on saves anything unsaved straight away; the bar then shows only the save status, with the arrow beside it to turn Autosave off.'
     },
     {
       type: 'p',
@@ -244,7 +246,7 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'Every field or section an unsaved change touched shows a small amber dot until you save. Click the unsaved count in the top bar to list the changes; click one to select what it changed and scroll to it (a form-settings change opens Form settings).'
+      text: 'Every field or section an unsaved change touched shows a small blue dot until you save. Click the unsaved count in the top bar to list the changes; click one to select what it changed and scroll to it (a form-settings change opens Form settings).'
     },
     {
       type: 'p',
@@ -275,7 +277,7 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'Show on canvas (from the comparison, or Canvas on a version) marks the difference on the form itself: added fields and sections are outlined green, moved ones amber with the section they came from, changed ones violet with the settings that differ, and removed ones come back faintly in their old place, tagged Removed (they cannot be selected or dragged). With unsaved changes, Review changes beside Save does the same for what you are about to save. Close the comparison from the bar above the canvas.'
+      text: 'Show on canvas (from the comparison, or Canvas on a version) marks the difference on the form itself: added fields and sections are outlined green, moved ones amber with the section they came from, changed ones violet with the settings that differ, and removed ones come back faintly in their old place, tagged Removed (they cannot be selected or dragged). With unsaved changes, Save ▾ → Review changes on canvas does the same for what you are about to save. Close the comparison from the bar above the canvas.'
     },
     {
       type: 'p',
@@ -283,12 +285,12 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'Each section shows, faintly on its frame, who last changed it and when. It is worked out from the versions the layout keeps, so a change older than the kept versions is not named.'
+      text: 'The selected section, or the one under the pointer, shows on its frame who last changed it and when. It is worked out from the versions the layout keeps, so a change older than the kept versions is not named.'
     },
     { type: 'h3', id: 'layout-editor-schedule', text: 'Scheduled changes' },
     {
       type: 'p',
-      text: 'With unsaved changes, Schedule… beside Save applies them at a time you pick instead of now (for example the morning of a release). They leave the editor at once and nobody sees them until then. At that time the server applies them like a Save, as a version named "Scheduled change by <you>". If someone changed the layout meanwhile, your changes still apply when every one of them fits; if one no longer fits, nothing is applied and you get a notification saying why.'
+      text: 'With unsaved changes, Save ▾ → Schedule… applies them at a time you pick instead of now (for example the morning of a release). They leave the editor at once and nobody sees them until then. At that time the server applies them like a Save, as a version named "Scheduled change by <you>". If someone changed the layout meanwhile, your changes still apply when every one of them fits; if one no longer fits, nothing is applied and you get a notification saying why.'
     },
     {
       type: 'p',
@@ -322,7 +324,7 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: "Test in the top bar has three tabs. Test records: pin up to 5 records that cover the form's important cases, each as a role or as an administrator. They are stored with the layout (versioned with it, never sent to non-admins). Re-check runs the live resolver, the same one as Test a record, for each one against your draft and shows which form it gets, how many fields it sees and what changed: against the last save while changes wait for Save, otherwise against your previous check."
+      text: "⋯ → Test in the top bar has three tabs. Test records: pin up to 5 records that cover the form's important cases, each as a role or as an administrator. They are stored with the layout (versioned with it, never sent to non-admins). Re-check runs the live resolver, the same one as Test a record, for each one against your draft and shows which form it gets, how many fields it sees and what changed: against the last save while changes wait for Save, otherwise against your previous check."
     },
     {
       type: 'p',
@@ -334,14 +336,14 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'Check impact, beside Save while changes wait, runs the same check before you save and lists what changes for the pinned records ("Record 284212 loses the Zone field", "lands on another form") and the form cost against its limit. It only reads.'
+      text: 'What changes (Save ▾ → What changes, while changes wait) runs the same check before you save and lists what changes for the pinned records ("Record 284212 loses the Zone field", "lands on another form") and the form cost against its limit. It only reads.'
     },
 
     { type: 'h2', id: 'layout-editor-rules', text: 'Rules and checks' },
     { type: 'h3', id: 'layout-editor-rules-view', text: 'Rules on the canvas' },
     {
       type: 'p',
-      text: "The Rules switch in the top bar (on by default, remembered per browser) puts small tags on the canvas that say why each field behaves as it does: Required here or Required field (this form or every form), Needed to Approve (a pipeline move requires it), Read-only here, Read-only field, Calculated, Locked for Finance, Locked in Approved, Hidden here, Hidden field, and Filled by a rule. Hover a tag for the whole sentence; click it to open what causes it: the field's Rules, Look or Advanced tab, the section, the pipeline or the field rules page."
+      text: "The Rules switch in the top bar (the branch icon; on by default, remembered per browser) puts small tags on the canvas that say why each field behaves as it does: Required here or Required field (this form or every form), Needed to Approve (a pipeline move requires it), Read-only here, Read-only field, Calculated, Locked for Finance, Locked in Approved, Hidden here, Hidden field, and Filled by a rule. Hover a tag for the whole sentence; click it to open what causes it: the field's Rules, Look or Advanced tab, the section, the pipeline or the field rules page."
     },
     {
       type: 'p',
@@ -369,10 +371,10 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "Roles in the top bar shows every section and tab against every role. Click a cell to make the section Can edit, Read-only or Hidden for that role (the section's Hidden for and Read-only for). Each cell is one change to save. Administrator roles are greyed: they always see and edit everything. Field permissions still apply inside a section."
     },
-    { type: 'h3', id: 'layout-editor-checks', text: 'Checks' },
+    { type: 'h3', id: 'layout-editor-problems', text: 'Problems' },
     {
       type: 'p',
-      text: 'The Checks button in the top bar counts the problems and warnings on the form as you edit it; it opens a panel listing them, worst first. Click one to select it on the canvas. Many come with a fix that is one undo step.'
+      text: 'The Problems count in the top bar (the alert icon and a number) counts the errors and warnings on the form as you edit it; it opens the Problems panel listing them, worst first (Errors, Warnings, Tips). Click one to select it on the canvas. Many come with a fix that is one undo step.'
     },
     {
       type: 'ul',
@@ -400,10 +402,10 @@ export const layoutEditor: DocSection = {
     },
 
     { type: 'h2', id: 'layout-editor-ai', text: 'Commands and AI' },
-    { type: 'h3', id: 'layout-editor-commands', text: 'Commands (⌘K)' },
+    { type: 'h3', id: 'layout-editor-commands', text: 'Type a change (⌘K)' },
     {
       type: 'p',
-      text: 'Commands in the top bar (⌘K or Ctrl+K) takes a change in plain words. Enter shows every change it will make, in sentences; nothing changes until Apply, and one Apply is one undo step that waits for Save like any other change. Names match by label or key, in any case, with partial words and small typos; a name that fits two things asks you to be more specific.'
+      text: 'AI → Type a change… (⌘K or Ctrl+K) takes a change in plain words. Enter shows every change it will make, in sentences; nothing changes until Apply, and one Apply is one undo step that waits for Save like any other change. Names match by label or key, in any case, with partial words and small typos; a name that fits two things asks you to be more specific.'
     },
     {
       type: 'ul',
@@ -429,7 +431,7 @@ export const layoutEditor: DocSection = {
     {
       type: 'ul',
       items: [
-        'AI check beside Save: after a Save the AI reads what changed next to the roles and the workflow and warns about likely mistakes, such as hiding Amount from Finance, who must fill it before Approve. It never blocks or delays the save; warnings open beside the button and Undo reverses a saved change. Check asks before saving. A change that only renames, rewrites help text or reorders inside a section is not sent.',
+        'AI review (Save ▾ → AI review): after a Save the AI reads what changed next to the roles and the workflow and warns about likely mistakes, such as hiding Amount from Finance, who must fill it before Approve. It never blocks or delays the save; warnings open beside the Save menu (their count shows on its arrow) and Undo reverses a saved change. Picking AI review asks before saving. A change that only renames, rewrites help text or reorders inside a section is not sent.',
         'Help text that contradicts the form (Form settings → Tools → Review this layout): help text that says "optional" while a workflow move needs the field, or names a role that cannot edit it, is flagged with a rewrite. Use the rewrite changes only the help text on this form.',
         'Fields that mean the same thing (same review): two fields with different labels that hold the same information, such as Vendor and Supplier. Identical labels are a separate finding.',
         'Natural entry order: an order inside each section that follows how people fill the form in (who, what, when, cost), with fields that filter or show other fields first. Apply one section or Apply all — one undo step either way.',
@@ -439,14 +441,14 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-ai-tools', text: 'AI tools' },
     {
       type: 'p',
-      text: 'The AI tools button in the top bar (administrators) holds three reviews. None of them changes the form by itself: every fix is shown in sentences first, and one Apply is one undo step that waits for Save like any other change. Findings appear as tags on the canvas; click one in the list to select that field or section, and Clear marks removes the tags.'
+      text: 'The AI menu in the top bar (administrators) holds three reviews: Test as a role, Review the look and Tune from autofill. None of them changes the form by itself: every fix is shown in sentences first, and one Apply is one undo step that waits for Save like any other change. Findings appear as tags on the canvas; click one in the list to select that field or section, and Clear marks removes the tags.'
     },
     {
       type: 'ul',
       items: [
-        "Persona test: pick a role (and, if you like, what that person is trying to do). The AI plays someone in that role filling in a new record, step by step, and says where they would hesitate — a confusing step, label or field — with a suggestion; a clearer label can be applied with one click. Built-in checks run even without AI: a required field the role cannot see or change (the record could not be saved), a step with nothing for them to fill in, a label that reads like a database name, two fields with the same label. Only labels, help text, choices and the form's structure are sent, never stored data. Nothing is saved.",
-        "Visual critique: the AI reviews how the form looks — density, the order and nesting of sections, alignment of widths — and pins each comment to its section. It gets a picture of the canvas (typed values hidden) when the AI provider can read pictures; with a preview record on the canvas, or with a provider that cannot read pictures, it gets the sections' structure and measured sizes instead, and says so. Built-in checks flag long full-width stacks, ragged rows and one-field sections.",
-        'After autofill: for collections that use "Fill from document", the fields people most often change after the AI proposed a value (last 90 days, counts only). Fields changed in at least a quarter of their proposals start ticked. "Highlight after autofill" rings those fields with a Check this tag only when the form was filled from a document; "Add Check these section" moves them into a section at the top of the form (on a steps or tabs form, a first step).'
+        "Test as a role: pick a role (and, if you like, what that person is trying to do). The AI plays someone in that role filling in a new record, step by step, and says where they would hesitate — a confusing step, label or field — with a suggestion; a clearer label can be applied with one click. Built-in checks run even without AI: a required field the role cannot see or change (the record could not be saved), a step with nothing for them to fill in, a label that reads like a database name, two fields with the same label. Only labels, help text, choices and the form's structure are sent, never stored data. Nothing is saved.",
+        "Review the look: the AI reviews how the form looks — density, the order and nesting of sections, alignment of widths — and pins each comment to its section. It gets a picture of the canvas (typed values hidden) when the AI provider can read pictures; with a preview record on the canvas, or with a provider that cannot read pictures, it gets the sections' structure and measured sizes instead, and says so. Built-in checks flag long full-width stacks, ragged rows and one-field sections.",
+        'Tune from autofill: for collections that use "Fill from document", the fields people most often change after the AI proposed a value (last 90 days, counts only). Fields changed in at least a quarter of their proposals start ticked. "Highlight after autofill" rings those fields with a Check this tag only when the form was filled from a document; "Add Check these section" moves them into a section at the top of the form (on a steps or tabs form, a first step).'
       ]
     },
     {
@@ -491,7 +493,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-ai-forms', text: 'Build a form with AI' },
     {
       type: 'p',
-      text: 'Admins, when AI is set up. New form → Start with AI makes a new form; the AI button in the top bar of the editor rebuilds the open one (AI tools, beside it, holds the reviews above). Every proposal is listed in plain sentences first. Nothing is written until Apply (or Create form), it lands as one undo step, and it still waits for Save.'
+      text: 'Admins, when AI is set up. New form → Start with AI makes a new form; AI → Rebuild or lighter version in the editor rebuilds the open one (the same AI menu holds the reviews above). Every proposal is listed in plain sentences first. Nothing is written until Apply (or Create form), it lands as one undo step, and it still waits for Save.'
     },
     {
       type: 'ul',
@@ -510,17 +512,17 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-ask', text: 'Ask about this form' },
     {
       type: 'p',
-      text: 'Ask in the top bar opens a panel on the right for questions such as "Why can\'t Finance see Zone on record 284212?" or "Which form does record 284212 get?". The AI answers with the same engines the editor shows: which form a record gets for a role (Test a record), the role\'s field permissions, where the field sits, the section rules (hidden or read-only for roles, shows when) and the checks. It reads your unsaved draft, changes nothing, and never sees record values: a section rule comes back as matched or not. Each answer lists the fields, records and forms it looked at; click one to select the field, preview the record or open the form. Administrators only; it needs AI to be set up.'
+      text: 'AI → Ask… opens a panel on the right for questions such as "Why can\'t Finance see Zone on record 284212?" or "Which form does record 284212 get?". The AI answers with the same engines the editor shows: which form a record gets for a role (Test a record), the role\'s field permissions, where the field sits, the section rules (hidden or read-only for roles, shows when) and the checks. It reads your unsaved draft, changes nothing, and never sees record values: a section rule comes back as matched or not. Each answer lists the fields, records and forms it looked at; click one to select the field, preview the record or open the form. Administrators only; it needs AI to be set up.'
     },
     { type: 'h3', id: 'layout-editor-find-setting', text: 'Find a setting by asking' },
     {
       type: 'p',
       text: 'Ask "Where do I turn off comments?" in the Ask panel and it lists the matching controls, each with where it lives (Form settings section or inspector tab) and a Show me button. Show me opens that panel, selects a field or section the control applies to when it is an inspector control, switches to its tab and highlights the control. The words of the question are matched first; only when they do not place it does the AI pick from the same list. Without AI the closest word matches are shown. In Form settings, a search typed as a question, or one nothing matches, offers Look everywhere, which asks the same way.'
     },
-    { type: 'h3', id: 'layout-editor-proposals', text: 'Proposals from assistants' },
+    { type: 'h3', id: 'layout-editor-proposals', text: 'Suggested changes from assistants' },
     {
       type: 'p',
-      text: 'A connected assistant (Claude or ChatGPT over the MCP connector, or Claude Code) can propose changes to a form with the propose_layout_ops tool. A proposal never changes the form: Proposals in the top bar shows how many wait, who proposed each one and through which app, the note, and every change in plain words. Try on canvas applies it to your draft as one undo step (nothing is saved until Save, unless Autosave is on); Keep marks it applied, Take back undoes it, and Reject closes it. A proposal that no longer fits the form says why and cannot be tried.'
+      text: 'A connected assistant (Claude or ChatGPT over the MCP connector, or Claude Code) can propose changes to a form with the propose_layout_ops tool. A suggested change never changes the form: AI → Suggested changes (the count shows on AI) lists them, who sent each one and through which app, the note, and every change in plain words. Try on canvas applies it to your draft as one undo step (nothing is saved until Save, unless Autosave is on); Keep marks it applied, Take back undoes it, and Reject closes it. A suggested change that no longer fits the form says why and cannot be tried.'
     },
 
     { type: 'h2', id: 'layout-editor-across-forms', text: 'Across forms' },
@@ -533,14 +535,14 @@ export const layoutEditor: DocSection = {
       items: [
         'Fields labelled differently: a field that reads "Vendor" on one form and "Supplier" on another is listed with every label and the forms that use it. Pick the label to keep and every form gets it at once (one change per form, each in that form\'s History). The field\'s own label clears the label set on each form. A label hidden on purpose is left alone.',
         'Near copies: two forms of the same kind that are 90% or more the same (the same fields in the same sections with the same width, label and visibility) are listed with what differs. Compare side by side opens both; Make … the parent links the copy to the other form so fields added there later appear on it too. The copy keeps every field it has: remove the ones it repeats unchanged in its editor to let changes flow through.',
-        'Compare puts two forms side by side, read only, each drawn as people see it. "Only here" marks fields and sections the other form lacks and "Differs" marks fields set up differently (its tip says how: section, width, label, visibility, other settings). Click a field to select it on both. List the differences gives the same as a table. Pick either side from its menu, or Swap.',
-        'Find a field searches every collection by field name or label and lists each form, summary, detail, PDF or grid that places the field, with its section and width there and its label when the form changes it, including forms that inherit it from a parent. Click one to open it in the editor.'
+        'Analyze → Compare forms… puts two forms side by side, read only, each drawn as people see it. "Only here" marks fields and sections the other form lacks and "Differs" marks fields set up differently (its tip says how: section, width, label, visibility, other settings). Click a field to select it on both. List the differences gives the same as a table. Pick either side from its menu, or Swap.',
+        'Find a field (on every form) searches every collection by field name or label and lists each form, summary, detail, PDF or grid that places the field, with its section and width there and its label when the form changes it, including forms that inherit it from a parent. Click one to open it in the editor.'
       ]
     },
     { type: 'h3', id: 'layout-editor-every-form', text: 'Every form at once' },
     {
       type: 'p',
-      text: "Every form (in the editor's top bar and on the overview) changes all layouts of the collection in one go. Each run shows a preview first: per form, what will change, what is already like that, and which forms are skipped and why. Untick a form to leave it out. A form with unsaved changes in the editor is left out until you save or discard them."
+      text: 'Every form (Tools → Every form in the editor, ⋯ → Every form on the overview) changes all layouts of the collection in one go. Each run shows a preview first: per form, what will change, what is already like that, and which forms are skipped and why. Untick a form to leave it out. A form with unsaved changes in the editor is left out until you save or discard them.'
     },
     {
       type: 'ul',
@@ -559,7 +561,7 @@ export const layoutEditor: DocSection = {
     {
       type: 'ul',
       items: [
-        'Copy a section to another layout: drag a section from the canvas onto a layout in the Layouts list, or select it and use Copy to layout… in the inspector (which also reaches other collections). It lands at the end of that layout with its tabs, fields and settings. Fields already on that form stay where they are.',
+        'Copy a section to another layout: drag a section from the canvas onto a form in the Forms list, or select it and use Copy to layout… in the inspector (which also reaches other collections). It lands at the end of that layout with its tabs, fields and settings. Fields already on that form stay where they are.',
         'Section library: select a section and use Save to library…. Saved sections show under Add → Section library on every collection; a click adds one after the selection as one undo step. Remove one with the × beside it — forms keep their copies.',
         'Layout templates: ⋯ → Save as template… in the editor saves the whole form (sections, panels, header, how it behaves). New form → Start with → Template makes a new form from one. Rules for who gets a form, defaults and links to other layouts stay behind.',
         "Another collection: fields with no field of the same name get their closest match (by name or label), which you can change or set to Leave out. Step conditions, skip-if-filled, field swaps, lock conditions and grid bindings are written in the other collection's terms and are left out.",
@@ -571,7 +573,7 @@ export const layoutEditor: DocSection = {
     { type: 'h2', id: 'layout-editor-usage', text: 'Usage: how a form is used' },
     {
       type: 'p',
-      text: 'Each field on the canvas shows how often it is filled across the collection\'s records ("62% filled"; amber under 10%). The Add panel shows the same figure under each field ("filled on 3%"). The numbers are the Table Editor\'s Field usage figures and refresh every five minutes. Turn the canvas hints off in the Usage tab.'
+      text: 'Turn on Show how full each field is (the Usage tab, or Tools) and each field on the canvas shows how often it is filled across the collection\'s records ("62% filled"; under 10% its tip says it is rarely filled). It is off until you turn it on, and remembered per browser. The Add panel shows the same figure under each field ("filled on 3%"). The numbers are the Table Editor\'s Field usage figures and refresh every five minutes.'
     },
     {
       type: 'p',
@@ -591,10 +593,10 @@ export const layoutEditor: DocSection = {
     },
 
     { type: 'h2', id: 'layout-editor-ops', text: 'Suggestions, dependencies and environments' },
-    { type: 'h3', id: 'layout-editor-suggestions', text: 'Suggestions from people' },
+    { type: 'h3', id: 'layout-editor-suggestions', text: 'Suggested changes from people' },
     {
       type: 'p',
-      text: "People who are not administrators get Suggest a form change in a record's More menu. They say what should change and can name a field. The suggestion becomes a Form change support request, so they follow it under My requests and it also shows on the Support desk. The overview shows how many suggestions are open, per form. In the editor, Form settings → Tools → Suggestions from people lists them; Accept marks the request done and Decline cancels it, each with an optional note the person is told about. To turn suggestions off, deactivate the Form change type under Support → Request types. One person can send 10 suggestions an hour."
+      text: "People who are not administrators get Suggest a form change in a record's More menu. They say what should change and can name a field. The suggestion becomes a Form change support request, so they follow it under My requests and it also shows on the Support desk. The overview's subtitle shows how many suggested changes are open and, on a click, for which forms. In the editor, Form settings → Tools → Suggested changes · from people lists them; Accept marks the request done and Decline cancels it, each with an optional note the person is told about. To turn suggestions off, deactivate the Form change type under Support → Request types. One person can send 10 suggestions an hour."
     },
     { type: 'h3', id: 'layout-editor-dependencies', text: 'What relies on a layout' },
     {
@@ -617,7 +619,7 @@ export const layoutEditor: DocSection = {
       items: [
         "Help videos on a field or section: a field's Help tab, or the bottom of a section's inspector, attaches a published help video. The record page then shows a small play button beside that field's label or on that section's header, to the roles the video is visible to. The attachment belongs to the video (it appears in its Where list), so it shows for that field or section on every form of the collection.",
         'Notes for editors: pin a short note to a field (Help tab) or a section (bottom of its inspector), such as "Finance asked for this in Q3". A sticky-note marker shows on the canvas with the note, its author and date. Notes save, undo and version like any other layout change, and record pages never receive them.',
-        "Form map (top bar): a clean printable map of the form: its steps or tabs, sections and fields in order, each field's width, required and read-only marks, and the rules that hide or lock things, in plain words. Print / Save as PDF prints it on a light page whatever the app theme.",
+        "Form map (Tools → Form map): a clean printable map of the form: its steps or tabs, sections and fields in order, each field's width, required and read-only marks, and the rules that hide or lock things, in plain words. Print / Save as PDF prints it on a light page whatever the app theme.",
         'Why can\'t I edit this? On a record, pointing at a locked field names the exact rule behind it: the role or pipeline step a lock rule lists, the section locked for the role and the form it is on, or the role\'s field permissions. Admins also see a "N fields hidden by rules" note above the form that lists each hidden field and the rule that hides it (step rules, sections hidden from roles, fields turned off on the form).'
       ]
     },
@@ -626,7 +628,7 @@ export const layoutEditor: DocSection = {
     {
       type: 'ul',
       items: [
-        'Watch: the bell in the editor top bar. While it is on you get a notification (your Profile → Notification rules decide the channels, category Watch) whenever someone saves a change to the form or restores one of its versions. It says who saved, what changed in counts (for example "2 fields moved, 1 section added") and the version note, and opens the editor with History showing. You never hear about your own saves. A watch is listed with your other notification subscriptions, where you can also remove it.',
+        'Watch: ⋯ → Watch this form in the editor top bar. While it is on you get a notification (your Profile → Notification rules decide the channels, category Watch) whenever someone saves a change to the form or restores one of its versions. It says who saved, what changed in counts (for example "2 fields moved, 1 section added") and the version note, and opens the editor with History showing. You never hear about your own saves. A watch is listed with your other notification subscriptions, where you can also remove it.',
         'Owner: Share → Owner names the business owner of a form. The overview shows "Owner: …" under the form. The owner hears about every saved change even without watching, and is told first; change requests about the form go to the owner first too.',
         'Preview link: Share → Preview link makes a read-only link that lasts 7, 14, 30 or 90 days, for people who are not administrators. It shows the last saved version of the form, with only the fields you may read, and never shows record data. Anyone with the link can leave a comment on a field or on the whole form; comments appear under Share → Comments from previews (the count shows on the Share button), where Select this field finds the field on the canvas and Resolve removes the comment. Turn off ends a link for everyone.'
       ]
@@ -679,7 +681,7 @@ GET  /api/collection-layouts/overview?collection=orders
 GET  /api/collection-layouts/explain?collection=orders&item=42[&role_id=<uuid>][&slug=x]
      → { data: { layout_id, reason, checked: [{ layout_id, matched, why }] } }
 GET  /api/collection-layouts/lint-context?collection=orders
-     → { data: { fields, roles, requirements } }   // what the Checks panel reads
+     → { data: { fields, roles, requirements } }   // what the Problems panel reads
 GET  /api/collection-layouts/health?collection=orders
      → { data: { rows: [{ layout_id, score, costs, counts, unreachable_fields }] } }
 GET  /api/collection-layouts/coverage?collection=orders[&fresh=1]

@@ -330,7 +330,7 @@ describe('ProposalsButton (#2694)', () => {
       'Move Zone from Details to Money'
     )
     await act(async () => tryBtn.click())
-    expect(draft.apply).toHaveBeenCalledWith(proposal.ops, { label: 'Proposal from Rob' })
+    expect(draft.apply).toHaveBeenCalledWith(proposal.ops, { label: 'Suggested change from Rob' })
     await act(async () => (document.querySelector('[data-proposal-keep]') as HTMLElement).click())
     await settle(() =>
       request.mock.calls.some(([c]) => c._path.endsWith(`/proposals/${proposal.id}/resolve`))

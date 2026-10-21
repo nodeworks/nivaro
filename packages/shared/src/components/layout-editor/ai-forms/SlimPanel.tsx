@@ -76,7 +76,7 @@ export function SlimPanel({
       invalidate()
       onOpenLayout(id)
     } catch (err) {
-      setError(apiFailure(err, 'Could not create the layout').message)
+      setError(apiFailure(err, 'Could not create the form').message)
     } finally {
       setBusy(false)
     }

@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { cn } from '../../../lib/utils'
 import { apiFailure, useInvalidateLayouts } from '../overview/overview-api'
 import { effectText, tintCard } from '../panel-style'
+import { barBtn } from '../toolbar-kit'
 import {
   type AppliedForm,
   type BulkAction,
@@ -14,8 +15,7 @@ import {
   useBulkCalls
 } from './bulk-api'
 
-export const btnQuiet =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+export const btnQuiet = barBtn
 export const btnSolid =
   'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-40'
 

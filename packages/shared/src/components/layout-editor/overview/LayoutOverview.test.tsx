@@ -332,7 +332,7 @@ describe('LayoutOverview', () => {
     const unused = document.querySelector('[data-layout-row="20"]') as HTMLElement
     await click(button('Delete', unused))
     const confirm = document.querySelector('[data-delete-confirm="20"]') as HTMLElement
-    expect(confirm.textContent).toContain('Nothing uses this layout')
+    expect(confirm.textContent).toContain('Nothing uses this form')
     await click(button('Delete layout', confirm))
     await settle(() => calls.some((c) => c._method === 'DELETE'))
     expect(calls.some((c) => c._method === 'DELETE' && c._path === '/collection-layouts/20')).toBe(

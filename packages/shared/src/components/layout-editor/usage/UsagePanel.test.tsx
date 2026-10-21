@@ -147,7 +147,7 @@ describe('UsagePanel', () => {
 })
 
 describe('DesignNode fill hint', () => {
-  it('tags a field with its fill rate, amber when rarely filled', () => {
+  it('tags a field with its fill rate; a rarely filled one says so in its tip, not in amber', () => {
     const design: LayoutDesign = {
       selected: null,
       onSelect: () => {},
@@ -173,7 +173,9 @@ describe('DesignNode fill hint', () => {
     )
     const chips = [...host.querySelectorAll('[data-design-fill]')]
     expect(chips.map((c) => c.getAttribute('data-design-fill'))).toEqual(['4', '88'])
-    expect(chips[0].className).toContain('text-amber-700')
+    expect(chips[0].className).not.toContain('amber')
+    expect(chips[0].getAttribute('data-tip')).toContain('Rarely filled')
+    expect(chips[1].getAttribute('data-tip')).toBeNull()
     expect(chips[1].textContent).toContain('88% filled')
   })
 })

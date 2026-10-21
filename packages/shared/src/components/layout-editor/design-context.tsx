@@ -101,6 +101,14 @@ export interface DesignMark {
   highlight?: boolean
   /** A small icon before the text (a pinned section's pin, #2628). */
   icon?: 'pin'
+  /**
+   * Where the tag ranks when a node has more than fit (DesignNode shows two,
+   * then "+n"): `preview` (a preview mode's own tag) ranks with the role
+   * mark, `loop` (a rule loop) next, plain rule and state tags after, `ai`
+   * (an AI finding) last but one, "from <parent>" last. A highlighted tag
+   * without a kind ranks as a loop.
+   */
+  kind?: 'preview' | 'loop' | 'ai'
   /** Clickable: opens what the tag explains (the node is selected first). */
   onClick?: () => void
 }

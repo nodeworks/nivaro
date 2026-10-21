@@ -1,5 +1,5 @@
 export { CompareForms, defaultComparePair } from './CompareForms'
-export { CrossformFindings } from './CrossformFindings'
+export { DuplicateRow, LabelRow } from './CrossformFindings'
 export {
   type CrossformResponse,
   crossformKeys,

@@ -5,10 +5,11 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { Popover, PopoverContent } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import type { DescribeField } from '../overview/describe-conditions'
 import { apiFailure } from '../overview/overview-api'
+import { ToolButton } from '../toolbar-kit'
 import {
   type PersonRef,
   type PreviewCommentRow,
@@ -23,10 +24,6 @@ import {
 // who watches it, read-only preview links for people who are not administrators, and the
 // comments those people pinned to fields.
 
-const iconBtn =
-  'inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
-const btn =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 const smallBtn =
   'inline-flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 disabled:opacity-40 dark:text-muted-foreground dark:hover:text-foreground'
 const heading = 'text-[12px] font-semibold text-slate-700 dark:text-foreground'
@@ -45,18 +42,21 @@ export function WatchButton({ layoutId }: { layoutId: number }) {
   const [busy, setBusy] = useState(false)
   const watching = !!data?.watching
   return (
-    <button
-      type='button'
-      aria-label={watching ? 'Stop watching this form' : 'Watch this form'}
-      aria-pressed={watching}
-      data-form-watch=''
+    <ToolButton
+      label='Watch this form'
+      ariaLabel={watching ? 'Stop watching this form' : 'Watch this form'}
+      icon={watching ? <BellRing className='h-4 w-4' /> : <Bell className='h-4 w-4' />}
+      hint='Hear when someone saves a change'
+      iconOnly
+      checked={watching}
       disabled={busy}
-      className={cn(iconBtn, watching && 'text-[#0089ad] dark:text-nvr-cyan')}
-      data-tip={
+      className={cn(watching && 'text-[#0089ad] dark:text-nvr-cyan')}
+      tip={
         watching
           ? 'Watching: you hear when someone saves a change. Click to stop'
           : 'Watch: hear when someone saves a change to this form'
       }
+      data={{ 'data-form-watch': '' }}
       onClick={async () => {
         setBusy(true)
         try {
@@ -67,9 +67,7 @@ export function WatchButton({ layoutId }: { layoutId: number }) {
           setBusy(false)
         }
       }}
-    >
-      {watching ? <BellRing className='h-4 w-4' /> : <Bell className='h-4 w-4' />}
-    </button>
+    />
   )
 }
 
@@ -348,17 +346,18 @@ export function ShareButton({
   const others = (collab?.watchers ?? []).filter((w) => w.id !== collab?.owner?.id)
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          className={btn}
-          aria-label='Share'
-          data-form-share=''
-          data-tip='Owner, watchers, preview links and comments'
-        >
-          <Share2 className='h-3.5 w-3.5' />
-          Share
-          {comments.length > 0 && (
+      <ToolButton
+        popover
+        onOpen={() => setOpen(true)}
+        label='Share & watchers'
+        ariaLabel='Share'
+        icon={<Share2 className='h-3.5 w-3.5' />}
+        tip='Owner, watchers, preview links and comments'
+        hint='Owner, watchers, preview links, comments'
+        badge={comments.length || undefined}
+        data={{ 'data-form-share': '' }}
+        trailing={
+          comments.length > 0 && (
             <span
               data-preview-comment-count=''
               className='inline-flex h-4 min-w-4 items-center justify-center gap-0.5 rounded-full bg-nvr-cyan/15 px-1 text-[10.5px] font-semibold text-[#0089ad] dark:text-nvr-cyan'
@@ -366,9 +365,9 @@ export function ShareButton({
               <MessageSquare className='h-2.5 w-2.5' />
               {comments.length}
             </span>
-          )}
-        </button>
-      </PopoverTrigger>
+          )
+        }
+      />
       <PopoverContent
         align='end'
         className='max-h-[min(75vh,620px)] w-[400px] space-y-4 overflow-y-auto overscroll-contain p-3'

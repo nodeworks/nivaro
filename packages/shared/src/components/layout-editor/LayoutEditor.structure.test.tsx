@@ -14,6 +14,7 @@ import {
 } from '../../lib/layout-ops'
 import type { CMSField } from '../item-edit/types'
 import { LayoutEditor } from './LayoutEditor'
+import { pickBarRow } from './toolbar-kit.test-utils'
 
 // The canvas menu, ⌘D, pin and find & replace in the real editor
 // (#2623 #2624 #2625 #2628 #2630): what the person sees after each gesture.
@@ -271,7 +272,7 @@ describe('LayoutEditor structure actions', () => {
 
   it('Find and replace lists every hit and applies the ticked ones as one step', async () => {
     await mount()
-    act(() => (document.querySelector('[data-find-replace-open]') as HTMLElement).click())
+    await pickBarRow('Tools', '[data-find-replace-open]')
     await settle(() => !!document.querySelector('[data-find-replace]'))
     const [find, repl] = [
       ...document.querySelectorAll('[data-find-replace] input')

@@ -1,20 +1,17 @@
 import { Rows3 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { LayoutBundle, LayoutOp } from '../../lib/layout-ops'
-import { cn } from '../../lib/utils'
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { Popover, PopoverContent } from '../ui/popover'
 import { Switch } from '../ui/switch'
 import { type ArrangedZone, planAutoArrange } from './auto-arrange'
 import { plural } from './field-zones'
+import { ToolButton } from './toolbar-kit'
 import type { ApplyOptions } from './useLayoutDraft'
 
 // Auto-arrange (#2604): a button that opens a popover beside it with what the
 // packing would change (rows, gaps, moved and widened fields), then applies
 // it as one undoable step. Whole form from the top bar; one section from the
 // section's inspector.
-
-const triggerCls =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 
 function zoneLine(z: ArrangedZone): string {
   const parts: string[] = []
@@ -51,17 +48,16 @@ export function AutoArrangeButton({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          data-auto-arrange={whole ? 'form' : 'section'}
-          className={cn(triggerCls, className)}
-          data-tip='Pack fields into tidy rows by width and close the gaps'
-        >
-          <Rows3 className='h-3.5 w-3.5 shrink-0' />
-          {whole ? 'Auto-arrange' : 'Auto-arrange fields'}
-        </button>
-      </PopoverTrigger>
+      <ToolButton
+        popover
+        onOpen={() => setOpen(true)}
+        label={whole ? 'Auto-arrange' : 'Auto-arrange fields'}
+        icon={<Rows3 className='h-3.5 w-3.5 shrink-0' />}
+        tip='Pack fields into tidy rows by width and close the gaps'
+        hint='Tidy rows by width, gaps closed'
+        className={className}
+        data={{ 'data-auto-arrange': whole ? 'form' : 'section' }}
+      />
       <PopoverContent align='end' className='w-[340px] p-3' data-auto-arrange-plan=''>
         <p className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>{label}</p>
         <p className='mt-0.5 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>

@@ -2,9 +2,10 @@ import { Command, CornerDownLeft, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { post } from '../../../lib/commands'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { Popover, PopoverContent } from '../../ui/popover'
 import { useLayoutEditorHost } from '../host'
 import { useOverviewFields, useRoleNames } from '../overview/overview-api'
+import { ToolButton } from '../toolbar-kit'
 import { type LayoutDraft, parseSaveFailure } from '../useLayoutDraft'
 import {
   type CommandEnv,
@@ -16,8 +17,8 @@ import {
 import { parseCommand } from './parse'
 
 /**
- * The layout editor's command palette (#2586): ⌘K / Ctrl+K or the top bar's
- * Commands button opens it beside the button. A typed command is read by the
+ * The layout editor's command palette (#2586): ⌘K / Ctrl+K or AI → Type a
+ * change… opens it beside the AI menu's button. A typed command is read by the
  * palette itself (commands/parse.ts); text it cannot read can go to the AI
  * (admins, POST /ai-design/layouts/:id/command), which answers intents in the
  * same vocabulary. Either way the preview lists every change in plain words
@@ -43,8 +44,6 @@ type View =
       explanation: string | null
     }
 
-const trigger =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 const quiet = 'text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'
 const ghostBtn =
   'inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
@@ -167,19 +166,18 @@ export function CommandPalette({
         if (!v && view.kind !== 'preview') setView({ kind: 'idle' })
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          className={trigger}
-          aria-label='Commands'
-          data-command-palette-trigger=''
-          data-tip={`Type a change in plain words (${shortcut})`}
-          disabled={!draft.bundle}
-        >
-          <Command className='h-3.5 w-3.5' />
-          Commands
-        </button>
-      </PopoverTrigger>
+      <ToolButton
+        popover
+        onOpen={() => setOpen(true)}
+        label='Type a change…'
+        ariaLabel='Type a change'
+        icon={<Command className='h-3.5 w-3.5' />}
+        kbd={shortcut}
+        tip={`Type a change in plain words (${shortcut})`}
+        hint='In plain words: “make Zone required”'
+        disabled={!draft.bundle}
+        data={{ 'data-command-palette-trigger': '' }}
+      />
       <PopoverContent
         align='end'
         className='w-[440px] overflow-hidden p-0'

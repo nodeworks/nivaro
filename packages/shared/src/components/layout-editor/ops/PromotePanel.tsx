@@ -203,7 +203,7 @@ export function PromotePanel({
       </div>
       {!sources.isLoading && (sources.data ?? []).length === 0 && (
         <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-          No other environment is registered with an API address. Upload a layout file or a Config
+          No other environment is registered with an API address. Upload a form file or a Config
           Diff snapshot instead.
         </p>
       )}
@@ -220,7 +220,7 @@ export function PromotePanel({
           data-promote-download
         >
           <Download className='h-3 w-3' />
-          download this layout
+          download this form
         </button>{' '}
         and upload it there.
       </p>

@@ -307,7 +307,7 @@ export function HistoryPanel({
           <button
             type='button'
             onClick={() => startNaming('current')}
-            data-tip='Keep the layout as it is saved now, under a name, beyond the rolling 30 versions'
+            data-tip='Keep the form as it is saved now, under a name, beyond the rolling 30 versions'
             className={`${btn} inline-flex items-center gap-1`}
           >
             <Bookmark className='h-3 w-3' />
@@ -364,7 +364,7 @@ export function HistoryPanel({
                 </button>
                 <button
                   type='button'
-                  data-tip='See what differs from the layout now'
+                  data-tip='See what differs from the form now'
                   data-version-diff={v.version}
                   data-setting='tool.version_diff'
                   onClick={() => setDiffFor(v.id)}
@@ -413,7 +413,7 @@ export function HistoryPanel({
                     type='button'
                     data-restore={v.id}
                     data-setting='tool.version_restore'
-                    data-tip='Replace the layout with this version. The current one is kept as a version first.'
+                    data-tip='Replace the form with this version. The current one is kept as a version first.'
                     onClick={() => setConfirming(v.id)}
                     className={btn}
                   >

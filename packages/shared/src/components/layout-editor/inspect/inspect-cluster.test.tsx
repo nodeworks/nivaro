@@ -8,7 +8,7 @@ import { type LayoutBundle, type LayoutOp, newGroup, newPlacement } from '../../
 import { otherFormSuggestions } from '../AddPanel'
 import { LayoutEditorHostContext } from '../host'
 import { Inspector } from '../inspector/Inspector'
-import { InspectStrip } from '../overview/InspectStrip'
+import { FindingsStrip } from '../overview/FindingsStrip'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 Element.prototype.scrollIntoView ??= () => {}
@@ -311,7 +311,18 @@ describe('orphaned placements (#2650)', () => {
   it('removes a layout’s orphans in one ops batch on its current rev', async () => {
     const onChanged = vi.fn()
     const { calls } = await render(
-      () => <InspectStrip collection='orders' onChanged={onChanged} />,
+      () => (
+        <FindingsStrip
+          collection='orders'
+          rows={[]}
+          loops={{ byLayout: new Map(), collection: [] }}
+          checking={false}
+          onRecheck={() => {}}
+          onOpen={() => {}}
+          onCompare={() => {}}
+          onChanged={onChanged}
+        />
+      ),
       {
         '/layout-inspect/orders/orphans': {
           data: [
@@ -338,6 +349,14 @@ describe('orphaned placements (#2650)', () => {
         '/collection-layouts/7/ops': { ok: true }
       }
     )
+    // One strip: "2 things need a look", each kind a chip; the heading opens them all.
+    expect(host.querySelector('[data-overview-findings]')?.textContent).toContain(
+      '2 things need a look'
+    )
+    expect(host.querySelector('[data-findings-chip="orphans"]')?.textContent).toBe(
+      '2 placements point at nothing'
+    )
+    await click(host.querySelector('[data-findings-toggle]'))
     expect(host.querySelector('[data-orphans]')?.textContent).toContain('column no longer exists')
     expect(host.querySelector('[data-missing-layout="7"]')?.textContent).toContain('3 of 4')
     await click(host.querySelector('[data-remove-orphans="7"]'))

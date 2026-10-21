@@ -277,7 +277,7 @@ describe('across forms on the overview', () => {
     await settle(() => text().includes('Find a field'))
     await click(button(/Find a field/))
     const input = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Field name or label"]'
+      'input[aria-label="Find a field on every form"]'
     )
     if (!input) throw new Error('no input')
     await act(async () => {

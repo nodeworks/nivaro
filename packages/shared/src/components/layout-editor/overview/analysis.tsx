@@ -1,9 +1,8 @@
-import { AlertTriangle, ArrowDownWideNarrow, RefreshCw, ScanSearch } from 'lucide-react'
+import { AlertTriangle, ArrowDownWideNarrow, Columns2, RefreshCw, ScanSearch } from 'lucide-react'
 import { createContext, type ReactNode, useContext, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { cn } from '../../../lib/utils'
-import { scoreTone } from '../lint/LintPanel'
 import {
   type CoverageResult,
   type CoverageRow,
@@ -11,7 +10,7 @@ import {
   type HealthRow,
   useLayoutHealth
 } from '../lint/lint-api'
-import { btnOutline } from './OverviewActions'
+import { ToolButton } from '../toolbar-kit'
 import { apiFailure } from './overview-api'
 import type { OverviewRow } from './types'
 
@@ -68,6 +67,10 @@ export function sortWorstFirst(rows: OverviewRow[], health: Map<number, HealthRo
     .map((x) => x.r)
 }
 
+const HEALTH_DOT = (score: number) =>
+  score >= 80 ? 'bg-emerald-500' : score >= 60 ? 'bg-amber-500' : 'bg-red-500'
+
+/** "● Health 72": a word with the number, so it never reads as a count. */
 export function HealthChip({ layoutId }: { layoutId: number }) {
   const h = useContext(AnalysisContext).health.get(layoutId)
   if (!h) return null
@@ -78,13 +81,10 @@ export function HealthChip({ layoutId }: { layoutId: number }) {
     <span
       data-health={h.score}
       data-tip={tip}
-      className={cn(
-        'inline-flex items-center rounded-full px-1.5 py-px text-[11px] font-semibold tabular-nums',
-        scoreTone(h.score)
-      )}
+      className='inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-px text-[11px] font-medium tabular-nums text-slate-600 dark:bg-muted dark:text-muted-foreground'
     >
-      <span className='sr-only'>Health </span>
-      {h.score}
+      <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', HEALTH_DOT(h.score))} />
+      Health {h.score}
       <span className='sr-only'> out of 100</span>
     </span>
   )
@@ -147,49 +147,56 @@ export function CoverageNote({ row }: { row: OverviewRow }) {
   )
 }
 
+/** Rows of the overview's Analyze menu: coverage, worst first, compare forms. */
 export function AnalysisButtons({
   hasCoverage,
   checking,
   onCheck,
   worstFirst,
-  onWorstFirst
+  onWorstFirst,
+  onCompare
 }: {
   hasCoverage: boolean
   checking: boolean
   onCheck: () => void
   worstFirst: boolean
   onWorstFirst: (v: boolean) => void
+  /** Two forms side by side; absent with fewer than two forms. */
+  onCompare?: () => void
 }) {
   return (
     <>
-      <button
-        type='button'
-        className={cn(btnOutline, worstFirst && 'border-nvr-cyan/40 bg-nvr-cyan/10')}
-        aria-pressed={worstFirst}
+      <ToolButton
+        label={checking ? 'Checking…' : hasCoverage ? 'Check coverage again' : 'Check coverage'}
+        icon={<ScanSearch className='h-3.5 w-3.5' />}
+        hint='Run the newest records through the same matching the record page uses'
+        disabled={checking}
+        onClick={onCheck}
+        data={{ 'data-analyze-coverage': '' }}
+      />
+      <ToolButton
+        label='Worst first'
+        icon={<ArrowDownWideNarrow className='h-3.5 w-3.5' />}
+        hint='Sort each section by health, worst first'
+        checked={worstFirst}
         onClick={() => onWorstFirst(!worstFirst)}
-        data-tip='Sort each section by health score, worst first'
-      >
-        <ArrowDownWideNarrow className='h-3.5 w-3.5' />
-        Worst first
-      </button>
-      {!hasCoverage && (
-        <button
-          type='button'
-          className={btnOutline}
-          disabled={checking}
-          onClick={onCheck}
-          data-tip='Run the newest records through the same matching the record page uses'
-        >
-          <ScanSearch className='h-3.5 w-3.5' />
-          {checking ? 'Checking…' : 'Check coverage'}
-        </button>
+        data={{ 'data-analyze-worst-first': '' }}
+      />
+      {onCompare && (
+        <ToolButton
+          label='Compare forms…'
+          icon={<Columns2 className='h-3.5 w-3.5' />}
+          hint='Two forms side by side, with their differences'
+          onClick={onCompare}
+          data={{ 'data-analyze-compare': '' }}
+        />
       )}
     </>
   )
 }
 
-/** The strip under the header once coverage was checked. */
-export function CoverageStrip({
+/** The coverage part of the findings strip: what the sample said, and Check again. */
+export function CoverageSummary({
   rows,
   checking,
   onRecheck
@@ -202,40 +209,39 @@ export function CoverageStrip({
   if (!cov) return null
   const nobody = rows.filter((r) => coverageFlags(r, cov).some((f) => f.tone === 'warn')).length
   return (
-    <div
+    <span
       data-coverage-strip=''
       role='status'
-      className='flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-200 bg-white px-4 py-2 text-[12.5px] text-slate-600 dark:border-border dark:bg-card dark:text-muted-foreground'
+      data-tip={`Checked the ${cov.sampled.toLocaleString()} newest records, as an administrator sees them${cov.rule_error ? '. A record rule names a column this table lacks, so no record rule matches.' : ''}`}
+      className='inline-flex min-w-0 items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'
     >
       <ScanSearch className='h-3.5 w-3.5 shrink-0' />
-      <span>
-        Checked the {cov.sampled.toLocaleString()} newest records, as an administrator sees them
+      <span className='min-w-0 truncate'>
+        Coverage:{' '}
         {nobody > 0 ? (
-          <>
-            {' — '}
-            <b className='font-semibold text-amber-700 dark:text-amber-300'>
-              {nobody} {nobody === 1 ? 'form needs' : 'forms need'} a look
-            </b>
-          </>
+          <b className='font-semibold text-amber-800 dark:text-amber-200'>
+            {nobody} {nobody === 1 ? 'form gets' : 'forms get'} no records
+          </b>
         ) : (
-          ' — every form gets records'
+          'every form gets records'
         )}
-        {cov.no_form > 0 && `; ${cov.no_form.toLocaleString()} records match no form`}.
+        {cov.no_form > 0 && ` · ${cov.no_form.toLocaleString()} records match no form`}
+        {cov.rule_error && ' · a record rule names a missing column'}
       </span>
-      {cov.rule_error && (
-        <span className='text-amber-700 dark:text-amber-300'>
-          A record rule names a column this table lacks, so no record rule matches.
-        </span>
-      )}
       <button
         type='button'
-        className='ml-auto inline-flex h-7 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-slate-700 hover:bg-muted dark:text-foreground'
+        className='inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-slate-700 hover:bg-muted dark:text-foreground'
         disabled={checking}
         onClick={onRecheck}
       >
         <RefreshCw className={cn('h-3.5 w-3.5', checking && 'animate-spin')} />
         Check again
       </button>
-    </div>
+    </span>
   )
+}
+
+/** The last coverage check of this collection (null before one ran). */
+export function useCoverageResult(): CoverageResult | null {
+  return useContext(AnalysisContext).coverage
 }

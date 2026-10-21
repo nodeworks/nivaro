@@ -3,10 +3,11 @@ import { useMemo, useState } from 'react'
 import type { LayoutBundle, LayoutOp } from '../../lib/layout-ops'
 import { cn } from '../../lib/utils'
 import { Checkbox } from '../ui/checkbox'
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { Popover, PopoverContent } from '../ui/popover'
 import { useCollectionMeta } from './inspector/field-context'
 import { effectText, inputBase } from './panel-style'
 import { findHits, HIT_KIND_LABELS, type ReplaceHit, replacePlan } from './structure-ops'
+import { ToolButton } from './toolbar-kit'
 import type { ApplyOptions } from './useLayoutDraft'
 
 // Find and replace in labels (#2630): a button in the top bar opens a panel
@@ -14,9 +15,6 @@ import type { ApplyOptions } from './useLayoutDraft'
 // blocks and help text — plus the collection's own labels and help text where
 // the form sets none (replacing one gives this form its own). Every hit is
 // listed with a checkbox; Replace applies the ticked ones as one undo step.
-
-const triggerCls =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 
 const checkCls =
   'mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 data-[state=checked]:border-nvr-cyan data-[state=checked]:bg-nvr-cyan data-[state=checked]:text-white dark:border-slate-600 [&_svg]:h-3 [&_svg]:w-3'
@@ -123,17 +121,15 @@ export function FindReplaceButton({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          data-find-replace-open=''
-          className={triggerCls}
-          data-tip='Find and replace in labels, section names and help text'
-        >
-          <Replace className='h-3.5 w-3.5 shrink-0' />
-          Replace
-        </button>
-      </PopoverTrigger>
+      <ToolButton
+        popover
+        onOpen={() => setOpen(true)}
+        label='Find and replace'
+        icon={<Replace className='h-3.5 w-3.5 shrink-0' />}
+        tip='Find and replace in labels, section names and help text'
+        hint='In labels, section names and help text'
+        data={{ 'data-find-replace-open': '' }}
+      />
       <PopoverContent align='end' className='w-[440px] p-3' data-find-replace=''>
         <p className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
           Find and replace in labels

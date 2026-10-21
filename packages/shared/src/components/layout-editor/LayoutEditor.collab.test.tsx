@@ -16,6 +16,7 @@ import { RealtimeContext } from '../../lib/realtime'
 import type { CMSField } from '../item-edit/types'
 import { storedDraftKey } from './draft-recovery'
 import { LayoutEditor } from './LayoutEditor'
+import { closeBarMenu, openBarMenu } from './toolbar-kit.test-utils'
 
 // Collaboration in the layout editor: unsaved markers (#2629), presence (#2651),
 // crash recovery (#2653) and the required change note (#2654). The rebase
@@ -330,8 +331,12 @@ describe('crash recovery (#2653)', () => {
 describe('required change note (#2654)', () => {
   it('Save asks for a reason and a ticket and sends them; autosave is off', async () => {
     const { calls } = await mount({ bundle: makeBundle({ change_note: 'note_ticket' }) })
-    expect(q('[data-autosave-switch]')).toBeNull()
     await addVendor()
+    // No Autosave row in the Save menu: every save needs a reason.
+    await openBarMenu('Save options')
+    expect(q('[data-editor-schedule]')).not.toBeNull()
+    expect(q('[data-autosave-switch]')).toBeNull()
+    await closeBarMenu('Save options')
     click(q('[data-editor-save]'))
     await settle(() => !!q('[data-change-note-save]'))
     const submit = () => q('[data-change-note-submit]') as HTMLButtonElement
@@ -378,9 +383,10 @@ describe('live presence (#2651)', () => {
     expect(q('[data-presence-peer="u1"]')).toBeNull()
     expect(q('[data-presence-peer="u2"]')?.textContent).toBe('BO')
     expect(q('[data-presence-peer="u2"]')?.getAttribute('data-tip')).toContain('Title in Main')
-    expect(node('field:title:main')?.querySelector('[data-design-peer="u2"]')?.textContent).toBe(
-      'Ben'
-    )
+    // On the canvas: a small avatar with the initials, the name in its tip.
+    const avatar = node('field:title:main')?.querySelector('[data-design-peer="u2"]')
+    expect(avatar?.textContent).toBe('BO')
+    expect(avatar?.getAttribute('data-tip')).toBe('Ben Ode')
 
     click(node('field:amount:main'))
     await settle(() =>

@@ -4,6 +4,7 @@ import { cn, titleCase } from '../../../lib/utils'
 import type { ActiveLayoutData } from '../../item-edit/types'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import type { PreviewAs } from '../EditorTopBar'
+import { LoadError } from '../load-error'
 import type { DescribeField } from '../overview/describe-conditions'
 import { useRoleNames } from '../overview/overview-api'
 import { segOption, segTrack } from '../panel-style'
@@ -56,10 +57,12 @@ export function PreviewModes({
   fields: DescribeField[]
 }) {
   const { data: roles = [] } = useRoleNames(true)
-  const { data: pipelines = [], isLoading: pipelinesLoading } = useCollectionPipelines(
-    collection,
-    true
-  )
+  const {
+    data: pipelines = [],
+    isLoading: pipelinesLoading,
+    isError: pipelinesFailed,
+    refetch: refetchPipelines
+  } = useCollectionPipelines(collection, true)
   const drivers = useMemo(() => (layout ? drivingFields(layout) : []), [layout])
   const [field, setField] = useState('')
   const [text, setText] = useState('')
@@ -120,6 +123,8 @@ export function PreviewModes({
             className='h-8 text-[12.5px]'
             options={[{ value: '', label: 'The record’s own state' }, ...stateOptions]}
           />
+        ) : pipelinesFailed ? (
+          <LoadError what='the workflow states' onRetry={() => void refetchPipelines()} />
         ) : (
           <p className={hintCls}>
             {pipelinesLoading ? 'Loading…' : 'No pipeline is bound to this collection.'}

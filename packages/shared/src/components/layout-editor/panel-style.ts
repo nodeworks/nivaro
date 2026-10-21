@@ -43,3 +43,11 @@ export const segOption = (on: boolean) =>
  */
 export const tintCard =
   'rounded-md bg-[#f6f8fa] ring-1 ring-inset ring-slate-200/70 dark:bg-white/[0.04] dark:ring-white/[0.07]'
+
+/**
+ * The one amber of strips that ask for a look (overview findings, the
+ * environment warning, the editor's rule loops and conflicts): one token pair,
+ * light and dark, instead of a hex per strip.
+ */
+export const amberStrip =
+  'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'

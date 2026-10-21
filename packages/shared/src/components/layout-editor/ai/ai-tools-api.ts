@@ -151,7 +151,8 @@ export function pinsToMarks(pins: AiPin[]): ((t: DesignTarget) => DesignMark[]) 
         text: list.length > 1 ? `${first.text} · ${list.length}` : first.text,
         tone,
         tip: list.map((p) => p.tip).join('\n'),
-        highlight: true
+        highlight: true,
+        kind: 'ai'
       }
     ]
   }

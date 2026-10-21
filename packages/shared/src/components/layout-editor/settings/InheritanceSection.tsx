@@ -36,7 +36,7 @@ export function InheritanceSection(props: SectionProps) {
         children.length > 0 ? (
           <span className={quietText}>
             {children.map((c) => c.name).join(', ')}{' '}
-            {children.length === 1 ? 'inherits' : 'inherit'} from this layout, so it cannot inherit
+            {children.length === 1 ? 'inherits' : 'inherit'} from this form, so it cannot inherit
             from another.
           </span>
         ) : null

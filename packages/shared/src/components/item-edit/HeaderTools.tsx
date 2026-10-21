@@ -107,6 +107,7 @@ export function HeaderTools({ children }: { children: ReactNode }) {
         ref={btnRef}
         type='button'
         data-nvr-header-tools-btn
+        aria-expanded={open}
         title='More tools'
         onClick={() => setOpen((o) => !o)}
         className={cn(

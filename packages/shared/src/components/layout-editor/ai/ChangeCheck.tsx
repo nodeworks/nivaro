@@ -4,19 +4,20 @@ import { useNivaroClient } from '../../../context'
 import { post } from '../../../lib/commands'
 import type { LayoutBundle } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { Popover, PopoverContent } from '../../ui/popover'
 import { useLayoutEditorHost } from '../host'
+import { ToolButton } from '../toolbar-kit'
 import { type LayoutDraft, parseSaveFailure } from '../useLayoutDraft'
 import { savedJustNow, slimBundle } from './assist-ops'
 
 /**
- * AI check of a change (#2684), beside Save. On a manual Save the editor
+ * AI review of a change (#2684), in the Save menu. On a manual Save the editor
  * sends the layout as it was at the last save and as it is now to POST
  * /ai-design/layouts/:id/check-changes; the model reads the change next to
  * the roles and the workflow and warns about likely mistakes of intent. The
  * save is never held up: the check runs after it went out, and warnings open
- * in a popover anchored here (Undo reverses the saved change). "Check" asks
- * before saving. Admins only; silent when AI is not set up or the change is
+ * in a popover anchored here (Undo reverses the saved change). Picking it
+ * asks before saving. Admins only; silent when AI is not set up or the change is
  * trivial (labels, help text, order inside a section).
  */
 
@@ -41,8 +42,6 @@ type View =
   | { kind: 'done'; trigger: Trigger; answer: CheckAnswer }
   | { kind: 'error'; message: string }
 
-const chip =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[12.5px] font-medium transition-colors'
 const quiet = 'text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'
 const smallBtn =
   'inline-flex h-7 items-center rounded-md px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
@@ -142,49 +141,57 @@ export function AiChangeCheck({
   }
   const warnings =
     view.kind === 'done' && view.answer.status === 'checked' ? view.answer.warnings : []
+  const state =
+    view.kind === 'checking'
+      ? 'Checking…'
+      : warnings.length
+        ? `${warnings.length} to look at`
+        : fine
+          ? 'Looks fine'
+          : null
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          data-ai-change-check={view.kind}
-          aria-label='AI check of the changes'
-          data-tip='AI reads the change next to the roles and the workflow and warns about likely mistakes. It never blocks Save.'
-          onClick={(e) => {
-            if (view.kind === 'idle' || view.kind === 'error') {
-              e.preventDefault()
-              ask()
-              setOpen(true)
-            }
-          }}
-          className={cn(
-            chip,
-            warnings.length
-              ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:border-amber-800/70 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/60'
-              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
-          )}
-        >
-          {view.kind === 'checking' ? (
+      <ToolButton
+        popover
+        onOpen={() => {
+          if (view.kind === 'idle' || view.kind === 'error') ask()
+          setOpen(true)
+        }}
+        label='AI review'
+        ariaLabel='AI review of the changes'
+        icon={
+          view.kind === 'checking' ? (
             <Loader2 className='h-3.5 w-3.5 animate-spin' />
           ) : (
             <Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />
-          )}
-          {view.kind === 'checking'
-            ? 'Checking…'
-            : warnings.length
-              ? `${warnings.length} to look at`
-              : fine
-                ? 'Looks fine'
-                : 'Check'}
-        </button>
-      </PopoverTrigger>
+          )
+        }
+        tip='AI reads the change next to the roles and the workflow and warns about likely mistakes. It never blocks Save.'
+        hint={state ?? 'Likely mistakes, next to the roles and the workflow'}
+        badge={warnings.length || undefined}
+        data={{ 'data-ai-change-check': view.kind }}
+        onClick={(e) => {
+          if (view.kind === 'idle' || view.kind === 'error') {
+            e.preventDefault()
+            ask()
+            setOpen(true)
+          }
+        }}
+        className={cn(
+          warnings.length &&
+            'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:border-amber-800/70 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/60'
+        )}
+        trailing={
+          state && <span className='text-slate-500 dark:text-muted-foreground'>· {state}</span>
+        }
+      />
       <PopoverContent align='end' className='w-[380px] p-0' data-ai-change-check-panel=''>
         <div className='space-y-2.5 p-3'>
           <p className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
             {view.kind !== 'idle' && 'trigger' in view && view.trigger === 'save'
-              ? 'AI check of the change you saved'
-              : 'AI check of your unsaved changes'}
+              ? 'AI review of the change you saved'
+              : 'AI review of your unsaved changes'}
           </p>
           {view.kind === 'checking' && <p className={quiet}>Reading the change…</p>}
           {view.kind === 'error' && (

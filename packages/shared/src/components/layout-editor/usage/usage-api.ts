@@ -150,13 +150,13 @@ export function formatDuration(ms: number): string {
 
 const FILL_KEY = 'nvr:layout-editor:show-fill'
 
-/** Canvas fill-rate hints: on unless this person turned them off (in this browser). */
+/** Canvas fill-rate hints (the Usage lens): off unless this person turned them on (in this browser). */
 export function useShowFillRates(): [boolean, (on: boolean) => void] {
   const [on, setOn] = useState(() => {
     try {
-      return window.localStorage.getItem(FILL_KEY) !== '0'
+      return window.localStorage.getItem(FILL_KEY) === '1'
     } catch {
-      return true
+      return false
     }
   })
   const set = useCallback((v: boolean) => {

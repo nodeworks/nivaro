@@ -4,10 +4,10 @@ import {
   CircleDashed,
   EyeOff,
   FlaskConical,
-  ListChecks,
   Loader2,
   Pin,
   RefreshCw,
+  Target,
   X
 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
@@ -17,7 +17,7 @@ import { useRelationOptions } from '../../../hooks/useRelationOptions'
 import type { LayoutBundle, LayoutOp } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
 import type { ActiveLayoutData } from '../../item-edit/types'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { Popover, PopoverContent } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { bundleToActiveLayout } from '../bundle-to-active'
 import type { DescribeField } from '../overview/describe-conditions'
@@ -27,6 +27,7 @@ import { segOption, segTrack } from '../panel-style'
 import { fieldName } from '../preview/PreviewModes'
 import { drivingFields } from '../preview/preview-model'
 import { useSettingsRelations } from '../settings/settings-api'
+import { ToolButton } from '../toolbar-kit'
 import type { ApplyOptions } from '../useLayoutDraft'
 import { draftResolution, useFormRows, usePinnedLabels, useWalkAccess } from './testing-api'
 import {
@@ -44,7 +45,7 @@ import {
 import { type PinCheck, useRecordCheck } from './use-record-check'
 
 // The editor's Test popover (test records #2646, new-record walkthrough #2648,
-// form cost #2649) and the Save flow's Check impact (#2647). Everything here
+// form cost #2649) and the Save menu's What changes (#2647). Everything here
 // reads; pins and the cost limit are layout settings (one undoable step each).
 
 export interface TestingProps {
@@ -63,9 +64,6 @@ const labelCls = 'mb-1 block text-[11.5px] font-semibold text-slate-600 dark:tex
 const hintCls = 'text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'
 const inputCls =
   'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-muted-foreground'
-/** The top bar's compact buttons: an icon (and the pin count), the name in the tip. */
-const iconTopBtn =
-  'inline-flex h-8 min-w-8 items-center justify-center gap-1 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 const ADMIN = ''
 /** Looks like a record id (a number or a uuid): offered as-is in the pin search. */
 const ID_RE = /^(\d{1,20}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
@@ -671,22 +669,26 @@ export function TestingButton(props: TestingProps) {
   const pins = readTesting(props.bundle.layout.conditions).records.length
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          className={iconTopBtn}
-          aria-label='Test'
-          data-editor-testing=''
-          data-tip='Test: pinned records, a new record as a role, and what the form costs to open'
-        >
-          <FlaskConical className='h-4 w-4' />
-          {pins > 0 && (
+      <ToolButton
+        popover
+        onOpen={() => setOpen(true)}
+        label='Test'
+        icon={<FlaskConical className='h-4 w-4' />}
+        tip='Test: pinned records, a new record as a role, and what the form costs to open'
+        hint={
+          pins > 0
+            ? `${pins} pinned test ${pins === 1 ? 'record' : 'records'}, new record, cost`
+            : 'Pinned records, a new record as a role, cost'
+        }
+        data={{ 'data-editor-testing': '' }}
+        trailing={
+          pins > 0 && (
             <span className='rounded-full bg-slate-100 px-1.5 text-[11px] font-semibold text-slate-600 dark:bg-muted dark:text-muted-foreground'>
               {pins}
             </span>
-          )}
-        </button>
-      </PopoverTrigger>
+          )
+        }
+      />
       <PopoverContent
         align='end'
         className='max-h-[min(80vh,640px)] w-[380px] overflow-y-auto overscroll-contain p-3'
@@ -720,7 +722,7 @@ export function TestingButton(props: TestingProps) {
   )
 }
 
-// ─── Check impact, beside Save (#2647) ──────────────────────────────────────
+// ─── What changes, in the Save menu (#2647) ──────────────────────────────────────
 
 /**
  * What saving would change for the pinned test records, and the form's cost
@@ -752,17 +754,18 @@ export function ImpactButton(props: TestingProps) {
         if (o && cfg.records.length > 0) void check()
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          className={iconTopBtn}
-          data-editor-impact=''
-          aria-label='Check impact'
-          data-tip='Check impact: what this save changes for the pinned test records, and what the form costs to open'
-        >
-          <ListChecks className='h-4 w-4' />
-        </button>
-      </PopoverTrigger>
+      <ToolButton
+        popover
+        onOpen={() => {
+          setOpen(true)
+          if (cfg.records.length > 0) void check()
+        }}
+        label='What changes'
+        icon={<Target className='h-4 w-4' />}
+        tip='What this save changes for the pinned test records, and what the form costs to open'
+        hint='For the pinned test records, and the form’s cost'
+        data={{ 'data-editor-impact': '' }}
+      />
       <PopoverContent align='end' className='w-[360px] p-3'>
         <p className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
           What this save changes
@@ -770,7 +773,7 @@ export function ImpactButton(props: TestingProps) {
         <div className='mt-2' data-impact-records=''>
           {cfg.records.length === 0 ? (
             <p className={hintCls}>
-              Pin test records (Test → Test records) to see what a save changes for them.
+              Pin test records (More → Test → Test records) to see what a save changes for them.
             </p>
           ) : running ? (
             <p className={cn(hintCls, 'flex items-center gap-1.5')}>

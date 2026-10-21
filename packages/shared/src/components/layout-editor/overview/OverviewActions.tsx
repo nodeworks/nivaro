@@ -11,6 +11,7 @@ import { SimpleSelect } from '../../ui/SimpleSelect'
 import { AiStartComposer, AiStartOptions } from '../ai-forms/AiStart'
 import type { ComposeMode } from '../ai-forms/ai-forms-api'
 import { BLANK_SEED, NewFormStart, type StartSeed } from '../reuse/NewFormStart'
+import { barBtn } from '../toolbar-kit'
 import { apiFailure, fetchExplain, useDisplayTemplate, useRoleNames } from './overview-api'
 import type { ExplainResponse, LayoutType } from './types'
 
@@ -32,8 +33,8 @@ const DEFAULT_NAMES: Record<LayoutType, string> = {
   table: 'Grid columns'
 }
 
-export const btnOutline =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+/** The overview's outline buttons: the editor bar's one look (toolbar-kit). */
+export const btnOutline = barBtn
 export const btnPrimary =
   'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50'
 const inputCls =

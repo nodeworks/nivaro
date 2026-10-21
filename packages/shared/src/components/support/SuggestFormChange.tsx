@@ -1,22 +1,24 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { sendChangeRequest } from '../layout-editor/ops/ops-api'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
+import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 
 /**
  * "Suggest a form change" (#2609): someone who cannot edit layouts tells the
  * administrators what should change about the FORM (not this record's data),
  * optionally naming a field. It lands as a "Form change" support request —
- * followed under My requests — and in the layout editor's suggestions for the
- * form this record opened with.
+ * followed under My requests — and in the layout editor's suggested changes
+ * for the form this record opened with. An anchored popover beside the
+ * record's More button (the helper-surface rule), not a centred dialog.
  */
-export function SuggestFormChangeDialog({
+export function SuggestFormChange({
   open,
   onOpenChange,
+  anchor,
   collection,
   item,
   layoutId,
@@ -26,6 +28,8 @@ export function SuggestFormChangeDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** What the popover sits beside: the More button the row was picked from. */
+  anchor: HTMLElement | null
   collection: string
   item: string
   /** The layout this record page shows. */
@@ -69,26 +73,36 @@ export function SuggestFormChangeDialog({
   })
 
   const canSend = message.trim().length > 0 && !send.isPending
+  const anchorRef = useMemo(() => ({ current: anchor }), [anchor])
+  // Nothing in the record page's DOM until it is asked for.
+  if (!open) return null
   return (
-    <Dialog
+    <Popover
       open={open}
       onOpenChange={(o) => {
         if (!o) reset()
         onOpenChange(o)
       }}
     >
-      <DialogContent className='max-w-lg dark:bg-card' data-suggest-form-change>
-        <DialogHeader className='px-6 pt-5'>
-          <DialogTitle className='text-[15px] font-semibold text-slate-900 dark:text-slate-100'>
+      <PopoverAnchor virtualRef={anchorRef as { current: HTMLElement }} />
+      <PopoverContent
+        align='end'
+        role='dialog'
+        aria-label='Suggest a form change'
+        className='max-h-[min(80vh,620px)] w-[400px] max-w-[calc(100vw-24px)] overflow-y-auto overscroll-contain p-0'
+        data-suggest-form-change
+      >
+        <div className='px-4 pt-3.5'>
+          <p className='text-[13.5px] font-semibold text-slate-900 dark:text-slate-100'>
             Suggest a form change
-          </DialogTitle>
-          <DialogDescription className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+          </p>
+          <p className='mt-0.5 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
             Tell the administrators how this form{layoutName ? ` (${layoutName})` : ''} could work
             better — a field to add, move, rename or explain. You can follow it under My requests.
-          </DialogDescription>
-        </DialogHeader>
+          </p>
+        </div>
         <form
-          className='space-y-4 px-6 pb-5 pt-3'
+          className='space-y-3 px-4 pb-4 pt-3'
           onSubmit={(e) => {
             e.preventDefault()
             if (canSend) send.mutate()
@@ -107,7 +121,7 @@ export function SuggestFormChangeDialog({
                   { value: '', label: 'The form in general' },
                   ...fields.map((f) => ({ value: f.field, label: f.label }))
                 ]}
-                className='h-9 w-full text-[13px]'
+                className='h-8 w-full text-[12.5px]'
                 triggerProps={{ 'data-suggest-field': '' }}
               />
             </div>
@@ -120,7 +134,7 @@ export function SuggestFormChangeDialog({
               data-suggest-message
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              rows={5}
+              rows={4}
               maxLength={4000}
               placeholder='e.g. Put Vendor next to PO number — we always check them together'
               className='w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-900 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100'
@@ -150,7 +164,7 @@ export function SuggestFormChangeDialog({
             </button>
           </div>
         </form>
-      </DialogContent>
-    </Dialog>
+      </PopoverContent>
+    </Popover>
   )
 }

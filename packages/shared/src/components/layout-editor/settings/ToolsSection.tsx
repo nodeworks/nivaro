@@ -79,7 +79,7 @@ function ChangeNoteSetting({ layout, set }: SectionProps) {
       note={
         value === 'off'
           ? null
-          : 'Autosave stays off for this layout: every save waits for its reason.'
+          : 'Autosave stays off for this form: every save waits for its reason.'
       }
     />
   )
@@ -97,7 +97,7 @@ function PreviewRecordSetting({ collection, layout }: SectionProps) {
       k='tool.preview_record'
       note={
         slug
-          ? `The record opens pinned to this layout (?layout=${slug}).`
+          ? `The record opens pinned to this form (?layout=${slug}).`
           : 'Without a link name the record opens on whichever layout it resolves to.'
       }
     >
@@ -238,7 +238,7 @@ function SlotSetting({
           kind: 'config',
           type: 'layout',
           id: layoutId,
-          label: 'Describe this layout'
+          label: 'Describe this form'
         })
   return <Setting k={k}>{node ?? <p className={quietText}>Not offered in this app.</p>}</Setting>
 }
@@ -331,7 +331,7 @@ function DriftSetting({ layoutId }: { layoutId: number }) {
               ))}
             </ul>
           ) : (
-            <p className={quietText}>No drift: the layout matches its last saved version.</p>
+            <p className={quietText}>No drift: the form matches its last saved version.</p>
           )}
         </div>
       )}

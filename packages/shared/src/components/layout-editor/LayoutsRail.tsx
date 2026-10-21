@@ -98,7 +98,7 @@ export function LayoutsRail({
   const choices = useRuleChoiceLabels(collection, fields, rows)
 
   return (
-    <nav data-editor-rail='' aria-label='Layouts' className='flex flex-col gap-0.5 px-2 pb-4'>
+    <nav data-editor-rail='' aria-label='Forms' className='flex flex-col gap-0.5 px-2 pb-4'>
       {isLoading && [0, 1, 2].map((i) => <Skeleton key={i} className='mx-2 mt-3 h-9 rounded-md' />)}
       {RAIL_SECTIONS.map((s) => {
         const list = rows.filter((r) => r.section === s.id)

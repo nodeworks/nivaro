@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { Skeleton } from '../../ui/skeleton'
+import { LoadError } from '../load-error'
 import {
   type DependencyNode,
   type LayoutChange,
@@ -39,8 +40,8 @@ export function impactSentence(
   change: LayoutChange | null | undefined
 ): string {
   const n = nodes.length
-  if (n === 0) return 'Nothing stored here uses this layout.'
-  const things = `${n} ${n === 1 ? 'thing uses' : 'things use'} this layout`
+  if (n === 0) return 'Nothing stored here uses this form.'
+  const things = `${n} ${n === 1 ? 'thing uses' : 'things use'} this form`
   if (!change) return `${things}.`
   if (change === 'rename')
     return `${things}. Renaming keeps every one working: they find it by its id or link name.`
@@ -68,7 +69,7 @@ export function DependencyDiagram({
   /** Narrow host (Form settings): smaller boxes. */
   compact?: boolean
 }) {
-  const { data, isLoading, isError } = useLayoutDependencies(layoutId)
+  const { data, isLoading, isError, refetch } = useLayoutDependencies(layoutId)
   if (isLoading)
     return (
       <div className={cn('space-y-2', className)} data-dependency-diagram='loading'>
@@ -78,9 +79,7 @@ export function DependencyDiagram({
     )
   if (isError || !data)
     return (
-      <p className={cn('text-[12px] text-red-600 dark:text-red-400', className)}>
-        Could not read what uses this layout.
-      </p>
+      <LoadError what='what uses this form' onRetry={() => void refetch()} className={className} />
     )
   return (
     <DependencyDiagramView data={data} change={change} className={className} compact={compact} />
