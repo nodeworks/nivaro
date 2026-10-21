@@ -19,6 +19,7 @@ import { tintCard } from '../panel-style'
 import { slotName } from '../slot-names'
 import { type ApplyOptions, useLayoutBundle } from '../useLayoutDraft'
 import { AdvancedTab } from './AdvancedTab'
+import { Breadcrumb } from './Breadcrumb'
 import {
   type CollectionMeta,
   FieldCtxContext,
@@ -67,6 +68,8 @@ export interface InspectorProps {
   inheritedFrom?: string | null
   /** "Edit in <parent>": opens that layout. Without it the button is not shown. */
   openLayout?: (layoutId: number) => void
+  /** Select (and reveal) another part: the header breadcrumb's steps and sections. */
+  onSelect?: (t: DesignTarget) => void
 }
 
 const WIDGET_RE = /^__widget_\d+__$/
@@ -104,9 +107,10 @@ export function Inspector(props: InspectorProps) {
       flush: props.flush ?? (() => {}),
       collection,
       layoutType: layoutTypeOf(bundle.layout),
-      defaultForm: isDefaultForm(bundle.layout)
+      defaultForm: isDefaultForm(bundle.layout),
+      select: props.onSelect
     }),
-    [bundle, apply, props.flush, collection]
+    [bundle, apply, props.flush, collection, props.onSelect]
   )
 
   const at = target ? placementOf(target) : null
@@ -251,8 +255,6 @@ function sectionLabel(bundle: LayoutBundle, key: string | null): string | null {
   return g ? g.label || titleCase(g.key) : titleCase(key)
 }
 
-const dot = (a: string, b: string | null) => (b ? `${a} · ${b}` : a)
-
 /** What a field holds, in words: "picks one record", "number". */
 function fieldKindWords(info: FieldInfo): string {
   if (info.isPath) return 'shows a linked value'
@@ -295,26 +297,24 @@ function KeyLine({ words, k, setting }: { words?: string; k: string; setting?: s
   )
 }
 
-/** "Step · Request", "Section", "Tabs or steps holder". */
-function groupEyebrow(bundle: LayoutBundle, group: GroupRow): string {
+/** "Step", "Section", "Tabs holder" — the breadcrumb follows ("Step · Request"). */
+function groupKindWord(bundle: LayoutBundle, group: GroupRow): string {
   const parent = group.parent_key
     ? (bundle.groups.find((g) => g.key === group.parent_key) ?? null)
     : null
-  const kind =
-    group.type === 'tab'
-      ? parent?.tab_mode === 'steps'
-        ? 'Step'
-        : 'Tab'
-      : group.type === 'container'
-        ? group.tab_mode === 'steps'
-          ? 'Steps holder'
-          : 'Tabs holder'
-        : group.type === 'content'
-          ? 'Text block'
-          : group.type === 'metadata'
-            ? 'Record info'
-            : 'Section'
-  return dot(kind, parent ? parent.label || titleCase(parent.key) : null)
+  return group.type === 'tab'
+    ? parent?.tab_mode === 'steps'
+      ? 'Step'
+      : 'Tab'
+    : group.type === 'container'
+      ? group.tab_mode === 'steps'
+        ? 'Steps holder'
+        : 'Tabs holder'
+      : group.type === 'content'
+        ? 'Text block'
+        : group.type === 'metadata'
+          ? 'Record info'
+          : 'Section'
 }
 
 function GroupPanel({
@@ -331,7 +331,12 @@ function GroupPanel({
   return (
     <>
       <PanelHeader
-        eyebrow={groupEyebrow(env.bundle, group)}
+        eyebrow={
+          <Breadcrumb
+            kind={groupKindWord(env.bundle, group)}
+            target={{ kind: 'group', key: group.key }}
+          />
+        }
         title={group.label || titleCase(group.key)}
         sub={<KeyLine k={group.key} setting='group.key' />}
       />
@@ -372,7 +377,7 @@ function SimplePanel({
   readOnly,
   children
 }: {
-  eyebrow: string
+  eyebrow: ReactNode
   title: string
   sub?: ReactNode
   notice?: ReactNode
@@ -429,7 +434,7 @@ function PlacementInspector({
   if (row && (WIDGET_RE.test(field) || row.widget_id != null))
     return (
       <SimplePanel
-        eyebrow={dot('Widget', where)}
+        eyebrow={<Breadcrumb kind='Widget' target={target} where={where} />}
         title={row.label_override || 'Widget'}
         notice={notice}
         readOnly={readOnly}
@@ -440,7 +445,7 @@ function PlacementInspector({
   if (isSlotField(field))
     return (
       <SimplePanel
-        eyebrow={dot('Panel', where)}
+        eyebrow={<Breadcrumb kind='Panel' target={target} where={where} />}
         title={slotName(field)}
         notice={notice}
         readOnly={readOnly}
@@ -451,7 +456,9 @@ function PlacementInspector({
   if (!row) return null
   if (target.kind === 'header' || row.group_key === HEADER_GROUP_KEY)
     return <HeaderItem row={row} notice={notice} readOnly={readOnly} />
-  return <FieldInspector row={row} where={where} notice={notice} readOnly={readOnly} />
+  return (
+    <FieldInspector target={target} row={row} where={where} notice={notice} readOnly={readOnly} />
+  )
 }
 
 function HeaderItem({
@@ -482,11 +489,13 @@ function HeaderItem({
 const EMPTY_META: CollectionMeta = { fields: [], relations: [], label: '' }
 
 function FieldInspector({
+  target,
   row,
   where,
   notice,
   readOnly
 }: {
+  target: DesignTarget
   row: PlacementRow
   where: string | null
   notice?: ReactNode
@@ -555,7 +564,7 @@ function FieldInspector({
     <FieldCtxContext.Provider value={ctx}>
       <GlobalWriterContext.Provider value={writer}>
         <PanelHeader
-          eyebrow={dot('Field', where)}
+          eyebrow={<Breadcrumb kind='Field' target={target} where={where} />}
           title={info.label}
           sub={<KeyLine words={meta ? fieldKindWords(info) : undefined} k={row.field} />}
         >

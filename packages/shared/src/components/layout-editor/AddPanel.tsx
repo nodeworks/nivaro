@@ -17,6 +17,7 @@ import { fieldSpot, placeOp, sectionOp, slotSpot } from './add-target'
 import type { DesignTarget } from './design-context'
 import type { AddSource } from './dnd/collision'
 import { useAddDragSource } from './dnd/node'
+import { textMatcher } from './nav/find'
 import { useOverviewFields } from './overview/overview-api'
 import { slotName } from './slot-names'
 import type { ApplyOptions } from './useLayoutDraft'
@@ -207,9 +208,7 @@ export function AddPanel({
   // "Add another copy" refused: which field, and why.
   const [notice, setNotice] = useState<{ field: string; text: string } | null>(null)
 
-  const needle = q.trim().toLowerCase()
-  const matches = (...texts: Array<string | null | undefined>) =>
-    !needle || texts.some((t) => t?.toLowerCase().includes(needle))
+  const matches = textMatcher(q)
 
   // Where each field / slot already sits (twins: body first, header last).
   const placed = useMemo(() => {

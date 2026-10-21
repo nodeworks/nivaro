@@ -25,6 +25,7 @@ import {
   X
 } from 'lucide-react'
 import {
+  Fragment,
   type ReactElement,
   type ReactNode,
   useCallback,
@@ -221,7 +222,11 @@ import type {
 } from './item-edit/types'
 import { DesignDropBody, DesignDropZone, designWrap } from './layout-editor/DesignNode'
 import { DesignCanvas } from './layout-editor/design-canvas'
-import type { DesignTarget, LayoutDesignProp } from './layout-editor/design-context'
+import {
+  type DesignTarget,
+  type LayoutDesignProp,
+  revealGroupKey
+} from './layout-editor/design-context'
 import {
   DESIGN_SUMMARY_MIN_CANVAS,
   readDesignSummaryCollapsed,
@@ -5401,6 +5406,42 @@ function ItemEditFormView({
     return steps
   }, [hasTabs, sectionGroups, tabGroups, isStepsMode, ungroupedFields])
 
+  // Layout editor (#2620 #2621): Find, the outline and the inspector's
+  // breadcrumb ask for a part of the form; the step or tab holding it opens
+  // (sections open themselves, GroupSection). A group key, or null for the
+  // Ungrouped zone.
+  const revealInDesign = (key: string | null) => {
+    if (key === null || key === '__ungrouped__') {
+      if (isStepsMode && allSteps.some((st) => st.key === '__general__'))
+        setActiveTab('__general__')
+      return
+    }
+    const group = groups.find((g) => g.key === key)
+    if (!group) return
+    if (group.type === 'tab' && group.container_id != null) {
+      const container = groups.find((g) => g.id === group.container_id)
+      if (container) setContainerTab(container, key)
+    } else if (group.type === 'tab' && allSteps.some((st) => st.key === key)) {
+      if (activeTab !== key) setActiveTab(key)
+    } else if (
+      (group.type === 'section' || group.type === 'metadata') &&
+      !isStepsMode &&
+      allSteps.some((st) => st.key === '__general__') &&
+      activeTab !== '__general__'
+    ) {
+      setActiveTab('__general__')
+    }
+  }
+  const revealInDesignRef = useRef(revealInDesign)
+  revealInDesignRef.current = revealInDesign
+  const designReveal = designCtx?.reveal ?? null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one reveal per request (seq)
+  useEffect(() => {
+    if (designReveal) revealInDesignRef.current(revealGroupKey(designReveal.target))
+  }, [designReveal?.seq])
+  // Expand all (#2627): every step and tab laid out one under another.
+  const designStackAll = designOn && !!designCtx?.fold?.open
+
   // Rows for the 'Can't save yet' summary — form order, labelled, with the
   // step/tab/section the field lives on (steps layouts hide most fields).
   const validationSummaryItems = useMemo<ValidationSummaryItem[]>(() => {
@@ -8164,13 +8205,39 @@ function ItemEditFormView({
     )
   }
 
-  function renderContainer(c: FieldGroup) {
+  /** Expand all (layout editor): the name over each step or tab laid out in turn. */
+  function stackedPaneLabel(key: string, label: string) {
+    const selectable = key !== '__general__'
+    return (
+      <button
+        type='button'
+        data-design-pass=''
+        data-design-stacked={key}
+        disabled={!selectable}
+        onClick={() => selectable && designCtx?.onSelect({ kind: 'group', key })}
+        className='block px-1 text-left text-[12px] font-semibold text-slate-500 enabled:hover:text-slate-800 dark:text-muted-foreground dark:enabled:hover:text-foreground'
+      >
+        {label}
+      </button>
+    )
+  }
+
+  function renderContainer(c: FieldGroup, onlyKey?: string): ReactNode {
     const children = groups
       .filter((g) => g.type === 'tab' && g.container_id === c.id)
       .sort((a, b) => a.sort - b.sort)
     if (children.length === 0) return null
+    // Expand all (layout editor): the holder once per tab, each showing its own.
+    if (designStackAll && onlyKey === undefined)
+      return (
+        <div key={c.key} className='space-y-3'>
+          {children.map((ch) => (
+            <Fragment key={ch.key}>{renderContainer(c, ch.key)}</Fragment>
+          ))}
+        </div>
+      )
     const isSteps = c.tab_mode === 'steps'
-    const activeKey = getContainerTab(c, children)
+    const activeKey = onlyKey ?? getContainerTab(c, children)
     const activeChild = children.find((g) => g.key === activeKey) ?? children[0]
     const activeSwapCfg = (() => {
       try {
@@ -8234,7 +8301,13 @@ function ItemEditFormView({
 
     return (
       <div key={c.key} className='nvr-section-enter rounded-xl border border-slate-200 bg-white'>
-        {isSteps ? (
+        {/* Expand all: the strip once (its tabs are the selectable, draggable
+            ones), then each later tab under its name. */}
+        {onlyKey !== undefined && onlyKey !== children[0]?.key ? (
+          <div className='border-b border-slate-100 px-4 pt-3 pb-2'>
+            {stackedPaneLabel(onlyKey, activeChild?.label ?? onlyKey)}
+          </div>
+        ) : isSteps ? (
           <StepsBar
             steps={children.map((g) => ({ key: g.key, label: g.label }))}
             active={activeKey}
@@ -8981,7 +9054,14 @@ function ItemEditFormView({
             />
           )}
         </div>
-        {renderTabContent(activeTab)}
+        {designStackAll
+          ? tabStripItems.map((t) => (
+              <Fragment key={t.key}>
+                {stackedPaneLabel(t.key, t.label)}
+                {renderTabContent(t.key)}
+              </Fragment>
+            ))
+          : renderTabContent(activeTab)}
         {sectionOrder
           .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
           .map((item) => dwrap(slotTarget(item as string), renderSentinel(item as string)))}
@@ -9153,7 +9233,14 @@ function ItemEditFormView({
           }
           onStepClick={setActiveTab}
         />
-        {renderTabContent(activeTab, true)}
+        {designStackAll
+          ? allSteps.map((st) => (
+              <Fragment key={st.key}>
+                {stackedPaneLabel(st.key, st.label)}
+                {renderTabContent(st.key, true)}
+              </Fragment>
+            ))
+          : renderTabContent(activeTab, true)}
         {postTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
           return sectionShell(item as FieldGroup | string, key ?? i)

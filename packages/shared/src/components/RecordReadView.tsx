@@ -16,7 +16,11 @@ import type { CMSRelation } from './item-edit/types'
 import { UserChip } from './item-edit/UserChip'
 import { DesignNode } from './layout-editor/DesignNode'
 import { DesignCanvas } from './layout-editor/design-canvas'
-import type { DesignTarget, LayoutDesignProp } from './layout-editor/design-context'
+import {
+  type DesignTarget,
+  type LayoutDesignProp,
+  revealGroupKey
+} from './layout-editor/design-context'
 import { integrityByField, useRecordIntegrity } from './panels/RecordIntegrityBanner'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
@@ -1346,6 +1350,18 @@ function RecordReadViewBody({
       else next.add(key)
       return next
     })
+  // Layout editor: Expand all / Collapse all (#2627) and Find (#2620).
+  const fold = design?.context.fold ?? null
+  const reveal = design?.context.reveal ?? null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one fold per press (seq)
+  useEffect(() => {
+    if (fold) setOpenKeys(fold.open ? new Set(layoutData.groups.map((g) => g.key)) : new Set())
+  }, [fold?.seq])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one reveal per request (seq)
+  useEffect(() => {
+    const key = reveal ? revealGroupKey(reveal.target) : null
+    if (key) setOpenKeys((prev) => (prev.has(key) ? prev : new Set(prev).add(key)))
+  }, [reveal?.seq])
   const sectionGroups: LayoutGroup[] = []
   for (const g of groups) {
     if (g.type === 'container') {
