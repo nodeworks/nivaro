@@ -297,12 +297,12 @@ function BadgeEditor({
             key={c}
             type='button'
             aria-pressed={color === c && !!badge}
-            aria-label={c}
-            data-tip={c}
+            aria-label={colourName(c)}
+            data-tip={tag.trim() ? colourName(c) : 'Type the badge text first'}
             disabled={!tag.trim()}
             onClick={() => onChange({ tag, color: c }, false)}
             className={cn(
-              'h-5 w-5 rounded-full border transition-shadow disabled:opacity-40',
+              'h-5 w-5 rounded-full border transition-shadow disabled:cursor-not-allowed disabled:opacity-50',
               badgeClasses(c),
               color === c &&
                 !!badge &&
@@ -314,3 +314,5 @@ function BadgeEditor({
     </div>
   )
 }
+
+const colourName = (c: BadgeColor) => c.charAt(0).toUpperCase() + c.slice(1)

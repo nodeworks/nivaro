@@ -17,7 +17,7 @@ import { useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { useRelationOptions } from '../../hooks/useRelationOptions'
 import type { LayoutBundle } from '../../lib/layout-ops'
-import { cn } from '../../lib/utils'
+import { cn, titleCase } from '../../lib/utils'
 import { useOverflowTip } from '../TipLayer'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -476,7 +476,7 @@ export function EditorTopBar({
   const waiting = manual && unsaved > 0
   // History's "Piece" (#2716) names fields as the form does.
   const fieldLabel = useCallback(
-    (field: string) => fields.find((f) => f.field === field)?.label?.trim() || field,
+    (field: string) => fields.find((f) => f.field === field)?.label?.trim() || titleCase(field),
     [fields]
   )
   const nameRef = useOverflowTip<HTMLHeadingElement>(layoutName)

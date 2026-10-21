@@ -42,7 +42,7 @@ export const barCount =
   'inline-flex min-w-[18px] items-center justify-center rounded-full bg-nvr-cyan/15 px-1 text-[11px] font-semibold tabular-nums text-slate-800 dark:text-foreground'
 
 const rowCls =
-  'flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[12.5px] text-slate-700 outline-none transition-colors hover:bg-muted focus-visible:bg-muted disabled:pointer-events-none disabled:opacity-40 dark:text-foreground'
+  'flex min-h-8 w-full shrink-0 items-center gap-2 rounded-md px-2 py-1 text-left text-[12.5px] text-slate-700 outline-none transition-colors hover:bg-muted focus-visible:bg-muted disabled:pointer-events-none disabled:opacity-40 dark:text-foreground'
 
 interface Report {
   badge?: number

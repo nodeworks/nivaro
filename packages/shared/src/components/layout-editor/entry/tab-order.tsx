@@ -78,23 +78,30 @@ export function useTabOrderEditor(
         if (t.kind !== 'field' && t.kind !== 'header') return base?.(t) ?? null
         const n = position.get(t.field)
         return {
+          // Outlines, like the design shell's own: they sit outside the field (offset)
+          // instead of hugging its label, and a dashed one reads as "not yet".
           className: cn(
             'cursor-pointer',
             n
-              ? 'bg-nvr-cyan/10 ring-2 ring-nvr-cyan/60'
-              : 'opacity-70 ring-1 ring-dashed ring-slate-300 dark:ring-slate-600'
+              ? 'bg-nvr-cyan/[0.06] outline outline-2 outline-nvr-cyan'
+              : 'outline-dashed outline-1 outline-slate-300 dark:outline-slate-600'
           ),
           chip: (
+            // An empty dashed ring on a field not numbered yet: a "Click" word on every
+            // field shouted over the form and collided with its other tags.
             <span
               data-tab-order-chip={n ?? ''}
+              role='img'
+              data-tip={n ? 'Click to take it out' : 'Click to number it'}
+              aria-label={n ? `Tab stop ${n}` : 'Not in the tab order yet'}
               className={cn(
-                'inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold tabular-nums',
+                'inline-flex h-5 min-w-5 items-center justify-center rounded-full text-[11px] font-semibold tabular-nums',
                 n
-                  ? 'bg-nvr-cyan text-white'
-                  : 'border border-slate-300 bg-white text-slate-500 dark:border-slate-600 dark:bg-card dark:text-slate-300'
+                  ? 'bg-nvr-cyan px-1.5 text-white'
+                  : 'border border-dashed border-slate-400 bg-white dark:border-slate-500 dark:bg-card'
               )}
             >
-              {n ?? 'Click'}
+              {n ?? null}
             </span>
           )
         }
@@ -115,7 +122,7 @@ export function TabOrderBar({ editor }: { editor: TabOrderEditor }): ReactNode {
     <div
       role='status'
       data-tab-order-bar=''
-      className='sticky top-0 z-30 flex flex-wrap items-center gap-2 border-b border-nvr-cyan/40 bg-white px-4 py-2 text-[12.5px] text-slate-700 shadow-sm dark:bg-card dark:text-foreground'
+      className='sticky top-0 z-30 flex flex-wrap items-center gap-2 border-b border-nvr-cyan/40 bg-white px-4 py-2 text-[12.5px] text-slate-700 dark:bg-card dark:text-foreground'
     >
       <p className='m-0 min-w-0 flex-1'>
         <span className='font-medium'>Tab order.</span> Click fields in the order Tab should visit
