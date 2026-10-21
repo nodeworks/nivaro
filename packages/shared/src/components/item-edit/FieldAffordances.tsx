@@ -11,6 +11,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
+import type { TextContext } from '../../lib/placement-behaviour'
 import { cn, formatRelative } from '../../lib/utils'
 import type { CMSField, CMSRelation } from './types'
 
@@ -59,6 +60,8 @@ export interface FieldAffordances {
   fromAutofill?: boolean
   /** Glossary terms in help text get a dotted underline (#2711); false = the form turned it off. */
   glossaryHelp?: boolean
+  /** #2703: the record's pipeline state and the viewer's role, for label rules. */
+  placementText?: TextContext | null
 }
 
 export const FieldAffordancesContext = createContext<FieldAffordances | null>(null)

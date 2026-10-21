@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { markConfigRead } from '../services/config-live.js'
+import { displayFormulaOf, isDisplayFormulaField } from '../services/placement-behaviour.js'
 import { bustRollupContributorCache } from '../services/rollups.js'
 
 function parseJsonSafe(val: unknown): unknown {
@@ -395,6 +396,45 @@ export async function formatLayoutFieldRows(
   // Virtual fields (O2M/M2M alias with no nivaro_fields row) that are in assignments
   for (const [field, fieldAssignments] of assignmentsByField.entries()) {
     if (knownFields.has(field)) continue
+    // #2712: a display formula placement — a read-only value the browser
+    // computes from the form's fields; it has no column and is never stored.
+    if (isDisplayFormulaField(field)) {
+      for (const a of fieldAssignments) {
+        const ov = a.overrides ?? null
+        formatted.push({
+          field,
+          label: typeof ov?.label === 'string' ? ov.label : 'Formula',
+          note: typeof ov?.note === 'string' ? ov.note : null,
+          hidden: ov?.hidden === true,
+          readonly: true,
+          required: false,
+          interface: 'display-formula',
+          display: null,
+          display_options: null,
+          options: {
+            ...(a.col_span != null ? { col_span: a.col_span } : {}),
+            display_formula: displayFormulaOf(ov) ?? { expr: '', format: '', currency: null }
+          },
+          group_key: a.group_key,
+          sort: a.sort,
+          label_override: a.label_override,
+          is_visible: a.is_visible,
+          default_expanded: a.default_expanded,
+          show_row_revisions: false,
+          show_approval_chain: null,
+          lock_conditions: null,
+          allow_revision_restore: false,
+          widget_id: null,
+          input_bindings: null,
+          layout_assigned: true,
+          is_virtual: true as unknown,
+          dependency_config: null,
+          type: 'alias',
+          _overrides: ov
+        })
+      }
+      continue
+    }
     // Relation-path field ('order.customer.account_number'): read-only
     // display of a value reached through M2O hops. Rendered via the shared
     // form's relation-path handling; value resolved by /items/:col/:id/resolve-paths.

@@ -1,6 +1,7 @@
-import type { ComponentProps, ReactNode } from 'react'
+import { type ComponentProps, type ReactNode, useMemo } from 'react'
 import type { LayoutBundle, LayoutOp } from '../../lib/layout-ops'
 import { ItemEditForm } from '../ItemEditForm'
+import { PlacementTextContext } from '../item-edit/placement-behaviour'
 import type { ActiveLayoutData } from '../item-edit/types'
 import { RecordReadView } from '../RecordReadView'
 import { PdfCanvas } from './canvases/PdfCanvas'
@@ -45,6 +46,7 @@ export function EditorCanvas({
   layout,
   record,
   stateKey = null,
+  roleId = null,
   design,
   apply,
   whenIdle
@@ -55,12 +57,15 @@ export function EditorCanvas({
   record: Record<string, unknown> | null
   /** Preview as if the record were in this pipeline state (form only). */
   stateKey?: string | null
+  /** Preview as this role: labels and help that change by role follow it (#2703). */
+  roleId?: string | null
   design: LayoutDesign
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
   /** The draft's whenIdle: the PDF preview waits for the last save. */
   whenIdle?: () => Promise<void>
 }) {
   const renderer = canvasRenderer(String(bundle.layout.layout_type ?? 'grouped'))
+  const placementText = useMemo(() => ({ stateKey, roleId }), [stateKey, roleId])
   let body: ReactNode
   if (renderer === 'item-edit-form')
     body = (
@@ -86,7 +91,7 @@ export function EditorCanvas({
     )
   return (
     <div data-editor-canvas='' data-renderer={renderer} className='flex min-h-full flex-col'>
-      {body}
+      <PlacementTextContext.Provider value={placementText}>{body}</PlacementTextContext.Provider>
     </div>
   )
 }

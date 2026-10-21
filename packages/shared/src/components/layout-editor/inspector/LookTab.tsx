@@ -3,6 +3,7 @@ import { InlineDisplaySection } from '../editors/inline-display'
 import { foldPlan, rowUpdatePlan } from '../section-structure'
 import { AiFillSetting } from './AiFillSetting'
 import { showsDateMode, showsInputMask, showsNumbers } from './applies'
+import { CounterSetting, TextRulesSetting } from './BehaviourSettings'
 import { ColumnFit } from './ColumnFit'
 import { useFieldCtx } from './field-context'
 import { currentInterface, interfaceLabel, interfaceOptions } from './interfaces'
@@ -143,6 +144,7 @@ export function LookTab() {
           }
         />
       </Setting>
+      <TextRulesSetting />
       <Toggle
         k='field.hidden'
         label='Hidden'
@@ -343,6 +345,7 @@ export function LookTab() {
         </Setting>
       )}
 
+      <CounterSetting />
       {isText && !info.isPath && !info.computedType && <AiFillSetting />}
       <FieldTranslations />
     </div>

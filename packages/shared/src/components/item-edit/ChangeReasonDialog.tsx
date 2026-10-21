@@ -11,6 +11,8 @@ export interface ChangeReasonChallenge {
   allow_free_text: boolean
   /** Identity of the record being changed (config context_fields) — "Year 2026". */
   context?: Array<{ field: string; value: unknown }>
+  /** #2705: asked by the layout ("Are you sure?") rather than the collection. */
+  confirm?: boolean
 }
 
 /**
@@ -74,7 +76,7 @@ export function ChangeReasonDialog({
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2 text-[15px]'>
             <MessageSquareWarning className='h-4 w-4 text-amber-500' />
-            Reason for change
+            {challenge.confirm ? 'Are you sure?' : 'Reason for change'}
           </DialogTitle>
         </DialogHeader>
         {(challenge.context?.length ?? 0) > 0 && (
@@ -105,7 +107,9 @@ export function ChangeReasonDialog({
               </b>
             </>
           )}{' '}
-          — a short justification is required and will be recorded in the change history.
+          {challenge.confirm
+            ? '— this matters on a live record. Say why; the reason is kept with the change history.'
+            : '— a short justification is required and will be recorded in the change history.'}
         </p>
         {challenge.reasons.length > 0 && (
           <div className='flex flex-col gap-1.5' data-nvr-change-reasons>

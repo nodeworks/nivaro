@@ -480,6 +480,26 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "Roles in the top bar shows every section and tab against every role. Click a cell to make the section Can edit, Read-only or Hidden for that role (the section's Hidden for and Read-only for). Each cell is one change to save. Administrator roles are greyed: they always see and edit everything. Field permissions still apply inside a section."
     },
+    {
+      type: 'h3',
+      id: 'layout-editor-field-behaviour',
+      text: 'How a field behaves on live records'
+    },
+    {
+      type: 'p',
+      text: 'Settings on a field that change what people see and do on a saved record. All of them are per placement (this form only) and off until you set them.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Label and help by state or role (Look tab): different words in a workflow state or for a role, for example "Requested date" that reads "Delivered date" once Completed. Add a rule, pick the states or roles, and type the label and help text for that case; the first rule that matches wins. The record page, the read view and the PDF follow it, and Preview as a role or a state shows it on the canvas.',
+        'Recommended (Rules tab): between optional and required. The field gets an amber dot beside its label; saving lists the recommended fields still empty but never stops the save. The record header counts them on their own ("2 recommended to fill"), apart from the required-fields percentage. Required wins when both are on.',
+        'Confirm changes on saved records (Rules tab): changing the field on an existing record asks "Are you sure?" and a short reason before the save. The reason is stored with the change and shows in the record history. Tick states to ask only while the record is in them; with none ticked it asks in every state. New records are never asked. A transition button that would save the change asks first, then you start the move again.',
+        "Repeat last value (Rules tab): a Repeat last button beside the label fills in what this person entered for the field on their previous record of the collection, read from their own change history. It never offers another person's value, encrypted fields or system tables.",
+        'Counter and limit (Look tab, text fields): a counter under the input in characters or words. The limit starts at the database column size; past the limit the form will not save. Leave the limit empty to count without one.',
+        'Display formula (Add panel → Display formula): a read-only figure worked out on the page from fields already on the form, for example Remaining = {{budget}} - {{committed}}, shown as plain, whole, 0.00, money or a percent. It uses the same expression language as other client formulas, is never stored and creates no computed field. The inspector flags syntax errors, names that are not fields and fields that are not on this form (they read as empty there).'
+      ]
+    },
     { type: 'h3', id: 'layout-editor-problems', text: 'Problems' },
     {
       type: 'p',

@@ -12,6 +12,12 @@ import {
   type RowGroup
 } from '../lib/form-structure'
 import { useLiveRecord } from '../lib/live'
+import {
+  displayFormulaOf,
+  formatDisplayValue,
+  isDisplayFormulaField,
+  resolvePlacementText
+} from '../lib/placement-behaviour'
 import { useRecordReader } from '../lib/record-loader'
 import { sanitizeHtml } from '../lib/sanitize-html'
 import { formatRelative, titleCase } from '../lib/utils'
@@ -19,6 +25,7 @@ import { InboundRequestPopover } from './integrations/InboundRequest'
 import { FileM2MField } from './item-edit/FilePickerField'
 import { useFieldTouches } from './item-edit/HeaderFreshness'
 import { richTextToPlain } from './item-edit/helpers'
+import { evaluateDisplayFormula, usePlacementTextContext } from './item-edit/placement-behaviour'
 import type { CMSRelation } from './item-edit/types'
 import { UserChip } from './item-edit/UserChip'
 import { DesignNode } from './layout-editor/DesignNode'
@@ -989,6 +996,8 @@ function RecordReadViewBody({
   gridCounts?: Record<string, number>
 }) {
   const client = useNivaroClient()
+  // #2703: labels that change with the record's state or the reader's role.
+  const placementText = usePlacementTextContext()
   // Design mode: the passed draft layout and preview record replace the
   // fetched ones; "show everything" keeps hidden and empty placements on the
   // canvas so they can still be selected.
@@ -1006,7 +1015,7 @@ function RecordReadViewBody({
     [design, layoutDataProp]
   )
   const fieldTarget = (a: LayoutAssignment): DesignTarget => ({
-    kind: 'field',
+    kind: isDisplayFormulaField(a.field) ? 'slot' : 'field',
     field: a.field,
     group_key: a.group_key ?? null
   })
@@ -1196,7 +1205,9 @@ function RecordReadViewBody({
       !fieldByName.get(a.field)?.hidden
     )
   const visible = layoutData.assignments.filter(
-    (a) => !a.field.startsWith('__') && (showAll || !isHiddenAssignment(a))
+    (a) =>
+      (!a.field.startsWith('__') || isDisplayFormulaField(a.field)) &&
+      (showAll || !isHiddenAssignment(a))
   )
   // Widget slots (statistics / query tables) render in read views too — the
   // slot itself is read-only by nature, and a drill-down without its numbers
@@ -1223,6 +1234,7 @@ function RecordReadViewBody({
             (a) =>
               a.field.startsWith('__') &&
               !a.field.startsWith('__widget_') &&
+              !isDisplayFormulaField(a.field) &&
               (showAll || a.is_visible === undefined || !!a.is_visible)
           )
           .sort((a, b) => a.sort - b.sort)
@@ -1394,6 +1406,16 @@ function RecordReadViewBody({
   const renderValue = (a: LayoutAssignment) => {
     const f = fieldByName.get(a.field)
     const ov = parseOverrides(a.overrides)
+    // #2712: computed here from the record's values; never stored.
+    if (isDisplayFormulaField(a.field)) {
+      const df = displayFormulaOf(ov)
+      const r = evaluateDisplayFormula(df?.expr ?? '', record ?? {})
+      return (
+        <span data-display-formula={a.field} className='tabular-nums'>
+          {r.error ? '—' : formatDisplayValue(r.value, df ?? { format: '', currency: null })}
+        </span>
+      )
+    }
     const m2m = aliasChild(a.field)
     // Design canvas without a preview record: no parent to read links for.
     if (design && !itemId && m2m?.junction_field) return <Empty />
@@ -1511,6 +1533,10 @@ function RecordReadViewBody({
   // The form's label order: layout override → column override → field label.
   const labelFor = (a: LayoutAssignment) => {
     const ovLabel = parseOverrides(a.overrides).label
+    const ruled = placementText ? resolvePlacementText(a.overrides, placementText).label : undefined
+    if (ruled !== undefined) return ruled
+    if (isDisplayFormulaField(a.field))
+      return typeof ovLabel === 'string' && ovLabel.trim() ? ovLabel : 'Formula'
     if (typeof ovLabel === 'string' && ovLabel.trim()) return ovLabel
     // Alias fields carry an EMPTY label, not null — `||` so they still get a name.
     return a.label_override || fieldByName.get(a.field)?.label || titleCase(a.field)
