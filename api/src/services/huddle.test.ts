@@ -26,7 +26,9 @@ import {
   huddleRoomKind,
   huddleSession,
   registerHuddle,
-  STALE_MS
+  STALE_MS,
+  setHuddleStaleEvictor,
+  staleEvictorFor
 } from './huddle.js'
 
 /** An in-memory ioredis slice: sorted sets, hashes, strings. */
@@ -445,6 +447,57 @@ describe('large huddles (#2859): the mode switch', () => {
     const before = evicted.length
     await a.fire('huddle:leave', { room: 'ch:ops' })
     expect(evicted.length).toBe(before)
+  })
+
+  it('a REST-path roster read (no socket handler involved) evicts the stale browsers it prunes', async () => {
+    const redis = fakeRedis()
+    const evicted: Array<{ session: string; identity: string | null }> = []
+    const warned: string[] = []
+    const { d } = deps(redis, {
+      sfuEvict: async ({ session, identity }) => {
+        if (identity === 'U-BAD#S4') throw new Error('boom')
+        evicted.push({ session, identity })
+      },
+      warn: (_o, msg) => {
+        warned.push(msg)
+      }
+    })
+    setHuddleStaleEvictor(staleEvictorFor(d))
+    // An SFU huddle whose session is known, with one live and two stale browsers.
+    await redis.set('nvr:huddle:-:ch:ops:mode', 'sfu', 'EX', 1)
+    await redis.set('nvr:huddle:-:ch:ops:s', 'sessX', 'EX', 1)
+    const now = Date.now()
+    await redis.zadd('nvr:huddle:-:ch:ops', now, 'S1')
+    await redis.zadd('nvr:huddle:-:ch:ops', now - STALE_MS - 1, 'S3')
+    await redis.zadd('nvr:huddle:-:ch:ops', now - STALE_MS - 1, 'S4')
+    for (const [sock, user] of [
+      ['S1', 'U-ROB'],
+      ['S3', 'U-GONE'],
+      ['S4', 'U-BAD']
+    ]) {
+      await redis.hset('nvr:huddle:-:ch:ops:m', sock, JSON.stringify({ user, name: user }))
+    }
+    // The same call GET /chat/huddle/presence and the token route make.
+    const peers = await huddlePeers(redis, null, 'ch:ops', now)
+    expect(peers.map((p) => p.socket)).toEqual(['S1'])
+    await new Promise((r) => setImmediate(r))
+    expect(evicted).toEqual([{ session: 'sessX', identity: 'U-GONE#S3' }])
+    expect(warned).toEqual(['huddle: SFU eviction failed'])
+
+    // A mesh huddle tells no SFU; without an installed evictor the prune is just a prune.
+    await redis.set('nvr:huddle:-:ch:ops:mode', 'mesh', 'EX', 1)
+    await redis.zadd('nvr:huddle:-:ch:ops', now - STALE_MS - 1, 'S5')
+    await redis.hset('nvr:huddle:-:ch:ops:m', 'S5', JSON.stringify({ user: 'U-5', name: '5' }))
+    await huddlePeers(redis, null, 'ch:ops', now)
+    await new Promise((r) => setImmediate(r))
+    expect(evicted).toHaveLength(1)
+    setHuddleStaleEvictor(null)
+    await redis.set('nvr:huddle:-:ch:ops:mode', 'sfu', 'EX', 1)
+    await redis.zadd('nvr:huddle:-:ch:ops', now - STALE_MS - 1, 'S6')
+    await redis.hset('nvr:huddle:-:ch:ops:m', 'S6', JSON.stringify({ user: 'U-6', name: '6' }))
+    expect((await huddlePeers(redis, null, 'ch:ops', now)).map((p) => p.socket)).toEqual(['S1'])
+    await new Promise((r) => setImmediate(r))
+    expect(evicted).toHaveLength(1)
   })
 
   it('an eviction that fails is logged, never thrown into the socket handler', async () => {

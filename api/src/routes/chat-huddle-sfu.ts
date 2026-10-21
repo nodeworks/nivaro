@@ -2,11 +2,14 @@ import type { FastifyInstance } from 'fastify'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { canSeeRoom } from '../services/chat.js'
 import {
+  defaultHuddleDeps,
   type HuddleRedis,
   huddleMode,
   huddlePeers,
   huddleRoomKind,
-  huddleSession
+  huddleSession,
+  setHuddleStaleEvictor,
+  staleEvictorFor
 } from '../services/huddle.js'
 import { getHuddleSettings, sfuConfigured } from '../services/huddle-settings.js'
 import { mintJoinToken, probeLiveKit, sfuTokenDecision } from '../services/huddle-sfu.js'
@@ -29,6 +32,9 @@ import { currentTenantKey } from '../services/tenant-rooms.js'
  */
 export async function chatHuddleSfuRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
+  // A REST roster read (presence, this token route) prunes stale browsers too: install the
+  // evictor here so a process that has served no socket yet still tells the SFU.
+  setHuddleStaleEvictor(staleEvictorFor(defaultHuddleDeps(app)))
 
   app.get('/sfu-token', async (req, reply) => {
     const q = req.query as { room?: string; socket?: string }

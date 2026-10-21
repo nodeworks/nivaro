@@ -91,14 +91,52 @@ function nameOf(u: User): string | null {
   return [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || u.email || null
 }
 
-/** Everyone in the room's huddle right now (stale entries pruned as a side effect;
- *  `onStale` hears who fell out, so the SFU can be told too). */
+type StaleEvictor = (
+  tenant: string | null,
+  room: string,
+  stale: Array<{ socket: string; user: string }>
+) => void
+
+/** Whoever prunes a stale browser also drops it from the SFU (#2859): one evictor for every
+ *  caller of huddlePeers (socket handlers, REST presence, token route), installed by
+ *  registerHuddle and the SFU routes; null = mesh-only, nothing to tell. */
+let staleEvictor: StaleEvictor | null = null
+
+export function setHuddleStaleEvictor(fn: StaleEvictor | null): void {
+  staleEvictor = fn
+}
+
+/** The evictor built from a deps set: on an SFU huddle, each stale browser's identity is
+ *  removed from the LiveKit room; fire-and-forget, failures only warn. */
+export function staleEvictorFor(
+  deps: Pick<HuddleDeps, 'redis' | 'sfuEvict' | 'warn'>
+): StaleEvictor {
+  return (tenant, room, stale) => {
+    if (!deps.sfuEvict) return
+    void (async () => {
+      if ((await huddleMode(deps.redis, tenant, room)) !== 'sfu') return
+      const session = await huddleSession(deps.redis, tenant, room)
+      if (!session) return
+      for (const s of stale) {
+        if (!s.user) continue
+        const identity = sfuIdentity(s.user, s.socket)
+        try {
+          await deps.sfuEvict?.({ tenant, room, session, identity })
+        } catch (err) {
+          deps.warn({ err, room, identity }, 'huddle: SFU eviction failed')
+        }
+      }
+    })().catch((err) => deps.warn({ err, room }, 'huddle: SFU eviction failed'))
+  }
+}
+
+/** Everyone in the room's huddle right now (stale entries pruned as a side effect, and on an
+ *  SFU huddle evicted from LiveKit through the installed stale evictor). */
 export async function huddlePeers(
   redis: HuddleRedis,
   tenant: string | null,
   room: string,
-  now = Date.now(),
-  onStale?: (stale: Array<{ socket: string; user: string }>) => void
+  now = Date.now()
 ): Promise<HuddlePeer[]> {
   const k = keys(tenant, room)
   await redis.zremrangebyscore(k.set, '-inf', now - STALE_MS)
@@ -137,7 +175,7 @@ export async function huddlePeers(
       stale.push({ socket, user: '' })
     }
   }
-  if (stale.length && onStale) onStale(stale)
+  if (stale.length) staleEvictor?.(tenant, room, stale)
   return out
 }
 
@@ -270,17 +308,9 @@ export function registerHuddle(
     }
   }
 
-  /** The roster, with every stale browser also evicted from the SFU (#2859). */
-  async function peersOf(room: string) {
-    const tenant = scope.tenantNow()
-    return huddlePeers(deps.redis, tenant, room, Date.now(), (stale) => {
-      void (async () => {
-        if ((await huddleMode(deps.redis, tenant, room)) !== 'sfu') return
-        const session = await huddleSession(deps.redis, tenant, room)
-        for (const s of stale) await evict(room, session, sfuIdentity(s.user, s.socket))
-      })()
-    })
-  }
+  // Every roster read on this process now evicts the stale browsers it prunes (#2859).
+  setHuddleStaleEvictor(staleEvictorFor(deps))
+  const peersOf = (room: string) => huddlePeers(deps.redis, scope.tenantNow(), room)
 
   /** Nobody left: close the SFU room, forget the keys, say how long it ran. */
   async function endHuddle(room: string) {
