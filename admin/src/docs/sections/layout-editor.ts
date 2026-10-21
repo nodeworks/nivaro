@@ -211,6 +211,27 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'These checks are counted, never guessed. The AI review in Form settings → Tools also reads labels and help text.'
     },
+    { type: 'h3', id: 'layout-editor-commands', text: 'Commands (⌘K)' },
+    {
+      type: 'p',
+      text: 'Commands in the top bar (⌘K or Ctrl+K) takes a change in plain words. Enter shows every change it will make, in sentences; nothing is saved until Apply, and one Apply is one undo step. Names match by label or key, in any case, with partial words and small typos; a name that fits two things asks you to be more specific.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'move Shipping Location to Materials · move Notes after Zone · move section Details after Extras · move Notes to ungrouped',
+        'make Zone required · make Notes optional · make Zone read-only / editable · hide Notes · show Notes',
+        'rename Notes to "Comments" · rename section Details to Basics',
+        'set width Zone 6 · set Zone width to half · make Zone a third',
+        'add Region to Location (a field not on the form yet) · add step Review after Details · add section Extras',
+        'remove Notes (the data is kept) · collapse Extras · expand Extras',
+        'Several commands in one go: separate them with ";" — they apply as one change.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Required is set per form, not per role: "make Zone required for Finance" makes it required on this form and says so when the form is not limited to Finance (give Finance its own form to require it only there). Text the palette cannot read can go to the AI (admins, when AI is set up): it answers in the same commands, shown in the same preview before anything changes. Without AI the typed commands still work.'
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',

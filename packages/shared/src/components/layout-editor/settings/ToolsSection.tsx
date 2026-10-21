@@ -1,14 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { ExternalLink } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { applyLayoutOps, type LayoutBundle } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
 import { HistoryPanel } from '../HistoryPanel'
-import { useLayoutEditorHost } from '../host'
+import { type LayoutReviewContext, useLayoutEditorHost } from '../host'
 import { useRoleNames } from '../overview/overview-api'
 import { labelText, tintCard } from '../panel-style'
 import { RelationPicker } from '../pickers/relation-picker'
+import { humanizeOpError } from '../useLayoutDraft'
 import { PickList, quietText, Setting, smallBtn, useSettingVisible } from './controls'
 import type { SectionProps } from './section-props'
 import { type RolePreview, useRolePreview } from './settings-api'
@@ -29,7 +31,7 @@ export function ToolsSection(props: ToolsSectionProps) {
       <PreviewRecordSetting {...props} />
       <PreviewRoleSetting {...props} />
       <SlotSetting k='tool.describe' layoutId={id} />
-      <SlotSetting k='tool.ai_review' layoutId={id} />
+      <SlotSetting k='tool.ai_review' layoutId={id} bundle={props.bundle} apply={props.apply} />
       <HistorySetting layoutId={id} />
       <DriftSetting layoutId={id} />
     </>
@@ -152,11 +154,39 @@ function PreviewRoleSetting({
 }
 
 /** Admin-only tools the host supplies (AI review, describe); a quiet note when it does not. */
-function SlotSetting({ k, layoutId }: { k: 'tool.describe' | 'tool.ai_review'; layoutId: number }) {
+function SlotSetting({
+  k,
+  layoutId,
+  bundle,
+  apply
+}: {
+  k: 'tool.describe' | 'tool.ai_review'
+  layoutId: number
+  bundle?: LayoutBundle
+  apply?: SectionProps['apply']
+}) {
   const host = useLayoutEditorHost()
+  const ctx = useMemo<LayoutReviewContext | undefined>(
+    () =>
+      bundle && apply
+        ? {
+            bundle,
+            apply,
+            check: (ops) => {
+              try {
+                applyLayoutOps(bundle, ops)
+                return null
+              } catch (e) {
+                return humanizeOpError(e instanceof Error ? e.message : String(e))
+              }
+            }
+          }
+        : undefined,
+    [bundle, apply]
+  )
   const node =
     k === 'tool.ai_review'
-      ? host.aiReviewSlot?.(layoutId)
+      ? host.aiReviewSlot?.(layoutId, ctx)
       : host.explainSlot?.({
           kind: 'config',
           type: 'layout',

@@ -23,6 +23,7 @@ export { HistoryPanel } from './HistoryPanel'
 export {
   type LayoutEditorHost,
   LayoutEditorHostContext,
+  type LayoutReviewContext,
   useLayoutEditorHost
 } from './host'
 export { Inspector, type InspectorProps } from './inspector/Inspector'

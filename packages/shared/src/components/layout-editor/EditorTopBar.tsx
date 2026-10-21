@@ -6,6 +6,7 @@ import { useRelationOptions } from '../../hooks/useRelationOptions'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { CommandPalette } from './commands/CommandPalette'
 import { HistoryPanel } from './HistoryPanel'
 import type { DescribeField } from './overview/describe-conditions'
 import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overview/overview-api'
@@ -289,7 +290,16 @@ export function EditorTopBar({
   fields: DescribeField[]
   draft: Pick<
     LayoutDraft,
-    'status' | 'error' | 'undo' | 'redo' | 'canUndo' | 'canRedo' | 'undoLabel' | 'redoLabel'
+    | 'status'
+    | 'error'
+    | 'undo'
+    | 'redo'
+    | 'canUndo'
+    | 'canRedo'
+    | 'undoLabel'
+    | 'redoLabel'
+    | 'bundle'
+    | 'apply'
   > &
     Partial<Pick<LayoutDraft, 'autosave' | 'setAutosave' | 'unsavedCount' | 'save' | 'discard'>>
   preview: PreviewAs
@@ -342,6 +352,7 @@ export function EditorTopBar({
           </span>
         )}
       </div>
+      <CommandPalette collection={collection} layoutId={layoutId} draft={draft} />
       <div className='flex items-center gap-0.5'>
         <button
           type='button'

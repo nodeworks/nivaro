@@ -10,12 +10,24 @@ import {
   helpTextCandidates
 } from '../services/ai-design/help-text.js'
 import {
+  buildCommandPrompt,
+  COMMAND_SYSTEM,
+  type CommandContext,
+  parseCommandAnswer
+} from '../services/ai-design/layout-command.js'
+import {
   executeLayoutFix,
   loadLayoutModel,
   planLayoutFix,
   reviewLayout
 } from '../services/ai-design/layout-review.js'
-import { AiUnavailableError, cleanText, defaultComplete } from '../services/ai-design/model.js'
+import { attachSplitChangeSets, splitCandidates } from '../services/ai-design/layout-split.js'
+import {
+  AiUnavailableError,
+  cleanText,
+  defaultComplete,
+  titleCase
+} from '../services/ai-design/model.js'
 import {
   applyRoleProposal,
   countReadImpact,
@@ -27,6 +39,7 @@ import {
 } from '../services/ai-design/role-design.js'
 import { DEFAULT_DAYS, suggestRoleViews } from '../services/ai-design/role-views.js'
 import { clearMetadataCache } from '../services/collections.js'
+import { loadLayoutBundle } from '../services/layout-ops.js'
 
 /**
  * AI design helpers (#1920 #1964 #1912 #2010 #1965) — admin only.
@@ -64,9 +77,23 @@ export async function aiDesignRoutes(app: FastifyInstance) {
       const model = await loadLayoutModel(id)
       if (!model) return reply.code(404).send({ error: 'Layout not found' })
       const complete = await defaultComplete()
-      const result = await reviewLayout(model, req.body?.ai === false ? null : complete)
+      // Crowded steps / sections also get a split change set (#2587), built on the
+      // bundle the editor edits; the model, when asked, names and groups the parts.
+      const bundle = await loadLayoutBundle(db, id)
+      const { splits, ...result } = await reviewLayout(
+        model,
+        req.body?.ai === false ? null : complete,
+        (findings) => splitCandidates(findings, bundle)
+      )
+      const labels = new Map(model.fields.map((f) => [f.field, f.label]))
+      const findings = attachSplitChangeSets(
+        result.findings,
+        bundle,
+        (f) => labels.get(f) ?? f,
+        splits
+      )
       return reply.send({
-        data: { layout: model.layout, ...result, ai_configured: !!complete }
+        data: { layout: model.layout, ...result, findings, ai_configured: !!complete }
       })
     }
   )
@@ -90,6 +117,56 @@ export async function aiDesignRoutes(app: FastifyInstance) {
         req
       })
       return reply.send({ data: { applied: plan.description, undo_version_id } })
+    }
+  )
+
+  // ── Command palette, AI half (#2586) ───────────────────────────────────────
+  // Read-only: answers intents the editor previews and applies through its draft.
+
+  app.post<{ Params: { id: string }; Body: { text?: string } }>(
+    '/layouts/:id/command',
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Invalid layout id' })
+      const text = cleanText(req.body?.text, 500)
+      if (!text) return reply.code(400).send({ error: 'Type a command' })
+      const bundle = await loadLayoutBundle(db, id)
+      if (!bundle) return reply.code(404).send({ error: 'Layout not found' })
+      const complete = await defaultComplete()
+      if (!complete) return reply.code(503).send({ error: new AiUnavailableError().message })
+      const [fieldRows, roleRows] = await Promise.all([
+        db('nivaro_fields')
+          .where({ collection: bundle.layout.collection })
+          .select('field', 'label') as Promise<Array<{ field: string; label: string | null }>>,
+        db('nivaro_roles').select('id', 'name') as Promise<Array<{ id: string; name: string }>>
+      ])
+      const ctx: CommandContext = {
+        bundle,
+        fields: new Map(
+          fieldRows.map((f) => [
+            String(f.field),
+            cleanText(f.label, 80) ?? titleCase(String(f.field))
+          ])
+        ),
+        roles: roleRows.map((r) => ({ id: String(r.id), name: String(r.name) }))
+      }
+      let answer: string
+      try {
+        answer = await complete({
+          system: COMMAND_SYSTEM,
+          user: buildCommandPrompt(ctx, text),
+          maxTokens: 1500
+        })
+      } catch (err) {
+        return reply.code(502).send({
+          error: `The AI could not read the command: ${(err as Error).message}`.slice(0, 400)
+        })
+      }
+      const parsed = parseCommandAnswer(answer, ctx)
+      if (parsed.error) return reply.code(422).send({ error: parsed.error })
+      return reply.send({
+        data: { intents: parsed.intents, explanation: parsed.explanation, dropped: parsed.dropped }
+      })
     }
   )
 

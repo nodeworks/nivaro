@@ -53,7 +53,9 @@ export function AdminLayoutEditorHost({
     () => ({
       isAdmin,
       navigate: (to) => navigate(to),
-      aiReviewSlot: isAdmin ? (layoutId) => <LayoutReviewSection layoutId={layoutId} /> : undefined,
+      aiReviewSlot: isAdmin
+        ? (layoutId, ctx) => <LayoutReviewSection layoutId={layoutId} ctx={ctx} />
+        : undefined,
       explainSlot: isAdmin ? explain : undefined,
       warning,
       recordLink: (col, id) =>
