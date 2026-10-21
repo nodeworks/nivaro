@@ -106,8 +106,9 @@ export function SocketHealthTab() {
           ? 'One API server reporting.'
           : `${data.replicas} API servers reporting, merged.`}{' '}
         A client is held back once more than {formatBytes(data.limits.soft)} is waiting to reach it,
-        and disconnected past {formatBytes(data.limits.hard)} (SOCKET_BUFFER_SOFT_BYTES /
-        SOCKET_BUFFER_HARD_BYTES).
+        and disconnected past {formatBytes(data.limits.hard)} (
+        <span className='font-mono text-[11.5px]'>SOCKET_BUFFER_SOFT_BYTES</span> /{' '}
+        <span className='font-mono text-[11.5px]'>SOCKET_BUFFER_HARD_BYTES</span>).
       </p>
 
       <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-3 lg:grid-cols-6 dark:border-border dark:bg-border'>

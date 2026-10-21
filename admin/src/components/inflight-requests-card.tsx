@@ -105,7 +105,10 @@ export function InflightRequestsCard() {
                     >
                       {age(r.age_ms)}
                     </span>
-                    <span className='min-w-0 flex-1 truncate font-mono text-[11px]' title={r.route}>
+                    <span
+                      className='min-w-0 flex-1 truncate font-mono text-[11px]'
+                      data-tip={r.route}
+                    >
                       {r.method} {r.route}
                     </span>
                     <span className='max-w-[30%] shrink-0 truncate text-slate-500 dark:text-muted-foreground'>
@@ -120,7 +123,7 @@ export function InflightRequestsCard() {
                           ? ` · waiting on ${r.wait.wait_type} ${age(r.wait.wait_ms)}${r.wait.blocked_by ? `, blocked by session ${r.wait.blocked_by}` : ''}`
                           : ''}
                         {' · '}
-                        <span className='font-mono text-[11px]' title={sql.sql}>
+                        <span className='font-mono text-[11px]' data-tip={sql.sql}>
                           {sql.sql}
                         </span>
                       </>

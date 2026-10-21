@@ -8826,9 +8826,14 @@ export function CollectionBrowserView({
                 </span>{' '}
                 of{' '}
                 {totalApprox && (
-                  <span data-tip='Counted a few seconds ago. The rows on screen are current.'>
-                    about{' '}
-                  </span>
+                  <>
+                    <span
+                      className='cursor-help underline decoration-dotted underline-offset-2'
+                      data-tip='Counted a few seconds ago. The rows on screen are current.'
+                    >
+                      about
+                    </span>{' '}
+                  </>
                 )}
                 <span key={total} className='nvr-value-pulse-bg rounded-sm'>
                   {fmtNum(total)}
