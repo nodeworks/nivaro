@@ -692,6 +692,15 @@ export const layoutEditor: DocSection = {
       type: 'note',
       text: 'Usage is kept per form per day (nivaro_layout_usage_daily, nivaro_layout_usage_seen) and deleted after 180 days by the nightly layout-usage-prune job. Only counts are stored; people and records are counted, never listed.'
     },
+    { type: 'h3', id: 'layout-editor-picker-misses', text: 'Searches that found nothing' },
+    {
+      type: 'p',
+      text: 'When someone searches a relation picker on a record form and finds nothing, the form sends the words they typed when the picker closes. The server counts them per form and field for 14 days (in Redis); it never stores who typed them or on which record. Design mode sends nothing.'
+    },
+    {
+      type: 'p',
+      text: "Select the field in the editor and open its Picker tab: Searches that found nothing lists the top ten, how many times each was typed, and a suggested fix for the top five — the field's option filter leaves matching records out (loosen it), the picker filter or hidden records leave them out, or nothing matches at all (add the record, or turn on Quick create). Clear list empties it for that field."
+    },
 
     { type: 'h2', id: 'layout-editor-ops', text: 'Suggestions, dependencies and environments' },
     { type: 'h3', id: 'layout-editor-suggestions', text: 'Suggested changes from people' },

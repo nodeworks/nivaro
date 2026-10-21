@@ -23,6 +23,7 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { type CatalogModeConfig, CatalogPickerField } from './CatalogPickerField'
+import { useFieldAffordances } from './FieldAffordances'
 import {
   AddressAutocompleteField,
   ChecklistReadOnly,
@@ -153,6 +154,8 @@ export function FieldRenderer({
   pinnedOption?: { id: unknown; tag?: string } | null
 }) {
   const drill = useDrilldown()
+  // #2726: a record-form picker counts searches that find nothing on its placement.
+  const affordances = useFieldAffordances()
   const parentDraftForFilters = useParentDraft()
   const relationPathData = useContext(RelationPathDataContext)
   const parentDraftCtx = parentDraftForFilters
@@ -266,6 +269,11 @@ export function FieldRenderer({
     const combobox = (
       <RelationCombobox
         fieldKey={field.field}
+        missPlacement={
+          affordances?.layoutId != null && affordances.pickerMisses !== false
+            ? { layoutId: Number(affordances.layoutId), collection, field: field.field }
+            : null
+        }
         collection={m2oRel.one_collection}
         value={value}
         onChange={onChange}

@@ -169,7 +169,7 @@ export async function fetchLayoutsForCollection(collection: string) {
 // Used to restrict the item-record select to exactly what selection needs —
 // the record fetch (against a caller-supplied collection name) must never be
 // able to read a column no layout rule references.
-function collectRecordConditionFields(layouts: Record<string, unknown>[]): string[] {
+export function collectRecordConditionFields(layouts: Record<string, unknown>[]): string[] {
   const fields = new Set<string>()
   for (const row of layouts) {
     const rules = parseRecordConditions(row.record_conditions)
