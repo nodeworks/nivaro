@@ -1,4 +1,3 @@
-import { AlertTriangle } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn, formatDate, formatFileSize } from '@/lib/utils'
 import {
@@ -15,6 +14,7 @@ import {
   TH,
   useInfraHosts
 } from './swarm-ui'
+import { Banner, Note } from './ui'
 
 /** #2838 — GET /api/infrastructure/swarm, one host. */
 interface SwarmNode {
@@ -72,7 +72,21 @@ export function SwarmTab() {
     refetchInterval: 60_000
   })
   return (
-    <InfraHostsView<HostSwarm> query={query}>
+    <InfraHostsView<HostSwarm>
+      query={query}
+      aside={(d) =>
+        d?.state === 'active' && (
+          <>
+            <span>{d.manager ? 'Manager' : 'Worker'}</span>
+            {d.counts.reachable_managers != null && d.counts.managers != null && (
+              <Chip tone={d.counts.reachable_managers < d.counts.managers ? 'bad' : 'ok'} icon>
+                {d.counts.reachable_managers} of {d.counts.managers} managers reachable
+              </Chip>
+            )}
+          </>
+        )
+      }
+    >
       {(data) => <HostSwarmView data={data} />}
     </InfraHostsView>
   )
@@ -124,12 +138,8 @@ function HostSwarmView({ data }: { data: HostSwarm }) {
       {data.warnings.length > 0 && (
         <ul className='space-y-1.5'>
           {data.warnings.map((w) => (
-            <li
-              key={w}
-              className='flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
-            >
-              <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' />
-              {w}
+            <li key={w}>
+              <Banner tone='warn'>{w}</Banner>
             </li>
           ))}
         </ul>
@@ -201,10 +211,10 @@ function HostSwarmView({ data }: { data: HostSwarm }) {
         ]}
       />
       {!c && data.manager && (
-        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+        <Note>
           Cluster settings are not in this host's system info (older engine, or the info section is
           off on the proxy).
-        </p>
+        </Note>
       )}
       {data.manager ? (
         <div className={PANEL}>
@@ -282,9 +292,7 @@ function HostSwarmView({ data }: { data: HostSwarm }) {
           </table>
         </div>
       ) : (
-        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-          The node list is read from a manager; this host is a worker.
-        </p>
+        <Note>The node list is read from a manager; this host is a worker.</Note>
       )}
     </div>
   )

@@ -128,10 +128,7 @@ function HostSecretsView({ data, q, issues }: { data: HostSecrets; q: string; is
                     return (
                       <tr
                         key={v.id}
-                        className={cn(
-                          'hover:bg-slate-50 dark:hover:bg-muted/40',
-                          i > 0 && 'text-slate-600 dark:text-muted-foreground'
-                        )}
+                        className={cn(i > 0 && 'text-slate-600 dark:text-muted-foreground')}
                       >
                         <td className={cn(TD, i > 0 && 'pl-7')}>
                           <span className='font-mono'>{v.name}</span>
@@ -196,7 +193,7 @@ function HostSecretsView({ data, q, issues }: { data: HostSecrets; q: string; is
           </table>
         </div>
       )}
-      <p className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+      <p className='max-w-prose text-[12px] leading-5 text-slate-500 dark:text-muted-foreground'>
         Names and dates only. Docker never returns secret values. Configs are never read at all
         (their contents can hold credentials): they are listed by the names services reference, so a
         config no service uses does not appear.

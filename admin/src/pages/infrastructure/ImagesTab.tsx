@@ -1,5 +1,6 @@
 import { formatFileSize, formatRelative } from '@/lib/utils'
 import { DataTable, Empty, InventoryTab, Pill, Stat, StatStrip, Td, Th } from './inventory-ui'
+import { Dash, Note, PANEL, PANEL_TITLE, useShowMore } from './ui'
 
 interface Item {
   name: string
@@ -33,31 +34,87 @@ interface Inv {
 const tone = { 'in-use': 'green', unused: 'amber', dangling: 'slate' } as const
 
 function PruneList({ title, items, note }: { title: string; items: Item[]; note?: string }) {
+  const { visible, more } = useShowMore(items, 5)
   return (
-    <div className='py-2'>
-      <div className='text-[12px] font-medium'>
-        {title} <span className='text-slate-500 dark:text-muted-foreground'>({items.length})</span>
+    <div className='px-4 py-2.5'>
+      <div className='text-[12px] font-medium text-slate-900 dark:text-foreground'>
+        {title}{' '}
+        <span className='font-normal tabular-nums text-slate-500 dark:text-muted-foreground'>
+          ({items.length})
+        </span>
       </div>
-      {note && <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>{note}</p>}
+      {note && <Note>{note}</Note>}
       {items.length > 0 && (
-        <ul className='mt-1 space-y-0.5 text-[12px]'>
-          {items.slice(0, 25).map((i) => (
-            <li key={`${i.name}:${i.detail}`} className='flex gap-2'>
-              <span className='truncate font-medium'>{i.name}</span>
-              <span className='truncate text-slate-500 dark:text-muted-foreground'>{i.detail}</span>
+        <ul className='mt-1.5 space-y-0.5 text-[12px]'>
+          {visible.map((i) => (
+            <li key={`${i.name}:${i.detail}`} className='flex min-w-0 items-baseline gap-2'>
+              <span className='truncate font-mono text-slate-800 dark:text-foreground'>
+                {i.name}
+              </span>
+              <span className='shrink-0 text-slate-500 dark:text-muted-foreground'>{i.detail}</span>
               {i.bytes != null && (
-                <span className='ml-auto tabular-nums'>{formatFileSize(i.bytes)}</span>
+                <span className='ml-auto shrink-0 tabular-nums text-slate-700 dark:text-foreground'>
+                  {formatFileSize(i.bytes)}
+                </span>
               )}
             </li>
           ))}
-          {items.length > 25 && (
-            <li className='text-slate-500 dark:text-muted-foreground'>
-              and {items.length - 25} more
-            </li>
-          )}
         </ul>
       )}
+      {more && <div className='mt-1.5'>{more}</div>}
     </div>
+  )
+}
+
+function ImageRows({ images }: { images: Inv['images'] }) {
+  const { visible, more } = useShowMore(images, 50)
+  return (
+    <DataTable
+      footer={more}
+      head={
+        <>
+          <Th>Image</Th>
+          <Th>Status</Th>
+          <Th className='text-right'>Size</Th>
+          <Th className='text-right'>Shared</Th>
+          <Th className='text-right'>Containers</Th>
+          <Th>Created</Th>
+        </>
+      }
+    >
+      {visible.map((i) => (
+        <tr key={i.id}>
+          <Td className='max-w-[380px]'>
+            <span className='flex min-w-0 items-baseline gap-1.5'>
+              <span
+                className='truncate font-mono font-medium text-slate-900 dark:text-foreground'
+                data-tip={i.tags.length ? i.tags.join(', ') : i.id}
+              >
+                {i.tags[0] ?? i.id.replace('sha256:', '').slice(0, 12)}
+              </span>
+              {i.tags.length > 1 && (
+                <span className='shrink-0 text-slate-500 dark:text-muted-foreground'>
+                  +{i.tags.length - 1}
+                </span>
+              )}
+            </span>
+          </Td>
+          <Td>
+            <Pill tone={tone[i.status]}>{i.status === 'in-use' ? 'in use' : i.status}</Pill>
+          </Td>
+          <Td className='whitespace-nowrap text-right tabular-nums'>
+            {formatFileSize(i.unique_bytes)}
+          </Td>
+          <Td className='whitespace-nowrap text-right tabular-nums'>
+            {i.shared_bytes != null ? formatFileSize(i.shared_bytes) : <Dash />}
+          </Td>
+          <Td className='text-right tabular-nums'>{i.containers}</Td>
+          <Td className='whitespace-nowrap'>
+            {i.created ? formatRelative(new Date(i.created * 1000)) : <Dash />}
+          </Td>
+        </tr>
+      ))}
+    </DataTable>
   )
 }
 
@@ -88,15 +145,17 @@ export function ImagesTab() {
               value={`${formatFileSize(inv.build_cache.total_bytes)} (${formatFileSize(inv.build_cache.reclaimable_bytes)})`}
             />
           </StatStrip>
-          <div className='rounded-lg border border-slate-200 bg-white px-4 py-2 dark:border-border dark:bg-card'>
-            <p className='text-[13px] font-semibold'>
-              What docker system prune would do: free {formatFileSize(inv.prune.plain_bytes)}
-              <span className='font-normal text-slate-500 dark:text-muted-foreground'>
-                {' '}
-                (with -a: {formatFileSize(inv.prune.all_bytes)})
+          <div className={PANEL}>
+            <div className={PANEL_TITLE}>
+              <span className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+                What <span className='font-mono'>docker system prune</span> would free:{' '}
+                {formatFileSize(inv.prune.plain_bytes)}
               </span>
-            </p>
-            <div className='divide-y divide-slate-100 dark:divide-border'>
+              <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+                with -a: {formatFileSize(inv.prune.all_bytes)}
+              </span>
+            </div>
+            <div className='divide-y divide-slate-100 dark:divide-border/60'>
               <PruneList
                 title='Stopped containers it would delete'
                 items={inv.prune.stopped_containers}
@@ -104,9 +163,12 @@ export function ImagesTab() {
               />
               <PruneList title='Dangling images' items={inv.prune.dangling_images} />
               <PruneList title='Unused networks' items={inv.prune.unused_networks} />
-              <div className='py-2 text-[12px]'>
-                <span className='font-medium'>Build cache</span>: {inv.prune.build_cache.entries}{' '}
-                entries, {formatFileSize(inv.prune.build_cache.bytes)}
+              <div className='px-4 py-2.5 text-[12px] text-slate-700 dark:text-foreground'>
+                <span className='font-medium'>Build cache</span>{' '}
+                <span className='text-slate-500 dark:text-muted-foreground'>
+                  {inv.prune.build_cache.entries} entries,{' '}
+                  {formatFileSize(inv.prune.build_cache.bytes)}
+                </span>
               </div>
               <PruneList
                 title='Also with -a: images no container uses'
@@ -117,42 +179,7 @@ export function ImagesTab() {
           {inv.images.length === 0 ? (
             <Empty>No images on this host.</Empty>
           ) : (
-            <DataTable
-              head={
-                <>
-                  <Th>Image</Th>
-                  <Th>Status</Th>
-                  <Th>Size</Th>
-                  <Th>Shared</Th>
-                  <Th>Containers</Th>
-                  <Th>Created</Th>
-                </>
-              }
-            >
-              {inv.images.map((i) => (
-                <tr key={i.id}>
-                  <Td className='max-w-[360px] truncate font-medium'>
-                    <span title={i.id}>
-                      {i.tags[0] ?? i.id.replace('sha256:', '').slice(0, 12)}
-                    </span>
-                    {i.tags.length > 1 && (
-                      <span className='ml-1 text-slate-500 dark:text-muted-foreground'>
-                        +{i.tags.length - 1}
-                      </span>
-                    )}
-                  </Td>
-                  <Td>
-                    <Pill tone={tone[i.status]}>{i.status === 'in-use' ? 'In use' : i.status}</Pill>
-                  </Td>
-                  <Td className='tabular-nums'>{formatFileSize(i.unique_bytes)}</Td>
-                  <Td className='tabular-nums'>
-                    {i.shared_bytes != null ? formatFileSize(i.shared_bytes) : '—'}
-                  </Td>
-                  <Td className='tabular-nums'>{i.containers}</Td>
-                  <Td>{i.created ? formatRelative(new Date(i.created * 1000)) : '—'}</Td>
-                </tr>
-              ))}
-            </DataTable>
+            <ImageRows images={inv.images} />
           )}
         </div>
       )}

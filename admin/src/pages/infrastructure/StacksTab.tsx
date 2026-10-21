@@ -18,6 +18,7 @@ import {
   TH,
   useInfraHosts
 } from './swarm-ui'
+import { Note, PANEL_TITLE } from './ui'
 
 /** #2826 — GET /api/infrastructure/stacks, one host. */
 interface StackTask {
@@ -91,6 +92,25 @@ export function StacksTab() {
   return (
     <InfraHostsView<HostStacks>
       query={query}
+      aside={(d) =>
+        d && (
+          <>
+            <span className='tabular-nums'>
+              {d.swarm === 'manager' ? `${d.counts.services} services · ` : ''}
+              {d.counts.containers} containers
+            </span>
+            {d.counts.failing + d.counts.containers_failing > 0 ? (
+              <Chip tone='bad' icon>
+                {d.counts.failing + d.counts.containers_failing} failing
+              </Chip>
+            ) : (
+              <Chip tone='ok' icon>
+                All running
+              </Chip>
+            )}
+          </>
+        )
+      }
       toolbar={
         <div className='flex flex-wrap items-center gap-2'>
           <SearchBox value={q} onChange={setQ} placeholder='Filter stacks, services, images' />
@@ -161,10 +181,10 @@ function HostStacksView({
         ]}
       />
       {data.swarm === 'worker' && (
-        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+        <Note>
           This host is a swarm worker: services and other nodes' tasks are only visible from a
           manager. Its own task containers are listed below.
-        </p>
+        </Note>
       )}
       {nothing && (
         <EmptyNote>
@@ -195,7 +215,7 @@ function GroupHeading({
   count: string
 }) {
   return (
-    <div className='flex items-baseline gap-2 border-b border-slate-200 px-3 py-2 dark:border-border'>
+    <div className={PANEL_TITLE}>
       <span
         className={cn(
           'text-[13px] font-semibold text-slate-900 dark:text-foreground',
@@ -251,8 +271,8 @@ function StackTable({ name, services }: { name: string; services: StackService[]
             const isOpen = open.has(s.id)
             return (
               <Fragment key={s.id}>
-                <tr className='hover:bg-slate-50 dark:hover:bg-muted/40'>
-                  <td className={TD}>
+                <tr>
+                  <td className={cn(TD, 'min-w-[200px]')}>
                     <button
                       type='button'
                       aria-expanded={isOpen}
@@ -314,7 +334,7 @@ function StackTable({ name, services }: { name: string; services: StackService[]
                   </td>
                 </tr>
                 {isOpen && (
-                  <tr>
+                  <tr className='hover:bg-transparent dark:hover:bg-transparent'>
                     <td
                       colSpan={6}
                       className='border-b border-slate-100 bg-slate-50 px-3 py-2 dark:border-border/60 dark:bg-background'
@@ -431,7 +451,7 @@ function ContainerTable({ group }: { group: HostStacks['projects'][number] }) {
         </thead>
         <tbody>
           {group.containers.map((c) => (
-            <tr key={c.id} className='hover:bg-slate-50 dark:hover:bg-muted/40'>
+            <tr key={c.id}>
               <td className={TD}>
                 <span className='font-mono font-medium text-slate-900 dark:text-foreground'>
                   {c.service ?? c.name}

@@ -74,6 +74,19 @@ export function HealthTab() {
   return (
     <InfraHostsView<HostHealth>
       query={query}
+      aside={(d) =>
+        d &&
+        d.counts.with_healthcheck > 0 &&
+        (d.counts.unhealthy > 0 ? (
+          <Chip tone='bad' icon>
+            {d.counts.unhealthy} unhealthy
+          </Chip>
+        ) : (
+          <Chip tone='ok' icon>
+            All healthy
+          </Chip>
+        ))
+      }
       toolbar={
         <div className='flex flex-wrap items-center gap-2'>
           <SearchBox value={q} onChange={setQ} placeholder='Filter containers and images' />
@@ -135,7 +148,7 @@ function HostHealthView({
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className='hover:bg-slate-50 dark:hover:bg-muted/40'>
+              <tr key={r.id}>
                 <td className={TD}>
                   <HealthDetailPopover host={host} row={r} />
                   {(r.stack || r.project) && (

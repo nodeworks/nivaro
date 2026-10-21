@@ -1,6 +1,7 @@
 import { ExternalLink } from 'lucide-react'
 import { formatRelative } from '@/lib/utils'
 import { DataTable, duration, Empty, Flags, InventoryTab, Pill, Td, Th } from './inventory-ui'
+import { Chip } from './ui'
 
 interface Row {
   container: string
@@ -28,6 +29,10 @@ export function ProvenanceTab() {
   return (
     <InventoryTab<Row[]>
       area='provenance'
+      aside={(rows) => {
+        const behind = rows.filter((r) => r.releases_behind).length
+        return behind ? <Chip tone='warn'>{behind} behind this API</Chip> : null
+      }}
       intro='Running containers whose image carries OCI labels or matches INFRA_OWN_IMAGES. "Behind" compares the image version label with the version of this API.'
     >
       {(rows) =>
@@ -50,14 +55,19 @@ export function ProvenanceTab() {
             {rows.map((r) => (
               <tr key={r.container}>
                 <Td className='max-w-[360px]'>
-                  <div className='truncate font-medium'>{r.container}</div>
+                  <div
+                    className='truncate font-mono font-medium text-slate-900 dark:text-foreground'
+                    data-tip={r.container.length > 40 ? r.container : undefined}
+                  >
+                    {r.container}
+                  </div>
                   <Flags flags={r.flags} />
                 </Td>
                 <Td className='max-w-[260px]'>
-                  <div className='truncate'>{r.tag ?? 'untagged'}</div>
+                  <div className='truncate font-mono'>{r.tag ?? 'untagged'}</div>
                   <div
                     className='truncate font-mono text-[11px] text-slate-500 dark:text-muted-foreground'
-                    title={r.digest ?? ''}
+                    data-tip={r.digest ?? undefined}
                   >
                     {r.digest ? r.digest.slice(0, 19) : 'no digest'}
                   </div>
@@ -81,16 +91,18 @@ export function ProvenanceTab() {
                     '—'
                   )}
                 </Td>
-                <Td>
+                <Td className='whitespace-nowrap'>
                   {r.built ? formatRelative(new Date(r.built * 1000)) : '—'}
                   <span className='ml-1 text-slate-500 dark:text-muted-foreground'>
                     {duration(r.age_s)}
                   </span>
                 </Td>
                 <Td>
-                  {r.version ?? '—'}{' '}
-                  {r.releases_behind && <Pill tone='amber'>{behindText(r.releases_behind)}</Pill>}
-                  {r.ahead && <Pill>ahead of this API</Pill>}
+                  <span className='inline-flex flex-wrap items-center gap-1.5'>
+                    <span className='font-mono'>{r.version ?? '—'}</span>
+                    {r.releases_behind && <Pill tone='amber'>{behindText(r.releases_behind)}</Pill>}
+                    {r.ahead && <Pill>ahead of this API</Pill>}
+                  </span>
                 </Td>
               </tr>
             ))}

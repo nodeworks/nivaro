@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { Skeleton } from '@/components/ui/skeleton'
+import type { ReactNode } from 'react'
 import { api } from '@/lib/api'
-import { formatFileSize, formatRelative } from '@/lib/utils'
-import { Code, NotConfigured, Pill, TABLE_WRAP, TD, TH } from './edge-ui'
+import { cn, formatFileSize, formatRelative } from '@/lib/utils'
+import { Code, NotConfigured, Pill } from './edge-ui'
+import { Dash, LoadError, Note, PANEL, PANEL_TITLE, TABLE, TabSkeleton, TD, TH } from './ui'
 
 interface Part<T> {
   ok: boolean
@@ -67,14 +68,13 @@ function age(s: number | null): string {
 
 /** Self-hosted GitLab: health checks, runners, queue and its container (#2841). */
 export function GitlabTab() {
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['infrastructure', 'gitlab'],
     queryFn: async () => (await api.get('/infrastructure/gitlab')).data.data as View,
     refetchInterval: 60_000
   })
-  if (isLoading) return <Skeleton className='h-64' />
-  if (error || !data)
-    return <p className='text-[13px] text-red-600 dark:text-red-400'>Could not read GitLab.</p>
+  if (isLoading) return <TabSkeleton />
+  if (error || !data) return <LoadError what='GitLab' onRetry={refetch} />
   if (!data.configured)
     return (
       <NotConfigured title='No GitLab is connected'>
@@ -88,8 +88,13 @@ export function GitlabTab() {
   return (
     <div className='space-y-4'>
       <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-        {data.base}
-        {version?.data ? ` · GitLab ${version.data.version}` : ''}
+        <span className='font-mono text-slate-700 dark:text-foreground'>{data.base}</span>
+        {version?.data ? (
+          <>
+            {' · GitLab '}
+            <span className='font-mono'>{version.data.version}</span>
+          </>
+        ) : null}
       </p>
 
       <div className='grid gap-3 md:grid-cols-2'>
@@ -108,7 +113,15 @@ export function GitlabTab() {
                   {health.data.readiness?.ok ? 'ready' : 'not ready'}
                 </Pill>
                 {health.data.readiness?.checks.map((c) => (
-                  <span key={c.name} className='text-slate-500 dark:text-muted-foreground'>
+                  <span
+                    key={c.name}
+                    className={cn(
+                      'font-mono text-[11px]',
+                      c.status === 'ok'
+                        ? 'text-slate-500 dark:text-muted-foreground'
+                        : 'font-medium text-red-700 dark:text-red-300'
+                    )}
+                  >
                     {c.name}: {c.status}
                   </span>
                 ))}
@@ -142,8 +155,9 @@ export function GitlabTab() {
             <ul className='space-y-1 text-[12px]'>
               {container.data.containers.map((c) => (
                 <li key={`${c.host}-${c.container}`}>
-                  <b>{c.container}</b> on {c.host}: CPU {c.cpu_cores?.toFixed(2) ?? '—'} cores,
-                  memory {c.mem_bytes == null ? '—' : formatFileSize(c.mem_bytes)}
+                  <span className='font-mono font-medium'>{c.container}</span> on{' '}
+                  <span className='font-mono'>{c.host}</span>: CPU {c.cpu_cores?.toFixed(2) ?? '—'}{' '}
+                  cores, memory {c.mem_bytes == null ? '—' : formatFileSize(c.mem_bytes)}
                   {c.mem_limit_bytes != null
                     ? ` of ${formatFileSize(c.mem_limit_bytes)}`
                     : ' (no limit)'}{' '}
@@ -180,9 +194,17 @@ export function GitlabTab() {
       </div>
 
       {runners?.ok && runners.data && runners.data.runners.length > 0 && (
-        <div className={TABLE_WRAP}>
-          <table className='w-full min-w-[640px]'>
-            <thead className='border-b border-slate-200 dark:border-border'>
+        <div className={PANEL}>
+          <div className={PANEL_TITLE}>
+            <span className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+              All runners
+            </span>
+            <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+              {runners.data.runners.length}
+            </span>
+          </div>
+          <table className={cn(TABLE, 'min-w-[640px]')}>
+            <thead>
               <tr>
                 <th className={TH}>Runner</th>
                 <th className={TH}>State</th>
@@ -191,10 +213,12 @@ export function GitlabTab() {
                 <th className={TH}>Version</th>
               </tr>
             </thead>
-            <tbody className='divide-y divide-slate-100 dark:divide-border'>
+            <tbody>
               {runners.data.runners.map((r) => (
                 <tr key={r.id}>
-                  <td className={`${TD} font-medium`}>{r.name}</td>
+                  <td className={cn(TD, 'font-mono font-medium [overflow-wrap:anywhere]')}>
+                    {r.name}
+                  </td>
                   <td className={TD}>
                     <Pill
                       tone={
@@ -211,10 +235,16 @@ export function GitlabTab() {
                     </Pill>
                   </td>
                   <td className={TD}>{r.type.replace('_type', '').replace('_', ' ') || '—'}</td>
-                  <td className={TD}>
-                    {r.contacted_at ? formatRelative(r.contacted_at) : 'never'}
+                  <td className={cn(TD, 'whitespace-nowrap')}>
+                    {r.contacted_at ? (
+                      <span data-tip={new Date(r.contacted_at).toLocaleString()}>
+                        {formatRelative(r.contacted_at)}
+                      </span>
+                    ) : (
+                      'never'
+                    )}
                   </td>
-                  <td className={TD}>{r.version ?? '—'}</td>
+                  <td className={cn(TD, 'font-mono')}>{r.version ?? <Dash />}</td>
                 </tr>
               ))}
             </tbody>
@@ -222,19 +252,21 @@ export function GitlabTab() {
         </div>
       )}
       {flaggedRunners.length > 0 && (
-        <p className='text-[12px] text-amber-800 dark:text-amber-200'>
+        <Note tone='warn'>
           {flaggedRunners.length} {flaggedRunners.length === 1 ? 'runner needs' : 'runners need'} a
           look: offline, stale (no contact for a day) or never contacted.
-        </p>
+        </Note>
       )}
     </div>
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
-      <h2 className='mb-2 text-[13px] font-semibold'>{title}</h2>
+    <section className='min-w-0 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <h2 className='mb-2 text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+        {title}
+      </h2>
       {children}
     </section>
   )
