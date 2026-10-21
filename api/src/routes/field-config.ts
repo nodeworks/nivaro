@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { markConfigRead } from '../services/config-live.js'
 import { bustRollupContributorCache } from '../services/rollups.js'
 
 function parseJsonSafe(val: unknown): unknown {
@@ -146,44 +147,374 @@ function evaluateCondition(cond: Condition, values: Record<string, unknown>): bo
   }
 }
 
+// ─── Layout field rows ────────────────────────────────────────────────────────
+// ONE formatter for "the collection's fields as these layout placements show
+// them": GET /field-config/:collection answers it for a saved layout's
+// placements and POST /field-config/:collection/project for the layout
+// editor's DRAFT placements, so the editor canvas renders a draft exactly as
+// the record page will once it is saved. The base is always the collection's
+// own nivaro_fields rows — never a saved placement.
+
+/** One layout placement, from nivaro_layout_field_assignments or an editor draft. */
+export interface LayoutFieldAssignment {
+  field: string
+  group_key: string | null
+  sort: number
+  label_override: string | null
+  is_visible: number | boolean | null
+  default_expanded: number | boolean | null
+  show_row_revisions: number | boolean | null
+  show_approval_chain: number | boolean | null
+  col_span: number | null
+  overrides: Record<string, unknown> | null
+  widget_id: number | null
+  input_bindings: string | null
+  lock_conditions: string | null
+  allow_revision_restore: number | boolean | null
+}
+
+/** Relation-path placements one POST /project may carry (each walks its chain). */
+export const MAX_PROJECT_PATHS = 200
+
+const ASSIGNMENT_COLUMNS = [
+  'field',
+  'group_key',
+  'sort',
+  'label_override',
+  'is_visible',
+  'default_expanded',
+  'show_row_revisions',
+  'show_approval_chain',
+  'col_span',
+  'overrides',
+  'widget_id',
+  'input_bindings',
+  'lock_conditions',
+  'allow_revision_restore'
+] as const
+
+/** A stored row or a draft placement as the formatter reads it (overrides parsed). */
+export function normalizeLayoutAssignment(a: Record<string, unknown>): LayoutFieldAssignment {
+  let overrides: Record<string, unknown> | null = null
+  try {
+    const raw = typeof a.overrides === 'string' ? JSON.parse(a.overrides) : a.overrides
+    if (raw && typeof raw === 'object' && !Array.isArray(raw))
+      overrides = raw as Record<string, unknown>
+  } catch {
+    /* noop */
+  }
+  const num = (v: unknown) => (v == null || v === '' ? null : Number(v))
+  const flag = (v: unknown) => (v == null ? null : (v as number | boolean))
+  const str = (v: unknown) => (v == null ? null : typeof v === 'string' ? v : JSON.stringify(v))
+  return {
+    field: String(a.field),
+    group_key: a.group_key == null ? null : String(a.group_key),
+    sort: Number(a.sort ?? 0),
+    label_override: a.label_override == null ? null : String(a.label_override),
+    is_visible: flag(a.is_visible),
+    default_expanded: flag(a.default_expanded),
+    show_row_revisions: flag(a.show_row_revisions),
+    show_approval_chain: flag(a.show_approval_chain),
+    col_span: num(a.col_span),
+    overrides,
+    widget_id: num(a.widget_id),
+    input_bindings: str(a.input_bindings),
+    lock_conditions: str(a.lock_conditions),
+    allow_revision_restore: flag(a.allow_revision_restore)
+  }
+}
+
+async function loadFieldRows(collection: string): Promise<FieldRow[]> {
+  return (await db('nivaro_fields')
+    .where({ collection })
+    .select(
+      'field',
+      'type',
+      'label',
+      'note',
+      'display',
+      'display_options',
+      'hidden',
+      'readonly',
+      'required',
+      'interface',
+      'options',
+      'group_key',
+      'visibility_rules',
+      'dependency_config',
+      'validation_rules',
+      'lock_condition',
+      'default_formula',
+      'computed_formula',
+      'computed_type',
+      'cross_record_defaults',
+      'remote_options_config',
+      'repeater_schema',
+      'is_translatable',
+      'sort',
+      'placeholder',
+      'deprecated_at',
+      'deprecation_note'
+    )
+    .orderBy('sort', 'asc')) as FieldRow[]
+}
+
+/**
+ * The field-config rows for `assignments`: one formatted row per (field,
+ * group_key) placement (a field placed twice appears twice), unplaced fields
+ * as layout_assigned false, virtual O2M/M2M and relation-path placements
+ * included, sorted. `__ungrouped_pos__` carries the ungrouped zone's sort.
+ */
+export async function formatLayoutFieldRows(
+  collection: string,
+  assignments: LayoutFieldAssignment[]
+): Promise<{ data: unknown[]; ungrouped_sort: number | null }> {
+  const rows = await loadFieldRows(collection)
+  // Multi-group: a field may have multiple assignments (different group_keys)
+  const assignmentsByField = new Map<string, LayoutFieldAssignment[]>()
+  let ungrouped_sort: number | null = null
+  for (const a of assignments) {
+    if (a.field === '__ungrouped_pos__') {
+      ungrouped_sort = a.sort
+      continue
+    }
+    const existing = assignmentsByField.get(a.field)
+    if (existing) existing.push(a)
+    else assignmentsByField.set(a.field, [a])
+  }
+
+  // Dotted relation-path fields may have a nivaro_fields alias row (created by
+  // the rename PATCH) — capture its label but keep them OUT of the normal
+  // emission so they always render via the relation-path virtual branch.
+  const dottedLabels = new Map<string, string | null>()
+  for (const r of rows) {
+    if (r.field.includes('.') && !r.field.startsWith('__'))
+      dottedLabels.set(r.field, r.label ?? null)
+  }
+  const plainRows = rows.filter((r) => !dottedLabels.has(r.field))
+  const knownFields = new Set(plainRows.map((r) => r.field))
+
+  // Emit one formatted row per (field, group_key) assignment — multi-group fields appear multiple times
+  const formatted: unknown[] = []
+  for (const [rowIdx, row] of plainRows.entries()) {
+    const fieldAssignments = assignmentsByField.get(row.field)
+    const base = formatFieldConfig(row)
+
+    if (!fieldAssignments || fieldAssignments.length === 0) {
+      // Strip layout-specific options so unassigned fields don't inherit from global field metadata
+      const unassignedOpts = base.options ? { ...(base.options as Record<string, unknown>) } : null
+      if (unassignedOpts) {
+        delete unassignedOpts.col_span
+        delete unassignedOpts.show_row_revisions
+      }
+      formatted.push({
+        ...base,
+        options: unassignedOpts,
+        sort: row.sort ?? rowIdx,
+        layout_assigned: false,
+        _overrides: null
+      })
+      continue
+    }
+
+    for (const assignment of fieldAssignments) {
+      const ov = assignment.overrides ?? null
+      // Start from base.options but strip layout-specific keys so the assignment is authoritative
+      let options: Record<string, unknown> | null = base.options
+        ? { ...(base.options as Record<string, unknown>) }
+        : null
+      if (options) {
+        delete options.col_span
+        delete options.show_row_revisions
+      }
+      if (assignment.col_span != null)
+        options = { ...(options ?? {}), col_span: assignment.col_span }
+      if (assignment.show_row_revisions) options = { ...(options ?? {}), show_row_revisions: true }
+      if (assignment.lock_conditions)
+        options = { ...(options ?? {}), lock_conditions: assignment.lock_conditions }
+      if (assignment.allow_revision_restore != null)
+        options = {
+          ...(options ?? {}),
+          allow_revision_restore: !!assignment.allow_revision_restore
+        }
+      if (ov?.options && typeof ov.options === 'object')
+        options = { ...(options ?? {}), ...(ov.options as Record<string, unknown>) }
+      formatted.push({
+        ...base,
+        options,
+        label: ov?.label !== undefined ? (ov.label as string | null) : base.label,
+        note: ov?.note !== undefined ? (ov.note as string | null) : base.note,
+        hidden: ov?.hidden !== undefined ? !!ov.hidden : base.hidden,
+        // base.readonly already carries the derived-field rule. A layout
+        // override cannot switch it back on for a computed field via the
+        // wholesale `readonly` key (the layout editor writes it with its
+        // defaults — a `false` there is serialization, not a decision).
+        // `editable_computed` is the EXPLICIT opt-in: it lifts only the
+        // derived-field rule, letting a layout accept manual entry for a
+        // rollup (a PUB workflow's Total REQ Amount, entered by hand
+        // because no lines exist to sum). The next contributor write still
+        // recalculates a stored rollup — the flag is per-layout curation,
+        // not a change to what the field IS.
+        readonly:
+          ov?.editable_computed === true &&
+          (base.computed_type === 'rollup' || base.computed_type === 'write')
+            ? // Only the FIELD's own explicit readonly still binds — the
+              // override's readonly is the derived state serialized back by
+              // the settings sheet, which is exactly what this flag lifts.
+              !!row.readonly
+            : base.readonly || (ov?.readonly !== undefined ? !!ov.readonly : base.readonly),
+        required: ov?.required !== undefined ? !!ov.required : base.required,
+        interface: ov?.interface !== undefined ? (ov.interface as string | null) : base.interface,
+        placeholder:
+          ov?.placeholder !== undefined
+            ? (ov.placeholder as string | null)
+            : ((base as Record<string, unknown>).placeholder ?? null),
+        dependency_config:
+          ov?.dependency_config !== undefined
+            ? ov.dependency_config
+            : ((base as Record<string, unknown>).dependency_config ?? null),
+        group_key: assignment.group_key,
+        sort: assignment.sort,
+        layout_assigned: true,
+        // Inline-rename label (distinct from overrides.label) — the layouts
+        // editor round-trips it; header field chips read it back on load.
+        label_override: assignment.label_override ?? null,
+        lock_conditions: assignment.lock_conditions ?? null,
+        allow_revision_restore:
+          assignment.allow_revision_restore == null ? true : !!assignment.allow_revision_restore,
+        widget_id: assignment.widget_id ?? null,
+        input_bindings: assignment.input_bindings ?? null,
+        _overrides: ov
+      })
+    }
+  }
+
+  // Virtual fields (O2M/M2M alias with no nivaro_fields row) that are in assignments
+  for (const [field, fieldAssignments] of assignmentsByField.entries()) {
+    if (knownFields.has(field)) continue
+    // Relation-path field ('order.customer.account_number'): read-only
+    // display of a value reached through M2O hops. Rendered via the shared
+    // form's relation-path handling; value resolved by /items/:col/:id/resolve-paths.
+    if (field.includes('.') && !field.startsWith('__')) {
+      // Final entity collection of the chain — lets the layout settings popover
+      // list the target's detail layouts for drill-down config.
+      let pathTarget: string | null = null
+      try {
+        const { classifyRelationSegment } = await import('../services/queues.js')
+        const { getRelations } = await import('../services/collections.js')
+        let cur = collection
+        for (const seg of field.split('.')) {
+          const info = classifyRelationSegment(cur, seg, await getRelations(cur))
+          if (!info?.relatedCollection) break
+          cur = info.relatedCollection
+          pathTarget = cur
+        }
+      } catch {
+        /* leave null */
+      }
+      for (const a of fieldAssignments) {
+        const autoLabel = field
+          .split('.')
+          .map((seg) => seg.replace(/_/g, ' ').replace(/(^|\s)\S/g, (c) => c.toUpperCase()))
+          .join(' → ')
+        const aliasLabel = dottedLabels.get(field) ?? null
+        const ov = a.overrides ?? null
+        formatted.push({
+          field,
+          // Alias precedence: chip settings (overrides.label) -> inline rename
+          // (label_override) -> nivaro_fields alias row -> auto from the path.
+          label: (ov?.label as string | null) ?? a.label_override ?? aliasLabel ?? autoLabel,
+          note: (ov?.note as string | null) ?? null,
+          hidden: false,
+          readonly: true,
+          required: false,
+          interface: 'relation-path',
+          display: null,
+          display_options: null,
+          options: {
+            ...(ov?.options && typeof ov.options === 'object'
+              ? (ov.options as Record<string, unknown>)
+              : {}),
+            ...(pathTarget ? { path_target_collection: pathTarget } : {})
+          },
+          group_key: a.group_key,
+          sort: a.sort,
+          label_override: a.label_override,
+          is_visible: a.is_visible,
+          default_expanded: a.default_expanded,
+          show_row_revisions: false,
+          show_approval_chain: null,
+          lock_conditions: null,
+          allow_revision_restore: false,
+          // Header display bindings (link template, color, format) save per
+          // assignment for dotted fields too — hardcoding null here made the
+          // editor seed empty on reload and the next auto-save WIPE the
+          // stored value.
+          widget_id: null,
+          input_bindings: a.input_bindings ?? null,
+          layout_assigned: true,
+          is_virtual: true as unknown,
+          dependency_config: null,
+          type: 'string',
+          _overrides: a.overrides ?? null
+        })
+      }
+      continue
+    }
+    for (const a of fieldAssignments) {
+      const ov = a.overrides ?? null
+      let virtualOpts: Record<string, unknown> | null = a.show_row_revisions
+        ? { show_row_revisions: true }
+        : null
+      if (a.lock_conditions)
+        virtualOpts = { ...(virtualOpts ?? {}), lock_conditions: a.lock_conditions }
+      if (a.allow_revision_restore != null)
+        virtualOpts = {
+          ...(virtualOpts ?? {}),
+          allow_revision_restore: !!a.allow_revision_restore
+        }
+      if (ov?.options && typeof ov.options === 'object') {
+        virtualOpts = { ...(virtualOpts ?? {}), ...(ov.options as Record<string, unknown>) }
+      }
+      formatted.push({
+        field,
+        label: (ov?.label as string | null) ?? null,
+        note: null,
+        hidden: false,
+        readonly: false,
+        required: false,
+        interface: ov?.interface !== undefined ? (ov.interface as string | null) : 'o2m',
+        options: virtualOpts,
+        group_key: a.group_key,
+        sort: a.sort,
+        label_override: a.label_override,
+        is_visible: a.is_visible,
+        default_expanded: a.default_expanded,
+        show_row_revisions: a.show_row_revisions,
+        show_approval_chain: a.show_approval_chain,
+        lock_conditions: a.lock_conditions ?? null,
+        allow_revision_restore:
+          a.allow_revision_restore == null ? true : !!a.allow_revision_restore,
+        widget_id: a.widget_id ?? null,
+        input_bindings: a.input_bindings ?? null,
+        layout_assigned: true,
+        is_virtual: true as unknown,
+        dependency_config: null,
+        _overrides: ov
+      })
+    }
+  }
+
+  ;(formatted as Array<{ sort?: number }>).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+
+  return { data: formatted, ungrouped_sort }
+}
+
 export async function fieldConfigRoutes(app: FastifyInstance) {
   // GET /field-config/:collection — get all field configs, overlaid with active layout assignments
   app.get('/:collection', { preHandler: authenticate }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
     const { layout_id } = req.query as { layout_id?: string }
-
-    const rows = (await db('nivaro_fields')
-      .where({ collection })
-      .select(
-        'field',
-        'type',
-        'label',
-        'note',
-        'display',
-        'display_options',
-        'hidden',
-        'readonly',
-        'required',
-        'interface',
-        'options',
-        'group_key',
-        'visibility_rules',
-        'dependency_config',
-        'validation_rules',
-        'lock_condition',
-        'default_formula',
-        'computed_formula',
-        'computed_type',
-        'cross_record_defaults',
-        'remote_options_config',
-        'repeater_schema',
-        'is_translatable',
-        'sort',
-        'placeholder',
-        'deprecated_at',
-        'deprecation_note'
-      )
-      .orderBy('sort', 'asc')) as FieldRow[]
 
     // Resolve layout assignments — use explicit layout_id or fall back to active layout
     let targetLayoutId: number | null = null
@@ -197,308 +528,39 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         .first('id')
       targetLayoutId = active?.id ?? null
     }
+    const stored =
+      targetLayoutId !== null
+        ? ((await db('nivaro_layout_field_assignments')
+            .where({ layout_id: targetLayoutId })
+            .select(...ASSIGNMENT_COLUMNS)) as Array<Record<string, unknown>>)
+        : []
+    return reply.send(
+      await formatLayoutFieldRows(collection, stored.map(normalizeLayoutAssignment))
+    )
+  })
 
-    // Multi-group: a field may have multiple assignments (different group_keys)
-    type Assignment = {
-      group_key: string | null
-      sort: number
-      label_override: string | null
-      is_visible: number | null
-      default_expanded: number | null
-      show_row_revisions: number | null
-      show_approval_chain: number | null
-      col_span: number | null
-      overrides: Record<string, unknown> | null
-      widget_id: number | null
-      input_bindings: string | null
-      lock_conditions: string | null
-      allow_revision_restore: number | null
+  // POST /field-config/:collection/project {assignments} — the rows GET would
+  // answer if these placements were the saved layout (the layout editor's
+  // canvas renders its unsaved draft through it). A read: writes nothing.
+  app.post('/:collection/project', { preHandler: requireAdmin }, async (req, reply) => {
+    markConfigRead(req)
+    const { collection } = req.params as { collection: string }
+    const list = (req.body as { assignments?: unknown } | null)?.assignments
+    if (!Array.isArray(list) || list.length > 2000)
+      return reply.code(400).send({ error: 'assignments must be an array of at most 2000' })
+    const assignments: LayoutFieldAssignment[] = []
+    for (const a of list) {
+      if (!a || typeof a !== 'object' || typeof (a as { field?: unknown }).field !== 'string')
+        return reply.code(400).send({ error: 'every assignment needs a field' })
+      assignments.push(normalizeLayoutAssignment(a as Record<string, unknown>))
     }
-    const assignmentsByField = new Map<string, Assignment[]>()
-    let ungrouped_sort: number | null = null
-    if (targetLayoutId !== null) {
-      const assignments = await db('nivaro_layout_field_assignments')
-        .where({ layout_id: targetLayoutId })
-        .select(
-          'field',
-          'group_key',
-          'sort',
-          'label_override',
-          'is_visible',
-          'default_expanded',
-          'show_row_revisions',
-          'show_approval_chain',
-          'col_span',
-          'overrides',
-          'widget_id',
-          'input_bindings',
-          'lock_conditions',
-          'allow_revision_restore'
-        )
-      for (const a of assignments) {
-        if (a.field === '__ungrouped_pos__') {
-          ungrouped_sort = a.sort
-          continue
-        }
-        let overrides: Record<string, unknown> | null = null
-        try {
-          overrides = a.overrides
-            ? typeof a.overrides === 'string'
-              ? JSON.parse(a.overrides)
-              : a.overrides
-            : null
-        } catch {
-          /* noop */
-        }
-        const entry: Assignment = {
-          group_key: a.group_key,
-          sort: a.sort,
-          label_override: a.label_override ?? null,
-          is_visible: a.is_visible ?? null,
-          default_expanded: a.default_expanded ?? null,
-          show_row_revisions: a.show_row_revisions ?? null,
-          show_approval_chain: a.show_approval_chain ?? null,
-          col_span: a.col_span ?? null,
-          overrides,
-          widget_id: a.widget_id ?? null,
-          input_bindings: a.input_bindings ?? null,
-          lock_conditions: a.lock_conditions ?? null,
-          allow_revision_restore: a.allow_revision_restore ?? null
-        }
-        const existing = assignmentsByField.get(a.field)
-        if (existing) existing.push(entry)
-        else assignmentsByField.set(a.field, [entry])
-      }
-    }
-
-    // Dotted relation-path fields may have a nivaro_fields alias row (created by
-    // the rename PATCH) — capture its label but keep them OUT of the normal
-    // emission so they always render via the relation-path virtual branch.
-    const dottedLabels = new Map<string, string | null>()
-    for (const r of rows) {
-      if (r.field.includes('.') && !r.field.startsWith('__'))
-        dottedLabels.set(r.field, r.label ?? null)
-    }
-    const plainRows = rows.filter((r) => !dottedLabels.has(r.field))
-    const knownFields = new Set(plainRows.map((r) => r.field))
-
-    // Emit one formatted row per (field, group_key) assignment — multi-group fields appear multiple times
-    const formatted: unknown[] = []
-    for (const [rowIdx, row] of plainRows.entries()) {
-      const fieldAssignments = assignmentsByField.get(row.field)
-      const base = formatFieldConfig(row)
-
-      if (!fieldAssignments || fieldAssignments.length === 0) {
-        // Strip layout-specific options so unassigned fields don't inherit from global field metadata
-        const unassignedOpts = base.options
-          ? { ...(base.options as Record<string, unknown>) }
-          : null
-        if (unassignedOpts) {
-          delete unassignedOpts.col_span
-          delete unassignedOpts.show_row_revisions
-        }
-        formatted.push({
-          ...base,
-          options: unassignedOpts,
-          sort: row.sort ?? rowIdx,
-          layout_assigned: false,
-          _overrides: null
-        })
-        continue
-      }
-
-      for (const assignment of fieldAssignments) {
-        const ov = assignment.overrides ?? null
-        // Start from base.options but strip layout-specific keys so the assignment is authoritative
-        let options: Record<string, unknown> | null = base.options
-          ? { ...(base.options as Record<string, unknown>) }
-          : null
-        if (options) {
-          delete options.col_span
-          delete options.show_row_revisions
-        }
-        if (assignment.col_span != null)
-          options = { ...(options ?? {}), col_span: assignment.col_span }
-        if (assignment.show_row_revisions)
-          options = { ...(options ?? {}), show_row_revisions: true }
-        if (assignment.lock_conditions)
-          options = { ...(options ?? {}), lock_conditions: assignment.lock_conditions }
-        if (assignment.allow_revision_restore != null)
-          options = {
-            ...(options ?? {}),
-            allow_revision_restore: !!assignment.allow_revision_restore
-          }
-        if (ov?.options && typeof ov.options === 'object')
-          options = { ...(options ?? {}), ...(ov.options as Record<string, unknown>) }
-        formatted.push({
-          ...base,
-          options,
-          label: ov?.label !== undefined ? (ov.label as string | null) : base.label,
-          note: ov?.note !== undefined ? (ov.note as string | null) : base.note,
-          hidden: ov?.hidden !== undefined ? !!ov.hidden : base.hidden,
-          // base.readonly already carries the derived-field rule. A layout
-          // override cannot switch it back on for a computed field via the
-          // wholesale `readonly` key (the layout editor writes it with its
-          // defaults — a `false` there is serialization, not a decision).
-          // `editable_computed` is the EXPLICIT opt-in: it lifts only the
-          // derived-field rule, letting a layout accept manual entry for a
-          // rollup (a PUB workflow's Total REQ Amount, entered by hand
-          // because no lines exist to sum). The next contributor write still
-          // recalculates a stored rollup — the flag is per-layout curation,
-          // not a change to what the field IS.
-          readonly:
-            ov?.editable_computed === true &&
-            (base.computed_type === 'rollup' || base.computed_type === 'write')
-              ? // Only the FIELD's own explicit readonly still binds — the
-                // override's readonly is the derived state serialized back by
-                // the settings sheet, which is exactly what this flag lifts.
-                !!row.readonly
-              : base.readonly || (ov?.readonly !== undefined ? !!ov.readonly : base.readonly),
-          required: ov?.required !== undefined ? !!ov.required : base.required,
-          interface: ov?.interface !== undefined ? (ov.interface as string | null) : base.interface,
-          placeholder:
-            ov?.placeholder !== undefined
-              ? (ov.placeholder as string | null)
-              : ((base as Record<string, unknown>).placeholder ?? null),
-          dependency_config:
-            ov?.dependency_config !== undefined
-              ? ov.dependency_config
-              : ((base as Record<string, unknown>).dependency_config ?? null),
-          group_key: assignment.group_key,
-          sort: assignment.sort,
-          layout_assigned: true,
-          // Inline-rename label (distinct from overrides.label) — the layouts
-          // editor round-trips it; header field chips read it back on load.
-          label_override: assignment.label_override ?? null,
-          lock_conditions: assignment.lock_conditions ?? null,
-          allow_revision_restore:
-            assignment.allow_revision_restore == null ? true : !!assignment.allow_revision_restore,
-          widget_id: assignment.widget_id ?? null,
-          input_bindings: assignment.input_bindings ?? null,
-          _overrides: ov
-        })
-      }
-    }
-
-    // Virtual fields (O2M/M2M alias with no nivaro_fields row) that are in assignments
-    for (const [field, fieldAssignments] of assignmentsByField.entries()) {
-      if (knownFields.has(field)) continue
-      // Relation-path field ('order.customer.account_number'): read-only
-      // display of a value reached through M2O hops. Rendered via the shared
-      // form's relation-path handling; value resolved by /items/:col/:id/resolve-paths.
-      if (field.includes('.') && !field.startsWith('__')) {
-        // Final entity collection of the chain — lets the layout settings popover
-        // list the target's detail layouts for drill-down config.
-        let pathTarget: string | null = null
-        try {
-          const { classifyRelationSegment } = await import('../services/queues.js')
-          const { getRelations } = await import('../services/collections.js')
-          let cur = collection
-          for (const seg of field.split('.')) {
-            const info = classifyRelationSegment(cur, seg, await getRelations(cur))
-            if (!info?.relatedCollection) break
-            cur = info.relatedCollection
-            pathTarget = cur
-          }
-        } catch {
-          /* leave null */
-        }
-        for (const a of fieldAssignments) {
-          const autoLabel = field
-            .split('.')
-            .map((seg) => seg.replace(/_/g, ' ').replace(/(^|\s)\S/g, (c) => c.toUpperCase()))
-            .join(' → ')
-          const aliasLabel = dottedLabels.get(field) ?? null
-          const ov = a.overrides ?? null
-          formatted.push({
-            field,
-            // Alias precedence: chip settings (overrides.label) -> inline rename
-            // (label_override) -> nivaro_fields alias row -> auto from the path.
-            label: (ov?.label as string | null) ?? a.label_override ?? aliasLabel ?? autoLabel,
-            note: (ov?.note as string | null) ?? null,
-            hidden: false,
-            readonly: true,
-            required: false,
-            interface: 'relation-path',
-            display: null,
-            display_options: null,
-            options: {
-              ...(ov?.options && typeof ov.options === 'object'
-                ? (ov.options as Record<string, unknown>)
-                : {}),
-              ...(pathTarget ? { path_target_collection: pathTarget } : {})
-            },
-            group_key: a.group_key,
-            sort: a.sort,
-            label_override: a.label_override,
-            is_visible: a.is_visible,
-            default_expanded: a.default_expanded,
-            show_row_revisions: false,
-            show_approval_chain: null,
-            lock_conditions: null,
-            allow_revision_restore: false,
-            // Header display bindings (link template, color, format) save per
-            // assignment for dotted fields too — hardcoding null here made the
-            // editor seed empty on reload and the next auto-save WIPE the
-            // stored value.
-            widget_id: null,
-            input_bindings: a.input_bindings ?? null,
-            layout_assigned: true,
-            is_virtual: true as unknown,
-            dependency_config: null,
-            type: 'string',
-            _overrides: a.overrides ?? null
-          })
-        }
-        continue
-      }
-      for (const a of fieldAssignments) {
-        const ov = a.overrides ?? null
-        let virtualOpts: Record<string, unknown> | null = a.show_row_revisions
-          ? { show_row_revisions: true }
-          : null
-        if (a.lock_conditions)
-          virtualOpts = { ...(virtualOpts ?? {}), lock_conditions: a.lock_conditions }
-        if (a.allow_revision_restore != null)
-          virtualOpts = {
-            ...(virtualOpts ?? {}),
-            allow_revision_restore: !!a.allow_revision_restore
-          }
-        if (ov?.options && typeof ov.options === 'object') {
-          virtualOpts = { ...(virtualOpts ?? {}), ...(ov.options as Record<string, unknown>) }
-        }
-        formatted.push({
-          field,
-          label: (ov?.label as string | null) ?? null,
-          note: null,
-          hidden: false,
-          readonly: false,
-          required: false,
-          interface: ov?.interface !== undefined ? (ov.interface as string | null) : 'o2m',
-          options: virtualOpts,
-          group_key: a.group_key,
-          sort: a.sort,
-          label_override: a.label_override,
-          is_visible: a.is_visible,
-          default_expanded: a.default_expanded,
-          show_row_revisions: a.show_row_revisions,
-          show_approval_chain: a.show_approval_chain,
-          lock_conditions: a.lock_conditions ?? null,
-          allow_revision_restore:
-            a.allow_revision_restore == null ? true : !!a.allow_revision_restore,
-          widget_id: a.widget_id ?? null,
-          input_bindings: a.input_bindings ?? null,
-          layout_assigned: true,
-          is_virtual: true as unknown,
-          dependency_config: null,
-          _overrides: ov
-        })
-      }
-    }
-
-    ;(formatted as Array<{ sort?: number }>).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
-
-    return reply.send({ data: formatted, ungrouped_sort })
+    // Each relation-path placement walks its relation chain — bound the work.
+    const paths = assignments.filter((a) => a.field.includes('.') && !a.field.startsWith('__'))
+    if (paths.length > MAX_PROJECT_PATHS)
+      return reply
+        .code(400)
+        .send({ error: `at most ${MAX_PROJECT_PATHS} relation-path placements` })
+    return reply.send(await formatLayoutFieldRows(collection, assignments))
   })
 
   // PATCH /field-config/:collection/:field — update field config
@@ -690,6 +752,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
   // POST /field-config/:collection/evaluate-visibility
   app.post('/:collection/evaluate-visibility', { preHandler: authenticate }, async (req, reply) => {
+    markConfigRead(req)
     const { collection } = req.params as { collection: string }
     const { values } = req.body as { values: Record<string, unknown> }
 
@@ -729,6 +792,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
   // POST /field-config/:collection/evaluate-defaults
   app.post('/:collection/evaluate-defaults', { preHandler: authenticate }, async (req, reply) => {
+    markConfigRead(req)
     const { collection } = req.params as { collection: string }
     const { trigger_field, values } = req.body as {
       trigger_field: string
@@ -760,6 +824,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
   // POST /field-config/:collection/evaluate-lock
   app.post('/:collection/evaluate-lock', { preHandler: authenticate }, async (req, reply) => {
+    markConfigRead(req)
     const { collection } = req.params as { collection: string }
     const { values } = req.body as { values: Record<string, unknown> }
 
@@ -786,6 +851,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
 
   // POST /field-config/:collection/cascade
   app.post('/:collection/cascade', { preHandler: authenticate }, async (req, reply) => {
+    markConfigRead(req)
     const { collection } = req.params as { collection: string }
     const { changed_field, values } = req.body as {
       changed_field: string

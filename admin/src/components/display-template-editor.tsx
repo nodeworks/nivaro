@@ -12,7 +12,7 @@ import { arrayMove, rectSortingStrategy, SortableContext, useSortable } from '@d
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import { GripVertical, Plus } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { CollectionFieldPickerPanel, type PickedField } from '@/components/field-picker'
+import { CollectionFieldPickerPanel, type PickedField } from '@nivaro/shared'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { titleCase } from '@/lib/utils'
 

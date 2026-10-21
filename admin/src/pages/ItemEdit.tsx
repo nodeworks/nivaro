@@ -9,8 +9,10 @@ import {
   ItemEditAuthContext,
   ItemEditForm,
   itemActionChoiceStep,
+  layoutGrantedTools,
   NavigationContext,
   NivaroProvider,
+  useLayoutEditingQuiet,
   usePublishAskContext
 } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -21,12 +23,13 @@ import {
   ChevronsUpDown,
   EyeOff,
   History,
+  LayoutTemplate,
   Loader2,
   Network,
   Play,
   Sparkles
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -343,6 +346,10 @@ function ScheduleChangeDialog({
 
 // ─── ItemEditPage ─────────────────────────────────────────────────────────────
 
+// The layout editor (record page Edit layout mode) is admin-only: its own chunk,
+// requested only when an admin turns the mode on.
+const RecordLayoutEditor = lazy(() => import('@/components/record-layout-editor'))
+
 export function ItemEditPage() {
   const { collection, id } = useParams<{ collection: string; id: string }>()
   const navigate = useNavigate()
@@ -554,8 +561,10 @@ export function ItemEditPage() {
   const toggleExclusion = useMutation({
     mutationFn: () =>
       isExcluded
-        ? api.delete('/picker-exclusions', { data: { collection, item_id: id } })
-        : api.post('/picker-exclusions', { collection, item_id: id }),
+        ? api.delete('/picker-exclusions', {
+            data: { collection, item_id: id, layout: layoutSlug ?? null }
+          })
+        : api.post('/picker-exclusions', { collection, item_id: id, layout: layoutSlug ?? null }),
     onSuccess: () => {
       refetchExclusion()
       toast.success(isExcluded ? 'Record re-enabled in pickers' : 'Record excluded from pickers')
@@ -593,6 +602,7 @@ export function ItemEditPage() {
         .get<{
           data: {
             layout: {
+              id?: number
               ai_enabled?: boolean | number
               allow_schedule?: boolean | number
               allow_disable_pickers?: boolean | number
@@ -605,7 +615,9 @@ export function ItemEditPage() {
           }
         })
         .then((r) => r.data.data)
-        .catch(() => null),
+        // The API answers 404 when a collection has no layout; only that is
+        // "no layout yet". Any other failure stays unknown (null).
+        .catch((e) => (e?.response?.status === 404 ? { layout: null } : null)),
     enabled: !!collection,
     staleTime: 0
   })
@@ -629,9 +641,21 @@ export function ItemEditPage() {
 
   // ── Derived values ────────────────────────────────────────────────────────
   const layoutMeta = activeLayoutData?.layout
+  // Edit layout mode keeps the layout it opened on: a save can change which
+  // layout /active resolves for this record, and the editor must not jump.
+  const [editingLayoutId, setEditingLayoutId] = useState<number | null>(null)
+  const editableLayoutId = user?.is_admin && layoutMeta?.id != null ? Number(layoutMeta.id) : null
+  // The editor re-reads the record's layout queries itself once its last save lands; until
+  // then (plus the push gap) its own config pushes leave the record form alone (N1).
+  const layoutQuiet = useLayoutEditingQuiet(editingLayoutId != null)
+  const closeLayoutEditor = (saved: Promise<void>) => {
+    setEditingLayoutId(null)
+    layoutQuiet.settle(saved)
+  }
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
-  const canSchedule = !!user?.is_admin || !!layoutMeta?.allow_schedule
-  const canDisablePickers = !!user?.is_admin || !!layoutMeta?.allow_disable_pickers
+  const granted = layoutGrantedTools(layoutMeta, !!user?.is_admin)
+  const canSchedule = granted.schedule
+  const canDisablePickers = granted.disablePickers
   const displayName = colMeta?.display_name ?? titleCase(collection ?? '')
   const allFields: CMSField[] = colMeta?.fields ?? []
   const itemStatus = (itemData as Record<string, unknown> | undefined)?._status as
@@ -1044,6 +1068,45 @@ export function ItemEditPage() {
                         <History className='h-3.5 w-3.5' />
                       </Button>
                     )}
+                    {editableLayoutId != null && (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        onClick={() => setEditingLayoutId(editableLayoutId)}
+                        data-tip='Edit the layout this record opens with'
+                        className='rounded-none -ml-px first:ml-0'
+                      >
+                        <LayoutTemplate className='mr-1.5 h-3.5 w-3.5' />
+                        Edit layout
+                      </Button>
+                    )}
+                    {/* /active answers 404 both for a collection with no layout and for a
+                        ?layout= slug that names none: only the first is "create the first form". */}
+                    {user?.is_admin && activeLayoutData && !activeLayoutData.layout && (
+                      <Button
+                        asChild
+                        variant='outline'
+                        size='sm'
+                        className='rounded-none -ml-px first:ml-0'
+                      >
+                        <Link
+                          to={`/data-model/${collection}?tab=groups`}
+                          data-tip={
+                            layoutSlug
+                              ? "This link names a form that doesn't exist — see this collection's forms"
+                              : 'No layout yet — create the first form'
+                          }
+                          aria-label={
+                            layoutSlug
+                              ? "This link names a form that doesn't exist. See this collection's forms"
+                              : undefined
+                          }
+                        >
+                          <LayoutTemplate className='mr-1.5 h-3.5 w-3.5' />
+                          {layoutSlug ? 'Form not found' : 'Edit layout'}
+                        </Link>
+                      </Button>
+                    )}
                     {id && !isNew && collection && (
                       <ShareLinkPopover
                         collection={collection}
@@ -1136,6 +1199,7 @@ export function ItemEditPage() {
                 }}
                 focusField={focusField}
                 showHeader={true}
+                layoutEditing={layoutQuiet.layoutEditing}
                 onBack={undefined}
                 onSaved={(newId) => {
                   if (isNew)
@@ -1185,6 +1249,18 @@ export function ItemEditPage() {
                 {...(isNew && importResult ? { initialImportResult: importResult } : {})}
               />
             </div>
+            {/* Edit layout mode: mounted here, outside the header tools (inside
+                the record's providers), and portalled to the page by the editor. */}
+            {editingLayoutId != null && user?.is_admin && collection && (
+              <Suspense fallback={null}>
+                <RecordLayoutEditor
+                  collection={collection}
+                  layoutId={editingLayoutId}
+                  recordId={isNew ? null : (id ?? null)}
+                  onClose={closeLayoutEditor}
+                />
+              </Suspense>
+            )}
           </DrilldownContext.Provider>
         </ItemEditAuthContext.Provider>
       </NavigationContext.Provider>

@@ -12,6 +12,8 @@ import {
 import { get, post } from '../../lib/commands'
 import { useRecordReader } from '../../lib/record-loader'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
+import { DesignDropZone, designWrap } from '../layout-editor/DesignNode'
+import { type DesignTarget, useLayoutDesign } from '../layout-editor/design-context'
 import { UserAvatar } from '../UserAvatar'
 import {
   DropdownMenu,
@@ -1138,6 +1140,13 @@ export function GroupSection({
   alternateWidths?: Record<string, 1 | 2>
 }) {
   const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
+  // Layout editor canvas: every placement is a selectable shell, the section
+  // always shows (rules and emptiness never hide it), hidden fields can show
+  // as faint placeholders. Null on a record page.
+  const design = useLayoutDesign()
+  const shell = (t: DesignTarget, node: ReactNode) => designWrap(design, t, node, { asChild: true })
+  const slotAt = (field: string): DesignTarget => ({ kind: 'slot', field, group_key: group.key })
+  const showHidden = !!design?.showHidden
   // Widget content reports (WidgetSlot onContentChange) — hide_when_empty must
   // consider widget rows, not just field values, or a widget-only section is
   // permanently hidden (empty fieldValues → every() is vacuously true).
@@ -1151,7 +1160,7 @@ export function GroupSection({
   const hasErrors = !displayOnly && fields.some((f) => errors[f.field])
 
   // Section visibility rules (layout-configured)
-  const visibilityMode = group.visibility_mode ?? 'always'
+  const visibilityMode = design ? 'always' : (group.visibility_mode ?? 'always')
   if (visibilityMode === 'new_only' && !isNew) return null
   if (visibilityMode === 'existing_only' && isNew) return null
   const groupWidgets = widgetAssignments ?? []
@@ -1165,7 +1174,7 @@ export function GroupSection({
     !isNew &&
     groupWidgets.some((ws) => ws.widget_id != null && widgetContent[ws.field] === undefined)
   let hiddenWhenEmpty = false
-  if (group.hide_when_empty && fieldValues) {
+  if (group.hide_when_empty && fieldValues && !design) {
     const allEmpty = fieldValues.every(
       (v) => v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)
     )
@@ -1180,7 +1189,11 @@ export function GroupSection({
   const containerWidth = useContainerWidth(gridRef)
   const GroupIcon = resolveIcon(group.icon)
 
-  const visibleFields_ = fields.filter((f) => !f.hidden)
+  const visibleFields_ = showHidden ? fields : fields.filter((f) => !f.hidden)
+  // Design mode + "show hidden": a field hidden here (flag or a rule) renders
+  // forced-visible but faint, so it can still be selected.
+  const hiddenInDesign = (f: CMSField) =>
+    showHidden && (f.hidden || !(visibleFields.has(f.field) || !visibleFields.size))
 
   return (
     <div
@@ -1193,6 +1206,8 @@ export function GroupSection({
       <button
         type='button'
         onClick={toggle}
+        // Layout editor: a field dropped on the header goes first in the section.
+        data-design-group-header={design ? '' : undefined}
         className={cn(
           'flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-slate-50/50 dark:hover:bg-white/[0.02] rounded-t-xl',
           // Round the bottom only when nothing renders below the header — an
@@ -1210,6 +1225,9 @@ export function GroupSection({
         <span className='flex-1' />
         {hasErrors && <span className='nvr-pop h-2 w-2 rounded-full bg-destructive shrink-0' />}
         <ChevronDown
+          // Design mode: the chevron still folds the section; the rest of
+          // the header selects it.
+          data-design-pass={design ? '' : undefined}
           className={cn(
             'h-4 w-4 text-slate-400 dark:text-slate-500 transition-transform duration-200',
             collapsed && '-rotate-90'
@@ -1297,12 +1315,15 @@ export function GroupSection({
             }
             items.sort((a, b) => a.sort - b.sort)
 
+            if (design && items.length === 0) return <DesignDropZone />
+
             return displayOnly ? (
               <div ref={gridRef} className='grid grid-cols-12 gap-x-6 gap-y-3'>
                 {items.map((item) => {
                   if (item._t === 'owners') {
                     const span = item.slot.col_span ?? 12
-                    return (
+                    return shell(
+                      slotAt('__owners__'),
                       <div
                         key='__owners__'
                         className='min-w-0'
@@ -1325,7 +1346,8 @@ export function GroupSection({
                       r.many_field === f.field &&
                       !r.junction_field
                   )
-                  return (
+                  return shell(
+                    { kind: 'field', field: f.field, group_key: group.key },
                     <div
                       key={f.field}
                       className='min-w-0'
@@ -1366,7 +1388,8 @@ export function GroupSection({
                 {items.map((item) => {
                   if (item._t === 'owners') {
                     const span = item.slot.col_span ?? 12
-                    return (
+                    return shell(
+                      slotAt('__owners__'),
                       <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
                         <OwnersInline
                           collection={collection}
@@ -1380,7 +1403,8 @@ export function GroupSection({
                     if (!layoutId) return null
                     const span = item.slot.col_span ?? 12
                     const label = item.slot.label_override?.trim() || 'Generate PDF'
-                    return (
+                    return shell(
+                      slotAt('__pdf__'),
                       <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
                         <PdfGenerateButton
                           collection={collection}
@@ -1397,7 +1421,8 @@ export function GroupSection({
                     if (!item.slot.widget_id) return null
                     const span = item.slot.col_span ?? 12
                     const bindings = parseBindings(item.slot.input_bindings)
-                    return (
+                    return shell(
+                      slotAt(item.slot.field),
                       <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
                         <WidgetSlot
                           widgetId={item.slot.widget_id}
@@ -1519,27 +1544,38 @@ export function GroupSection({
                         </div>
                       </div>
                     ) : undefined
-                  return (
+                  const row = (
+                    <FieldRow
+                      field={f}
+                      draft={draft}
+                      onChange={onChange}
+                      relations={relations}
+                      collection={collection}
+                      itemId={itemId}
+                      error={errors[f.field]}
+                      visible={visibleFields.has(f.field) || !visibleFields.size}
+                      forceVisible={hiddenInDesign(f) || undefined}
+                      locked={lockedFields.has(f.field)}
+                      layoutAiEnabled={layoutAiEnabled}
+                      renderField={renderField}
+                      onCountChange={onCountChange}
+                      swapButton={swapBtn}
+                      swapContent={swapCnt}
+                    />
+                  )
+                  return shell(
+                    { kind: 'field', field: f.field, group_key: group.key },
                     <div
                       key={f.field}
                       style={{ gridColumn: `span ${resolveColSpan(f.options, containerWidth)}` }}
                     >
-                      <FieldRow
-                        field={f}
-                        draft={draft}
-                        onChange={onChange}
-                        relations={relations}
-                        collection={collection}
-                        itemId={itemId}
-                        error={errors[f.field]}
-                        visible={visibleFields.has(f.field) || !visibleFields.size}
-                        locked={lockedFields.has(f.field)}
-                        layoutAiEnabled={layoutAiEnabled}
-                        renderField={renderField}
-                        onCountChange={onCountChange}
-                        swapButton={swapBtn}
-                        swapContent={swapCnt}
-                      />
+                      {hiddenInDesign(f) ? (
+                        <div data-design-hidden='' className='opacity-40'>
+                          {row}
+                        </div>
+                      ) : (
+                        row
+                      )}
                       {inlineEntries?.length && hasVal && inlineRelCollection && (
                         <InlineDisplay
                           relCollection={inlineRelCollection}

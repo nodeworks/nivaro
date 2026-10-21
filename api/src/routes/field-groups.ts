@@ -2,6 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { nameConfigCollection } from '../services/config-live.js'
+import { lockLayout } from '../services/layout-activation.js'
+import { snapshotLayoutVersion } from '../services/layout-versions.js'
 
 export async function fieldGroupsRoutes(app: FastifyInstance) {
   // GET /field-groups/:collection — list groups for active layout (backward compat)
@@ -79,19 +82,26 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'collection, key, label, and type are required' })
     }
 
-    await db('nivaro_field_groups').insert({
-      collection: body.collection,
-      key: body.key,
-      label: body.label,
-      type: body.type,
-      icon: body.icon ?? null,
-      sort: body.sort ?? 0,
-      is_collapsed: body.is_collapsed ? 1 : 0,
-      layout_id: body.layout_id ?? null,
-      container_id: (body as Record<string, unknown>).container_id ?? null,
-      tab_mode: (body as Record<string, unknown>).tab_mode ?? null,
-      content: (body as Record<string, unknown>).content ?? null,
-      content_tone: (body as Record<string, unknown>).content_tone ?? null
+    // Layout writers queue on the layout row (see lockLayout).
+    await db.transaction(async (trx) => {
+      if (body.layout_id != null) {
+        await lockLayout(trx, body.layout_id)
+        await snapshotLayoutVersion(Number(body.layout_id), 'before group add', req.user?.id, trx)
+      }
+      await trx('nivaro_field_groups').insert({
+        collection: body.collection,
+        key: body.key,
+        label: body.label,
+        type: body.type,
+        icon: body.icon ?? null,
+        sort: body.sort ?? 0,
+        is_collapsed: body.is_collapsed ? 1 : 0,
+        layout_id: body.layout_id ?? null,
+        container_id: (body as Record<string, unknown>).container_id ?? null,
+        tab_mode: (body as Record<string, unknown>).tab_mode ?? null,
+        content: (body as Record<string, unknown>).content ?? null,
+        content_tone: (body as Record<string, unknown>).content_tone ?? null
+      })
     })
 
     const created = await db('nivaro_field_groups')
@@ -116,6 +126,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     const existing = await db('nivaro_field_groups').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    nameConfigCollection(req, existing.collection)
 
     const body = req.body as Partial<{
       key: string
@@ -172,7 +183,18 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     if (Object.keys(patch).length === 0)
       return reply.code(400).send({ error: 'No fields to update' })
 
-    await db('nivaro_field_groups').where({ id }).update(patch)
+    await db.transaction(async (trx) => {
+      if (existing.layout_id) {
+        await lockLayout(trx, existing.layout_id)
+        await snapshotLayoutVersion(
+          Number(existing.layout_id),
+          'before group edit',
+          req.user?.id,
+          trx
+        )
+      }
+      await trx('nivaro_field_groups').where({ id }).update(patch)
+    })
     const updated = await db('nivaro_field_groups').where({ id }).first()
 
     await logActivity({
@@ -192,20 +214,29 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     const existing = await db('nivaro_field_groups').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    nameConfigCollection(req, existing.collection)
 
-    if (existing.layout_id) {
-      // Layout-aware: clear group_key in assignments for this layout
-      await db('nivaro_layout_field_assignments')
-        .where({ layout_id: existing.layout_id, group_key: existing.key })
-        .update({ group_key: null })
-    } else {
-      // Legacy: clear group_key directly on fields
-      await db('nivaro_fields')
-        .where({ collection: existing.collection, group_key: existing.key })
-        .update({ group_key: null })
-    }
-
-    await db('nivaro_field_groups').where({ id }).delete()
+    await db.transaction(async (trx) => {
+      if (existing.layout_id) {
+        await lockLayout(trx, existing.layout_id)
+        await snapshotLayoutVersion(
+          Number(existing.layout_id),
+          'before group delete',
+          req.user?.id,
+          trx
+        )
+        // Layout-aware: clear group_key in assignments for this layout
+        await trx('nivaro_layout_field_assignments')
+          .where({ layout_id: existing.layout_id, group_key: existing.key })
+          .update({ group_key: null })
+      } else {
+        // Legacy: clear group_key directly on fields
+        await trx('nivaro_fields')
+          .where({ collection: existing.collection, group_key: existing.key })
+          .update({ group_key: null })
+      }
+      await trx('nivaro_field_groups').where({ id }).delete()
+    })
 
     await logActivity({
       action: 'delete',
@@ -226,11 +257,29 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'collection and order array are required' })
     }
 
-    for (const item of body.order) {
-      await db('nivaro_field_groups')
-        .where({ id: item.id, collection: body.collection })
-        .update({ sort: item.sort })
-    }
+    const touched = (await db('nivaro_field_groups')
+      .where({ collection: body.collection })
+      .whereIn(
+        'id',
+        body.order.map((o) => o.id)
+      )
+      .select('layout_id')) as Array<{ layout_id: number | null }>
+    // Lock in id order so two reorders across the same layouts can't deadlock.
+    const layoutIds = [
+      ...new Set(touched.map((t) => t.layout_id).filter((l): l is number => l != null))
+    ]
+      .map(Number)
+      .sort((a, b) => a - b)
+    await db.transaction(async (trx) => {
+      for (const lid of layoutIds) await lockLayout(trx, lid)
+      for (const lid of layoutIds)
+        await snapshotLayoutVersion(lid, 'before group reorder', req.user?.id, trx)
+      for (const item of body.order) {
+        await trx('nivaro_field_groups')
+          .where({ id: item.id, collection: body.collection })
+          .update({ sort: item.sort })
+      }
+    })
 
     const rows = await db('nivaro_field_groups')
       .where({ collection: body.collection })

@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { Skeleton } from '@/components/ui/skeleton'
-import { api } from '@/lib/api'
-import { renderDisplayTemplate, USER_SYSTEM_COLS, userDisplayLabel } from '@/lib/relations'
+import { useNivaroClient } from '../../../context'
+import { get } from '../../../lib/commands'
+import { renderDisplayTemplate, USER_SYSTEM_COLS, userDisplayLabel } from '../../pipeline/relations'
+import { Skeleton } from '../../ui/skeleton'
+import { useCollectionBody } from '../collection-meta'
 
 interface RelationLabelProps {
   relatedCollection: string
@@ -9,19 +11,23 @@ interface RelationLabelProps {
 }
 
 export function RelationLabel({ relatedCollection, id }: RelationLabelProps) {
+  const client = useNivaroClient()
   const hasId = id !== null && id !== undefined && id !== ''
 
-  const SYSTEM_COLS = new Set(['directus_users', 'directus_files', 'directus_activity', 'directus_roles', 'nivaro_users'])
+  const SYSTEM_COLS = new Set([
+    'directus_users',
+    'directus_files',
+    'directus_activity',
+    'directus_roles',
+    'nivaro_users'
+  ])
   const isSystemCol = SYSTEM_COLS.has(relatedCollection)
   // User relations resolve via /users — system tables have no /items route
   const isUserCol = USER_SYSTEM_COLS.has(relatedCollection)
 
-  const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', relatedCollection],
-    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
-    staleTime: 10 * 60 * 1000,
+  const { data: colMeta } = useCollectionBody(relatedCollection, {
     enabled: !isSystemCol,
-    retry: false,
+    retry: false
   })
 
   const displayTemplate = colMeta?.display_template ?? null
@@ -30,13 +36,13 @@ export function RelationLabel({ relatedCollection, id }: RelationLabelProps) {
     queryKey: ['relation-item', relatedCollection, String(id)],
     queryFn: () =>
       isUserCol
-        ? api.get(`/users/${id}`).then((r) => r.data.data)
-        : api
-            .get(`/items/${relatedCollection}/${id}`, { params: { fields: '*' } })
-            .then((r) => r.data.data),
+        ? client.request<{ data: any }>(get(`/users/${id}`)).then((r) => r.data)
+        : client
+            .request<{ data: any }>(get(`/items/${relatedCollection}/${id}`, { fields: '*' }))
+            .then((r) => r.data),
     enabled: hasId && (isUserCol || !isSystemCol),
     staleTime: 30 * 60 * 1000,
-    retry: false,
+    retry: false
   })
 
   if (!hasId) {

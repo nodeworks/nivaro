@@ -2,8 +2,9 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
-import { announceConfigChanged, collectionHint } from '../services/config-live.js'
+import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
+import { bustLayoutReferences } from '../services/layout-references.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
 import { accessAnnouncement, announceAccessChanged } from '../services/record-events.js'
 import { clearRelationLimitCache } from '../services/relation-limits.js'
@@ -267,6 +268,8 @@ export async function registerRoutes(app: FastifyInstance) {
       // Batches of reads (#1304, people cards) are POSTs only because they carry a body.
       url.startsWith('/api/items/batch-read') ||
       url.startsWith('/api/users/cards') ||
+      // The layout editor canvas's draft field rows: a read carrying placements.
+      /^\/api\/field-config\/[^/?]+\/project(\?|$)/.test(url) ||
       // The MCP endpoint only carries protocol messages; each tool call inside it is its
       // own API request, judged by this hook on its own method and path.
       url === '/api/mcp' ||
@@ -298,8 +301,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // can change that metadata drops the cache immediately, so edits are visible
   // on the next request instead of waiting out the TTL. One hook rather than a
   // call at every mutation site — no site can be missed.
-  const META_ROUTES =
-    /^\/api\/(data-model|collections|field-config|collection-layouts|field-groups)\b/
+  // (The route list and the read-only exemptions: isConfigWrite, services/config-live.ts.)
   // Definition rows (widgets, custom queries) are cached per id for renders
   // (#494); a write to their editors drops that cache the same way.
   const DEFINITION_ROUTES = /^\/api\/(widgets-internal|custom-queries)\b/
@@ -335,7 +337,7 @@ export async function registerRoutes(app: FastifyInstance) {
     if (DEFINITION_ROUTES.test(req.url) && !/\/(render|action|execute|run)\b/.test(req.url)) {
       bustDefinitionCache()
     }
-    if (META_ROUTES.test(req.url)) {
+    if (isConfigWrite(req)) {
       clearMetadataCache()
       bustSectionLockCache()
       // Live integrity checks compile field/layout config per collection — same
@@ -345,6 +347,7 @@ export async function registerRoutes(app: FastifyInstance) {
       clearRowRuleCache()
       clearRelationLimitCache()
       clearPickerRuleCache()
+      bustLayoutReferences()
       // Config hot-push (#268): tell open clients the schema/layout changed —
       // they re-resolve field-config/layout queries in place and show an
       // "updated" chip instead of serving a stale form until reload.

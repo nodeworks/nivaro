@@ -802,7 +802,7 @@ export function SummaryPanel({
                     'flex items-center px-2 opacity-0 group-hover/row:opacity-100 transition-all duration-150',
                     copiedField === f.field
                       ? 'text-emerald-500'
-                      : 'text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-300'
+                      : 'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
                   )}
                 >
                   {copiedField === f.field ? (

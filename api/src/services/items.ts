@@ -5358,6 +5358,34 @@ export async function createOne(
   })
 }
 
+/**
+ * May this person update THIS record — the gates updateOne applies before it
+ * writes: servable, can(update), the tree permission on the item and the
+ * update policy's row filter within the workspace. Visibility (readOne) and
+ * field-level rules are not judged here. For routes that change something
+ * about a record without writing its row (picker exclusions).
+ */
+export async function canUpdateItem(
+  user: User,
+  collection: string,
+  id: string | number,
+  workspaceId?: string
+): Promise<boolean> {
+  try {
+    await assertServable(user, collection, 'update')
+    assertRecordId(id)
+  } catch {
+    return false
+  }
+  if (!(await can(user, 'update', collection))) return false
+  if ((await getTreePermission(user, 'update', collection, id)) === false) return false
+  const rowFilter = await getRowFilter(user, 'update', collection)
+  const q = db(collection).where({ id }).select('id')
+  await applyWorkspaceScope(q, collection, workspaceId)
+  if (rowFilter) applyRowFilter(q, rowFilter, user)
+  return !!(await q.first())
+}
+
 export async function updateOne(
   user: User,
   collection: string,

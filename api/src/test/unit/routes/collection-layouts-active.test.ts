@@ -16,7 +16,13 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
 
-vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+// PATCH writes inside db.transaction(); the transaction hands back the same mock.
+vi.mock('../../../db/index.js', () => {
+  const d = vi.fn()
+  return {
+    db: Object.assign(d, { transaction: vi.fn(async (cb: (t: unknown) => unknown) => cb(d)) })
+  }
+})
 
 import { db } from '../../../db/index.js'
 import { authenticate } from '../../../middleware/authenticate.js'
@@ -89,6 +95,9 @@ describe('matchesRecordConditions', () => {
 
 // ─── GET /collection-layouts/active — selection precedence ────────────────
 
+/** The ORDER BY each candidate read asked for (fetchLayoutsForCollection). */
+const candidateOrders: string[] = []
+
 function makeActiveDbMock(opts: {
   slugRow?: Record<string, unknown>
   layouts: Record<string, unknown>[]
@@ -109,7 +118,10 @@ function makeActiveDbMock(opts: {
           // The route narrows to record-form layouts with a second, callback
           // form of .where() before ordering, so this stage must be chainable.
           const stage: Record<string, unknown> = {
-            orderByRaw: vi.fn(() => Promise.resolve(opts.layouts))
+            orderByRaw: vi.fn((order: string) => {
+              candidateOrders.push(order)
+              return Promise.resolve(opts.layouts)
+            })
           }
           stage.where = vi.fn(() => stage)
           return stage
@@ -320,9 +332,12 @@ describe('GET /collection-layouts/active — record-condition precedence', () =>
       }) as unknown as typeof db
     )
 
+    candidateOrders.length = 0
     const res = await getActive({ collection: 'workflows', item: 'w1' })
     expect(res.statusCode).toBe(200)
     expect((JSON.parse(res.body).data.layout as { id: number }).id).toBe(2)
+    // id last: equal sorts resolve the same way here and in the overview's sentences.
+    expect(candidateOrders).toContain('is_active desc, sort asc, id asc')
   })
 
   it('unknown item id falls through as if no item was supplied (no 404)', async () => {
@@ -550,6 +565,64 @@ describe('GET /collection-layouts/active — record-condition precedence', () =>
     }
     expect(layout.record_conditions).toEqual([{ field: 'workflow_type', op: 'eq', value: 2 }])
     expect(layout.default_values).toEqual({ workflow_type: 2 })
+  })
+})
+
+// ─── GET /collection-layouts/active — placement columns ───────────────────
+
+describe('GET /collection-layouts/active — placement columns', () => {
+  it('returns col_span for the layout and its parent (slot card widths)', async () => {
+    const child = {
+      id: 2,
+      is_active: 1,
+      sort: 0,
+      conditions: null,
+      record_conditions: null,
+      default_values: null,
+      parent_layout_id: 5
+    }
+    // Rows as stored; the mock answers only the columns the route selects,
+    // like the database would.
+    const rows: Record<number, Record<string, unknown>[]> = {
+      2: [{ field: '__owners__', group_key: null, sort: 3, col_span: 4, secret_col: 'x' }],
+      5: [{ field: '__pdf__', group_key: null, sort: 4, col_span: 6 }]
+    }
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_collection_layouts')
+        return {
+          where: vi.fn(() => {
+            const stage: Record<string, unknown> = {
+              orderByRaw: vi.fn(() => Promise.resolve([child]))
+            }
+            stage.where = vi.fn(() => stage)
+            return stage
+          })
+        }
+      if (table === 'nivaro_field_groups')
+        return { where: vi.fn(() => ({ orderBy: vi.fn(() => Promise.resolve([])) })) }
+      if (table === 'nivaro_layout_field_assignments')
+        return {
+          where: vi.fn((cond: { layout_id: number }) => ({
+            select: vi.fn((...cols: string[]) => ({
+              orderBy: vi.fn(() =>
+                Promise.resolve(
+                  (rows[cond.layout_id] ?? []).map((r) =>
+                    Object.fromEntries(cols.filter((c) => c in r).map((c) => [c, r[c]]))
+                  )
+                )
+              )
+            }))
+          }))
+        }
+      throw new Error(`unexpected table: ${table}`)
+    }) as unknown as typeof db)
+
+    const res = await getActive({ collection: 'workflows' })
+    expect(res.statusCode).toBe(200)
+    const assignments = JSON.parse(res.body).data.assignments as Array<Record<string, unknown>>
+    expect(assignments.find((a) => a.field === '__owners__')?.col_span).toBe(4)
+    expect(assignments.find((a) => a.field === '__pdf__')?.col_span).toBe(6)
+    expect(assignments[0]).not.toHaveProperty('secret_col')
   })
 })
 

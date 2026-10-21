@@ -1889,6 +1889,81 @@ When SLA rules, scheduled flows, or other time-tracking systems are active:
 
 ---
 
+## SDK — Layout Editor
+
+The layout editor saves through a bundle + ops model: read the layout as `{ layout, groups, placements, rev }`, send a batch of small ops with the `rev` you read, and get the new bundle back. A batch applies all or nothing. Every call below except the picker and scheduled-change tools is admin only.
+
+```typescript
+import {
+  readLayoutBundle, submitLayoutOps,
+  readLayoutOverview, explainLayout,
+  createCollectionLayout, cloneLayout, readActiveLayout
+} from '@nivaro/sdk'
+
+const bundle = await nivaro.request(readLayoutBundle(42))
+
+try {
+  const next = await nivaro.request(
+    submitLayoutOps(42, {
+      base_rev: bundle.rev,
+      note: 'Move Status into the header',
+      ops: [
+        { op: 'move', from: { field: 'status', group_key: 'details' }, to_group_key: null, index: 0 },
+        { op: 'update_placement', at: { field: 'owner', group_key: null }, patch: { col_span: 6 } },
+        { op: 'layout_update', patch: { disable_clone: true } }
+      ]
+    })
+  )
+} catch (err) {
+  // 409 { error: 'stale', bundle }: the layout changed since base_rev. Re-apply on err.response.bundle.
+  // 400 { error, op_index }: the op at op_index was refused; nothing was saved.
+}
+```
+
+The op union (`LayoutOp`), `LayoutBundle`, `PlacementPatch`, `GroupPatch` and `LayoutPatch` are exported as types, with `PLACEMENT_PATCH_KEYS`, `GROUP_PATCH_KEYS` and `LAYOUT_PATCH_KEYS` as runtime lists. A batch holds at most 500 ops.
+
+#### Commands
+
+| Command | Route | Notes |
+| --- | --- | --- |
+| readLayoutBundle(id) | GET /collection-layouts/:id/bundle | Returns the bundle itself (no `data` wrapper). |
+| submitLayoutOps(id, { ops, base_rev, note? }) | POST /collection-layouts/:id/ops | Returns the new bundle; 409 stale carries the current bundle, 400 carries `op_index`. |
+| readLayoutOverview(collection) | GET /collection-layouts/overview | Every layout, sectioned the way the active-layout resolution checks them, with references and warnings. |
+| explainLayout({ collection, item?, role_id?, slug? }) | GET /collection-layouts/explain | Which layout a record opens with, why, and each candidate's check. |
+| createCollectionLayout(collection, name, { slug?, layout_type?, seed_fields? }) | POST /collection-layouts | `seed_fields` starts the layout with one Main section holding every visible field. |
+| cloneLayout(id, name, { slug?, layout_type? }) | POST /collection-layouts/:id/clone | The copy starts hidden from the New menu (`create_hidden`); an admin opts it in. |
+| readActiveLayout(collection, { slug?, item? }) | GET /collection-layouts/active | Placements carry `col_span`; the result includes `ungrouped_sort`. |
+| updateCollectionLayout(id, patch) | PATCH /collection-layouts/:id | Any `LayoutPatch` setting. |
+| readLayoutVersion / diffLayoutVersion / restoreLayoutVersion | /collection-layouts/:id/versions/... | A restore snapshots the current state first, so it is reversible. |
+| projectFieldConfig(collection, placements) | POST /field-config/:collection/project | The field-config rows a draft would produce. A read; writes nothing. |
+| listInternalWidgetPlacements(widgetId) | GET /widgets-internal/:id/placements | The layouts that place a widget. |
+
+#### Layout-gated record tools
+
+Disabling a record in pickers and scheduling a change accept `layout`, the `?layout=` slug of the form the record was opened with. A non-admin may use them only when that form grants it (`allow_disable_pickers`, `allow_schedule`) and they may update the record. Scheduled changes for non-admins are limited to real, writable columns they may update; a read-only, computed or alias field is refused with 400.
+
+```typescript
+import { excludeFromPickers, includeInPickers, createScheduledChange } from '@nivaro/sdk'
+
+await nivaro.request(excludeFromPickers({ collection: 'vendors', item_id: 17, layout: 'intake' }))
+await nivaro.request(includeInPickers({ collection: 'vendors', item_id: 17, layout: 'intake' }))
+
+await nivaro.request(
+  createScheduledChange({
+    collection: 'vendors',
+    item_id: '17',
+    change_type: 'field_update',
+    changes: { status: 'inactive' },
+    scheduled_at: '2026-12-01T09:00:00Z',
+    layout: 'intake'
+  })
+)
+```
+
+> **Note:** Retired layout settings are no longer writable: `summary_show_all`, `allow_clone` (use `disable_clone`), `addendum_lock_fields` and `hide_actions_when_collapsed`. They stay optional and deprecated on the `CollectionLayout` read type.
+
+---
+
 ## SDK — Schema Snapshots
 
 Capture point-in-time snapshots of your entire metadata registry (collections, fields, relations). Useful for version control, environment promotion, and disaster recovery.

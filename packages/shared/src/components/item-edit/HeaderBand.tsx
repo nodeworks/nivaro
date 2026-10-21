@@ -6,6 +6,7 @@ import {
   headerFoldedCells,
   headerNeedsDense
 } from '../../lib/header-strip'
+import { useLayoutDesign } from '../layout-editor/design-context'
 import { HeaderOverflowChip } from './HeaderOverflowChip'
 
 /**
@@ -99,6 +100,15 @@ export function HeaderTiles({ tiles, folded }: { tiles: ReactElement[]; folded: 
     return key
   })
   const foldedTiles = tiles.filter((_, k) => foldSet.has(cellKeys[k]))
+  // Layout editor canvas: the chip's copies are the same design targets as
+  // the folded tiles in the row; marked so only the row tile registers for
+  // drag and drop.
+  const design = useLayoutDesign()
+  const chipTiles = design
+    ? foldedTiles.map((t) =>
+        cloneElement(t as ReactElement<Record<string, unknown>>, { 'data-design-copy': '' })
+      )
+    : foldedTiles
   return (
     <>
       {tiles.map((t, k) =>
@@ -119,7 +129,7 @@ export function HeaderTiles({ tiles, folded }: { tiles: ReactElement[]; folded: 
           allEmpty={folded.every((c) => c.empty)}
           labels={folded.map((c) => c.label)}
         >
-          {foldedTiles}
+          {chipTiles}
         </HeaderOverflowChip>
       )}
     </>
