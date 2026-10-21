@@ -302,6 +302,8 @@ export const RUNTIME_TABLES: string[] = [
   // ── classified 2026-09-17 — per-user state, logs, reactions, journals ──
   'nivaro_ai_calls',
   'nivaro_ai_feedback',
+  'nivaro_ai_spend_days', // #2473/#2764 per-day AI spend rollup + bill reconciliation (migration 470)
+  'nivaro_ai_model_catalogue', // #2732 models the provider lists, refreshed by the catalogue watch
   'nivaro_ai_knowledge_suggestions', // #1898/#1949 drafts awaiting an admin
   'nivaro_ai_docs_misses', // #1855 docs searches that found nothing
   'nivaro_ai_knowledge_findings', // #2480 glossary / data-guide conflicts
