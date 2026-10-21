@@ -8,8 +8,8 @@ import {
   isEmptyValue as isBlank,
   isFolded,
   planFieldGrid,
-  readGroupStructure,
-  type RowGroup
+  type RowGroup,
+  readGroupStructure
 } from '../lib/form-structure'
 import { useLiveRecord } from '../lib/live'
 import {
@@ -125,6 +125,10 @@ const fmtNumber = (v: unknown) => {
   const n = Number(v)
   return Number.isNaN(n) ? String(v) : n.toLocaleString('en-US')
 }
+
+/** A fact's label on the read board: sentence case, and dark enough to read (the
+ *  old 10px uppercase slate-400 fell under 3:1 on white). */
+const FACT_LABEL = 'text-[11.5px] font-medium text-slate-500 dark:text-slate-400'
 
 const Empty = () => <span className='text-slate-300 dark:text-slate-600'>—</span>
 
@@ -1634,7 +1638,7 @@ function RecordReadViewBody({
           {shell(
             fieldTarget(a),
             <>
-              <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+              <dt className={FACT_LABEL}>
                 {labelFor(a)}
                 <IntegrityMark field={a.field} />
                 {touchMark(a.field)}
@@ -1670,9 +1674,7 @@ function RecordReadViewBody({
           data-read-row={row.key}
           className={`min-w-0 ${members.length > 2 ? 'col-span-full' : 'col-span-2'}`}
         >
-          <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-            {row.label.trim() || members.map(labelFor).join(' / ')}
-          </dt>
+          <dt className={FACT_LABEL}>{row.label.trim() || members.map(labelFor).join(' / ')}</dt>
           <dd className='mt-1 flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[13px] font-medium text-slate-800 dark:text-slate-100'>
             {!record ? (
               <span className='inline-block h-3.5 w-28 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
@@ -1716,7 +1718,7 @@ function RecordReadViewBody({
           { kind: 'group', key: g.key },
           <>
             <h3
-              className={`group/rs relative flex items-center justify-between gap-2 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${
+              className={`group/rs relative flex items-center justify-between gap-2 px-5 py-2.5 text-[12.5px] font-semibold text-slate-700 dark:text-slate-200 ${
                 isOpen(g) ? 'border-b border-slate-100 dark:border-slate-800' : ''
               }`}
             >
@@ -1728,7 +1730,7 @@ function RecordReadViewBody({
                   type='button'
                   onClick={() => toggleOpen(g.key)}
                   aria-expanded={isOpen(g)}
-                  className='min-w-0 flex-1 text-left uppercase after:absolute after:inset-0 group-hover/rs:text-slate-700 dark:group-hover/rs:text-slate-200'
+                  className='min-w-0 flex-1 text-left after:absolute after:inset-0 group-hover/rs:text-slate-900 dark:group-hover/rs:text-white'
                 >
                   {g.label}
                 </button>
@@ -1789,7 +1791,7 @@ function RecordReadViewBody({
                     <>
                       {integrityMap?.get(a.field)?.length ? (
                         <div className='mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'>
-                          <span className='uppercase tracking-wide'>{labelFor(a)}</span>
+                          <span>{labelFor(a)}</span>
                           <IntegrityMark field={a.field} />
                           <span className='font-normal text-amber-700/80 dark:text-amber-300/80'>
                             — {integrityMap.get(a.field)!.length} line issue
@@ -1853,7 +1855,7 @@ function RecordReadViewBody({
             shell(
               { kind: 'header', field: titleAssignment.field },
               <div className='min-w-0'>
-                <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                <p className={FACT_LABEL}>
                   {labelFor(titleAssignment)}
                   <IntegrityMark field={titleAssignment.field} />
                 </p>
@@ -1874,7 +1876,7 @@ function RecordReadViewBody({
                   {shell(
                     { kind: 'header', field: a.field },
                     <>
-                      <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                      <dt className={FACT_LABEL}>
                         {labelFor(a)}
                         <IntegrityMark field={a.field} />
                         {touchMark(a.field)}

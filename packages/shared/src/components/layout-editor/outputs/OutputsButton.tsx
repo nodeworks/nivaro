@@ -232,8 +232,10 @@ export function OutputsButton({
           </>
         ) : (
           <>
-            <p className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>Outputs</p>
-            <p className={cn(effectText, 'mt-0.5')}>
+            <p className='px-2 text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+              Outputs
+            </p>
+            <p className={cn(effectText, 'mt-0.5 px-2')}>
               The form as a file. Spreadsheets and print follow the saved form.
             </p>
             <div className='mt-2 space-y-0.5'>

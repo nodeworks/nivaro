@@ -77,7 +77,7 @@ export function TextRulesSetting() {
     <Setting
       k='field.text_rules'
       label='Label and help by state or role'
-      effect='Different words in a workflow state or for a role — "Requested date" becomes "Delivered date" once Completed. The first rule that matches wins; the record page, read view and PDF follow it.'
+      effect='Different words in a workflow state or for a role: “Requested date” becomes “Delivered date” once Completed. The first rule that matches wins; the record page, read view and PDF follow it.'
     >
       {rules.map((r, i) => (
         <div
@@ -318,7 +318,7 @@ export function ConfirmChangeSetting() {
       <Toggle
         k='field.confirm_change.on'
         label='Confirm changes on saved records'
-        effect='Changing it on an existing record asks "Are you sure?" and a short reason, kept with the change in the history. New records are not asked.'
+        effect='Changing it on an existing record asks “Are you sure?” and a short reason, kept with the change in the history. New records are not asked.'
         checked={!!cfg}
         onChange={(v) =>
           write(
@@ -368,7 +368,7 @@ export function RepeatLastToggle() {
     <Toggle
       k='field.repeat_last'
       label='Repeat last value'
-      effect='A "Repeat last" button beside the label fills in what this person entered on their previous record here.'
+      effect='A “Repeat last” button beside the label fills in what this person entered on their previous record here.'
       checked={ov.repeat_last === true}
       onChange={(v) =>
         ctx.setOverride(
@@ -386,9 +386,9 @@ export function RepeatLastToggle() {
 const FORMAT_OPTIONS: Array<{ value: DisplayFormat; label: string }> = [
   { value: '', label: 'Plain' },
   { value: 'integer', label: 'Whole' },
-  { value: 'number', label: '0.00' },
+  { value: 'number', label: 'Decimal' },
   { value: 'currency', label: 'Money' },
-  { value: 'percent', label: '%' }
+  { value: 'percent', label: 'Percent' }
 ]
 
 /** Label, expression and format of a `__calc_<n>__` placement. */
@@ -452,6 +452,7 @@ export function DisplayFormulaSettings({
         <TextArea
           ariaLabel='Formula'
           rows={3}
+          mono
           value={df.expr}
           onChange={(v) =>
             write({ display_formula: { ...df, expr: v } }, 'Change the formula', true)
@@ -468,12 +469,14 @@ export function DisplayFormulaSettings({
         )}
         {check?.ok && check.unknownTokens.length > 0 && (
           <p data-formula-unknown='' className='text-[12px] text-amber-700 dark:text-amber-300'>
-            Not fields of this collection: {check.unknownTokens.join(', ')}
+            Not fields of this collection:{' '}
+            <span className='font-mono'>{check.unknownTokens.join(', ')}</span>
           </p>
         )}
         {check?.ok && !check.unknownTokens.length && offForm.length > 0 && (
           <p data-formula-offform='' className={effectText}>
-            Not on this form, so they read as empty here: {offForm.join(', ')}
+            Not on this form, so they read as empty here:{' '}
+            <span className='font-mono'>{offForm.join(', ')}</span>
           </p>
         )}
       </Setting>

@@ -383,12 +383,15 @@ export function TextArea({
   value,
   onChange,
   ariaLabel,
-  rows = 4
+  rows = 4,
+  mono
 }: {
   value: string
   onChange: (v: string) => void
   ariaLabel?: string
   rows?: number
+  /** Machine text (an expression): JetBrains Mono. */
+  mono?: boolean
 }) {
   const env = useContext(InspectorEnvContext)
   const buf = useFocusBuffer(value, () => env?.flush())
@@ -402,7 +405,7 @@ export function TextArea({
         onChange(e.target.value)
       }}
       {...buf.props}
-      className={cn(inputBase, 'h-auto py-1.5 leading-snug')}
+      className={cn(inputBase, 'h-auto py-1.5 leading-snug', mono && 'font-mono text-[12px]')}
     />
   )
 }

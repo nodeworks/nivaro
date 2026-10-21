@@ -99,8 +99,7 @@ export function PickerMisses({ layoutId, field }: { layoutId: number; field: str
           </p>
         ) : misses.length === 0 ? (
           <p className='rounded-md border border-dashed border-border px-3 py-2.5 text-[12px] leading-5 text-muted-foreground'>
-            No missed searches yet. When someone searches this picker and finds nothing, the words
-            show here with a suggested fix.
+            None in the last 14 days. Words that find nothing show here with a suggested fix.
           </p>
         ) : (
           <>
