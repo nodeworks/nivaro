@@ -1,8 +1,8 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { ChatConfigContext, type ChatConfig } from './chat-core'
 import { ChatPanel } from './ChatPanel'
+import { type ChatConfig, ChatConfigContext } from './chat-core'
 
 // Presence is the only live source the Online tab reads; everything else the
 // panel asks react-query for is empty, so the tab renders from these rows.
@@ -70,15 +70,20 @@ const ZONED = {
   app: null,
   current_path: '/records/workflows/312100'
 }
-const ZONED_USER = { user_id: ZONED.user_id, display_name: 'Ada Approver', role_name: 'workflow_approver' }
+const ZONED_USER = {
+  user_id: ZONED.user_id,
+  display_name: 'Ada Approver',
+  role_name: 'workflow_approver'
+}
 
 describe('ChatPanel Online tab person row', () => {
-  it('puts the page on its own line with a title, and keeps role/zones on a separate titled line', () => {
+  it('puts the page on its own line with its path as the tip, and keeps role/zones on a separate titled line', () => {
     const html = render({ fields: ['role', 'scopes', 'page'], rows: [ZONED], users: [ZONED_USER] })
     expect(html).toContain('data-chat-online-meta')
     expect(html).toContain('data-chat-online-page')
     expect(html).toContain('title="Workflow Approver · Zone 3, Zone 1, Zone 2"')
-    expect(html).toContain('title="Workflows › AB26-12345"')
+    expect(html).toContain('>Workflows › AB26-12345<')
+    expect(html).toContain('data-tip="/records/workflows/312100"')
     expect(html).toContain('line-clamp-2')
     expect(html).toContain('break-words')
   })
