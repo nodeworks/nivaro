@@ -1145,9 +1145,14 @@ export interface AccessReason {
  *  separately, reasons only, never record data. */
 export function explainRecordAccess(
   collection: string,
-  id: string | number
+  id: string | number,
+  opts?: { user_id?: string }
 ): Command<{ data: { access: boolean; reasons: AccessReason[] } }> {
-  return cmd('GET', `/access-explain/${collection}/${id}`)
+  return cmd(
+    'GET',
+    `/access-explain/${collection}/${id}`,
+    opts?.user_id ? { user_id: opts.user_id } : undefined
+  )
 }
 
 /** Ask admins for access to a hidden record. Deduped per user+record per day

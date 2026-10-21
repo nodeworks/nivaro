@@ -16,14 +16,18 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createNivaro, type NivaroClient, readMe } from '@nivaro/sdk'
 import { identifyingFetch, tagToolCalls } from './identify.js'
 import { registerResources } from './resources.js'
+import { registerAccessTools } from './tools/access.js'
 import { registerAccountTools } from './tools/account.js'
 import { registerAdminTools } from './tools/admin.js'
+import { registerApprovalTools } from './tools/approvals.js'
 import { registerCollectionTools } from './tools/collections.js'
 import { registerItemTools } from './tools/items.js'
 import { registerLayoutTools } from './tools/layouts.js'
 import { registerLookupTools } from './tools/lookup.js'
 import { registerPipelineTools } from './tools/pipeline.js'
 import { registerRecordTools } from './tools/record.js'
+import { registerStatusTools } from './tools/status.js'
+import { registerSupportTools } from './tools/support.js'
 import { registerWorkTools } from './tools/work.js'
 
 export const SERVER_NAME = 'nivaro'
@@ -81,7 +85,15 @@ export const TOOL_NAMES = [
   'search',
   'find_people',
   'list_custom_queries',
-  'run_custom_query'
+  'run_custom_query',
+  'support_tickets',
+  'support_ticket',
+  'support_claim',
+  'support_reply',
+  'support_set_status',
+  'list_approvals',
+  'decide_approval',
+  'sla_status'
 ] as const
 
 /** The read-only admin/ops tools, registered only with `adminTools: true`. */
@@ -94,7 +106,8 @@ export const ADMIN_TOOL_NAMES = [
   'traffic_summary',
   'list_cron_jobs',
   'list_job_runs',
-  'cpu_profile'
+  'cpu_profile',
+  'explain_access'
 ] as const
 
 /**
@@ -163,8 +176,12 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   registerWorkTools(server, client)
   registerRecordTools(server, client)
   registerLookupTools(server, client)
+  registerSupportTools(server, client)
+  registerApprovalTools(server, client)
+  registerStatusTools(server, client)
   if (options.adminTools === true) {
     registerAdminTools(server, client)
+    registerAccessTools(server, client)
     registerLayoutTools(server, client)
   }
   registerResources(server, client)
