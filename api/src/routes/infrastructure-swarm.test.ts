@@ -1,13 +1,7 @@
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { setDockerFetchForTests } from '../services/docker-source.js'
-import {
-  configs,
-  managerInfo,
-  nodes,
-  services,
-  tasks
-} from '../services/infra-swarm/fixtures.test-data.js'
+import { managerInfo, nodes, services, tasks } from '../services/infra-swarm/fixtures.test-data.js'
 import { infrastructureSwarmRoutes } from './infrastructure-swarm.js'
 
 const saved = { ...process.env }
@@ -37,8 +31,9 @@ beforeEach(() => {
       '/services': services,
       '/tasks': tasks,
       '/nodes': nodes,
-      '/secrets': [],
-      '/configs': configs
+      '/secrets': [{ ID: 's1', Spec: { Name: 'db_v1', Data: 'cGFzc3dvcmQ9aHVudGVyMg==' } }],
+      // Never requested: docker-source refuses the path before any fetch.
+      '/configs': [{ ID: 'c1', Spec: { Name: 'cfg', Data: 'cGFzc3dvcmQ9aHVudGVyMg==' } }]
     }
     if (!(u.pathname in body)) return new Response('{}', { status: 404 })
     return new Response(JSON.stringify(body[u.pathname]), { status: 200 })
@@ -56,7 +51,7 @@ describe('/infrastructure swarm routes', () => {
     expect(res.statusCode).toBe(200)
     const hosts = res.json().data.hosts
     expect(hosts[0]).toMatchObject({ host: 'staging', error: null })
-    expect(hosts[0].data.counts.configs).toBe(2)
+    expect(hosts[0].data.counts).toMatchObject({ secrets: 1, configs: 2 })
     expect(hosts[1].host).toBe('production')
     expect(hosts[1].error).toContain('did not answer')
     expect(res.body).not.toContain('cGFzc3dvcmQ9aHVudGVyMg==')

@@ -11,7 +11,7 @@ export const infrastructureDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Tabs that read swarm services, tasks, nodes, secrets or configs need the matching sections switched on in the proxy (SERVICES, TASKS, NODES, SECRETS, CONFIGS, SWARM, INFO, CONTAINERS). A section the proxy refuses is reported on the tab; everything else still shows.'
+      text: 'Tabs that read swarm services, tasks, nodes or secrets need the matching sections switched on in the proxy (INFO, CONTAINERS, SERVICES, TASKS, NODES, SECRETS). Keep SWARM and CONFIGS off: Nivaro never reads them, because the swarm section returns the join tokens and the configs section returns config contents. A section the proxy refuses is reported on the tab; everything else still shows. Whatever the Engine answers, environment variables, join and unlock keys, credential-looking label values and secret command-line arguments are removed on the server before anything is cached or sent to the page.'
     },
 
     { type: 'h2', id: 'infrastructure-stacks', text: 'Stacks' },
@@ -64,18 +64,18 @@ export const infrastructureDocs: DocSection = {
         'Warnings appear when managers are unreachable (and whether quorum is lost), when there are exactly two managers (they tolerate no failure), when no manager leads, when a node is not ready, and during a root CA rotation.',
         'The node certificate expiry date comes from the host-facts collector (metric nivaro_host_swarm_node_cert_expiry_seconds in the telemetry store). It warns under 14 days. Without the collector the tab says host facts are not collected.',
         'Autolock is shown for information only. Keeping it off lets hosts restart unattended.',
-        'If the proxy does not allow the swarm section, the cluster settings are left out and nodes still show.'
+        'The cluster settings come from the manager’s system info, never the swarm section (which carries the join tokens). A setting the engine does not report there shows as unknown.'
       ]
     },
 
     { type: 'h2', id: 'infrastructure-secrets', text: 'Secrets' },
     {
       type: 'p',
-      text: 'The Secrets tab maps swarm secrets and configs to the services that use them. Versions named with a suffix such as _v1, _v2 are grouped under one name with the newest first. Flags mark objects no service uses and services still on an older version while a newer one exists.'
+      text: 'The Secrets tab maps swarm secrets and configs to the services that use them. Versions named with a suffix such as _v1, _v2 are grouped under one name with the newest first. Flags mark secrets no service uses and services still on an older version while a newer one exists. Configs are listed only by the names service specs reference: their contents are never read, so a config no service uses does not appear.'
     },
     {
       type: 'warn',
-      text: 'Only names and dates are shown. Docker never returns secret values; config contents (which can hold credentials) are dropped on the server before anything is sent to the page.'
+      text: 'Only names and dates are shown. Docker never returns secret values, and Nivaro never reads configs (their contents can hold credentials).'
     }
   ]
 }

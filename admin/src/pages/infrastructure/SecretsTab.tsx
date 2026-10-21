@@ -29,6 +29,8 @@ interface Version {
 }
 interface Group {
   kind: 'secret' | 'config'
+  /** service-specs: configs are never read, only the names services reference. */
+  source: 'swarm' | 'service-specs'
   base: string
   versions: Version[]
   stale: Array<{ service_id: string; service: string; uses: string; latest: string }>
@@ -86,7 +88,7 @@ function HostSecretsView({ data, q, issues }: { data: HostSecrets; q: string; is
       <StatStrip
         items={[
           { label: 'Secrets', value: c.secrets },
-          { label: 'Configs', value: c.configs },
+          { label: 'Configs referenced by services', value: c.configs },
           { label: 'Unused', value: c.unused, tone: c.unused ? 'warn' : undefined },
           {
             label: 'Services on an older version',
@@ -134,7 +136,16 @@ function HostSecretsView({ data, q, issues }: { data: HostSecrets; q: string; is
                         <td className={cn(TD, i > 0 && 'pl-7')}>
                           <span className='font-mono'>{v.name}</span>
                         </td>
-                        <td className={TD}>{i === 0 ? g.kind : ''}</td>
+                        <td className={TD}>
+                          {i === 0 &&
+                            (g.source === 'service-specs' ? (
+                              <span data-tip='Listed from the services that reference it; config contents are never read'>
+                                config
+                              </span>
+                            ) : (
+                              g.kind
+                            ))}
+                        </td>
                         <td className={TD}>
                           {v.used_by.length ? (
                             <span className='flex flex-wrap gap-x-3 gap-y-0.5'>
@@ -186,8 +197,9 @@ function HostSecretsView({ data, q, issues }: { data: HostSecrets; q: string; is
         </div>
       )}
       <p className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-        Names and dates only. Docker never returns secret values, and config contents are dropped
-        before they reach this page.
+        Names and dates only. Docker never returns secret values. Configs are never read at all
+        (their contents can hold credentials): they are listed by the names services reference, so a
+        config no service uses does not appear.
       </p>
     </div>
   )

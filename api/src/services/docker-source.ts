@@ -11,8 +11,10 @@
  *   DOCKER_API_TIMEOUT_MS=5000
  *
  * Every read is a GET to an allowlisted path, cached briefly per host + path, and one host failing
- * never blanks the others (forEachDockerHost reports its error). Off in cloud mode: a tenant never
- * sees the operator's hosts.
+ * never blanks the others (forEachDockerHost reports its error). Every answer goes through
+ * sanitizeDockerValue before it is cached or returned, so no caller can hand environment
+ * variables, join tokens or credential-looking labels and arguments to the browser. Off in cloud
+ * mode: a tenant never sees the operator's hosts.
  */
 
 export interface DockerHost {
@@ -46,12 +48,12 @@ const ALLOWED = [
   '/services',
   '/tasks',
   '/nodes',
-  '/swarm',
   '/networks',
   '/volumes',
   '/images/json',
-  '/secrets',
-  '/configs'
+  // Never '/swarm' (its JoinTokens are a cluster takeover; the cluster settings come from /info)
+  // and never '/configs' (Spec.Data holds the config's contents, which often carry credentials).
+  '/secrets'
 ]
 
 function allowedPath(path: string): boolean {
@@ -59,6 +61,94 @@ function allowedPath(path: string): boolean {
   if (path.startsWith('/containers/') && path !== '/containers/json')
     return /^\/containers\/[A-Za-z0-9_.-]+\/json$/.test(path)
   return ALLOWED.some((p) => path === p || path.startsWith(`${p}/`) || path.startsWith(`${p}?`))
+}
+
+/** Keys removed wherever they appear. */
+const DROP_KEYS = new Set(['Env', 'JoinTokens', 'UnlockKey'])
+/** Label keys and argument flags whose VALUE is masked. */
+const SECRETISH = /(secret|token|pass|key|credential|auth)/i
+const MASK = '***'
+/** Argument vectors (container Cmd / Entrypoint, service Args / Command). */
+const ARG_KEYS = new Set(['Cmd', 'Args', 'Entrypoint', 'Command'])
+
+/** `--password=x` → `--password=***`, and the word after `--password` / `-p`-style secret flags. */
+export function maskArgs(args: string[]): string[] {
+  const out: string[] = []
+  let maskNext = false
+  for (const a of args) {
+    if (maskNext) {
+      out.push(MASK)
+      maskNext = false
+      continue
+    }
+    const eq = /^(-{1,2}[^=\s]+)=(.*)$/.exec(a)
+    if (eq && SECRETISH.test(eq[1])) {
+      out.push(`${eq[1]}=${MASK}`)
+      continue
+    }
+    // KEY=value style arguments (e.g. `env DB_PASSWORD=x cmd`).
+    const kv = /^([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$/.exec(a)
+    if (kv && SECRETISH.test(kv[1])) {
+      out.push(`${kv[1]}=${MASK}`)
+      continue
+    }
+    if (/^-{1,2}[A-Za-z]/.test(a) && SECRETISH.test(a)) maskNext = true
+    out.push(a)
+  }
+  return out
+}
+
+/** `https://user:token@host/…` → `https://***@host/…` (CI often bakes a job token into URLs). */
+export const stripUrlCredentials = (s: string): string =>
+  s.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1***@')
+
+/** A one-line command (container summary `Command`): masked word by word. */
+export function maskCommandLine(cmd: string): string {
+  return maskArgs(cmd.split(/\s+/).filter(Boolean)).join(' ')
+}
+
+/**
+ * Deep copy of an Engine answer without what must never leave the API: `Env` anywhere, swarm
+ * `JoinTokens` / `UnlockKey`, `Spec.Data` (config / secret contents), credential-looking label and
+ * log-driver option values (key kept, value masked), secret flag values in commands, and the
+ * user:password part of any URL.
+ */
+export function sanitizeDockerValue(value: unknown, parentKey = ''): unknown {
+  if (Array.isArray(value)) {
+    if (ARG_KEYS.has(parentKey) && value.every((v) => typeof v === 'string'))
+      return maskArgs(value as string[])
+    return value.map((v) => sanitizeDockerValue(v, parentKey))
+  }
+  if (typeof value === 'string')
+    return stripUrlCredentials(parentKey === 'Command' ? maskCommandLine(value) : value)
+  if (!value || typeof value !== 'object') return value
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (DROP_KEYS.has(k)) continue
+    if (k === 'Data' && parentKey === 'Spec') continue
+    if (k === 'Labels' && v && typeof v === 'object' && !Array.isArray(v)) {
+      const labels: Record<string, unknown> = {}
+      for (const [lk, lv] of Object.entries(v as Record<string, unknown>))
+        labels[lk] = SECRETISH.test(lk) ? MASK : sanitizeDockerValue(lv, lk)
+      out[k] = labels
+      continue
+    }
+    // Log driver options carry credentials for remote drivers (splunk-token, awslogs keys…).
+    if (k === 'LogConfig' && v && typeof v === 'object' && !Array.isArray(v)) {
+      const lc = sanitizeDockerValue(v, k) as Record<string, unknown>
+      if (lc.Config && typeof lc.Config === 'object' && !Array.isArray(lc.Config))
+        lc.Config = Object.fromEntries(
+          Object.entries(lc.Config as Record<string, unknown>).map(([ck, cv]) => [
+            ck,
+            SECRETISH.test(ck) ? MASK : cv
+          ])
+        )
+      out[k] = lc
+      continue
+    }
+    out[k] = sanitizeDockerValue(v, k)
+  }
+  return out
 }
 
 function cleanUrl(raw: string): string | null {
@@ -166,7 +256,8 @@ export async function dockerGet<T = unknown>(
         res.status
       )
     }
-    const value = (await res.json()) as T
+    // Sanitized BEFORE the cache, so no cached copy ever holds what was stripped.
+    const value = sanitizeDockerValue(await res.json()) as T
     cache.set(key, { at: Date.now(), value })
     if (cache.size > 2000) cache.delete(cache.keys().next().value as string)
     return value

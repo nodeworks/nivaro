@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { setDockerFetchForTests } from '../docker-source.js'
 import { formatContainerPorts, formatSwarmPorts, splitImage } from './engine.js'
 import {
-  CONFIG_DATA,
-  configs,
   containers,
   IMG_NEW,
   IMG_OLD,
@@ -444,20 +442,15 @@ describe('#2838 swarm internals', () => {
     expect(s.warnings.join(' ')).toContain('expires in 10 days')
   })
 
-  it('never copies join tokens out of /swarm and degrades when /swarm is off', async () => {
-    const infoNoCluster = { ...managerInfo, Swarm: { ...managerInfo.Swarm, Cluster: undefined } }
-    engine({
-      '/info': infoNoCluster,
-      '/nodes': nodes,
-      '/swarm': {
-        ...managerInfo.Swarm?.Cluster,
-        JoinTokens: { Worker: 'SWMTKN-1-worker-secret', Manager: 'SWMTKN-1-manager-secret' }
-      }
-    })
+  it('reads cluster settings from /info only, never /swarm', async () => {
+    const seen = engine({ '/info': managerInfo, '/nodes': nodes })
     const s = await loadSwarm(host, new Map())
     expect(s.cluster?.task_history_limit).toBe(5)
-    expect(JSON.stringify(s)).not.toContain('SWMTKN')
+    expect(s.cluster?.autolock).toBe(false)
+    expect(seen.some((u) => new URL(u).pathname.startsWith('/swarm'))).toBe(false)
+    // An /info without Swarm.Cluster (older engine): settings unknown, nodes still listed.
     setDockerFetchForTests(null)
+    const infoNoCluster = { ...managerInfo, Swarm: { ...managerInfo.Swarm, Cluster: undefined } }
     engine({ '/info': infoNoCluster, '/nodes': nodes })
     const off = await loadSwarm(host, new Map())
     expect(off.cluster).toBeNull()
@@ -466,13 +459,15 @@ describe('#2838 swarm internals', () => {
 })
 
 describe('#2839 secret and config usage', () => {
-  it('groups versions, flags unused objects and services on an older version', () => {
-    const r = deriveSecrets({ secrets, configs, services })
+  it('groups versions, flags unused secrets and services on an older version', () => {
+    const r = deriveSecrets({ secrets, services })
     const db = r.groups.find((g) => g.kind === 'secret' && g.base === 'nivaro_db_password')
+    expect(db?.source).toBe('swarm')
     expect(db?.versions.map((v) => [v.name, v.latest, v.unused])).toEqual([
       ['nivaro_db_password_v2', true, false],
       ['nivaro_db_password_v1', false, false]
     ])
+    expect(db?.versions[0].used_by).toHaveLength(1)
     expect(db?.stale).toEqual([
       {
         service_id: 'svcapi',
@@ -482,15 +477,25 @@ describe('#2839 secret and config usage', () => {
       }
     ])
     expect(r.groups.find((g) => g.base === 'legacy_token')?.versions[0].unused).toBe(true)
-    const traefik = r.groups.find((g) => g.kind === 'config')
+    expect(r.counts).toEqual({ secrets: 3, configs: 2, unused: 1, stale: 2 })
+  })
+
+  it('lists configs only from the service specs that reference them', () => {
+    const traefik = deriveSecrets({ secrets: [], services }).groups.find((g) => g.kind === 'config')
+    expect(traefik?.source).toBe('service-specs')
+    expect(traefik?.versions.map((v) => [v.name, v.unused, v.created_at])).toEqual([
+      ['traefik_yml_v2', false, null],
+      ['traefik_yml_v1', false, null]
+    ])
+    expect(traefik?.versions[1].used_by[0]).toMatchObject({
+      service: 'nivaro_app',
+      target: '/etc/traefik.yml'
+    })
     expect(traefik?.stale[0]).toMatchObject({
       service: 'nivaro_app',
       uses: 'traefik_yml_v1',
       latest: 'traefik_yml_v2'
     })
-    expect(traefik?.versions[0].used_by).toEqual([])
-    expect(traefik?.versions[1].used_by[0].target).toBe('/etc/traefik.yml')
-    expect(r.counts).toEqual({ secrets: 3, configs: 2, unused: 2, stale: 2 })
   })
 
   it('splits version suffixes', () => {
@@ -499,34 +504,27 @@ describe('#2839 secret and config usage', () => {
     expect(splitVersion('plain')).toEqual({ base: 'plain', version: null })
   })
 
-  it('never returns config Data (configs can hold credentials)', async () => {
-    expect(JSON.stringify(stripObject(configs[0]))).not.toContain(CONFIG_DATA)
-    expect(JSON.stringify(deriveSecrets({ secrets, configs, services }))).not.toContain(CONFIG_DATA)
-    engine({
+  it('never requests /configs and keeps only named secret metadata', async () => {
+    const withData = [{ ...secrets[0], Spec: { ...secrets[0].Spec, Data: 'c2VjcmV0' } }]
+    expect(JSON.stringify(stripObject(withData[0]))).not.toContain('c2VjcmV0')
+    const seen = engine({
       '/info': managerInfo,
       '/services': services,
       '/tasks': tasks,
       '/nodes': nodes,
-      '/secrets': secrets,
-      '/configs': configs
+      '/secrets': withData
     })
     const loaded = await loadSecrets(host)
     expect(loaded.counts.configs).toBe(2)
-    const json = JSON.stringify(loaded)
-    expect(json).not.toContain(CONFIG_DATA)
-    expect(json).not.toContain('"Data"')
+    expect(loaded.unavailable).toEqual([])
+    expect(seen.some((u) => new URL(u).pathname.startsWith('/configs'))).toBe(false)
+    expect(JSON.stringify(loaded)).not.toContain('c2VjcmV0')
   })
 
-  it('degrades when the proxy refuses the configs section', async () => {
-    engine({
-      '/info': managerInfo,
-      '/services': services,
-      '/tasks': tasks,
-      '/nodes': nodes,
-      '/secrets': secrets
-    })
+  it('degrades when the proxy refuses the secrets section', async () => {
+    engine({ '/info': managerInfo, '/services': services, '/tasks': tasks, '/nodes': nodes })
     const r = await loadSecrets(host)
-    expect(r.unavailable).toEqual(['configs'])
-    expect(r.counts.secrets).toBe(3)
+    expect(r.unavailable).toEqual(['secrets'])
+    expect(r.counts).toMatchObject({ secrets: 0, configs: 2 })
   })
 })

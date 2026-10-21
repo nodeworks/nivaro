@@ -4,9 +4,10 @@ import { type EngineCluster, type EngineInfo, type EngineNode, iso, shortId } fr
 
 /**
  * #2838 Swarm internals: managers, nodes and the cluster's Raft / CA / orchestration settings,
- * read from /info (and /nodes, and /swarm when /info leaves the cluster out). /swarm also carries
- * the join tokens — only named fields are ever copied out of it. Autolock is shown as information
- * only: the deployment keeps it off on purpose so hosts restart unattended.
+ * read from /info → Swarm.Cluster (Spec, TLSInfo, RootRotationInProgress…) and /nodes. /swarm is
+ * never read: it carries the join tokens (docker-source refuses it). A field /info leaves out shows
+ * as unknown. Autolock is shown as information only: the deployment keeps it off on purpose so
+ * hosts restart unattended.
  */
 
 const NS_PER_MS = 1_000_000
@@ -224,15 +225,10 @@ export async function readCertMetrics(): Promise<Map<string, number>> {
 export async function loadSwarm(host: DockerHost, certs: Map<string, number>): Promise<HostSwarm> {
   const info = await dockerGet<EngineInfo>(host, '/info', { cacheMs: 10_000 })
   const manager = info.Swarm?.LocalNodeState === 'active' && !!info.Swarm.ControlAvailable
-  let nodes: EngineNode[] | null = null
-  let cluster: EngineCluster | null = info.Swarm?.Cluster ?? null
-  if (manager) {
-    nodes = await dockerGet<EngineNode[]>(host, '/nodes', { cacheMs: 10_000 }).catch(() => null)
-    if (!cluster?.Spec)
-      // The /swarm section may be off on the proxy: the page still shows nodes without it.
-      cluster = await dockerGet<EngineCluster>(host, '/swarm', { cacheMs: 30_000 }).catch(
-        () => cluster
-      )
-  }
+  // Only a manager's /info carries Swarm.Cluster; a worker shows what it knows about itself.
+  const cluster: EngineCluster | null = info.Swarm?.Cluster ?? null
+  const nodes = manager
+    ? await dockerGet<EngineNode[]>(host, '/nodes', { cacheMs: 10_000 }).catch(() => null)
+    : null
   return deriveSwarm({ info, nodes, cluster, certSeconds: certs.get(host.name) ?? null })
 }
