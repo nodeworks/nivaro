@@ -216,8 +216,8 @@ describe('record page Edit layout toggle', () => {
     state.user = { id: 'u1', is_admin: true }
     state.noLayout = true
     renderWith(<ItemEditPage />, HostProvider)
-    const link = await screen.findByRole('link', { name: /create the first form/i })
-    expect(link.getAttribute('href')).toBe('/data-model/orders?tab=groups')
+    const row = await screen.findByRole('button', { name: /create the first form/i })
+    expect(row.closest('[data-testid="more-menu"]')).not.toBeNull()
     expect(state.chunkLoads).toBe(0)
   })
 
@@ -232,7 +232,7 @@ describe('record page Edit layout toggle', () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50))
     })
-    expect(screen.queryByRole('link', { name: /create the first form/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /create the first form/i })).toBeNull()
   })
 
   it('shows Edit layout for admins', async () => {

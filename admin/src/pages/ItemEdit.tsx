@@ -1166,19 +1166,21 @@ export function ItemEditPage() {
                   ) : user?.is_admin && activeLayoutData && !activeLayoutData.layout ? (
                     // /active answers 404 both for a collection with no layout and for a
                     // ?layout= slug that names none: only the first is "create the first form".
-                    <Button asChild variant='outline' size='sm' className='gap-1.5'>
-                      <Link
-                        to={`/data-model/${collection}?tab=groups`}
-                        data-nvr-menu-close
-                        data-tip={
-                          layoutSlug
-                            ? "This link names a form that doesn't exist — see this collection's forms"
-                            : 'No layout yet — create the first form'
-                        }
-                      >
-                        <LayoutTemplate className='h-3.5 w-3.5' />
-                        {layoutSlug ? 'Form not found' : 'Create the first form'}
-                      </Link>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      className='gap-1.5'
+                      data-nvr-menu-close
+                      data-tip={
+                        layoutSlug
+                          ? "This link names a form that doesn't exist — see this collection's forms"
+                          : 'No layout yet — create the first form'
+                      }
+                      onClick={() => navigate(`/data-model/${collection}?tab=groups`)}
+                    >
+                      <LayoutTemplate className='h-3.5 w-3.5' />
+                      {layoutSlug ? 'Form not found' : 'Create the first form'}
                     </Button>
                   ) : null
                 }
