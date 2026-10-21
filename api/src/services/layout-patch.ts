@@ -1,5 +1,8 @@
 import type { Knex } from 'knex'
 import { changeNoteColumnReady, normalizeChangeNote } from './layout-change-note.js'
+import { emailSectionColumnReady, normalizeEmailSection } from './layout-email-section.js'
+import { entryConfigColumnReady, normalizeEntryConfig, parseEntryConfig } from './layout-entry.js'
+import { validateResolveConditions } from './layout-resolve-rules.js'
 
 /**
  * Layout settings — the parsers, validators and the PATCH body → column
@@ -204,6 +207,8 @@ export type LayoutPatchBody = Partial<{
   header_fields: string[] | null
   hide_empty: boolean
   change_note: string | null
+  entry_config: Record<string, unknown> | null
+  email_summary_group: string | null
 }>
 
 /** A layout row as the API returns it: JSON settings parsed, flags as booleans. */
@@ -216,6 +221,7 @@ export function parseLayoutRow<T extends Record<string, unknown>>(row: T): T {
   r.header_fields = parseQuickPicker(r.header_fields)
   r.hide_empty = !!r.hide_empty
   r.changes_tray = !!r.changes_tray
+  r.entry_config = parseEntryConfig(r.entry_config)
   return row
 }
 
@@ -256,6 +262,11 @@ export async function normalizeLayoutPatch(
   }
   if (body.default_values !== undefined && body.default_values !== null) {
     const err = validateDefaultValues(body.default_values)
+    if (err) return { status: 400, error: err }
+  }
+  if (body.conditions !== undefined && body.conditions !== null) {
+    // Active dates, phone version, freeze, lazy sections (#2713–#2717).
+    const err = await validateResolveConditions(q, Number(id), existing.collection, body.conditions)
     if (err) return { status: 400, error: err }
   }
 
@@ -406,6 +417,23 @@ export async function normalizeLayoutPatch(
     if (!(await changeNoteColumnReady(q)))
       return { status: 400, error: 'Change notes need migration 462 to run first' }
     patch.change_note = res.value
+  }
+  // Entry ergonomics (#2702 #2707 #2708 #2710 #2728): the column comes with migration 491.
+  if (body.entry_config !== undefined) {
+    const res = normalizeEntryConfig(body.entry_config)
+    if ('error' in res) return { status: 400, error: res.error }
+    if (!(await entryConfigColumnReady()))
+      return { status: 400, error: 'Entry settings need migration 491 to run first' }
+    patch.entry_config = res.value
+  }
+
+  // A section as an email body (#2725): the column comes with migration 493.
+  if (body.email_summary_group !== undefined) {
+    const res = normalizeEmailSection(body.email_summary_group)
+    if ('error' in res) return { status: 400, error: res.error }
+    if (!(await emailSectionColumnReady(q)))
+      return { status: 400, error: 'The email section needs migration 493 to run first' }
+    patch.email_summary_group = res.value
   }
 
   // Settings the renderers read that this route used to drop.

@@ -85,6 +85,9 @@ function project(assignments: Array<Record<string, unknown>>): CMSField[] {
   return rows
 }
 
+// The server's staged copy of my draft (#2589), per test.
+let stagedAnswer: unknown = { data: null, others: [], available: true }
+
 function makeClient(initial: LayoutBundle) {
   const calls: Cmd[] = []
   let stored = initial
@@ -97,6 +100,7 @@ function makeClient(initial: LayoutBundle) {
       const p = cmd._path
       const method = (cmd._method ?? 'GET').toUpperCase()
       if (p === '/collection-layouts/7/bundle') return stored
+      if (p === '/collection-layouts/7/staged' && method === 'GET') return stagedAnswer
       if (p === '/users/me') return { data: { id: 'u1' } }
       if (p === '/collection-layouts/7/ops') {
         stored = { ...applyLayoutOps(stored, cmd._body?.ops as LayoutOp[]), rev: `r${++rev}` }
@@ -168,6 +172,7 @@ let root: Root
 let host: HTMLDivElement
 beforeEach(() => {
   window.localStorage.clear()
+  stagedAnswer = { data: null, others: [], available: true }
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -268,12 +273,13 @@ describe('unsaved markers (#2629)', () => {
   })
 })
 
-describe('crash recovery (#2653)', () => {
-  const step = {
-    label: 'Add Vendor name',
-    ops: [{ op: 'place', field: 'vendor', group_key: 'main', index: 2 }]
-  }
+// One recoverable step, for the browser copy and the server copy alike.
+const step = {
+  label: 'Add Vendor name',
+  ops: [{ op: 'place', field: 'vendor', group_key: 'main', index: 2 }]
+}
 
+describe('crash recovery (#2653)', () => {
   it('keeps the unsaved steps in this browser and clears them on Save', async () => {
     await mount()
     await addVendor()
@@ -307,7 +313,7 @@ describe('crash recovery (#2653)', () => {
     expect(opsBodies(calls)).toHaveLength(0)
   })
 
-  it('drops a draft whose layout was saved since, and says so', async () => {
+  it('offers a draft whose layout was saved since as stale; Recover lays it on top', async () => {
     window.localStorage.setItem(
       storedDraftKey(7, 'u1'),
       JSON.stringify({
@@ -320,11 +326,74 @@ describe('crash recovery (#2653)', () => {
       })
     )
     await mount()
-    await settle(() => !!q('[data-draft-recovery="dropped"]'))
-    expect(window.localStorage.getItem(storedDraftKey(7, 'u1'))).toBeNull()
+    await settle(() => !!q('[data-draft-recovery="offer"][data-draft-stale]'))
+    expect(q('[data-draft-recovery]')?.textContent).toContain('saved since')
+    click(q('[data-draft-recover]'))
+    await settle(() => unsaved() === '1')
+    await settle(() => !!node('field:vendor:main'))
+  })
+
+  it('Discard on the offer clears both copies', async () => {
+    window.localStorage.setItem(
+      storedDraftKey(7, 'u1'),
+      JSON.stringify({ v: 1, layoutId: 7, userId: 'u1', baseRev: 'r0', steps: [step], at: 5 })
+    )
+    stagedAnswer = {
+      data: { steps: [step], base_rev: 'r0', saved_at: new Date(10).toISOString() },
+      others: [],
+      available: true
+    }
+    const { calls } = await mount()
+    await settle(() => !!q('[data-draft-recovery="offer"]'))
+    expect(q('[data-draft-recovery]')?.textContent).toContain('kept for you')
     click(q('[data-draft-dismiss]'))
     await settle(() => !q('[data-draft-recovery]'))
+    expect(window.localStorage.getItem(storedDraftKey(7, 'u1'))).toBeNull()
+    await settle(() => calls.some((c) => c._path === '/collection-layouts/7/staged/clear'))
     expect(unsaved()).toBe('0')
+  })
+})
+
+describe('staged edits on the server (#2589)', () => {
+  it('keeps unsaved steps on the server after a pause; Save clears them', async () => {
+    const { calls } = await mount()
+    await addVendor()
+    await settle(() =>
+      calls.some((c) => c._path === '/collection-layouts/7/staged' && c._method === 'POST')
+    )
+    const kept = calls.find(
+      (c) => c._path === '/collection-layouts/7/staged' && c._method === 'POST'
+    )
+    expect(kept?._body).toMatchObject({ base_rev: 'r0' })
+    expect((kept?._body?.steps as unknown[]).length).toBe(1)
+    expect(q('[data-save-status]')?.getAttribute('data-tip')).toContain('Kept for you')
+    click(q('[data-editor-save]'))
+    await settle(() => calls.some((c) => c._path === '/collection-layouts/7/staged/clear'))
+    expect(unsaved()).toBe('0')
+  })
+
+  it('offers the server copy from another browser and shows who else is drafting', async () => {
+    stagedAnswer = {
+      data: { steps: [step], base_rev: 'r0', saved_at: new Date().toISOString() },
+      others: [
+        {
+          user_id: 'u2',
+          name: 'Ana Ruiz',
+          step_count: 3,
+          op_count: 4,
+          saved_at: new Date().toISOString()
+        }
+      ],
+      available: true
+    }
+    const { calls } = await mount()
+    await settle(() => !!q('[data-draft-recovery="offer"]'))
+    expect(q('[data-draft-recovery]')?.textContent).toContain('kept for you')
+    expect(q('[data-staged-others]')?.textContent).toContain('Ana is drafting')
+    expect(q('[data-staged-others]')?.getAttribute('data-tip')).toContain('3 unsaved changes')
+    click(q('[data-draft-recover]'))
+    await settle(() => unsaved() === '1')
+    expect(opsBodies(calls)).toHaveLength(0)
   })
 })
 

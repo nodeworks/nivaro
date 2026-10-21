@@ -10,6 +10,7 @@ import {
   type PlacementRow,
   UNGROUPED_KEY
 } from '../../lib/layout-ops'
+import { withGroupStructure } from '../../lib/form-structure'
 import { titleCase } from '../../lib/utils'
 import { newGroupKey } from './add-target'
 import type { DesignTarget } from './design-context'
@@ -44,10 +45,13 @@ export type StructurePlan =
     }
   | { ok: false; reason: string }
 
-const refuse = (reason: string): StructurePlan => ({ ok: false, reason })
+export const refuse = (reason: string): StructurePlan => ({ ok: false, reason })
 
 /** The plan, or a refusal naming what the save would refuse. */
-function checked(bundle: LayoutBundle, plan: Extract<StructurePlan, { ok: true }>): StructurePlan {
+export function checked(
+  bundle: LayoutBundle,
+  plan: Extract<StructurePlan, { ok: true }>
+): StructurePlan {
   if (plan.ops.length === 0) return refuse('Nothing would change')
   try {
     applyLayoutOps(bundle, plan.ops)
@@ -136,7 +140,8 @@ export function duplicatePlan(bundle: LayoutBundle, t: DesignTarget | null): Str
     for (let n = 2; used.has(key); n++) key = `${src.key}_copy_${n}`
     used.add(key)
     const patch = groupSettings(src)
-    patch.swap_config = withPin(src.swap_config, false)
+    // The copy is never pinned, nor sticky: one sticky section per form (#2699).
+    patch.swap_config = withGroupStructure(withPin(src.swap_config, false), { sticky: false })
     ops.push({
       op: 'group_create',
       key,
@@ -656,7 +661,7 @@ export function findHits(
 }
 
 // Every group in page order (holders, then their tabs), the Ungrouped zone left out.
-function groupsInPageOrder(b: LayoutBundle): GroupRow[] {
+export function groupsInPageOrder(b: LayoutBundle): GroupRow[] {
   const top = b.groups
     .filter((g) => g.parent_key === null && g.key !== UNGROUPED_KEY)
     .sort((a, c) => a.sort - c.sort)

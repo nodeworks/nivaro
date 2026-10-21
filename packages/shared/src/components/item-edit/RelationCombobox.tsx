@@ -26,6 +26,7 @@ function labelInitials(label: string): string {
 
 import { cn, userOptionFilter } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
+import { type PickerMissPlacement, usePickerMissReport } from './picker-miss'
 
 /**
  * Instant hover tooltip for a picker whose committed value failed its
@@ -82,9 +83,13 @@ export function RelationCombobox({
   facets,
   fieldKey,
   narrowedBy,
-  pinned
+  pinned,
+  missPlacement
 }: {
   collection: string
+  /** The record-form placement this picker sits on: searches that find
+   *  nothing are counted there (#2726). Absent = not reported. */
+  missPlacement?: PickerMissPlacement | null
   value: unknown
   onChange: (v: unknown) => void
   /** A "floating" option shown FIRST regardless of search or sort — the
@@ -300,6 +305,14 @@ export function RelationCombobox({
     enabled: open,
     staleTime: filterStr ? 0 : 30_000
   })
+  usePickerMissReport({
+    placement: missPlacement,
+    open,
+    search: debouncedQuery,
+    settled: !isLoadingOptions && data !== undefined,
+    count: data?.length ?? 0
+  })
+
   const { data: selected, isLoading: isLoadingSelected } = useQuery<Item | null>({
     queryKey: ['relation-single', collection, String(value), tmplFields],
     queryFn: () =>

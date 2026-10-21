@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
@@ -8,8 +8,10 @@ import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
+import { type AbApplied, abFor, liveVariants } from '../services/layout-ab.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
 import { stripEditorNotes } from '../services/layout-editor-notes.js'
+import { parseEntryConfig } from '../services/layout-entry.js'
 import { afterLayoutSaved } from '../services/layout-notify.js'
 import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
 import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
@@ -31,6 +33,18 @@ import {
   slugify
 } from '../services/layout-patch.js'
 import { findLayoutReferences } from '../services/layout-references.js'
+import {
+  activeWindowOf,
+  checkFreeze,
+  type FreezeCheck,
+  lazySectionsOf,
+  phoneOf,
+  todayInInstance,
+  type Viewport,
+  windowOpen,
+  windowWords
+} from '../services/layout-resolve-rules.js'
+import { registerTestRecordsReadiness } from '../services/layout-test-readiness.js'
 import { shownConditions } from '../services/layout-testing.js'
 import {
   diffLayoutVersions,
@@ -40,7 +54,7 @@ import {
   snapshotLayoutVersion,
   versionsHaveName
 } from '../services/layout-versions.js'
-import { generatePdfFromLayout } from '../services/pdf-layout.js'
+import { generatePdfFromLayout, pdfTextContext } from '../services/pdf-layout.js'
 import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layout-themes.js'
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
@@ -49,7 +63,10 @@ import { registerLayoutAnalysisRoutes } from './layout-analysis.js'
 import { layoutBulkRoutes } from './layout-bulk.js'
 import { registerLayoutCrossformRoutes } from './layout-crossform.js'
 import { layoutHistoryRoutes } from './layout-history.js'
+import { layoutMergeRoutes } from './layout-merge.js'
+import { registerLayoutOutputRoutes } from './layout-output.js'
 import { applyTemplateToNewLayout, layoutReuseRoutes, loadFormTemplate } from './layout-reuse.js'
+import { layoutStagedRoutes } from './layout-staged.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, roleAllows, slugify }
 
@@ -102,6 +119,7 @@ export async function nextFreeSlug(
  *  Retired settings nothing reads (summary_show_all, allow_clone,
  *  addendum_lock_fields) are not copied: their columns stay, unwritten. */
 const CLONE_CARRIED_COLUMNS = [
+  'email_summary_group',
   'parent_layout_id',
   'disable_comments',
   'disable_tasks',
@@ -164,7 +182,7 @@ export async function fetchLayoutsForCollection(collection: string) {
 // Used to restrict the item-record select to exactly what selection needs —
 // the record fetch (against a caller-supplied collection name) must never be
 // able to read a column no layout rule references.
-function collectRecordConditionFields(layouts: Record<string, unknown>[]): string[] {
+export function collectRecordConditionFields(layouts: Record<string, unknown>[]): string[] {
   const fields = new Set<string>()
   for (const row of layouts) {
     const rules = parseRecordConditions(row.record_conditions)
@@ -187,26 +205,43 @@ function collectRecordConditionFields(layouts: Record<string, unknown>[]): strin
 // or null when no layout exists.
 /** Why a layout won resolution — the overview's reason vocabulary. */
 export type PickReason = {
-  kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use'
+  kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use' | 'ab' | 'phone'
   rules?: RecordConditionRule[]
   role_ids?: string[]
   role_names?: string[]
   type_use?: string
+  /** kind 'ab' (#2614): the person's half of an A/B test chose this version. */
+  ab?: AbApplied
+  /** kind 'phone' (#2715): the desktop form this phone version stands in for, and why that won. */
+  phone_of?: number
+  phone_of_name?: string
+  desktop_kind?: PickReason['kind']
 }
 export type PickCheck = { layout_id: number; matched: boolean; why: string }
 export type PickResult = {
   row: Record<string, unknown> | null
   reason: PickReason | null
   checked: PickCheck[]
+  /** The A/B test (#2614) on the form resolution picked for this role, when there is one. */
+  ab?: AbApplied | null
 }
+/**
+ * What else decides the pick: the day (active dates, #2714), the screen (phone
+ * version, #2715) and the person asking (their half of an A/B test, #2614).
+ */
+export type ResolveContext = { today?: string; viewport?: Viewport; userId?: string | null }
+
+/** `viewport` from a query string: only 'phone' means anything. */
+export const parseViewport = (v: unknown): Viewport => (v === 'phone' ? 'phone' : null)
 
 export function pickBestLayout(
   allCandidates: Record<string, unknown>[],
   userRoleId: string | null | undefined,
   record: Record<string, unknown> | null,
-  isAdmin = false
+  isAdmin = false,
+  ctx: ResolveContext = {}
 ) {
-  return pickBestLayoutTraced(allCandidates, userRoleId, record, isAdmin).row
+  return pickBestLayoutTraced(allCandidates, userRoleId, record, isAdmin, ctx).row
 }
 
 /**
@@ -218,11 +253,21 @@ export function pickBestLayoutTraced(
   allCandidates: Record<string, unknown>[],
   userRoleId: string | null | undefined,
   record: Record<string, unknown> | null,
-  isAdmin = false
+  isAdmin = false,
+  ctx: ResolveContext = {}
 ): PickResult {
-  // Role-restricted layouts leave the candidate set entirely for non-listed
-  // roles — before record conditions, before the default fallback.
-  const layouts = allCandidates.filter((row) => roleAllows(row, userRoleId, isAdmin))
+  const today = ctx.today ?? todayInInstance()
+  // A/B test versions (#2614) never win on their own: they only stand in for
+  // their control, below. Role-restricted layouts leave the candidate set
+  // entirely for non-listed roles — before record conditions, before the
+  // default fallback. So do forms outside their active dates (#2714).
+  const variants = liveVariants(allCandidates)
+  const allowed = allCandidates.filter(
+    (row) => roleAllows(row, userRoleId, isAdmin) && windowOpen(row.conditions, today)
+  )
+  // A phone version (#2715) never wins on its own either: it stands in for its
+  // desktop form after that one won, on a small screen.
+  const layouts = allowed.filter((row) => !variants.has(row) && phoneOf(row.conditions) == null)
 
   const fallbackPool: typeof layouts = []
   const recordMatched = new Set<Record<string, unknown>>()
@@ -275,24 +320,127 @@ export function pickBestLayoutTraced(
     if (picked) reason = { kind: picked.is_active ? 'default' : 'fallback' }
   }
 
-  const winnerName = picked ? `“${String(picked.name ?? picked.id)}”` : ''
+  // A/B test (#2614): the person's half of the role decides between the
+  // control resolution picked and its test version. Deterministic: the same
+  // person always lands in the same half of the same test. A test version
+  // outside its active dates (#2714) is not offered.
+  const control = picked
+  const test = abFor(picked, variants, userRoleId, isAdmin, ctx.userId ?? null)
+  const ab =
+    test &&
+    roleAllows(test.variant, userRoleId, isAdmin) &&
+    windowOpen(test.variant.conditions, today)
+      ? test.applied
+      : null
+  if (ab?.half === 'b' && test) {
+    picked = test.variant
+    reason = { kind: 'ab', role_ids: [ab.role_id], ab }
+  }
+
+  // On a phone the winner's phone version (role-allowed, inside its dates) opens instead.
+  const desktop = picked
+  const variant =
+    desktop && ctx.viewport === 'phone'
+      ? (allowed.find((row) => phoneOf(row.conditions) === Number(desktop.id)) ?? null)
+      : null
+  if (desktop && variant && reason) {
+    picked = variant
+    reason = {
+      kind: 'phone',
+      phone_of: Number(desktop.id),
+      phone_of_name: String(desktop.name ?? desktop.id),
+      desktop_kind: reason.kind,
+      ...(reason.rules ? { rules: reason.rules } : {}),
+      ...(reason.role_ids ? { role_ids: reason.role_ids } : {}),
+      ...(reason.ab ? { ab: reason.ab } : {})
+    }
+  }
+
+  const nameOf = (row: Record<string, unknown> | null | undefined) =>
+    row ? `“${String(row.name ?? row.id)}”` : ''
+  const controlName = nameOf(control)
+  const winnerName = nameOf(desktop)
+  const datesNote = (row: Record<string, unknown>) => {
+    const win = activeWindowOf(row.conditions)
+    return win ? ` (active ${windowWords(win)})` : ''
+  }
+  const phoneNote = (row: Record<string, unknown>) =>
+    variant && row === desktop ? `; on a phone its phone version ${nameOf(variant)} opens` : ''
+  const winWhy = (kind: PickReason['kind'] | undefined) =>
+    kind === 'record_rule'
+      ? 'Its record rules match'
+      : kind === 'role'
+        ? 'Listed for this role'
+        : kind === 'default'
+          ? 'The default form'
+          : allCandidates.some((c) => c.is_active)
+            ? 'First in order among the forms this role can open'
+            : 'First in order (no form is marked default)'
   const checked = allCandidates.map((row): PickCheck => {
     const layout_id = Number(row.id)
-    if (row === picked) {
-      const why =
-        reason?.kind === 'record_rule'
-          ? 'Its record rules match'
-          : reason?.kind === 'role'
-            ? 'Listed for this role'
-            : reason?.kind === 'default'
-              ? 'The default form'
-              : allCandidates.some((c) => c.is_active)
-                ? 'First in order among the forms this role can open'
-                : 'First in order (no form is marked default)'
-      return { layout_id, matched: true, why }
+    if (variant && row === variant)
+      return {
+        layout_id,
+        matched: true,
+        why: `The phone version of ${winnerName}, used on small screens${datesNote(row)}`
+      }
+    if (variants.has(row)) {
+      if (ab && test?.variant === row) {
+        if (ab.half === 'b')
+          return {
+            layout_id,
+            matched: true,
+            why: `A/B test: this person is in the half of the role that gets it instead of ${controlName}${datesNote(row)}${phoneNote(row)}`
+          }
+        if (ab.half === 'a')
+          return {
+            layout_id,
+            matched: false,
+            why: `A/B test: this person is in the half of the role that keeps ${controlName}`
+          }
+        return {
+          layout_id,
+          matched: true,
+          why: `A/B test: half of this role (chosen per person) get it instead of ${controlName}`
+        }
+      }
+      const win = activeWindowOf(row.conditions)
+      if (win && !windowOpen(row.conditions, today))
+        return { layout_id, matched: false, why: `Outside its active dates (${windowWords(win)})` }
+      return {
+        layout_id,
+        matched: false,
+        why: 'A/B test version: only shown in place of its original form, to half of one role'
+      }
     }
-    if (!layouts.includes(row))
+    if (ab?.half === 'b' && row === control)
+      return {
+        layout_id,
+        matched: true,
+        why: `Picked, but this person is in the A/B test half that gets ${winnerName}`
+      }
+    if (row === desktop) {
+      const why = `${winWhy(variant ? reason?.desktop_kind : reason?.kind)}${datesNote(row)}`
+      return { layout_id, matched: true, why: `${why}${phoneNote(row)}` }
+    }
+    if (!roleAllows(row, userRoleId, isAdmin))
       return { layout_id, matched: false, why: 'Restricted to other roles' }
+    const win = activeWindowOf(row.conditions)
+    if (win && !windowOpen(row.conditions, today))
+      return { layout_id, matched: false, why: `Outside its active dates (${windowWords(win)})` }
+    const of = phoneOf(row.conditions)
+    if (of != null) {
+      const target = allCandidates.find((c) => Number(c.id) === of)
+      const targetName = target ? nameOf(target) : `form ${of}`
+      return {
+        layout_id,
+        matched: false,
+        why:
+          desktop && Number(desktop.id) === of
+            ? `Phone version of ${targetName}; used on small screens only`
+            : `Phone version of ${targetName}, which this record does not get`
+      }
+    }
     if (parseRecordConditions(row.record_conditions)) {
       if (!record)
         return { layout_id, matched: false, why: 'Has record rules; no saved record to test them' }
@@ -307,7 +455,7 @@ export function pickBestLayoutTraced(
     return { layout_id, matched: false, why: `Not the default; ${winnerName} is used` }
   })
 
-  return { row: picked, reason, checked }
+  return { row: picked, reason, checked, ab }
 }
 
 /**
@@ -321,8 +469,19 @@ export async function resolveLayout(opts: {
   item?: string | null
   role: string | null
   isAdmin: boolean
+  /** The person asking: decides their half of an A/B test (#2614). */
+  userId?: string | null
+  /** The client's screen class (#2715): 'phone' swaps in a form's phone version. */
+  viewport?: Viewport
+  /** The day to resolve on (#2714 active dates); default today in the instance zone. */
+  today?: string
 }): Promise<PickResult> {
   const { collection, slug, item, role, isAdmin } = opts
+  const ctx: ResolveContext = {
+    today: opts.today ?? todayInInstance(),
+    viewport: opts.viewport,
+    userId: opts.userId ?? null
+  }
   // Explicit slug pins a specific layout (any type — detail layouts use this
   // for drill-down rendering), bypassing role- and record-conditional resolution.
   let pinned: Record<string, unknown> | undefined | null
@@ -339,8 +498,50 @@ export async function resolveLayout(opts: {
       })
       pinned = null
     }
+    // So does one outside its active dates (#2714).
+    const win = pinned ? activeWindowOf(pinned.conditions) : null
+    if (pinned && win && !windowOpen(pinned.conditions, ctx.today as string)) {
+      slugChecks.push({
+        layout_id: Number(pinned.id),
+        matched: false,
+        why: `Its link name was asked for, but it is outside its active dates (${windowWords(win)})`
+      })
+      pinned = null
+    }
   }
   if (pinned) {
+    // A pinned record form still opens as its phone version on a phone (#2715).
+    const grouped = !pinned.layout_type || pinned.layout_type === 'grouped'
+    if (ctx.viewport === 'phone' && grouped && phoneOf(pinned.conditions) == null) {
+      const pinnedId = Number(pinned.id)
+      const variant = (
+        (await fetchLayoutsForCollection(collection)) as Record<string, unknown>[]
+      ).find(
+        (l) =>
+          phoneOf(l.conditions) === pinnedId &&
+          roleAllows(l, role, isAdmin) &&
+          windowOpen(l.conditions, ctx.today as string)
+      )
+      if (variant) {
+        const name = String(pinned.name ?? pinned.id)
+        return {
+          row: variant,
+          reason: { kind: 'phone', phone_of: pinnedId, phone_of_name: name, desktop_kind: 'slug' },
+          checked: [
+            {
+              layout_id: pinnedId,
+              matched: true,
+              why: `Opened by its link name; on a phone its phone version “${String(variant.name ?? variant.id)}” opens`
+            },
+            {
+              layout_id: Number(variant.id),
+              matched: true,
+              why: `The phone version of “${name}”, used on small screens`
+            }
+          ]
+        }
+      }
+    }
     return {
       row: pinned,
       reason: { kind: 'slug' },
@@ -372,7 +573,7 @@ export async function resolveLayout(opts: {
           .catch(() => null)) ?? null
     }
   }
-  const res = pickBestLayoutTraced(layouts, userRoleId, record, isAdmin)
+  const res = pickBestLayoutTraced(layouts, userRoleId, record, isAdmin, ctx)
   return { ...res, checked: [...slugChecks, ...res.checked] }
 }
 
@@ -473,6 +674,43 @@ export async function seedLayoutFields(
   }
 }
 
+/** A layout's conditions for its copy: without the freeze and the phone-version link. */
+export function conditionsForCopy(raw: unknown): string | null {
+  const c = parseConditions(raw) as Record<string, unknown> | null
+  if (!c || typeof c !== 'object') return raw == null ? null : String(raw)
+  const { freeze: _freeze, phone_of: _phoneOf, ...rest } = c
+  return Object.keys(rest).length > 0 ? JSON.stringify(rest) : null
+}
+
+/** The override note a write to a frozen form carries (#2717): body or query `freeze_override`. */
+function freezeOverrideOf(req: FastifyRequest): unknown {
+  const body = req.body as { freeze_override?: unknown } | null | undefined
+  const query = req.query as { freeze_override?: unknown } | null | undefined
+  return body?.freeze_override ?? query?.freeze_override
+}
+
+/** 400 LAYOUT_FROZEN for a refused write; null when it may go. */
+function frozenReply(reply: FastifyReply, check: FreezeCheck) {
+  if (check.ok) return null
+  return reply.code(400).send({
+    error: check.error,
+    code: check.code,
+    freeze: { until: check.freeze.until, reason: check.freeze.reason }
+  })
+}
+
+/** Every write let through a freeze leaves its note in the activity log. */
+async function logFreezeOverride(req: FastifyRequest, id: number, note: string) {
+  await logActivity({
+    action: 'layout-freeze-override',
+    user: req.user?.id,
+    collection: 'nivaro_collection_layouts',
+    item: String(id),
+    comment: note,
+    req
+  })
+}
+
 let driftCheckRegistered = false
 
 export async function collectionLayoutsRoutes(app: FastifyInstance) {
@@ -500,6 +738,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       }
     })
   }
+  // Pinned test records (#2646) as a readiness check after each deploy (#2720).
+  registerTestRecordsReadiness({
+    pick: (candidates, role, record, isAdmin) =>
+      pickBestLayoutTraced(candidates, role, record, isAdmin).row,
+    candidates: (collection) =>
+      fetchLayoutsForCollection(collection) as Promise<Record<string, unknown>[]>
+  })
   // Preview-as-role (#86): which layout a member of a role would resolve, and
   // which fields their permissions hide — answered with the SAME pickBestLayout
   // + getAllowedFields the live path uses (a parallel evaluator would drift).
@@ -646,23 +891,51 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // Which layout a saved record opens with, and why — the /active resolution
   // itself (resolveLayout), with each candidate's check. role_id tests as that
   // role (an admin role gets no role preference, as live); none = as an admin.
+  // user_id tests as that person (their role, unless role_id names another, and
+  // their half of an A/B test, #2614); without one an A/B test is described.
   app.get('/explain', { preHandler: requireAdmin }, async (req, reply) => {
-    const { collection, item, role_id, slug } = req.query as {
+    const { collection, item, role_id, slug, user_id, viewport, at } = req.query as {
       collection?: string
       item?: string
       role_id?: string
       slug?: string
+      user_id?: string
+      /** 'phone' = as on a small screen (#2715). */
+      viewport?: string
+      /** yyyy-mm-dd = as on that day (#2714 active dates); default today. */
+      at?: string
     }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
+    if (at != null && at !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(at))
+      return reply.code(400).send({ error: 'at must be a date (yyyy-mm-dd)' })
     let role: string | null = req.user?.role ?? null
     let isAdmin = true
-    if (role_id) {
-      const r = await db('nivaro_roles').where({ id: role_id }).first('id', 'admin_access')
+    let userId: string | null = null
+    let roleId = role_id
+    if (user_id) {
+      const u = (await db('nivaro_users').where({ id: user_id }).first('id', 'role')) as
+        | { id: string; role: string | null }
+        | undefined
+      if (!u) return reply.code(404).send({ error: 'Person not found' })
+      userId = String(u.id)
+      if (!roleId && u.role) roleId = String(u.role)
+    }
+    if (roleId) {
+      const r = await db('nivaro_roles').where({ id: roleId }).first('id', 'admin_access')
       if (!r) return reply.code(404).send({ error: 'Role not found' })
       role = String(r.id)
       isAdmin = !!r.admin_access
     }
-    const res = await resolveLayout({ collection, slug, item, role, isAdmin })
+    const res = await resolveLayout({
+      collection,
+      slug,
+      item,
+      role,
+      isAdmin,
+      userId,
+      viewport: parseViewport(viewport),
+      today: at || undefined
+    })
     let reason = res.reason
     if (reason?.role_ids?.length) {
       const names = new Map(
@@ -682,7 +955,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       data: {
         layout_id: res.row ? Number(res.row.id) : null,
         reason,
-        checked: res.checked
+        checked: res.checked,
+        ab: res.ab ?? null,
+        // The day and screen this answer is for (#2714 #2715).
+        at: at || todayInInstance(),
+        viewport: parseViewport(viewport)
       }
     })
   })
@@ -697,10 +974,12 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // GET /collection-layouts/active?collection=x — MUST be before /:id
   app.get('/active', { preHandler: authenticate }, async (req, reply) => {
-    const { collection, slug, item } = req.query as {
+    const { collection, slug, item, viewport } = req.query as {
       collection?: string
       slug?: string
       item?: string
+      /** 'phone' from a small screen: a form's phone version opens instead (#2715). */
+      viewport?: string
     }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
@@ -709,7 +988,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       slug,
       item,
       role: req.user?.role ?? null,
-      isAdmin: !!req.isAdmin
+      isAdmin: !!req.isAdmin,
+      userId: req.user?.id ? String(req.user.id) : null,
+      viewport: parseViewport(viewport)
     })
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
 
@@ -718,6 +999,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.default_values = parseDefaultValues(layout.default_values)
     layout.quick_picker = parseQuickPicker(layout.quick_picker)
     layout.changes_tray = !!layout.changes_tray
+    layout.entry_config = parseEntryConfig(layout.entry_config)
 
     let [groupsRaw, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
@@ -748,6 +1030,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     // groups ride along unless the child defines the same key. One level
     // deep, deliberately (chains would make "where does this field come from"
     // unanswerable).
+    const ownGroupKeys = new Set(groupsRaw.map((g: { key: string }) => g.key))
     if (layout.parent_layout_id) {
       try {
         const [pGroups, pAssignments] = await Promise.all([
@@ -786,6 +1069,22 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         ]
       } catch {
         // broken parent reference — the child stands alone
+      }
+      // Sections that load when opened (#2713) ride along with the parent's sections.
+      try {
+        const parent = (await db('nivaro_collection_layouts')
+          .where({ id: Number(layout.parent_layout_id) })
+          .first('conditions')) as { conditions?: unknown } | undefined
+        const parentLazy = lazySectionsOf(parent?.conditions).filter((k) => !ownGroupKeys.has(k))
+        if (parentLazy.length > 0) {
+          const own = (layout.conditions ?? {}) as Record<string, unknown>
+          layout.conditions = {
+            ...own,
+            lazy_sections: [...new Set([...lazySectionsOf(own), ...parentLazy])]
+          }
+        }
+      } catch {
+        // the parent's own lazy sections are a nicety; the form renders without them
       }
     }
 
@@ -850,6 +1149,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.header_fields = parseQuickPicker(layout.header_fields)
     layout.hide_empty = !!layout.hide_empty
     layout.changes_tray = !!layout.changes_tray
+    layout.entry_config = parseEntryConfig(layout.entry_config)
 
     const [groups, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
@@ -890,6 +1190,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.header_fields = parseQuickPicker(layout.header_fields)
     layout.hide_empty = !!layout.hide_empty
     layout.changes_tray = !!layout.changes_tray
+    layout.entry_config = parseEntryConfig(layout.entry_config)
     const [groups, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
@@ -1122,6 +1423,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     row.header_fields = parseQuickPicker(row.header_fields)
     row.hide_empty = !!row.hide_empty
     row.changes_tray = !!row.changes_tray
+    row.entry_config = parseEntryConfig(row.entry_config)
     return reply.send({ data: row })
   })
 
@@ -1131,6 +1433,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (!isRowId(id)) return reply.code(400).send({ error: 'id must be a number' })
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    const freeze = checkFreeze(existing, freezeOverrideOf(req))
+    if (!freeze.ok) return frozenReply(reply, freeze)
     nameConfigCollection(req, existing.collection)
 
     await snapshotLayoutVersion(Number(id), 'before settings change', req.user?.id)
@@ -1170,6 +1474,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       throw err
     }
     const updated = parseLayoutRow(await db('nivaro_collection_layouts').where({ id }).first())
+    if (freeze.override) await logFreezeOverride(req, Number(id), freeze.override)
 
     await logActivity({
       action: 'update',
@@ -1187,6 +1492,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    const freeze = checkFreeze(existing, freezeOverrideOf(req))
+    if (!freeze.ok) return frozenReply(reply, freeze)
+    if (freeze.override) await logFreezeOverride(req, Number(id), freeze.override)
     nameConfigCollection(req, existing.collection)
 
     const countRow = await db('nivaro_collection_layouts')
@@ -1318,7 +1626,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const [groups, assignments, fieldMeta] = await Promise.all([
       db('nivaro_field_groups')
         .where({ layout_id: Number(id) })
-        .select('id', 'key', 'label', 'sort')
+        .select('id', 'key', 'label', 'sort', 'swap_config')
         .orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
@@ -1449,7 +1757,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const [groups, assignments, fieldMeta, colMeta, settings, directRelations] = await Promise.all([
       db('nivaro_field_groups')
         .where({ layout_id: Number(id) })
-        .select('id', 'key', 'label', 'sort')
+        .select('id', 'key', 'label', 'sort', 'swap_config')
         .orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
@@ -1523,7 +1831,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       fieldMeta,
       relations,
       logoUrl,
-      generatedBy
+      generatedBy,
+      textContext: await pdfTextContext(
+        collection,
+        String(item_id),
+        assignments,
+        req.user?.role ?? null
+      )
     })
 
     await logActivity({
@@ -1608,7 +1922,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const [groups, assignments, fieldMeta, colMeta, settings, directRelations] = await Promise.all([
       db('nivaro_field_groups')
         .where({ layout_id: Number(id) })
-        .select('id', 'key', 'label', 'sort')
+        .select('id', 'key', 'label', 'sort', 'swap_config')
         .orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
@@ -1684,7 +1998,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       relations,
       logoUrl,
       generatedBy,
-      childRowsOverride
+      childRowsOverride,
+      textContext: await pdfTextContext(
+        collection,
+        String(item_id),
+        assignments,
+        req.user?.role ?? null
+      )
     })
 
     // Save PDF to file storage
@@ -1871,6 +2191,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     for (const col of CLONE_CARRIED_COLUMNS) {
       if (col in source && source[col] !== undefined) carried[col] = source[col]
     }
+    // A copy is neither frozen nor a second phone version of the same form (#2715 #2717).
+    carried.conditions = conditionsForCopy(carried.conditions)
     const slug = await nextFreeSlug(source.collection, body.slug || slugBaseFromName(body.name))
     try {
       await db('nivaro_collection_layouts').insert({
@@ -2044,6 +2366,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // captures a 'before restore' version first so the restore is reversible.
   app.post('/:id/versions/:versionId/restore', { preHandler: requireAdmin }, async (req, reply) => {
     const { id, versionId } = req.params as { id: string; versionId: string }
+    const current = await db('nivaro_collection_layouts')
+      .where({ id: Number(id) })
+      .first('id', 'conditions')
+    const freeze = checkFreeze(current, freezeOverrideOf(req))
+    if (!freeze.ok) return frozenReply(reply, freeze)
     const result = await restoreLayoutVersion(Number(id), Number(versionId), req.user?.id)
     if (!result) return reply.code(404).send({ error: 'Version not found' })
     if ('error' in result) return reply.code(result.status).send({ error: result.error })
@@ -2051,6 +2378,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .where({ id: Number(id) })
       .first('collection')
     nameConfigCollection(req, restored?.collection)
+    if (freeze.override) await logFreezeOverride(req, Number(id), freeze.override)
     await logActivity({
       action: 'layout-version-restore',
       user: req.user?.id,
@@ -2072,6 +2400,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const layout = await db('nivaro_collection_layouts').where({ id }).first()
     if (!layout) return reply.code(404).send({ error: 'Not found' })
+    const freeze = checkFreeze(layout, freezeOverrideOf(req))
+    if (!freeze.ok) return frozenReply(reply, freeze)
+    if (freeze.override) await logFreezeOverride(req, Number(id), freeze.override)
     nameConfigCollection(req, layout.collection)
 
     // The editor auto-saves this route on a 400ms debounce — snapshot the
@@ -2204,6 +2535,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       note?: unknown
       reason?: unknown
       ticket?: unknown
+      freeze_override?: unknown
     }
     if (!Array.isArray(body.ops)) return reply.code(400).send({ error: 'ops array required' })
     // One manual Save carries a whole editing session (#2619); the write is a diff, not per op.
@@ -2217,7 +2549,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         base_rev: body.base_rev,
         note: typeof body.note === 'string' ? body.note : null,
         reason: typeof body.reason === 'string' ? body.reason : null,
-        ticket: typeof body.ticket === 'string' ? body.ticket : null
+        ticket: typeof body.ticket === 'string' ? body.ticket : null,
+        freeze_override: typeof body.freeze_override === 'string' ? body.freeze_override : null
       },
       req.user?.id
     )
@@ -2227,9 +2560,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (result.status === 409)
       return reply.code(409).send({ error: 'stale', bundle: result.bundle })
     if (result.status === 400)
-      return reply
-        .code(400)
-        .send({ error: result.error, op_index: result.op_index, code: result.code })
+      return reply.code(400).send({
+        error: result.error,
+        op_index: result.op_index,
+        code: result.code,
+        ...(result.freeze ? { freeze: result.freeze } : {})
+      })
+    if (result.changed && result.override) await logFreezeOverride(req, Number(id), result.override)
     if (result.changed) {
       await logActivity({
         action: 'update',
@@ -2259,6 +2596,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // One change on many layouts + recorded macros (#2639 / #2662 / #2663).
   await layoutBulkRoutes(app)
 
+  // Merge two forms + the layout change log (#2661 / #2719).
+  await layoutMergeRoutes(app)
+
   // Named versions, version bundles, section last-changed, scheduled changes.
   await layoutHistoryRoutes(app)
+
+  // Staged edits (#2589): a person's unsaved steps, kept on the server until they Save.
+  await layoutStagedRoutes(app)
+  // Form-shaped outputs: spreadsheet template / export, blank printable form, help text sheet.
+  await registerLayoutOutputRoutes(app)
 }

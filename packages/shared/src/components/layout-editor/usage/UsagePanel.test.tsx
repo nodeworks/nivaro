@@ -146,6 +146,127 @@ describe('UsagePanel', () => {
   })
 })
 
+describe('UsagePanel collapse suggestion and A/B test (#2730 #2614)', () => {
+  it('collapses rarely opened sections in one batch and shows a running test side by side', async () => {
+    const sectionBundle: LayoutBundle = {
+      layout: { id: 9, collection: 'orders', name: 'Order', layout_type: 'grouped' },
+      rev: 'r1',
+      groups: [
+        { ...newGroup('basics', 'Basics', 'section', null), id: 1, sort: 0 } as GroupRow,
+        { ...newGroup('audit', 'Audit trail', 'section', null), id: 2, sort: 1 } as GroupRow
+      ],
+      placements: []
+    }
+    const arm = (half: 'a' | 'b', over: Record<string, unknown> = {}) => ({
+      layout_id: half === 'a' ? 9 : 12,
+      half,
+      people: 6,
+      opens: 30,
+      saves: 24,
+      abandons: 2,
+      save_rate: 0.8,
+      avg_save_ms: 90_000,
+      timed_saves: 24,
+      created: 10,
+      edited_after_save: 4,
+      edits_per_record: 0.6,
+      ...over
+    })
+    const client = {
+      request: vi.fn(async (cmd: Cmd) => {
+        if (cmd._path === '/layout-usage/9/friction')
+          return {
+            data: {
+              ready: true,
+              days: 30,
+              opens: 0,
+              saves: 0,
+              abandons: 0,
+              steps: [],
+              sections: [
+                { key: 'basics', shown: 120, opened: 0 },
+                { key: 'audit', shown: 120, opened: 3 }
+              ],
+              changed_after_save: { scope: 'collection', revisions: 0, fields: [] }
+            }
+          }
+        if (cmd._path === '/collection-layouts/9/ab-test')
+          return {
+            data: {
+              control: { id: 9, name: 'Order', slug: null },
+              variant: { id: 12, name: 'Order (new version)', slug: null },
+              role: { id: 'R1', name: 'Field Tech' },
+              started_at: '2026-10-01T00:00:00Z',
+              started_by: { id: 'u1', name: 'Pat' },
+              side: 'control'
+            }
+          }
+        if (cmd._path === '/collection-layouts/9/ab-test/results')
+          return {
+            data: {
+              ready: true,
+              since: '2026-10-01T00:00:00Z',
+              a: arm('a'),
+              b: arm('b', { avg_save_ms: 45_000 })
+            }
+          }
+        return { data: null }
+      })
+    }
+    const apply = vi.fn()
+    const onOpenLayout = vi.fn()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={client as never}>
+            <UsagePanel
+              bundle={sectionBundle}
+              collection='orders'
+              fields={[]}
+              apply={apply}
+              showFill={false}
+              onShowFill={() => {}}
+              onOpenLayout={onOpenLayout}
+            />
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    })
+    await settle(
+      () =>
+        !!host.querySelector('[data-usage-collapse]') && !!host.querySelector('[data-ab-results]')
+    )
+    const card = host.querySelector('[data-usage-collapse]') as HTMLElement
+    // The first section is where people land: never suggested.
+    expect(card.querySelector('[data-usage-collapse-section="basics"]')).toBeNull()
+    expect(card.textContent).toContain('opened in 3% of 120 visits')
+    const btn = [...card.querySelectorAll('button')].find((b) =>
+      b.textContent?.startsWith('Start it collapsed')
+    ) as HTMLButtonElement
+    act(() => btn.click())
+    expect(apply).toHaveBeenCalledWith(
+      [{ op: 'group_update', key: 'audit', patch: { is_collapsed: true } }],
+      { label: 'Collapse Audit trail' }
+    )
+
+    const text = host.querySelector('[data-ab-test]')?.textContent ?? ''
+    expect(text).toContain('Field Tech')
+    expect(text).toContain('Order (new version)')
+    expect(text).toContain('1 min 30 s')
+    expect(text).toContain('45 s')
+    const bold = [...host.querySelectorAll('[data-ab-results] td.font-semibold')].map(
+      (td) => td.textContent
+    )
+    expect(bold).toEqual(['45 s'])
+    const open = [...host.querySelectorAll('[data-ab-test] button')].find((b) =>
+      b.textContent?.startsWith('Open')
+    ) as HTMLButtonElement
+    act(() => open.click())
+    expect(onOpenLayout).toHaveBeenCalledWith(12)
+  })
+})
+
 describe('DesignNode fill hint', () => {
   it('tags a field with its fill rate; a rarely filled one says so in its tip, not in amber', () => {
     const design: LayoutDesign = {

@@ -17,6 +17,7 @@ import {
   useGlobalValue
 } from './kit'
 import { asArray, asObject, describeField, relKindOf, withKey } from './model'
+import { PickerMisses } from './PickerMisses'
 import { PickerPreview } from './PickerPreview'
 
 type Rel = {
@@ -217,6 +218,9 @@ export function PickerTab() {
 
       {(isM2O || isM2M) && info.iface !== 'files-m2m' && (
         <PickerPreview rules={rules as CascadeRule[]} />
+      )}
+      {isM2O && env.layoutType === 'grouped' && Number(env.bundle.layout.id) > 0 && (
+        <PickerMisses layoutId={Number(env.bundle.layout.id)} field={info.field} />
       )}
 
       {(isM2O || isM2M || isPath) && (

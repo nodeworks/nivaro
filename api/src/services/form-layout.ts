@@ -16,6 +16,8 @@ export interface FormLayoutField {
   db_type: string
   required: boolean
   placeholder: string | null
+  /** Help text under the field. Only set when the caller asks for the form's own text (`withOverrides`). */
+  help?: string | null
   choices: Array<{ value: string; text: string }> | null
   visibility: Array<{ when: string; op: string; value?: unknown; action: 'show' | 'hide' }> | null
 }
@@ -46,7 +48,11 @@ function parseJson<T>(v: unknown): T | null {
 export async function loadFormLayout(
   layoutId: number,
   collection: string,
-  opts: { includeReadonly?: boolean } = {}
+  opts: {
+    includeReadonly?: boolean
+    /** Take the form's own label / placeholder / help text / required / hidden over the field's (spreadsheets, print). */
+    withOverrides?: boolean
+  } = {}
 ): Promise<FormLayoutStructure | null> {
   const layout = await db('nivaro_collection_layouts')
     .where({ id: layoutId, collection })
@@ -71,6 +77,7 @@ export async function loadFormLayout(
         'type',
         'required',
         'placeholder',
+        'note',
         'options',
         'visibility_rules',
         'hidden',
@@ -94,6 +101,7 @@ export async function loadFormLayout(
     const meta = metaByField.get(path)
     if (!meta || meta.hidden === true || meta.hidden === 1) return null
     const overrides = parseJson<Record<string, unknown>>(a.overrides) ?? {}
+    if (opts.withOverrides && overrides.hidden === true) return null
     if (!opts.includeReadonly) {
       if (meta.readonly === true || meta.readonly === 1) return null
       if (overrides.readonly === true) return null
@@ -117,12 +125,23 @@ export async function loadFormLayout(
           )
           .filter((c) => c.value !== '')
       : null
+    const own = (v: unknown) => (typeof v === 'string' && v !== '' ? v : null)
+    const ov = opts.withOverrides
     return {
       path,
-      label: String(a.label_override ?? meta.label ?? path.replace(/_/g, ' ')),
+      label: String(
+        (ov ? own(overrides.label) : null) ??
+          a.label_override ??
+          meta.label ??
+          path.replace(/_/g, ' ')
+      ),
       db_type: String(meta.type ?? ''),
-      required: meta.required === true || meta.required === 1,
-      placeholder: meta.placeholder != null ? String(meta.placeholder) : null,
+      required:
+        meta.required === true || meta.required === 1 || (!!ov && overrides.required === true),
+      placeholder:
+        (ov ? own(overrides.placeholder) : null) ??
+        (meta.placeholder != null ? String(meta.placeholder) : null),
+      ...(ov ? { help: own(overrides.note) ?? own(meta.note) } : {}),
       choices: choices?.length ? choices : null,
       visibility: parseJson<FormLayoutField['visibility']>(meta.visibility_rules) ?? null
     }

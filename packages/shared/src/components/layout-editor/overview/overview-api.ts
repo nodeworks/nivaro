@@ -38,20 +38,32 @@ export function useLayoutOverview(collection: string) {
 
 export async function fetchExplain(
   client: ReturnType<typeof useNivaroClient>,
-  params: { collection: string; item: string | number; role_id?: string | null }
+  params: {
+    collection: string
+    item: string | number
+    role_id?: string | null
+    /** #2715: as on a small screen. */
+    viewport?: 'phone' | null
+    /** #2714: as on this day (yyyy-mm-dd). */
+    at?: string | null
+  }
 ): Promise<ExplainResponse> {
   const res = await client.request<unknown>(
     get('/collection-layouts/explain', {
       collection: params.collection,
       item: params.item,
-      ...(params.role_id ? { role_id: params.role_id } : {})
+      ...(params.role_id ? { role_id: params.role_id } : {}),
+      ...(params.viewport ? { viewport: params.viewport } : {}),
+      ...(params.at ? { at: params.at } : {})
     })
   )
   const body = unwrap<ExplainResponse>(res, 'checked')
   return {
     layout_id: body?.layout_id ?? null,
     reason: body?.reason ?? null,
-    checked: body?.checked ?? []
+    checked: body?.checked ?? [],
+    at: body?.at ?? null,
+    viewport: body?.viewport ?? null
   }
 }
 

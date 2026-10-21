@@ -189,6 +189,24 @@
     "layout_types": ["grouped"]
   },
   {
+    "key": "layout.conditions.active_window",
+    "label": "Active dates: the form applies only between two days (#2714)",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.conditions.phone_of",
+    "label": "Phone version of a form, opened on small screens (#2715)",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
     "key": "layout.layout_type",
     "label": "Kind of layout (6 types)",
     "home": "form_settings",
@@ -630,6 +648,24 @@
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "layout.email_summary_group",
+    "label": "Section for notification emails",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.conditions.freeze",
+    "label": "Freeze edits until a date, with a reason; admins override with a note (#2717)",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
     "key": "tool.ai_review",
     "label": "Review this layout (AI) + Apply fix + Undo",
     "home": "form_settings",
@@ -1044,6 +1080,15 @@
     "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "group.load_on_open",
+    "label": "Load when opened (#2713)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail"]
+  },
+  {
     "key": "group.tab_mode",
     "label": "Container shows tabs or steps",
     "home": "inspector",
@@ -1104,6 +1149,33 @@
     "tab_or_section": "Group",
     "scope": "form",
     "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.empty_text",
+    "label": "Text for a section with nothing filled (#2700)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.sticky",
+    "label": "Stick the section to the top of the form (#2699)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.row_groups",
+    "label": "Rows of fields side by side under one label (#2697)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
     "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
   },
   {
@@ -1521,6 +1593,24 @@
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "field.text_rules",
+    "label": "Label and help text by pipeline state or viewer role (#2703)",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.counter",
+    "label": "Character or word counter with a limit, default the column size (#2709)",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
     "key": "field.hidden",
     "label": "Hidden on this form",
     "home": "inspector",
@@ -1536,6 +1626,15 @@
     "tab_or_section": "Look",
     "scope": "form",
     "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.fold",
+    "label": "Behind “Show more” while empty (#2698)",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "add",
     "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
   },
   {
@@ -1672,6 +1771,33 @@
     "scope": "form",
     "status": "keep",
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.recommended",
+    "label": "Recommended (soft-required): amber marker and a save nudge (#2704)",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.confirm_change",
+    "label": "Confirm and give a reason when changed on a saved record, optionally per state (#2705)",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.repeat_last",
+    "label": "Repeat last value from the person's own last revision (#2706)",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
   },
   {
     "key": "field.readonly",
@@ -2626,5 +2752,77 @@
     "scope": "form",
     "status": "add",
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "layout.focus_first",
+    "label": "Start on the first empty required field",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.enter_next",
+    "label": "Enter moves to the next field",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.tab_order",
+    "label": "Tab order",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.adaptive_mode",
+    "label": "Guided steps for new people",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.adaptive_threshold",
+    "label": "Records before tabs",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.badge",
+    "label": "Form badge",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.glossary",
+    "label": "Glossary tooltips in help text",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.presets",
+    "label": "Placement presets",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
   }
 ]

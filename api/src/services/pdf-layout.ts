@@ -3,8 +3,10 @@ import type { Browser } from 'puppeteer'
 import puppeteer from 'puppeteer'
 import { db } from '../db/index.js'
 import { resolveDisplayValue } from './display-value.js'
+import { isEmptyValue, isFolded, shapePdfFields } from './form-structure.js'
 import type { PdfLayoutData } from './pdf-layout-themes.js'
 import { classicTheme, escHtml, executiveTheme, minimalTheme } from './pdf-layout-themes.js'
+import { resolvePlacementText, type TextContext, textRulesOf } from './placement-behaviour.js'
 
 // Allowlist-based HTML sanitizer for richtext fields rendered in PDF.
 // Strips all tags not on the allowlist (keeps inner text), drops block-removed tags
@@ -489,6 +491,8 @@ interface GroupRow {
   key: string
   label: string
   sort: number
+  /** Rows of fields and the empty-section text (services/form-structure.ts). */
+  swap_config?: string | null
 }
 interface AssignmentRow {
   field: string
@@ -507,6 +511,32 @@ interface FieldMetaRow {
   options: string | null
 }
 
+/**
+ * #2703: what label rules read for this PDF — the reader's role and, only
+ * when some placement has a state rule, the record's pipeline state.
+ */
+export async function pdfTextContext(
+  collection: string,
+  itemId: string,
+  assignments: Array<{ overrides?: string | null }>,
+  roleId: string | null
+): Promise<TextContext | undefined> {
+  const rules = assignments.flatMap((a) => textRulesOf(a.overrides))
+  if (!rules.length) return undefined
+  let stateKey: string | null = null
+  if (rules.some((r) => r.type === 'pipeline_state')) {
+    try {
+      const { attachRecordState, STATE_FIELD } = await import('./record-state.js')
+      const row: Record<string, unknown> = { id: itemId }
+      await attachRecordState(collection, [row])
+      stateKey = (row[STATE_FIELD] as { key?: string } | null)?.key ?? null
+    } catch {
+      /* no pipeline tables: state rules simply do not apply */
+    }
+  }
+  return { stateKey, roleId }
+}
+
 export async function generatePdfFromLayout(params: {
   layout: LayoutRow
   collectionLabel: string
@@ -519,6 +549,8 @@ export async function generatePdfFromLayout(params: {
   logoUrl: string | null
   generatedBy: string
   childRowsOverride?: Record<string, Record<string, unknown>[]>
+  /** #2703: the record's pipeline state and the reader's role, for label rules. */
+  textContext?: TextContext
 }): Promise<Buffer> {
   const {
     layout,
@@ -531,7 +563,8 @@ export async function generatePdfFromLayout(params: {
     relations,
     logoUrl,
     generatedBy,
-    childRowsOverride
+    childRowsOverride,
+    textContext
   } = params
 
   const safeLogoUrl = logoUrl && /^https?:\/\//i.test(logoUrl) ? logoUrl : null
@@ -613,6 +646,11 @@ export async function generatePdfFromLayout(params: {
               /* noop */
             }
           }
+          // #2703: a label rule for the record's state or the reader's role wins.
+          const ruled = textContext
+            ? resolvePlacementText(a.overrides, textContext).label
+            : undefined
+          if (ruled !== undefined && ovLabel !== '') ovLabel = ruled
           const hideLabel = ovLabel === ''
           const isRichText =
             meta?.interface === 'input-rich-text-html' ||
@@ -627,6 +665,10 @@ export async function generatePdfFromLayout(params: {
               : (o2mHtml[a.field] ??
                 renderFieldValue(meta?.type ?? 'string', enrichedItem[a.field], fieldOpts))
           return {
+            field: a.field,
+            // A child table counts as filled; M2M lists come resolved on enrichedItem.
+            empty: o2mHtml[a.field] == null && isEmptyValue(enrichedItem[a.field]),
+            folded: isFolded(a.overrides),
             label: hideLabel
               ? ''
               : (ovLabel ??
@@ -646,7 +688,11 @@ export async function generatePdfFromLayout(params: {
       const hasChildTable = groupFields.some(
         (f) => f.rawHtml && String(f.value).startsWith('<table')
       )
-      return { label: group.label, pageBreak: hasChildTable, fields: groupFields }
+      return {
+        label: group.label,
+        pageBreak: hasChildTable,
+        fields: shapePdfFields(groupFields, group.swap_config)
+      }
     })
     .filter((s) => s.fields.length > 0)
     .map((s, i) => ({ ...s, pageBreak: s.pageBreak && i > 0 }))
@@ -737,7 +783,7 @@ export async function generatePdfFromLayout(params: {
 /** Render an HTML string to a PDF buffer (JS disabled, backgrounds on). */
 export async function htmlToPdf(
   html: string,
-  opts: { format?: 'A4' | 'Letter'; landscape?: boolean } = {}
+  opts: { format?: 'A4' | 'Letter'; landscape?: boolean; margin?: string } = {}
 ): Promise<Buffer> {
   const b = await getBrowser()
   const page = await b.newPage()
@@ -748,7 +794,12 @@ export async function htmlToPdf(
       format: opts.format ?? 'A4',
       landscape: !!opts.landscape,
       printBackground: true,
-      margin: { top: '0', right: '0', bottom: '0', left: '0' }
+      margin: {
+        top: opts.margin ?? '0',
+        right: opts.margin ?? '0',
+        bottom: opts.margin ?? '0',
+        left: opts.margin ?? '0'
+      }
     })
     return Buffer.from(pdfBuf)
   } finally {

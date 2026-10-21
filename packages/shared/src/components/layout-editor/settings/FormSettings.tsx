@@ -10,6 +10,7 @@ import { AddendumSection } from './AddendumSection'
 import { ButtonsSection } from './ButtonsSection'
 import { inputCls, quietText, VisibleSettingsContext } from './controls'
 import { DefaultsSection } from './DefaultsSection'
+import { EntrySection } from './EntrySection'
 import { InheritanceSection } from './InheritanceSection'
 import { LayoutSection } from './LayoutSection'
 import { PdfSection } from './PdfSection'
@@ -28,6 +29,7 @@ const SECTION_BODIES: Record<SectionId, ComponentType<SectionProps & Record<stri
   pdf: PdfSection,
   addendum: AddendumSection,
   defaults: DefaultsSection,
+  entry: EntrySection,
   inheritance: InheritanceSection,
   tools: ToolsSection as ComponentType<SectionProps & Record<string, unknown>>
 }

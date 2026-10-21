@@ -56,6 +56,7 @@ import { registerTempCacheHooks } from '../services/traffic-actions/temp-cache.j
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import { runUnit } from '../services/unit-of-work.js'
 import type { ItemsQuery, User } from '../types.js'
+import { registerBulkFieldsRoute } from './bulk-fields.js'
 
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof CollectionNotFoundError) {
@@ -421,9 +422,17 @@ export async function itemsRoutes(app: FastifyInstance) {
     return reply.send({ deleted })
   })
 
+  // #2722: what bulk "Update field" offers for a selection (the records' forms).
+  registerBulkFieldsRoute(app)
+
   app.post('/:collection/bulk-update', async (req, reply) => {
     const { collection } = req.params as { collection: string }
-    const { ids, data } = req.body as { ids: string[]; data: Record<string, unknown> }
+    const { ids, data, by_form } = req.body as {
+      ids: string[]
+      data: Record<string, unknown>
+      /** #2722: also refuse fields that are not on a record's form. */
+      by_form?: boolean
+    }
     if (!Array.isArray(ids) || ids.length === 0)
       return reply.code(400).send({ error: 'ids array required' })
     if (!(await builtinAllowed(collection, 'update-field', req)))
@@ -432,6 +441,8 @@ export async function itemsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'data object required' })
     let updated = 0
     let skipped = 0
+    let refused = 0
+    let refusedReason: string | null = null
     let upFailed = 0
     let upReason: string | null = null
     const rp = openBulkRowProgress(
@@ -445,8 +456,35 @@ export async function itemsRoutes(app: FastifyInstance) {
       })
     )
     const fields = Object.keys(data).filter((k) => !k.startsWith('_'))
+    // #2722 — a field the record's form locks for the caller is refused per
+    // record (and, with by_form, one that is not on its form). A broken
+    // layout never blocks the write.
+    const refusals = await import('../services/form-field-gate.js')
+      .then((g) =>
+        g.bulkFormRefusals({
+          user: req.user!,
+          isAdmin: !!req.isAdmin,
+          collection,
+          ids,
+          fields,
+          byForm: by_form === true,
+          workspaceId: req.workspaceId ?? undefined
+        })
+      )
+      .catch((err) => {
+        req.log.warn({ err, collection }, 'bulk update form check skipped')
+        return new Map<string, string>()
+      })
     for (const id of ids) {
       rp.next(id)
+      const refusal = refusals.get(String(id).toLowerCase())
+      if (refusal) {
+        refused++
+        upFailed++
+        upReason = refusal
+        refusedReason = refusedReason ?? refusal
+        continue
+      }
       try {
         // A record already holding every value gets no write and no change
         // reason on its history — the note belongs to the ones that moved.
@@ -469,7 +507,12 @@ export async function itemsRoutes(app: FastifyInstance) {
       }
     }
     rp.end()
-    return reply.send({ updated, skipped })
+    return reply.send({
+      updated,
+      skipped,
+      refused,
+      ...(refusedReason ? { refused_reason: refusedReason } : {})
+    })
   })
 
   app.post('/:collection/bulk-transition', async (req, reply) => {

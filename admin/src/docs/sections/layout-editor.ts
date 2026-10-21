@@ -56,6 +56,20 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Test a record… picks a saved record and lights up the row it resolves to, with the reason in words, and says for every other form why it was passed over ("Its record rules do not match", "A form with record rules matched first", "Restricted to other roles"). Optionally test as a role. The test runs the live `/active` resolution itself — there is no separate preview logic — so the answer is what that person would get.'
     },
+    {
+      type: 'p',
+      text: 'Pick Phone under Screen to see which form the record opens with on a small screen, and a day under On day to test active dates on another day.'
+    },
+    { type: 'h3', id: 'layout-editor-active-dates', text: 'Active dates' },
+    {
+      type: 'p',
+      text: 'Form settings → Who gets this form → Active dates limits a form to the days between From and Until (both included, in the instance time zone). Outside them the form takes no part in choosing a form: records open with the next form that fits, as if the form were restricted to other roles. A link that names the form falls through the same way. The overview shows the dates beside the form and warns when they have not started or have passed. Scheduled changes publish edits to a form; active dates decide when the form is used at all.'
+    },
+    { type: 'h3', id: 'layout-editor-phone-version', text: 'Phone version' },
+    {
+      type: 'p',
+      text: 'Form settings → Who gets this form → Phone version → Make a phone version copies the form as a lighter one for small screens (remove what a phone does not need). Record pages on a screen narrower than 640 px ask for the phone version (`viewport=phone` on `/collection-layouts/active`): after the usual rules pick a form, its phone version opens in its place. A phone version never opens on its own and needs no rules of its own; its roles and active dates still apply. On the overview it sits under the form it stands in for.'
+    },
     { type: 'h3', id: 'layout-editor-coverage', text: 'Check coverage and health' },
     {
       type: 'p',
@@ -116,7 +130,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-form-settings', text: 'Form settings' },
     {
       type: 'p',
-      text: "Layout-wide settings in short named sections, each control with a one-line effect, searchable from the box at the top: Who gets this form (kind, record rules, roles by name, link name, New-menu label and hiding) · How it's laid out (tabs or steps, check each step before Next, one section open at a time) · Buttons & panels (hide comments, tasks, revisions, clone, delete, banners; Schedule and Hide-from-pickers buttons for everyone) · Read view & summary · PDF (file layouts only) · Addendum · Defaults for new records · Inheritance · AI review, previews, version history. Only the settings that apply to the layout's kind are shown — addendum layouts get every setting that applies to them. This page calls that last section Form settings → Tools."
+      text: "Layout-wide settings in short named sections, each control with a one-line effect, searchable from the box at the top: Who gets this form (kind, record rules, roles by name, link name, New-menu label and hiding) · How it's laid out (tabs or steps, check each step before Next, one section open at a time) · Buttons & panels (hide comments, tasks, revisions, clone, delete, banners; Schedule and Hide-from-pickers buttons for everyone) · Read view & summary · PDF (file layouts only) · Addendum · Defaults for new records · Entering data (keyboard, tab order, guided steps, badge, presets) · Inheritance · AI review, previews, version history. Only the settings that apply to the layout's kind are shown — addendum layouts get every setting that applies to them. This page calls that last section Form settings → Tools."
     },
     {
       type: 'p',
@@ -130,6 +144,39 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: "On other forms lists, above the fields, the fields this collection's other forms of the same kind place and this one does not, most-carried first, with how many forms carry each and their names."
+    },
+    {
+      type: 'h3',
+      id: 'layout-editor-entry',
+      text: 'Entering data: keyboard, steps, badge, presets'
+    },
+    {
+      type: 'p',
+      text: 'Form settings → Entering data holds what changes how people fill the form. Start on the first empty required field puts the cursor there when the form opens. Enter moves to the next field turns Enter into "next" (Ctrl or ⌘ + Enter saves; Enter still means a new line in long text and picks the highlighted item in an open list). Glossary tooltips in help text gives glossary terms in a field\'s help text a dotted underline with their definition from AI knowledge → Glossary (labels always have it).'
+    },
+    {
+      type: 'p',
+      text: 'Tab order: Tools → Set the tab order (or the button in Form settings) numbers the fields as you click them on the canvas. Click a number again to take that field out. Done stores the order as one undoable step; fields you skipped follow in page order. Tab and Shift+Tab then follow the order on the record form, while a field with two controls keeps its own order inside.'
+    },
+    {
+      type: 'p',
+      text: 'Guided steps for new people: the form shows as steps while a person has made fewer records of the collection than the number in Records before tabs (3 unless you change it), and as tabs after that. People can switch with the Guided steps / Tabs switch above the header; their choice is remembered in their browser. It needs a form with tabs or steps.'
+    },
+    {
+      type: 'p',
+      text: 'Form badge: a short tag (16 characters at most) in one of eight colours, shown above the record header, so people can tell which form they are in.'
+    },
+    {
+      type: 'p',
+      text: "Presets: select a field, open Presets in its inspector, tick what to keep (width, required, help text, placeholder, input and format, lock rule), name it and save. Select one or several fields and pick a preset to apply it; that is one undo step. Presets belong to the form and are deleted under Form settings → Entering data. They never change a field's label."
+    },
+    {
+      type: 'p',
+      text: "Theme preview: Tools → Preview in dark shows the canvas in the dark theme without changing the app's theme. When the app is already dark the tool is off, because a dark app cannot show a light canvas."
+    },
+    {
+      type: 'note',
+      text: 'These settings live in one JSON column, `nivaro_collection_layouts.entry_config` (migration 491): `{ focus_first, enter_next, tab_order, adaptive, adaptive_threshold, badge: { tag, color }, glossary, presets }`. It is a layout setting like the others (`layout_update` ops, `PATCH /collection-layouts/:id`) and is returned by `GET /collection-layouts/active`.'
     },
     { type: 'h3', id: 'layout-editor-drag', text: 'Drag and drop' },
     {
@@ -168,7 +215,11 @@ export const layoutEditor: DocSection = {
         'Press ? (when not typing) or the keyboard button for every shortcut, grouped by area: undo and redo, duplicate, moving with Alt+arrows or Space, find, the command palette and save.'
       ]
     },
-    { type: 'h3', id: 'layout-editor-arrange', text: 'Arrange: duplicate, wrap, convert, pin' },
+    {
+      type: 'h3',
+      id: 'layout-editor-arrange',
+      text: 'Arrange: duplicate, wrap, split, join, convert, pin'
+    },
     {
       type: 'p',
       text: "Right-click anything on the canvas (or press the context-menu key on it), or press Arrange… in a section's inspector, to open the Arrange menu beside it. Every action in it is one Undo step."
@@ -181,13 +232,44 @@ export const layoutEditor: DocSection = {
         'Unwrap removes a section, tab or step and keeps its fields as ungrouped fields. When there are no ungrouped fields yet, they stay where the section was.',
         "Convert to… turns a section into a tab or step (it joins the holder just above it when that holder shows the same way, else a new holder takes its place), a tab or step into a section (an emptied holder goes), tabs into steps and back, or a holder's tabs into sections. Each choice lists what it would change before you press Convert. A holder shows all its tabs one way, so one tab becomes a step only with its siblings.",
         'Copy rules to other sections… copies Hidden for, Read-only for and (from a tab or step) Only when onto the sections you tick. Step conditions are skipped on plain sections, where they do nothing.',
-        'Pin in the editor marks a section so it cannot be dragged and takes no drops, with its fields and tabs, while you arrange the rest. Alt+arrow skips it too. The pin only affects the editor; the form people see is unchanged.'
+        'Pin in the editor marks a section so it cannot be dragged and takes no drops, with its fields and tabs, while you arrange the rest. Alt+arrow skips it too. The pin only affects the editor; the form people see is unchanged.',
+        'Split the section here (on a selected field) moves that field and everything after it to a new section right below, named “… (continued)”, in the same order. The first part keeps all its settings; the new part takes its look, rules and visibility, but not its intro, collapsed summary or field swap. A split cannot fall inside a row of fields side by side.',
+        'Join with … (on a section, tab or step) moves the fields of the section right below into this one, after its own, and removes the emptied section. This section keeps its settings; a field both hold shows once.',
+        'Put side by side under one label (with two to six fields of one section selected) puts them in one row, such as Street / City / Zip or Qty / Unit. The row shows one label and one required marker; each input is captioned with its own name. Rename or take a row apart in the section’s inspector under Side by side; take one field out from its own inspector.'
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'layout-editor-structure',
+      text: 'Show more, sticky sections and empty text'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Behind “Show more” (a field’s Look tab) tucks an optional field under a “Show 4 more” button at the end of its section. The fold opens on its own as soon as one of its fields has a value, so nothing filled is ever hidden. Required fields and fields in a row always show. The read view and the PDF leave out an empty folded field.',
+        'Stick to the top (a section’s inspector) keeps that section, such as totals or status, at the top of the form while people scroll the rest. A form has one sticky section: turning it on for one turns it off for the other. It does not stick on phone widths, nor on the canvas, where it is tagged “Sticks to the top”.',
+        'When nothing is filled (a section’s inspector) is the text the read view and the PDF show for a section none of whose fields has a value, such as “No shipping details yet”, instead of a list of dashes.',
+        'Rows of fields side by side print the same way everywhere: one label on the record page, and on the read view and the PDF their values on one line, joined by a dot.',
+        'Select a field to get a width handle on its right edge: drag it to make the field full, half, a third or a quarter wide (or focus it and press ← →). While you drag a field or a width, faint guides show the form’s 12 columns, so widths line up across sections.'
       ]
     },
     { type: 'h3', id: 'layout-editor-find-replace', text: 'Find and replace in labels' },
     {
       type: 'p',
       text: "Find and replace (Tools) searches this form's field labels, section names, text blocks and help text, for example Oracle to Fusion. Where the form sets no label or help text of its own, the collection's is searched too; replacing it gives this form its own. Every match is listed with its before and after and a tick box; Replace changes the ticked ones as one Undo step."
+    },
+    { type: 'h3', id: 'layout-editor-outputs', text: 'Spreadsheets, paper and email' },
+    {
+      type: 'p',
+      text: "The Outputs button (Tools) turns the saved form into files. Excel import template gives one column per field in the form's order: choice fields are dropdowns, number and date columns are checked, and required columns are amber. A Fields sheet explains every column. Export records to Excel writes up to 5,000 records in the same columns, limited to what you may read; pointers to other records show their names. Blank printable form is a PDF with a ruled line, checkboxes or lines for every field, for people filling it in on paper."
+    },
+    {
+      type: 'p',
+      text: "Download as a sheet writes every label, help text and placeholder on the form, with your unsaved edits, to Excel. Edit the amber columns and upload the file back: the editor lists every difference with a tick box, and Apply changes the ticked ones as one Undo step. Clearing a cell removes the text this form set, so the field's own text shows again. Rows for fields or sections that were removed are left out."
+    },
+    {
+      type: 'p',
+      text: "Section for notification emails (Form settings, Tools) picks the section whose fields notification emails show as the record summary, in place of the header strip. Each email is cut to the person it goes to: a section hidden for their role, a field their role may not read, or a record they cannot open adds nothing. None keeps the header strip. It needs migration 493, and only the default form's choice counts."
     },
     { type: 'h3', id: 'layout-editor-inherited', text: 'Inherited layouts' },
     {
@@ -248,9 +330,18 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Every field or section an unsaved change touched shows a small blue dot until you save. Click the unsaved count in the top bar to list the changes; click one to select what it changed and scroll to it (a form-settings change opens Form settings).'
     },
+    { type: 'h3', id: 'layout-editor-staged', text: 'Your draft is staged until you save' },
     {
       type: 'p',
-      text: 'Unsaved changes are also kept in this browser. If the tab crashed or was closed, opening the layout again offers Recover, which brings them back as unsaved changes. If the layout was saved by anyone since, they cannot be laid on it safely: the editor says so and drops them.'
+      text: 'Unsaved changes are a private draft: only you see them, on the canvas and nowhere else. About a second after each change they are kept for you on the server (and in this browser), so a closed tab, a crash or a switch to another computer loses nothing. Opening the layout again offers Recover, which brings the changes back unsaved, and Discard, which drops them. The status chip\'s tip says where the draft stands ("Kept for you on the server").'
+    },
+    {
+      type: 'p',
+      text: "If the layout was saved by anyone since (or staging took the night's layouts from development), Recover lays your changes on top of the layout as it is now; a change that no longer fits is listed in a banner instead of applied, the rest are kept. Save is still one step: every change lands together against the layout's current revision, or none does."
+    },
+    {
+      type: 'p',
+      text: 'A small "Ana is drafting" chip beside the layout\'s name says who else has unsaved changes staged on it, and how many — never what they are. Saving, discarding or scheduling your changes clears your draft.'
     },
     { type: 'h3', id: 'layout-editor-presence', text: 'Who else is here' },
     {
@@ -262,10 +353,24 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "Form settings → Tools → Ask why on every save makes Save ask for a short reason, or a reason and a ticket link. The reason and ticket lead the version's note in History. Autosave stays off for that layout, and the server refuses a save without them (turning the setting off needs a reason too)."
     },
+    { type: 'h3', id: 'layout-editor-freeze', text: 'Freeze edits' },
+    {
+      type: 'p',
+      text: 'Form settings → Tools → Freeze edits stops changes to a layout until a date (a go-live or an audit), with a reason people read. Until that day the server refuses every save, restore, settings change and delete of the layout with the reason (400 `LAYOUT_FROZEN`). An administrator can still save by giving an override note: the editor asks for it at Save, the note becomes the version note in History and an activity entry (`layout-freeze-override`). Lifting the freeze early is a save too, so it asks for a note. The freeze lifts by itself on its date; copies of a frozen layout are not frozen.'
+    },
+    { type: 'h3', id: 'layout-editor-sections-on-open', text: 'Sections that load when opened' },
+    {
+      type: 'p',
+      text: 'Select a section that starts collapsed and turn on Load when opened. Until someone opens it, the record page does not read what only that section holds: its grids\' rows, its relation-path values and its widgets. Fields the folded section shows in its summary still load. Test → Cost counts these requests apart ("more once someone opens…"). It changes when data loads on live records, so it is off unless you turn it on for a section.'
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
       text: 'History lists the saved versions of the layout — one per editing burst, sections included — with who saved and the change\'s name. "What the last save changed" shows the newest difference first; any version can be compared with the layout now. Restore replaces the layout with that version exactly (sections added since are removed) after keeping the current one as a version first. Versions survive a layout delete.'
+    },
+    {
+      type: 'p',
+      text: 'Piece on a version restores one section or one field from it without rolling back the rest. It lists only what differs from the form now, each with what restoring does ("Back on the form · 2 settings", "1 field removed · Order"): a field comes back with its settings, in the version\'s section when it is elsewhere or gone (its place among its neighbours is kept as it is now); a section comes back exactly as the version had it — its settings, its tabs, its fields in that order, fields added since removed. Each restore is one change: one Undo step, one unsaved change to save (or one autosave). A field whose section is gone says so; restore the section instead.'
     },
     {
       type: 'p',
@@ -338,6 +443,10 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'What changes (Save ▾ → What changes, while changes wait) runs the same check before you save and lists what changes for the pinned records ("Record 284212 loses the Zone field", "lands on another form") and the form cost against its limit. It only reads.'
     },
+    {
+      type: 'p',
+      text: 'After each deploy the readiness scorecard (Configuration → "Pinned test records still see their forms as before") opens every pinned record the way its role would and compares it with what the previous version showed: which form it opens on, which fields it shows and which its role may edit. A difference is a warning naming the record and the change. Accept what test records see now makes the current view the one later checks compare with. Show-when rules on tabs are not judged.'
+    },
 
     { type: 'h2', id: 'layout-editor-rules', text: 'Rules and checks' },
     { type: 'h3', id: 'layout-editor-rules-view', text: 'Rules on the canvas' },
@@ -370,6 +479,26 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: "Roles in the top bar shows every section and tab against every role. Click a cell to make the section Can edit, Read-only or Hidden for that role (the section's Hidden for and Read-only for). Each cell is one change to save. Administrator roles are greyed: they always see and edit everything. Field permissions still apply inside a section."
+    },
+    {
+      type: 'h3',
+      id: 'layout-editor-field-behaviour',
+      text: 'How a field behaves on live records'
+    },
+    {
+      type: 'p',
+      text: 'Settings on a field that change what people see and do on a saved record. All of them are per placement (this form only) and off until you set them.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Label and help by state or role (Look tab): different words in a workflow state or for a role, for example "Requested date" that reads "Delivered date" once Completed. Add a rule, pick the states or roles, and type the label and help text for that case; the first rule that matches wins. The record page, the read view and the PDF follow it, and Preview as a role or a state shows it on the canvas.',
+        'Recommended (Rules tab): between optional and required. The field gets an amber dot beside its label; saving lists the recommended fields still empty but never stops the save. The record header counts them on their own ("2 recommended to fill"), apart from the required-fields percentage. Required wins when both are on.',
+        'Confirm changes on saved records (Rules tab): changing the field on an existing record asks "Are you sure?" and a short reason before the save. The reason is stored with the change and shows in the record history. Tick states to ask only while the record is in them; with none ticked it asks in every state. New records are never asked. A transition button that would save the change asks first, then you start the move again.',
+        "Repeat last value (Rules tab): a Repeat last button beside the label fills in what this person entered for the field on their previous record of the collection, read from their own change history. It never offers another person's value, encrypted fields or system tables.",
+        'Counter and limit (Look tab, text fields): a counter under the input in characters or words. The limit starts at the database column size; past the limit the form will not save. Leave the limit empty to count without one.',
+        'Display formula (Add panel → Display formula): a read-only figure worked out on the page from fields already on the form, for example Remaining = {{budget}} - {{committed}}, shown as plain, whole, 0.00, money or a percent. It uses the same expression language as other client formulas, is never stored and creates no computed field. The inspector flags syntax errors, names that are not fields and fields that are not on this form (they read as empty there).'
+      ]
     },
     { type: 'h3', id: 'layout-editor-problems', text: 'Problems' },
     {
@@ -556,6 +685,25 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Each changed form saves its own version first (its History shows "Before <the change>"), so any one form can be put back from History. Right after a run, Undo this bulk change puts every changed form back at once — except a form someone changed since, which you restore from its History.'
     },
+    { type: 'h3', id: 'layout-editor-merge', text: 'Merging two forms' },
+    {
+      type: 'p',
+      text: 'Merge two forms (⋯ → Merge two forms on the overview, or Merge into one… on a near-copies finding) folds one form into another. Pick the form to keep and the form to fold in, then Preview. What only the folded form has is added to the kept one; what only one of them has becomes a section shown just for the records (or roles) that form used to open for, as a show-when rule or a hidden-for-roles list. The kept form takes over who the folded one opened for: its record rules, roles, the default and its link name when the kept form has none.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The preview lists what the kept form gets, who will open the merged form and what happens to the folded one, then checks the newest 2,000 records: how many move to the merged form, how many keep it, and any that will open a different form instead.',
+        "Worth a look lists what the merge cannot carry exactly: two forms picked in different ways (record rules and roles), record rules with nothing in common, fields set up differently on the two (the kept form's setup wins), page cards and header fields only the folded form has.",
+        'The folded form is renamed "… (merged into …)" and no longer opens for any record. Its sections and fields stay, so a queue, share link or child form that opens it by id keeps working; the preview names those places.',
+        'Apply changes both forms as one change: each saves a named "Before merge" version first. Undo the merge puts both back; either form can also be restored on its own from its History. A form someone changed since the preview is not touched: preview again.'
+      ]
+    },
+    { type: 'h3', id: 'layout-editor-change-log', text: 'Change log for auditors' },
+    {
+      type: 'p',
+      text: '⋯ → Change log on the overview exports every layout change in a period as a CSV: when, the form and collection, who made it (name and email), the change note and what it did (fields and sections added, removed or moved, settings changed). Pick 30 days, 90 days, this year or two dates, and this collection or every collection; Count changes shows how many first. History keeps the newest 30 versions of each form plus every named one, so the log cannot show older changes than that.'
+    },
 
     { type: 'h2', id: 'layout-editor-reuse', text: 'Reusing forms and sections' },
     {
@@ -584,12 +732,31 @@ export const layoutEditor: DocSection = {
       items: [
         'Edit form on a record page adds how many people used this form on how many records today (UTC day) to its banner.',
         "The editor's Usage tab shows today's opens, people and records; the last 30 days' opens, saves and new records left unfinished; the average time on each step with how many new records were left on it; and the fields changed most often within 24 hours of a record being created (last 90 days; on records opened with this form once 20 of them are known, otherwise across the collection).",
-        'Suggested sections: fields people change in the same save (Jaccard over the last 90 days of revisions) that sit in different sections. Move into (the section) moves the strays next to the others in one step, which Undo reverses. Not now hides a suggestion until the editor reopens.'
+        'Suggested sections: fields people change in the same save (Jaccard over the last 90 days of revisions) that sit in different sections. Move into (the section) moves the strays next to the others in one step, which Undo reverses. Not now hides a suggestion until the editor reopens.',
+        'Rarely opened sections: the form also counts, per visit, each section it showed and whether the person opened it (expanded it, clicked or typed in it). A section that starts open and was opened on 10% of visits or fewer (at least 20 visits) is suggested to start collapsed; the first section of the form or of a step is never suggested, nor any section on an accordion form. Start them collapsed is one change, which Undo reverses.'
       ]
+    },
+    { type: 'h3', id: 'layout-editor-ab-test', text: 'A/B test two versions of a form' },
+    {
+      type: 'p',
+      text: 'At the bottom of the Usage tab, Start test shows a new version of this form to half of one role: pick the role and either a copy of this form (it opens so you can change it) or another form of the collection that is not the default. Each person lands in the same half every time (a stable hash of their id), administrators always get the original, and a link name (?layout=) still opens either version. The new version never wins on its own: it only stands in for the original, so the overview lists it right after the original with an A/B pill, and Test a record shows the split.'
+    },
+    {
+      type: 'p',
+      text: 'The test compares the halves side by side: people in each half, visits, saves and save rate, average time from opening the form to saving, new records left unfinished, and records created by people in each half with how many were edited again within a day. The better side of each line is in bold once each half has 20 visits. End test asks which version everyone should get: Keep the original simply stops the test; Use the new version copies its sections, fields and settings onto the original (its name, link name and who gets it stay), so links and history are kept and History can put it back.'
     },
     {
       type: 'note',
       text: 'Usage is kept per form per day (nivaro_layout_usage_daily, nivaro_layout_usage_seen) and deleted after 180 days by the nightly layout-usage-prune job. Only counts are stored; people and records are counted, never listed.'
+    },
+    { type: 'h3', id: 'layout-editor-picker-misses', text: 'Searches that found nothing' },
+    {
+      type: 'p',
+      text: 'When someone searches a relation picker on a record form and finds nothing, the form sends the words they typed when the picker closes. The server counts them per form and field for 14 days (in Redis); it never stores who typed them or on which record. Design mode sends nothing.'
+    },
+    {
+      type: 'p',
+      text: "Select the field in the editor and open its Picker tab: Searches that found nothing lists the top ten, how many times each was typed, and a suggested fix for the top five — the field's option filter leaves matching records out (loosen it), the picker filter or hidden records leave them out, or nothing matches at all (add the record, or turn on Quick create). Clear list empties it for that field."
     },
 
     { type: 'h2', id: 'layout-editor-ops', text: 'Suggestions, dependencies and environments' },
@@ -630,6 +797,7 @@ export const layoutEditor: DocSection = {
       items: [
         'Watch: ⋯ → Watch this form in the editor top bar. While it is on you get a notification (your Profile → Notification rules decide the channels, category Watch) whenever someone saves a change to the form or restores one of its versions. It says who saved, what changed in counts (for example "2 fields moved, 1 section added") and the version note, and opens the editor with History showing. You never hear about your own saves. A watch is listed with your other notification subscriptions, where you can also remove it.',
         'Owner: Share → Owner names the business owner of a form. The overview shows "Owner: …" under the form. The owner hears about every saved change even without watching, and is told first; change requests about the form go to the owner first too.',
+        "Review reminder: Share → Review reminder sets how long a form may stay unchanged before its owner is asked to review it: 3, 6 or 12 months, never, or the default (6 months). The reminder arrives on a weekday morning (category Watch) with the form's health score and its last 30 days of use (visits, people, saves, new records left unfinished), and comes again every that many months while the form stays unchanged. Any saved change starts the count over.",
         'Preview link: Share → Preview link makes a read-only link that lasts 7, 14, 30 or 90 days, for people who are not administrators. It shows the last saved version of the form, with only the fields you may read, and never shows record data. Anyone with the link can leave a comment on a field or on the whole form; comments appear under Share → Comments from previews (the count shows on the Share button), where Select this field finds the field on the canvas and Resolve removes the comment. Turn off ends a link for everyone.'
       ]
     },
@@ -775,6 +943,19 @@ GET  /api/collection-layouts/macros              // your own macros
 POST /api/collection-layouts/macros  { id?, name, collection, steps, source_layout_id? }
 POST /api/collection-layouts/macros/:id/delete
 
+# Merging two forms + the change log (administrators)
+POST /api/collection-layouts/merge/preview  { collection, keep_id, fold_id }
+     → { data: { keep: { id, name, rev }, fold: { id, name, rev }, changes, assignment, retire, notes,
+                 counts, references, needs_note,
+                 records: { sampled_newest, names, views: [{ label, plain, kept, carried, lost, gained }] } } }
+POST /api/collection-layouts/merge/apply  { collection, keep_id, fold_id, revs: { keep, fold }, reason?, ticket? }
+     → { data: { keep: { layout_id, version_id, rev }, fold: { layout_id, version_id, rev } } }
+     // 409 when either form changed since the preview; the folded form is put back if the kept one fails
+POST /api/collection-layouts/merge/undo  { collection, keep: { layout_id, version_id, rev }, fold: { … } }
+GET  /api/collection-layouts/change-log?from=YYYY-MM-DD&to=YYYY-MM-DD&collection=&format=csv
+     → { data: { rows: [{ at, collection, layout_id, layout, version, who, who_email, note, summary, … }], truncated } }
+     // format=csv downloads the same rows; at most 366 days and 5,000 changes
+
 # Across forms (administrators)
 GET  /api/collection-layouts/crossform?collection=
      → { data: { thumbs: { <layout id>: { blocks, more } }, labels: [{ field, field_label, variants }],
@@ -801,11 +982,21 @@ POST /api/layout-usage/beacon  { events: [{ layout_id, collection, item, open, s
 GET  /api/layout-usage/:layoutId/today            → { data: { ready, day, opens, people, records } }   (admin)
 GET  /api/layout-usage/:layoutId/friction?days=30 → { data: { opens, saves, abandons, steps, changed_after_save } }   (admin)
 GET  /api/layout-usage/co-changes/:collection     → { data: { revisions, fields, pairs: [{ a, b, together, jaccard }] } }   (admin)
+     // beacon events may also carry sections: { shown: [group key], opened: [group key] } and save_ms;
+     // friction answers sections: [{ key, shown, opened }]
+
+# A/B test (administrators)
+GET    /api/collection-layouts/:id/ab-test           → { data: { control, variant, role, started_at, started_by, side } | null }
+GET    /api/collection-layouts/:id/ab-test/results   → { data: { since, a: {...}, b: {...} } }   // per half
+POST   /api/collection-layouts/:id/ab-test  { variant_id, role_id }   // start, on the original
+DELETE /api/collection-layouts/:id/ab-test?keep=control|variant      // end
+GET    /api/collection-layouts/explain?collection=&item=&user_id=   // user_id: that person's half
 
 # Owner, watching and preview links
 GET  /api/layout-collab/:id                        // administrators
-     → { data: { owner: { id, name } | null, watching, watchers: [{ id, name }] } }
+     → { data: { owner: { id, name } | null, watching, watchers: [{ id, name }], review } }
 PUT  /api/layout-collab/:id/watch  { on }          // administrators: watch or stop watching
+PUT  /api/layout-collab/:id/review { months }      // administrators: 0-36, 0 = never, null = default (6)
 PUT  /api/layout-collab/:id/owner  { user_id }     // administrators: null clears the owner;
                                                    // the owner must be active and able to read the form's records
 GET  /api/layout-collab/owners                     // administrators → { data: { <layout id>: { id, name } } }

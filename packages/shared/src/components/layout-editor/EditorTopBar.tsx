@@ -12,7 +12,7 @@ import {
   Wrench,
   X
 } from 'lucide-react'
-import { type ReactNode, useMemo, useState } from 'react'
+import { type ReactNode, useCallback, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { useRelationOptions } from '../../hooks/useRelationOptions'
@@ -84,11 +84,14 @@ const BAR_CSS = `
 
 function StatusChip({
   draft,
-  onOpen
+  onOpen,
+  pendingTip
 }: {
   draft: Pick<LayoutDraft, 'status' | 'error'> & Partial<Pick<LayoutDraft, 'unsavedCount'>>
   /** The unsaved count opens the list of unsaved changes (#2629). */
   onOpen?: (anchor: HTMLElement) => void
+  /** The tip while changes wait: where they are kept (#2589). */
+  pendingTip?: string
 }) {
   const { status, error } = draft
   const unsaved = draft.unsavedCount ?? 0
@@ -114,7 +117,7 @@ function StatusChip({
         (status === 'error' || status === 'conflict') && error
           ? error
           : pendingOnly
-            ? 'Only you see these changes until you save (⌘S)'
+            ? (pendingTip ?? 'Only you see these changes until you save (⌘S)')
             : undefined
       }
       className={cn(
@@ -376,6 +379,7 @@ export function EditorTopBar({
   more,
   presence,
   onOpenUnsaved,
+  pendingTip,
   onSelectField,
   onShowOnCanvas,
   onReviewChanges,
@@ -439,6 +443,8 @@ export function EditorTopBar({
   presence?: ReactNode
   /** Opens the unsaved-changes list from the unsaved count (#2629). */
   onOpenUnsaved?: (anchor: HTMLElement) => void
+  /** The status chip's tip while changes wait: where the staged draft is kept (#2589). */
+  pendingTip?: string
   /** Select a field on the canvas (a preview comment's "Select this field"). */
   onSelectField?: (field: string) => void
   /** History's "Show on canvas" (#2591): compare a version with the editor's layout. */
@@ -468,6 +474,11 @@ export function EditorTopBar({
       : []
   const manual = !!draft.save && !draft.autosave
   const waiting = manual && unsaved > 0
+  // History's "Piece" (#2716) names fields as the form does.
+  const fieldLabel = useCallback(
+    (field: string) => fields.find((f) => f.field === field)?.label?.trim() || field,
+    [fields]
+  )
   const nameRef = useOverflowTip<HTMLHeadingElement>(layoutName)
 
   return (
@@ -589,6 +600,9 @@ export function EditorTopBar({
               onDiscardUnsaved={draft.discard}
               session={draft.session}
               onJump={draft.jump}
+              bundle={draft.bundle}
+              onApply={(ops, label) => draft.apply(ops, { label })}
+              fieldLabel={fieldLabel}
               onShowOnCanvas={
                 onShowOnCanvas
                   ? (base, label) => {
@@ -617,7 +631,7 @@ export function EditorTopBar({
         {more}
       </BarMenu>
       <Sep />
-      <StatusChip draft={draft} onOpen={onOpenUnsaved} />
+      <StatusChip draft={draft} onOpen={onOpenUnsaved} pendingTip={pendingTip} />
       <div data-save-split='' className='flex shrink-0 items-center'>
         {manual && (
           <button

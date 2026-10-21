@@ -27,6 +27,7 @@ export interface GlobalFieldRow {
   interface?: string | null
   label?: string | null
   note?: string | null
+  placeholder?: string | null
   hidden?: boolean | null
   options?: unknown
   dependency_config?: unknown

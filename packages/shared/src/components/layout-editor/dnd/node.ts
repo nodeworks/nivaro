@@ -34,6 +34,8 @@ export class DndStore {
   activators = new WeakMap<Element, () => ((e: PointerEvent) => void) | undefined>()
   /** Droppable id → registered element (the overlay copies it, the drop line measures it). */
   nodes = new Map<string, HTMLElement>()
+  /** A width is being dragged on the canvas (#2701): the column guides show. */
+  resizing = false
   private subs = new Set<() => void>()
 
   subscribe = (fn: () => void) => {
@@ -55,6 +57,17 @@ export class DndStore {
       return
     this.state = s
     for (const fn of this.subs) fn()
+  }
+
+  setResizing(on: boolean) {
+    if (this.resizing === on) return
+    this.resizing = on
+    for (const fn of this.subs) fn()
+  }
+
+  /** Column guides (#2701): on while something drags or a width is dragged. */
+  guidesOn(): boolean {
+    return this.state.activeKey !== null || this.resizing
   }
 
   /** What one node renders from: a node re-renders only when its slice changes. */

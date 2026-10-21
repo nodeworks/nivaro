@@ -28,6 +28,12 @@ import {
   renderFormPreviewHtml,
   revokePreviewLink
 } from '../services/layout-preview.js'
+import {
+  MAX_REVIEW_MONTHS,
+  parseMonths,
+  reviewInfo,
+  setFormReviewMonths
+} from '../services/layout-review.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import type { User } from '../types.js'
 
@@ -91,15 +97,34 @@ export async function layoutCollabRoutes(app: FastifyInstance) {
       getLayoutOwnerId(layout.id),
       layoutWatcherIds(layout.id)
     ])
-    const people = await peopleByIds([...(ownerId ? [ownerId] : []), ...watcherIds])
+    const [people, review] = await Promise.all([
+      peopleByIds([...(ownerId ? [ownerId] : []), ...watcherIds]),
+      reviewInfo(layout.id)
+    ])
     const me = String(req.user!.id).toUpperCase()
     return {
       data: {
         owner: ownerId ? (people.get(ownerId.toUpperCase()) ?? null) : null,
         watching: watcherIds.some((w) => w.toUpperCase() === me),
-        watchers: watcherIds.flatMap((w) => people.get(w.toUpperCase()) ?? [])
+        watchers: watcherIds.flatMap((w) => people.get(w.toUpperCase()) ?? []),
+        review
       }
     }
+  })
+
+  // Review reminder (#2718): months unchanged before the owner is reminded; null = default.
+  app.put('/:id/review', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const layout = await layoutRow(id)
+    if (!layout) return reply.code(404).send({ error: 'Not found' })
+    const raw = (req.body as { months?: unknown } | null)?.months
+    const months = raw == null ? null : parseMonths(raw)
+    if (raw != null && months == null)
+      return reply
+        .code(400)
+        .send({ error: `months must be a whole number from 0 to ${MAX_REVIEW_MONTHS}` })
+    await setFormReviewMonths(layout.id, months)
+    return { data: { review: await reviewInfo(layout.id) } }
   })
 
   app.put('/:id/watch', { preHandler: requireAdmin }, async (req, reply) => {

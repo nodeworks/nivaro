@@ -19,6 +19,7 @@ export type SectionId =
   | 'pdf'
   | 'addendum'
   | 'defaults'
+  | 'entry'
   | 'inheritance'
   | 'tools'
 
@@ -47,6 +48,7 @@ export const SECTIONS: SectionDef[] = [
   { id: 'pdf', title: 'PDF' },
   { id: 'addendum', title: 'Addendum' },
   { id: 'defaults', title: 'Defaults for new records' },
+  { id: 'entry', title: 'Entering data' },
   { id: 'inheritance', title: 'Inheritance' },
   { id: 'tools', title: 'AI review, previews, version history' }
 ]
@@ -105,6 +107,24 @@ export const SETTINGS: SettingDef[] = [
     label: 'Hide from New menu',
     effect: 'Leaves this layout out of the New menu; its link name keeps working.',
     types: NEW_MENU
+  },
+  {
+    key: 'layout.conditions.active_window',
+    section: 'who',
+    label: 'Active dates',
+    effect:
+      'The form applies only on these days, both included; outside them records open with the next form that fits.',
+    types: ['grouped'],
+    keywords: 'window from until year end close season schedule period'
+  },
+  {
+    key: 'layout.conditions.phone_of',
+    section: 'who',
+    label: 'Phone version',
+    effect:
+      'A lighter copy of a form that opens instead of it on small screens; it never opens on its own.',
+    types: ['grouped'],
+    keywords: 'mobile small screen variant device lighter'
   },
 
   // ── How it's laid out ─────────────────────────────────────────────────────
@@ -411,6 +431,76 @@ export const SETTINGS: SettingDef[] = [
     types: ON_SCREEN
   },
 
+  // ── Entering data ─────────────────────────────────────────────────────────
+  {
+    key: 'layout.focus_first',
+    section: 'entry',
+    label: 'Start on the first empty required field',
+    effect: 'When the form opens, the cursor is already in the first required field with no value.',
+    types: NEW_MENU,
+    keywords: 'keyboard focus autofocus cursor'
+  },
+  {
+    key: 'layout.enter_next',
+    section: 'entry',
+    label: 'Enter moves to the next field',
+    effect:
+      'Pressing Enter in a field goes to the next one instead of saving; Ctrl or ⌘ + Enter still saves.',
+    types: NEW_MENU,
+    keywords: 'keyboard submit return'
+  },
+  {
+    key: 'layout.tab_order',
+    section: 'entry',
+    label: 'Tab order',
+    effect:
+      'The order the Tab key visits fields in. Set it by clicking fields in order on the canvas.',
+    types: NEW_MENU,
+    keywords: 'keyboard accessibility sequence'
+  },
+  {
+    key: 'layout.adaptive_mode',
+    section: 'entry',
+    label: 'Guided steps for new people',
+    effect:
+      'A person making their first records sees this form as steps; after that it shows as tabs. Each person can switch.',
+    types: NEW_MENU,
+    keywords: 'beginner expert onboarding steps tabs'
+  },
+  {
+    key: 'layout.adaptive_threshold',
+    section: 'entry',
+    label: 'Records before tabs',
+    effect: 'How many records of their own a person makes before the form switches to tabs.',
+    types: NEW_MENU
+  },
+  {
+    key: 'layout.badge',
+    section: 'entry',
+    label: 'Form badge',
+    effect:
+      'A colour and short tag on the record header, so people can tell which form they are in.',
+    types: NEW_MENU,
+    keywords: 'identity chip tag colour label'
+  },
+  {
+    key: 'layout.glossary',
+    section: 'entry',
+    label: 'Glossary tooltips in help text',
+    effect: 'Glossary terms in help text get a dotted underline that shows their definition.',
+    types: NEW_MENU,
+    keywords: 'definition term hover'
+  },
+  {
+    key: 'layout.presets',
+    section: 'entry',
+    label: 'Placement presets',
+    effect:
+      'Named bundles of field settings (width, required, help text) that apply to other fields in one click.',
+    types: NEW_MENU,
+    keywords: 'template reuse bundle'
+  },
+
   // ── Inheritance ───────────────────────────────────────────────────────────
   {
     key: 'layout.parent_layout_id',
@@ -489,6 +579,24 @@ export const SETTINGS: SettingDef[] = [
       'Save asks for a short reason, and a ticket link if you choose, and keeps it with the version in History.',
     types: ALL,
     keywords: 'change note reason ticket audit required'
+  },
+  {
+    key: 'layout.email_summary_group',
+    section: 'tools',
+    label: 'Section for notification emails',
+    effect:
+      'Notification emails summarise the record with this section’s fields, in this form’s order, cut to what each person may see. None keeps the header strip. Only the default form’s choice counts.',
+    types: NEW_MENU,
+    keywords: 'email mail notification summary body section'
+  },
+  {
+    key: 'layout.conditions.freeze',
+    section: 'tools',
+    label: 'Freeze edits',
+    effect:
+      'Until the date, saves to this layout are refused with your reason; an administrator can still save by giving a note.',
+    types: ALL,
+    keywords: 'freeze lock go-live audit read-only block edits override'
   },
   {
     key: 'tool.cost_limit',

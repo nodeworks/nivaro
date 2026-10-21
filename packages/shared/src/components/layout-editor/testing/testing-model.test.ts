@@ -307,5 +307,19 @@ describe('formCost', () => {
     const cost = formCost({ layout, rows: [], relations, collection: 'orders' })
     expect(cost.counts).toEqual({ picker: 2, grid: 1, widget: 1, panel: 1, query: 1 })
     expect(cost.total).toBe(5 + 2 + 3 + 1 + 2 + 1)
+    expect(cost.deferred).toBe(0)
+  })
+
+  it('counts a folded section that loads when opened apart (#2713)', () => {
+    const layout = layoutOf(
+      [g('main', 1), g('more', 2, { is_collapsed: true })],
+      [a('notes', 'main'), a('vendor.name', 'more'), a('__report__', 'more', { widget_id: 4 })],
+      { conditions: { lazy_sections: ['more'] } }
+    )
+    const cost = formCost({ layout, rows: [], relations: [], collection: 'orders' })
+    expect(cost.total).toBe(5)
+    expect(cost.deferred).toBe(2)
+    expect(cost.items.filter((i) => i.deferred).map((i) => i.kind)).toEqual(['query', 'widget'])
+    expect(cost.counts).toEqual({ picker: 0, grid: 0, widget: 0, panel: 0, query: 0 })
   })
 })

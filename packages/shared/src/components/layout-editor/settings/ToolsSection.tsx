@@ -15,6 +15,7 @@ import { RelationPicker } from '../pickers/relation-picker'
 import { CostLimitSetting } from '../testing/CostLimitSetting'
 import { humanizeOpError } from '../useLayoutDraft'
 import { PickList, quietText, Segmented, Setting, smallBtn, useSettingVisible } from './controls'
+import { FreezeSetting } from './ResolveSettings'
 import type { SectionProps } from './section-props'
 import { type RolePreview, useRolePreview } from './settings-api'
 import { settingDef } from './settings-registry'
@@ -39,6 +40,8 @@ export function ToolsSection(props: ToolsSectionProps) {
       <CostLimitSetting {...props} />
       <HistorySetting layoutId={id} />
       <ChangeNoteSetting {...props} />
+      <EmailSectionSetting {...props} />
+      <FreezeSetting {...props} />
       <DriftSetting layoutId={id} />
       <LayoutOpsBlocks
         collection={props.collection}
@@ -80,6 +83,50 @@ function ChangeNoteSetting({ layout, set }: SectionProps) {
         value === 'off'
           ? null
           : 'Autosave stays off for this form: every save waits for its reason.'
+      }
+    />
+  )
+}
+
+/** A section as an email body (#2725): which section notification emails summarise the record with. */
+function EmailSectionSetting({ bundle, layout, set }: SectionProps) {
+  const options = useMemo(
+    () =>
+      bundle.groups
+        .filter(
+          (g) =>
+            g.parent_key === null &&
+            !g.key.startsWith('__') &&
+            (g.type === 'section' || g.type === 'container')
+        )
+        .sort((a, b) => a.sort - b.sort)
+        .map((g) => ({ value: g.key, label: g.label || g.key })),
+    [bundle.groups]
+  )
+  const value = typeof layout.email_summary_group === 'string' ? layout.email_summary_group : null
+  const name = options.find((o) => o.value === value)?.label
+  return (
+    <Setting
+      k='layout.email_summary_group'
+      control={
+        <PickList
+          ariaLabel='Section for notification emails'
+          value={value}
+          options={
+            value && !name ? [...options, { value, label: `Missing section (${value})` }] : options
+          }
+          clearLabel='None (header strip)'
+          placeholder='None (header strip)'
+          emptyText='This form has no sections yet'
+          onChange={(next) =>
+            set(
+              { email_summary_group: next },
+              next
+                ? `Use ${options.find((o) => o.value === next)?.label ?? next} in emails`
+                : 'Use the header strip in emails'
+            )
+          }
+        />
       }
     />
   )

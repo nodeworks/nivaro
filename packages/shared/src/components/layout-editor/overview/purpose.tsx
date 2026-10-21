@@ -1,4 +1,6 @@
+import { CalendarRange, Lock, Smartphone } from 'lucide-react'
 import { Fragment, type ReactNode } from 'react'
+import { dayWords, windowWords } from '../../../lib/layout-resolve'
 import { cn } from '../../../lib/utils'
 import {
   type ChoiceLabels,
@@ -50,7 +52,7 @@ export function Sentence({ segs, muted }: { segs: Segment[]; muted?: boolean }) 
   )
 }
 
-export type PillTone = 'default' | 'rule' | 'link' | 'role' | 'view'
+export type PillTone = 'default' | 'rule' | 'link' | 'role' | 'view' | 'frozen'
 
 export function Pill({ tone, children }: { tone: PillTone; children: ReactNode }) {
   return (
@@ -62,11 +64,63 @@ export function Pill({ tone, children }: { tone: PillTone; children: ReactNode }
           'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300',
         tone === 'role' && 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
         (tone === 'link' || tone === 'view') &&
-          'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
+          'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground',
+        tone === 'frozen' &&
+          'gap-1 bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200'
       )}
     >
       {children}
     </span>
+  )
+}
+
+/**
+ * Active dates, phone version and edit freeze (#2714 #2715 #2717) as small
+ * pills beside a layout's name; nothing for a layout without them.
+ */
+export function ResolvePills({ row }: { row: OverviewRow }) {
+  const win = row.active_window
+  return (
+    <>
+      {win && (
+        <span data-row-window={win.state} data-tip='Active dates: the form applies only then'>
+          <Pill tone='view'>
+            <CalendarRange className='mr-1 h-3 w-3' />
+            {windowWords(win)}
+          </Pill>
+        </span>
+      )}
+      {row.phone_of != null && (
+        <span data-row-phone-of={row.phone_of}>
+          <Pill tone='view'>
+            <Smartphone className='mr-1 h-3 w-3' />
+            phone
+          </Pill>
+        </span>
+      )}
+      {row.phone_version && (
+        <span
+          data-row-phone-version={row.phone_version.layout_id}
+          data-tip={`On small screens “${row.phone_version.name}” opens instead`}
+        >
+          <Pill tone='view'>
+            <Smartphone className='mr-1 h-3 w-3' />
+            has phone version
+          </Pill>
+        </span>
+      )}
+      {row.frozen && (
+        <span
+          data-row-frozen={row.frozen.until}
+          data-tip={row.frozen.reason || 'Edits are refused until then'}
+        >
+          <Pill tone='frozen'>
+            <Lock className='h-3 w-3' />
+            frozen until {dayWords(row.frozen.until)}
+          </Pill>
+        </span>
+      )}
+    </>
   )
 }
 
@@ -76,6 +130,8 @@ export function rowPill(row: OverviewRow): { tone: PillTone; text: string } | nu
     if (row.is_default) return { tone: 'default', text: 'default' }
     if (row.reason.kind === 'record_rule') return { tone: 'rule', text: 'rule' }
     if (row.reason.kind === 'role') return { tone: 'role', text: 'role' }
+    if (row.reason.kind === 'ab') return { tone: 'role', text: 'A/B' }
+    if (row.reason.kind === 'phone') return { tone: 'view', text: 'phone' }
     return null
   }
   if (row.section === 'link_only') return { tone: 'link', text: 'link only' }

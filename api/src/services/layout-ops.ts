@@ -30,6 +30,7 @@ import {
   normalizeLayoutPatch,
   parseLayoutRow
 } from './layout-patch.js'
+import { checkFreeze } from './layout-resolve-rules.js'
 import { layoutStateHash, snapshotLayoutVersion } from './layout-versions.js'
 
 export * from './layout-ops-apply.js'
@@ -426,12 +427,20 @@ export interface LayoutOpsInput {
   /** The admin's reason and ticket link, for layouts that ask for a change note (#2654). */
   reason?: string | null
   ticket?: string | null
+  /** An administrator's note that lets this save through a freeze (#2717). */
+  freeze_override?: string | null
 }
 
 export type LayoutOpsResult =
-  | { status: 200; bundle: LayoutBundle; changed: boolean }
+  | { status: 200; bundle: LayoutBundle; changed: boolean; override?: string | null }
   | { status: 409; bundle: LayoutBundle }
-  | { status: 400; error: string; op_index?: number; code?: string }
+  | {
+      status: 400
+      error: string
+      op_index?: number
+      code?: string
+      freeze?: { until: string; reason: string }
+    }
   | { status: 404 }
 
 /**
@@ -504,16 +513,28 @@ function applyInTransaction(
       same(before.placements, after.placements)
     if (unchanged) return { status: 200, bundle: before, changed: false }
 
+    // A frozen form (#2717) refuses every change, the freeze's own too, unless
+    // an administrator overrides it with a note (every caller is admin-only).
+    const freeze = checkFreeze(raw, input.freeze_override)
+    if (!freeze.ok)
+      return {
+        status: 400,
+        error: freeze.error,
+        code: freeze.code,
+        freeze: { until: freeze.freeze.until, reason: freeze.freeze.reason }
+      }
+
     // A layout that asks for a change note (#2654): no reason, no save; every
     // reasoned save gets its own version, so each reason stays in History.
     const policy = changeNotePolicy(before.layout)
     const missing = missingChangeNote(policy, input.reason, input.ticket)
     if (missing) return { status: 400, error: missing, code: CHANGE_NOTE_REQUIRED }
     const reasoned = changeNoteVersionNote(input.reason, input.ticket, input.note)
-    if (policy || !(await snapshottedRecently(trx, layoutId, userId)))
+    const overridden = freeze.override ? `Freeze override: ${freeze.override}`.slice(0, 255) : null
+    if (policy || overridden || !(await snapshottedRecently(trx, layoutId, userId)))
       await snapshotLayoutVersion(
         layoutId,
-        reasoned || input.note?.trim() || 'before layout edit',
+        overridden || reasoned || input.note?.trim() || 'before layout edit',
         userId ?? null,
         trx
       )
@@ -522,6 +543,6 @@ function applyInTransaction(
     await writePlacements(trx, layoutId, before, after)
 
     const fresh = (await loadLayoutBundle(trx, layoutId)) as LayoutBundle
-    return { status: 200, bundle: fresh, changed: true }
+    return { status: 200, bundle: fresh, changed: true, override: freeze.override }
   })
 }

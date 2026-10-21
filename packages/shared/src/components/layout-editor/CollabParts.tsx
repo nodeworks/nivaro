@@ -48,7 +48,7 @@ export function DroppedBanner({ labels, onDismiss }: { labels: string[]; onDismi
   )
 }
 
-/** A draft from a closed tab or a crash: recover it, or say it could not be (#2653). */
+/** A staged draft from another browser, a closed tab or a crash: recover it (#2589, #2653). */
 export function RecoveryBanner({
   state,
   onRecover,
@@ -61,33 +61,30 @@ export function RecoveryBanner({
   if (!state) return null
   const n = state.draft.steps.length
   const when = formatRelative(new Date(state.draft.at).toISOString())
+  const where = state.source === 'server' ? 'kept for you' : 'left in this browser'
   return (
-    <div role='note' data-draft-recovery={state.kind} className={cn(bannerCls, 'items-center')}>
+    <div
+      role='note'
+      data-draft-recovery={state.kind}
+      data-draft-stale={state.stale ? '' : undefined}
+      className={cn(bannerCls, 'items-center')}
+    >
       <History className='h-3.5 w-3.5 shrink-0' />
       <p className='m-0 min-w-0 flex-1'>
-        {state.kind === 'offer' ? (
-          <>
-            You left {unsavedText(n)} on this layout {when} that {n === 1 ? 'was' : 'were'} never
-            saved.
-          </>
-        ) : (
-          <>
-            {unsavedText(n)} left here {when} could not be brought back: the layout was saved since.
-          </>
-        )}
+        You have {unsavedText(n)} on this layout, {where} {when}.
+        {state.stale &&
+          ' The layout was saved since: Recover lays them on top of it and lists any that no longer fit.'}
       </p>
-      {state.kind === 'offer' && (
-        <button
-          type='button'
-          data-draft-recover=''
-          onClick={onRecover}
-          className='inline-flex h-7 shrink-0 items-center rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90'
-        >
-          Recover
-        </button>
-      )}
+      <button
+        type='button'
+        data-draft-recover=''
+        onClick={onRecover}
+        className='inline-flex h-7 shrink-0 items-center rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90'
+      >
+        Recover
+      </button>
       <button type='button' data-draft-dismiss='' onClick={onDismiss} className={bannerBtn}>
-        {state.kind === 'offer' ? 'Discard' : 'Got it'}
+        Discard
       </button>
     </div>
   )

@@ -53,6 +53,14 @@ import {
 import { formatApiPayload } from '../lib/api-payload'
 import { del, get, patch, post, put } from '../lib/commands'
 import {
+  isEmptyValue,
+  isFolded,
+  planFieldGrid,
+  type RowGroup,
+  readGroupStructure,
+  stickyGroupKey
+} from '../lib/form-structure'
+import {
   deleteDraft,
   draftHasContent,
   draftKey,
@@ -60,6 +68,7 @@ import {
   type StoredDraft,
   saveDraft
 } from '../lib/draft-store'
+import { entryConfigOf } from '../lib/entry-config'
 import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import {
@@ -77,6 +86,7 @@ import {
 } from '../lib/header-strip'
 import { type LayoutGrantFlags, layoutGrantedTools } from '../lib/layout-grants'
 import { formLocale, translateFieldRow, translateGroup } from '../lib/layout-i18n'
+import { currentViewport } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useRecordReader } from '../lib/record-loader'
@@ -140,6 +150,7 @@ import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
 import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
 import { FieldAffordancesContext, type RemoteFieldChange } from './item-edit/FieldAffordances'
 import { FieldRow } from './item-edit/FieldRow'
+import { FoldArea, RowGroupCell, rowMemberField } from './item-edit/form-structure-ui'
 import {
   GroupSection,
   InlineDisplay,
@@ -165,6 +176,7 @@ import {
 } from './item-edit/helpers'
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
+import { deferredSections } from './item-edit/lazy-sections'
 import {
   computeLiveRollup,
   isDerivedForRecord,
@@ -184,6 +196,16 @@ import {
   type StagedRelationsCtx,
   type StagedRelOps
 } from './item-edit/O2MStagingContext'
+import {
+  confirmChangeFields,
+  fieldCounterError,
+  fieldIsRecommended,
+  isDisplayFormulaRow,
+  missingRecommended,
+  placementBehaviourNeeds,
+  placementFieldText,
+  usePlacementTextContext
+} from './item-edit/placement-behaviour'
 import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
@@ -210,6 +232,9 @@ import { SupportRequestDialog } from './support/SupportRequestDialog'
 
 let formulaCtxHydrated = false
 
+import { EntryStrip } from './item-edit/entry/EntryStrip'
+import { useEntryKeyboard } from './item-edit/entry/useEntryKeyboard'
+import { useEntryMode } from './item-edit/entry/useEntryMode'
 import { type FindableField, FindInRecordButton } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
@@ -227,11 +252,13 @@ import type {
   SummaryEntry
 } from './item-edit/types'
 import { DesignDropBody, DesignDropZone, designWrap } from './layout-editor/DesignNode'
+import { GridGuides } from './layout-editor/grid-guides'
 import { DesignCanvas } from './layout-editor/design-canvas'
 import {
   type DesignTarget,
   type LayoutDesignProp,
-  revealGroupKey
+  revealGroupKey,
+  useLayoutDesign
 } from './layout-editor/design-context'
 import {
   DESIGN_SUMMARY_MIN_CANVAS,
@@ -337,8 +364,11 @@ function reimportAttachField(template: ImportTemplateSummary): string | null {
 function GridContainer({ children }: { children: (containerWidth: number) => ReactNode }) {
   const ref = useRef<HTMLDivElement>(null)
   const containerWidth = useContainerWidth(ref)
+  // The canvas's column guides (#2701) sit in the grid: it positions them there only.
+  const design = useLayoutDesign()
   return (
-    <div ref={ref} className='grid grid-cols-12 gap-4 items-start'>
+    <div ref={ref} className={cn(design && 'relative', 'grid grid-cols-12 gap-4 items-start')}>
+      <GridGuides />
       {children(containerWidth)}
     </div>
   )
@@ -1338,14 +1368,25 @@ function ItemEditFormView({
   const isNew = !itemIdIn || itemIdIn === 'new'
 
   // ── Data fetching ──────────────────────────────────────────────────────────
+  // A small screen gets a form's phone version (#2715) — read once per open,
+  // so turning the device never swaps the form under someone's edits.
+  const [viewport] = useState(currentViewport)
   const { data: fetchedLayoutData } = useQuery<ActiveLayoutData | null>({
-    queryKey: ['active-layout', collection, layoutSlug ?? null, itemId],
+    // Desktop keeps the key the host's own /active read shares (admin ItemEdit).
+    queryKey: [
+      'active-layout',
+      collection,
+      layoutSlug ?? null,
+      itemId,
+      ...(viewport ? [viewport] : [])
+    ],
     queryFn: () =>
       client
         .request<{ data: ActiveLayoutData | null }>(
           get('/collection-layouts/active', {
             collection,
-            ...(layoutSlug ? { slug: layoutSlug } : itemId !== 'new' ? { item: itemId } : {})
+            ...(layoutSlug ? { slug: layoutSlug } : itemId !== 'new' ? { item: itemId } : {}),
+            ...(viewport ? { viewport } : {})
           })
         )
         .then((r) => r.data)
@@ -1356,6 +1397,19 @@ function ItemEditFormView({
   const activeLayoutData = designOn ? design.layout : fetchedLayoutData
 
   const layoutId = activeLayoutData?.layout?.id ?? null
+
+  // Sections that load when opened (#2713): what they alone need waits until
+  // someone opens them; opened ones stay loaded for this record.
+  const [openedLazy, setOpenedLazy] = useState<ReadonlySet<string>>(() => new Set())
+  // biome-ignore lint/correctness/useExhaustiveDependencies: another record or form starts folded again
+  useEffect(() => setOpenedLazy(new Set()), [collection, itemId, layoutId])
+  const deferred = useMemo(
+    () => deferredSections(activeLayoutData, openedLazy, { design: designOn }),
+    [activeLayoutData, openedLazy, designOn]
+  )
+  const openLazySection = useCallback((key: string) => {
+    setOpenedLazy((cur) => (cur.has(key) ? cur : new Set([...cur, key])))
+  }, [])
 
   // Summary layout (layout_type 'summary'): the customisable read-only
   // presentation Summary mode renders. Null = the collection has none, and
@@ -1425,6 +1479,10 @@ function ItemEditFormView({
       return ghost ? { ...f, placeholder: ghost } : f
     })
   }, [designGhost, isNew, projectedFieldConfig])
+  // #2703 / #2705: placement rules that read the viewer's role or the record's state.
+  const behaviourNeeds = useMemo(() => placementBehaviourNeeds(fieldConfig ?? []), [fieldConfig])
+  // The layout editor's canvas: its previewed role (state comes through `design`).
+  const outerPlacementText = usePlacementTextContext()
 
   const { data: relations = [], isFetched: relationsFetched } = useQuery<CMSRelation[]>({
     queryKey: ['relations', collection],
@@ -3060,9 +3118,14 @@ function ItemEditFormView({
   const relationPathFields = useMemo(
     () =>
       (fieldConfig ?? [])
-        .filter((f) => f.interface === 'relation-path' && f.field.includes('.'))
+        .filter(
+          (f) =>
+            f.interface === 'relation-path' &&
+            f.field.includes('.') &&
+            !deferred.fields.has(f.field)
+        )
         .map((f) => f.field),
-    [fieldConfig]
+    [fieldConfig, deferred]
   )
   const { data: resolvedPaths } = useQuery<
     Record<string, { value: string; ids: string[]; target_collection: string | null }>
@@ -3986,7 +4049,8 @@ function ItemEditFormView({
           )
           .then((res) => res.data ?? []),
       select: (rows: Record<string, unknown>[]) => rows.length,
-      enabled: !!itemId && !isNew,
+      // A grid only in a section that loads when opened waits for it (#2713).
+      enabled: !!itemId && !isNew && !deferred.fields.has(r.one_field as string),
       staleTime: 30_000
     }))
   })
@@ -4121,7 +4185,7 @@ function ItemEditFormView({
         .request<{ data: { role?: string | null } }>(get('/users/me'))
         .then((r) => r.data ?? null),
     staleTime: 5 * 60_000,
-    enabled: hasLockConditions || addendumEnabled || summaryNeedsRole
+    enabled: hasLockConditions || addendumEnabled || summaryNeedsRole || behaviourNeeds.role
   })
   // #2596: the exact rule behind a lock (and, for admins, what rules hide) —
   // fetched on the first hover of a locked field; admins with the form.
@@ -4151,7 +4215,9 @@ function ItemEditFormView({
         .catch(() => null),
     staleTime: 30_000,
     enabled:
-      (hasLockConditions || addendumEnabled || summaryNeedsState) && !isNew && !designStateKey
+      (hasLockConditions || addendumEnabled || summaryNeedsState || behaviourNeeds.state) &&
+      !isNew &&
+      !designStateKey
   })
   const pipelineInstanceData = useMemo(
     () =>
@@ -4162,6 +4228,23 @@ function ItemEditFormView({
           }
         : pipelineInstanceQueried,
     [designStateKey, pipelineInstanceQueried]
+  )
+  // #2703: what label rules and confirm-on-change read — the record's state and
+  // the viewer's role (the previewed role under View as, the canvas's in the editor).
+  const recordStateKey = useMemo(() => {
+    const cur = pipelineInstanceData?.instance?.current_state ?? null
+    return cur
+      ? ((pipelineInstanceData?.states ?? []).find((st) => st.id === cur)?.key ?? null)
+      : null
+  }, [pipelineInstanceData])
+  const placementTextCtx = useMemo(
+    () => ({
+      stateKey: recordStateKey,
+      roleId: designOn
+        ? (outerPlacementText?.roleId ?? null)
+        : (viewAs.roleId ?? currentUserData?.role ?? null)
+    }),
+    [recordStateKey, designOn, outerPlacementText?.roleId, viewAs.roleId, currentUserData?.role]
   )
 
   const addendumCanCreate = useMemo(() => {
@@ -4843,7 +4926,23 @@ function ItemEditFormView({
   const hasTabs = tabGroups.length > 0
   const layoutMeta = activeLayoutData?.layout
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
-  const isStepsMode = hasTabs && layoutMeta?.tab_mode === 'steps'
+  // Entry ergonomics (#2702-#2728): the layout's entry config, and the beginner / expert
+  // mode of an adaptive form (guided steps for a person's first records, tabs after).
+  const entryCfg = useMemo(() => entryConfigOf(layoutMeta), [layoutMeta])
+  const entryMode = useEntryMode({
+    collection,
+    layoutId: layoutMeta?.id ?? null,
+    userId: authUserId,
+    config: entryCfg,
+    hasTabs: hasTabs || hasContainers,
+    enabled: !designOn
+  })
+  const containerIsSteps = (c: { tab_mode?: string | null }) =>
+    entryMode.mode && (c.tab_mode === 'steps' || c.tab_mode === 'tabs')
+      ? entryMode.mode === 'beginner'
+      : c.tab_mode === 'steps'
+  const isStepsMode =
+    hasTabs && (entryMode.mode ? entryMode.mode === 'beginner' : layoutMeta?.tab_mode === 'steps')
   const validateBeforeNext = !!layoutMeta?.validate_before_next
   const summaryEnabled = !!layoutMeta?.summary_enabled
   const hideEmptySummary = !!layoutMeta?.summary_hide_empty
@@ -4879,6 +4978,8 @@ function ItemEditFormView({
   // Accordion mode: track the single open section group id (null = none open)
   const [openSectionId, setOpenSectionId] = useState<number | null>(null)
   const [swappedGroups, setSwappedGroups] = useState<Set<number>>(new Set())
+  // #2698: tabs and steps whose "Show N more" was opened by hand.
+  const [openFolds, setOpenFolds] = useState<Set<string>>(() => new Set())
   const prevAccordionModeRef = useRef(false)
   useEffect(() => {
     if (!accordionMode) {
@@ -5594,7 +5695,7 @@ function ItemEditFormView({
     }
     // Container steps (the attached-track wizard, e.g. IR layouts): seed each
     // steps container's tab past its skip-satisfied leading steps.
-    for (const c of groups.filter((g) => g.type === 'container' && g.tab_mode === 'steps')) {
+    for (const c of groups.filter((g) => g.type === 'container' && containerIsSteps(g))) {
       const children = groups
         .filter((g) => g.type === 'tab' && g.container_id === c.id)
         .sort((a, b) => a.sort - b.sort)
@@ -6029,7 +6130,9 @@ function ItemEditFormView({
     // Completeness = REQUIRED layout fields only — optional fields being
     // blank is normal, not incompleteness. No required fields → no pill.
     const required = fields.filter((f) => f.required)
-    if (required.length === 0) return null
+    // #2704: recommended fields are counted on their own, never as required.
+    const recommended = fields.filter((f) => fieldIsRecommended(f))
+    if (required.length === 0 && recommended.length === 0) return null
     const isFilled = (f: (typeof fields)[number]): boolean => {
       const alias = m2mAliasFieldsForRules.get(f.field)
       if (alias) return (m2mAliasFieldStates[f.field]?.ids ?? []).length > 0
@@ -6040,11 +6143,16 @@ function ItemEditFormView({
     }
     const filled = required.filter(isFilled)
     const requiredMissing = required.filter((f) => !isFilled(f))
+    const recommendedMissing = recommended.filter((f) => !isFilled(f))
     return {
-      pct: Math.round((filled.length / required.length) * 100),
+      hasRequired: required.length > 0,
+      pct: required.length ? Math.round((filled.length / required.length) * 100) : 100,
       filled: filled.length,
       total: required.length,
-      requiredMissing: requiredMissing.map((f) => f.label ?? f.field)
+      requiredMissing: requiredMissing.map((f) => f.label ?? f.field),
+      recommendedTotal: recommended.length,
+      recommendedFilled: recommended.length - recommendedMissing.length,
+      recommendedMissing: recommendedMissing.map((f) => f.label ?? f.field)
     }
   }, [
     fieldConfig,
@@ -6395,6 +6503,11 @@ function ItemEditFormView({
           }
         }
       }
+      // #2709: a placement's counter limit blocks the save once passed.
+      if (!errs[f.field]) {
+        const over = fieldCounterError(f, draft[f.field], f.label ?? titleCase(f.field))
+        if (over) errs[f.field] = over
+      }
     }
     if (Object.keys(errs).length > 0) {
       setValidationErrors(errs)
@@ -6544,21 +6657,105 @@ function ItemEditFormView({
   const handleSaveRef = useRef<() => void>(() => {})
   // Function declarations hoist — safe to capture here, fresh every render.
   handleSaveRef.current = () => handleSave()
+  // Keyboard-first entry (#2707) and the layout's tab order (#2708).
+  const entryRequired = useMemo(
+    () =>
+      new Set(
+        allFields
+          .filter(
+            (f) =>
+              f.required &&
+              !f.hidden &&
+              !f.readonly &&
+              !SYSTEM_FIELDS.has(f.field) &&
+              !isSentinelKey(f.field) &&
+              (f as { layout_assigned?: boolean }).layout_assigned !== false
+          )
+          .map((f) => f.field)
+      ),
+    [allFields]
+  )
+  useEntryKeyboard({
+    collection,
+    config: entryCfg,
+    enabled: !designOn && !readMode && !recordGone,
+    ready: isNew || !!itemData,
+    recordKey: `${collection}:${itemId ?? 'new'}`,
+    required: entryRequired,
+    draft: draft as Record<string, unknown>,
+    save: () => handleSaveRef.current()
+  })
   useEffect(() => {
     if (!registerSaveHandler) return
     registerSaveHandler(() => handleSaveRef.current())
     return () => registerSaveHandler(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ref indirection keeps the handle stable
   }, [registerSaveHandler])
+  // #2705: fields the layout marks "confirm and give a reason" that this save
+  // changes on an existing record (in the record's current state). The reason
+  // rides `_change_reason` like the collection-level requirement's.
+  function layoutConfirmChallenge(): ChangeReasonChallenge | null {
+    if (isNew || changeReasonRef.current) return null
+    const changed = new Set(
+      allFields
+        .filter(
+          (f) =>
+            !SYSTEM_FIELDS.has(f.field) &&
+            f.field in draft &&
+            !valuesEqual(draft[f.field], initialDataRef.current[f.field])
+        )
+        .map((f) => f.field)
+    )
+    if (!changed.size) return null
+    const hit = confirmChangeFields(allFields, changed, recordStateKey)
+    return hit.length
+      ? { fields_changed: hit, reasons: [], allow_free_text: true, confirm: true }
+      : null
+  }
+
+  // #2704: recommended fields still empty — named on save, never blocking it.
+  function nudgeRecommended() {
+    const missing = missingRecommended(
+      allFields,
+      draft,
+      (f) => visibleFields.size === 0 || visibleFields.has(f.field),
+      (f) => placementFieldText(f, placementTextCtx).label || titleCase(f.field)
+    )
+    if (!missing.length) return
+    toast.warning(
+      missing.length === 1
+        ? `${missing[0]} is recommended and still empty`
+        : `${missing.length} recommended fields are still empty`,
+      {
+        description: `${missing.slice(0, 6).join(', ')}${missing.length > 6 ? '…' : ''} — saved anyway; fill ${missing.length === 1 ? 'it' : 'them'} in when you can.`
+      }
+    )
+  }
+
   function handleSave() {
     if (recordGone) return
     if (!validateAll()) return
     void (async () => {
-      const challenge = await preflightChangeReason()
+      const collectionChallenge = await preflightChangeReason()
+      const layoutChallenge = layoutConfirmChallenge()
+      // One prompt: the collection's (its preset reasons) naming every field asked about.
+      const challenge =
+        collectionChallenge && layoutChallenge
+          ? {
+              ...collectionChallenge,
+              fields_changed: [
+                ...new Set([
+                  ...collectionChallenge.fields_changed,
+                  ...layoutChallenge.fields_changed
+                ])
+              ]
+            }
+          : (collectionChallenge ?? layoutChallenge)
       if (challenge) {
         setCrChallenge(challenge)
         return
       }
+      nudgeRecommended()
       saveMut.mutate()
     })()
   }
@@ -7537,6 +7734,13 @@ function ItemEditFormView({
   const saveThenTransition = async (): Promise<boolean> => {
     if (!validateAll()) return false
     if (!isDirty) return true
+    // #2705: a confirm-on-change field asks first; the move waits for that save.
+    const confirmFirst = layoutConfirmChallenge()
+    if (confirmFirst) {
+      setCrChallenge(confirmFirst)
+      return false
+    }
+    nudgeRecommended()
     try {
       await saveMut.mutateAsync()
       return true
@@ -7970,7 +8174,11 @@ function ItemEditFormView({
     applyToLines,
     openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id }),
     layoutId: layoutMeta?.id ?? null,
-    fromAutofill
+    // #2726: designers trying pickers on the canvas are not people searching.
+    pickerMisses: !designOn,
+    fromAutofill,
+    glossaryHelp: entryCfg.glossary !== false,
+    placementText: placementTextCtx
   }
 
   // ── Design mode shells ─────────────────────────────────────────────────────
@@ -8004,15 +8212,32 @@ function ItemEditFormView({
       node
     )
   const fieldTarget = (f: CMSField): DesignTarget => ({
-    kind: 'field',
+    // A display formula is a `__calc_<n>__` placement — the editor's slot kind (#2712).
+    kind: isDisplayFormulaRow(f) ? 'slot' : 'field',
     field: f.field,
     group_key: f.group_key ?? null
   })
   // Section-mode rows: the row div becomes the shell of whatever it holds.
   // The ungrouped zone shells itself (renderUngrouped is also used by tabs).
-  const sectionShell = (item: FieldGroup | string, key: string | number) => {
+  // #2699: the form's one sticky section stays at the top while the rest scrolls
+  // (section mode, from tablet widths up; hosts with a fixed bar set --nvr-sticky-top).
+  const sectionShell = (
+    item: FieldGroup | string,
+    key: string | number,
+    stickyKey?: string | null
+  ) => {
     const content = renderSectionItem(item)
-    const el = <div key={key}>{content}</div>
+    const sticky =
+      !designOn && content != null && typeof item !== 'string' && item.key === stickyKey
+    const el = (
+      <div
+        key={key}
+        data-form-sticky={sticky ? '' : undefined}
+        className={sticky ? 'md:sticky md:top-[var(--nvr-sticky-top,0px)] md:z-20' : undefined}
+      >
+        {content}
+      </div>
+    )
     if (content == null || item === '__ungrouped__') return el
     return dwrap(
       typeof item === 'string' ? slotTarget(item) : { kind: 'group', key: item.key },
@@ -8289,7 +8514,7 @@ function ItemEditFormView({
           ))}
         </div>
       )
-    const isSteps = c.tab_mode === 'steps'
+    const isSteps = containerIsSteps(c)
     const activeKey = onlyKey ?? getContainerTab(c, children)
     const activeChild = children.find((g) => g.key === activeKey) ?? children[0]
     const activeSwapCfg = (() => {
@@ -8404,160 +8629,174 @@ function ItemEditFormView({
         <div className='px-5 py-5'>
           {activeChild && <SectionIntro group={activeChild} className='mb-4' />}
           {designOn && activeChild && <DesignDropBody groupKey={activeChild.key} />}
-          <GridContainer>
-            {(cw) =>
-              activeFields.map((f) => {
-                const inlineConfig = fieldInlineDisplay?.[f.field]
-                const inlineEntries = inlineConfig?.entries
-                const inlineSeparator = inlineConfig?.separator ?? null
-                const rawVal = draft[f.field]
-                const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
-                const inlineRelCollection =
-                  inlineEntries?.length && hasVal
-                    ? (relations.find(
-                        (r) =>
-                          r.many_collection === collection &&
-                          r.many_field === f.field &&
-                          !r.junction_field
-                      )?.one_collection ?? null)
-                    : null
-                const isPrimarySwapField =
-                  activeSwapCfg?.enabled && f.field === activeSwapCfg.primary_field
-                const primaryHasVal = (() => {
-                  const v = draft[activeSwapCfg?.primary_field ?? '']
-                  return v !== null && v !== undefined && v !== ''
-                })()
-                const altHasVal = normActiveAlts.some((a) => {
-                  const v = draft[a.field]
-                  return v !== null && v !== undefined && v !== ''
-                })
-                const swapToggleBtn = isPrimarySwapField ? (
-                  <span className='inline-flex items-center gap-1.5'>
-                    <button
-                      type='button'
-                      onClick={() =>
-                        setSwappedGroups((prev) => {
-                          const next = new Set(prev)
-                          if (next.has(activeChild!.id)) next.delete(activeChild!.id)
-                          else next.add(activeChild!.id)
-                          return next
-                        })
-                      }
-                      className='inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 transition-colors'
-                    >
-                      {activeIsSwapped
-                        ? (activeSwapCfg!.back_label ?? 'Back')
-                        : (activeSwapCfg!.toggle_label ?? 'Enter manually')}
-                    </button>
-                    <span
-                      className={[
-                        'inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium',
-                        primaryHasVal
-                          ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
-                          : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'
-                      ].join(' ')}
-                    >
-                      <span
-                        className={[
-                          'h-1.5 w-1.5 rounded-full',
-                          primaryHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
-                        ].join(' ')}
-                      />
-                      Original
-                    </span>
-                    <span
-                      className={[
-                        'inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium',
-                        altHasVal
-                          ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
-                          : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'
-                      ].join(' ')}
-                    >
-                      <span
-                        className={[
-                          'h-1.5 w-1.5 rounded-full',
-                          altHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
-                        ].join(' ')}
-                      />
-                      Manual
-                    </span>
-                  </span>
-                ) : undefined
-                const swapContentNode =
-                  isPrimarySwapField && activeIsSwapped ? (
-                    <div className='mt-2 rounded-lg border border-slate-200 bg-slate-50 dark:border-border dark:bg-slate-900/40 p-3'>
-                      <div className='grid grid-cols-2 gap-3'>
-                        {normActiveAlts.map((a) => {
-                          const af = (fieldConfig ?? []).find((fc) => fc.field === a.field)
-                          if (!af) return null
-                          return (
-                            <div key={af.field} style={{ gridColumn: `span ${a.width}` }}>
-                              <FieldRow
-                                field={af}
-                                draft={effectiveDraft}
-                                onChange={handleFieldChange}
-                                relations={relations}
-                                collection={collection}
-                                itemId={itemId}
-                                error={validationErrors[af.field]}
-                                autoFillTick={autoFillTicks[af.field]}
-                                visible={true}
-                                forceVisible={true}
-                                locked={lockedFields.has(af.field) || addendumViewId !== 'original'}
-                                layoutAiEnabled={layoutAiEnabled}
-                                renderField={renderField}
-                                onCountChange={handleM2MCountChange}
-                              />
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ) : undefined
-                return dwrap(
-                  fieldTarget(f),
-                  <div
-                    key={f.field}
-                    style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}
-                  >
-                    {faint(
-                      designHidden(f, visibleFields.has(f.field) || !visibleFields.size),
-                      <FieldRow
-                        field={f}
-                        draft={effectiveDraft}
-                        onChange={handleFieldChange}
-                        relations={relations}
-                        collection={collection}
-                        itemId={itemId}
-                        error={validationErrors[f.field]}
-                        autoFillTick={autoFillTicks[f.field]}
-                        visible={visibleFields.has(f.field) || !visibleFields.size}
-                        forceVisible={
-                          designHidden(f, visibleFields.has(f.field) || !visibleFields.size) ||
-                          undefined
-                        }
-                        locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
-                        layoutAiEnabled={layoutAiEnabled}
-                        renderField={renderField}
-                        onCountChange={handleM2MCountChange}
-                        swapButton={swapToggleBtn}
-                        swapContent={swapContentNode}
-                      />
-                    )}
-                    {inlineEntries?.length && hasVal && inlineRelCollection && (
-                      <InlineDisplay
-                        relCollection={inlineRelCollection}
-                        relId={rawVal as string | number}
-                        entries={inlineEntries}
-                        separator={inlineSeparator}
-                      />
-                    )}
-                  </div>,
-                  { asChild: true }
-                )
+          {(() => {
+            const renderActiveField = (f: CMSField, cw: number): ReactNode => {
+              const inlineConfig = fieldInlineDisplay?.[f.field]
+              const inlineEntries = inlineConfig?.entries
+              const inlineSeparator = inlineConfig?.separator ?? null
+              const rawVal = draft[f.field]
+              const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
+              const inlineRelCollection =
+                inlineEntries?.length && hasVal
+                  ? (relations.find(
+                      (r) =>
+                        r.many_collection === collection &&
+                        r.many_field === f.field &&
+                        !r.junction_field
+                    )?.one_collection ?? null)
+                  : null
+              const isPrimarySwapField =
+                activeSwapCfg?.enabled && f.field === activeSwapCfg.primary_field
+              const primaryHasVal = (() => {
+                const v = draft[activeSwapCfg?.primary_field ?? '']
+                return v !== null && v !== undefined && v !== ''
+              })()
+              const altHasVal = normActiveAlts.some((a) => {
+                const v = draft[a.field]
+                return v !== null && v !== undefined && v !== ''
               })
+              const swapToggleBtn = isPrimarySwapField ? (
+                <span className='inline-flex items-center gap-1.5'>
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setSwappedGroups((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(activeChild!.id)) next.delete(activeChild!.id)
+                        else next.add(activeChild!.id)
+                        return next
+                      })
+                    }
+                    className='inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 transition-colors'
+                  >
+                    {activeIsSwapped
+                      ? (activeSwapCfg!.back_label ?? 'Back')
+                      : (activeSwapCfg!.toggle_label ?? 'Enter manually')}
+                  </button>
+                  <span
+                    className={[
+                      'inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium',
+                      primaryHasVal
+                        ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
+                        : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'
+                    ].join(' ')}
+                  >
+                    <span
+                      className={[
+                        'h-1.5 w-1.5 rounded-full',
+                        primaryHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+                      ].join(' ')}
+                    />
+                    Original
+                  </span>
+                  <span
+                    className={[
+                      'inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium',
+                      altHasVal
+                        ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
+                        : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'
+                    ].join(' ')}
+                  >
+                    <span
+                      className={[
+                        'h-1.5 w-1.5 rounded-full',
+                        altHasVal ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+                      ].join(' ')}
+                    />
+                    Manual
+                  </span>
+                </span>
+              ) : undefined
+              const swapContentNode =
+                isPrimarySwapField && activeIsSwapped ? (
+                  <div className='mt-2 rounded-lg border border-slate-200 bg-slate-50 dark:border-border dark:bg-slate-900/40 p-3'>
+                    <div className='grid grid-cols-2 gap-3'>
+                      {normActiveAlts.map((a) => {
+                        const af = (fieldConfig ?? []).find((fc) => fc.field === a.field)
+                        if (!af) return null
+                        return (
+                          <div key={af.field} style={{ gridColumn: `span ${a.width}` }}>
+                            <FieldRow
+                              field={af}
+                              draft={effectiveDraft}
+                              onChange={handleFieldChange}
+                              relations={relations}
+                              collection={collection}
+                              itemId={itemId}
+                              error={validationErrors[af.field]}
+                              autoFillTick={autoFillTicks[af.field]}
+                              visible={true}
+                              forceVisible={true}
+                              locked={lockedFields.has(af.field) || addendumViewId !== 'original'}
+                              layoutAiEnabled={layoutAiEnabled}
+                              renderField={renderField}
+                              onCountChange={handleM2MCountChange}
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ) : undefined
+              return dwrap(
+                fieldTarget(f),
+                <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
+                  {faint(
+                    designHidden(f, visibleFields.has(f.field) || !visibleFields.size),
+                    <FieldRow
+                      field={f}
+                      draft={effectiveDraft}
+                      onChange={handleFieldChange}
+                      relations={relations}
+                      collection={collection}
+                      itemId={itemId}
+                      error={validationErrors[f.field]}
+                      autoFillTick={autoFillTicks[f.field]}
+                      visible={visibleFields.has(f.field) || !visibleFields.size}
+                      forceVisible={
+                        designHidden(f, visibleFields.has(f.field) || !visibleFields.size) ||
+                        undefined
+                      }
+                      locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
+                      layoutAiEnabled={layoutAiEnabled}
+                      renderField={renderField}
+                      onCountChange={handleM2MCountChange}
+                      swapButton={swapToggleBtn}
+                      swapContent={swapContentNode}
+                    />
+                  )}
+                  {inlineEntries?.length && hasVal && inlineRelCollection && (
+                    <InlineDisplay
+                      relCollection={inlineRelCollection}
+                      relId={rawVal as string | number}
+                      entries={inlineEntries}
+                      separator={inlineSeparator}
+                    />
+                  )}
+                </div>,
+                { asChild: true }
+              )
             }
-          </GridContainer>
+            const plan = structurePlan(activeChild, activeFields)
+            return (
+              <>
+                <GridContainer>
+                  {(cw) =>
+                    plan.units.map((u) =>
+                      u.kind === 'row'
+                        ? renderRowCell(u.row, u.members, cw, activeChild?.key ?? null)
+                        : renderActiveField(u.field, cw)
+                    )
+                  }
+                </GridContainer>
+                {renderFold(activeChild?.key ?? c.key, plan, () => (
+                  <GridContainer>
+                    {(cw) => plan.folded.map((f) => renderActiveField(f, cw))}
+                  </GridContainer>
+                ))}
+              </>
+            )
+          })()}
           {designOn &&
             activeFields.length === 0 &&
             !pdfInContainer &&
@@ -8627,7 +8866,7 @@ function ItemEditFormView({
               </div>,
               { asChild: true }
             )}
-          {c.tab_mode === 'steps' &&
+          {containerIsSteps(c) &&
             children.length > 1 &&
             (() => {
               const idx = children.findIndex((ch) => ch.key === activeKey)
@@ -8774,6 +9013,8 @@ function ItemEditFormView({
             : undefined
         }
         summaryFields={parseSummaryFields(g.summary_fields)}
+        deferred={deferred.groups.has(g.key)}
+        onFirstOpen={deferred.groups.has(g.key) ? openLazySection : undefined}
         m2mCounts={fieldCounts}
         o2mCounts={o2mCounts}
         o2mAggValues={o2mAggValues}
@@ -8808,11 +9049,14 @@ function ItemEditFormView({
 
   // ── Section mode ───────────────────────────────────────────────────────────
   function renderSectionMode() {
+    const stickyKey = stickyGroupKey(
+      sectionOrder.filter((x): x is FieldGroup => typeof x !== 'string' && !x.container_id)
+    )
     return (
       <div className='nvr-stagger space-y-4'>
         {sectionOrder.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
-          return sectionShell(item, key ?? i)
+          return sectionShell(item, key ?? i, stickyKey)
         })}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel
@@ -8879,6 +9123,83 @@ function ItemEditFormView({
     )
   }
 
+  // ── Rows and the fold of a tab or step (#2697 #2698) ──────────────────────
+  function structurePlan(g: FieldGroup | undefined, fields: CMSField[]) {
+    return planFieldGrid(fields, {
+      rows: g ? readGroupStructure(g.swap_config).rows : [],
+      folded: (f) => !!g && isFolded(f._overrides),
+      keep: (f) => !!f.required,
+      filled: (f) => !isEmptyValue(effectiveDraft[f.field]) || !!validationErrors[f.field]
+    })
+  }
+
+  function renderRowCell(row: RowGroup, members: CMSField[], cw: number, groupKey: string | null) {
+    return (
+      <RowGroupCell
+        key={`row:${row.key}`}
+        row={row}
+        members={members}
+        containerWidth={cw}
+        errors={validationErrors}
+        renderMember={(f) =>
+          dwrap(
+            { kind: 'field', field: f.field, group_key: groupKey },
+            <div key={f.field}>
+              {faint(
+                designHidden(f, visibleFields.has(f.field) || !visibleFields.size),
+                <FieldRow
+                  field={rowMemberField(f)}
+                  draft={effectiveDraft}
+                  onChange={handleFieldChange}
+                  relations={relations}
+                  collection={collection}
+                  itemId={itemId}
+                  error={validationErrors[f.field]}
+                  autoFillTick={autoFillTicks[f.field]}
+                  visible={visibleFields.has(f.field) || !visibleFields.size}
+                  forceVisible={
+                    designHidden(f, visibleFields.has(f.field) || !visibleFields.size) || undefined
+                  }
+                  locked={lockedFields.has(f.field) || isReadOnly || addendumViewId !== 'original'}
+                  layoutAiEnabled={layoutAiEnabled}
+                  renderField={renderField}
+                  onCountChange={handleM2MCountChange}
+                />
+              )}
+            </div>,
+            { asChild: true }
+          )
+        }
+      />
+    )
+  }
+
+  function renderFold(
+    key: string,
+    plan: { folded: CMSField[]; forcedOpen: boolean },
+    grid: () => ReactNode
+  ) {
+    if (plan.folded.length === 0) return null
+    return (
+      <FoldArea
+        count={plan.folded.length}
+        open={openFolds.has(key)}
+        forcedOpen={plan.forcedOpen}
+        design={designOn}
+        onToggle={() =>
+          setOpenFolds((cur) => {
+            const next = new Set(cur)
+            if (next.has(key)) next.delete(key)
+            else next.add(key)
+            return next
+          })
+        }
+      >
+        {grid()}
+      </FoldArea>
+    )
+  }
+
   // ── Tab mode ───────────────────────────────────────────────────────────────
   function renderTabContent(tabKey: string, inStepsMode = false) {
     const fields = (
@@ -8893,16 +9214,27 @@ function ItemEditFormView({
     const widgetsHereTab = widgetSlots.filter((ws) => (ws.group_key ?? null) === tabKey)
     type TabItem = { _k: string; sort: number } & (
       | { _t: 'field'; f: CMSField }
+      | { _t: 'row'; row: RowGroup; members: CMSField[] }
       | { _t: 'owners'; slot: SlotAssignment }
       | { _t: 'pdf'; slot: SlotAssignment }
       | { _t: 'widget'; slot: SlotAssignment }
     )
-    const tabItems: TabItem[] = fields.map((f) => ({
-      _k: f.field,
-      sort: f.sort ?? 0,
-      _t: 'field' as const,
-      f
-    }))
+    // "General" mixes fields of several sections: rows and the fold are a tab's own.
+    const tabPlan = structurePlan(
+      tabKey === '__general__' ? undefined : groups.find((g) => g.key === tabKey),
+      fields
+    )
+    const tabItems: TabItem[] = tabPlan.units.map((u) =>
+      u.kind === 'row'
+        ? {
+            _k: `row:${u.row.key}`,
+            sort: u.members[0].sort ?? 0,
+            _t: 'row' as const,
+            row: u.row,
+            members: u.members
+          }
+        : { _k: u.field.field, sort: u.field.sort ?? 0, _t: 'field' as const, f: u.field }
+    )
     if (ownersHere && ownersSlot) {
       tabItems.push({
         _k: '__owners__',
@@ -8928,127 +9260,148 @@ function ItemEditFormView({
         {designOn && (tabKey !== '__general__' || inStepsMode) && (
           <DesignDropBody groupKey={tabKey === '__general__' ? '__ungrouped__' : tabKey} />
         )}
-        <GridContainer>
-          {(cw) =>
-            tabItems.map((item) => {
-              if (item._t === 'owners') {
-                const span = item.slot.col_span ?? 12
-                return dwrap(
-                  slotTarget('__owners__', item.slot.group_key ?? null),
-                  <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
-                    <OwnersInline
-                      collection={collection}
-                      itemId={itemId}
-                      label={item.slot.label_override || 'Owners'}
-                    />
-                  </div>,
-                  { asChild: true }
-                )
-              }
-              if (item._t === 'pdf') {
-                if (!layoutId) return null
-                const span = item.slot.col_span ?? 12
-                const label = item.slot.label_override?.trim() || 'Generate PDF'
-                const notConfigured = !pdfAttachField
-                return dwrap(
-                  slotTarget('__pdf__', item.slot.group_key ?? null),
-                  <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
-                    <button
-                      type='button'
-                      onClick={() => void handleGenerateAndAttach()}
-                      disabled={pdfAttaching || notConfigured}
-                      title={
-                        notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined
-                      }
-                      className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
-                    >
-                      <svg
-                        xmlns='http://www.w3.org/2000/svg'
-                        className='h-3.5 w-3.5'
-                        viewBox='0 0 24 24'
-                        fill='none'
-                        stroke='currentColor'
-                        strokeWidth='2'
-                        strokeLinecap='round'
-                        strokeLinejoin='round'
-                      >
-                        <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
-                        <polyline points='14 2 14 8 20 8' />
-                      </svg>
-                      {pdfAttaching ? 'Generating…' : label}
-                    </button>
-                  </div>,
-                  { asChild: true }
-                )
-              }
-              if (item._t === 'widget') {
-                if (!item.slot.widget_id) return null
-                const span = item.slot.col_span ?? 12
-                return dwrap(
-                  slotTarget(item.slot.field, item.slot.group_key ?? null),
-                  <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
-                    <WidgetSlot
-                      widgetId={item.slot.widget_id}
-                      inputBindings={(item.slot.input_bindings ?? []) as InputBinding[]}
-                      itemDraft={draft}
-                      label={item.slot.label_override ?? undefined}
-                      defaultExpanded={item.slot.default_expanded ?? true}
-                    />
-                  </div>,
-                  { asChild: true }
-                )
-              }
-              const f = item.f
-              const inlineConfig = fieldInlineDisplay?.[f.field]
-              const inlineEntries = inlineConfig?.entries
-              const inlineSeparator = inlineConfig?.separator ?? null
-              const rawVal = draft[f.field]
-              const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
-              const inlineRelCollection =
-                inlineEntries?.length && hasVal
-                  ? (relations.find(
-                      (r) =>
-                        r.many_collection === collection &&
-                        r.many_field === f.field &&
-                        !r.junction_field
-                    )?.one_collection ?? null)
-                  : null
+        {(() => {
+          const renderTabItem = (item: TabItem, cw: number): ReactNode => {
+            if (item._t === 'row')
+              return renderRowCell(
+                item.row,
+                item.members,
+                cw,
+                tabKey === '__general__' ? null : tabKey
+              )
+            if (item._t === 'owners') {
+              const span = item.slot.col_span ?? 12
               return dwrap(
-                fieldTarget(f),
-                <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-                  {faint(
-                    designHidden(f),
-                    <FieldRow
-                      field={f}
-                      draft={effectiveDraft}
-                      onChange={handleFieldChange}
-                      relations={relations}
-                      collection={collection}
-                      itemId={itemId}
-                      error={validationErrors[f.field]}
-                      autoFillTick={autoFillTicks[f.field]}
-                      visible={true}
-                      forceVisible={designHidden(f) || undefined}
-                      locked={isReadOnly || addendumViewId !== 'original'}
-                      layoutAiEnabled={layoutAiEnabled}
-                      renderField={renderField}
-                      onCountChange={handleM2MCountChange}
-                    />
-                  )}
-                  {inlineEntries?.length && hasVal && inlineRelCollection && (
-                    <InlineDisplay
-                      relCollection={inlineRelCollection}
-                      relId={rawVal as string | number}
-                      entries={inlineEntries}
-                      separator={inlineSeparator}
-                    />
-                  )}
+                slotTarget('__owners__', item.slot.group_key ?? null),
+                <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
+                  <OwnersInline
+                    collection={collection}
+                    itemId={itemId}
+                    label={item.slot.label_override || 'Owners'}
+                  />
                 </div>,
                 { asChild: true }
               )
-            })
+            }
+            if (item._t === 'pdf') {
+              if (!layoutId) return null
+              const span = item.slot.col_span ?? 12
+              const label = item.slot.label_override?.trim() || 'Generate PDF'
+              const notConfigured = !pdfAttachField
+              return dwrap(
+                slotTarget('__pdf__', item.slot.group_key ?? null),
+                <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
+                  <button
+                    type='button'
+                    onClick={() => void handleGenerateAndAttach()}
+                    disabled={pdfAttaching || notConfigured}
+                    title={
+                      notConfigured ? 'Configure PDF field in Data Model → Layouts' : undefined
+                    }
+                    className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
+                  >
+                    <svg
+                      xmlns='http://www.w3.org/2000/svg'
+                      className='h-3.5 w-3.5'
+                      viewBox='0 0 24 24'
+                      fill='none'
+                      stroke='currentColor'
+                      strokeWidth='2'
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                    >
+                      <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
+                      <polyline points='14 2 14 8 20 8' />
+                    </svg>
+                    {pdfAttaching ? 'Generating…' : label}
+                  </button>
+                </div>,
+                { asChild: true }
+              )
+            }
+            if (item._t === 'widget') {
+              if (!item.slot.widget_id) return null
+              const span = item.slot.col_span ?? 12
+              return dwrap(
+                slotTarget(item.slot.field, item.slot.group_key ?? null),
+                <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
+                  <WidgetSlot
+                    widgetId={item.slot.widget_id}
+                    inputBindings={(item.slot.input_bindings ?? []) as InputBinding[]}
+                    itemDraft={draft}
+                    label={item.slot.label_override ?? undefined}
+                    defaultExpanded={item.slot.default_expanded ?? true}
+                  />
+                </div>,
+                { asChild: true }
+              )
+            }
+            const f = item.f
+            const inlineConfig = fieldInlineDisplay?.[f.field]
+            const inlineEntries = inlineConfig?.entries
+            const inlineSeparator = inlineConfig?.separator ?? null
+            const rawVal = draft[f.field]
+            const hasVal = rawVal !== null && rawVal !== undefined && rawVal !== ''
+            const inlineRelCollection =
+              inlineEntries?.length && hasVal
+                ? (relations.find(
+                    (r) =>
+                      r.many_collection === collection &&
+                      r.many_field === f.field &&
+                      !r.junction_field
+                  )?.one_collection ?? null)
+                : null
+            return dwrap(
+              fieldTarget(f),
+              <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
+                {faint(
+                  designHidden(f),
+                  <FieldRow
+                    field={f}
+                    draft={effectiveDraft}
+                    onChange={handleFieldChange}
+                    relations={relations}
+                    collection={collection}
+                    itemId={itemId}
+                    error={validationErrors[f.field]}
+                    autoFillTick={autoFillTicks[f.field]}
+                    visible={true}
+                    forceVisible={designHidden(f) || undefined}
+                    locked={isReadOnly || addendumViewId !== 'original'}
+                    layoutAiEnabled={layoutAiEnabled}
+                    renderField={renderField}
+                    onCountChange={handleM2MCountChange}
+                  />
+                )}
+                {inlineEntries?.length && hasVal && inlineRelCollection && (
+                  <InlineDisplay
+                    relCollection={inlineRelCollection}
+                    relId={rawVal as string | number}
+                    entries={inlineEntries}
+                    separator={inlineSeparator}
+                  />
+                )}
+              </div>,
+              { asChild: true }
+            )
           }
-        </GridContainer>
+          return (
+            <>
+              <GridContainer>
+                {(cw) => tabItems.map((item) => renderTabItem(item, cw))}
+              </GridContainer>
+              {renderFold(tabKey, tabPlan, () => (
+                <GridContainer>
+                  {(cw) =>
+                    tabPlan.folded.map((f) =>
+                      renderTabItem({ _k: f.field, sort: f.sort ?? 0, _t: 'field', f }, cw)
+                    )
+                  }
+                </GridContainer>
+              ))}
+            </>
+          )
+        })()}
         {/* "General" in tab mode mixes Ungrouped fields and sections: no single
             place to drop into, so no drop zone invitation either. */}
         {designOn && tabItems.length === 0 && (tabKey !== '__general__' || inStepsMode) && (
@@ -9688,7 +10041,7 @@ function ItemEditFormView({
                                           data-last-touch
                                         >
                                           {lastTouchText}
-                                          {completeness && (
+                                          {completeness?.hasRequired && (
                                             <span
                                               data-completeness-chip
                                               className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums transition-colors duration-300 ${
@@ -9707,6 +10060,16 @@ function ItemEditFormView({
                                               <span key={completeness.pct} className='nvr-fade-in'>
                                                 {completeness.pct}% complete
                                               </span>
+                                            </span>
+                                          )}
+                                          {(completeness?.recommendedMissing.length ?? 0) > 0 && (
+                                            <span
+                                              data-recommended-chip
+                                              className='inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[9.5px] font-semibold tabular-nums text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                                              data-tip={`${completeness?.recommendedFilled} of ${completeness?.recommendedTotal} recommended fields filled · missing: ${completeness?.recommendedMissing.slice(0, 5).join(', ')}${(completeness?.recommendedMissing.length ?? 0) > 5 ? '…' : ''}`}
+                                            >
+                                              {completeness?.recommendedMissing.length} recommended
+                                              to fill
                                             </span>
                                           )}
                                           {provenance && !provenance.api && (
@@ -10873,12 +11236,16 @@ function ItemEditFormView({
                                   challenge={crChallenge}
                                   fieldLabel={(f) => {
                                     const fc = allFields.find((af) => af.field === f)
-                                    return fc?.label || titleCase(f)
+                                    return (
+                                      (fc && placementFieldText(fc, placementTextCtx).label) ||
+                                      titleCase(f)
+                                    )
                                   }}
                                   onCancel={() => setCrChallenge(null)}
                                   onSubmit={(reason) => {
                                     changeReasonRef.current = reason
                                     setCrChallenge(null)
+                                    nudgeRecommended()
                                     saveMut.mutate()
                                   }}
                                 />
@@ -10944,6 +11311,14 @@ function ItemEditFormView({
                                   />
                                 )}
 
+                                {(entryCfg.badge || (!designOn && entryMode.switchable)) && (
+                                  <EntryStrip
+                                    badge={entryCfg.badge}
+                                    mode={!designOn && entryMode.switchable ? entryMode.mode : null}
+                                    auto={entryMode.auto}
+                                    onMode={entryMode.set}
+                                  />
+                                )}
                                 {showHeader &&
                                   (headerWidgets.length > 0 || headerFields.length > 0) && (
                                     // Condensing HIDES rather than unmounts: a

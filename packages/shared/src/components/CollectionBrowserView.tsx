@@ -103,6 +103,7 @@ import {
   useAvailableBulkActions,
   useBuiltinGate
 } from './bulk/BulkActionButtons'
+import { BulkFieldUpdate } from './bulk/BulkFieldUpdate'
 import { BulkRowMark } from './bulk/BulkRowMark'
 import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushActions'
 import { CellCopyLayer } from './CellCopyLayer'
@@ -129,6 +130,7 @@ import {
   RevisionsPanel
 } from './panels'
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
+import { RecordCompareDialog } from './RecordCompare'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { RowPresence } from './RowPresence'
@@ -3525,7 +3527,7 @@ function BulkBar({
   const qc = useQueryClient()
   const itemNav = useItemNavigation()
   const [mode, setMode] = useState<
-    'actions' | 'update' | 'transition' | 'message' | 'confirm-delete' | 'merge'
+    'actions' | 'transition' | 'message' | 'confirm-delete' | 'merge'
   >('actions')
   // Built-in operations are registry entries too (Data Model → Settings →
   // Bulk actions): a collection can switch them off or restrict who sees them.
@@ -3580,13 +3582,13 @@ function BulkBar({
     if (r.action_type === 'update' && r.config?.field) {
       const cfg = r.config
       void run(async (pid) => {
-        const res = await client.request<{ updated: number; skipped?: number }>(
+        const res = await client.request<{ updated: number; skipped?: number; refused?: number }>(
           post(`/items/${collection}/bulk-update?progress=${pid}`, {
             ids: selectedIds,
             data: { [String(cfg.field)]: cfg.value ?? '' }
           })
         )
-        return `${r.name}: updated ${res.updated} items${res.skipped ? ` · ${res.skipped} already there` : ''}`
+        return `${r.name}: updated ${res.updated} items${res.skipped ? ` · ${res.skipped} already there` : ''}${res.refused ? ` · ${res.refused} locked on their form` : ''}`
       })
     } else if (r.action_type === 'transition' && r.config?.transition_label) {
       const t = transitions.find((x) => x.label === r.config?.transition_label)
@@ -3608,8 +3610,6 @@ function BulkBar({
     }
   }
   const [comparing, setComparing] = useState(false)
-  const [field, setField] = useState('')
-  const [value, setValue] = useState('')
   const [transitionId, setTransitionId] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
@@ -3634,6 +3634,30 @@ function BulkBar({
       setBusy(false)
     }
   }
+  // #2722: the bar offers the records' form fields; by_form makes the server
+  // refuse, per record, a field its form locks for this person or does not show.
+  const runFieldUpdate = (f: string, v: unknown) =>
+    void run(async (pid) => {
+      const res = await client.request<{
+        updated: number
+        skipped?: number
+        refused?: number
+        refused_reason?: string
+      }>(
+        post(`/items/${collection}/bulk-update?progress=${pid}`, {
+          ids: selectedIds,
+          data: { [f]: v ?? null },
+          by_form: true
+        })
+      )
+      return [
+        `Updated ${res.updated} items`,
+        res.skipped ? `${res.skipped} already there` : '',
+        res.refused ? `${res.refused} refused — ${res.refused_reason ?? 'locked on its form'}` : ''
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    })
 
   return (
     <div
@@ -3656,7 +3680,7 @@ function BulkBar({
           collection={collection}
           ids={selectedIds.slice(0, 3)}
           fields={fields}
-          relations={relations}
+          renderValue={(f, v) => compareCell(collection, relations, f, v)}
           onClose={() => setComparing(false)}
         />
       )}
@@ -3755,13 +3779,17 @@ function BulkBar({
             }}
           />
           {builtin('update-field') && (
-            <button
-              type='button'
-              onClick={() => setMode('update')}
-              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
-            >
-              Update Field
-            </button>
+            <BulkFieldUpdate
+              collection={collection}
+              selectedIds={selectedIds}
+              disabled={busy}
+              onApply={runFieldUpdate}
+              onSaveRecipe={(f, v) => {
+                setRecipeName('')
+                setRecipeNaming({ action_type: 'update', config: { field: f, value: v } })
+              }}
+              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted disabled:opacity-40'
+            />
           )}
           {builtin('transition') && transitions.length > 0 && (
             <button
@@ -3815,64 +3843,6 @@ function BulkBar({
           }}
           onCancel={() => setMode('actions')}
         />
-      )}
-      {mode === 'update' && (
-        <form
-          className='flex items-center gap-1.5'
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (!field.trim()) return
-            void run(async (pid) => {
-              const res = await client.request<{ updated: number; skipped?: number }>(
-                post(`/items/${collection}/bulk-update?progress=${pid}`, {
-                  ids: selectedIds,
-                  data: { [field.trim()]: value }
-                })
-              )
-              return `Updated ${res.updated} items${res.skipped ? ` · ${res.skipped} already there` : ''}`
-            })
-          }}
-        >
-          <input
-            autoFocus
-            value={field}
-            onChange={(e) => setField(e.target.value)}
-            placeholder='field'
-            className='h-8 w-32 rounded-md border border-white/20 dark:border-border bg-white/10 dark:bg-background px-2 text-[12.5px] text-white dark:text-foreground placeholder:text-slate-400 dark:placeholder:text-muted-foreground'
-          />
-          <input
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder='value'
-            className='h-8 w-32 rounded-md border border-white/20 dark:border-border bg-white/10 dark:bg-background px-2 text-[12.5px] text-white dark:text-foreground placeholder:text-slate-400 dark:placeholder:text-muted-foreground'
-          />
-          <button
-            type='submit'
-            disabled={busy}
-            className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
-          >
-            Apply
-          </button>
-          <button
-            type='button'
-            disabled={!field.trim()}
-            onClick={() => {
-              setRecipeName('')
-              setRecipeNaming({ action_type: 'update', config: { field: field.trim(), value } })
-            }}
-            title='Save this update as a reusable recipe'
-            className='h-8 rounded-md border border-white/20 dark:border-border px-2.5 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:bg-white/10 dark:hover:bg-muted disabled:opacity-40'
-          >
-            ☆ Save recipe
-          </button>
-          <button
-            type='button'
-            onClick={() => setMode('actions')}
-            className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
-          >
-            Cancel
-          </button>
-        </form>
       )}
       {mode === 'transition' && (
         <form
@@ -8979,187 +8949,20 @@ export function CollectionBrowserView({
   )
 }
 
-/**
- * Side-by-side record compare — 2-3 selected rows as columns, fields as rows,
- * differing values tinted. Read-only; alias/O2M fields are skipped (they are
- * sets, not values). Renders through a body portal above everything.
- */
-function RecordCompareDialog({
-  collection,
-  ids,
-  fields,
-  relations,
-  onClose
-}: {
-  collection: string
-  ids: Array<string | number>
-  fields: CMSField[]
-  relations: CMSRelation[]
-  onClose: () => void
-}) {
-  const client = useNivaroClient()
-  const { data: records, isLoading } = useQuery({
-    queryKey: ['cbv-compare', collection, ids.join(',')],
-    queryFn: () =>
-      Promise.all(
-        ids.map((id) =>
-          client
-            .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
-            .then((r) => r.data)
-            .catch(() => null)
-        )
-      ),
-    staleTime: 30_000
-  })
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  const rows = useMemo(() => {
-    const loaded = (records ?? []).filter(Boolean) as Array<Record<string, unknown>>
-    if (loaded.length === 0) return []
-    return fields
-      .filter((f) => {
-        if (f.hidden || f.field === 'id') return false
-        // Alias fields (O2M/M2M) have no scalar value to compare.
-        const isAlias = relations.some(
-          (r) => r.one_collection === collection && r.one_field === f.field
-        )
-        if (isAlias) return false
-        return loaded.some((rec) => f.field in rec)
-      })
-      .map((f) => {
-        const values = loaded.map((rec) => rec[f.field] ?? null)
-        const norm = values.map((v) => {
-          if (v == null || v === '') return ''
-          const n = Number(v)
-          if (typeof v !== 'boolean' && String(v).trim() !== '' && Number.isFinite(n)) {
-            return String(Math.round(n * 100) / 100)
-          }
-          return String(v).trim()
-        })
-        const differs = new Set(norm).size > 1
-        return { field: f, values, differs }
-      })
-  }, [records, fields, relations, collection])
-
-  const [diffOnly, setDiffOnly] = useState(false)
-  const visible = diffOnly ? rows.filter((r) => r.differs) : rows
-  const diffCount = rows.filter((r) => r.differs).length
-
-  const cell = (f: CMSField, v: unknown) => {
-    if (v == null || v === '') return <span className='text-slate-300 dark:text-slate-600'>—</span>
-    const m2o = findM2ORelation(relations, collection, f.field)
-    if (m2o?.one_collection) {
-      return <RelationLabel relatedCollection={m2o.one_collection} id={v} />
-    }
-    if (typeof v === 'boolean') return v ? 'Yes' : 'No'
-    if (typeof v === 'object') return JSON.stringify(v).slice(0, 80)
-    const s = String(v)
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return new Date(s).toLocaleString()
-    return s.length > 120 ? `${s.slice(0, 120)}…` : s
-  }
-
-  return createPortal(
-    <div
-      className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-6'
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
-    >
-      <div className='nvr-pop-in flex max-h-[85vh] w-full max-w-[980px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl dark:border-border dark:bg-card'>
-        <div className='flex shrink-0 items-center gap-3 border-b border-slate-200 px-4 py-2.5 dark:border-border'>
-          <span className='text-[13.5px] font-semibold text-slate-800 dark:text-foreground'>
-            Compare {ids.length} records
-          </span>
-          <span className='text-[11.5px] text-slate-400'>
-            {diffCount} field{diffCount === 1 ? '' : 's'} differ
-          </span>
-          <label className='ml-auto flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-            <input
-              type='checkbox'
-              checked={diffOnly}
-              onChange={(e) => setDiffOnly(e.target.checked)}
-              className='h-3.5 w-3.5'
-            />
-            Differences only
-          </label>
-          <button
-            type='button'
-            onClick={onClose}
-            className='text-[16px] leading-none text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-          >
-            ✕
-          </button>
-        </div>
-        <div className='min-h-0 flex-1 overflow-auto'>
-          {isLoading ? (
-            <p className='px-4 py-6 text-[12px] text-slate-400'>Loading records…</p>
-          ) : (
-            <table className='w-full border-collapse text-[12px]'>
-              <thead className='sticky top-0 z-[1]'>
-                <tr className='bg-slate-50 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:bg-background'>
-                  <th className='w-[200px] border-b border-slate-200 px-3 py-2 font-medium dark:border-border'>
-                    Field
-                  </th>
-                  {ids.map((id) => (
-                    <th
-                      key={String(id)}
-                      className='border-b border-slate-200 px-3 py-2 font-mono font-medium normal-case dark:border-border'
-                    >
-                      #{String(id)}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className='tabular-nums'>
-                {visible.map(({ field: f, values, differs }) => (
-                  <tr
-                    key={f.field}
-                    className={cn(
-                      'border-b border-slate-50 dark:border-border/50',
-                      differs && 'bg-amber-50/70 dark:bg-amber-400/10'
-                    )}
-                  >
-                    <td className='px-3 py-1.5 text-slate-500 dark:text-muted-foreground'>
-                      {titleCase(f.field)}
-                    </td>
-                    {values.map((v, i) => (
-                      <td
-                        key={i}
-                        className={cn(
-                          'px-3 py-1.5',
-                          differs
-                            ? 'font-medium text-slate-800 dark:text-foreground'
-                            : 'text-slate-600 dark:text-slate-300'
-                        )}
-                      >
-                        {cell(f, v)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-                {visible.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={ids.length + 1}
-                      className='px-4 py-6 text-center text-[12px] text-slate-400'
-                    >
-                      {diffOnly ? 'No differing fields.' : 'Nothing to compare.'}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-    </div>,
-    document.body
-  )
+/** How a value reads in record compare (#2723): relations as labels, dates local. */
+function compareCell(
+  collection: string,
+  relations: CMSRelation[],
+  field: string,
+  v: unknown
+): React.ReactNode {
+  const m2o = findM2ORelation(relations, collection, field)
+  if (m2o?.one_collection) return <RelationLabel relatedCollection={m2o.one_collection} id={v} />
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No'
+  if (typeof v === 'object') return JSON.stringify(v).slice(0, 80)
+  const s = String(v)
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return new Date(s).toLocaleString()
+  return s.length > 160 ? `${s.slice(0, 160)}…` : s
 }
 
 /** @deprecated Column model changed to plain field keys — kept for source

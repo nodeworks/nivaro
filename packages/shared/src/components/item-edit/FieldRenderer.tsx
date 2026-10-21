@@ -15,6 +15,7 @@ import {
 } from '../../lib/field-interfaces'
 import { precisionOf } from '../../lib/format-value'
 import { resolveOptionFilterTokens } from '../../lib/option-filter-tokens'
+import { counterOf } from '../../lib/placement-behaviour'
 import { choiceLabel } from '../../lib/utils'
 import { Badge } from '../ui/badge'
 import { Input } from '../ui/input'
@@ -23,6 +24,7 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { type CatalogModeConfig, CatalogPickerField } from './CatalogPickerField'
+import { useFieldAffordances } from './FieldAffordances'
 import {
   AddressAutocompleteField,
   ChecklistReadOnly,
@@ -153,6 +155,8 @@ export function FieldRenderer({
   pinnedOption?: { id: unknown; tag?: string } | null
 }) {
   const drill = useDrilldown()
+  // #2726: a record-form picker counts searches that find nothing on its placement.
+  const affordances = useFieldAffordances()
   const parentDraftForFilters = useParentDraft()
   const relationPathData = useContext(RelationPathDataContext)
   const parentDraftCtx = parentDraftForFilters
@@ -266,6 +270,11 @@ export function FieldRenderer({
     const combobox = (
       <RelationCombobox
         fieldKey={field.field}
+        missPlacement={
+          affordances?.layoutId != null && affordances.pickerMisses !== false
+            ? { layoutId: Number(affordances.layoutId), collection, field: field.field }
+            : null
+        }
         collection={m2oRel.one_collection}
         value={value}
         onChange={onChange}
@@ -1051,8 +1060,9 @@ export function FieldRenderer({
       placeholder={field.placeholder ?? mask ?? undefined}
     />
   )
-  // Character counter (#183): shows once past 60% of the limit.
-  if (maxLen != null && maxLen > 0) {
+  // Character counter (#183): shows once past 60% of the limit — unless the
+  // layout gives this placement its own counter (#2709), drawn under the field.
+  if (maxLen != null && maxLen > 0 && !counterOf(field._overrides)) {
     const len = strVal.length
     return (
       <div>

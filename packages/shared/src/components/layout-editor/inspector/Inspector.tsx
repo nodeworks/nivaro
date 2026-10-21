@@ -9,17 +9,20 @@ import {
   type PlacementRow,
   UNGROUPED_KEY
 } from '../../../lib/layout-ops'
+import { isDisplayFormulaField } from '../../../lib/placement-behaviour'
 import { cn, titleCase } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
 import { ArrangeButton } from '../ArrangeButton'
 import { AutoArrangeButton } from '../AutoArrange'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
+import { PlacementPresets } from '../entry/PlacementPresets'
 import { FIELD_HOLDERS } from '../field-zones'
 import { PanelBody, PanelHeader, PanelTabs, tabId, tabPanelId } from '../panel-frame'
 import { tintCard } from '../panel-style'
 import { slotName } from '../slot-names'
 import { type ApplyOptions, useLayoutBundle } from '../useLayoutDraft'
 import { AdvancedTab } from './AdvancedTab'
+import { DisplayFormulaSettings } from './BehaviourSettings'
 import { Breadcrumb } from './Breadcrumb'
 import {
   type CollectionMeta,
@@ -493,9 +496,33 @@ function PlacementInspector({
   if (!row) return null
   if (target.kind === 'header' || row.group_key === HEADER_GROUP_KEY)
     return <HeaderItem row={row} notice={notice} readOnly={readOnly} />
+  if (isDisplayFormulaField(field))
+    return (
+      <SimplePanel
+        eyebrow={<Breadcrumb kind='Formula' target={target} where={where} />}
+        title={displayFormulaTitle(row)}
+        notice={notice}
+        readOnly={readOnly}
+      >
+        <DisplayFormulaPanel row={row} />
+      </SimplePanel>
+    )
   return (
     <FieldInspector target={target} row={row} where={where} notice={notice} readOnly={readOnly} />
   )
+}
+
+/** #2712: a display formula's own label, else "Formula". */
+function displayFormulaTitle(row: PlacementRow): string {
+  const ov = asObject(row.overrides)
+  return typeof ov.label === 'string' && ov.label.trim() ? ov.label : 'Formula'
+}
+
+function DisplayFormulaPanel({ row }: { row: PlacementRow }) {
+  const env = useInspectorEnv()
+  const { data: meta } = useCollectionMeta(env.collection)
+  const fields = useMemo(() => (meta?.fields ?? []).map((f) => f.field), [meta?.fields])
+  return <DisplayFormulaSettings row={row} fields={fields} />
 }
 
 function HeaderItem({
@@ -642,6 +669,7 @@ function FieldInspector({
             </div>
           ) : (
             <>
+              <PlacementPresets bundle={env.bundle} rows={[row]} apply={env.apply} />
               <ScopeLegend field />
               {tabBody}
             </>

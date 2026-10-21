@@ -4,6 +4,8 @@ import {
   BarChart3,
   Grid3x3,
   LayoutGrid,
+  ListOrdered,
+  Lock,
   Percent,
   Plus,
   Table2,
@@ -20,6 +22,7 @@ import {
   type LayoutOp,
   UNGROUPED_KEY
 } from '../../lib/layout-ops'
+import { activeFreeze, dayWords, type LayoutFreeze } from '../../lib/layout-resolve'
 import { useMyUserId } from '../../lib/presence-signals'
 import { cn } from '../../lib/utils'
 import { modalHostOf } from '../ui/popover'
@@ -61,18 +64,23 @@ import {
   type SelectOptions,
   targetKey
 } from './design-context'
+import { WIDTH_LABELS } from './field-zones'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
-import { useDraftRecovery } from './draft-recovery'
+import { stagedTip, useDraftRecovery } from './draft-recovery'
 import { canvasRenderer, EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { noteKey, notesOf } from './editor-notes'
+import { EntryEditorContext } from './entry/entry-editor-context'
+import { TabOrderBar, useTabOrderEditor } from './entry/tab-order'
+import { previewThemeClass, ThemePreviewTool, useAppIsDark } from './entry/theme-preview'
 import { explainMarks, RuleLoopsBanner, RulesToggle, useRulesView } from './explain/CanvasRules'
 import { useDriverHover } from './explain/driver-hover'
 import type { OpenSource } from './explain/field-sources'
 import type { RuleDep } from './explain/rule-graph'
 import { useCanvasExplain, useDefaultGhosts } from './explain/use-explain'
 import { FindReplaceButton } from './FindReplace'
+import { OutputsButton } from './outputs/OutputsButton'
 import { FormMapButton } from './FormMapButton'
 import { useSectionChanges } from './history-api'
 import { useLayoutEditorHost } from './host'
@@ -108,9 +116,11 @@ import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
 import { useRailCopy } from './reuse/useRailCopy'
+import { StagedByOthers } from './StagedChip'
 import { StructureActions, usePinMarks } from './StructureMenu'
 import { useRolePreview } from './settings/settings-api'
 import { layoutKindOf } from './settings/settings-registry'
+import { useStagedDraft, useStagedWriter } from './staged-api'
 import { ImpactButton, TestingButton } from './testing/TestingPanels'
 import { MenuSeparator, ToolButton } from './toolbar-kit'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
@@ -501,7 +511,22 @@ function Canvas({
       lastChange: lastChanges
         ? (t) => (t.kind === 'group' ? (lastChanges[t.key] ?? null) : null)
         : undefined,
-      ghost
+      ghost,
+      resizeWidth: noDnd
+        ? undefined
+        : (t, span) => {
+            if (t.kind !== 'field' && t.kind !== 'slot') return
+            apply(
+              [
+                {
+                  op: 'update_placement',
+                  at: { field: t.field, group_key: t.group_key },
+                  patch: { col_span: span === 12 ? null : span }
+                }
+              ],
+              { label: `Set the width to ${WIDTH_LABELS[span] ?? span}` }
+            )
+          }
     }),
     [
       selected,
@@ -521,7 +546,9 @@ function Canvas({
       peers,
       compare,
       lastChanges,
-      ghost
+      ghost,
+      apply,
+      noDnd
     ]
   )
   const hoverRef = useDriverHover(deps)
@@ -533,6 +560,7 @@ function Canvas({
         layout={layout}
         record={record}
         stateKey={stateKey}
+        roleId={roleId}
         design={design}
         apply={apply}
         whenIdle={whenIdle}
@@ -727,19 +755,29 @@ export function LayoutEditor({
 
   // Required change note (#2654): the server's copy decides (turning it off asks too).
   const { data: serverBundle } = useLayoutBundle(currentId)
-  const notePolicy = changeNotePolicyOf(serverBundle?.layout) ?? changeNotePolicyOf(bundle?.layout)
+  // Edit freeze (#2717): until its date every save asks for an override note.
+  const freeze = activeFreeze(serverBundle?.layout?.conditions ?? bundle?.layout?.conditions)
+  const notePolicy =
+    changeNotePolicyOf(serverBundle?.layout) ??
+    changeNotePolicyOf(bundle?.layout) ??
+    (freeze ? 'note' : null)
   const [note, setNote] = useState<ChangeNoteValue>({ reason: '', ticket: '' })
   // Where the change-note Save popover sits; null = closed.
   const [noteAnchor, setNoteAnchor] = useState<HTMLElement | null>(null)
   const noteRef = useRef(note)
   noteRef.current = note
   const saveNow = useCallback(async () => {
-    const meta = notePolicy ? changeNoteMeta(noteRef.current) : undefined
+    const meta = notePolicy
+      ? {
+          ...changeNoteMeta(noteRef.current),
+          ...(freeze ? { freeze_override: noteRef.current.reason.trim() } : {})
+        }
+      : undefined
     await draft.save(meta)
     const ok = draft.unsavedOps().length === 0
     if (ok && meta) setNote((n) => ({ ...n, reason: '' }))
     return ok
-  }, [draft.save, draft.unsavedOps, notePolicy])
+  }, [draft.save, draft.unsavedOps, notePolicy, freeze])
   // Save (button, ⌘S): straight away, or ask for the reason first.
   const requestSave = useCallback(() => {
     if (!notePolicy) return draft.save()
@@ -827,6 +865,22 @@ export function LayoutEditor({
   }, [])
   const onMoved = useCallback((t: DesignTarget) => setSelection([t]), [])
 
+  // Entry tools: the tab order overlay (#2708) and the canvas theme preview (#2727).
+  const tabOrder = useTabOrderEditor(bundle, draft.apply)
+  const canvasSelect = useMemo(() => tabOrder.intercept(onSelect), [tabOrder.intercept, onSelect])
+  const [previewDark, setPreviewDark] = useState(false)
+  const appDark = useAppIsDark()
+  const entryApi = useMemo(
+    () => ({
+      tabOrderActive: tabOrder.active,
+      startTabOrder: () => {
+        setView('canvas')
+        tabOrder.start()
+      }
+    }),
+    [tabOrder.active, tabOrder.start]
+  )
+
   // A rule tag clicked: open what causes it (#2632) — the field's inspector
   // tab, the section, or the pipeline / field rules page (asks first when
   // there are unsaved changes).
@@ -908,9 +962,21 @@ export function LayoutEditor({
       el?.focus({ preventScroll: true })
     })
   }, [])
-  // A draft left behind by a crash or a closed tab (#2653).
+  // A staged draft (#2589): kept on the server for its author, and offered back here after a
+  // crash, a closed tab or another browser (#2653).
   const me = useMyUserId()
-  const recovery = useDraftRecovery(draft, currentId, me)
+  const stagedQ = useStagedDraft(currentId)
+  const stagedWriter = useStagedWriter()
+  const staged = useMemo(
+    () => ({
+      settled: stagedQ.isFetched || stagedQ.isError,
+      draft: stagedQ.data?.data ?? null,
+      available: stagedQ.data?.available ?? !stagedQ.isError,
+      writer: stagedWriter
+    }),
+    [stagedQ.isFetched, stagedQ.isError, stagedQ.data, stagedWriter]
+  )
+  const recovery = useDraftRecovery(draft, currentId, me, staged)
 
   // Form settings' "Preview as role" and the top bar's role are one choice.
   const onPreviewRoleChange = useCallback(
@@ -1039,20 +1105,24 @@ export function LayoutEditor({
         onReviewChanges={compareState.toggleReview}
         reviewing={compareState.compare?.kind === 'unsaved'}
         onOpenUnsaved={setListAnchor}
+        pendingTip={stagedTip(recovery.sync)}
         presence={
-          <PresenceAvatars
-            peers={peers}
-            describe={(key) => {
-              const t = targetFromKey(key)
-              return t && bundle && targetExists(t, bundle, parent)
-                ? describeTarget(t, bundle, fields)
-                : null
-            }}
-            onJump={(key) => {
-              const t = targetFromKey(key)
-              if (t) jumpTo(t)
-            }}
-          />
+          <>
+            <PresenceAvatars
+              peers={peers}
+              describe={(key) => {
+                const t = targetFromKey(key)
+                return t && bundle && targetExists(t, bundle, parent)
+                  ? describeTarget(t, bundle, fields)
+                  : null
+              }}
+              onJump={(key) => {
+                const t = targetFromKey(key)
+                if (t) jumpTo(t)
+              }}
+            />
+            <StagedByOthers others={stagedQ.data?.others ?? []} />
+          </>
         }
         onSelectField={(field) =>
           onSelect({
@@ -1075,6 +1145,9 @@ export function LayoutEditor({
             {bundle && <FindTool find={nav.find} />}
             {bundle && arrangeable && (
               <FindReplaceButton bundle={bundle} apply={draft.apply} collection={collection} />
+            )}
+            {bundle && arrangeable && (
+              <OutputsButton bundle={bundle} apply={draft.apply} collection={collection} />
             )}
             <MenuSeparator />
             {bundle && (
@@ -1111,6 +1184,24 @@ export function LayoutEditor({
                 checked={showFill}
                 onClick={() => setShowFill(!showFill)}
                 data={{ 'data-editor-fill-toggle': '' }}
+              />
+            )}
+            {bundle && arrangeable && (
+              <ToolButton
+                label='Set the tab order'
+                icon={<ListOrdered className='h-3.5 w-3.5' />}
+                hint='Click fields in the order Tab should visit them'
+                checked={tabOrder.active}
+                onClick={() => (tabOrder.active ? tabOrder.cancel() : entryApi.startTabOrder())}
+                data={{ 'data-editor-tab-order-toggle': '' }}
+              />
+            )}
+            {bundle && arrangeable && (
+              <ThemePreviewTool
+                on={previewDark}
+                onChange={setPreviewDark}
+                appDark={appDark}
+                disabled={view !== 'canvas'}
               />
             )}
             <MenuSeparator />
@@ -1263,6 +1354,19 @@ export function LayoutEditor({
           {warning}
         </div>
       )}
+      {freeze && (
+        <div
+          role='note'
+          data-editor-frozen={freeze.until}
+          className={cn(
+            'flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-[12.5px]',
+            amberStrip
+          )}
+        >
+          <Lock className='h-3.5 w-3.5 shrink-0' />
+          {frozenSaveIntro(freeze)}
+        </div>
+      )}
       <RuleLoopsBanner explain={explain} onShow={showField} />
       {/* Drag and drop spans the whole body: Add panel rows drag onto the canvas. */}
       <LayoutDndProvider
@@ -1340,6 +1444,7 @@ export function LayoutEditor({
                   apply={draft.apply}
                   showFill={showFill}
                   onShowFill={setShowFill}
+                  onOpenLayout={openLayout}
                 />
               ) : (
                 <LayoutsRail
@@ -1370,6 +1475,7 @@ export function LayoutEditor({
             </aside>
           )}
           <main className='min-w-0 flex-1 overflow-y-auto'>
+            {view === 'canvas' && <TabOrderBar editor={tabOrder} />}
             {compareState.compare && (view === 'canvas' || !arrangeable) && (
               <CompareBanner compare={compareState.compare} onClose={compareState.close} />
             )}
@@ -1403,7 +1509,11 @@ export function LayoutEditor({
                 data-canvas-density={nav.compact && arrangeable ? 'compact' : 'normal'}
                 // Compact (#2627): editor-only zoom; the record page is unchanged.
                 style={nav.compact && arrangeable ? { zoom: COMPACT_ZOOM } : undefined}
-                className='min-h-full'
+                className={cn(
+                  'min-h-full',
+                  previewThemeClass(previewDark, appDark),
+                  previewDark && !appDark && 'bg-background text-foreground'
+                )}
               >
                 <PreviewPanes
                   collection={collection}
@@ -1421,7 +1531,7 @@ export function LayoutEditor({
                       roleId={pane.roleId}
                       stateKey={pane.stateKey}
                       marks={withAiMarks(pane.marks)}
-                      overlay={pane.overlay}
+                      overlay={tabOrder.overlay(pane.overlay)}
                       ruleMarks={ruleMarks}
                       ghost={ghost}
                       deps={explain.deps}
@@ -1429,7 +1539,7 @@ export function LayoutEditor({
                       record={pane.record}
                       selected={selected}
                       selection={selection}
-                      onSelect={onSelect}
+                      onSelect={canvasSelect}
                       showHidden={showHidden}
                       fold={nav.fold}
                       reveal={nav.reveal}
@@ -1545,6 +1655,7 @@ export function LayoutEditor({
           open
           anchor={noteAnchor}
           policy={notePolicy}
+          intro={freeze ? frozenSaveIntro(freeze) : undefined}
           count={draft.unsavedCount}
           value={note}
           onChange={setNote}
@@ -1572,7 +1683,8 @@ export function LayoutEditor({
     </div>
   )
 
-  if (!overlay) return body
+  if (!overlay)
+    return <EntryEditorContext.Provider value={entryApi}>{body}</EntryEditorContext.Provider>
   // Fixed under the page outlet would be offset by its transform: portal out —
   // into the hosting modal when there is one (a body portal would sit under
   // its pointer/scroll lock), else body.
@@ -1580,7 +1692,15 @@ export function LayoutEditor({
   return (
     <>
       <span ref={setMarker} hidden data-layout-editor-marker='' />
-      {container && createPortal(body, container)}
+      <EntryEditorContext.Provider value={entryApi}>
+        {container && createPortal(body, container)}
+      </EntryEditorContext.Provider>
     </>
   )
+}
+
+/** "Frozen until 15 Dec 2026: go-live. Saving asks for an override note." (#2717) */
+function frozenSaveIntro(f: LayoutFreeze): string {
+  const why = f.reason.trim() ? `: ${f.reason.trim()}` : ''
+  return `Frozen until ${dayWords(f.until)}${why}. Saving asks for an override note, kept in History.`
 }
