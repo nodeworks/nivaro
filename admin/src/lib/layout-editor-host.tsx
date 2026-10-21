@@ -65,7 +65,9 @@ export function AdminLayoutEditorHost({
       explainSlot: isAdmin ? explain : undefined,
       warning,
       recordLink: (col, id) =>
-        `/collections/${encodeURIComponent(col)}/${encodeURIComponent(String(id))}`
+        `/collections/${encodeURIComponent(col)}/${encodeURIComponent(String(id))}`,
+      layoutLink: (col, layoutId) =>
+        `/data-model/${encodeURIComponent(col)}?tab=groups&layout=${layoutId}`
     }),
     [isAdmin, navigate, warning]
   )

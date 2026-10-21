@@ -28,6 +28,8 @@ export interface LayoutEditorHost {
   /** Shown above the editor when this instance's layouts are overwritten elsewhere. */
   warning: string | null
   recordLink(collection: string, id: string): string
+  /** Where a layout of any collection opens in this host (find a field across forms). */
+  layoutLink?(collection: string, layoutId: number): string
 }
 
 const DEFAULT_HOST: LayoutEditorHost = {

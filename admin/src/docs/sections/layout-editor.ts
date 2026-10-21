@@ -321,6 +321,26 @@ export const layoutEditor: DocSection = {
       text: "What this layout changes of the parent's is tagged \"Overrides parent\". Select it and the inspector offers Reset to parent: this layout's copy goes and the parent's shows again, as one Undo step. Resetting a section also resets the fields in it that the parent places; fields only this layout places move to Ungrouped. The States and Roles views mark rows the same way, with Reset or Override beside the name."
     },
 
+    { type: 'h2', id: 'layout-editor-across-forms', text: 'Across forms' },
+    {
+      type: 'p',
+      text: 'The overview looks across all the forms of a collection as well as at each one. Each form carries a small sketch: its sections as blocks, its fields as bars as wide as they are on the form, steps and tabs as a strip, page cards (pipeline, comments) as thin bars. The sketch is drawn from the saved layout and changes the next time the overview loads after a save.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Fields labelled differently: a field that reads "Vendor" on one form and "Supplier" on another is listed with every label and the forms that use it. Pick the label to keep and every form gets it at once (one change per form, each in that form\'s History). The field\'s own label clears the label set on each form. A label hidden on purpose is left alone.',
+        'Near copies: two forms of the same kind that are 90% or more the same (the same fields in the same sections with the same width, label and visibility) are listed with what differs. Compare side by side opens both; Make … the parent links the copy to the other form so fields added there later appear on it too. The copy keeps every field it has: remove the ones it repeats unchanged in its editor to let changes flow through.',
+        'Compare puts two forms side by side, read only, each drawn as people see it. "Only here" marks fields and sections the other form lacks and "Differs" marks fields set up differently (its tip says how: section, width, label, visibility, other settings). Click a field to select it on both. List the differences gives the same as a table. Pick either side from its menu, or Swap.',
+        'Find a field searches every collection by field name or label and lists each form, summary, detail, PDF or grid that places the field, with its section and width there and its label when the form changes it, including forms that inherit it from a parent. Click one to open it in the editor.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET /api/collection-layouts/crossform?collection=   → { data: { thumbs: { <layout id>: { blocks, more } }, labels: [{ field, field_label, variants }], duplicates: [{ a, b, similarity, identical, only_a, only_b, differing, parent_id, can_link }] } }  (admin)
+GET /api/collection-layouts/field-search?q=&collection=   → { data: { fields: [{ collection, field, label, placements: [{ layout_id, layout_name, layout_type, section, width, visible, label, label_hidden, inherited_from }] }], truncated } }  (admin; q at least 2 characters)`
+    },
+
     { type: 'h2', id: 'layout-editor-other-kinds', text: 'Table and PDF layouts' },
     {
       type: 'ul',
