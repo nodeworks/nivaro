@@ -8,6 +8,7 @@ import {
   mcpPublicOrigin,
   protectedResourceMetadataUrl
 } from '../services/mcp-config.js'
+import { mcpLiveRoutes, resolveLiveSession, subscriptionHost } from './mcp-live.js'
 
 /**
  * POST /api/mcp — the hosted MCP server (Streamable HTTP, stateless).
@@ -23,6 +24,10 @@ import {
  *
  * Unauthenticated requests get 401 with `WWW-Authenticate: Bearer
  * resource_metadata=…`, which is how a client finds the OAuth server.
+ *
+ * `/api/mcp?live=1` opts a connection into a session (#2467, routes/mcp-live.ts): the
+ * initialize answer carries an Mcp-Session-Id, record resources become subscribable and GET
+ * opens the session's event stream. Requests without a session id stay stateless.
  */
 
 const bearerOf = (req: FastifyRequest) => {
@@ -40,10 +45,20 @@ function unauthorized(reply: FastifyReply, message: string, invalid: boolean) {
     .send({ jsonrpc: '2.0', error: { code: -32001, message }, id: null })
 }
 
-/** A fetch for the SDK that answers through `app.inject` as the original caller. */
-export function injectFetch(app: FastifyInstance, req: FastifyRequest): typeof fetch {
+/**
+ * A fetch for the SDK that answers through `app.inject` as the original caller. `cookie`
+ * (the admin MCP console) forwards the signed-in session instead of a bearer, and drops the
+ * SDK's placeholder bearer when the caller sent none.
+ */
+export function injectFetch(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  opts: { cookie?: boolean; inner?: boolean; app?: string } = {}
+): typeof fetch {
   const forward: Record<string, string> = {}
-  for (const h of ['authorization', 'x-workspace', 'user-agent', 'x-forwarded-for']) {
+  const names = ['authorization', 'x-workspace', 'user-agent', 'x-forwarded-for']
+  if (opts.cookie) names.push('cookie')
+  for (const h of names) {
     const v = req.headers[h]
     if (typeof v === 'string') forward[h] = v
   }
@@ -56,10 +71,10 @@ export function injectFetch(app: FastifyInstance, req: FastifyRequest): typeof f
       headers[k] = v
     })
     // The caller's own credential, never the SDK's placeholder.
-    Object.assign(headers, forward, {
-      'accept-encoding': 'identity',
-      [MCP_INNER_HEADER]: mcpInnerHeaderValue()
-    })
+    if (opts.cookie && !forward.authorization) delete headers.authorization
+    Object.assign(headers, forward, { 'accept-encoding': 'identity' })
+    if (opts.inner !== false) headers[MCP_INNER_HEADER] = mcpInnerHeaderValue()
+    if (opts.app) headers['x-nivaro-app'] = opts.app
     const res = await app.inject({
       method: (init?.method ?? 'GET') as 'GET',
       url: `${url.pathname}${url.search}`,
@@ -77,11 +92,20 @@ export function injectFetch(app: FastifyInstance, req: FastifyRequest): typeof f
   }) as typeof fetch
 }
 
+/**
+ * Which tools a caller gets — one rule for /api/mcp and the admin MCP console, so the console
+ * lists exactly what a connected app signed in as that admin would see.
+ */
+export function mcpToolOptions(req: FastifyRequest): { adminTools: boolean } {
+  // Administrator tools only for an administrator who is not on a collection-scoped key.
+  return { adminTools: !!req.isAdmin && !req.user?.api_key_scopes }
+}
+
 let mcpModules: Promise<{
   createNivaroMcpServer: typeof import('@nivaro/mcp').createNivaroMcpServer
   StreamableHTTPServerTransport: typeof import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport
 }> | null = null
-const loadMcp = () => {
+export const loadMcp = () => {
   mcpModules ??= Promise.all([
     import('@nivaro/mcp'),
     import('@modelcontextprotocol/sdk/server/streamableHttp.js')
@@ -96,15 +120,12 @@ export async function mcpRoutes(app: FastifyInstance) {
   app.post('/mcp', { compress: false }, async (req, reply) => {
     if (!mcpHttpEnabled())
       return reply.code(404).send({ error: 'The MCP endpoint is turned off (MCP_HTTP)' })
-    const token = bearerOf(req)
-    if (!token) return unauthorized(reply, 'Sign in to connect to Nivaro', false)
-    try {
-      await authenticate(req, reply)
-    } catch (err) {
-      const e = err as { statusCode?: number; message?: string }
-      if (e.statusCode === 401) return unauthorized(reply, e.message ?? 'Unauthorized', true)
-      throw err
-    }
+    const token = await authenticateMcp(req, reply)
+    if (!token) return reply
+
+    // Live mode (#2467): a session to remember subscriptions in, or null = stateless.
+    const live = await resolveLiveSession(app, req)
+    if (live === 'unknown') return sessionNotFound(reply)
 
     // Loaded on first use: boot never depends on the MCP packages, and a process
     // nobody connects an assistant to never loads them.
@@ -113,14 +134,18 @@ export async function mcpRoutes(app: FastifyInstance) {
       url: mcpPublicOrigin(),
       token,
       fetch: injectFetch(app, req),
-      // Administrator tools only for an administrator who is not on a collection-scoped key.
-      adminTools: !!req.isAdmin && !req.user?.api_key_scopes
+      ...mcpToolOptions(req),
+      subscriptions: live ? subscriptionHost(app, req, live.session) : undefined
     } as Parameters<typeof createNivaroMcpServer>[0])
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true
     })
     reply.hijack()
+    if (live?.created) {
+      reply.raw.setHeader('mcp-session-id', live.session.id)
+      reply.raw.setHeader('access-control-expose-headers', 'Mcp-Session-Id')
+    }
     reply.raw.on('close', () => {
       void transport.close()
       void server.close()
@@ -143,12 +168,33 @@ export async function mcpRoutes(app: FastifyInstance) {
     }
   })
 
-  // Stateless server: no standalone event stream and no sessions to end.
-  const notAllowed = async (_req: FastifyRequest, reply: FastifyReply) =>
-    reply
-      .code(405)
-      .header('Allow', 'POST')
-      .send({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed' }, id: null })
-  app.get('/mcp', notAllowed)
-  app.delete('/mcp', notAllowed)
+  // GET (the event stream) and DELETE (end the session) exist only inside a live session;
+  // without one the server is stateless and answers 405.
+  await mcpLiveRoutes(app, { authenticateMcp })
+}
+
+/** Bearer + authenticate, as POST does. Null when it already answered 401. */
+async function authenticateMcp(req: FastifyRequest, reply: FastifyReply): Promise<string | null> {
+  const token = bearerOf(req)
+  if (!token) {
+    unauthorized(reply, 'Sign in to connect to Nivaro', false)
+    return null
+  }
+  try {
+    await authenticate(req, reply)
+  } catch (err) {
+    const e = err as { statusCode?: number; message?: string }
+    if (e.statusCode === 401) {
+      unauthorized(reply, e.message ?? 'Unauthorized', true)
+      return null
+    }
+    throw err
+  }
+  return token
+}
+
+export function sessionNotFound(reply: FastifyReply) {
+  return reply
+    .code(404)
+    .send({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null })
 }

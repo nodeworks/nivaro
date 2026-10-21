@@ -116,9 +116,12 @@ function readAuthorizeParams(src: Record<string, unknown>): AuthorizeParams {
   }
 }
 
-/** A resource the token may be bound to: ours, or none named. */
-const acceptableResource = (r: string | undefined) =>
-  !r || r.replace(/\/+$/, '') === mcpResourceUrl() || r.replace(/\/+$/, '') === mcpPublicOrigin()
+/** A resource the token may be bound to: ours, or none named. The query string is not part of
+ *  it — `/api/mcp?live=1` (a live session, #2467) is the same resource. */
+const acceptableResource = (r: string | undefined) => {
+  const base = r?.split(/[?#]/)[0].replace(/\/+$/, '')
+  return !base || base === mcpResourceUrl() || base === mcpPublicOrigin()
+}
 
 type Checked =
   | { ok: true; client: OAuthClient; p: AuthorizeParams }
