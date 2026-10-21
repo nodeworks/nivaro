@@ -209,7 +209,7 @@ export function RowRuleTester({
       : o === 'lock'
         ? 'text-violet-700 bg-violet-50 dark:bg-violet-400/10 dark:text-violet-300'
         : o === 'not-triggered'
-          ? 'text-slate-500 bg-slate-100 dark:bg-white/5 dark:text-slate-400'
+          ? 'text-slate-600 bg-slate-100 dark:bg-white/5 dark:text-slate-400'
           : 'text-amber-700 bg-amber-50 dark:bg-amber-400/10 dark:text-amber-300'
   return (
     <div className={cn(tintCard, 'mt-2 space-y-2 p-3')}>
