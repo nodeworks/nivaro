@@ -9,3 +9,4 @@ export {
 } from './crossform-api'
 export { FindFieldButton } from './FindFieldButton'
 export { LayoutThumb } from './LayoutThumb'
+export { MergeFormsButton, MergePanel } from './MergeForms'

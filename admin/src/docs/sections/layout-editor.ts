@@ -556,6 +556,25 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Each changed form saves its own version first (its History shows "Before <the change>"), so any one form can be put back from History. Right after a run, Undo this bulk change puts every changed form back at once — except a form someone changed since, which you restore from its History.'
     },
+    { type: 'h3', id: 'layout-editor-merge', text: 'Merging two forms' },
+    {
+      type: 'p',
+      text: 'Merge two forms (⋯ → Merge two forms on the overview, or Merge into one… on a near-copies finding) folds one form into another. Pick the form to keep and the form to fold in, then Preview. What only the folded form has is added to the kept one; what only one of them has becomes a section shown just for the records (or roles) that form used to open for, as a show-when rule or a hidden-for-roles list. The kept form takes over who the folded one opened for: its record rules, roles, the default and its link name when the kept form has none.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The preview lists what the kept form gets, who will open the merged form and what happens to the folded one, then checks the newest 2,000 records: how many move to the merged form, how many keep it, and any that will open a different form instead.',
+        "Worth a look lists what the merge cannot carry exactly: two forms picked in different ways (record rules and roles), record rules with nothing in common, fields set up differently on the two (the kept form's setup wins), page cards and header fields only the folded form has.",
+        'The folded form is renamed "… (merged into …)" and no longer opens for any record. Its sections and fields stay, so a queue, share link or child form that opens it by id keeps working; the preview names those places.',
+        'Apply changes both forms as one change: each saves a named "Before merge" version first. Undo the merge puts both back; either form can also be restored on its own from its History. A form someone changed since the preview is not touched: preview again.'
+      ]
+    },
+    { type: 'h3', id: 'layout-editor-change-log', text: 'Change log for auditors' },
+    {
+      type: 'p',
+      text: '⋯ → Change log on the overview exports every layout change in a period as a CSV: when, the form and collection, who made it (name and email), the change note and what it did (fields and sections added, removed or moved, settings changed). Pick 30 days, 90 days, this year or two dates, and this collection or every collection; Count changes shows how many first. History keeps the newest 30 versions of each form plus every named one, so the log cannot show older changes than that.'
+    },
 
     { type: 'h2', id: 'layout-editor-reuse', text: 'Reusing forms and sections' },
     {
@@ -774,6 +793,19 @@ POST /api/collection-layouts/bulk/undo  { collection, items: [{ layout_id, versi
 GET  /api/collection-layouts/macros              // your own macros
 POST /api/collection-layouts/macros  { id?, name, collection, steps, source_layout_id? }
 POST /api/collection-layouts/macros/:id/delete
+
+# Merging two forms + the change log (administrators)
+POST /api/collection-layouts/merge/preview  { collection, keep_id, fold_id }
+     → { data: { keep: { id, name, rev }, fold: { id, name, rev }, changes, assignment, retire, notes,
+                 counts, references, needs_note,
+                 records: { sampled_newest, names, views: [{ label, plain, kept, carried, lost, gained }] } } }
+POST /api/collection-layouts/merge/apply  { collection, keep_id, fold_id, revs: { keep, fold }, reason?, ticket? }
+     → { data: { keep: { layout_id, version_id, rev }, fold: { layout_id, version_id, rev } } }
+     // 409 when either form changed since the preview; the folded form is put back if the kept one fails
+POST /api/collection-layouts/merge/undo  { collection, keep: { layout_id, version_id, rev }, fold: { … } }
+GET  /api/collection-layouts/change-log?from=YYYY-MM-DD&to=YYYY-MM-DD&collection=&format=csv
+     → { data: { rows: [{ at, collection, layout_id, layout, version, who, who_email, note, summary, … }], truncated } }
+     // format=csv downloads the same rows; at most 366 days and 5,000 changes
 
 # Across forms (administrators)
 GET  /api/collection-layouts/crossform?collection=
