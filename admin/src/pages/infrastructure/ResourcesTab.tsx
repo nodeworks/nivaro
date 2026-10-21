@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn, formatFileSize } from '@/lib/utils'
-import { Code, NotConfigured, Pill, Sparkline, TABLE_WRAP, TD, TH } from './edge-ui'
+import { Code, NotConfigured, Pill, Sparkline } from './edge-ui'
+import { matches, SearchBox } from './swarm-ui'
+import { Banner, Dash, LoadError, PANEL, TABLE, TabSkeleton, TD, TH } from './ui'
 
 interface Row {
   id: string
@@ -56,11 +57,14 @@ const COLUMNS: Array<{ key: SortKey; label: string }> = [
 
 const rate = (v: number | null) => (v == null ? '—' : `${formatFileSize(v)}/s`)
 
+const NUM = cn(TD, 'whitespace-nowrap text-right tabular-nums')
+
 /** Per-container CPU, throttling, memory against limit, OOM kills, network and disk (#2835). */
 export function ResourcesTab() {
   const [window, setWindow] = useState<'24h' | '7d'>('24h')
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'cpu_cores', dir: -1 })
-  const { data, isLoading, error } = useQuery({
+  const [q, setQ] = useState('')
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['infrastructure', 'resources', window],
     queryFn: async () =>
       (await api.get('/infrastructure/resources', { params: { window } })).data.data as Resp,
@@ -68,7 +72,7 @@ export function ResourcesTab() {
   })
   const sortKey = sort.key === 'mem_bytes' ? 'mem_share' : sort.key
   const rows = useMemo(() => {
-    const list = [...(data?.containers ?? [])]
+    const list = (data?.containers ?? []).filter((r) => matches(q, r.container, r.host))
     list.sort((a, b) => {
       if (sort.key === 'container') return sort.dir * a.container.localeCompare(b.container)
       // Memory sorts by share of limit first, then absolute size, so limited containers lead.
@@ -80,15 +84,10 @@ export function ResourcesTab() {
       return sort.dir * (av - bv) || sort.dir * ((a.mem_bytes ?? 0) - (b.mem_bytes ?? 0))
     })
     return list
-  }, [data, sort, sortKey])
+  }, [data, sort, sortKey, q])
 
-  if (isLoading) return <Skeleton className='h-64' />
-  if (error || !data)
-    return (
-      <p className='text-[13px] text-red-600 dark:text-red-400'>
-        Could not read container resources.
-      </p>
-    )
+  if (isLoading) return <TabSkeleton />
+  if (error || !data) return <LoadError what='container resources' onRetry={refetch} />
   if (!data.configured)
     return (
       <NotConfigured title='The telemetry store is not configured'>
@@ -99,7 +98,8 @@ export function ResourcesTab() {
   const flagged = rows.filter((r) => r.flags.length).length
   return (
     <div className='space-y-3'>
-      <div className='flex flex-wrap items-center gap-3'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <SearchBox value={q} onChange={setQ} placeholder='Filter containers and hosts' />
         <div
           role='toolbar'
           aria-label='Window'
@@ -122,28 +122,35 @@ export function ResourcesTab() {
             </button>
           ))}
         </div>
-        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-          Throttled share and OOM kills cover the window; the other figures are current. Flags:
-          throttled over 10 %, memory over 85 % of its limit.
-          {flagged > 0 ? ` ${flagged} flagged.` : ''}
-        </p>
       </div>
-      {data.error && <p className='text-[12px] text-red-600 dark:text-red-400'>{data.error}</p>}
-      <div className={TABLE_WRAP}>
-        <table className='w-full min-w-[1040px]'>
-          <thead className='border-b border-slate-200 dark:border-border'>
+      <p className='max-w-prose text-[12px] leading-5 text-slate-500 dark:text-muted-foreground'>
+        Throttled share and OOM kills cover the window; the other figures are current. Flags:
+        throttled over 10 %, memory over 85 % of its limit.
+        {flagged > 0 ? ` ${flagged} flagged.` : ''}
+      </p>
+      {data.error && (
+        <Banner tone='warn'>
+          <span className='font-medium'>Some figures are missing.</span> {data.error}
+        </Banner>
+      )}
+      <div className={PANEL}>
+        <table className={cn(TABLE, 'min-w-[1100px]')}>
+          <thead>
             <tr>
               {COLUMNS.map((c) => (
                 <th
                   key={c.key}
-                  className={TH}
+                  className={cn(TH, c.key !== 'container' && 'text-right')}
                   aria-sort={
                     sort.key === c.key ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'
                   }
                 >
                   <button
                     type='button'
-                    className='inline-flex items-center gap-1 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:text-foreground'
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:text-foreground',
+                      c.key !== 'container' && 'flex-row-reverse'
+                    )}
                     onClick={() =>
                       setSort((s) =>
                         s.key === c.key
@@ -165,24 +172,34 @@ export function ResourcesTab() {
               <th className={TH}>{window} trend (CPU, memory)</th>
             </tr>
           </thead>
-          <tbody className='divide-y divide-slate-100 dark:divide-border'>
+          <tbody>
             {rows.length === 0 && (
               <tr>
-                <td className={TD} colSpan={COLUMNS.length + 1}>
-                  No container metrics found. cAdvisor needs to feed the telemetry store.
+                <td
+                  className={cn(TD, 'py-6 text-center text-slate-500 dark:text-muted-foreground')}
+                  colSpan={COLUMNS.length + 1}
+                >
+                  {q
+                    ? 'No container matches this filter.'
+                    : 'No container metrics found. cAdvisor needs to feed the telemetry store.'}
                 </td>
               </tr>
             )}
             {rows.map((r) => (
               <tr key={r.id}>
-                <td className={`${TD} font-medium`}>
-                  <span className='break-all'>{r.container}</span>
-                  <div className='text-[11px] font-normal text-slate-500 dark:text-muted-foreground'>
+                <td className={cn(TD, 'max-w-[300px]')}>
+                  <div
+                    className='truncate font-mono font-medium text-slate-900 dark:text-foreground'
+                    data-tip={r.container.length > 36 ? r.container : undefined}
+                  >
+                    {r.container}
+                  </div>
+                  <div className='font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
                     {r.host}
                   </div>
                 </td>
-                <td className={TD}>{r.cpu_cores == null ? '—' : r.cpu_cores.toFixed(2)}</td>
-                <td className={TD}>
+                <td className={NUM}>{r.cpu_cores == null ? <Dash /> : r.cpu_cores.toFixed(2)}</td>
+                <td className={NUM}>
                   {r.throttled_share == null ? (
                     '—'
                   ) : r.flags.includes('throttled') ? (
@@ -191,8 +208,8 @@ export function ResourcesTab() {
                     `${(r.throttled_share * 100).toFixed(1)} %`
                   )}
                 </td>
-                <td className={TD}>
-                  {r.mem_bytes == null ? '—' : formatFileSize(r.mem_bytes)}
+                <td className={NUM}>
+                  {r.mem_bytes == null ? <Dash /> : formatFileSize(r.mem_bytes)}
                   <div className='text-[11px] text-slate-500 dark:text-muted-foreground'>
                     {r.mem_limit_bytes == null
                       ? 'no limit'
@@ -201,7 +218,7 @@ export function ResourcesTab() {
                   </div>
                   {r.flags.includes('memory') && <Pill tone='warn'>near limit</Pill>}
                 </td>
-                <td className={TD}>
+                <td className={NUM}>
                   {r.oom_events == null ? (
                     '—'
                   ) : r.oom_events > 0 ? (
@@ -210,10 +227,10 @@ export function ResourcesTab() {
                     '0'
                   )}
                 </td>
-                <td className={TD}>{rate(r.rx_bps)}</td>
-                <td className={TD}>{rate(r.tx_bps)}</td>
-                <td className={TD}>{rate(r.read_bps)}</td>
-                <td className={TD}>{rate(r.write_bps)}</td>
+                <td className={NUM}>{rate(r.rx_bps)}</td>
+                <td className={NUM}>{rate(r.tx_bps)}</td>
+                <td className={NUM}>{rate(r.read_bps)}</td>
+                <td className={NUM}>{rate(r.write_bps)}</td>
                 <td className={TD}>
                   <div className='flex flex-col gap-1'>
                     <Sparkline values={r.cpu_spark} label={`${r.container} CPU over ${window}`} />

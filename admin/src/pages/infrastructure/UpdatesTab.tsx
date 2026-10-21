@@ -208,7 +208,7 @@ function ServiceUpdate({ s }: { s: UpdateService }) {
       </div>
       {s.replacements.length > 0 && (
         <table className={TABLE}>
-          <caption className='px-4 pt-2 text-left text-[12px] font-medium text-slate-700 dark:text-foreground'>
+          <caption className='px-4 pt-3 text-left text-[12px] font-medium text-slate-700 dark:text-foreground'>
             Latest rollout, slot by slot
           </caption>
           <thead>
@@ -264,8 +264,13 @@ function ServiceUpdate({ s }: { s: UpdateService }) {
         </table>
       )}
       {s.history.length > 0 && (
-        <table className={TABLE}>
-          <caption className='px-4 pt-2 text-left text-[12px] font-medium text-slate-700 dark:text-foreground'>
+        <table
+          className={cn(
+            TABLE,
+            s.replacements.length > 0 && 'border-t border-slate-200 dark:border-border'
+          )}
+        >
+          <caption className='px-4 pt-3 text-left text-[12px] font-medium text-slate-700 dark:text-foreground'>
             Rollouts in the task history
           </caption>
           <thead>

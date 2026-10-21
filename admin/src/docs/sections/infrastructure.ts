@@ -11,7 +11,7 @@ export const infrastructureDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'The page has sixteen tabs, grouped in this documentation by what they look at. This section covers Stacks, Updates, Health, Swarm and Secrets, and how to ask about all of it in plain words. Containers, Volumes, Images and Provenance are in “Containers, volumes and images”; Proxy, Resources and GitLab are in “Proxy, resources and GitLab”; Hosts, Reboot and Logs are in “Host health, reboot and logs”.'
+      text: 'The tabs are grouped: Overview; Workloads (Stacks, Containers, Updates, Health); Swarm (Swarm, Secrets); Hosts (Hosts, Resources, Reboot, Logs); Images and storage (Volumes, Images, Provenance); Proxy and build (Proxy, GitLab). On a wide screen they sit in one strip with a thin rule between groups, and the strip scrolls when it does not fit. On a narrow screen a single button shows the current view and opens the grouped list, which you can also type into. Every Docker-backed tab shows one section per host with the host name and its status on the right; a host that does not answer says so in that place. Long lists (a host with hundreds of containers, many images) show the first rows with a button for the rest. This section covers Stacks, Updates, Health, Swarm and Secrets, and how to ask about all of it in plain words. Containers, Volumes, Images and Provenance are in “Containers, volumes and images”; Proxy, Resources and GitLab are in “Proxy, resources and GitLab”; Hosts, Reboot and Logs are in “Host health, reboot and logs”.'
     },
     {
       type: 'note',

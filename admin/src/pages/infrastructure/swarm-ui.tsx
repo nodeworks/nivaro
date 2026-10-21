@@ -1,11 +1,32 @@
 import { useQuery } from '@tanstack/react-query'
-import { Search, Server } from 'lucide-react'
+import { Search } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
-import { DockerNotConfigured, HostError, useInfraStatus } from './ui'
+import {
+  Chip,
+  DockerNotConfigured,
+  HOSTS_STACK,
+  HostBlock,
+  LoadError,
+  TabSkeleton,
+  type Tone,
+  useInfraStatus
+} from './ui'
+
+export {
+  Chip,
+  EmptyNote,
+  META_CELL,
+  META_GRID,
+  PANEL,
+  StatStrip,
+  TABLE,
+  TD,
+  TH,
+  type Tone
+} from './ui'
 
 /**
  * Shared pieces of the Stacks / Updates / Health / Swarm / Secrets tabs (#2826–#2828, #2838,
@@ -47,46 +68,35 @@ export function useInfraHosts<T, X extends object = object>(
 export function InfraHostsView<T>({
   query,
   toolbar,
+  aside,
   children
 }: {
-  query: { data?: { hosts: PerHost<T>[] }; isLoading: boolean; error: unknown }
+  query: {
+    data?: { hosts: PerHost<T>[] }
+    isLoading: boolean
+    error: unknown
+    refetch?: () => unknown
+  }
   toolbar?: ReactNode
+  /** Status chips beside each host's name (counts, verdicts). */
+  aside?: (data: T | null, host: string) => ReactNode
   children: (data: T, host: string) => ReactNode
 }) {
   const status = useInfraStatus()
   if (status.data && !status.data.docker.configured) return <DockerNotConfigured />
-  if (query.isLoading || status.isLoading)
-    return (
-      <div className='space-y-3'>
-        <Skeleton className='h-9 w-72' />
-        <Skeleton className='h-16' />
-        <Skeleton className='h-48' />
-      </div>
-    )
+  if (query.isLoading || status.isLoading) return <TabSkeleton />
   if (query.error || !query.data)
-    return (
-      <p className='text-[13px] text-red-600 dark:text-red-400'>
-        Could not read the Docker hosts. Try again in a moment.
-      </p>
-    )
+    return <LoadError what='the Docker hosts' onRetry={query.refetch} />
   return (
-    <div className='space-y-6'>
+    <div className='space-y-5'>
       {toolbar}
-      {query.data.hosts.map((h) => (
-        <section key={h.host} aria-label={`Host ${h.host}`} className='space-y-3'>
-          {query.data && query.data.hosts.length > 1 && (
-            <h2 className='flex items-center gap-2 text-[13px] font-semibold text-slate-900 dark:text-foreground'>
-              <Server className='h-3.5 w-3.5 text-slate-400' />
-              <span className='font-mono'>{h.host}</span>
-            </h2>
-          )}
-          {h.error ? (
-            <HostError host={h.host} error={h.error} />
-          ) : h.data ? (
-            children(h.data, h.host)
-          ) : null}
-        </section>
-      ))}
+      <div className={HOSTS_STACK}>
+        {query.data.hosts.map((h) => (
+          <HostBlock key={h.host} host={h.host} error={h.error} aside={aside?.(h.data, h.host)}>
+            {h.data ? children(h.data, h.host) : null}
+          </HostBlock>
+        ))}
+      </div>
     </div>
   )
 }
@@ -138,71 +148,6 @@ export function FilterChip({
     >
       {children}
     </button>
-  )
-}
-
-/**
- * Meta grid with 1px dividers that also works when the last row is short: every cell draws its
- * right and bottom rule and the container clips the outer ones (no gap-px backdrop showing
- * through empty tracks).
- */
-export const META_GRID =
-  'grid overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
-export const META_CELL = '-mb-px -mr-px border-b border-r border-slate-200 dark:border-border'
-
-/** The counts strip: one row of numbers with 1px dividers (meta grid). */
-export function StatStrip({
-  items
-}: {
-  items: Array<{ label: string; value: ReactNode; tone?: 'bad' | 'warn' }>
-}) {
-  return (
-    <div
-      className={META_GRID}
-      style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}
-    >
-      {items.map((i) => (
-        <div key={i.label} className={cn(META_CELL, 'px-4 py-2.5')}>
-          <div className='text-[11px] text-slate-500 dark:text-muted-foreground'>{i.label}</div>
-          <div
-            className={cn(
-              'text-[15px] font-semibold tabular-nums',
-              i.tone === 'bad'
-                ? 'text-red-600 dark:text-red-400'
-                : i.tone === 'warn'
-                  ? 'text-amber-700 dark:text-amber-300'
-                  : 'text-slate-900 dark:text-foreground'
-            )}
-          >
-            {i.value}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-export type Tone = 'ok' | 'bad' | 'warn' | 'info' | 'muted'
-
-const TONES: Record<Tone, string> = {
-  ok: 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300',
-  bad: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
-  warn: 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200',
-  info: 'bg-nvr-cyan/10 text-slate-800 dark:bg-nvr-cyan/15 dark:text-nvr-cyan',
-  muted: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
-}
-
-export function Chip({ tone, children, tip }: { tone: Tone; children: ReactNode; tip?: string }) {
-  return (
-    <span
-      data-tip={tip}
-      className={cn(
-        'inline-flex items-center whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium',
-        TONES[tone]
-      )}
-    >
-      {children}
-    </span>
   )
 }
 
@@ -283,7 +228,7 @@ export function Ago({ at }: { at: string | null | undefined }) {
 export function ImageRef({ image, digest }: { image: string | null; digest?: string | null }) {
   if (!image) return <span className='text-slate-400'>—</span>
   return (
-    <span className='inline-flex min-w-0 items-baseline gap-1.5'>
+    <span className='flex min-w-0 max-w-full items-baseline gap-1.5'>
       <span className='truncate font-mono text-[12px]' data-tip={image}>
         {image}
       </span>
@@ -295,23 +240,6 @@ export function ImageRef({ image, digest }: { image: string | null; digest?: str
     </span>
   )
 }
-
-/** A plain-sentence empty state that says what would appear and why it doesn't. */
-export function EmptyNote({ children }: { children: ReactNode }) {
-  return (
-    <p className='rounded-lg border border-dashed border-slate-200 bg-white px-4 py-6 text-center text-[12px] text-slate-500 dark:border-border dark:bg-card dark:text-muted-foreground'>
-      {children}
-    </p>
-  )
-}
-
-/** Table chrome shared by every tab: header 11px muted, rows 12px with 1px dividers. */
-export const TABLE = 'w-full border-collapse text-[12px]'
-export const TH =
-  'border-b border-slate-200 px-3 py-2 text-left text-[11px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'
-export const TD = 'border-b border-slate-100 px-3 py-2 align-top dark:border-border/60'
-export const PANEL =
-  'overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
 
 export const matches = (q: string, ...values: Array<string | null | undefined>): boolean => {
   const needle = q.trim().toLowerCase()

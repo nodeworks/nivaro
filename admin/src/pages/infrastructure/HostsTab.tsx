@@ -71,14 +71,14 @@ const dash = (v: number | string | null | undefined) => (v == null || v === '' ?
 /** Host health: patch and reboot status, and whether the host is stuck waiting on IO. */
 export function HostsTab() {
   const status = useInfraStatus()
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['infrastructure', 'hosts'],
     queryFn: async () => (await api.get('/infrastructure/hosts')).data.data as HostsData,
     refetchInterval: 60_000,
     staleTime: 20_000
   })
   if (isLoading) return <HostSkeletons />
-  if (error || !data) return <TabError what='host health' />
+  if (error || !data) return <TabError what='host health' onRetry={refetch} />
   if (status.data?.cloud)
     return (
       <p className='text-[13px] text-slate-600 dark:text-muted-foreground'>
@@ -89,7 +89,7 @@ export function HostsTab() {
   if (data.hosts.length === 0)
     return (
       <div className='space-y-3'>
-        <p className='text-[13px] text-slate-600 dark:text-muted-foreground'>
+        <p className='max-w-prose text-[12px] leading-5 text-slate-600 dark:text-muted-foreground'>
           No host has reported yet. Hosts appear here once a Docker host is connected or the host
           facts collector sends its first figures.
         </p>
@@ -97,7 +97,7 @@ export function HostsTab() {
       </div>
     )
   return (
-    <div className='space-y-4'>
+    <div className='space-y-8'>
       {data.error && (
         <ToneBanner tone='warning'>
           The metrics store answered with an error: {data.error}

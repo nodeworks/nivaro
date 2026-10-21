@@ -11,7 +11,17 @@ import {
   ToneBanner,
   ToneChip
 } from './host-ui'
-import { DockerNotConfigured, HostError, useInfraStatus } from './ui'
+import {
+  DockerNotConfigured,
+  HOSTS_STACK,
+  HostBlock,
+  Intro,
+  PANEL,
+  TABLE,
+  TD,
+  TH,
+  useInfraStatus
+} from './ui'
 
 /** GET /api/infrastructure/logs (#2831). */
 interface LogsData {
@@ -47,23 +57,29 @@ const fillTone = (days: number | null): Tone | undefined =>
 /** Container log files per host: how big, how fast they grow, and whether Docker rotates them. */
 export function LogsTab() {
   const status = useInfraStatus()
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['infrastructure', 'logs'],
     queryFn: async () => (await api.get('/infrastructure/logs')).data.data as LogsData,
     staleTime: 60_000
   })
   if (isLoading || status.isLoading) return <HostSkeletons />
-  if (error || !data) return <TabError what='container logs' />
+  if (error || !data) return <TabError what='container logs' onRetry={refetch} />
   if (status.data && !status.data.docker.configured) return <DockerNotConfigured />
   return (
-    <div className='space-y-4'>
-      {data.hosts.map((h) =>
-        h.error || !h.data ? (
-          <HostError key={h.host} host={h.host} error={h.error ?? 'No answer'} />
-        ) : (
-          <LogsHost key={h.host} host={h.host} d={h.data} />
-        )
-      )}
+    <div className='space-y-5'>
+      <Intro>
+        Container log files per host: how big they are, how fast they grow, and whether Docker
+        rotates them before they fill the disk.
+      </Intro>
+      <div className={HOSTS_STACK}>
+        {data.hosts.map((h) =>
+          h.error || !h.data ? (
+            <HostBlock key={h.host} host={h.host} error={h.error ?? 'The host sent no data.'} />
+          ) : (
+            <LogsHost key={h.host} host={h.host} d={h.data} />
+          )
+        )}
+      </div>
     </div>
   )
 }
@@ -125,25 +141,22 @@ function LogsHost({
       />
       {!d.facts_collected && <FactsNotCollected />}
       {d.containers.length > 0 && (
-        <div className='overflow-x-auto rounded-md border border-slate-200 dark:border-border'>
-          <table className='w-full min-w-[640px] text-[12px]'>
+        <div className={PANEL}>
+          <table className={cn(TABLE, 'min-w-[640px]')}>
             <thead>
-              <tr className='border-b border-slate-200 text-left text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
-                <th className='px-3 py-2 font-medium'>Container</th>
-                <th className='px-3 py-2 font-medium'>Driver</th>
-                <th className='px-3 py-2 font-medium'>Rotation</th>
-                <th className='px-3 py-2 text-right font-medium'>Size</th>
-                <th className='px-3 py-2 text-right font-medium'>Per day</th>
+              <tr>
+                <th className={TH}>Container</th>
+                <th className={TH}>Driver</th>
+                <th className={TH}>Rotation</th>
+                <th className={cn(TH, 'text-right')}>Size</th>
+                <th className={cn(TH, 'text-right')}>Per day</th>
               </tr>
             </thead>
             <tbody>
               {d.containers.map((c) => (
-                <tr
-                  key={c.name}
-                  className='border-b border-slate-100 last:border-0 hover:bg-slate-50 dark:border-border/60 dark:hover:bg-muted/40'
-                >
-                  <td className='max-w-[280px] px-3 py-2'>
-                    <span className='block truncate font-mono text-slate-900 dark:text-foreground'>
+                <tr key={c.name}>
+                  <td className={cn(TD, 'max-w-[280px]')}>
+                    <span className='block truncate font-mono font-medium text-slate-900 dark:text-foreground'>
                       {c.name}
                     </span>
                     {!c.running && (
@@ -152,10 +165,10 @@ function LogsHost({
                       </span>
                     )}
                   </td>
-                  <td className='px-3 py-2 font-mono text-slate-700 dark:text-foreground'>
+                  <td className={cn(TD, 'font-mono text-slate-700 dark:text-foreground')}>
                     {c.driver ?? '—'}
                   </td>
-                  <td className='px-3 py-2'>
+                  <td className={TD}>
                     {c.unbounded ? (
                       <ToneChip tone='warning'>No max-size</ToneChip>
                     ) : c.max_size ? (
@@ -169,12 +182,18 @@ function LogsHost({
                       </span>
                     )}
                   </td>
-                  <td className='px-3 py-2 text-right tabular-nums text-slate-700 dark:text-foreground'>
+                  <td
+                    className={cn(
+                      TD,
+                      'text-right tabular-nums text-slate-700 dark:text-foreground'
+                    )}
+                  >
                     {formatFileSize(c.bytes)}
                   </td>
                   <td
                     className={cn(
-                      'px-3 py-2 text-right tabular-nums',
+                      TD,
+                      'text-right tabular-nums',
                       c.unbounded && (c.growth_per_day ?? 0) > 100 * 1048576
                         ? 'text-amber-700 dark:text-amber-300'
                         : 'text-slate-700 dark:text-foreground'

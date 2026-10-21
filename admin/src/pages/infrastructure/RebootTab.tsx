@@ -10,7 +10,17 @@ import {
   ToneBanner,
   ToneChip
 } from './host-ui'
-import { DockerNotConfigured, HostError, useInfraStatus } from './ui'
+import {
+  DockerNotConfigured,
+  HOSTS_STACK,
+  HostBlock,
+  Intro,
+  PANEL,
+  TABLE,
+  TD,
+  TH,
+  useInfraStatus
+} from './ui'
 
 type Verdict = 'comes_back' | 'stays_down' | 'may_break'
 
@@ -56,27 +66,29 @@ const MANAGED: Record<string, string> = { swarm: 'Swarm', compose: 'Compose', no
 /** Per host, per running container: does it come back on its own after the host reboots? */
 export function RebootTab() {
   const status = useInfraStatus()
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['infrastructure', 'reboot'],
     queryFn: async () => (await api.get('/infrastructure/reboot')).data.data as RebootData,
     staleTime: 30_000
   })
   if (isLoading || status.isLoading) return <HostSkeletons />
-  if (error || !data) return <TabError what='the reboot check' />
+  if (error || !data) return <TabError what='the reboot check' onRetry={refetch} />
   if (status.data && !status.data.docker.configured) return <DockerNotConfigured />
   return (
-    <div className='space-y-4'>
-      <p className='max-w-prose text-[12px] text-slate-500 dark:text-muted-foreground'>
+    <div className='space-y-5'>
+      <Intro>
         What happens to each running container when its host reboots (for example after patching),
         judged on its restart policy or swarm service and on the remote mounts it uses.
-      </p>
-      {data.hosts.map((h) =>
-        h.error || !h.data ? (
-          <HostError key={h.host} host={h.host} error={h.error ?? 'No answer'} />
-        ) : (
-          <RebootHost key={h.host} host={h.host} d={h.data} />
-        )
-      )}
+      </Intro>
+      <div className={HOSTS_STACK}>
+        {data.hosts.map((h) =>
+          h.error || !h.data ? (
+            <HostBlock key={h.host} host={h.host} error={h.error ?? 'The host sent no data.'} />
+          ) : (
+            <RebootHost key={h.host} host={h.host} d={h.data} />
+          )
+        )}
+      </div>
     </div>
   )
 }
@@ -118,25 +130,25 @@ function RebootHost({
         </ul>
       )}
       {d.containers.length > 0 && (
-        <div className='overflow-x-auto rounded-md border border-slate-200 dark:border-border'>
-          <table className='w-full min-w-[720px] text-[12px]'>
+        <div className={PANEL}>
+          <table className={cn(TABLE, 'min-w-[720px]')}>
             <thead>
-              <tr className='border-b border-slate-200 text-left text-[11px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
-                <th className='px-3 py-2 font-medium'>Container</th>
-                <th className='px-3 py-2 font-medium'>Managed by</th>
-                <th className='px-3 py-2 font-medium'>Restart</th>
-                <th className='px-3 py-2 font-medium'>Remote mounts</th>
-                <th className='px-3 py-2 font-medium'>After a reboot</th>
+              <tr>
+                <th className={TH}>Container</th>
+                <th className={TH}>Managed by</th>
+                <th className={TH}>Restart</th>
+                <th className={TH}>Remote mounts</th>
+                <th className={TH}>After a reboot</th>
               </tr>
             </thead>
             <tbody>
               {d.containers.map((c) => (
-                <tr
-                  key={c.name}
-                  className='border-b border-slate-100 align-top last:border-0 hover:bg-slate-50 dark:border-border/60 dark:hover:bg-muted/40'
-                >
-                  <td className='max-w-[260px] px-3 py-2'>
-                    <div className='truncate font-mono text-slate-900 dark:text-foreground'>
+                <tr key={c.name}>
+                  <td className={cn(TD, 'max-w-[260px]')}>
+                    <div
+                      className='truncate font-mono font-medium text-slate-900 dark:text-foreground'
+                      data-tip={c.name.length > 32 ? c.name : undefined}
+                    >
                       {c.name}
                     </div>
                     {c.image && (
@@ -145,7 +157,7 @@ function RebootHost({
                       </div>
                     )}
                   </td>
-                  <td className='px-3 py-2 text-slate-700 dark:text-foreground'>
+                  <td className={cn(TD, 'text-slate-700 dark:text-foreground')}>
                     {MANAGED[c.managed_by]}
                     {(c.stack || c.service) && (
                       <div className='font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
@@ -153,10 +165,10 @@ function RebootHost({
                       </div>
                     )}
                   </td>
-                  <td className='px-3 py-2 font-mono text-slate-700 dark:text-foreground'>
+                  <td className={cn(TD, 'font-mono text-slate-700 dark:text-foreground')}>
                     {c.restart_policy ?? '—'}
                   </td>
-                  <td className='px-3 py-2'>
+                  <td className={TD}>
                     {c.remote_mounts.length === 0 ? (
                       <span className='text-slate-500 dark:text-muted-foreground'>None</span>
                     ) : (
@@ -185,7 +197,7 @@ function RebootHost({
                       </ul>
                     )}
                   </td>
-                  <td className='px-3 py-2'>
+                  <td className={TD}>
                     <ToneChip tone={VERDICT[c.verdict].tone}>{VERDICT[c.verdict].label}</ToneChip>
                     <p className='mt-1 max-w-[320px] text-[11px] leading-snug text-slate-500 dark:text-muted-foreground'>
                       {c.reason}

@@ -1,91 +1,143 @@
-import { CheckCircle2, Server, XCircle } from 'lucide-react'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Server } from 'lucide-react'
 import { formatFileSize } from '@/lib/utils'
-import { DockerNotConfigured, useInfraStatus } from './ui'
+import {
+  Chip,
+  Code,
+  Dash,
+  DockerNotConfigured,
+  LoadError,
+  Note,
+  StatStrip,
+  TabSkeleton,
+  useInfraStatus
+} from './ui'
+
+type StatusHost = NonNullable<ReturnType<typeof useInfraStatus>['data']>['docker']['hosts'][number]
+
+const role = (d: NonNullable<StatusHost['data']>) =>
+  d.swarm === 'active' ? (d.manager ? 'Swarm manager' : 'Swarm worker') : 'Not in a swarm'
 
 /** Which infrastructure sources are connected, and each Docker host's engine. */
 export function OverviewTab() {
-  const { data, isLoading, error } = useInfraStatus()
-  if (isLoading)
-    return (
-      <div className='grid gap-3 sm:grid-cols-2'>
-        <Skeleton className='h-28' />
-        <Skeleton className='h-28' />
-      </div>
-    )
-  if (error || !data)
-    return (
-      <p className='text-[13px] text-red-600 dark:text-red-400'>
-        Could not read the infrastructure status.
-      </p>
-    )
+  const { data, isLoading, error, refetch } = useInfraStatus()
+  if (isLoading) return <TabSkeleton />
+  if (error || !data) return <LoadError what='the infrastructure status' onRetry={refetch} />
   if (data.cloud)
     return (
-      <p className='text-[13px] text-slate-600 dark:text-muted-foreground'>
-        Infrastructure is managed by the platform in cloud mode.
-      </p>
+      <Note>
+        Infrastructure is managed by the platform in cloud mode, so this page has nothing to show.
+      </Note>
     )
+  const hosts = data.docker.hosts
+  const up = hosts.filter((h) => !h.error && h.data)
+  const down = hosts.length - up.length
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       {!data.docker.configured && <DockerNotConfigured />}
-      {data.docker.hosts.length > 0 && (
-        <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
-          {data.docker.hosts.map((h) => (
-            <div
-              key={h.host}
-              className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
-            >
-              <div className='flex items-center gap-2'>
-                <Server className='h-4 w-4 text-slate-400' />
-                <span className='text-[13px] font-semibold'>{h.host}</span>
-                {h.error ? (
-                  <XCircle className='ml-auto h-4 w-4 text-red-500' aria-label='not answering' />
-                ) : (
-                  <CheckCircle2
-                    className='ml-auto h-4 w-4 text-emerald-600 dark:text-emerald-400'
-                    aria-label='answering'
-                  />
-                )}
-              </div>
-              {h.error ? (
-                <p className='mt-2 text-[12px] text-red-600 dark:text-red-400'>{h.error}</p>
-              ) : (
-                h.data && (
-                  <dl className='mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px]'>
-                    <dt className='text-slate-500 dark:text-muted-foreground'>Host</dt>
-                    <dd className='truncate'>{h.data.hostname ?? '—'}</dd>
-                    <dt className='text-slate-500 dark:text-muted-foreground'>Engine</dt>
-                    <dd>
-                      {h.data.engine ?? '—'} (API {h.data.api ?? '—'})
-                    </dd>
-                    <dt className='text-slate-500 dark:text-muted-foreground'>OS</dt>
-                    <dd className='truncate'>{h.data.os ?? '—'}</dd>
-                    <dt className='text-slate-500 dark:text-muted-foreground'>Kernel</dt>
-                    <dd className='truncate'>{h.data.kernel ?? '—'}</dd>
-                    <dt className='text-slate-500 dark:text-muted-foreground'>Size</dt>
-                    <dd>
-                      {h.data.cpus ?? '—'} CPUs ·{' '}
-                      {h.data.memory_bytes ? formatFileSize(h.data.memory_bytes) : '—'}
-                    </dd>
-                    <dt className='text-slate-500 dark:text-muted-foreground'>Swarm</dt>
-                    <dd>
-                      {h.data.swarm === 'active'
-                        ? h.data.manager
-                          ? 'Manager'
-                          : 'Worker'
-                        : (h.data.swarm ?? 'Not in a swarm')}
-                    </dd>
-                  </dl>
-                )
-              )}
-            </div>
-          ))}
-        </div>
+      {hosts.length > 0 && (
+        <StatStrip
+          items={[
+            {
+              label: 'Docker hosts answering',
+              value: `${up.length} of ${hosts.length}`,
+              tone: down ? 'bad' : undefined
+            },
+            {
+              label: 'Swarm managers',
+              value: up.filter((h) => h.data?.swarm === 'active' && h.data.manager).length
+            },
+            { label: 'CPUs', value: up.reduce((n, h) => n + (h.data?.cpus ?? 0), 0) },
+            {
+              label: 'Memory',
+              value: formatFileSize(up.reduce((n, h) => n + (h.data?.memory_bytes ?? 0), 0))
+            },
+            {
+              label: 'Telemetry store',
+              value: data.metrics_store ? 'Connected' : 'Not set',
+              tone: data.metrics_store ? undefined : 'warn'
+            }
+          ]}
+        />
       )}
-      <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-        Host metrics {data.metrics_store ? 'come from' : 'need'} the telemetry store
-        {data.metrics_store ? '' : ' (TELEMETRY_STORE_URL is not set)'}.
-      </p>
+      {hosts.length > 0 && (
+        <ul className='grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))]'>
+          {hosts.map((h) => (
+            <HostCard key={h.host} h={h} />
+          ))}
+        </ul>
+      )}
+      {!data.metrics_store && (
+        <Note>
+          Host health, resources, log growth and the reboot check's mount facts read the telemetry
+          store. Set <Code>TELEMETRY_STORE_URL</Code> to see them.
+        </Note>
+      )}
     </div>
+  )
+}
+
+function HostCard({ h }: { h: StatusHost }) {
+  const d = h.data
+  return (
+    <li
+      aria-label={`Host ${h.host}`}
+      className='min-w-0 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
+    >
+      <div className='flex items-center gap-2'>
+        <Server className='h-3.5 w-3.5 shrink-0 text-slate-400' aria-hidden />
+        <span className='min-w-0 truncate font-mono text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+          {h.host}
+        </span>
+        <span className='ml-auto'>
+          {h.error || !d ? (
+            <Chip tone='bad' icon>
+              Not answering
+            </Chip>
+          ) : (
+            <Chip tone='ok' icon>
+              {role(d)}
+            </Chip>
+          )}
+        </span>
+      </div>
+      {h.error || !d ? (
+        <p className='mt-3 break-words text-[12px] leading-5 text-slate-600 dark:text-muted-foreground'>
+          {h.error ?? 'The host sent no data.'}
+        </p>
+      ) : (
+        <dl className='mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[12px]'>
+          <Row label='Hostname' value={d.hostname} mono />
+          <Row
+            label='Engine'
+            value={d.engine ? `${d.engine}${d.api ? ` · API ${d.api}` : ''}` : null}
+            mono
+          />
+          <Row label='OS' value={d.os} />
+          <Row label='Kernel' value={d.kernel} mono />
+          <Row
+            label='Size'
+            value={`${d.cpus ?? '?'} CPUs · ${d.memory_bytes ? formatFileSize(d.memory_bytes) : '?'}`}
+          />
+        </dl>
+      )}
+    </li>
+  )
+}
+
+function Row({ label, value, mono }: { label: string; value: string | null; mono?: boolean }) {
+  return (
+    <>
+      <dt className='text-slate-500 dark:text-muted-foreground'>{label}</dt>
+      <dd
+        className={
+          mono
+            ? 'truncate font-mono text-slate-800 dark:text-foreground'
+            : 'truncate text-slate-800 dark:text-foreground'
+        }
+        data-tip={value && value.length > 28 ? value : undefined}
+      >
+        {value ?? <Dash />}
+      </dd>
+    </>
   )
 }
