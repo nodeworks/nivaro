@@ -168,6 +168,31 @@ describe('nivaro-host-facts.sh', () => {
     expect(code).toMatch(/mktemp "\$TEXTFILE_DIR\/\.nivaro_host\.prom\.XXXXXX"/)
   })
 
+  it('compose example: no extra capability, narrow read-only mounts, no Docker socket', () => {
+    const compose = readFileSync(join(dirname(SCRIPT), 'compose.example.yml'), 'utf8')
+    const live = compose
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('#'))
+      .map((l) => l.replace(/\s+#.*$/, ''))
+      .join('\n')
+    expect(live).not.toMatch(/cap_add/)
+    expect(live).not.toMatch(/DAC_READ_SEARCH|SYS_ADMIN|privileged/)
+    expect(live).not.toMatch(/-\s*\/:\/host/)
+    expect(live).not.toMatch(/source:\s*\/\s*$/m)
+    expect(live).not.toMatch(/docker\.sock/)
+    expect(live).not.toMatch(/pid:\s*host/)
+    expect(live).toMatch(/cap_drop: \[ALL\]/)
+    expect(live).toMatch(/read_only: true/)
+    expect(live).toMatch(/no-new-privileges:true/)
+    // Every host bind mount is read-only and lands under /host.
+    for (const m of live.matchAll(/^\s*- (\/[^:\s]+):([^:\s]+)(?::(\S+))?\s*$/gm)) {
+      expect(m[2].startsWith('/host/')).toBe(true)
+      expect(m[3]).toBe('ro')
+    }
+    // The swarm certificates folder also holds the node's private key: never mounted.
+    expect(live).not.toMatch(/swarm\/certificates/)
+  })
+
   it('keeps its state dir private and leaves no temp files behind', () => {
     const f = fixture()
     fullFixture(f.root)
