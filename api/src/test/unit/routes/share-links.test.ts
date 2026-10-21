@@ -8,8 +8,18 @@ const m = vi.hoisted(() => ({
   link: null as Record<string, unknown> | null,
   rows: [] as Array<Record<string, unknown>>,
   inserted: [] as unknown[],
-  deleted: 0
+  deleted: 0,
+  whereNot: [] as unknown[][]
 }))
+
+// SQL Server's default collation: case-insensitive, trailing spaces ignored.
+const sqlEq = (a: unknown, b: unknown) =>
+  String(a ?? '')
+    .replace(/ +$/, '')
+    .toLowerCase() ===
+  String(b ?? '')
+    .replace(/ +$/, '')
+    .toLowerCase()
 
 vi.mock('../../../middleware/authenticate.js', () => ({
   requireAuth: vi.fn(async (req: { user?: unknown; isAdmin?: boolean }) => {
@@ -24,9 +34,22 @@ vi.mock('../../../services/form-layout.js', () => ({
 }))
 vi.mock('../../../db/index.js', () => {
   const chain = (table: string) => {
+    const preds: Array<(r: Record<string, unknown>) => boolean> = []
+    const hits = () =>
+      (table === 'nivaro_share_links' ? [...m.rows, ...(m.link ? [m.link] : [])] : []).filter((r) =>
+        preds.every((p) => p(r))
+      )
     const api: Record<string, unknown> = {
-      where: () => api,
-      orderBy: async () => m.rows,
+      where: (w: Record<string, unknown>) => {
+        preds.push((r) => Object.entries(w).every(([k, v]) => sqlEq(r[k], v)))
+        return api
+      },
+      whereNot: (col: string, v: unknown) => {
+        m.whereNot.push([table, col, v])
+        preds.push((r) => !sqlEq(r[col], v))
+        return api
+      },
+      orderBy: async () => hits(),
       insert: async (row: unknown) => {
         m.inserted.push(row)
       },
@@ -34,10 +57,7 @@ vi.mock('../../../db/index.js', () => {
         m.deleted++
         return 1
       },
-      first: async () => {
-        if (table === 'nivaro_share_links') return m.link ?? undefined
-        return undefined
-      }
+      first: async () => hits()[0]
     }
     return api
   }
@@ -70,6 +90,7 @@ beforeEach(() => {
   m.rows = []
   m.inserted = []
   m.deleted = 0
+  m.whereNot = []
 })
 
 describe('share links refuse form preview links', () => {
@@ -113,5 +134,42 @@ describe('share links refuse form preview links', () => {
     })
     expect(r.statusCode).toBe(201)
     expect(m.inserted).toHaveLength(1)
+  })
+  it('refuses the preview item however it is cased or padded', async () => {
+    m.rows = [previewRow]
+    const app = await build()
+    for (const item of ['__FORM_PREVIEW__', '__form_preview__ ', ' __Form_Preview__  ']) {
+      const list = await app.inject({
+        method: 'GET',
+        url: `/share-links/for/orders/${encodeURIComponent(item)}`
+      })
+      expect(list.statusCode).toBe(404)
+      expect(list.body).not.toContain('tok')
+      const made = await app.inject({
+        method: 'POST',
+        url: '/share-links',
+        payload: { collection: 'orders', item, layout_id: 5 }
+      })
+      expect(made.statusCode).toBe(400)
+    }
+    expect(m.inserted).toEqual([])
+  })
+  it('keeps preview rows out of the list and the public lookup at the query', async () => {
+    m.rows = [
+      { ...previewRow, item: 'x', id: 'a', token: 'real' },
+      { ...previewRow, item: 'X ', id: 'b', token: 'real2' }
+    ]
+    const app = await build()
+    const list = await app.inject({ method: 'GET', url: '/share-links/for/orders/x' })
+    expect(list.statusCode).toBe(200)
+    expect(list.json().data).toHaveLength(2)
+    m.link = { ...previewRow, token: 'ptok' }
+    m.rows = []
+    const pub = await app.inject({ method: 'GET', url: '/share/ptok' })
+    expect(pub.statusCode).toBe(404)
+    expect(m.whereNot).toEqual([
+      ['nivaro_share_links', 'item', '__form_preview__'],
+      ['nivaro_share_links', 'item', '__form_preview__']
+    ])
   })
 })

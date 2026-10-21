@@ -47,12 +47,11 @@ const { resetWindowedMemory } = await import('../../../services/windowed-limit.j
 async function build() {
   const app = Fastify()
   app.decorate('redis', {
-    incrby: async (_k: string, n: number) => {
+    eval: async (_s: string, _nk: number, _k: string, n: number) => {
       if (m.redisDown) throw new Error('down')
       m.redisCount += n
       return m.redisCount
-    },
-    expire: async () => 1
+    }
   } as never)
   await app.register(layoutUsageRoutes, { prefix: '/layout-usage' })
   await app.ready()

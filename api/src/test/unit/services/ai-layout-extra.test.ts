@@ -330,11 +330,10 @@ describe('AI fill per field (#2692)', () => {
   it('limits fills per person per window, cluster-wide through Redis', async () => {
     const counts = new Map<string, number>()
     const redis = {
-      incrby: async (k: string, n: number) => {
+      eval: async (_s: string, _nk: number, k: string, n: number) => {
         counts.set(k, (counts.get(k) ?? 0) + n)
         return counts.get(k) as number
-      },
-      expire: async () => 1
+      }
     }
     let ok = 0
     for (let i = 0; i < 40; i++) if (await takeFieldFillSlot(redis, 'u-limit')) ok++

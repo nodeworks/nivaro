@@ -7,9 +7,18 @@ import { getTenantId } from '../db/tenant-context.js'
  */
 
 type RedisLike = {
-  incrby(key: string, n: number): Promise<number>
-  expire(key: string, seconds: number): Promise<unknown>
+  eval(script: string, numKeys: number, ...args: Array<string | number>): Promise<unknown>
 }
+
+/**
+ * INCRBY and the window's expiry in ONE atomic step. Any key without a TTL gets one (TTL < 0),
+ * so a counter can never outlive its window — not when the process dies between two calls,
+ * and not for a key an older version left without one. Works on every Redis version (EXPIRE
+ * NX needs 7.0).
+ */
+const INCR_WITH_TTL = `local v = redis.call('INCRBY', KEYS[1], ARGV[1])
+if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end
+return v`
 
 const memory = new Map<string, { n: number; until: number }>()
 
@@ -29,8 +38,8 @@ export async function takeWindowed(
   let after: number
   try {
     if (!redis) throw new Error('no redis')
-    after = Number(await redis.incrby(k, n))
-    if (after === n) await redis.expire(k, windowS)
+    after = Number(await redis.eval(INCR_WITH_TTL, 1, k, n, windowS))
+    if (!Number.isFinite(after)) throw new Error('bad counter')
   } catch {
     const now = Date.now()
     const hit = memory.get(k)

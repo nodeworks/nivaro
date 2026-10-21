@@ -17,7 +17,13 @@ import { can } from '../services/permissions.js'
  * listed and revoked only through /layout-collab (admin), so every route here refuses them.
  */
 
-const isPreviewItem = (item: unknown) => String(item ?? '') === FORM_PREVIEW_ITEM
+// SQL Server compares item case-insensitively and ignores trailing spaces, so
+// '__FORM_PREVIEW__ ' finds the preview rows: compare the way the database does. The queries
+// below also exclude the preview item themselves (the collation covers the variants).
+export const isPreviewItem = (item: unknown) =>
+  String(item ?? '')
+    .trim()
+    .toLowerCase() === FORM_PREVIEW_ITEM
 
 function esc(v: unknown): string {
   return String(v ?? '')
@@ -99,6 +105,7 @@ export async function shareLinksRoutes(app: FastifyInstance) {
     }
     const rows = await db('nivaro_share_links')
       .where({ collection, item })
+      .whereNot('item', FORM_PREVIEW_ITEM)
       .orderBy('created_at', 'desc')
     return reply.send({
       data: rows.map((r: Record<string, unknown>) => ({
@@ -133,6 +140,7 @@ export async function sharePublicRoutes(app: FastifyInstance) {
   app.get<{ Params: { token: string } }>('/share/:token', async (req, reply) => {
     const link = await db('nivaro_share_links')
       .where({ token: req.params.token })
+      .whereNot('item', FORM_PREVIEW_ITEM)
       .first()
       .catch(() => null)
 
