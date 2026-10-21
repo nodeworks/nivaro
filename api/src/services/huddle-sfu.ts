@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
+import { sfuDestinationAllowed } from './huddle-destinations.js'
 
 /**
  * Large huddles (#2859): above a size the mesh (one upload per peer) stops
@@ -219,7 +220,7 @@ async function twirp(
   fetchImpl: typeof fetch,
   timeoutMs: number
 ): Promise<Response> {
-  const base = livekitHttpBase(s.livekit_url)
+  const base = sfuDestinationAllowed(s.livekit_url) ? livekitHttpBase(s.livekit_url) : null
   if (!base) throw new Error('bad livekit url')
   const token = mintLiveKitToken({
     apiKey: s.livekit_api_key,
@@ -232,6 +233,8 @@ async function twirp(
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
+    // A redirect is a failure, never followed (finding 3): the address is the only destination.
+    redirect: 'manual',
     signal: AbortSignal.timeout(timeoutMs)
   })
 }
@@ -288,7 +291,7 @@ export async function probeLiveKit(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 5000
 ): Promise<SfuProbe> {
-  const base = livekitHttpBase(s.livekit_url)
+  const base = sfuDestinationAllowed(s.livekit_url) ? livekitHttpBase(s.livekit_url) : null
   if (!base) return { ok: false, reason: 'bad-url' }
   const token = mintLiveKitToken({
     apiKey: s.livekit_api_key,
@@ -303,9 +306,14 @@ export async function probeLiveKit(
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: '{}',
+      redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs)
     })
     if (res.status === 401 || res.status === 403) return { ok: false, reason: 'unauthorized' }
+    // Only a short status ever comes back; a redirect is refused, not followed.
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+      return { ok: false, reason: 'error', detail: 'Redirect refused' }
+    }
     if (!res.ok) return { ok: false, reason: 'error', detail: `HTTP ${res.status}` }
     const body = (await res.json().catch(() => ({}))) as { rooms?: unknown[] }
     return { ok: true, ms: Date.now() - started, rooms: body.rooms?.length ?? 0 }

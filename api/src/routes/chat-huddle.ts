@@ -3,6 +3,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { canSeeRoom } from '../services/chat.js'
 import { type HuddleRedis, huddlePeers, huddleRoomKind } from '../services/huddle.js'
+import { destinationPatchError, iceProbeAllowed } from '../services/huddle-destinations.js'
 import { defaultSessionStore, type SessionRedis } from '../services/huddle-sessions.js'
 import {
   getHuddleSettings,
@@ -76,6 +77,8 @@ export async function chatHuddleRoutes(app: FastifyInstance) {
   })
 
   app.post('/settings/turn-health/run', { preHandler: requireAdmin }, async (_req, reply) => {
+    // Cloud mode: only the platform's servers are ever dialled; none set = nothing to probe.
+    if (!iceProbeAllowed()) return reply.code(404).send({ error: 'Not found' })
     const r = await runHuddleProbe({ redis: app.redis as unknown as ProbeRedis })
     return reply.send({
       data: r.skipped ? { skipped: true } : { skipped: false, sample: r.sample }
@@ -83,6 +86,8 @@ export async function chatHuddleRoutes(app: FastifyInstance) {
   })
 
   app.patch('/settings', { preHandler: requireAdmin }, async (req, reply) => {
+    const refused = destinationPatchError(req.body)
+    if (refused) return reply.code(400).send({ error: refused, code: 'HUDDLE_DESTINATION' })
     const next = await saveHuddleSettings(req.body)
     await logActivity({
       action: 'update',
