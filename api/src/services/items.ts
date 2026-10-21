@@ -53,6 +53,7 @@ import { applyRowFilter, can, getAllowedFields, getRowFilter, isAdminRole } from
 import { enforcePickerRules } from './picker-rules.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import {
+  gateIsSelfContained,
   getCachedRows,
   getCachedTotal,
   labelLookupIds,
@@ -1441,8 +1442,9 @@ async function expandRelations(
       !subInstance.instance &&
       subToMany.length === 0
     let relItems: Record<string, unknown>[]
-    if (flat) {
-      const sig = relQ.toSQL()
+    // A gate that reads another table (a sub-select) is never cached: its writes bust nothing.
+    const sig = flat ? relQ.toSQL() : null
+    if (sig && gateIsSelfContained(sig.sql)) {
       const signature = statementHash(sig.sql, sig.bindings ?? [])
       const epoch = readEpoch(relCollection)
       const cached = getCachedRows(relCollection, signature, batchValues)
@@ -3722,20 +3724,24 @@ export async function readItems(
   let sumRows: unknown[] | null
   if (labelIds) {
     // #2444 — countQ carries every gate of this read and no id list: with the projection it
-    // names exactly which rows any id can come back as, so it keys the row cache.
+    // names exactly which rows any id can come back as, so it keys the row cache. A gate that
+    // reads another table (sub-select on memberships, scopes, owners…) is never cached.
     const sigSql = countQ.toSQL()
+    const cacheable = gateIsSelfContained(sigSql.sql)
     const signature = statementHash(
       `${sigSql.sql}|${JSON.stringify(selectFields)}`,
       sigSql.bindings ?? []
     )
     const epoch = readEpoch(collection)
-    const cached = getCachedRows(collection, signature, labelIds)
+    const cached = cacheable
+      ? getCachedRows(collection, signature, labelIds)
+      : { hits: new Map<string, Record<string, unknown> | null>(), missing: labelIds }
     const fetched = cached.missing.length
       ? ((await span('query', () =>
           q.clone().whereIn(`${collection}.id`, cached.missing)
         )) as Record<string, unknown>[])
       : []
-    putCachedRows(collection, signature, cached.missing, fetched, epoch)
+    if (cacheable) putCachedRows(collection, signature, cached.missing, fetched, epoch)
     const byId = new Map(fetched.map((r) => [String(r.id).toLowerCase(), r]))
     rawData = labelIds
       .map((id) =>
@@ -3746,8 +3752,9 @@ export async function readItems(
     sumRows = null
   } else {
     // #2443 — `count=approx`: a total up to a few seconds old may stand in for the COUNT(*).
-    const approx = query.count === 'approx' && !skipCount
-    const countSql = approx ? countQ.toSQL() : null
+    // A gate that reads another table is counted every time (its writes bust nothing here).
+    const countSql = query.count === 'approx' && !skipCount ? countQ.toSQL() : null
+    const approx = countSql != null && gateIsSelfContained(countSql.sql)
     const statement = countSql ? statementHash(countSql.sql, countSql.bindings ?? []) : ''
     const epoch = approx ? readEpoch(collection) : ''
     const cachedTotal = approx ? getCachedTotal(collection, statement) : null

@@ -77,6 +77,30 @@ export function readCachesActive(): boolean {
   return totals.size > 0 || rows.size > 0
 }
 
+/**
+ * Can an answer of this statement be cached at all? Only when the statement reads the
+ * collection's own table and nothing else: one SELECT, one FROM, no JOIN / APPLY / EXISTS /
+ * sub-select. A row filter, User Scope or picker exclusion that looks at another table
+ * (memberships, teams, owner seats, scope rows) compiles to a sub-select, and a write to that
+ * table never reaches this cache's busts: the same SQL would keep answering after someone's
+ * access changed. Such reads always go to the database. Identifiers are bracket- or
+ * double-quoted by knex and values are bound, so only keywords are left to look at.
+ */
+export function gateIsSelfContained(sql: string): boolean {
+  const bare = sql
+    .replace(/\[[^\]]*\]/g, '[]')
+    .replace(/"[^"]*"/g, '""')
+    .replace(/`[^`]*`/g, '``')
+    .toLowerCase()
+  const count = (re: RegExp) => (bare.match(re) ?? []).length
+  return (
+    count(/\bselect\b/g) === 1 &&
+    count(/\bfrom\b/g) === 1 &&
+    count(/\b(join|apply|exists|union|intersect|except|with)\b/g) === 0 &&
+    !/\(\s*select\b/.test(bare)
+  )
+}
+
 export function statementHash(sql: string, bindings: readonly unknown[]): string {
   return createHash('sha1')
     .update(sql)

@@ -278,12 +278,12 @@ export const apiItems: DocSection = {
         [
           'count',
           '1',
-          'When 0, the count query is skipped and `total` answers null. When `approx`, a total counted in the last 30 seconds by the same query may answer instead, and `total_approx: true` says so. The rows are always read fresh. An unfiltered list reads the row count SQL Server keeps for the table.'
+          'When 0, the count query is skipped and `total` answers null. When `approx`, a total counted in the last 30 seconds by the same query may answer instead, and `total_approx: true` says so. The rows are always read fresh. An unfiltered list reads the row count SQL Server keeps for the table. When the caller's access rules look at another table (teams, owners, scopes), the total is always counted live.'
         ],
         [
           'labels',
           '0',
-          'When 1 on an `id _in` lookup (a list resolving the labels of linked records), rows read in the last 30 seconds by the same query may answer without a database read. A write to the collection through the API clears them at once; a write by a stored procedure or script shows when they expire. Ignored for any other filter.'
+          'When 1 on an `id _in` lookup (a list resolving the labels of linked records), rows read in the last 30 seconds by the same query may answer without a database read. A write to the collection through the API clears them at once; a write by a stored procedure or script shows when they expire. Ignored for any other filter, and when the caller's access rules look at another table.'
         ],
         ['search', 'none', 'Fulltext search across string/text fields.'],
         ['picker', '0', 'When 1, applies picker filters and exclusions; used by relation pickers.'],

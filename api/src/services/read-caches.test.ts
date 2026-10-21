@@ -1,8 +1,10 @@
 // #2443 list totals + #2444 display-label rows: keys, busts, races, shapes.
+import knex from 'knex'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   _resetReadCaches,
   bustAllReadCaches,
+  gateIsSelfContained,
   getCachedRows,
   getCachedTotal,
   LABEL_LOOKUP_MAX_IDS,
@@ -127,5 +129,48 @@ describe('labelLookupIds', () => {
   it('LABEL_CACHE_MS=0 turns it off', () => {
     process.env.LABEL_CACHE_MS = '0'
     expect(labelLookupIds(lookup())).toBeNull()
+  })
+})
+
+describe('gateIsSelfContained — gates that read another table are never cached', () => {
+  const k = knex({ client: 'mssql' })
+  const sql = (q: { toSQL(): { sql: string } }) => q.toSQL().sql
+
+  it('count path: a gate on the collection own columns may use the total cache', () => {
+    const q = k('orders')
+      .count('* as count')
+      .where('region', 7)
+      .andWhere((w) => w.where('[from]', 1).orWhereNull('status'))
+    expect(gateIsSelfContained(sql(q))).toBe(true)
+    expect(gateIsSelfContained(sql(k('orders').count('* as count')))).toBe(true)
+  })
+
+  it('count path: a row filter / scope sub-select on memberships bypasses the cache', () => {
+    const viaIn = k('orders')
+      .count('* as count')
+      .whereIn('team_id', k('team_members').select('team_id').where('user_id', 'u1'))
+    const viaExists = k('orders')
+      .count('* as count')
+      .whereExists(k('owners').select(k.raw('1')).whereRaw('owners.item = orders.id'))
+    const viaJoin = k('orders').count('* as count').join('scopes', 'scopes.v', 'orders.region')
+    expect(gateIsSelfContained(sql(viaIn))).toBe(false)
+    expect(gateIsSelfContained(sql(viaExists))).toBe(false)
+    expect(gateIsSelfContained(sql(viaJoin))).toBe(false)
+  })
+
+  it('label path: the related-row statement is cached only without another table', () => {
+    const own = k('vendors').select(['id', 'name']).limit(1000).where('active', true)
+    const scoped = k('vendors')
+      .select(['id', 'name'])
+      .limit(1000)
+      .whereIn('region', k('nivaro_user_scopes').select('value').where('user_id', 'u1'))
+    expect(gateIsSelfContained(sql(own))).toBe(true)
+    expect(gateIsSelfContained(sql(scoped))).toBe(false)
+  })
+
+  it('identifiers that look like keywords do not count', () => {
+    expect(gateIsSelfContained('select [select], [join] from [from] where [exists] = @p0')).toBe(
+      true
+    )
   })
 })
