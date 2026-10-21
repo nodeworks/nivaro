@@ -30,6 +30,7 @@ export * from './sections/graphql.js'
 export * from './sections/help-videos.js'
 export * from './sections/ideas.js'
 export * from './sections/import-templates.js'
+export * from './sections/infrastructure-edge.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
@@ -240,6 +241,7 @@ import {
 import { helpVideosApi, helpVideosGuide, sdkHelpVideos } from './sections/help-videos.js'
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
+import { infrastructureEdgeDocs } from './sections/infrastructure-edge.js'
 import { integrationObligations } from './sections/integration-obligations.js'
 import {
   integrationsConnector,
@@ -907,7 +909,8 @@ export const navSections: NavGroup[] = [
       opsContentPromotion,
       opsFileUsage,
       opsPermissionSimulator,
-      opsErdView
+      opsErdView,
+      infrastructureEdgeDocs
     ]
   },
   {
