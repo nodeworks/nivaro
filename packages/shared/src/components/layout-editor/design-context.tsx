@@ -52,6 +52,8 @@ export interface LayoutDesign {
   lastChange?(t: DesignTarget): LastChange | null
   /** A new record's starting value for the field, as grey placeholder text (#2633). */
   ghost?(field: string): string | null
+  /** #2701: the width handle on a selected field set its width (12, 6, 4 or 3 columns). */
+  resizeWidth?(t: DesignTarget, span: number): void
 }
 
 export interface DiffMark {
