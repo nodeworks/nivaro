@@ -167,7 +167,7 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
     async noteWriterRefusal(room, writer) {
       const { getUser } = await import('./users.js')
       const u = await getUser(writer.id).catch(() => undefined)
-      if (!u || u.status !== 'active') return `${writer.name} can no longer post here`
+      if (u?.status !== 'active') return `${writer.name} can no longer post here`
       const { chatPostRefusal } = await import('./chat-send.js')
       const { isAdminRole } = await import('./permissions.js')
       const refused = await chatPostRefusal(u, room, await isAdminRole(u).catch(() => false))
@@ -179,7 +179,7 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
     async postNote(room, authorId, text) {
       const { getUser } = await import('./users.js')
       const author = await getUser(authorId).catch(() => undefined)
-      if (!author || author.status !== 'active') return 'their writer can no longer post here'
+      if (author?.status !== 'active') return 'their writer can no longer post here'
       try {
         const { postChatMessage } = await import('./chat-send.js')
         const { isAdminRole } = await import('./permissions.js')

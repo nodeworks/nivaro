@@ -461,7 +461,7 @@ export function registerHuddleCollab(
         // Only the frozen note of a finished huddle, and only for the people who were in it.
         const ended = parseEnded(await deps.redis.get(collabKeys(scope.tenantNow(), room).ended))
         const me = String(user.id).toUpperCase()
-        if (!ended || !ended.attendees.some((a) => a.toUpperCase() === me)) return
+        if (!ended?.attendees.some((a) => a.toUpperCase() === me)) return
         socket.emit('huddle:note:kept', { room, text: ended.text })
       } catch (err) {
         deps.warn({ err, room }, 'huddle:note:fetch failed')
