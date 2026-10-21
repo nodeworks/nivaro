@@ -209,7 +209,8 @@ function Canvas({
   selected,
   onSelect,
   showHidden,
-  apply
+  apply,
+  whenIdle
 }: {
   collection: string
   bundle: LayoutBundle
@@ -220,6 +221,7 @@ function Canvas({
   onSelect: (t: DesignTarget) => void
   showHidden: boolean
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
+  whenIdle: () => Promise<void>
 }) {
   const dnd = useLayoutDnd()
   const canvas = useMemo(() => bundleToActiveLayout(bundle, parent), [bundle, parent])
@@ -252,6 +254,7 @@ function Canvas({
       record={record}
       design={design}
       apply={apply}
+      whenIdle={whenIdle}
     />
   )
 }
@@ -516,6 +519,7 @@ export function LayoutEditor({
                 onSelect={onSelect}
                 showHidden={showHidden}
                 apply={draft.apply}
+                whenIdle={draft.whenIdle}
               />
             ) : draft.error ? (
               <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>

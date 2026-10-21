@@ -7,11 +7,7 @@ export {
 } from './cascade-filters'
 export { type CascadeRuleCfg, CascadeRuleRow } from './cascade-rule-row'
 export { Combobox } from './controls'
-export {
-  type DefaultValueSettings,
-  FieldDefaultValueControl,
-  FieldDefaultValueSection
-} from './field-default-value'
+export { type DefaultValueSettings, FieldDefaultValueControl } from './field-default-value'
 export {
   type ColumnPresetItem,
   ColumnPresetRow,
