@@ -212,9 +212,14 @@ describe('delivery acknowledgement stamps (#2477)', () => {
   it('a sampled event keeps its stamp server-side and sends the same one over the stream', async () => {
     const sets: unknown[][] = []
     const redis = {
-      incr: vi.fn(async () => 50),
       multi: () => {
+        // #2462 — the counters come from their own MULTI (global seq, the room's own counter).
+        let counted = false
         const m = {
+          incr: () => {
+            counted = true
+            return m
+          },
           zadd: () => m,
           zremrangebyrank: () => m,
           expire: () => m,
@@ -222,7 +227,14 @@ describe('delivery acknowledgement stamps (#2477)', () => {
             sets.push(a)
             return m
           },
-          exec: async () => []
+          exec: async () =>
+            counted
+              ? [
+                  [null, 50],
+                  [null, 7],
+                  [null, 1]
+                ]
+              : []
         }
         return m
       }
@@ -244,9 +256,14 @@ describe('delivery acknowledgement stamps (#2477)', () => {
   it('an unsampled event keeps nothing', async () => {
     const sets: unknown[] = []
     setJournalRedis({
-      incr: vi.fn(async () => 51),
       multi: () => {
+        // #2462 — the counters come from their own MULTI (global seq, the room's own counter).
+        let counted = false
         const m = {
+          incr: () => {
+            counted = true
+            return m
+          },
           zadd: () => m,
           zremrangebyrank: () => m,
           expire: () => m,
@@ -254,7 +271,14 @@ describe('delivery acknowledgement stamps (#2477)', () => {
             sets.push(a)
             return m
           },
-          exec: async () => []
+          exec: async () =>
+            counted
+              ? [
+                  [null, 51],
+                  [null, 8],
+                  [null, 1]
+                ]
+              : []
         }
         return m
       }
