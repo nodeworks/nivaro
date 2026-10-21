@@ -294,21 +294,33 @@ function isUniqueViolation(err: unknown): boolean {
   return Array.isArray(e.errors) && e.errors.some((x) => code((x as { number?: unknown })?.number))
 }
 
-const layoutCollections = new Map<string, { at: number; collection: string | null }>()
+const layoutCollections = new Map<
+  string,
+  { at: number; collection: string | null; conditions: unknown }
+>()
+
+/** A layout's collection and role conditions (cached 60 s); null = no such layout. */
+export async function layoutUsageInfo(
+  layoutId: number
+): Promise<{ collection: string; conditions: unknown } | null> {
+  const key = `${getTenantId() ?? ''}|${layoutId}`
+  const hit = layoutCollections.get(key)
+  if (hit && Date.now() - hit.at < 60_000)
+    return hit.collection ? { collection: hit.collection, conditions: hit.conditions } : null
+  const row = (await db('nivaro_collection_layouts')
+    .where({ id: layoutId })
+    .first('collection', 'conditions')) as { collection?: string; conditions?: unknown } | undefined
+  const collection = row?.collection ?? null
+  const conditions = row?.conditions ?? null
+  layoutCollections.set(key, { at: Date.now(), collection, conditions })
+  if (layoutCollections.size > 2000)
+    layoutCollections.delete(layoutCollections.keys().next().value as string)
+  return collection ? { collection, conditions } : null
+}
 
 /** The collection a layout belongs to (cached 60 s); null = no such layout. */
 export async function layoutCollection(layoutId: number): Promise<string | null> {
-  const key = `${getTenantId() ?? ''}|${layoutId}`
-  const hit = layoutCollections.get(key)
-  if (hit && Date.now() - hit.at < 60_000) return hit.collection
-  const row = (await db('nivaro_collection_layouts').where({ id: layoutId }).first('collection')) as
-    | { collection?: string }
-    | undefined
-  const collection = row?.collection ?? null
-  layoutCollections.set(key, { at: Date.now(), collection })
-  if (layoutCollections.size > 2000)
-    layoutCollections.delete(layoutCollections.keys().next().value as string)
-  return collection
+  return (await layoutUsageInfo(layoutId))?.collection ?? null
 }
 
 async function upsertDaily(ev: UsageEvent, day: string): Promise<void> {

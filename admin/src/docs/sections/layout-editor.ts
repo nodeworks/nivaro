@@ -594,7 +594,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-suggestions', text: 'Suggestions from people' },
     {
       type: 'p',
-      text: "People who are not administrators get Suggest a form change in a record's More menu. They say what should change and can name a field. The suggestion becomes a Form change support request, so they follow it under My requests and it also shows on the Support desk. The overview shows how many suggestions are open, per form. In the editor, Form settings → Tools → Suggestions from people lists them; Accept marks the request done and Decline cancels it, each with an optional note the person is told about. To turn suggestions off, deactivate the Form change type under Support → Request types."
+      text: "People who are not administrators get Suggest a form change in a record's More menu. They say what should change and can name a field. The suggestion becomes a Form change support request, so they follow it under My requests and it also shows on the Support desk. The overview shows how many suggestions are open, per form. In the editor, Form settings → Tools → Suggestions from people lists them; Accept marks the request done and Decline cancels it, each with an optional note the person is told about. To turn suggestions off, deactivate the Form change type under Support → Request types. One person can send 10 suggestions an hour."
     },
     { type: 'h3', id: 'layout-editor-dependencies', text: 'What relies on a layout' },
     {
@@ -794,7 +794,8 @@ POST   /api/collection-layouts/:id/copy-section  { source_layout_id, group_key, 
 
 # Usage
 POST /api/layout-usage/beacon  { events: [{ layout_id, collection, item, open, saved, abandoned_step, steps }] }
-     → 204   // signed in; at most 20 events
+     → 204   // signed in; at most 20 events a call, 60 a minute per person; events for a form
+             // your role cannot open, or a record you cannot read, are dropped
 GET  /api/layout-usage/:layoutId/today            → { data: { ready, day, opens, people, records } }   (admin)
 GET  /api/layout-usage/:layoutId/friction?days=30 → { data: { opens, saves, abandons, steps, changed_after_save } }   (admin)
 GET  /api/layout-usage/co-changes/:collection     → { data: { revisions, fields, pairs: [{ a, b, together, jaccard }] } }   (admin)
@@ -803,7 +804,8 @@ GET  /api/layout-usage/co-changes/:collection     → { data: { revisions, field
 GET  /api/layout-collab/:id                        // administrators
      → { data: { owner: { id, name } | null, watching, watchers: [{ id, name }] } }
 PUT  /api/layout-collab/:id/watch  { on }          // administrators: watch or stop watching
-PUT  /api/layout-collab/:id/owner  { user_id }     // administrators: null clears the owner
+PUT  /api/layout-collab/:id/owner  { user_id }     // administrators: null clears the owner;
+                                                   // the owner must be active and able to read the form's records
 GET  /api/layout-collab/owners                     // administrators → { data: { <layout id>: { id, name } } }
 GET  /api/layout-collab/:id/whats-new              // anyone who may read the collection
      → { data: { rev, lines: string[] | null, mark, changed_at?, changed_by? } }
@@ -814,6 +816,8 @@ GET      /api/layout-collab/:id/preview-comments          // administrators
 DELETE   /api/layout-collab/:id/preview-comments/:commentId
 GET  /api/form-preview/:token                      // public page (expiring token)
 POST /api/form-preview/:token/comments  { field, name, text }   // public; 20 per 10 minutes per address
+// Preview links are made, listed and revoked only here: /api/share-links refuses them.
+// The page sends a strict Content-Security-Policy (one inline script, by nonce).
 
 # Other environments and suggestions from people
 GET  /api/collection-layouts/promote/sources       (admin) → other environments' APIs
@@ -832,7 +836,10 @@ GET  /api/collection-layouts/why?collection=&item=
 POST /api/ai/field-fill  { collection, layout_id, field, item_id?, values? }   // record editors
      → { data: { value, missing } }   // the prompt is read from the layout, never sent
      403 when the field has no AI fill on that form, the role may not open the form,
-         or the person may not change the record / field; 429 past 30 fills in 5 minutes
+         or the person may not change the record / field (a form with record rules has
+         no AI fill before the record is saved); 429 past 30 fills in 5 minutes (all servers)
+     Record pages never receive the prompt: placements carry ai_generate { enabled,
+     has_prompt, tokens } for anyone who is not an administrator
 
 # AI for layouts — administrators. Proposals only: nothing here writes a layout.
 # Tools that need the model answer 503 when AI is not set up; rule-based checks answer without it.

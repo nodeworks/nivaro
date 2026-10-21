@@ -327,11 +327,22 @@ describe('AI fill per field (#2692)', () => {
     expect(cleanFieldValue('abcdef', 3)).toBe('abc')
   })
 
-  it('limits fills per person per window', () => {
-    const t0 = 1_000_000
+  it('limits fills per person per window, cluster-wide through Redis', async () => {
+    const counts = new Map<string, number>()
+    const redis = {
+      incrby: async (k: string, n: number) => {
+        counts.set(k, (counts.get(k) ?? 0) + n)
+        return counts.get(k) as number
+      },
+      expire: async () => 1
+    }
     let ok = 0
-    for (let i = 0; i < 40; i++) if (takeFieldFillSlot('u-limit', t0 + i)) ok++
+    for (let i = 0; i < 40; i++) if (await takeFieldFillSlot(redis, 'u-limit')) ok++
     expect(ok).toBe(30)
-    expect(takeFieldFillSlot('u-limit', t0 + 6 * 60_000)).toBe(true)
+    expect(await takeFieldFillSlot(redis, 'u-other')).toBe(true)
+    // Redis down: this process still limits.
+    let local = 0
+    for (let i = 0; i < 40; i++) if (await takeFieldFillSlot(null, 'u-local')) local++
+    expect(local).toBe(30)
   })
 })

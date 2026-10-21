@@ -27,6 +27,7 @@ import {
   parseQuickPicker,
   parseRecordConditions,
   type RecordConditionRule,
+  roleAllows,
   slugify
 } from '../services/layout-patch.js'
 import { findLayoutReferences } from '../services/layout-references.js'
@@ -50,7 +51,7 @@ import { registerLayoutCrossformRoutes } from './layout-crossform.js'
 import { layoutHistoryRoutes } from './layout-history.js'
 import { applyTemplateToNewLayout, layoutReuseRoutes, loadFormTemplate } from './layout-reuse.js'
 
-export { parseConditions, parseRecordConditions, type RecordConditionRule, slugify }
+export { parseConditions, parseRecordConditions, type RecordConditionRule, roleAllows, slugify }
 
 // Does every rule match the given record? eq/neq compare via
 // String(raw ?? '') === String(value) (tolerant of numeric/string mismatches,
@@ -184,27 +185,6 @@ function collectRecordConditionFields(layouts: Record<string, unknown>[]): strin
 // when it does not match (or no record is supplied) — it can never leak to
 // non-matching records. Returns the raw DB row (JSON columns still strings)
 // or null when no layout exists.
-/**
- * Role allow-list. `conditions.role_ids` on a layout is a RESTRICTION, not a
- * preference: a non-admin whose role is not listed can never resolve, pin
- * (?layout=<slug>), list, or drill into that layout — record-condition
- * matches included (a CAR still resolves the admin-only PUB layout for an
- * admin, and the next allowed layout for everyone else). Empty/absent list =
- * open to all. Admins always pass.
- */
-export function roleAllows(
-  row: Record<string, unknown>,
-  userRoleId: string | null | undefined,
-  isAdmin: boolean
-): boolean {
-  if (isAdmin) return true
-  const roleIds = parseConditions(row.conditions)?.role_ids
-  if (!Array.isArray(roleIds) || roleIds.length === 0) return true
-  if (!userRoleId) return false
-  const want = String(userRoleId).toUpperCase()
-  return roleIds.some((r) => String(r).toUpperCase() === want)
-}
-
 /** Why a layout won resolution — the overview's reason vocabulary. */
 export type PickReason = {
   kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use'
@@ -835,7 +815,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const ungrouped_sort: number | null = ungroupedRow ? ungroupedRow.sort : null
 
     return reply.send({
-      data: { layout, ...stripEditorNotes(groups, assignments), ungrouped_sort }
+      data: {
+        layout,
+        ...stripEditorNotes(groups, assignments, { stripAiPrompt: !req.isAdmin }),
+        ungrouped_sort
+      }
     })
   })
 
@@ -884,7 +868,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         )
         .orderBy('sort', 'asc')
     ])
-    return reply.send({ data: { layout, ...stripEditorNotes(groups, assignments) } })
+    return reply.send({
+      data: { layout, ...stripEditorNotes(groups, assignments, { stripAiPrompt: !req.isAdmin }) }
+    })
   })
 
   // GET /collection-layouts/summary/:collection — the layout Summary mode
@@ -921,7 +907,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         )
         .orderBy('sort', 'asc')
     ])
-    return reply.send({ data: { layout, ...stripEditorNotes(groups, assignments) } })
+    return reply.send({
+      data: { layout, ...stripEditorNotes(groups, assignments, { stripAiPrompt: !req.isAdmin }) }
+    })
   })
 
   // GET /collection-layouts?collection=x[&active=true][&layout_type=grouped]
@@ -1958,7 +1946,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   app.get('/:id/assignments', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const layout = await db('nivaro_collection_layouts').where({ id }).first()
-    if (!layout) return reply.code(404).send({ error: 'Not found' })
+    if (!layout || !roleAllows(layout, req.user?.role ?? null, !!req.isAdmin))
+      return reply.code(404).send({ error: 'Not found' })
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
       .select(
@@ -1976,7 +1965,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'input_bindings'
       )
       .orderBy('sort', 'asc')
-    return reply.send({ data: rows })
+    // Admins (the editor) get the stored rows; a record page never sees editor notes or
+    // AI fill prompt templates.
+    if (req.isAdmin) return reply.send({ data: rows })
+    return reply.send({
+      data: stripEditorNotes([], rows as Record<string, unknown>[], { stripAiPrompt: true })
+        .assignments
+    })
   })
 
   // PATCH /collection-layouts/:id/ungrouped-sort — update only the __ungrouped_pos__ row

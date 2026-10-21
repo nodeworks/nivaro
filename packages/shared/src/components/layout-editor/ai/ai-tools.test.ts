@@ -219,7 +219,12 @@ describe('canvas pins (#2685 #2690)', () => {
 describe('AI fill per field (#2692)', () => {
   it('reads the setting and decides the button', () => {
     const ov = { ai_generate: { enabled: true, prompt: 'Describe {{vendor}} and {{ po }}' } }
-    expect(readAiFill(ov)).toEqual({ enabled: true, prompt: 'Describe {{vendor}} and {{ po }}' })
+    expect(readAiFill(ov)).toEqual({
+      enabled: true,
+      prompt: 'Describe {{vendor}} and {{ po }}',
+      hasPrompt: true,
+      tokens: ['vendor', 'po']
+    })
     expect(promptTokens('Describe {{vendor}} and {{ po }} {{vendor}}')).toEqual(['vendor', 'po'])
     expect(showsAiButton(ov, false, false)).toEqual({ show: true, perField: true })
     expect(showsAiButton({ ai_generate: { enabled: false } }, true, true)).toEqual({
@@ -229,5 +234,19 @@ describe('AI fill per field (#2692)', () => {
     expect(showsAiButton({ ai_generate: { enabled: true } }, true, true).show).toBe(false)
     expect(showsAiButton(null, true, true)).toEqual({ show: true, perField: false })
     expect(showsAiButton(null, true, false).show).toBe(false)
+  })
+  it('works from the prompt-less shape the server sends non-admins', () => {
+    const ov = { ai_generate: { enabled: true, has_prompt: true, tokens: ['vendor', 3] } }
+    expect(readAiFill(ov)).toEqual({
+      enabled: true,
+      prompt: null,
+      hasPrompt: true,
+      tokens: ['vendor']
+    })
+    expect(showsAiButton(ov, false, false)).toEqual({ show: true, perField: true })
+    expect(
+      showsAiButton({ ai_generate: { enabled: true, has_prompt: false, tokens: [] } }, true, true)
+        .show
+    ).toBe(false)
   })
 })

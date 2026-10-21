@@ -60,8 +60,23 @@ const TABLE = 'nivaro_layout_schedules'
 /** Failed rows stay on the overview this long (or until dismissed). */
 const FAILED_SHOWN_MS = 7 * 24 * 3600_000
 const MAX_OPS = 5000
-/** A 'running' row older than this was interrupted. */
+/** A 'running' row not touched for this long was interrupted. */
 const STUCK_MS = 10 * 60_000
+/** A running apply refreshes its row's updated_at this often, so a long apply (thousands of
+ *  ops, a slow database) is never taken for an interrupted one — STUCK_MS is 10 beats. */
+export const HEARTBEAT_MS = 60_000
+
+/** Keep `id` looking alive while this process applies it; call the answer to stop. */
+function startHeartbeat(id: number): () => void {
+  const timer = setInterval(() => {
+    void db(TABLE)
+      .where({ id, status: 'running' })
+      .update({ updated_at: new Date() })
+      .catch(() => undefined)
+  }, HEARTBEAT_MS)
+  timer.unref?.()
+  return () => clearInterval(timer)
+}
 
 // Migration 457 creates the table; until it has run, scheduling answers 503
 // and the cron does nothing. Present is remembered; missing is re-checked.
@@ -282,16 +297,27 @@ function announceLayoutChanged(collection: string) {
   }
 }
 
+/**
+ * running → failed, then log and tell the scheduler. The update is the claim: it changes the
+ * row only while it is still 'running' (and, for the stuck sweep, still untouched since
+ * `staleBefore`), and nobody is logged or told unless it changed exactly this one row — two
+ * processes never report one failure twice, and a sweep never fails an apply still beating.
+ */
 async function failSchedule(
   row: Record<string, unknown>,
   reason: string,
   layoutName: string | null,
-  opts: { notify?: boolean } = {}
-): Promise<void> {
+  opts: { notify?: boolean; staleBefore?: Date } = {}
+): Promise<boolean> {
   const id = Number(row.id)
-  await db(TABLE)
-    .where({ id })
-    .update({ status: 'failed', error: reason.slice(0, 2000), updated_at: new Date() })
+  let q = db(TABLE).where({ id, status: 'running' })
+  if (opts.staleBefore) q = q.where('updated_at', '<', opts.staleBefore)
+  const changed = await q.update({
+    status: 'failed',
+    error: reason.slice(0, 2000),
+    updated_at: new Date()
+  })
+  if (Number(changed) !== 1) return false
   await logActivity({
     action: 'layout-schedule-failed',
     user: (row.created_by as string | null) ?? null,
@@ -302,10 +328,10 @@ async function failSchedule(
   })
   // Nobody is told when the scheduler may no longer edit layouts: the overview
   // shows the failed row, and any administrator can schedule it again.
-  if (opts.notify === false) return
+  if (opts.notify === false) return true
   const app = getApp()
   const to = row.created_by ? String(row.created_by) : null
-  if (!app || !to) return
+  if (!app || !to) return true
   try {
     const base = adminBaseUrl()
     const url = base
@@ -324,6 +350,7 @@ async function failSchedule(
   } catch (err) {
     app.log?.warn?.({ err, schedule: id }, 'Scheduled layout change notification failed')
   }
+  return true
 }
 
 /**
@@ -337,14 +364,16 @@ export async function runDueSchedules(
   if (!(await schedulesAvailable())) return { applied: 0, failed: 0 }
   // A process that died mid-apply leaves its row 'running'. Whether the write
   // committed is unknown, so it is never retried: the scheduler is told.
+  const cutoff = new Date(now.getTime() - STUCK_MS)
   const stuck = (await db(TABLE)
     .where({ status: 'running' })
-    .where('updated_at', '<', new Date(now.getTime() - STUCK_MS))) as Array<Record<string, unknown>>
+    .where('updated_at', '<', cutoff)) as Array<Record<string, unknown>>
   for (const row of stuck)
     await failSchedule(
       row,
       'it was interrupted while applying; check the layout before scheduling it again',
-      null
+      null,
+      { staleBefore: cutoff }
     ).catch(() => {})
   const due = (await db(TABLE)
     .where({ status: 'pending' })
@@ -360,6 +389,7 @@ export async function runDueSchedules(
       .update({ status: 'running', updated_at: new Date() })
     if (Number(claimed) !== 1) continue
     const layoutId = Number(row.layout_id)
+    const stopHeartbeat = startHeartbeat(id)
     try {
       // Re-checked at run time: a scheduler suspended, redacted or no longer an
       // administrator since scheduling does not get the change made anyway.
@@ -398,7 +428,9 @@ export async function runDueSchedules(
       )
       if (result.status === 409) {
         // Someone saved between the read and the write: try again next tick.
-        await db(TABLE).where({ id }).update({ status: 'pending', updated_at: new Date() })
+        await db(TABLE)
+          .where({ id, status: 'running' })
+          .update({ status: 'pending', updated_at: new Date() })
         continue
       }
       if (result.status !== 200) {
@@ -411,7 +443,7 @@ export async function runDueSchedules(
         continue
       }
       await db(TABLE)
-        .where({ id })
+        .where({ id, status: 'running' })
         .update({ status: 'applied', applied_at: new Date(), updated_at: new Date(), error: null })
       await logActivity({
         action: 'layout-schedule-apply',
@@ -434,6 +466,8 @@ export async function runDueSchedules(
         null
       ).catch(() => {})
       failed++
+    } finally {
+      stopHeartbeat()
     }
   }
   return { applied, failed }

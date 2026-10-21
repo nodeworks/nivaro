@@ -32,6 +32,32 @@ describe('orList', () => {
 })
 
 describe('explainFieldLocks', () => {
+  it('never explains a field the viewer cannot read, nor names a section hidden from them', () => {
+    const g = (key: string, over: Record<string, unknown> = {}) => ({
+      key,
+      label: key === 'secret' ? 'Secret pay' : 'Open',
+      parent_key: null,
+      visible_when: null,
+      hidden_for_roles: null,
+      locked_for_roles: JSON.stringify(['R-TECH']),
+      ...over
+    })
+    const lockState = JSON.stringify([{ type: 'pipeline_state', state_keys: ['approved'] }])
+    const locks = explainFieldLocks(
+      base({
+        groups: [g('secret', { hidden_for_roles: JSON.stringify(['r-tech']) }), g('open')],
+        placements: [
+          { field: 'pay', group_key: 'secret', is_visible: true, lock_conditions: null },
+          { field: 'note', group_key: 'open', is_visible: true, lock_conditions: null },
+          { field: 'salary', group_key: null, is_visible: true, lock_conditions: lockState },
+          { field: 'title', group_key: null, is_visible: true, lock_conditions: lockState }
+        ],
+        readable: ['note', 'title', 'pay']
+      })
+    )
+    expect(Object.keys(locks).sort()).toEqual(['note', 'title'])
+    expect(JSON.stringify(locks)).not.toContain('Secret pay')
+  })
   it('names the section that locks a field for the viewer role, nested sections included', () => {
     const locks = explainFieldLocks(
       base({
@@ -191,5 +217,21 @@ describe('stripEditorNotes', () => {
     expect(JSON.parse(assignments[0].overrides as string)).toEqual({ note: 'help' })
     expect(assignments[1].overrides).toEqual({ label: 'Y' })
     expect(assignments[2].overrides).toBeNull()
+  })
+  it('replaces the AI fill prompt with has_prompt + tokens for non-admins only', () => {
+    const ai = { enabled: true, prompt: 'Describe {{vendor}} for {{ po }} and {{vendor}}' }
+    const rows = [
+      { field: 'x', overrides: JSON.stringify({ ai_generate: ai, label: 'X' }) },
+      { field: 'y', overrides: { ai_generate: { enabled: false } } }
+    ]
+    const kept = stripEditorNotes([], rows).assignments
+    expect(JSON.parse(kept[0].overrides as string).ai_generate).toEqual(ai)
+    const out = stripEditorNotes([], rows, { stripAiPrompt: true }).assignments
+    expect(JSON.parse(out[0].overrides as string)).toEqual({
+      ai_generate: { enabled: true, has_prompt: true, tokens: ['vendor', 'po'] },
+      label: 'X'
+    })
+    expect(out[0].overrides).not.toContain('Describe')
+    expect(out[1].overrides).toEqual({ ai_generate: { enabled: false } })
   })
 })

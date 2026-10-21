@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -13,6 +14,7 @@ import {
   setLayoutWatch,
   whatsNewFor
 } from '../services/layout-notify.js'
+import { roleAllows } from '../services/layout-patch.js'
 import {
   addPreviewComment,
   cleanComment,
@@ -42,9 +44,22 @@ async function layoutRow(id: string) {
   if (!isId(id)) return null
   return (await db('nivaro_collection_layouts')
     .where({ id: Number(id) })
-    .first('id', 'name', 'collection', 'layout_type')) as
-    | { id: number; name: string; collection: string; layout_type: string | null }
+    .first('id', 'name', 'collection', 'layout_type', 'conditions')) as
+    | {
+        id: number
+        name: string
+        collection: string
+        layout_type: string | null
+        conditions: unknown
+      }
     | undefined
+}
+
+/** A non-admin reads a form's news only when they may read the collection AND open the form. */
+async function mayReadLayout(req: FastifyRequest, layout: { collection: string }) {
+  if (req.isAdmin) return true
+  if (!roleAllows(layout as Record<string, unknown>, req.user?.role ?? null, false)) return false
+  return can(req.user!, 'read', layout.collection)
 }
 
 /** Field filter for a reader: null = every field. */
@@ -103,12 +118,16 @@ export async function layoutCollabRoutes(app: FastifyInstance) {
     const raw = (req.body as { user_id?: unknown } | null)?.user_id
     const userId = typeof raw === 'string' && raw ? raw : null
     if (userId) {
-      const u = (await db('nivaro_users').where({ id: userId }).first('id', 'status')) as
-        | { id: string; status: string }
+      // An owner hears first about change requests on the form's records (#2609), so they
+      // must be able to read the collection — notices name the record.
+      const u = (await db('nivaro_users').where({ id: userId }).first()) as
+        | (User & { is_redacted?: unknown })
         | undefined
       if (!u) return reply.code(400).send({ error: 'That person does not exist' })
-      if (u.status !== 'active')
+      if (u.status !== 'active' || u.is_redacted)
         return reply.code(400).send({ error: 'Only an active person can own a form' })
+      if (!(await can(u, 'read', layout.collection)))
+        return reply.code(400).send({ error: 'The owner must be able to read this form’s records' })
     }
     await setLayoutOwnerId(layout.id, userId)
     await logActivity({
@@ -128,8 +147,7 @@ export async function layoutCollabRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const layout = await layoutRow(id)
     if (!layout) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && !(await can(req.user!, 'read', layout.collection)))
-      return reply.code(404).send({ error: 'Not found' })
+    if (!(await mayReadLayout(req, layout))) return reply.code(404).send({ error: 'Not found' })
     const readable = await readableFields(req.user!, !!req.isAdmin, layout.collection)
     const answer = await whatsNewFor(req.user!.id, layout.id, (f) => !readable || readable.has(f))
     return { data: answer }
@@ -142,8 +160,7 @@ export async function layoutCollabRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'rev required' })
     const layout = await layoutRow(id)
     if (!layout) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && !(await can(req.user!, 'read', layout.collection)))
-      return reply.code(404).send({ error: 'Not found' })
+    if (!(await mayReadLayout(req, layout))) return reply.code(404).send({ error: 'Not found' })
     await markSeen(req.user!.id, layout.id, rev)
     return { data: { ok: true } }
   })
@@ -251,9 +268,9 @@ async function overLimit(app: FastifyInstance, req: FastifyRequest, token: strin
 async function previewStructure(link: PreviewLink) {
   if (!link.created_by) return null
   const creator = (await db('nivaro_users').where({ id: link.created_by }).first()) as
-    | User
+    | (User & { is_redacted?: boolean | number | null })
     | undefined
-  if (creator?.status !== 'active') return null
+  if (creator?.status !== 'active' || creator.is_redacted) return null
   const role = creator.role
     ? ((await db('nivaro_roles').where({ id: creator.role }).first('admin_access')) as
         | { admin_access?: boolean | number }
@@ -275,11 +292,27 @@ async function previewStructure(link: PreviewLink) {
   }
 }
 
+/** The preview page runs one inline script (by nonce) and only talks back to this API. */
+export function previewCsp(nonce: string | null): string {
+  return [
+    "default-src 'none'",
+    "style-src 'unsafe-inline'",
+    nonce ? `script-src 'nonce-${nonce}'` : "script-src 'none'",
+    'img-src data:',
+    "connect-src 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'"
+  ].join('; ')
+}
+
 function gone(reply: FastifyReply, title: string, msg: string) {
   return reply
     .code(404)
     .type('text/html')
     .header('Cache-Control', 'no-store')
+    .header('Content-Security-Policy', previewCsp(null))
+    .header('Referrer-Policy', 'no-referrer')
     .send(
       `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body style="font-family:'DM Sans',system-ui,sans-serif;padding:60px 16px;text-align:center;color:#6b7280"><h2 style="color:#111827;font-size:18px">${title}</h2><p>${msg}</p></body></html>`
     )
@@ -299,9 +332,11 @@ export async function formPreviewPublicRoutes(app: FastifyInstance) {
       listPreviewComments(link.layout_id, link.id)
     ])
     countPreviewView(link.id)
+    const nonce = randomBytes(16).toString('base64')
     return reply
       .type('text/html')
       .header('Cache-Control', 'no-store')
+      .header('Content-Security-Policy', previewCsp(nonce))
       .header('Referrer-Policy', 'no-referrer')
       .header('X-Robots-Tag', 'noindex')
       .send(
@@ -311,7 +346,8 @@ export async function formPreviewPublicRoutes(app: FastifyInstance) {
           structure,
           comments,
           token: req.params.token,
-          expiresAt: link.expires_at
+          expiresAt: link.expires_at,
+          nonce
         })
       )
   })

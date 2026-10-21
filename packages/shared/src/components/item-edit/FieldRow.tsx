@@ -15,7 +15,7 @@ import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient, useParentDraft } from '../../context'
-import { AUTOFILL_CHECK_KEY, promptTokens, readAiFill, showsAiButton } from '../../lib/ai-fill'
+import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
 import { del, get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { GlossaryLabel } from '../ai/GlossaryText'
@@ -651,9 +651,8 @@ export function FieldRow({
 
   // The layout's prompt runs on the server; only the values its {{tokens}} name go along.
   async function handleFieldFill() {
-    const prompt = readAiFill(field._overrides)?.prompt ?? ''
     const values: Record<string, unknown> = {}
-    for (const t of promptTokens(prompt)) if (t in draft) values[t] = draft[t]
+    for (const t of readAiFill(field._overrides)?.tokens ?? []) if (t in draft) values[t] = draft[t]
     setIsGenerating(true)
     try {
       const res = await client.request<{ data: { value: string; missing?: string[] } }>(

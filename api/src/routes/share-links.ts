@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { loadFormLayout } from '../services/form-layout.js'
+import { FORM_PREVIEW_ITEM } from '../services/layout-preview.js'
 import { can } from '../services/permissions.js'
 
 /**
@@ -11,7 +12,12 @@ import { can } from '../services/permissions.js'
  * token URL rendering ONE record read-only through a grouped layout.
  * Curation-not-security, same as widget feeds: the creator decides what to
  * expose and to whom they hand the link.
+ *
+ * Form preview links (#2666) share this table under item FORM_PREVIEW_ITEM; they are made,
+ * listed and revoked only through /layout-collab (admin), so every route here refuses them.
  */
+
+const isPreviewItem = (item: unknown) => String(item ?? '') === FORM_PREVIEW_ITEM
 
 function esc(v: unknown): string {
   return String(v ?? '')
@@ -47,6 +53,9 @@ export async function shareLinksRoutes(app: FastifyInstance) {
     }
     if (!b.collection || b.item == null) {
       return reply.code(400).send({ error: 'collection and item are required' })
+    }
+    if (isPreviewItem(b.item)) {
+      return reply.code(400).send({ error: 'That record cannot be shared' })
     }
     if (b.collection.startsWith('nivaro_')) {
       return reply.code(400).send({ error: 'System collections cannot be shared' })
@@ -84,6 +93,7 @@ export async function shareLinksRoutes(app: FastifyInstance) {
 
   app.get('/for/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    if (isPreviewItem(item)) return reply.code(404).send({ error: 'Not found' })
     if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
@@ -102,7 +112,7 @@ export async function shareLinksRoutes(app: FastifyInstance) {
   app.delete('/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const row = await db('nivaro_share_links').where({ id }).first()
-    if (!row) return reply.code(404).send({ error: 'Not found' })
+    if (!row || isPreviewItem(row.item)) return reply.code(404).send({ error: 'Not found' })
     if (!req.isAdmin && row.created_by !== req.user?.id) {
       return reply.code(403).send({ error: 'Only the creator can revoke this link' })
     }
@@ -134,7 +144,7 @@ export async function sharePublicRoutes(app: FastifyInstance) {
           `<!doctype html><html><body style="font-family:sans-serif;padding:60px;text-align:center;color:#334155"><h2>${esc(title)}</h2><p>${esc(msg)}</p></body></html>`
         )
 
-    if (!link || !link.is_active)
+    if (!link?.is_active || isPreviewItem(link.item))
       return gone('Link not found', 'This share link does not exist or was revoked.')
     if (link.expires_at && new Date(link.expires_at) < new Date()) {
       return gone('Link expired', 'This share link is no longer available.')

@@ -24,6 +24,27 @@ export function parseConditions(raw: unknown): LayoutConditions {
   }
 }
 
+/**
+ * Role allow-list. `conditions.role_ids` on a layout is a RESTRICTION, not a
+ * preference: a non-admin whose role is not listed can never resolve, pin
+ * (?layout=<slug>), list, or drill into that layout — record-condition
+ * matches included (a CAR still resolves the admin-only PUB layout for an
+ * admin, and the next allowed layout for everyone else). Empty/absent list =
+ * open to all. Admins always pass.
+ */
+export function roleAllows(
+  row: Record<string, unknown>,
+  userRoleId: string | null | undefined,
+  isAdmin: boolean
+): boolean {
+  if (isAdmin) return true
+  const roleIds = parseConditions(row.conditions)?.role_ids
+  if (!Array.isArray(roleIds) || roleIds.length === 0) return true
+  if (!userRoleId) return false
+  const want = String(userRoleId).toUpperCase()
+  return roleIds.some((r) => String(r).toUpperCase() === want)
+}
+
 // Safely parse the record_conditions JSON text column into a rule array (or null).
 export function parseRecordConditions(raw: unknown): RecordConditionRule[] | null {
   if (raw == null) return null

@@ -122,16 +122,29 @@ function fieldsUnder(key: string, groups: WhyGroup[], placements: WhyPlacement[]
     .map((p) => p.field)
 }
 
+/** Is group `key` (or a group it sits in) hidden from `role`? */
+function hiddenFromRole(key: string | null, groups: WhyGroup[], role: string): boolean {
+  const byKey = new Map(groups.map((g) => [g.key, g]))
+  const seen = new Set<string>()
+  for (let k = key; k && !seen.has(k); k = byKey.get(k)?.parent_key ?? null) {
+    seen.add(k)
+    if (parseList(byKey.get(k)?.hidden_for_roles ?? null).some((r) => up(r) === role)) return true
+  }
+  return false
+}
+
 export function explainFieldLocks(input: WhyInput): Record<string, FieldLock> {
   const out: Record<string, FieldLock> = {}
   const myRole = input.roleId ? up(input.roleId) : null
   const roleWords = input.roleName ? `the ${input.roleName} role` : 'your role'
   const form = quoted(input.layoutName)
 
-  // A section locked for the viewer's role (admins are exempt, as on the form).
+  // A section locked for the viewer's role (admins are exempt, as on the form). A section
+  // hidden from the role is never named: the viewer does not see it.
   if (myRole && !input.isAdmin) {
     for (const g of input.groups) {
       if (!parseList(g.locked_for_roles).some((r) => up(r) === myRole)) continue
+      if (hiddenFromRole(g.key, input.groups, myRole)) continue
       const label = g.label || titleOf(g.key)
       for (const f of fieldsUnder(g.key, input.groups, input.placements))
         out[f] = {
@@ -196,6 +209,17 @@ export function explainFieldLocks(input: WhyInput): Record<string, FieldLock> {
         kind: 'permission',
         text: `${input.roleName ? `The ${input.roleName} role` : 'Your role'} can read this field but not change it (role permissions)`
       }
+    }
+  }
+
+  // A non-admin hears only about fields they can read, outside sections hidden from them.
+  if (!input.isAdmin) {
+    const read = input.readable === null ? null : new Set(input.readable)
+    const groupOf = new Map(input.placements.map((p) => [p.field, p.group_key]))
+    for (const f of Object.keys(out)) {
+      const unreadable = read != null && !read.has('*') && !read.has(f.split('.')[0])
+      const hidden = myRole != null && hiddenFromRole(groupOf.get(f) ?? null, input.groups, myRole)
+      if (unreadable || hidden) delete out[f]
     }
   }
   return out
