@@ -2,13 +2,13 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { activateLayout, lockLayout } from './layout-activation.js'
-import { groupI18nSupported } from './layout-inspect.js'
 import {
   CHANGE_NOTE_REQUIRED,
   changeNotePolicy,
   changeNoteVersionNote,
   missingChangeNote
 } from './layout-change-note.js'
+import { groupI18nSupported } from './layout-inspect.js'
 import {
   applyLayoutOps,
   type GroupRow,

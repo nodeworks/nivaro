@@ -20,7 +20,7 @@ export const aiDesignDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'A crowded step or section also offers a whole restructure: **Split into 3 steps…** (or sections) previews every change as a list — the new steps, where each sits and which fields move into it — and **Apply all** makes them as ONE change through the editor, so a single Undo in the top bar reverses the whole split. When AI is set up the model groups related fields and names the parts; its answer is used only if it places every field exactly once, otherwise the fields are split into equal runs in their current order ("Details (2)", "Details (3)"). Hidden fields stay where they are. The single **Move field** fix stays available beside it.'
+      text: 'A crowded step or section also offers a whole restructure: **Split into 3 steps…** (or sections) previews every change as a list — the new steps, where each sits and which fields move into it — and **Apply all** makes them as one change through the editor, so a single Undo in the top bar reverses the whole split. When AI is set up the model groups related fields and names the parts; its answer is used only if it places every field exactly once, otherwise the fields are split into equal runs in their current order ("Details (2)", "Details (3)"). Hidden fields stay where they are. The single **Move field** fix stays available beside it.'
     },
     { type: 'h2', id: 'ai-design-help-text', text: 'Field help text drafts' },
     {

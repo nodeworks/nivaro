@@ -49,13 +49,11 @@ export const layoutEditor: DocSection = {
         'No layouts yet — the empty state explains what a form layout is and offers Create first form, which seeds one section "Main" holding every visible field of the collection.'
       ]
     },
-
     { type: 'h3', id: 'layout-editor-test-record', text: 'Test a record' },
     {
       type: 'p',
       text: 'Test a record… picks a saved record and lights up the row it resolves to, with the reason in words, and says for every other form why it was passed over ("Its record rules do not match", "A form with record rules matched first", "Restricted to other roles"). Optionally test as a role. The test runs the live `/active` resolution itself — there is no separate preview logic — so the answer is what that person would get.'
     },
-
     { type: 'h3', id: 'layout-editor-coverage', text: 'Check coverage and health' },
     {
       type: 'p',
@@ -71,30 +69,12 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar carries the layout name and purpose, Preview as, History, Undo / Redo and the save status.'
     },
-    { type: 'h3', text: 'Canvas' },
+    { type: 'h3', id: 'layout-editor-canvas', text: 'Canvas' },
     {
       type: 'p',
       text: 'The canvas is the shared record form (ItemEditForm, or the read view for summary and detail layouts) running in design mode: same styles, spacing, steps or tabs, header strip and slot cards as a real record. Inputs are inert — nothing on the canvas writes to a record, takes a lock or runs a rule that saves. Click a field, section, tab, slot card, header strip item or widget to select it (from the keyboard: Tab to it, Enter). Empty sections show a drop zone; Show hidden reveals fields and sections the preview would hide, faintly, so they can still be selected.'
     },
-    {
-      type: 'p',
-      text: 'Preview as picks a record: the canvas shows its real values, its steps, and the fields its rules show or hide. "As a role" previews the form the way a role sees it — hidden and read-only fields are marked.'
-    },
-    {
-      type: 'p',
-      text: 'The same Preview as popover holds the other preview modes. A strip above the canvas says what each active mode changes; its × turns that mode off. Nothing in them changes a record.'
-    },
-    {
-      type: 'ul',
-      items: [
-        'Compare with a second role: the canvas splits in two, the same record as each role. Fields one role can edit and the other only read (or never see), and sections only one of them sees, are ringed and tagged Differs; hover the tag for both answers. Both halves are preview only: select to edit, but drag on a single canvas.',
-        'Workflow state: pick a state of a pipeline bound to the collection and the form shows it as if the record were there — the fields that state locks, and what each move out of it needs (tagged Needed to move on) — without finding a record in that state.',
-        'What if: pick a field a step’s "Only when" condition reads, then one of the values the condition tests, Empty, or any value. The canvas lays it over the record and tags the steps that appear (Appears) or disappear (Hides, seen with Show hidden).',
-        'Device: Desktop, Tablet (768 px) or Phone (390 px). The form measures its own width, so columns wrap exactly as on that screen.',
-        'Who sees each field: every field is tinted by how many roles see it (every role, most, some, few, none — legend in the strip) with a chip such as 3/5 roles; click the chip for the roles that can edit it, only read it, or never see it. It combines each role’s permissions with this form’s section and lock rules; administrators see everything and are not counted.'
-      ]
-    },
-    { type: 'h3', text: 'Inspector' },
+    { type: 'h3', id: 'layout-editor-inspector', text: 'Inspector' },
     {
       type: 'table',
       head: ['Tab', 'What it holds'],
@@ -131,16 +111,16 @@ export const layoutEditor: DocSection = {
       type: 'note',
       text: 'Row rules, row lints, picker enforcement, max values and line SLA are enforced on the server from the default grouped form only. On any other layout the inspector labels those keys "enforced on the default form only".'
     },
-    { type: 'h3', text: 'Form settings' },
+    { type: 'h3', id: 'layout-editor-form-settings', text: 'Form settings' },
     {
       type: 'p',
-      text: "Layout-wide settings in short named sections, each control with a one-line effect, searchable from the box at the top: Who gets this form (kind, record rules, roles by name, link name, New-menu label and hiding) · How it's laid out (tabs or steps, check each step before Next, one section open at a time) · Buttons & panels (hide comments, tasks, revisions, clone, delete, banners; Schedule and Hide-from-pickers buttons for everyone) · Read view & summary · PDF (file layouts only) · Addendum · Defaults for new records · Inheritance · AI review, previews, version history. Only the settings that apply to the layout's kind are shown — addendum layouts get every setting that applies to them."
+      text: "Layout-wide settings in short named sections, each control with a one-line effect, searchable from the box at the top: Who gets this form (kind, record rules, roles by name, link name, New-menu label and hiding) · How it's laid out (tabs or steps, check each step before Next, one section open at a time) · Buttons & panels (hide comments, tasks, revisions, clone, delete, banners; Schedule and Hide-from-pickers buttons for everyone) · Read view & summary · PDF (file layouts only) · Addendum · Defaults for new records · Inheritance · AI review, previews, version history. Only the settings that apply to the layout's kind are shown — addendum layouts get every setting that applies to them. This page calls that last section Form settings → Tools."
     },
     {
       type: 'p',
       text: '"Schedule button for everyone" and "Hide-from-pickers button for everyone" give people who may edit the record "Schedule a change…" and "Disable in pickers" (administrators always have both). Nivaro admin shows them in the record header; the shared record form shows them in its More menu when the host turns on `showGrantedTools` (efp-new does). The server checks the same grant for both. A non-admin must be able to see the record (otherwise the answer is Not found), the form that record opens with for them must have the setting on, and they must be allowed to update this record — the update rules of their role for the collection, its row filter and any tree permission, not just access to the collection. A form opened with a `?layout=` link counts only when it is a record form their role may open and its record rules match this record; naming any other form never grants the tool. Scheduling also checks every field in the change: each must be one the person may update, and a registered field with its own column that is not read-only, computed or an audit stamp; otherwise the request is refused naming the field. People who are not administrators see the scheduled changes on a record only when they can see the record, with values of fields they may not read left out, and may cancel only their own changes on records they can still update.'
     },
-    { type: 'h3', text: 'Add panel' },
+    { type: 'h3', id: 'layout-editor-add-panel', text: 'Add panel' },
     {
       type: 'p',
       text: 'Add a field, section, panel or widget opens a searchable list showing labels (the key as secondary text), the type and an "on this form" mark for what is already placed. Click a row to add it after the selection, or drag it onto the canvas. A field already on the form can be added again ("Add another copy") — the same field may sit in two places, such as the header strip and a section.'
@@ -149,22 +129,7 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "On other forms lists, above the fields, the fields this collection's other forms of the same kind place and this one does not, most-carried first, with how many forms carry each and their names."
     },
-    { type: 'h3', id: 'layout-editor-checks', text: 'Checks against the database' },
-    {
-      type: 'ul',
-      items: [
-        "Stored as (Look tab): the database type and size behind the field, for example nvarchar(50). A warning shows when this form's default value, the input mask or the label cannot fit: a default longer than the column or past its digits, a mask that stores more characters than the column holds, or a label longer than the field's width shows.",
-        'Check the width against stored values (Look tab, single-line fields): reads the newest 5,000 stored values, never the whole table, and says how long 95% of them are and how much the current width shows. When the width cuts them off, or is far wider than needed, Use ⅓ (or the width it names) sets it in one Undo step.',
-        "Options for a record (Picker tab): pick a saved record and see the options this picker would offer it — the cascade filters and option filter worked out as the record form works them out (the draft you are editing included), then the picker exclusions — with the count left after each step and the first 50 options. When the target collection has a picker filter, the count it would leave is shown too: the record form's picker does not apply it; enforced API writes do.",
-        "Placements that point at nothing (overview): placements whose column was dropped, whose widget was deleted, whose grid's table or link column is gone (relations are a claim: the table and column must exist) or whose section no longer exists. Remove it / Remove N takes them off that layout in one save, with a version kept like any other edit."
-      ]
-    },
-    { type: 'h3', id: 'layout-editor-translations', text: 'Translations' },
-    {
-      type: 'p',
-      text: "When Settings → Localization lists more than one language, the first is the one the form is written in and the others get a Translations section: a field's label and help text (Look tab) and a section's, tab's or step's name (its inspector). Translations save with the layout and version with it. The record form shows them to people reading in that language — their chosen admin language, else the page's, else the browser's — and the text as written where a translation is missing. A suggested translation (for example one drafted by AI) shows marked as a suggestion and stays off records until Approve; the overview counts it as missing until then. The overview counts the missing translations per form. Section names need migration 465; field labels and help text work without it. Record values are translated separately (field translations)."
-    },
-    { type: 'h3', text: 'Drag and drop' },
+    { type: 'h3', id: 'layout-editor-drag', text: 'Drag and drop' },
     {
       type: 'ul',
       items: [
@@ -189,16 +154,6 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: 'Canvas | Table in the top bar switches the centre to a table of every field on the form, grouped by section: the label on this form, section, width, Required, Read-only and Hidden, all editable in place. Shift- or ⌘-click rows (or tick their boxes) to select several and change them together in the inspector. Fields that come from a parent layout are not listed. Table and PDF layouts keep their own canvases.'
-    },
-    { type: 'h3', id: 'layout-editor-state-matrix', text: 'Fields by state' },
-    {
-      type: 'p',
-      text: "States in the top bar shows every field against the states of the collection's pipeline (a switcher picks one when several run on it), with an Every state column first. Click a cell to set the field to Editable, Read-only, Required or Hidden. Every state writes the field's own Read-only, Required and Hidden on this form. Read-only in one state adds that state to the field's Read-only when. Required in one state makes the moves that leave the state ask for the value (a record-fields requirement on those moves); that is saved to the pipeline at once, for every form, and its toast has Undo. A field cannot be hidden in one state only, and a state nothing leaves cannot require anything: those choices stay greyed with the reason. A dot on a cell marks a field that is read-only but required, which nobody could fill in."
-    },
-    { type: 'h3', id: 'layout-editor-role-matrix', text: 'Sections by role' },
-    {
-      type: 'p',
-      text: "Roles in the top bar shows every section and tab against every role. Click a cell to make the section Can edit, Read-only or Hidden for that role (the section's Hidden for and Read-only for). Each cell is one change to save. Administrator roles are greyed: they always see and edit everything. Field permissions still apply inside a section."
     },
     { type: 'h3', id: 'layout-editor-find', text: 'Finding your way on a long form' },
     {
@@ -232,27 +187,40 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "Replace in the top bar searches this form's field labels, section names, text blocks and help text, for example Oracle to Fusion. Where the form sets no label or help text of its own, the collection's is searched too; replacing it gives this form its own. Every match is listed with its before and after and a tick box; Replace changes the ticked ones as one Undo step."
     },
-    { type: 'h3', id: 'layout-editor-rules-view', text: 'Rules on the canvas' },
+    { type: 'h3', id: 'layout-editor-inherited', text: 'Inherited layouts' },
     {
       type: 'p',
-      text: "The Rules switch in the top bar (on by default, remembered per browser) puts small tags on the canvas that say why each field behaves as it does: Required here or Required field (this form or every form), Needed to Approve (a pipeline move requires it), Read-only here, Read-only field, Calculated, Locked for Finance, Locked in Approved, Hidden here, Hidden field, and Filled by a rule. Hover a tag for the whole sentence; click it to open what causes it: the field's Rules, Look or Advanced tab, the section, the pipeline or the field rules page."
+      text: 'A layout that inherits from a parent shows the parent\'s placements on its canvas marked "from <parent>" and locked (an inherited step or tab gets a small dot instead, with the parent\'s name in its tip). The inspector offers Override here (copies the placement into this layout as the parent last saved it, then editable) and Edit in <parent>.'
     },
     {
       type: 'p',
-      text: 'Sections carry their rules as sentences too, worded as on the overview: "Shows when Is Sparing is Yes", "Skipped when Project is filled", "Hidden for Finance", "Read-only for Finance".'
+      text: "What this layout changes of the parent's is tagged \"Overrides parent\". Select it and the inspector offers Reset to parent: this layout's copy goes and the parent's shows again, as one Undo step. Resetting a section also resets the fields in it that the parent places; fields only this layout places move to Ungrouped. The States and Roles views mark rows the same way, with Reset or Override beside the name."
+    },
+    { type: 'h3', id: 'layout-editor-translations', text: 'Translations' },
+    {
+      type: 'p',
+      text: "When Settings → Localization lists more than one language, the first is the one the form is written in and the others get a Translations section: a field's label and help text (Look tab) and a section's, tab's or step's name (its inspector). Translations save with the layout and version with it. The record form shows them to people reading in that language — their chosen admin language, else the page's, else the browser's — and the text as written where a translation is missing. A suggested translation (for example one drafted by AI) shows marked as a suggestion and stays off records until Approve; the overview counts it as missing until then. The overview counts the missing translations per form. Section names need migration 465; field labels and help text work without it. Record values are translated separately (field translations)."
+    },
+    { type: 'h3', id: 'layout-editor-other-kinds', text: 'Table and PDF layouts' },
+    {
+      type: 'ul',
+      items: [
+        'Table layouts (the columns a collection shows when it is a grid inside another record) edit on a columns strip that looks like the real grid header: column order and width, plus the Apply values and Create with defaults zones.',
+        'File (PDF) layouts edit their sections in form style, labelled as the PDF prints them; Preview with sample values waits for the last change to save (unsaved changes are not in it — Save first), then renders the real PDF in a new tab. Theme, cover, logo, page size, orientation and button label live in Form settings → PDF, which has its own Preview PDF.',
+        'Summary and detail layouts edit on the read view they render as, with the same selection and drag handles.'
+      ]
+    },
+    { type: 'h3', id: 'layout-editor-record-page', text: 'Edit layout from a record' },
+    {
+      type: 'p',
+      text: "On a record page an admin finds Edit layout in the record's More menu (Nivaro admin ItemEdit and efp-new RecordDetail). It switches that page's form into design mode on the layout this record resolved to, with the layouts list, inspector and add panel as side panels over the page. The editor keeps the layout it opened on even if a save changes which layout the record resolves to. Back to record closes it at once; the record re-reads its layout as soon as the last change has saved, so it never shows the form from before your last edit. When the collection has no layout yet, the same menu row reads Create the first form and opens the Layout tab. When the page's ?layout= link names a form that doesn't exist, it reads Form not found and opens the collection's forms instead."
     },
     {
       type: 'p',
-      text: 'Hover a field whose value decides something else: every section it shows or hides, picker it filters, field a rule fills and grid whose lines or row rules read it gets a dashed amber ring, and the field a "Controls n" tag.'
+      text: 'Edits are the same operations, saving and History as in the Layout tab. People who are not administrators never see the menu row and never download the editor: it is a separate chunk, loaded only when an admin turns the mode on (efp-new loads it through the `@nivaro/react/layout-editor` subpath export).'
     },
-    {
-      type: 'p',
-      text: 'Without a preview record, each input shows in grey the value a new record on this form starts with: "Default: Open" from the form\'s defaults, "By rule: …" when a field rule fills it from those defaults, "From Project: …" when a cross-record default copies it from a record a default picks. Yes/no and multi-pick fields show it as a tag. Nothing is saved; preview a record to see its real values instead.'
-    },
-    {
-      type: 'p',
-      text: 'Rule loops are flagged in a banner above the canvas and on the overview: a section that shows only by a field placed inside that same section (once hidden, nobody can change the field back), or fields whose rules, cascades and section rules decide each other in a circle. The fields involved get a Rule loop tag; Show selects the first one. A loop of field rules alone is the same on every form, so the overview says it once above the list.'
-    },
+
+    { type: 'h2', id: 'layout-editor-saving-history', text: 'Saving and history' },
     { type: 'h3', id: 'layout-editor-saving', text: 'Saving, undo and conflicts' },
     {
       type: 'p',
@@ -290,7 +258,116 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-change-note', text: 'Ask why on every save' },
     {
       type: 'p',
-      text: "Form settings → AI review, previews, version history → Ask why on every save makes Save ask for a short reason, or a reason and a ticket link. The reason and ticket lead the version's note in History. Autosave stays off for that layout, and the server refuses a save without them (turning the setting off needs a reason too)."
+      text: "Form settings → Tools → Ask why on every save makes Save ask for a short reason, or a reason and a ticket link. The reason and ticket lead the version's note in History. Autosave stays off for that layout, and the server refuses a save without them (turning the setting off needs a reason too)."
+    },
+    { type: 'h3', id: 'layout-editor-history', text: 'History' },
+    {
+      type: 'p',
+      text: 'History lists the saved versions of the layout — one per editing burst, sections included — with who saved and the change\'s name. "What the last save changed" shows the newest difference first; any version can be compared with the layout now. Restore replaces the layout with that version exactly (sections added since are removed) after keeping the current one as a version first. Versions survive a layout delete.'
+    },
+    {
+      type: 'p',
+      text: 'This session (at the top of History) lists every Undo step since you opened the layout, oldest first, each marked saved or unsaved, and what Redo would bring back. Click a step to go back (or forward) to the layout right after it: that is the same as pressing Undo or Redo that many times, so it saves, or waits for Save, the same way.'
+    },
+    {
+      type: 'p',
+      text: 'Name a version to keep it: older unnamed versions are pruned (the newest 30 are kept), named ones never are. "Name the saved layout…" keeps the layout as it is saved now ("Go-live baseline"); Name / Rename on a version names that one, and clearing the name lets it be pruned again. Compare any later state against a named version like any other.'
+    },
+    {
+      type: 'p',
+      text: 'Show on canvas (from the comparison, or Canvas on a version) marks the difference on the form itself: added fields and sections are outlined green, moved ones amber with the section they came from, changed ones violet with the settings that differ, and removed ones come back faintly in their old place, tagged Removed (they cannot be selected or dragged). With unsaved changes, Review changes beside Save does the same for what you are about to save. Close the comparison from the bar above the canvas.'
+    },
+    {
+      type: 'p',
+      text: 'Explain in words, under a comparison, says what the differences mean for the people filling the form, using the History notes of the saves in between (administrators, with AI set up). The exact differences and the notes stay one click away, and without AI they are what you get. Compare two forms and Merge two forms use the same explanation for two different layouts.'
+    },
+    {
+      type: 'p',
+      text: 'Each section shows, faintly on its frame, who last changed it and when. It is worked out from the versions the layout keeps, so a change older than the kept versions is not named.'
+    },
+    { type: 'h3', id: 'layout-editor-schedule', text: 'Scheduled changes' },
+    {
+      type: 'p',
+      text: 'With unsaved changes, Schedule… beside Save applies them at a time you pick instead of now (for example the morning of a release). They leave the editor at once and nobody sees them until then. At that time the server applies them like a Save, as a version named "Scheduled change by <you>". If someone changed the layout meanwhile, your changes still apply when every one of them fits; if one no longer fits, nothing is applied and you get a notification saying why.'
+    },
+    {
+      type: 'p',
+      text: "The overview shows each form's scheduled changes (when, who, how many) under its name; any administrator can cancel one. A change that could not be applied stays there with the reason until dismissed (or for a week)."
+    },
+
+    { type: 'h2', id: 'layout-editor-preview', text: 'Preview and test' },
+    { type: 'h3', id: 'layout-editor-preview-as', text: 'Preview as' },
+    {
+      type: 'p',
+      text: 'Preview as picks a record: the canvas shows its real values, its steps, and the fields its rules show or hide. "As a role" previews the form the way a role sees it — hidden and read-only fields are marked.'
+    },
+    {
+      type: 'p',
+      text: 'The same Preview as popover holds the other preview modes. A strip above the canvas says what each active mode changes; its × turns that mode off. Nothing in them changes a record.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Compare with a second role: the canvas splits in two, the same record as each role. Fields one role can edit and the other only read (or never see), and sections only one of them sees, are ringed and tagged Differs; hover the tag for both answers. Both halves are preview only: select to edit, but drag on a single canvas.',
+        'Workflow state: pick a state of a pipeline bound to the collection and the form shows it as if the record were there — the fields that state locks, and what each move out of it needs (tagged Needed to move on) — without finding a record in that state.',
+        'What if: pick a field a step’s "Only when" condition reads, then one of the values the condition tests, Empty, or any value. The canvas lays it over the record and tags the steps that appear (Appears) or disappear (Hides, seen with Show hidden).',
+        'Device: Desktop, Tablet (768 px) or Phone (390 px). The form measures its own width, so columns wrap exactly as on that screen.',
+        'Who sees each field: every field is tinted by how many roles see it (every role, most, some, few, none — legend in the strip) with a chip such as 3/5 roles; click the chip for the roles that can edit it, only read it, or never see it. It combines each role’s permissions with this form’s section and lock rules; administrators see everything and are not counted.'
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'layout-editor-testing',
+      text: 'Test records, new-record walkthrough, form cost'
+    },
+    {
+      type: 'p',
+      text: "Test in the top bar has three tabs. Test records: pin up to 5 records that cover the form's important cases, each as a role or as an administrator. They are stored with the layout (versioned with it, never sent to non-admins). Re-check runs the live resolver, the same one as Test a record, for each one against your draft and shows which form it gets, how many fields it sees and what changed: against the last save while changes wait for Save, otherwise against your previous check."
+    },
+    {
+      type: 'p',
+      text: 'New record acts out creating a record on this form as a role, step by step, and stops where the form would stop them: at Next when the form validates each step, otherwise at Save. A required field blocks when the role may not write it, it is locked or read-only, or its step or section is hidden for the values you pick under "Values they enter". Required fields the form never shows are listed under "Saves without". Nothing is written.'
+    },
+    {
+      type: 'p',
+      text: "Cost estimates how many requests a record page fires when it opens on this form: one per picker, three per inline grid, one per widget, panel, relation-path or remote-options field, plus the page's own reads. It warns above the Form cost limit (Form settings → Tools; default 40). It complements form-ready timing, which is measured after release."
+    },
+    {
+      type: 'p',
+      text: 'Check impact, beside Save while changes wait, runs the same check before you save and lists what changes for the pinned records ("Record 284212 loses the Zone field", "lands on another form") and the form cost against its limit. It only reads.'
+    },
+
+    { type: 'h2', id: 'layout-editor-rules', text: 'Rules and checks' },
+    { type: 'h3', id: 'layout-editor-rules-view', text: 'Rules on the canvas' },
+    {
+      type: 'p',
+      text: "The Rules switch in the top bar (on by default, remembered per browser) puts small tags on the canvas that say why each field behaves as it does: Required here or Required field (this form or every form), Needed to Approve (a pipeline move requires it), Read-only here, Read-only field, Calculated, Locked for Finance, Locked in Approved, Hidden here, Hidden field, and Filled by a rule. Hover a tag for the whole sentence; click it to open what causes it: the field's Rules, Look or Advanced tab, the section, the pipeline or the field rules page."
+    },
+    {
+      type: 'p',
+      text: 'Sections carry their rules as sentences too, worded as on the overview: "Shows when Is Sparing is Yes", "Skipped when Project is filled", "Hidden for Finance", "Read-only for Finance".'
+    },
+    {
+      type: 'p',
+      text: 'Hover a field whose value decides something else: every section it shows or hides, picker it filters, field a rule fills and grid whose lines or row rules read it gets a dashed amber ring, and the field a "Controls n" tag.'
+    },
+    {
+      type: 'p',
+      text: 'Without a preview record, each input shows in grey the value a new record on this form starts with: "Default: Open" from the form\'s defaults, "By rule: …" when a field rule fills it from those defaults, "From Project: …" when a cross-record default copies it from a record a default picks. Yes/no and multi-pick fields show it as a tag. Nothing is saved; preview a record to see its real values instead.'
+    },
+    {
+      type: 'p',
+      text: 'Rule loops are flagged in a banner above the canvas and on the overview: a section that shows only by a field placed inside that same section (once hidden, nobody can change the field back), or fields whose rules, cascades and section rules decide each other in a circle. The fields involved get a Rule loop tag; Show selects the first one. A loop of field rules alone is the same on every form, so the overview says it once above the list.'
+    },
+    { type: 'h3', id: 'layout-editor-state-matrix', text: 'Fields by state' },
+    {
+      type: 'p',
+      text: "States in the top bar shows every field against the states of the collection's pipeline (a switcher picks one when several run on it), with an Every state column first. Click a cell to set the field to Editable, Read-only, Required or Hidden. Every state writes the field's own Read-only, Required and Hidden on this form. Read-only in one state adds that state to the field's Read-only when. Required in one state makes the moves that leave the state ask for the value (a record-fields requirement on those moves); that is saved to the pipeline at once, for every form, and its toast has Undo. A field cannot be hidden in one state only, and a state nothing leaves cannot require anything: those choices stay greyed with the reason. A dot on a cell marks a field that is read-only but required, which nobody could fill in."
+    },
+    { type: 'h3', id: 'layout-editor-role-matrix', text: 'Sections by role' },
+    {
+      type: 'p',
+      text: "Roles in the top bar shows every section and tab against every role. Click a cell to make the section Can edit, Read-only or Hidden for that role (the section's Hidden for and Read-only for). Each cell is one change to save. Administrator roles are greyed: they always see and edit everything. Field permissions still apply inside a section."
     },
     { type: 'h3', id: 'layout-editor-checks', text: 'Checks' },
     {
@@ -311,10 +388,22 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'These checks are counted, never guessed. The AI review in Form settings → Tools also reads labels and help text.'
     },
+    { type: 'h3', id: 'layout-editor-db-checks', text: 'Checks against the database' },
+    {
+      type: 'ul',
+      items: [
+        "Stored as (Look tab): the database type and size behind the field, for example nvarchar(50). A warning shows when this form's default value, the input mask or the label cannot fit: a default longer than the column or past its digits, a mask that stores more characters than the column holds, or a label longer than the field's width shows.",
+        'Check the width against stored values (Look tab, single-line fields): reads the newest 5,000 stored values, never the whole table, and says how long 95% of them are and how much the current width shows. When the width cuts them off, or is far wider than needed, Use ⅓ (or the width it names) sets it in one Undo step.',
+        "Options for a record (Picker tab): pick a saved record and see the options this picker would offer it — the cascade filters and option filter worked out as the record form works them out (the draft you are editing included), then the picker exclusions — with the count left after each step and the first 50 options. When the target collection has a picker filter, the count it would leave is shown too: the record form's picker does not apply it; enforced API writes do.",
+        "Placements that point at nothing (overview): placements whose column was dropped, whose widget was deleted, whose grid's table or link column is gone (relations are a claim: the table and column must exist) or whose section no longer exists. Remove it / Remove N takes them off that layout in one save, with a version kept like any other edit."
+      ]
+    },
+
+    { type: 'h2', id: 'layout-editor-ai', text: 'Commands and AI' },
     { type: 'h3', id: 'layout-editor-commands', text: 'Commands (⌘K)' },
     {
       type: 'p',
-      text: 'Commands in the top bar (⌘K or Ctrl+K) takes a change in plain words. Enter shows every change it will make, in sentences; nothing is saved until Apply, and one Apply is one undo step. Names match by label or key, in any case, with partial words and small typos; a name that fits two things asks you to be more specific.'
+      text: 'Commands in the top bar (⌘K or Ctrl+K) takes a change in plain words. Enter shows every change it will make, in sentences; nothing changes until Apply, and one Apply is one undo step that waits for Save like any other change. Names match by label or key, in any case, with partial words and small typos; a name that fits two things asks you to be more specific.'
     },
     {
       type: 'ul',
@@ -350,7 +439,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-ai-tools', text: 'AI tools' },
     {
       type: 'p',
-      text: 'The AI button in the top bar (administrators) holds three reviews. None of them changes the form by itself: every fix is shown in sentences first, and one Apply is one undo step that waits for Save like any other change. Findings appear as tags on the canvas; click one in the list to select that field or section, and Clear marks removes the tags.'
+      text: 'The AI tools button in the top bar (administrators) holds three reviews. None of them changes the form by itself: every fix is shown in sentences first, and one Apply is one undo step that waits for Save like any other change. Findings appear as tags on the canvas; click one in the list to select that field or section, and Clear marks removes the tags.'
     },
     {
       type: 'ul',
@@ -372,7 +461,7 @@ export const layoutEditor: DocSection = {
     {
       type: 'ul',
       items: [
-        'A step\'s "Only when" and a field\'s "Read-only when" → Write with AI. "Hide this step when Is Sparing is yes or Warehouse is 3" becomes conditions the step checks. Before Apply you see how many of the newest 500 records it shows on (or locks on), next to today\'s count. Apply is one undo step and is saved with the form.',
+        'A step\'s "Only when" and a field\'s "Read-only when" → Write with AI. "Hide this step when Is Sparing is yes or Warehouse is 3" becomes conditions the step checks. Before Apply you see how many of the newest 500 records it shows on (or locks on), next to today\'s count. Apply is one undo step and saves with the form.',
         "Steps can show and hide by a field's value; single fields cannot. A field locks by pipeline state or by role, not by another field's value. The AI says so instead of guessing.",
         'Picker tab → Narrow the options → Write with AI: "only regions of the record\'s zone" becomes a cascade filter or an option filter. Pick a record to see its options today and with the change, side by side. Use this adds it to the field\'s every-form change, which you confirm.',
         'Rules tab → Default for new records → Write a rule with AI: "Default Zone from the project\'s zone" becomes a field rule, tried on five records (now, after the rule, and what a new record gets). It is saved only when you confirm, and then runs on every form and API write.',
@@ -382,7 +471,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-ai-wording', text: 'AI wording' },
     {
       type: 'p',
-      text: 'Form settings → AI review → AI wording (administrators) checks the words on the form. Each tool lists its changes as sentences with a checkbox; Apply sends the ticked ones through the editor as one undo step, and nothing is saved until Save. A change whose text was edited since you asked is greyed out — run the tool again.'
+      text: 'Form settings → Tools → AI wording (administrators) checks the words on the form. Each tool lists its changes as sentences with a checkbox; Apply sends the ticked ones through the editor as one undo step, and nothing is saved until Save. A change whose text was edited since you asked is greyed out — run the tool again.'
     },
     {
       type: 'ul',
@@ -399,14 +488,10 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Without AI, Glossary terms, Placeholders, Choice labels and Plain language still work from rules; Section intros and Translations need AI.'
     },
-    {
-      type: 'p',
-      text: "API (administrators): `GET /api/ai-design/layouts/:id/text/locales` and `POST /api/ai-design/layouts/:id/text/:tool` (tool = glossary, intros, placeholders, choices, reading or translate; translate takes `{ locale }`) answer proposals and never write. `POST /api/ai-design/layouts/:id/text/choices/field` with `{ field, choices: [{ value, text }] }` relabels the field's own choices and is logged with the old ones. Translations are stored on the placement as `overrides.i18n[locale] = { label, help, draft: true }`."
-    },
     { type: 'h3', id: 'layout-editor-ai-forms', text: 'Build a form with AI' },
     {
       type: 'p',
-      text: 'Admins, when AI is set up. New form → Start with AI makes a new form; the AI button in the editor rebuilds the open one. Every proposal is listed in plain sentences first. Nothing is written until Apply (or Create form), it lands as one undo step, and it still waits for Save.'
+      text: 'Admins, when AI is set up. New form → Start with AI makes a new form; the AI button in the top bar of the editor rebuilds the open one (AI tools, beside it, holds the reviews above). Every proposal is listed in plain sentences first. Nothing is written until Apply (or Create form), it lands as one undo step, and it still waits for Save.'
     },
     {
       type: 'ul',
@@ -437,39 +522,20 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'A connected assistant (Claude or ChatGPT over the MCP connector, or Claude Code) can propose changes to a form with the propose_layout_ops tool. A proposal never changes the form: Proposals in the top bar shows how many wait, who proposed each one and through which app, the note, and every change in plain words. Try on canvas applies it to your draft as one undo step (nothing is saved until Save, unless Autosave is on); Keep marks it applied, Take back undoes it, and Reject closes it. A proposal that no longer fits the form says why and cannot be tried.'
     },
+
+    { type: 'h2', id: 'layout-editor-across-forms', text: 'Across forms' },
     {
       type: 'p',
-      text: 'Explain in words, under a comparison, says what the differences mean for the people filling the form, using the History notes of the saves in between (administrators, with AI set up). The exact differences and the notes stay one click away, and without AI they are what you get. Compare two forms and Merge two forms use the same explanation for two different layouts.'
-    },
-    { type: 'h3', id: 'layout-editor-history', text: 'History' },
-    {
-      type: 'p',
-      text: 'History lists the saved versions of the layout — one per editing burst, sections included — with who saved and the change\'s name. "What the last save changed" shows the newest difference first; any version can be compared with the layout now. Restore replaces the layout with that version exactly (sections added since are removed) after keeping the current one as a version first. Versions survive a layout delete.'
+      text: 'The overview looks across all the forms of a collection as well as at each one. Each form carries a small sketch: its sections as blocks, its fields as bars as wide as they are on the form, steps and tabs as a strip, page cards (pipeline, comments) as thin bars. The sketch is drawn from the saved layout and changes the next time the overview loads after a save.'
     },
     {
-      type: 'p',
-      text: 'This session (at the top of History) lists every Undo step since you opened the layout, oldest first, each marked saved or unsaved, and what Redo would bring back. Click a step to go back (or forward) to the layout right after it: that is the same as pressing Undo or Redo that many times, so it saves, or waits for Save, the same way.'
-    },
-    {
-      type: 'p',
-      text: 'Name a version to keep it: older unnamed versions are pruned (the newest 30 are kept), named ones never are. "Name the saved layout…" keeps the layout as it is saved now ("Go-live baseline"); Name / Rename on a version names that one, and clearing the name lets it be pruned again. Compare any later state against a named version like any other.'
-    },
-    {
-      type: 'p',
-      text: 'Show on canvas (from the comparison, or Canvas on a version) marks the difference on the form itself: added fields and sections are outlined green, moved ones amber with the section they came from, changed ones violet with the settings that differ, and removed ones come back faintly in their old place, tagged Removed (they cannot be selected or dragged). With unsaved changes, Review changes beside Save does the same for what you are about to save. Close the comparison from the bar above the canvas.'
-    },
-    {
-      type: 'p',
-      text: 'Each section shows, faintly on its frame, who last changed it and when. It is worked out from the versions the layout keeps, so a change older than the kept versions is not named.'
-    },
-    { type: 'h3', id: 'layout-editor-schedule', text: 'Scheduled changes' },
-    {
-      type: 'p',
-      text: 'With unsaved changes, Schedule… beside Save applies them at a time you pick instead of now (for example the morning of a release). They leave the editor at once and nobody sees them until then. At that time the server applies them like a Save, as a version named "Scheduled change by <you>". If someone changed the layout meanwhile, your changes still apply when every one of them fits; if one no longer fits, nothing is applied and you get a notification saying why.'
-    },
-    {
-      type: 'p',
-      text: "The overview shows each form's scheduled changes (when, who, how many) under its name; any administrator can cancel one. A change that could not be applied stays there with the reason until dismissed (or for a week)."
+      type: 'ul',
+      items: [
+        'Fields labelled differently: a field that reads "Vendor" on one form and "Supplier" on another is listed with every label and the forms that use it. Pick the label to keep and every form gets it at once (one change per form, each in that form\'s History). The field\'s own label clears the label set on each form. A label hidden on purpose is left alone.',
+        'Near copies: two forms of the same kind that are 90% or more the same (the same fields in the same sections with the same width, label and visibility) are listed with what differs. Compare side by side opens both; Make … the parent links the copy to the other form so fields added there later appear on it too. The copy keeps every field it has: remove the ones it repeats unchanged in its editor to let changes flow through.',
+        'Compare puts two forms side by side, read only, each drawn as people see it. "Only here" marks fields and sections the other form lacks and "Differs" marks fields set up differently (its tip says how: section, width, label, visibility, other settings). Click a field to select it on both. List the differences gives the same as a table. Pick either side from its menu, or Swap.',
+        'Find a field searches every collection by field name or label and lists each form, summary, detail, PDF or grid that places the field, with its section and width there and its label when the form changes it, including forms that inherit it from a parent. Click one to open it in the editor.'
+      ]
     },
     { type: 'h3', id: 'layout-editor-every-form', text: 'Every form at once' },
     {
@@ -488,75 +554,18 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Each changed form saves its own version first (its History shows "Before <the change>"), so any one form can be put back from History. Right after a run, Undo this bulk change puts every changed form back at once — except a form someone changed since, which you restore from its History.'
     },
-    {
-      type: 'h3',
-      id: 'layout-editor-testing',
-      text: 'Test records, new-record walkthrough, form cost'
-    },
-    {
-      type: 'p',
-      text: "Test in the top bar has three tabs. Test records: pin up to 5 records that cover the form's important cases, each as a role or as an administrator. They are stored with the layout (versioned with it, never sent to non-admins). Re-check runs the live resolver, the same one as Test a record, for each one against your draft and shows which form it gets, how many fields it sees and what changed: against the last save while changes wait for Save, otherwise against your previous check."
-    },
-    {
-      type: 'p',
-      text: 'New record acts out creating a record on this form as a role, step by step, and stops where the form would stop them: at Next when the form validates each step, otherwise at Save. A required field blocks when the role may not write it, it is locked or read-only, or its step or section is hidden for the values you pick under "Values they enter". Required fields the form never shows are listed under "Saves without". Nothing is written.'
-    },
-    {
-      type: 'p',
-      text: "Cost estimates how many requests a record page fires when it opens on this form: one per picker, three per inline grid, one per widget, panel, relation-path or remote-options field, plus the page's own reads. It warns above the Form cost limit (Form settings → AI review, previews, version history; default 40). It complements form-ready timing, which is measured after release."
-    },
-    {
-      type: 'p',
-      text: 'Check impact, beside Save while changes wait, runs the same check before you save and lists what changes for the pinned records ("Record 284212 loses the Zone field", "lands on another form") and the form cost against its limit. It only reads.'
-    },
-    { type: 'h3', text: 'Inherited layouts' },
-    {
-      type: 'p',
-      text: 'A layout that inherits from a parent shows the parent\'s placements on its canvas marked "from <parent>" and locked (an inherited step or tab gets a small dot instead, with the parent\'s name in its tip). The inspector offers Override here (copies the placement into this layout as the parent last saved it, then editable) and Edit in <parent>.'
-    },
-    {
-      type: 'p',
-      text: "What this layout changes of the parent's is tagged \"Overrides parent\". Select it and the inspector offers Reset to parent: this layout's copy goes and the parent's shows again, as one Undo step. Resetting a section also resets the fields in it that the parent places; fields only this layout places move to Ungrouped. The States and Roles views mark rows the same way, with Reset or Override beside the name."
-    },
 
-    { type: 'h2', id: 'layout-editor-across-forms', text: 'Across forms' },
-    {
-      type: 'p',
-      text: 'The overview looks across all the forms of a collection as well as at each one. Each form carries a small sketch: its sections as blocks, its fields as bars as wide as they are on the form, steps and tabs as a strip, page cards (pipeline, comments) as thin bars. The sketch is drawn from the saved layout and changes the next time the overview loads after a save.'
-    },
+    { type: 'h2', id: 'layout-editor-reuse', text: 'Reusing forms and sections' },
     {
       type: 'ul',
       items: [
-        'Fields labelled differently: a field that reads "Vendor" on one form and "Supplier" on another is listed with every label and the forms that use it. Pick the label to keep and every form gets it at once (one change per form, each in that form\'s History). The field\'s own label clears the label set on each form. A label hidden on purpose is left alone.',
-        'Near copies: two forms of the same kind that are 90% or more the same (the same fields in the same sections with the same width, label and visibility) are listed with what differs. Compare side by side opens both; Make … the parent links the copy to the other form so fields added there later appear on it too. The copy keeps every field it has: remove the ones it repeats unchanged in its editor to let changes flow through.',
-        'Compare puts two forms side by side, read only, each drawn as people see it. "Only here" marks fields and sections the other form lacks and "Differs" marks fields set up differently (its tip says how: section, width, label, visibility, other settings). Click a field to select it on both. List the differences gives the same as a table. Pick either side from its menu, or Swap.',
-        'Find a field searches every collection by field name or label and lists each form, summary, detail, PDF or grid that places the field, with its section and width there and its label when the form changes it, including forms that inherit it from a parent. Click one to open it in the editor.'
+        'Copy a section to another layout: drag a section from the canvas onto a layout in the Layouts list, or select it and use Copy to layout… in the inspector (which also reaches other collections). It lands at the end of that layout with its tabs, fields and settings. Fields already on that form stay where they are.',
+        'Section library: select a section and use Save to library…. Saved sections show under Add → Section library on every collection; a click adds one after the selection as one undo step. Remove one with the × beside it — forms keep their copies.',
+        'Layout templates: ⋯ → Save as template… in the editor saves the whole form (sections, panels, header, how it behaves). New form → Start with → Template makes a new form from one. Rules for who gets a form, defaults and links to other layouts stay behind.',
+        "Another collection: fields with no field of the same name get their closest match (by name or label), which you can change or set to Leave out. Step conditions, skip-if-filled, field swaps, lock conditions and grid bindings are written in the other collection's terms and are left out.",
+        'New form → Start with → Field list: paste names (one per line or separated by commas) or upload a CSV or text file. Names are matched to fields by name or label, with close spellings marked "?"; names with no match are left out. The form gets one section with the matched fields in that order.',
+        "New form from this record: Test a record on the overview, or the editor's ⋯ while previewing a record (also from a record's Edit layout), makes a form with one section holding the fields that record has filled in, in field order. New form → Start with → A record does the same."
       ]
-    },
-    {
-      type: 'pre',
-      code: `GET /api/collection-layouts/crossform?collection=   → { data: { thumbs: { <layout id>: { blocks, more } }, labels: [{ field, field_label, variants }], duplicates: [{ a, b, similarity, identical, only_a, only_b, differing, parent_id, can_link }] } }  (admin)
-GET /api/collection-layouts/field-search?q=&collection=   → { data: { fields: [{ collection, field, label, placements: [{ layout_id, layout_name, layout_type, section, width, visible, label, label_hidden, inherited_from }] }], truncated } }  (admin; q at least 2 characters)`
-    },
-
-    { type: 'h2', id: 'layout-editor-other-kinds', text: 'Table and PDF layouts' },
-    {
-      type: 'ul',
-      items: [
-        'Table layouts (the columns a collection shows when it is a grid inside another record) edit on a columns strip that looks like the real grid header: column order and width, plus the Apply values and Create with defaults zones.',
-        'File (PDF) layouts edit their sections in form style, labelled as the PDF prints them; Preview with sample values waits for the last change to save (unsaved changes are not in it — Save first), then renders the real PDF in a new tab. Theme, cover, logo, page size, orientation and button label live in Form settings → PDF, which has its own Preview PDF.',
-        'Summary and detail layouts edit on the read view they render as, with the same selection and drag handles.'
-      ]
-    },
-
-    { type: 'h2', id: 'layout-editor-record-page', text: 'Edit layout from a record' },
-    {
-      type: 'p',
-      text: "On a record page an admin sees Edit layout in the record header (Nivaro admin ItemEdit and efp-new RecordDetail). It switches that page's form into design mode on the layout this record resolved to, with the layouts list, inspector and add panel as side panels over the page. The editor keeps the layout it opened on even if a save changes which layout the record resolves to. Back to record closes it at once; the record re-reads its layout as soon as the last change has saved, so it never shows the form from before your last edit. When the collection has no layout yet, the button links to the Layout tab to create the first form. When the page's ?layout= link names a form that doesn't exist, the button says Form not found and links to the collection's forms instead."
-    },
-    {
-      type: 'p',
-      text: 'Edits are the same operations, saving and History as in the Layout tab. People who are not administrators never see the button and never download the editor: it is a separate chunk, loaded only when an admin turns the mode on (efp-new loads it through the `@nivaro/react/layout-editor` subpath export).'
     },
 
     { type: 'h2', id: 'layout-editor-usage', text: 'Usage: how a form is used' },
@@ -577,28 +586,8 @@ GET /api/collection-layouts/field-search?q=&collection=   → { data: { fields: 
       ]
     },
     {
-      type: 'pre',
-      code: `POST /api/layout-usage/beacon            { events: [{ layout_id, collection, item, open, saved, abandoned_step, steps }] } → 204 (signed in; max 20)
-GET  /api/layout-usage/:layoutId/today   → { data: { ready, day, opens, people, records } }              (admin)
-GET  /api/layout-usage/:layoutId/friction?days=30 → { data: { opens, saves, abandons, steps, changed_after_save } } (admin)
-GET  /api/layout-usage/co-changes/:collection → { data: { revisions, fields, pairs: [{ a, b, together, jaccard }] } } (admin)`
-    },
-    {
       type: 'note',
       text: 'Usage is kept per form per day (nivaro_layout_usage_daily, nivaro_layout_usage_seen) and deleted after 180 days by the nightly layout-usage-prune job. Only counts are stored; people and records are counted, never listed.'
-    },
-
-    { type: 'h2', id: 'layout-editor-reuse', text: 'Reusing forms and sections' },
-    {
-      type: 'ul',
-      items: [
-        'Copy a section to another layout: drag a section from the canvas onto a layout in the Layouts list, or select it and use Copy to layout… in the inspector (which also reaches other collections). It lands at the end of that layout with its tabs, fields and settings. Fields already on that form stay where they are.',
-        'Section library: select a section and use Save to library…. Saved sections show under Add → Section library on every collection; a click adds one after the selection as one undo step. Remove one with the × beside it — forms keep their copies.',
-        'Layout templates: ⋯ → Save as template… in the editor saves the whole form (sections, panels, header, how it behaves). New form → Start with → Template makes a new form from one. Rules for who gets a form, defaults and links to other layouts stay behind.',
-        "Another collection: fields with no field of the same name get their closest match (by name or label), which you can change or set to Leave out. Step conditions, skip-if-filled, field swaps, lock conditions and grid bindings are written in the other collection's terms and are left out.",
-        'New form → Start with → Field list: paste names (one per line or separated by commas) or upload a CSV or text file. Names are matched to fields by name or label, with close spellings marked "?"; names with no match are left out. The form gets one section with the matched fields in that order.',
-        "New form from this record: Test a record on the overview, or the editor's ⋯ while previewing a record (also from a record's Edit layout), makes a form with one section holding the fields that record has filled in, in field order. New form → Start with → A record does the same."
-      ]
     },
 
     { type: 'h2', id: 'layout-editor-ops', text: 'Suggestions, dependencies and environments' },
@@ -621,17 +610,6 @@ GET  /api/layout-usage/co-changes/:collection → { data: { revisions, fields, p
       type: 'p',
       text: "Row menu → Compare with another environment (or Form settings → Tools) reads another environment's copy of this layout and lists what would change here: settings, sections and tabs, fields and order. The other copy comes from an API in the Environments registry (read by this server with that component's token), or from an uploaded file: Download this layout on the other side, or a Config Diff snapshot. The copy is matched by link name, then by name, and you can pick another. Apply here saves a version of this layout first, so History → Restore undoes it. Which layout is the default and its place in the list stay as they are here. Settings that cannot be carried (a template or layout this environment does not have, a name already taken, a value this instance refuses) are listed and left alone. Nothing is ever sent from here to the other environment."
     },
-    {
-      type: 'pre',
-      code: `GET  /api/collection-layouts/:id/dependencies        (admin) → { layout, groups, nodes, extensions }
-GET  /api/collection-layouts/promote/sources         (admin) → other environments' APIs
-GET  /api/collection-layouts/:id/export              (admin) → layout file
-POST /api/collection-layouts/:id/promote/preview     (admin) { component_id | file, remote_layout_id? }
-POST /api/collection-layouts/:id/promote/apply       (admin) { …same, base_rev }  409 = changed since
-POST /api/layout-change-requests                     { collection, item, layout_id?, field?, message }
-GET  /api/layout-change-requests?collection=&status= (admin)
-POST /api/layout-change-requests/:id/resolve         (admin) { decision: 'accept' | 'decline', note? }`
-    },
 
     { type: 'h2', id: 'layout-editor-help', text: 'Help, notes and the form map' },
     {
@@ -643,13 +621,6 @@ POST /api/layout-change-requests/:id/resolve         (admin) { decision: 'accept
         'Why can\'t I edit this? On a record, pointing at a locked field names the exact rule behind it: the role or pipeline step a lock rule lists, the section locked for the role and the form it is on, or the role\'s field permissions. Admins also see a "N fields hidden by rules" note above the form that lists each hidden field and the rule that hides it (step rules, sections hidden from roles, fields turned off on the form).'
       ]
     },
-    {
-      type: 'pre',
-      code: `GET /api/help-videos/for-form?collection=   → { data: { fields: { <field>: [video] }, sections: { <group key>: [video] } } }
-GET /api/collection-layouts/why?collection=&item=
-     → { data: { layout: { id, name, why }, role, record_lock, locks: { <field>: { kind, text } }, hidden? } }
-     // as the viewer; 404 when they cannot read the record; \`hidden\` for administrators only`
-    },
 
     { type: 'h2', id: 'layout-editor-follow', text: 'Owner, watching and sharing a form' },
     {
@@ -660,11 +631,13 @@ GET /api/collection-layouts/why?collection=&item=
         'Preview link: Share → Preview link makes a read-only link that lasts 7, 14, 30 or 90 days, for people who are not administrators. It shows the last saved version of the form, with only the fields you may read, and never shows record data. Anyone with the link can leave a comment on a field or on the whole form; comments appear under Share → Comments from previews (the count shows on the Share button), where Select this field finds the field on the canvas and Resolve removes the comment. Turn off ends a link for everyone.'
       ]
     },
+
     { type: 'h2', id: 'layout-editor-whats-new', text: "What's new on this form" },
     {
       type: 'p',
       text: 'The first time someone opens a record form after it changed, a short note at the top of the form lists what is new, what moved to another section and what is no longer on the form, with who changed it and when. It only names fields that person may read. Dismissing it hides it for that person until the next change; the person who saved the change never sees it, and nothing shows the very first time someone opens a form.'
     },
+
     { type: 'h2', id: 'layout-editor-flows', text: 'React to form changes in flows and webhooks' },
     {
       type: 'p',
@@ -700,165 +673,65 @@ LAYOUT_EDIT_WARNING=Layouts here are replaced every night from development. Make
     },
     {
       type: 'pre',
-      code: `GET  /api/collection-layouts/overview?collection=orders
+      code: `# Which form a record gets, checks and health (administrators)
+GET  /api/collection-layouts/overview?collection=orders
      → { data: { rows: [...], warning: string | null } }   // sectioned, in /active order
-
 GET  /api/collection-layouts/explain?collection=orders&item=42[&role_id=<uuid>][&slug=x]
      → { data: { layout_id, reason, checked: [{ layout_id, matched, why }] } }
-
 GET  /api/collection-layouts/lint-context?collection=orders
      → { data: { fields, roles, requirements } }   // what the Checks panel reads
 GET  /api/collection-layouts/health?collection=orders
      → { data: { rows: [{ layout_id, score, costs, counts, unreachable_fields }] } }
 GET  /api/collection-layouts/coverage?collection=orders[&fresh=1]
      → { data: { sampled, limit, no_form, rule_error, rows: [{ layout_id, records, rule_matches }] } }
+GET  /api/collection-layouts/field-access?collection=orders
+     → { data: { roles: [{ role: { id, name, admin_access }, can_read, can_update,
+                           hidden_fields, readonly_fields }] } }   // every role's field permissions
+GET  /api/collection-layouts/:id/dependencies
+     → { layout, groups, nodes, extensions }   // what relies on the layout
 
+# Create, read and change a layout (administrators)
 POST /api/collection-layouts  { collection, name, layout_type?, slug?, seed_fields?: true | string[],
                                 template_id?, field_map? }
      // seed_fields: one section "Main" holding every visible field ("Create first form"),
      // or exactly the named fields in that order; template_id: a saved form template
      // (field_map renames its fields, { source: target | null })
-
-GET    /api/collection-layouts/templates?kind=form|section   → { data: [{ id, kind, name, fields, ... }] }
-POST   /api/collection-layouts/templates  { kind, name, description?, layout_id, group_key?, bundle? }
-PATCH  /api/collection-layouts/templates/:id  { name?, description? }
-DELETE /api/collection-layouts/templates/:id
-POST   /api/collection-layouts/blocks/plan  { source: { template_id } | { layout_id, group_key },
-                                              target_collection, target_bundle, field_map?, index? }
-     → { ops, already, unmapped, dropped }   // read-only; the editor applies the ops
-POST   /api/collection-layouts/:id/copy-section  { source_layout_id, group_key, field_map? }
-     → { bundle, group_key, already, unmapped, dropped }   // applied through :id's ops
-
 GET  /api/collection-layouts/:id/bundle
      → { layout, groups, placements, rev }
-
 POST /api/collection-layouts/:id/ops  { ops: LayoutOp[], base_rev, note?, reason?, ticket? }
      → the new bundle (applied all or nothing, at most 5000 ops)
      409 { error: 'stale', bundle }       // someone saved since base_rev
      400 { error, op_index }              // an op was refused (also a rename onto a taken name)
      400 { error, code: 'CHANGE_NOTE_REQUIRED' }   // the layout's change_note asks for a reason (+ ticket)
-
-Socket (live operations topic, administrators): ops:join { topic: 'layout:<id>' }
+POST /api/field-config/:collection/project  { assignments: [...] }
+     // the field rows GET /field-config would return if these placements were saved
+     // (read-only: the canvas renders unsaved drafts through it; flushes no cache, pushes nothing)
+Socket (live operations topic): ops:join { topic: 'layout:<id>' }
      ops:signal { topic, kind: 'select', state: 'start' | 'stop', target: '<design target key>' }
      ← ops:changed { topic, viewers: [{ id, name, selected? }] }   // who has the layout open
 
-POST /api/field-config/:collection/project  { assignments: [...] }   // administrators
-     // the field rows GET /field-config would return if these placements were saved
-     // (read-only: the canvas renders unsaved drafts through it; flushes no cache, pushes nothing)
-
-GET  /api/collection-layouts/field-access?collection=orders      // administrators
-     → { data: { roles: [{ role: { id, name, admin_access }, can_read, can_update,
-                           hidden_fields, readonly_fields }] } }   // every role's field permissions
-
-GET  /api/collection-layouts/bulk/fields?collection=orders
-     → { data: [{ field, forms }] }   // every field placed on a form, with how many forms hold it
-
-POST /api/collection-layouts/bulk/preview  { collection, action, labels?, layout_ids? }
-     → { data: { label, forms: [{ layout_id, name, rev, status: 'change'|'same'|'skip',
-                                  reason, changes, notes }], values } }
-     // action: { kind: 'retire', field }
-     //       | { kind: 'change', change: { type: 'place_after'|'place_before', field, anchor }
-     //                                 | { type: 'set_width', field, width: 12|6|4|3 }
-     //                                 | { type: 'set_flag', field, flag: 'required'|'readonly'|'hidden', on }
-     //                                 | { type: 'remove', field } }
-     //       | { kind: 'macro', name, steps }
-     // values (retire only): { populated, total, note } — records that still hold a value
-
-POST /api/collection-layouts/bulk/apply  { …same, revs: { [layout_id]: rev } }
-     → { data: { label, forms: [{ layout_id, status: 'applied'|'same'|'skipped'|'failed',
-                                  reason, version_id, rev }] } }
-     // a form whose rev moved since the preview is skipped
-
-POST /api/collection-layouts/bulk/undo  { collection, items: [{ layout_id, version_id, rev }] }
-     // restores each form unless it changed since the bulk change
-
-GET  /api/collection-layouts/macros              // your own macros
-POST /api/collection-layouts/macros  { id?, name, collection, steps, source_layout_id? }
-POST /api/collection-layouts/macros/:id/delete
-
-POST /api/ai-design/layouts/:id/check-changes  { before?, after }   // administrators; 503 without AI
-     → { data: { status: 'skipped', reason, changes } | { status: 'checked', changes,
-                 warnings: [{ message, field, field_label, section, section_label, roles }], dropped } }
-POST /api/ai-design/layouts/:id/entry-order  { bundle? }   // the draft; proposals only
-     → { data: { change_sets: [{ title, steps, ops, group_key, why }], dropped, checked } }
-POST /api/ai-design/layouts/:id/sensitive  { bundle? }
-     → { data: { findings: [{ field, class, seen_by, broad, suggest, section, change_set }], note } }
-
-GET  /api/layout-collab/:id                       // administrators
-     → { data: { owner: { id, name } | null, watching, watchers: [{ id, name }] } }
-PUT  /api/layout-collab/:id/watch  { on }          // administrators — watch or stop watching
-PUT  /api/layout-collab/:id/owner  { user_id }     // administrators — null clears the owner
-GET  /api/layout-collab/owners                     // administrators → { data: { <layout id>: { id, name } } }
-GET  /api/layout-collab/:id/whats-new              // anyone who may read the collection
-     → { data: { rev, lines: string[] | null, mark, changed_at?, changed_by? } }
-POST /api/layout-collab/:id/whats-new/seen  { rev } // dismiss (or remember a first open)
-GET|POST /api/layout-collab/:id/preview-links  { days }   // administrators; 201 { data: { token, path, expires_at, … } }
-DELETE   /api/layout-collab/preview-links/:linkId         // administrators — turn a link off
-GET      /api/layout-collab/:id/preview-comments          // administrators
-DELETE   /api/layout-collab/:id/preview-comments/:commentId
-GET  /api/form-preview/:token                      // public page (expiring token)
-POST /api/form-preview/:token/comments  { field, name, text }   // public; 20 per 10 minutes per address
-
-GET  /api/collection-layouts/:id/versions/:versionId/bundle   → { data: { bundle, version } }
-PATCH /api/collection-layouts/:id/versions/:versionId  { name | null }   // name: kept beyond the 30
-POST /api/collection-layouts/:id/versions/name  { name }   // name the layout as saved now
-GET  /api/collection-layouts/:id/section-changes
-     → { data: { [section key]: { by, by_id, at } } }   // who last changed each section
-
-GET  /api/collection-layouts/schedules?collection=orders[&layout_id=5]
-     → { data: [{ id, layout_id, run_at, status, op_count, created_by_name, note, error }] }
-POST /api/collection-layouts/:id/schedules  { ops, base_rev, run_at, note? }
+# History and scheduled changes (administrators)
+GET   /api/collection-layouts/:id/versions/:versionId/bundle   → { data: { bundle, version } }
+PATCH /api/collection-layouts/:id/versions/:versionId  { name | null }   // named: kept beyond the 30
+POST  /api/collection-layouts/:id/versions/name  { name }   // name the layout as saved now
+GET   /api/collection-layouts/:id/section-changes
+      → { data: { [section key]: { by, by_id, at } } }   // who last changed each section
+GET   /api/collection-layouts/schedules?collection=orders[&layout_id=5]
+      → { data: [{ id, layout_id, run_at, status, op_count, created_by_name, note, error }] }
+POST  /api/collection-layouts/:id/schedules  { ops, base_rev, run_at, note? }
 PATCH /api/collection-layouts/schedules/:sid  { run_at }   // pending only
 DELETE /api/collection-layouts/schedules/:sid              // cancel (or dismiss a failed one)
 
-POST /api/ai-design/layouts/compose  { collection, text }            // administrators; AI
-POST /api/ai-design/layouts/compose/file  multipart: collection, mode (picture | sop), note?, file
-     → { data: { form: { name, layout: 'steps' | 'sections', groups: [{ label, fields, source }],
-                         locks, requirements, candidates, dropped, explanation },
-                 read_as?, states? } }    // a proposal: the editor turns it into ops
-POST /api/ai-design/layouts/:id/slim  { role_id }
-     → { data: { role, parent, days, revisions, people, plan: { keep, drop, hide_groups } | null } }
-POST /api/ai-design/layouts/:id/sections-by-meaning  { groups: [{ key, label, fields }], fields }
-     → { data: { suggestions: [{ field, group_key, reason }], dropped } }
-
-POST /api/collection-layouts/:id/test-records   // administrators; reads only
+# Test records and the new-record walkthrough (administrators; read only)
+POST /api/collection-layouts/:id/test-records
      { records: [{ item, role_id? }], draft?: { record_conditions, conditions, is_active, sort, layout_type }, fields?: [...] }
      → { data: { results: [{ item, role_id, found, role, saved: { layout_id, name, why }, draft: {...},
                              values: { <field>: value }, access }] } }   // at most 10 records
-
-POST /api/collection-layouts/:id/walkthrough-access   { role_id?, draft? }   // administrators
+POST /api/collection-layouts/:id/walkthrough-access  { role_id?, draft? }
      → { data: { role, role_may_open, can_create, create_fields, hidden_fields,
                  new_record_form: { layout_id, name, why }, column_defaults } }
 
-GET  /api/widgets-internal/:id/placements
-     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget
-
-POST /api/ai-design/layouts/:id/persona-test  { role_id, goal? }            // administrators
-     → { data: { role, walkthrough, summary, steps, findings, dropped, ai_configured } }
-POST /api/ai-design/layouts/:id/visual-critique  { sections, canvas, image? }  // administrators
-     → { data: { summary, comments, dropped, used_image, image_skipped, ai_configured } }
-GET  /api/ai-design/layouts/:id/autofill-corrections?days=90                 // administrators
-     → { data: { days, documents, fields: [{ field, proposed, corrected, kept, share, suggest }] } }
-
-POST /api/ai/field-fill  { collection, layout_id, field, item_id?, values? }   // record editors
-     → { data: { value, missing } }   // the prompt is read from the layout, never sent
-     403 when the field has no AI fill on that form, the role may not open the form,
-         or the person may not change the record / field; 429 past 30 fills in 5 minutes
-
-# AI rule writers — administrators; propose only, never write. 503 when AI is not set up.
-POST /api/ai-design/layouts/:id/rule  { text, target?: { kind: 'step', group } | { kind: 'lock', field } }
-     → { data: { proposal, ops, sentence, replaces, dropped, notes,
-                 test: { checked, matched, current, roles } } }   // newest 500 records
-POST /api/ai-design/layouts/:id/cascade  { field, text }
-     → { data: { related, cascade_filters, option_filter, sentences, dropped } }
-POST /api/ai-design/layouts/:id/field-rule  { text, field? }
-     → { data: { rule, sentence, dry_run: [{ id, label, before_label, after_label, new_record_label }] } }
-     // save with POST /api/field-rules { ...rule }
-POST /api/ai-design/layouts/:id/validation  { field, ai?: false }
-     → { data: { checked, empty, capped, current, suggestions: [{ rule, sentence, source, fails }] } }
-     // newest 5,000 values; the AI sees value shapes (masks, lengths, ranges), never values
-
-// Inspector reads (administrators, read-only)
+# Inspector reads (administrators; read only)
 GET  /api/layout-inspect/:collection/columns
      → { data: { <column>: { type, max_length, precision, scale, nullable } } }
 GET  /api/layout-inspect/:collection/value-lengths?field=code
@@ -874,21 +747,150 @@ POST /api/layout-inspect/picker-preview
      { collection: <target>, steps: [{ key, label, filter }], fields?, sort? }
      → { data: { total, steps: [{ key, label, count, applies }], excluded, offered,
                  picker_filter, with_picker_filter, rows } }
+GET  /api/widgets-internal/:id/placements
+     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget
 
-// Layout AI helpers (administrators; nothing here writes a layout)
+# Every form at once (administrators)
+GET  /api/collection-layouts/bulk/fields?collection=orders
+     → { data: [{ field, forms }] }   // every field placed on a form, with how many forms hold it
+POST /api/collection-layouts/bulk/preview  { collection, action, labels?, layout_ids? }
+     → { data: { label, forms: [{ layout_id, name, rev, status: 'change'|'same'|'skip',
+                                  reason, changes, notes }], values } }
+     // action: { kind: 'retire', field }
+     //       | { kind: 'change', change: { type: 'place_after'|'place_before', field, anchor }
+     //                                 | { type: 'set_width', field, width: 12|6|4|3 }
+     //                                 | { type: 'set_flag', field, flag: 'required'|'readonly'|'hidden', on }
+     //                                 | { type: 'remove', field } }
+     //       | { kind: 'macro', name, steps }
+     // values (retire only): { populated, total, note } — records that still hold a value
+POST /api/collection-layouts/bulk/apply  { …same, revs: { [layout_id]: rev } }
+     → { data: { label, forms: [{ layout_id, status: 'applied'|'same'|'skipped'|'failed',
+                                  reason, version_id, rev }] } }
+     // a form whose rev moved since the preview is skipped
+POST /api/collection-layouts/bulk/undo  { collection, items: [{ layout_id, version_id, rev }] }
+     // restores each form unless it changed since the bulk change
+GET  /api/collection-layouts/macros              // your own macros
+POST /api/collection-layouts/macros  { id?, name, collection, steps, source_layout_id? }
+POST /api/collection-layouts/macros/:id/delete
+
+# Across forms (administrators)
+GET  /api/collection-layouts/crossform?collection=
+     → { data: { thumbs: { <layout id>: { blocks, more } }, labels: [{ field, field_label, variants }],
+                 duplicates: [{ a, b, similarity, identical, only_a, only_b, differing, parent_id, can_link }] } }
+GET  /api/collection-layouts/field-search?q=&collection=   // q at least 2 characters
+     → { data: { fields: [{ collection, field, label, placements: [{ layout_id, layout_name, layout_type,
+                 section, width, visible, label, label_hidden, inherited_from }] }], truncated } }
+
+# Reuse: templates, the section library, copying sections (administrators)
+GET    /api/collection-layouts/templates?kind=form|section   → { data: [{ id, kind, name, fields, ... }] }
+POST   /api/collection-layouts/templates  { kind, name, description?, layout_id, group_key?, bundle? }
+PATCH  /api/collection-layouts/templates/:id  { name?, description? }
+DELETE /api/collection-layouts/templates/:id
+POST   /api/collection-layouts/blocks/plan  { source: { template_id } | { layout_id, group_key },
+                                              target_collection, target_bundle, field_map?, index? }
+       → { ops, already, unmapped, dropped }   // read only; the editor applies the ops
+POST   /api/collection-layouts/:id/copy-section  { source_layout_id, group_key, field_map? }
+       → { bundle, group_key, already, unmapped, dropped }   // applied through :id's ops
+
+# Usage
+POST /api/layout-usage/beacon  { events: [{ layout_id, collection, item, open, saved, abandoned_step, steps }] }
+     → 204   // signed in; at most 20 events
+GET  /api/layout-usage/:layoutId/today            → { data: { ready, day, opens, people, records } }   (admin)
+GET  /api/layout-usage/:layoutId/friction?days=30 → { data: { opens, saves, abandons, steps, changed_after_save } }   (admin)
+GET  /api/layout-usage/co-changes/:collection     → { data: { revisions, fields, pairs: [{ a, b, together, jaccard }] } }   (admin)
+
+# Owner, watching and preview links
+GET  /api/layout-collab/:id                        // administrators
+     → { data: { owner: { id, name } | null, watching, watchers: [{ id, name }] } }
+PUT  /api/layout-collab/:id/watch  { on }          // administrators: watch or stop watching
+PUT  /api/layout-collab/:id/owner  { user_id }     // administrators: null clears the owner
+GET  /api/layout-collab/owners                     // administrators → { data: { <layout id>: { id, name } } }
+GET  /api/layout-collab/:id/whats-new              // anyone who may read the collection
+     → { data: { rev, lines: string[] | null, mark, changed_at?, changed_by? } }
+POST /api/layout-collab/:id/whats-new/seen  { rev } // dismiss (or remember a first open)
+GET|POST /api/layout-collab/:id/preview-links  { days }   // administrators; 201 { data: { token, path, expires_at, … } }
+DELETE   /api/layout-collab/preview-links/:linkId         // administrators: turn a link off
+GET      /api/layout-collab/:id/preview-comments          // administrators
+DELETE   /api/layout-collab/:id/preview-comments/:commentId
+GET  /api/form-preview/:token                      // public page (expiring token)
+POST /api/form-preview/:token/comments  { field, name, text }   // public; 20 per 10 minutes per address
+
+# Other environments and suggestions from people
+GET  /api/collection-layouts/promote/sources       (admin) → other environments' APIs
+GET  /api/collection-layouts/:id/export            (admin) → layout file
+POST /api/collection-layouts/:id/promote/preview   (admin) { component_id | file, remote_layout_id? }
+POST /api/collection-layouts/:id/promote/apply     (admin) { …same, base_rev }   409 = changed since
+POST /api/layout-change-requests                   { collection, item, layout_id?, field?, message }
+GET  /api/layout-change-requests?collection=&status=   (admin)
+POST /api/layout-change-requests/:id/resolve       (admin) { decision: 'accept' | 'decline', note? }
+
+# On the record page (as the viewer)
+GET  /api/help-videos/for-form?collection=   → { data: { fields: { <field>: [video] }, sections: { <group key>: [video] } } }
+GET  /api/collection-layouts/why?collection=&item=
+     → { data: { layout: { id, name, why }, role, record_lock, locks: { <field>: { kind, text } }, hidden? } }
+     // 404 when they cannot read the record; \`hidden\` for administrators only
+POST /api/ai/field-fill  { collection, layout_id, field, item_id?, values? }   // record editors
+     → { data: { value, missing } }   // the prompt is read from the layout, never sent
+     403 when the field has no AI fill on that form, the role may not open the form,
+         or the person may not change the record / field; 429 past 30 fills in 5 minutes
+
+# AI for layouts — administrators. Proposals only: nothing here writes a layout.
+# Tools that need the model answer 503 when AI is not set up; rule-based checks answer without it.
+POST /api/ai-design/layouts/:id/check-changes  { before?, after }
+     → { data: { status: 'skipped', reason, changes } | { status: 'checked', changes,
+                 warnings: [{ message, field, field_label, section, section_label, roles }], dropped } }
+POST /api/ai-design/layouts/:id/entry-order  { bundle? }   // the draft
+     → { data: { change_sets: [{ title, steps, ops, group_key, why }], dropped, checked } }
+POST /api/ai-design/layouts/:id/sensitive  { bundle? }
+     → { data: { findings: [{ field, class, seen_by, broad, suggest, section, change_set }], note } }
+POST /api/ai-design/layouts/:id/persona-test  { role_id, goal? }
+     → { data: { role, walkthrough, summary, steps, findings, dropped, ai_configured } }
+POST /api/ai-design/layouts/:id/visual-critique  { sections, canvas, image? }
+     → { data: { summary, comments, dropped, used_image, image_skipped, ai_configured } }
+GET  /api/ai-design/layouts/:id/autofill-corrections?days=90
+     → { data: { days, documents, fields: [{ field, proposed, corrected, kept, share, suggest }] } }
+
+POST /api/ai-design/layouts/compose  { collection, text }
+POST /api/ai-design/layouts/compose/file  multipart: collection, mode (picture | sop), note?, file
+     → { data: { form: { name, layout: 'steps' | 'sections', groups: [{ label, fields, source }],
+                         locks, requirements, candidates, dropped, explanation },
+                 read_as?, states? } }    // the editor turns it into ops
+POST /api/ai-design/layouts/:id/slim  { role_id }
+     → { data: { role, parent, days, revisions, people, plan: { keep, drop, hide_groups } | null } }
+POST /api/ai-design/layouts/:id/sections-by-meaning  { groups: [{ key, label, fields }], fields }
+     → { data: { suggestions: [{ field, group_key, reason }], dropped } }
+
+POST /api/ai-design/layouts/:id/rule  { text, target?: { kind: 'step', group } | { kind: 'lock', field } }
+     → { data: { proposal, ops, sentence, replaces, dropped, notes,
+                 test: { checked, matched, current, roles } } }   // newest 500 records
+POST /api/ai-design/layouts/:id/cascade  { field, text }
+     → { data: { related, cascade_filters, option_filter, sentences, dropped } }
+POST /api/ai-design/layouts/:id/field-rule  { text, field? }
+     → { data: { rule, sentence, dry_run: [{ id, label, before_label, after_label, new_record_label }] } }
+     // save with POST /api/field-rules { ...rule }
+POST /api/ai-design/layouts/:id/validation  { field, ai?: false }
+     → { data: { checked, empty, capped, current, suggestions: [{ rule, sentence, source, fails }] } }
+     // newest 5,000 values; the AI sees value shapes (masks, lengths, ranges), never values
+
+GET  /api/ai-design/layouts/:id/text/locales
+POST /api/ai-design/layouts/:id/text/:tool   // tool: glossary | intros | placeholders | choices | reading | translate ({ locale })
+     // translations are stored on the placement as overrides.i18n[locale] = { label, help, draft: true }
+POST /api/ai-design/layouts/:id/text/choices/field  { field, choices: [{ value, text }] }
+     // the one write here: relabels the field's own choices (every form), logged with the old ones
+
 GET  /api/ai-design/layouts/:id/describe              // the form in plain terms
 GET  /api/ai-design/layouts/which-form?collection=orders&item=284212&role=Finance
 GET  /api/ai-design/layouts/explain-field?collection=orders&field=zone&role=Finance&item=284212
      → { data: { verdict: 'shown' | 'shown read-only' | 'hidden' | 'not on the form' | 'cannot open the record',
                  reasons: [...], layout: { id, name } } }
-POST /api/ai-design/layouts/:id/proposals { ops, note }   // store a proposal (201), never applied
-     400 { error, dropped, op_index }                     // unknown names are dropped and listed
-GET  /api/ai-design/layouts/:id/proposals[?status=all]
-POST /api/ai-design/layouts/:id/proposals/:pid/resolve { outcome: 'applied' | 'rejected' }
 POST /api/ai-design/layouts/:id/ask { question, history?, draft? }  → { data: { answer, cites } }
 POST /api/ai-design/layouts/find-setting { question, candidates: [{ key, label, where }] }
 POST /api/ai-design/layouts/explain-diff { a: { layout_id, version? }, b: { layout_id, version? }, ai? }
-     → { data: { sentences, notes, summary, points } }   // version: id | 'newest'; none = now`
+     → { data: { sentences, notes, summary, points } }   // version: id | 'newest'; none = now
+POST /api/ai-design/layouts/:id/proposals { ops, note }   // store a proposal (201), never applied
+     400 { error, dropped, op_index }                     // unknown names are dropped and listed
+GET  /api/ai-design/layouts/:id/proposals[?status=all]
+POST /api/ai-design/layouts/:id/proposals/:pid/resolve { outcome: 'applied' | 'rejected' }`
     },
     {
       type: 'table',

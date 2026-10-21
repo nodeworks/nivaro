@@ -276,7 +276,12 @@ export function DesignNode({
               data-design-pass=''
               data-tip={m.tip}
               onClick={m.onClick}
-              className={cn(MARK_CLS, m.icon && 'inline-flex items-center gap-0.5', 'pointer-events-auto hover:brightness-95', MARK_TONE[m.tone])}
+              className={cn(
+                MARK_CLS,
+                m.icon && 'inline-flex items-center gap-0.5',
+                'pointer-events-auto hover:brightness-95',
+                MARK_TONE[m.tone]
+              )}
             >
               {m.icon === 'pin' && <Pin aria-hidden className='h-3 w-3' />}
               {m.text}
@@ -287,7 +292,12 @@ export function DesignNode({
               key={`${i}:${m.text}`}
               data-design-mark=''
               data-tip={m.tip}
-              className={cn(MARK_CLS, m.icon && 'inline-flex items-center gap-0.5', m.tip && 'pointer-events-auto', MARK_TONE[m.tone])}
+              className={cn(
+                MARK_CLS,
+                m.icon && 'inline-flex items-center gap-0.5',
+                m.tip && 'pointer-events-auto',
+                MARK_TONE[m.tone]
+              )}
             >
               {m.icon === 'pin' && <Pin aria-hidden className='h-3 w-3' />}
               {m.text}
