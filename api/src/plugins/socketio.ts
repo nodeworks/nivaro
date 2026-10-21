@@ -1727,8 +1727,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   // never ends on its own, so io.close() below waited on the very close that
   // was waiting on it: every deploy sat out the shutdown deadline, then
   // Docker's SIGKILL (10 s). End the clients first.
+  //
+  // Close the TRANSPORTS only — never io.disconnectSockets(): that sends each
+  // client socket.io's disconnect packet ("41"), which clients treat as "the
+  // server kicked you" and never reconnect from. With the graceful drain
+  // (SHUTDOWN_DRAIN_DELAY_MS) the packet always arrived, and every open tab sat
+  // on "Live updates paused" after a rolling deploy. A transport close is an
+  // ordinary drop: clients reconnect straight away, to a task that is serving.
   app.addHook('preClose', async () => {
-    io.disconnectSockets(true)
     io.engine.close()
   })
   app.addHook('onClose', async () => {
