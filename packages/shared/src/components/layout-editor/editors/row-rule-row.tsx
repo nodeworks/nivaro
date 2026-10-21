@@ -7,6 +7,7 @@ import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '.
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { tintCard } from '../panel-style'
 import { useEditorApi } from './editor-api'
+import { editorQueryKeys } from './editor-queries'
 
 export type RowRuleSource = {
   source_type: 'relation_field' | 'o2m_first' | 'o2m_filtered' | 'parent_m2o'
@@ -195,6 +196,7 @@ export function ViaValuePicker({
                 <button
                   type='button'
                   onClick={() => toggle(id)}
+                  aria-label={`Remove ${item ? getLabel(item) : id}`}
                   className='hover:text-red-600 dark:hover:text-red-400 ml-0.5'
                 >
                   ✕
@@ -348,7 +350,7 @@ export function PrecedenceSourceRow({
     : null
 
   const { data: intermediateRelsRaw } = useQuery({
-    queryKey: ['relations-for-intermediate', intermediateCollection],
+    queryKey: editorQueryKeys.relationsFor(intermediateCollection),
     queryFn: () =>
       api
         .get<{
@@ -968,7 +970,7 @@ export function RowRuleRow({
 
   // Fetch relations on the related collection so we can detect 2nd-level M2O hops
   const { data: relCollRelations } = useQuery({
-    queryKey: ['relations-for', relatedCollection],
+    queryKey: editorQueryKeys.relationsFor(relatedCollection),
     queryFn: () =>
       api
         .get<{
@@ -1535,9 +1537,11 @@ export function RowRuleRow({
                             trigger_fields: (rule.trigger_fields ?? []).filter((_, j) => j !== i)
                           })
                         }
-                        className='shrink-0 text-slate-500 hover:text-red-600 dark:hover:text-red-400 text-[12px] px-0.5'
+                        aria-label='Remove trigger field'
+                        data-tip='Remove trigger field'
+                        className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
                       >
-                        ✕
+                        <X className='h-3.5 w-3.5' />
                       </button>
                     </div>
                   ))}

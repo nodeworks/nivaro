@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { X } from 'lucide-react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { cn, titleCase } from '../../../lib/utils'
@@ -174,9 +175,10 @@ export function RulesTab() {
                       `Remove a lock condition from ${name}`
                     )
                   }
-                  className='shrink-0 px-1 text-[12px] text-slate-400 hover:text-red-500'
+                  data-tip='Remove condition'
+                  className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
                 >
-                  ✕
+                  <X className='h-3.5 w-3.5' />
                 </button>
               </div>
               {c.type === 'role' ? (

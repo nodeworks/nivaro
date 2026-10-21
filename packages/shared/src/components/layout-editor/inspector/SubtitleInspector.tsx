@@ -1,3 +1,4 @@
+import { X } from 'lucide-react'
 import { cn } from '../../../lib/utils'
 import type { CMSRelation } from '../../pipeline/types'
 import { tintCard } from '../panel-style'
@@ -99,9 +100,10 @@ export function SubtitleInspector() {
                           'Remove a subtitle field'
                         )
                       }
-                      className='shrink-0 text-[12px] text-slate-400 hover:text-red-500'
+                      data-tip='Remove'
+                      className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
                     >
-                      ✕
+                      <X className='h-3.5 w-3.5' />
                     </button>
                   </div>
                   <div className='grid grid-cols-3 gap-1' data-setting='subtitle.field_style'>

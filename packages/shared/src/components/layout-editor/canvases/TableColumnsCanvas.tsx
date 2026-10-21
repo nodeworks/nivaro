@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   isCanvasSlot,
   type LayoutBundle,
@@ -40,19 +40,42 @@ export interface TableColumnsCanvasProps {
 
 const labelOf = (p: PlacementRow) => p.label_override ?? titleCase(p.field)
 
-function zoneRows(bundle: LayoutBundle, zone: string | null): PlacementRow[] {
+/** Everything a move or place op counts in a zone (the ops twin's zoneMembers), in order. */
+function zoneMembers(bundle: LayoutBundle, zone: string | null): PlacementRow[] {
   return bundle.placements
-    .filter((p) => p.group_key === zone && !isCanvasSlot(p) && !p.field.startsWith('__'))
-    .sort((a, b) => a.sort - b.sort)
+    .filter((p) => p.group_key === zone && !isCanvasSlot(p))
+    .sort((a, b) => a.sort - b.sort || (a.id ?? 0) - (b.id ?? 0))
 }
 
-function useCellActions(row: PlacementRow, index: number, count: number, apply: Apply) {
+/** What the zone shows: its members without `__` sentinels (widgets and the like). */
+const shownIn = (members: PlacementRow[]) => members.filter((p) => !p.field.startsWith('__'))
+
+/** A zone's rows: the ones shown, and every member the ops count indexes over. */
+interface ZoneRows {
+  rows: PlacementRow[]
+  members: PlacementRow[]
+}
+
+function zoneRowsOf(bundle: LayoutBundle, zone: string | null): ZoneRows {
+  const members = zoneMembers(bundle, zone)
+  return { rows: shownIn(members), members }
+}
+
+function useCellActions(row: PlacementRow, zone: ZoneRows, apply: Apply) {
   const label = labelOf(row)
   const at = { field: row.field, group_key: row.group_key }
-  const move = (to: number) =>
-    apply([{ op: 'move', from: at, to_group_key: row.group_key, index: to }], {
+  const index = zone.rows.indexOf(row)
+  const count = zone.rows.length
+  // Step past the shown neighbour; the index is counted over the zone's other
+  // members (hidden sentinels included), as the move op counts it.
+  const move = (to: number) => {
+    const neighbour = zone.rows[to]
+    const others = zone.members.filter((m) => m !== row)
+    const i = others.indexOf(neighbour) + (to > index ? 1 : 0)
+    apply([{ op: 'move', from: at, to_group_key: row.group_key, index: i }], {
       label: `Move ${label}`
     })
+  }
   const btn =
     'rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-30 dark:hover:bg-slate-700 dark:hover:text-slate-200'
   const arrows = (
@@ -92,18 +115,8 @@ function useIsSelected(row: PlacementRow) {
 // focused or selected: the header stays one row, like the real grid.
 const REVEAL = 'hidden group-hover:flex group-focus-within:flex'
 
-function HeaderCell({
-  row,
-  index,
-  count,
-  apply
-}: {
-  row: PlacementRow
-  index: number
-  count: number
-  apply: Apply
-}) {
-  const { label, arrows } = useCellActions(row, index, count, apply)
+function HeaderCell({ row, zone, apply }: { row: PlacementRow; zone: ZoneRows; apply: Apply }) {
+  const { label, arrows } = useCellActions(row, zone, apply)
   const selected = useIsSelected(row)
   return (
     <DesignNode asChild target={{ kind: 'field', field: row.field, group_key: row.group_key }}>
@@ -129,18 +142,8 @@ function HeaderCell({
   )
 }
 
-function Chip({
-  row,
-  index,
-  count,
-  apply
-}: {
-  row: PlacementRow
-  index: number
-  count: number
-  apply: Apply
-}) {
-  const { label, arrows } = useCellActions(row, index, count, apply)
+function Chip({ row, zone, apply }: { row: PlacementRow; zone: ZoneRows; apply: Apply }) {
+  const { label, arrows } = useCellActions(row, zone, apply)
   const selected = useIsSelected(row)
   return (
     <DesignNode asChild target={{ kind: 'field', field: row.field, group_key: row.group_key }}>
@@ -225,7 +228,7 @@ function AddField({
 function Zone({
   title,
   hint,
-  rows,
+  bundle,
   zone,
   apply,
   columns,
@@ -234,13 +237,15 @@ function Zone({
 }: {
   title: string
   hint: string
-  rows: PlacementRow[]
+  bundle: LayoutBundle
   zone: string | null
   apply: Apply
   columns: boolean
   fields: TableFieldChoice[]
   showHidden: boolean
 }) {
+  const zoneRows = useMemo(() => zoneRowsOf(bundle, zone), [bundle, zone])
+  const { rows, members } = zoneRows
   const shown = rows.filter((r) => r.is_visible || showHidden)
   return (
     <section
@@ -263,13 +268,7 @@ function Zone({
             <thead className='border-b border-slate-200 bg-slate-50 dark:border-border dark:bg-slate-800/40'>
               <tr>
                 {shown.map((r) => (
-                  <HeaderCell
-                    key={r.field}
-                    row={r}
-                    index={rows.indexOf(r)}
-                    count={rows.length}
-                    apply={apply}
-                  />
+                  <HeaderCell key={r.field} row={r} zone={zoneRows} apply={apply} />
                 ))}
               </tr>
             </thead>
@@ -277,13 +276,7 @@ function Zone({
         ) : (
           <div className='flex flex-wrap gap-1.5 p-2'>
             {shown.map((r) => (
-              <Chip
-                key={r.field}
-                row={r}
-                index={rows.indexOf(r)}
-                count={rows.length}
-                apply={apply}
-              />
+              <Chip key={r.field} row={r} zone={zoneRows} apply={apply} />
             ))}
           </div>
         )}
@@ -295,7 +288,7 @@ function Zone({
           taken={new Set(rows.map((r) => r.field))}
           fields={fields}
           apply={apply}
-          size={rows.length}
+          size={members.length}
         />
       </div>
     </section>
@@ -314,7 +307,7 @@ export function TableColumnsCanvas({
       <Zone
         title='Columns'
         hint='The columns of the grid, left to right. The grid gives them equal width.'
-        rows={zoneRows(bundle, null)}
+        bundle={bundle}
         zone={null}
         apply={apply}
         columns
@@ -324,7 +317,7 @@ export function TableColumnsCanvas({
       <Zone
         title='Apply values'
         hint='Fields in the "apply to all rows" form.'
-        rows={zoneRows(bundle, APPLY_ZONE)}
+        bundle={bundle}
         zone={APPLY_ZONE}
         apply={apply}
         columns={false}
@@ -334,7 +327,7 @@ export function TableColumnsCanvas({
       <Zone
         title='Create with defaults'
         hint='Fields in the "with defaults" form when adding several rows.'
-        rows={zoneRows(bundle, DEFAULTS_ZONE)}
+        bundle={bundle}
         zone={DEFAULTS_ZONE}
         apply={apply}
         columns={false}

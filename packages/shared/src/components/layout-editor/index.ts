@@ -59,12 +59,15 @@ export {
 export { IconPicker } from './pickers/icon-picker'
 export { RelationLabel } from './pickers/relation-label'
 export { RelationPicker } from './pickers/relation-picker'
+export { invalidateRecordLayoutQueries } from './record-queries'
 export * from './settings'
 export {
   type ApplyOptions,
   CONFLICT_MESSAGE,
   type DraftStatus,
   type LayoutDraft,
+  type LayoutDraftOptions,
   layoutDraftKeys,
+  useLayoutBundle,
   useLayoutDraft
 } from './useLayoutDraft'

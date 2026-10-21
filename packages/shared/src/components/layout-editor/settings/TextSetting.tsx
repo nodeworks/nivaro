@@ -1,4 +1,4 @@
-import { type ReactNode, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import type { LayoutPatch } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
 import { inputCls, Setting } from './controls'
@@ -11,7 +11,9 @@ import { changeLabel, column, type SectionProps } from './section-props'
  * value from before the edit back. Empty saves null.
  *
  * `blurOnly` (link names): sent on blur or Enter only. The server slugifies
- * these, and every pause would rename ?layout= links half-typed.
+ * these, and every pause would rename ?layout= links half-typed. An input
+ * removed while focused fires no blur (Form settings closed, another layout
+ * opened), so what was typed is sent as it goes away.
  */
 export function TextSetting({
   k,
@@ -63,6 +65,14 @@ export function TextSetting({
     if (blurOnly && typed !== null && typed !== saved) props.set(patchOf(typed), changeLabel(k))
     props.flush()
   }
+  // Unmount while editing: send the typed link name (blur-only rows; the
+  // others are already in the draft, which flushes on its own unmount).
+  const onUnmount = useRef(() => {})
+  onUnmount.current = () => {
+    const typed = bufferRef.current
+    if (blurOnly && typed !== null && typed !== saved) props.set(patchOf(typed), changeLabel(k))
+  }
+  useEffect(() => () => onUnmount.current(), [])
   const revert = () => {
     const start = startRef.current
     if (!blurOnly && start !== null && bufferRef.current !== start)

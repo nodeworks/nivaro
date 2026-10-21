@@ -569,6 +569,8 @@ describe('LayoutEditor', () => {
     expect(banner.textContent).toContain('used by every record no rule catches')
     click(banner.querySelector('button'))
     expect(onBack).toHaveBeenCalledTimes(1)
+    // Hosts get a promise that settles once the last save has landed.
+    expect(onBack.mock.calls[0][0]).toBeInstanceOf(Promise)
     expect(document.querySelector('[data-editor-topbar]')?.textContent).toContain('Back to record')
   })
 
@@ -673,6 +675,29 @@ describe('LayoutEditor', () => {
     click(toggle)
     await settle(() => opsCalls(calls).length > 0)
     expect(opsCalls(calls)).toEqual([[{ op: 'layout_update', patch: { accordion_mode: true } }]])
+  })
+
+  it('a save that leaves the overview as it was never refetches it; a New-menu change does', async () => {
+    const { calls } = await mount()
+    const overviewReads = () =>
+      calls.filter((c) => c._path === '/collection-layouts/overview').length
+    await settle(() => overviewReads() > 0)
+    const before = overviewReads()
+    click(document.querySelector('[data-rail-settings]'))
+    await settle(() => !!document.querySelector('[data-editor-inspector] [data-form-settings]'))
+    const toggle = (key: string) =>
+      click(document.querySelector(`[data-setting="${key}"] [role="switch"]`))
+    toggle('layout.accordion_mode')
+    await settle(() => opsCalls(calls).length === 1)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    expect(overviewReads()).toBe(before)
+
+    toggle('layout.create_hidden')
+    await settle(() => opsCalls(calls).length === 2)
+    await settle(() => overviewReads() > before)
+    expect(overviewReads()).toBe(before + 1)
   })
 
   it('Preview as role in Form settings is the top bar role; the canvas follows', async () => {

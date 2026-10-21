@@ -1,10 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
 import { CornerDownLeft, Plus, X } from 'lucide-react'
 import { cn, titleCase } from '../../../lib/utils'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { effectText, inputBase, segOption, tintCard } from '../panel-style'
 import { Combobox } from './controls'
-import { useEditorApi } from './editor-api'
+import { useEditorFieldList } from './editor-queries'
 
 export type InlineDisplayEntry = {
   field: string
@@ -34,14 +33,8 @@ export function InlineDisplaySection({
   onChange: (entries: InlineDisplayEntry[]) => void
   onSeparatorChange: (sep: string | null) => void
 }) {
-  const api = useEditorApi()
-  const { data: relFields = [] } = useQuery<Array<{ field: string; label?: string }>>({
-    queryKey: ['field-config', relatedCollection],
-    queryFn: () =>
-      api.get(`/field-config/${relatedCollection}`).then((r) => r.data?.data ?? r.data ?? []),
-    staleTime: 60_000
-  })
-  const fieldOptions = (relFields as Array<{ field: string; label?: string }>)
+  const { data: relFields = [] } = useEditorFieldList(relatedCollection)
+  const fieldOptions = relFields
     .filter((f) => !f.field.startsWith('__'))
     .map((f) => ({ value: f.field, label: f.label || titleCase(f.field) }))
   // A path into the picked record's own links ("unit_type.name") is named hop by
@@ -138,7 +131,7 @@ export function InlineDisplaySection({
                   aria-label='Remove'
                   data-tip='Remove'
                   onClick={() => onChange(entries.filter((_, j) => j !== i))}
-                  className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
+                  className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
                 >
                   <X className='h-3.5 w-3.5' />
                 </button>

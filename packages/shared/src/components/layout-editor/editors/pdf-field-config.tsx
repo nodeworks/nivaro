@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { useEditorApi } from './editor-api'
+import { editorQueryKeys } from './editor-queries'
 
 export function PdfFieldConfig({
   tableName,
@@ -20,7 +21,7 @@ export function PdfFieldConfig({
 }) {
   const api = useEditorApi()
   const { data: relData } = useQuery({
-    queryKey: ['relations-for', tableName],
+    queryKey: editorQueryKeys.relationsFor(tableName),
     queryFn: () =>
       api
         .get<{

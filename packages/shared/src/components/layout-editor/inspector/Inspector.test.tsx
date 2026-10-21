@@ -14,6 +14,7 @@ import {
 import type { DesignTarget } from '../design-context'
 import { LayoutEditorHostContext } from '../host'
 import parityRows from '../parity-keys.json'
+import { layoutDraftKeys } from '../useLayoutDraft'
 import { Inspector } from './Inspector'
 import { CONDITION_OPS } from './kit'
 
@@ -719,6 +720,25 @@ describe('Inspector', () => {
     expect(openLayout).toHaveBeenCalledWith(3)
   })
 
+  it("Override here copies the parent as its own editor last saved it (the draft's bundle key)", async () => {
+    // The parent's editor saved a new width a moment ago: its draft wrote the
+    // bundle under the shared key. The inspector must read that, not a copy.
+    const saved: LayoutBundle = {
+      ...PARENT,
+      rev: 'p2',
+      placements: [place('region', 'shipping', { col_span: 3 })]
+    }
+    const { apply, calls } = await mount(field('region', 'shipping'), {
+      bundle: makeBundle({ parent_layout_id: 3 }),
+      inheritedFrom: 'Base order',
+      seed: (qc) => qc.setQueryData(layoutDraftKeys.bundle(3), saved)
+    })
+    await click(host.querySelector('[data-override-here]'))
+    const [ops] = apply.mock.calls[0]
+    expect(ops[1]).toMatchObject({ field: 'region', patch: { col_span: 3 } })
+    expect(calls.some((c) => c._path === '/collection-layouts/3/bundle')).toBe(false)
+  })
+
   it('the header names the kind, the section, the field and its key', async () => {
     await mount(field('vendor'))
     const header = host.querySelector('[data-panel-header]')
@@ -958,6 +978,38 @@ describe('Inspector', () => {
     })
   })
 
+  describe('a JSON box that goes away while focused', () => {
+    const box = () =>
+      host.querySelector('[data-setting="field.overrides_raw"] textarea') as HTMLTextAreaElement
+    it('saves valid JSON typed into it (a canvas click selects without a blur)', async () => {
+      const { apply } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      await typeInto(box(), '{"label": "Subject"}')
+      expect(apply).not.toHaveBeenCalled()
+      await act(async () => root.render(null))
+      expect(apply).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify(apply.mock.calls[0][0])).toContain('Subject')
+    })
+
+    it('drops invalid JSON, as a blur would', async () => {
+      const { apply } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      await typeInto(box(), '{"label": "Sub')
+      await act(async () => root.render(null))
+      expect(apply).not.toHaveBeenCalled()
+    })
+
+    it('saves nothing again after a blur already did', async () => {
+      const { apply } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      await typeInto(box(), '{"label": "Subject"}')
+      await leave(box())
+      expect(apply).toHaveBeenCalledTimes(1)
+      await act(async () => root.render(null))
+      expect(apply).toHaveBeenCalledTimes(1)
+    })
+  })
+
   describe('every-form changes wait together', () => {
     const fmtButton = (label: string) =>
       [...host.querySelectorAll('[data-setting="field.format"] button')].find(
@@ -1073,6 +1125,19 @@ describe('Inspector', () => {
         host.querySelector(`[data-inspector-tab="${t.getAttribute('data-inspector-tab')}"]`)
       )
     expect(host.querySelector('[data-inspector-tab]')).not.toBeNull()
+  })
+
+  it('moved editors read fields under their own key, whatever shape other screens cached', async () => {
+    // Queues keeps the response BODY under ['field-config', c]; TableEditor the array.
+    const seed = (qc: QueryClient) => {
+      qc.setQueryData(['field-config', 'vendors'], { data: [{ field: 'name' }] })
+      qc.setQueryData(['field-config', 'order_lines'], [{ field: 'amount' }])
+    }
+    const { qc } = await mount(field('vendor'), { seed })
+    await settle()
+    expect(host.querySelector('[data-setting="field.inline_display.separator"]')).not.toBeNull()
+    expect(qc.getQueryData(['field-config', 'vendors'])).toEqual({ data: [{ field: 'name' }] })
+    expect(qc.getQueryData(['layout-editor', 'field-list', 'vendors'])).toEqual(expect.any(Array))
   })
 
   describe('cascade filters edited on the Picker and Advanced tabs', () => {

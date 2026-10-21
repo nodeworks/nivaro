@@ -19,7 +19,6 @@ import { type DesignTarget, type LayoutDesign, targetKey } from './design-contex
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
-import { versionsKey } from './HistoryPanel'
 import { useLayoutEditorHost } from './host'
 import { FormSettings, Inspector } from './inspector-slot'
 import { LayoutsRail } from './LayoutsRail'
@@ -34,7 +33,13 @@ import {
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { useRolePreview } from './settings/settings-api'
-import { type LayoutDraft, layoutDraftKeys, parseBundle, useLayoutDraft } from './useLayoutDraft'
+import {
+  type LayoutDraft,
+  layoutDraftKeys,
+  touchesOverview,
+  useLayoutBundle,
+  useLayoutDraft
+} from './useLayoutDraft'
 
 /**
  * The layout editor (spec §7.2): layouts rail and Add panel on the left, the
@@ -46,7 +51,13 @@ import { type LayoutDraft, layoutDraftKeys, parseBundle, useLayoutDraft } from '
 export interface LayoutEditorProps {
   collection: string
   layoutId: number
-  onBack: () => void
+  /**
+   * Leave the editor. `saved` resolves once the last edit has reached the
+   * server (or failed): hosts close at once and re-read what the record page
+   * renders after it (invalidateRecordLayoutQueries), so the refetch cannot
+   * beat the save.
+   */
+  onBack: (saved: Promise<void>) => void
   mode: 'page' | 'overlay'
   /** Another layout was picked in the rail — hosts mirror it into the URL. */
   onLayoutChange?: (layoutId: number) => void
@@ -107,27 +118,24 @@ function useLeaveGuard(draft: LayoutDraft) {
   }, [draft.flush])
 }
 
-/** Every save refreshes History and whatever shows this collection's layouts. */
-function useSavedRefresh(draft: LayoutDraft, layoutId: number, collection: string) {
+/**
+ * Every save refreshes History and whatever shows this collection's layouts:
+ * at once when the batch changed what the overview says (name, rules, link,
+ * New menu, kind, parent), otherwise only marked stale (refetched when shown).
+ * Runs from the draft engine, so a save that lands after the editor closed
+ * still refreshes.
+ */
+function useSavedRefresh(collection: string) {
   const qc = useQueryClient()
   const invalidateLayouts = useInvalidateLayouts(collection)
-  const rev = draft.bundle?.rev
-  useEffect(() => {
-    if (draft.status !== 'saved' || !rev) return
-    void qc.invalidateQueries({ queryKey: versionsKey(layoutId) })
-    invalidateLayouts()
-  }, [draft.status, rev, layoutId, qc, invalidateLayouts])
-}
-
-function useParentBundle(parentId: number | null) {
-  const client = useNivaroClient()
-  return useQuery<LayoutBundle | null>({
-    queryKey: layoutDraftKeys.bundle(parentId ?? 0),
-    queryFn: async () =>
-      parseBundle(await client.request<unknown>(get(`/collection-layouts/${parentId}/bundle`))),
-    enabled: parentId != null,
-    staleTime: 30_000
-  })
+  return useCallback(
+    (bundle: LayoutBundle, ops: LayoutOp[] | null) => {
+      const id = Number(bundle.layout.id)
+      if (Number.isFinite(id)) void qc.invalidateQueries({ queryKey: layoutDraftKeys.versions(id) })
+      invalidateLayouts({ lazy: !touchesOverview(ops) })
+    },
+    [qc, invalidateLayouts]
+  )
 }
 
 function usePreviewRecord(collection: string, id: string | null) {
@@ -201,7 +209,8 @@ function Canvas({
   selected,
   onSelect,
   showHidden,
-  apply
+  apply,
+  whenIdle
 }: {
   collection: string
   bundle: LayoutBundle
@@ -212,6 +221,7 @@ function Canvas({
   onSelect: (t: DesignTarget) => void
   showHidden: boolean
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
+  whenIdle: () => Promise<void>
 }) {
   const dnd = useLayoutDnd()
   const canvas = useMemo(() => bundleToActiveLayout(bundle, parent), [bundle, parent])
@@ -244,6 +254,7 @@ function Canvas({
       record={record}
       design={design}
       apply={apply}
+      whenIdle={whenIdle}
     />
   )
 }
@@ -318,7 +329,8 @@ export function LayoutEditor({
   const host = useLayoutEditorHost()
   const [currentId, setCurrentId] = useState(layoutId)
   useEffect(() => setCurrentId(layoutId), [layoutId])
-  const draft = useLayoutDraft(currentId)
+  const onSaved = useSavedRefresh(collection)
+  const draft = useLayoutDraft(currentId, { onSaved })
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add'>('layouts')
@@ -335,12 +347,20 @@ export function LayoutEditor({
   const row = overview?.rows.find((r) => r.layout_id === currentId)
   const parentId =
     bundle?.layout.parent_layout_id != null ? Number(bundle.layout.parent_layout_id) : null
-  const { data: parent = null } = useParentBundle(parentId)
+  const { data: parent = null } = useLayoutBundle(parentId)
   const { data: record = null } = usePreviewRecord(collection, preview.record?.id ?? null)
 
   useUndoKeys(draft)
   useLeaveGuard(draft)
-  useSavedRefresh(draft, currentId, collection)
+
+  // Leaving sends typed text now; once the queue drains, the layouts lists
+  // refresh for real (saves while editing only marked most of them stale).
+  const invalidateLayouts = useInvalidateLayouts(collection)
+  const leave = useCallback(() => {
+    const saved = draft.whenIdle()
+    void saved.then(() => invalidateLayouts())
+    onBack(saved)
+  }, [draft.whenIdle, invalidateLayouts, onBack])
 
   // Undo, redo or another writer removed what was selected: nothing is.
   useEffect(() => {
@@ -354,7 +374,7 @@ export function LayoutEditor({
   const onDragActive = useCallback((on: boolean) => {
     dragging.current = on
   }, [])
-  const dialogRef = useOverlayDialog(overlay && marker != null, onBack, dragging)
+  const dialogRef = useOverlayDialog(overlay && marker != null, leave, dragging)
 
   const onSelect = useCallback((t: DesignTarget) => {
     setSelected(t)
@@ -412,7 +432,7 @@ export function LayoutEditor({
         onPreview={setPreview}
         showHidden={showHidden}
         onShowHidden={setShowHidden}
-        onBack={onBack}
+        onBack={leave}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
       />
       {overlay && (
@@ -422,7 +442,7 @@ export function LayoutEditor({
           row={row}
           rows={overview?.rows ?? []}
           fields={fields}
-          onDone={onBack}
+          onDone={leave}
         />
       )}
       {warning && (
@@ -499,6 +519,7 @@ export function LayoutEditor({
                 onSelect={onSelect}
                 showHidden={showHidden}
                 apply={draft.apply}
+                whenIdle={draft.whenIdle}
               />
             ) : draft.error ? (
               <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>

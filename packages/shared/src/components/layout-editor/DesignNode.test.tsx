@@ -82,6 +82,62 @@ describe('DesignNode', () => {
     expect(node.textContent).toContain('from Base form')
   })
 
+  it('Enter on the node selects it; Enter inside a control does not', () => {
+    const d = design()
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target}>
+            <input id='inner' />
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    const enter = (el: Element) =>
+      act(() => {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })
+    enter(host.querySelector('#inner') as Element)
+    expect(d.onSelect).not.toHaveBeenCalled()
+    enter(node)
+    expect(d.onSelect).toHaveBeenCalledWith(target)
+  })
+
+  it('an inherited (locked) node still takes focus so the keyboard can select it', () => {
+    const d = design({ inheritedFrom: () => 'Base form' })
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target}>
+            <span>hi</span>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    expect(node.tabIndex).toBe(0)
+    expect(node.getAttribute('role')).toBe('button')
+  })
+
+  it('an inherited step or tab gets a dot and a tip, not a chip over its label', () => {
+    const d = design({ inheritedFrom: () => 'Unit Order' })
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={{ kind: 'group', key: 'basic' }} asChild>
+            <div data-design-tab=''>Basic Information</div>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    expect(node.getAttribute('data-tip')).toBe('From Unit Order')
+    const badge = node.querySelector('[data-design-badges]') as HTMLElement
+    expect(badge.textContent).toBe('from Unit Order')
+    expect(badge.querySelector('.sr-only')).not.toBeNull()
+  })
+
   it('marks what a previewed role cannot see (faint, tagged) or change (lock tag)', () => {
     const marks: Record<string, 'hidden' | 'readonly'> = { title: 'hidden', amount: 'readonly' }
     const d = design({

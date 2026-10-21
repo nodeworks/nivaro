@@ -63,6 +63,63 @@ describe('PdfCanvas', () => {
     open.mockRestore()
   })
 
+  it('preview waits for the last save, then fetches; the tab gets no opener', async () => {
+    const tab = { location: { href: '' }, close: vi.fn(), opener: window as unknown }
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window)
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => '<html></html>' })
+    vi.stubGlobal('fetch', fetchMock)
+    URL.createObjectURL = vi.fn(() => 'blob:x')
+    URL.revokeObjectURL = vi.fn()
+    let saved!: () => void
+    const whenIdle = vi.fn(
+      () =>
+        new Promise<void>((r) => {
+          saved = r
+        })
+    )
+    act(() => root.render(<PdfCanvas bundle={bundle()} collection='orders' whenIdle={whenIdle} />))
+    const b = host.querySelector('button[data-pdf-preview]') as HTMLButtonElement
+    await act(async () => b.click())
+    expect(whenIdle).toHaveBeenCalledTimes(1)
+    expect(tab.opener).toBe(null)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await act(async () => saved())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(tab.location.href).toBe('blob:x')
+    vi.unstubAllGlobals()
+    open.mockRestore()
+  })
+
+  it('labels cells as the PDF prints them: override, then the field label', () => {
+    const b = bundle()
+    b.placements.push({ ...newPlacement('due', 'basics'), sort: 1 })
+    b.placements.push({
+      ...newPlacement('ref_no', 'basics'),
+      sort: 2,
+      overrides: JSON.stringify({ label: 'Reference' })
+    })
+    act(() =>
+      root.render(
+        <PdfCanvas
+          bundle={b}
+          collection='orders'
+          fields={[
+            { field: 'due', label: 'Due date' },
+            { field: 'amount', label: 'Amount (USD)' }
+          ]}
+        />
+      )
+    )
+    const text = host.textContent ?? ''
+    expect(text).toContain('Due date')
+    expect(text).toContain('Reference')
+    // label_override still wins over the field's label.
+    expect(text).toContain('Total')
+    expect(text).not.toContain('Amount (USD)')
+    // No label anywhere: the key in words.
+    expect(text).toContain('Title')
+  })
+
   it('field cells are selectable design nodes', () => {
     const onSelect = vi.fn()
     const design: LayoutDesign = {

@@ -34,13 +34,19 @@ function TableWithFields(props: ComponentProps<typeof TableColumnsCanvas>) {
   return <TableColumnsCanvas {...props} fields={fields} />
 }
 
+function PdfWithFields(props: ComponentProps<typeof PdfCanvas>) {
+  const { data: fields = [] } = useOverviewFields(props.collection)
+  return <PdfCanvas {...props} fields={fields} />
+}
+
 export function EditorCanvas({
   collection,
   bundle,
   layout,
   record,
   design,
-  apply
+  apply,
+  whenIdle
 }: {
   collection: string
   bundle: LayoutBundle
@@ -48,6 +54,8 @@ export function EditorCanvas({
   record: Record<string, unknown> | null
   design: LayoutDesign
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
+  /** The draft's whenIdle: the PDF preview waits for the last save. */
+  whenIdle?: () => Promise<void>
 }) {
   const renderer = canvasRenderer(String(bundle.layout.layout_type ?? 'grouped'))
   let body: ReactNode
@@ -64,7 +72,7 @@ export function EditorCanvas({
   else if (renderer === 'pdf')
     body = (
       <LayoutDesignContext.Provider value={design}>
-        <PdfCanvas bundle={bundle} collection={collection} />
+        <PdfWithFields bundle={bundle} collection={collection} whenIdle={whenIdle} />
       </LayoutDesignContext.Provider>
     )
   else

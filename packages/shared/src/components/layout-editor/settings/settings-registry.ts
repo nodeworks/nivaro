@@ -52,11 +52,12 @@ export const SECTIONS: SectionDef[] = [
 ]
 
 const ALL: LayoutKind[] = ['grouped', 'table', 'file', 'addendum', 'detail', 'summary']
-const RECORD_VIEWS: LayoutKind[] = ['grouped', 'file', 'detail', 'summary']
 /** Layouts people open a record with. A PDF (file) layout only renders the PDF:
  *  its buttons, panels, folding and new-record defaults never show. */
 const ON_SCREEN: LayoutKind[] = ['grouped', 'table', 'detail', 'summary']
 const ON_SCREEN_RECORD: LayoutKind[] = ['grouped', 'detail', 'summary']
+/** Only grouped forms join the New menu (lib/use-new-item-layouts.ts). */
+const NEW_MENU: LayoutKind[] = ['grouped']
 
 export const SETTINGS: SettingDef[] = [
   // ── Who gets this form ────────────────────────────────────────────────────
@@ -96,14 +97,14 @@ export const SETTINGS: SettingDef[] = [
     section: 'who',
     label: 'New-menu label',
     effect: 'The name shown in the New menu of the collection list. Empty uses the layout name.',
-    types: ALL
+    types: NEW_MENU
   },
   {
     key: 'layout.create_hidden',
     section: 'who',
     label: 'Hide from New menu',
     effect: 'Leaves this layout out of the New menu; its link name keeps working.',
-    types: ALL
+    types: NEW_MENU
   },
 
   // ── How it's laid out ─────────────────────────────────────────────────────
@@ -238,14 +239,14 @@ export const SETTINGS: SettingDef[] = [
     section: 'read',
     label: 'Summary side panel',
     effect: 'Shows a side panel with the summary fields beside the form.',
-    types: RECORD_VIEWS
+    types: ON_SCREEN_RECORD
   },
   {
     key: 'layout.summary_hide_empty',
     section: 'read',
     label: 'Summary: hide empty fields',
     effect: 'Fields with no value are left out of the summary panel.',
-    types: RECORD_VIEWS
+    types: ON_SCREEN_RECORD
   },
   {
     key: 'layout.display_mode',

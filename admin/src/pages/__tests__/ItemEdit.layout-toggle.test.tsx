@@ -228,12 +228,9 @@ describe('record page Edit layout toggle', () => {
     ).toBe(true)
     expect(state.chunkLoads).toBe(1)
 
-    // Turning it off returns to the record, which re-reads its layout.
-    const activeReads = () =>
-      state.requests.filter((r) => r.url === '/collection-layouts/active').length
-    const before = activeReads()
+    // Turning it off returns to the record at once (the editor wrapper re-reads
+    // the record's layout once the last save lands: record-layout-editor.test).
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     await waitFor(() => expect(screen.queryByTestId('record-layout-editor')).toBeNull())
-    await waitFor(() => expect(activeReads()).toBeGreaterThan(before))
   })
 })

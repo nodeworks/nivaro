@@ -66,9 +66,10 @@ function args(
   active: DesignTarget,
   pointer: { x: number; y: number } | null,
   collisionRect = rect(0, 0, 10, 10),
-  extra: Node[] = []
+  extra: Node[] = [],
+  base: Node[] = nodes
 ): Parameters<CollisionDetection>[0] {
-  const all = [...nodes, ...extra]
+  const all = [...base, ...extra]
   const idOf = (n: Node) => n.id ?? targetKey(n.t)
   const containers = all.map(
     (n) =>
@@ -116,6 +117,18 @@ describe('typedCollision', () => {
       id: 'group:g2',
       hint: { side: 'before', axis: 'y', body: true }
     })
+  })
+
+  it('a field dropped anywhere on a step or tab button goes first in that step (all header)', () => {
+    // node.ts measures a data-design-tab node's whole height as its header.
+    const tabsAsHeaders = nodes.map((n) =>
+      n.t.kind === 'group' && (n.t.key === 't1' || n.t.key === 't2') ? { ...n, header: 36 } : n
+    )
+    for (const y of [562, 578, 594])
+      expect(hit(args(A, { x: 60, y }, undefined, [], tabsAsHeaders)), String(y)).toEqual({
+        id: 'group:t1',
+        hint: { side: 'before', axis: 'y', body: true }
+      })
   })
 
   it('a field in the gap of a group body snaps to the nearest field there', () => {

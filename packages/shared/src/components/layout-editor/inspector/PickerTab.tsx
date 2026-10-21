@@ -3,6 +3,7 @@ import { useContext, useEffect, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { type CascadeFilterRule, CascadeFiltersEditor } from '../editors/cascade-filters'
+import { editorQueryKeys } from '../editors/editor-queries'
 import { useFieldCtx } from './field-context'
 import {
   Choice,
@@ -26,7 +27,7 @@ type Rel = {
 export function useRelationsFor(collection: string | null | undefined) {
   const client = useNivaroClient()
   return useQuery<Rel[]>({
-    queryKey: ['layout-editor', 'relations-for', collection],
+    queryKey: editorQueryKeys.relationsFor(collection),
     queryFn: () =>
       client
         .request<{ data: Rel[] }>(get(`/data-model/relations/for/${collection}`))

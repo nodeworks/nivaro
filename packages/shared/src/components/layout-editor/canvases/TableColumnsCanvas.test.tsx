@@ -139,6 +139,23 @@ describe('TableColumnsCanvas', () => {
     )
   })
 
+  it('arrow moves count the zone the way the op does, hidden sentinels included', () => {
+    // A legacy widget sentinel sits between Name and Price in the columns zone.
+    const b = bundle()
+    b.placements.push({ ...newPlacement('__widget_5__', null), sort: 0.5, widget_id: 5 })
+    const apply = vi.fn()
+    act(() => root.render(<TableColumnsCanvas bundle={b} apply={apply} collection='lines' />))
+    // Shown: name, price, qty. Members: name, __widget_5__, price, qty.
+    click('Move Name right')
+    expect(apply.mock.calls[0][0]).toEqual([
+      { op: 'move', from: { field: 'name', group_key: null }, to_group_key: null, index: 2 }
+    ])
+    click('Move Qty left')
+    expect(apply.mock.calls[1][0]).toEqual([
+      { op: 'move', from: { field: 'qty', group_key: null }, to_group_key: null, index: 2 }
+    ])
+  })
+
   it('every zone adds a field with one place op, offering only fields not in it', async () => {
     const apply = vi.fn()
     act(() =>

@@ -1,101 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { type ReactNode, useMemo } from 'react'
+import type { ReactNode } from 'react'
 import { Input } from '../../ui/input'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { useFocusBuffer } from '../focus-buffer'
 import { RelationLabel } from '../pickers/relation-label'
 import { RelationPicker } from '../pickers/relation-picker'
-import { useEditorApi } from './editor-api'
 
 export type DefaultValueSettings = { options?: unknown; interface?: string | null }
-
-/** Per-field slice of the layout's default_values, edited from the field
- *  chip's settings — relation fields pick records by display label. Saves
- *  straight onto the layout row; the layout-level Settings list shows the
- *  same data. */
-export function FieldDefaultValueSection({
-  layoutId,
-  collection,
-  fieldName,
-  isM2O,
-  isM2M,
-  relatedCollection,
-  settings,
-  abstractType
-}: {
-  layoutId: number
-  collection: string
-  fieldName: string
-  isM2O?: boolean
-  isM2M?: boolean
-  relatedCollection?: string | null
-  settings: DefaultValueSettings
-  abstractType?: string
-}) {
-  const api = useEditorApi()
-  const qc = useQueryClient()
-  const { data: layouts = [] } = useQuery<
-    Array<{ id: number; default_values?: Record<string, unknown> | string | null }>
-  >({
-    queryKey: ['collection-layouts', collection],
-    queryFn: () =>
-      api.get('/collection-layouts', { params: { collection } }).then((r) => r.data.data ?? []),
-    enabled: !!collection
-  })
-  const layoutRow = layouts.find((l) => l.id === layoutId)
-  const dv = useMemo(() => {
-    const raw = layoutRow?.default_values
-    const parsed =
-      typeof raw === 'string'
-        ? (() => {
-            try {
-              return JSON.parse(raw)
-            } catch {
-              return null
-            }
-          })()
-        : raw
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {}
-  }, [layoutRow?.default_values])
-  const value = dv[fieldName]
-
-  const saveMut = useMutation({
-    mutationFn: (next: Record<string, unknown> | null) =>
-      api.patch(`/collection-layouts/${layoutId}`, { default_values: next }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['collection-layouts', collection] })
-  })
-  const setValue = (v: unknown) => {
-    const next = { ...dv }
-    if (v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)) {
-      delete next[fieldName]
-    } else {
-      next[fieldName] = v
-    }
-    saveMut.mutate(Object.keys(next).length ? next : null)
-  }
-
-  return (
-    <div className='space-y-2'>
-      <p className='border-t border-slate-100 pt-2 text-[11px] font-semibold text-slate-400 dark:border-border'>
-        Default value
-      </p>
-      <FieldDefaultValueControl
-        value={value}
-        onChange={setValue}
-        isM2O={isM2O}
-        isM2M={isM2M}
-        relatedCollection={relatedCollection}
-        settings={settings}
-        abstractType={abstractType}
-      />
-      <p className='text-[11px] leading-relaxed text-slate-400'>
-        Pre-filled when creating a new record on this layout. Optional.
-      </p>
-    </div>
-  )
-}
 
 /** The value input for one field's default: a record picker for relations, a
  *  choice list for dropdowns, else text / number. `onChange(v, typing)` —

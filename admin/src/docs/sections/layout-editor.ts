@@ -64,7 +64,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', text: 'Canvas' },
     {
       type: 'p',
-      text: 'The canvas is the shared record form (ItemEditForm, or the read view for summary and detail layouts) running in design mode: same styles, spacing, steps or tabs, header strip and slot cards as a real record. Inputs are inert — nothing on the canvas writes to a record, takes a lock or runs a rule that saves. Click a field, section, tab, slot card, header strip item or widget to select it. Empty sections show a drop zone; Show hidden reveals fields and sections the preview would hide, faintly, so they can still be selected.'
+      text: 'The canvas is the shared record form (ItemEditForm, or the read view for summary and detail layouts) running in design mode: same styles, spacing, steps or tabs, header strip and slot cards as a real record. Inputs are inert — nothing on the canvas writes to a record, takes a lock or runs a rule that saves. Click a field, section, tab, slot card, header strip item or widget to select it (from the keyboard: Tab to it, Enter). Empty sections show a drop zone; Show hidden reveals fields and sections the preview would hide, faintly, so they can still be selected.'
     },
     {
       type: 'p',
@@ -148,7 +148,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', text: 'Inherited layouts' },
     {
       type: 'p',
-      text: 'A layout that inherits from a parent shows the parent\'s placements on its canvas marked "from <parent>" and locked. The inspector offers Override here (copies the placement into this layout, then editable) and Edit in <parent>.'
+      text: 'A layout that inherits from a parent shows the parent\'s placements on its canvas marked "from <parent>" and locked (an inherited step or tab gets a small dot instead, with the parent\'s name in its tip). The inspector offers Override here (copies the placement into this layout as the parent last saved it, then editable) and Edit in <parent>.'
     },
 
     { type: 'h2', id: 'layout-editor-other-kinds', text: 'Table and PDF layouts' },
@@ -156,7 +156,7 @@ export const layoutEditor: DocSection = {
       type: 'ul',
       items: [
         'Table layouts (the columns a collection shows when it is a grid inside another record) edit on a columns strip that looks like the real grid header: column order and width, plus the Apply values and Create with defaults zones.',
-        'File (PDF) layouts edit their sections in form style; Preview with sample values renders the real PDF in a new tab. Theme, cover, logo, page size, orientation and button label live in Form settings → PDF, which has its own Preview PDF.',
+        'File (PDF) layouts edit their sections in form style, labelled as the PDF prints them; Preview with sample values waits for the last change to save, then renders the real PDF in a new tab. Theme, cover, logo, page size, orientation and button label live in Form settings → PDF, which has its own Preview PDF.',
         'Summary and detail layouts edit on the read view they render as, with the same selection and drag handles.'
       ]
     },
@@ -164,7 +164,7 @@ export const layoutEditor: DocSection = {
     { type: 'h2', id: 'layout-editor-record-page', text: 'Edit layout from a record' },
     {
       type: 'p',
-      text: "On a record page an admin sees Edit layout in the record header (Nivaro admin ItemEdit and efp-new RecordDetail). It switches that page's form into design mode on the layout this record resolved to, with the layouts list, inspector and add panel as side panels over the page. The editor keeps the layout it opened on even if a save changes which layout the record resolves to. Back to record closes it, and the record re-reads its layout. When the collection has no layout yet, the button links to the Layout tab to create the first form. When the page's ?layout= link names a form that doesn't exist, the button says Form not found and links to the collection's forms instead."
+      text: "On a record page an admin sees Edit layout in the record header (Nivaro admin ItemEdit and efp-new RecordDetail). It switches that page's form into design mode on the layout this record resolved to, with the layouts list, inspector and add panel as side panels over the page. The editor keeps the layout it opened on even if a save changes which layout the record resolves to. Back to record closes it at once; the record re-reads its layout as soon as the last change has saved, so it never shows the form from before your last edit. When the collection has no layout yet, the button links to the Layout tab to create the first form. When the page's ?layout= link names a form that doesn't exist, the button says Form not found and links to the collection's forms instead."
     },
     {
       type: 'p',

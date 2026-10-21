@@ -19,7 +19,7 @@
  * - A refetch never replaces the draft while anything is pending or typed; a
  *   refetched bundle with a new rev (someone else saved) clears undo/redo.
  */
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -59,6 +59,13 @@ export interface LayoutDraft {
   redo(): void
   /** Send typed text now instead of after the pause (blur). */
   flush(): void
+  /**
+   * Send typed text now, then resolve once nothing is queued or in flight
+   * (saved, failed or conflicted alike). Hosts await it before re-reading
+   * what the layout renders, so the refetch cannot beat the last save.
+   * Resolves anyway after `timeoutMs` so a hung request never traps a caller.
+   */
+  whenIdle(timeoutMs?: number): Promise<void>
   canUndo: boolean
   canRedo: boolean
   status: DraftStatus
@@ -70,7 +77,37 @@ export interface LayoutDraft {
 }
 
 export const layoutDraftKeys = {
-  bundle: (layoutId: number) => ['layout-editor', 'bundle', layoutId] as const
+  bundle: (layoutId: number) => ['layout-editor', 'bundle', layoutId] as const,
+  versions: (layoutId: number) => ['layout-editor', 'versions', layoutId] as const
+}
+
+/**
+ * Layout settings the overview (and the editor's layouts rail) reads: a batch
+ * that changes none of them leaves every overview row as it was apart from its
+ * shape counts, so it need not trigger the overview's references scan.
+ */
+const OVERVIEW_LAYOUT_KEYS = new Set([
+  'name',
+  'slug',
+  'create_label',
+  'create_hidden',
+  'sort',
+  'is_active',
+  'conditions',
+  'layout_type',
+  'record_conditions',
+  'parent_layout_id',
+  'tab_mode'
+])
+
+/** Does this batch change how the overview describes or resolves layouts? Unknown (null) = yes. */
+export function touchesOverview(ops: LayoutOp[] | null): boolean {
+  if (!ops) return true
+  return ops.some(
+    (op) =>
+      op.op === 'layout_update' &&
+      Object.keys(op.patch ?? {}).some((k) => OVERVIEW_LAYOUT_KEYS.has(k))
+  )
 }
 
 export const TEXT_DEBOUNCE_MS = 600
@@ -308,14 +345,15 @@ interface TextEdit {
 
 export interface DraftTransport {
   send(ops: LayoutOp[], baseRev: string, note: string): Promise<LayoutBundle>
-  /** A bundle the server confirmed — mirror it into the query cache. */
-  saved(bundle: LayoutBundle): void
+  /** A bundle the server confirmed — mirror it into the query cache. `ops` is the
+   *  batch that produced it; null when it is the server's copy after a conflict. */
+  saved(bundle: LayoutBundle, ops: LayoutOp[] | null): void
   /** A 409 without a usable bundle: fetch the layout again. */
   reload(): void
   notify(message: string): void
 }
 
-type View = Omit<LayoutDraft, 'apply' | 'undo' | 'redo' | 'flush' | 'isLoading'>
+type View = Omit<LayoutDraft, 'apply' | 'undo' | 'redo' | 'flush' | 'whenIdle' | 'isLoading'>
 
 /** Split a text apply into single-setting update ops keyed by (target, setting). */
 function textEdits(ops: LayoutOp[]): Array<{ key: string; op: LayoutOp }> | null {
@@ -355,6 +393,7 @@ export class LayoutDraftEngine {
   private error: string | null = null
   private nextId = 1
   private listeners = new Set<() => void>()
+  private idleWaiters: Array<() => void> = []
   private view: View
 
   constructor(private transport: DraftTransport) {
@@ -453,6 +492,30 @@ export class LayoutDraftEngine {
     for (const key of [...this.text.keys()]) this.flushTextKey(key)
   }
 
+  /** Anything typed, queued or in flight. */
+  isBusy() {
+    return this.pending()
+  }
+
+  whenIdle(timeoutMs = 15_000): Promise<void> {
+    this.flushText()
+    if (!this.pending()) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        resolve()
+      }
+      const timer = setTimeout(() => {
+        this.idleWaiters = this.idleWaiters.filter((w) => w !== finish)
+        finish()
+      }, timeoutMs)
+      this.idleWaiters.push(finish)
+    })
+  }
+
   private applyText(edits: Array<{ key: string; op: LayoutOp }>, label: string) {
     const draft = this.draft as LayoutBundle
     try {
@@ -542,7 +605,7 @@ export class LayoutDraftEngine {
     this.redoStack = []
     if (bundle) {
       this.server = bundle
-      this.transport.saved(bundle)
+      this.transport.saved(bundle, null)
     } else this.transport.reload()
     this.outcome = 'conflict'
     this.error = null
@@ -596,7 +659,7 @@ export class LayoutDraftEngine {
       .then((bundle) => {
         this.server = bundle
         this.queue.shift()
-        this.transport.saved(bundle)
+        this.transport.saved(bundle, batch.ops)
         if (this.outcome !== 'error') this.outcome = 'saved'
       })
       .catch((err) => {
@@ -632,56 +695,114 @@ export class LayoutDraftEngine {
   private emit() {
     this.view = this.buildView()
     for (const fn of this.listeners) fn()
+    if (this.idleWaiters.length > 0 && !this.pending()) {
+      const waiters = this.idleWaiters
+      this.idleWaiters = []
+      for (const w of waiters) w()
+    }
   }
 }
 
 // ── Hook ────────────────────────────────────────────────────────────────────
 
-export function useLayoutDraft(layoutId: number): LayoutDraft {
-  const client = useNivaroClient()
-  const qc = useQueryClient()
-  const queryKey = layoutDraftKeys.bundle(layoutId)
+export interface LayoutDraftOptions {
+  /**
+   * Called for every bundle the server confirms, with the batch that produced
+   * it (null after a conflict). Runs even after the editor unmounted, for the
+   * batches it left in flight, so callers can refresh what reads the layout.
+   */
+  onSaved?: (bundle: LayoutBundle, ops: LayoutOp[] | null) => void
+}
 
-  const query = useQuery<LayoutBundle>({
-    queryKey,
+interface Live {
+  client: ReturnType<typeof useNivaroClient>
+  qc: QueryClient
+  onSaved?: LayoutDraftOptions['onSaved']
+}
+
+/**
+ * Engines with unsent or in-flight work, per query cache and layout. A layout
+ * opened again (A → B → A) while its last save is still going reuses that
+ * engine instead of starting a second one from the pre-save cache, whose next
+ * batch would carry a stale rev and come back as a false conflict.
+ */
+const engines = new WeakMap<
+  QueryClient,
+  Map<number, { engine: LayoutDraftEngine; live: { current: Live } }>
+>()
+
+function engineFor(layoutId: number, current: Live) {
+  let byId = engines.get(current.qc)
+  if (!byId) {
+    byId = new Map()
+    engines.set(current.qc, byId)
+  }
+  const existing = byId.get(layoutId)
+  if (existing?.engine.isBusy()) return existing
+  const key = layoutDraftKeys.bundle(layoutId)
+  const live = { current }
+  const engine = new LayoutDraftEngine({
+    send: async (ops, baseRev, note) => {
+      const res = await live.current.client.request<unknown>(
+        post(`/collection-layouts/${layoutId}/ops`, { ops, base_rev: baseRev, note })
+      )
+      const bundle = parseBundle(res)
+      if (!bundle) throw new Error('The server answered without the saved layout')
+      return bundle
+    },
+    saved: (bundle, ops) => {
+      live.current.qc.setQueryData(key, bundle)
+      live.current.onSaved?.(bundle, ops)
+    },
+    reload: () => {
+      void live.current.qc.invalidateQueries({ queryKey: key })
+    },
+    notify: (message) => {
+      toast.warning(message)
+    }
+  })
+  const entry = { engine, live }
+  byId.set(layoutId, entry)
+  return entry
+}
+
+/**
+ * One layout's bundle by id: the key the draft engine keeps current on every
+ * save, so a parent layout read here is never older than its own editor's last
+ * save. An unreadable body is an error, never a cached null.
+ */
+export function useLayoutBundle(layoutId: number | null, enabled = true) {
+  const client = useNivaroClient()
+  return useQuery<LayoutBundle>({
+    queryKey: layoutDraftKeys.bundle(layoutId ?? 0),
     queryFn: async () => {
       const res = await client.request<unknown>(get(`/collection-layouts/${layoutId}/bundle`))
       const bundle = parseBundle(res)
       if (!bundle) throw new Error('The layout could not be read')
       return bundle
     },
+    enabled: enabled && layoutId != null,
     staleTime: 15_000,
     refetchOnWindowFocus: false
   })
+}
 
-  // Latest client/cache for the engine's transport, without rebuilding the engine.
-  const live = useRef({ client, qc })
-  live.current = { client, qc }
+export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}): LayoutDraft {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const query = useLayoutBundle(layoutId)
 
-  const engineRef = useRef<{ id: number; engine: LayoutDraftEngine } | null>(null)
-  if (!engineRef.current || engineRef.current.id !== layoutId) {
-    const key = layoutDraftKeys.bundle(layoutId)
-    engineRef.current = {
-      id: layoutId,
-      engine: new LayoutDraftEngine({
-        send: async (ops, baseRev, note) => {
-          const res = await live.current.client.request<unknown>(
-            post(`/collection-layouts/${layoutId}/ops`, { ops, base_rev: baseRev, note })
-          )
-          const bundle = parseBundle(res)
-          if (!bundle) throw new Error('The server answered without the saved layout')
-          return bundle
-        },
-        saved: (bundle) => live.current.qc.setQueryData(key, bundle),
-        reload: () => {
-          void live.current.qc.invalidateQueries({ queryKey: key })
-        },
-        notify: (message) => {
-          toast.warning(message)
-        }
-      })
-    }
+  const engineRef = useRef<{
+    id: number
+    qc: QueryClient
+    engine: LayoutDraftEngine
+    live: { current: Live }
+  } | null>(null)
+  if (!engineRef.current || engineRef.current.id !== layoutId || engineRef.current.qc !== qc) {
+    engineRef.current = { id: layoutId, qc, ...engineFor(layoutId, { client, qc, ...opts }) }
   }
+  // Latest client/cache/callback for the engine's transport, without rebuilding the engine.
+  engineRef.current.live.current = { client, qc, onSaved: opts.onSaved }
   const engine = engineRef.current.engine
 
   const view = useSyncExternalStore(engine.subscribe, engine.getView, engine.getView)
@@ -701,6 +822,7 @@ export function useLayoutDraft(layoutId: number): LayoutDraft {
   const undo = useCallback(() => engine.undo(), [engine])
   const redo = useCallback(() => engine.redo(), [engine])
   const flush = useCallback(() => engine.flushText(), [engine])
+  const whenIdle = useCallback((timeoutMs?: number) => engine.whenIdle(timeoutMs), [engine])
 
   // A bundle that never loaded is an error, not an empty idle editor.
   const loadFailed = !view.bundle && query.error != null
@@ -714,6 +836,7 @@ export function useLayoutDraft(layoutId: number): LayoutDraft {
     undo,
     redo,
     flush,
+    whenIdle,
     isLoading: query.isLoading
   }
 }

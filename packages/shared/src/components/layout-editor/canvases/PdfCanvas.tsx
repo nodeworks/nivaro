@@ -1,6 +1,11 @@
 import { useState } from 'react'
 import { useApiFetchConfig } from '../../../context'
-import { type GroupRow, type LayoutBundle, UNGROUPED_KEY } from '../../../lib/layout-ops'
+import {
+  type GroupRow,
+  type LayoutBundle,
+  type PlacementRow,
+  UNGROUPED_KEY
+} from '../../../lib/layout-ops'
 import { titleCase } from '../../../lib/utils'
 import { DesignNode } from '../DesignNode'
 import { useLayoutDesign } from '../design-context'
@@ -9,15 +14,38 @@ import { useLayoutDesign } from '../design-context'
 // section per group, one cell per placement. The PDF never renders tabs,
 // widgets or slot cards, so this is a light renderer rather than the record
 // form in design mode (which would draw those and need live field data).
+// Sections come in plain `sort` order, tabs among them, because that is how
+// the PDF lists them (api services/pdf-layout.ts sorts every group flat).
 
 export interface PdfCanvasProps {
   bundle: LayoutBundle
   collection: string
+  /** The collection's fields, for the labels the PDF prints. */
+  fields?: Array<{ field: string; label?: string | null }>
+  /** Resolves once the draft's edits have reached the server: the preview
+   *  renders the stored layout, so it waits for the last save first. */
+  whenIdle?: () => Promise<void>
 }
 
 const isSlotKey = (f: string) => f.startsWith('__')
 
-export function PdfCanvas({ bundle, collection }: PdfCanvasProps) {
+/** The label the PDF prints: the placement's label override (overrides.label,
+ *  then label_override), else the field's label, else the key in words. */
+export function pdfLabel(p: PlacementRow, fieldLabel?: string | null): string {
+  let overrides: unknown = p.overrides
+  if (typeof overrides === 'string') {
+    try {
+      overrides = JSON.parse(overrides)
+    } catch {
+      overrides = null
+    }
+  }
+  const ov = (overrides as { label?: unknown } | null)?.label
+  if (typeof ov === 'string') return ov
+  return p.label_override ?? (fieldLabel || titleCase(p.field))
+}
+
+export function PdfCanvas({ bundle, collection, fields = [], whenIdle }: PdfCanvasProps) {
   const design = useLayoutDesign()
   const showHidden = design?.showHidden ?? false
   const sections: GroupRow[] = bundle.groups
@@ -27,14 +55,20 @@ export function PdfCanvas({ bundle, collection }: PdfCanvasProps) {
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState(false)
 
+  const labels = new Map(fields.map((f) => [f.field, f.label ?? null]))
+
   // The route is admin-only and the host may auth with a bearer token, so a
   // plain link cannot carry it: fetch with the host's config, open the blob.
-  // The tab opens first so the click's popup allowance is not lost to the await.
+  // The tab opens first so the click's popup allowance is not lost to the await;
+  // it gets no handle back to this page.
   const preview = async () => {
     setLoading(true)
     setFailed(false)
     const tab = window.open('', '_blank')
+    if (tab) tab.opener = null
     try {
+      // Typed text and batches still in flight first: preview what was saved last.
+      await whenIdle?.()
       const resp = await fetch(
         `${fetchCfg.apiBase}/collection-layouts/${bundle.layout.id}/preview-html`,
         { headers: fetchCfg.authHeaders, credentials: fetchCfg.credentials }
@@ -102,7 +136,7 @@ export function PdfCanvas({ bundle, collection }: PdfCanvasProps) {
                       }`}
                     >
                       <div className='text-[11px] text-slate-500 dark:text-slate-400'>
-                        {p.label_override ?? titleCase(p.field)}
+                        {pdfLabel(p, labels.get(p.field))}
                       </div>
                       <div className='h-4 rounded bg-slate-100 dark:bg-slate-800' />
                     </div>

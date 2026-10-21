@@ -10,6 +10,14 @@ import { FormSettings } from './FormSettings'
 import type { LayoutKind } from './settings-registry'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+// Pick lists are cmdk lists, which measure with ResizeObserver and scroll the
+// active entry into view; jsdom has neither.
+;(globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+Element.prototype.scrollIntoView ??= () => {}
 
 interface ParityRow {
   key: string
@@ -360,6 +368,17 @@ describe('FormSettings', () => {
     ])
   })
 
+  it('a link name typed and not yet sent is sent when the panel goes away', async () => {
+    const { apply } = await mount(bundleOf('grouped'))
+    const input = setting('layout.slug')?.querySelector('input') ?? null
+    await type(input, 'warehouse')
+    expect(apply).not.toHaveBeenCalled()
+    // Closing Form settings removes the focused input: no blur fires.
+    await act(async () => root.render(null))
+    expect(apply).toHaveBeenCalledTimes(1)
+    expect(apply.mock.calls[0][0]).toEqual([{ op: 'layout_update', patch: { slug: 'warehouse' } }])
+  })
+
   it('a PDF layout shows only what a PDF uses', async () => {
     await mount(bundleOf('file'))
     const sections = Array.from(document.querySelectorAll('[data-section]')).map((s) =>
@@ -369,6 +388,25 @@ describe('FormSettings', () => {
     expect(sections).not.toContain('layout')
     expect(sections).not.toContain('buttons')
     expect(sections).not.toContain('defaults')
+    // No read view or summary panel, and no New-menu rows: a PDF is never opened or created.
+    expect(sections).not.toContain('read')
+    for (const key of [
+      'layout.summary_enabled',
+      'layout.summary_hide_empty',
+      'layout.create_label',
+      'layout.create_hidden'
+    ])
+      expect(setting(key), key).toBeNull()
+  })
+
+  it('only grouped forms offer the New-menu rows (only they join the New menu)', async () => {
+    await mount(bundleOf('grouped'))
+    expect(setting('layout.create_label')).not.toBeNull()
+    expect(setting('layout.create_hidden')).not.toBeNull()
+    act(() => root.unmount())
+    root = createRoot(host)
+    await mount(bundleOf('table'))
+    expect(setting('layout.create_label')).toBeNull()
   })
 
   it('search narrows to matching settings across sections', async () => {
