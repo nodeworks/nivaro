@@ -8,6 +8,7 @@ import {
   Download,
   Globe,
   HardDrive,
+  Headphones,
   KeyRound,
   Mail,
   MessageSquare,
@@ -28,6 +29,7 @@ import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { ChannelTestModeCard } from '@/components/channel-test-mode-card'
 import { DirectorySyncCard } from '@/components/directory-sync-card'
+import { HuddleSettingsSection } from '@/components/huddle-settings'
 import { ObligationsArmingPreview } from '@/components/obligations-arming-preview'
 import { SessionReplaySettingsSection } from '@/components/session-replay-settings'
 import { Badge } from '@/components/ui/badge'
@@ -177,6 +179,7 @@ type Section =
   | 'profile-fields'
   | 'storage'
   | 'session-replay'
+  | 'huddles'
   | 'backups'
   | 'instance'
 
@@ -196,6 +199,7 @@ const NAV: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'profile-fields', label: 'Profile fields', icon: <UserRound className='h-3.5 w-3.5' /> },
   { id: 'storage', label: 'File storage', icon: <HardDrive className='h-3.5 w-3.5' /> },
   { id: 'session-replay', label: 'Session replay', icon: <Video className='h-3.5 w-3.5' /> },
+  { id: 'huddles', label: 'Huddles', icon: <Headphones className='h-3.5 w-3.5' /> },
   { id: 'backups', label: 'Backups', icon: <Download className='h-3.5 w-3.5' /> },
   { id: 'instance', label: 'This Instance', icon: <Server className='h-3.5 w-3.5' /> }
 ]
@@ -4037,6 +4041,8 @@ export function SettingsPage() {
               {activeSection === 'storage' && <FileStorageSection />}
 
               {activeSection === 'session-replay' && <SessionReplaySettingsSection />}
+
+              {activeSection === 'huddles' && <HuddleSettingsSection />}
 
               {activeSection === 'backups' && <BackupsSection />}
 
