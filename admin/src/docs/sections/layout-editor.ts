@@ -192,6 +192,27 @@ export const layoutEditor: DocSection = {
         'Press ? (when not typing) or the keyboard button for every shortcut, grouped by area: undo and redo, duplicate, moving with Alt+arrows or Space, find, the command palette and save.'
       ]
     },
+    { type: 'h3', id: 'layout-editor-arrange', text: 'Arrange: duplicate, wrap, convert, pin' },
+    {
+      type: 'p',
+      text: "Right-click anything on the canvas (or press the context-menu key on it), or press Arrange… in a section's inspector, to open the Arrange menu beside it. Every action in it is one Undo step."
+    },
+    {
+      type: 'ul',
+      items: [
+        "Duplicate (⌘D / Ctrl+D) copies the selected section, tab, step or holder right after itself, with all its settings and every field's settings (label, width, rules). A holder brings its tabs. The copy's fields are the same fields, so they now show in both sections. A single field cannot be duplicated: a field shows once per section.",
+        "Wrap puts the selected fields in a new section right after the first one's section. Fields in a tab or step get a new tab or step beside it, since a section cannot sit in a holder.",
+        'Unwrap removes a section, tab or step and keeps its fields as ungrouped fields. When there are no ungrouped fields yet, they stay where the section was.',
+        "Convert to… turns a section into a tab or step (it joins the holder just above it when that holder shows the same way, else a new holder takes its place), a tab or step into a section (an emptied holder goes), tabs into steps and back, or a holder's tabs into sections. Each choice lists what it would change before you press Convert. A holder shows all its tabs one way, so one tab becomes a step only with its siblings.",
+        'Copy rules to other sections… copies Hidden for, Read-only for and (from a tab or step) Only when onto the sections you tick. Step conditions are skipped on plain sections, where they do nothing.',
+        'Pin in the editor marks a section so it cannot be dragged and takes no drops, with its fields and tabs, while you arrange the rest. Alt+arrow skips it too. The pin only affects the editor; the form people see is unchanged.'
+      ]
+    },
+    { type: 'h3', id: 'layout-editor-find-replace', text: 'Find and replace in labels' },
+    {
+      type: 'p',
+      text: "Replace in the top bar searches this form's field labels, section names, text blocks and help text, for example Oracle to Fusion. Where the form sets no label or help text of its own, the collection's is searched too; replacing it gives this form its own. Every match is listed with its before and after and a tick box; Replace changes the ticked ones as one Undo step."
+    },
     { type: 'h3', id: 'layout-editor-saving', text: 'Saving, undo and conflicts' },
     {
       type: 'p',

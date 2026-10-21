@@ -2,6 +2,7 @@ import { X } from 'lucide-react'
 import { useMemo } from 'react'
 import { type LayoutBundle, type LayoutOp, UNGROUPED_KEY } from '../../../lib/layout-ops'
 import { TipLayer } from '../../TipLayer'
+import { ArrangeButton } from '../ArrangeButton'
 import { type DesignTarget, targetKey } from '../design-context'
 import {
   type FlagKey,
@@ -133,6 +134,7 @@ export function BulkInspector({
             </li>
           ))}
         </ul>
+        <ArrangeButton targets={selection} />
         {outside > 0 && (
           <p className={effectText}>
             {plural(outside, 'item')} from the parent form {outside === 1 ? 'is' : 'are'} left out:

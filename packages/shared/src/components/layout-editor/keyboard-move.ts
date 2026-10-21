@@ -8,6 +8,7 @@ import {
 import { titleCase } from '../../lib/utils'
 import type { DesignTarget } from './design-context'
 import { fieldZones, normalizedBundle, zoneItems } from './field-zones'
+import { pinLocked, pinnedZone } from './pin'
 
 // Alt+arrow on the canvas (#2603): the selected field or section moves one
 // place in one keystroke — one apply, one undo step — without starting a
@@ -74,6 +75,8 @@ function moveInZone(
 /** The ops one Alt+arrow makes for the selected `t`; null when it cannot move that way. */
 export function altArrowMove(bundle: LayoutBundle, t: DesignTarget, dir: ArrowDir): KeyMove | null {
   const b = normalizedBundle(bundle)
+  // Pinned sections (#2628) stay put and take nothing in.
+  if (pinLocked(b, t)) return null
 
   if (t.kind === 'header') return moveInZone(b, t, HEADER_GROUP_KEY, dir)
 
@@ -87,6 +90,7 @@ export function altArrowMove(bundle: LayoutBundle, t: DesignTarget, dir: ArrowDi
     for (let k = at + step(dir); k >= 0 && k < zones.length; k += step(dir)) {
       const z = zones[k]
       if (b.placements.some((p) => p.field === t.field && p.group_key === z.key)) continue
+      if (pinnedZone(b, z.key)) continue
       // A panel moved into the Ungrouped zone would turn into a page card.
       if (isCanvasSlot({ field: t.field, group_key: z.key })) continue
       const index = dir === 'left' ? zoneItems(b, z.key).length : 0

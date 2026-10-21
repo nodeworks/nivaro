@@ -35,11 +35,13 @@ import { NO_DND } from './dnd/node'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { noteKey, notesOf } from './editor-notes'
+import { FindReplaceButton } from './FindReplace'
 import { FormMapButton } from './FormMapButton'
 import { useLayoutEditorHost } from './host'
 import { overriddenTargets, overrideMark } from './inheritance'
 import { BulkInspector } from './inspector/BulkInspector'
 import { FormSettings, Inspector } from './inspector-slot'
+import { isTyping } from './is-typing'
 import { ARROW_DIRS, altArrowMove } from './keyboard-move'
 import { LayoutsRail } from './LayoutsRail'
 import { LintButton, LintPanel } from './lint/LintPanel'
@@ -66,6 +68,7 @@ import { PreviewPanes } from './preview/PreviewPanes'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
 import { useRailCopy } from './reuse/useRailCopy'
 import { useRolePreview } from './settings/settings-api'
+import { StructureActions, usePinMarks } from './StructureMenu'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import { UsagePanel } from './usage/UsagePanel'
 import {
@@ -114,16 +117,7 @@ export interface LayoutEditorProps {
   onDirtyChange?: (dirty: boolean) => void
 }
 
-export const isTyping = (el: EventTarget | null) => {
-  const t = el as HTMLElement | null
-  if (!t?.closest) return false
-  return (
-    t.isContentEditable ||
-    !!t.closest(
-      'input, textarea, select, [role="textbox"], [contenteditable]:not([contenteditable="false"])'
-    )
-  )
-}
+export { isTyping }
 
 /** ⌘Z / ⇧⌘Z / Ctrl+Y (Ctrl elsewhere) — never while typing, where the field's own undo wins.
  *  ⌘S / Ctrl+S saves, typing or not (typed text is already in the draft). */
@@ -383,7 +377,7 @@ function Canvas({
     () => (parent ? overriddenTargets(bundle, parent) : null),
     [bundle, parent]
   )
-  const allMarks = useMemo(() => {
+  const overrideMarks = useMemo(() => {
     if (!overrides?.size) return marks
     return (t: DesignTarget) => {
       const name = overrides.get(targetKey(t))
@@ -403,6 +397,7 @@ function Canvas({
   )
   // #2608: notes pinned to fields and sections show as markers on the canvas.
   const notes = useMemo(() => notesOf(bundle), [bundle])
+  const allMarks = usePinMarks(bundle, overrideMarks)
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
@@ -775,6 +770,7 @@ export function LayoutEditor({
               <>
                 <ViewToggle view={view} onView={setView} />
                 <AutoArrangeButton bundle={bundle} apply={draft.apply} />
+                <FindReplaceButton bundle={bundle} apply={draft.apply} collection={collection} />
               </>
             )}
             {bundle && (
@@ -1094,6 +1090,13 @@ export function LayoutEditor({
           </aside>
         </div>
       </LayoutDndProvider>
+      <StructureActions
+        bundle={bundle}
+        selection={selection}
+        apply={draft.apply}
+        onSelection={setSelection}
+        rootRef={bodyRef}
+      />
       <UnsavedConfirm
         request={leaveAsk}
         count={draft.unsavedCount}
