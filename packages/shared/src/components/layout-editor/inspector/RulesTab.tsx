@@ -3,8 +3,12 @@ import { X } from 'lucide-react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { cn, titleCase } from '../../../lib/utils'
+import { FieldRuleWriter } from '../ai-rules/FieldRuleWriter'
+import { RuleWriter } from '../ai-rules/RuleWriter'
+import { ValidationSuggest } from '../ai-rules/ValidationSuggest'
 import { FieldDefaultValueControl } from '../editors/field-default-value'
 import { PipelineStateConditionRow, RoleConditionRow } from '../editors/lock-conditions'
+import { useLayoutEditorHost } from '../host'
 import { tintCard } from '../panel-style'
 import { useFieldCtx } from './field-context'
 import { AddButton, Choice, Section, Segmented, Setting, TextInput, Toggle } from './kit'
@@ -84,6 +88,16 @@ export function RulesTab() {
   )
   const setAtl = (next: { grid?: string; target?: string; label?: string } | null, label: string) =>
     ctx.setOverride('apply_to_lines', next ?? undefined, label)
+
+  // Checks (#2680): stored scalar values only — not lists, relations or computed values.
+  const isAdmin = useLayoutEditorHost().isAdmin
+  const checksQualify =
+    isAdmin &&
+    !special &&
+    !info.relKind &&
+    !ALIAS_IFACES.has(info.iface ?? '') &&
+    info.type !== 'alias' &&
+    info.computedType !== 'virtual'
 
   const defaults = defaultValuesOf(layout)
   const maxValues = typeof opts.max_values === 'number' ? opts.max_values : null
@@ -209,16 +223,27 @@ export function RulesTab() {
               )}
             </div>
           ))}
-          <AddButton
-            onClick={() =>
-              setLocks(
-                [...locks, { type: 'pipeline_state', state_keys: [] }],
-                `Add a lock condition to ${name}`
-              )
-            }
-          >
-            + Add condition
-          </AddButton>
+          <div className='flex flex-wrap items-center gap-1.5'>
+            <AddButton
+              onClick={() =>
+                setLocks(
+                  [...locks, { type: 'pipeline_state', state_keys: [] }],
+                  `Add a lock condition to ${name}`
+                )
+              }
+            >
+              + Add condition
+            </AddButton>
+            {!special && (
+              <RuleWriter
+                layoutId={Number(layout.id)}
+                target={{ kind: 'lock', field: row.field }}
+                bundle={env.bundle}
+                apply={(ops, o) => env.apply(ops, o)}
+                disabled={ctx.readOnly}
+              />
+            )}
+          </div>
         </div>
       </Setting>
 
@@ -249,6 +274,38 @@ export function RulesTab() {
               abstractType={info.type}
             />
           </div>
+          <div className='pt-1'>
+            <FieldRuleWriter
+              layoutId={Number(layout.id)}
+              field={row.field}
+              disabled={ctx.readOnly}
+            />
+          </div>
+        </Setting>
+      )}
+
+      {checksQualify && (
+        <Setting
+          k='field.validation_rules'
+          label='Checks'
+          scope='field'
+          effect='Learned from the values stored today, each with how many existing values it would refuse.'
+        >
+          <ValidationSuggest
+            layoutId={Number(layout.id)}
+            field={row.field}
+            disabled={ctx.readOnly}
+            onApply={(rules, current, label) =>
+              ctx.proposeGlobal('field.validation_rules', rules.length, label, (d) => {
+                const stored = d.columns.validation_rules
+                const base = Array.isArray(stored) ? (stored as typeof current) : current
+                const same = (a: (typeof current)[number], b: (typeof current)[number]) =>
+                  a.type === b.type && String(a.value ?? '') === String(b.value ?? '')
+                const added = rules.filter((r) => !base.some((b) => same(b, r)))
+                return { ...d, columns: { ...d.columns, validation_rules: [...base, ...added] } }
+              })
+            }
+          />
         </Setting>
       )}
 

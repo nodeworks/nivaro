@@ -324,6 +324,21 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "AI fill per field: in the inspector's Look tab, a text field can get its own AI fill button with a prompt. Write {{field_name}} in the prompt (or pick from Insert a field) to use another field's current value; nothing else from the record is sent. A field's own setting wins over the form-wide \"AI generate buttons\" switch (turned off, it hides the button on that field). Anyone who may change the field on that record can use the button — not only administrators — and fields they cannot read stay empty in the prompt. The value goes into the form like typing; it is saved with the record."
     },
+    { type: 'h3', id: 'layout-editor-ai-rules', text: 'Write rules with AI' },
+    {
+      type: 'p',
+      text: "Admins with AI set up can describe a rule in words beside the setting it changes. The AI answers in the form's own rule format; names it cannot match are left out and listed. It sees field names, labels, choices and the layout — never stored values."
+    },
+    {
+      type: 'ul',
+      items: [
+        'A step\'s "Only when" and a field\'s "Read-only when" → Write with AI. "Hide this step when Is Sparing is yes or Warehouse is 3" becomes conditions the step checks. Before Apply you see how many of the newest 500 records it shows on (or locks on), next to today\'s count. Apply is one undo step and is saved with the form.',
+        "Steps can show and hide by a field's value; single fields cannot. A field locks by pipeline state or by role, not by another field's value. The AI says so instead of guessing.",
+        'Picker tab → Narrow the options → Write with AI: "only regions of the record\'s zone" becomes a cascade filter or an option filter. Pick a record to see its options today and with the change, side by side. Use this adds it to the field\'s every-form change, which you confirm.',
+        'Rules tab → Default for new records → Write a rule with AI: "Default Zone from the project\'s zone" becomes a field rule, tried on five records (now, after the rule, and what a new record gets). It is saved only when you confirm, and then runs on every form and API write.',
+        'Rules tab → Checks → Suggest checks: patterns, ranges and lengths learned from the values stored today, each with how many existing values it would refuse. Nothing is applied until you pick a check and confirm the every-form change. Without AI the pattern-based checks still appear.'
+      ]
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
@@ -686,7 +701,20 @@ GET  /api/ai-design/layouts/:id/autofill-corrections?days=90                 // 
 POST /api/ai/field-fill  { collection, layout_id, field, item_id?, values? }   // record editors
      → { data: { value, missing } }   // the prompt is read from the layout, never sent
      403 when the field has no AI fill on that form, the role may not open the form,
-         or the person may not change the record / field; 429 past 30 fills in 5 minutes`
+         or the person may not change the record / field; 429 past 30 fills in 5 minutes
+
+# AI rule writers — administrators; propose only, never write. 503 when AI is not set up.
+POST /api/ai-design/layouts/:id/rule  { text, target?: { kind: 'step', group } | { kind: 'lock', field } }
+     → { data: { proposal, ops, sentence, replaces, dropped, notes,
+                 test: { checked, matched, current, roles } } }   // newest 500 records
+POST /api/ai-design/layouts/:id/cascade  { field, text }
+     → { data: { related, cascade_filters, option_filter, sentences, dropped } }
+POST /api/ai-design/layouts/:id/field-rule  { text, field? }
+     → { data: { rule, sentence, dry_run: [{ id, label, before_label, after_label, new_record_label }] } }
+     // save with POST /api/field-rules { ...rule }
+POST /api/ai-design/layouts/:id/validation  { field, ai?: false }
+     → { data: { checked, empty, capped, current, suggestions: [{ rule, sentence, source, fails }] } }
+     // newest 5,000 values; the AI sees value shapes (masks, lengths, ranges), never values`
     },
     {
       type: 'table',

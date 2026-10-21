@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { GroupPatch, GroupRow } from '../../../lib/layout-ops'
 import { titleCase } from '../../../lib/utils'
+import { RuleWriter } from '../ai-rules/RuleWriter'
 import { RoleConditionRow } from '../editors/lock-conditions'
 import { O2MAggFieldCombobox } from '../editors/o2m-agg-field'
 import { SwapConfigEditor } from '../editors/swap-config'
@@ -302,6 +303,13 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
                 if (JSON.stringify(complete) !== storedSig)
                   update({ visible_when: jsonList(complete) }, `Change when ${name} shows`, true)
               }}
+            />
+            <RuleWriter
+              layoutId={Number(env.bundle.layout.id)}
+              target={{ kind: 'step', group: group.key }}
+              bundle={env.bundle}
+              apply={(ops, o) => env.apply(ops, o)}
+              disabled={readOnly}
             />
           </Setting>
         </Section>

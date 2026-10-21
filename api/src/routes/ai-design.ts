@@ -65,6 +65,7 @@ import {
 import { clearMetadataCache } from '../services/collections.js'
 import { loadLayoutBundle } from '../services/layout-ops.js'
 import { meaningPass, registerLayoutAssistRoutes } from './ai-design-assist.js'
+import { aiDesignRuleRoutes } from './ai-design-rules.js'
 
 /**
  * AI design helpers (#1920 #1964 #1912 #2010 #1965) — admin only.
@@ -91,6 +92,8 @@ function uiRoutesFrom(v: unknown): UiRoute[] {
 export async function aiDesignRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
   app.addHook('preHandler', resolveWorkspace)
+  // AI rule writers (#2673 #2674 #2675 #2680) — same admin gate.
+  await aiDesignRuleRoutes(app)
 
   // Layout editor AI assists (#2684 #2688 #2689): proposals only, see ai-design-assist.ts.
   registerLayoutAssistRoutes(app)

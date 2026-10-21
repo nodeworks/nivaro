@@ -34,7 +34,7 @@ export class AiUnavailableError extends Error {
 
 /**
  * The configured provider, or null when none is set up. `feature` picks the
- * per-feature model: 'chat' for reasoning (persona test, visual critique),
+ * per-feature model: 'chat' for reasoning (persona test, visual critique, rule writers),
  * 'generate' for writing a value; the default model otherwise.
  */
 export async function defaultComplete(

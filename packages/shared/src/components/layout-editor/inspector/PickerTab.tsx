@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useContext, useEffect, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { CascadeWriter } from '../ai-rules/CascadeWriter'
 import { type CascadeFilterRule, CascadeFiltersEditor } from '../editors/cascade-filters'
 import { editorQueryKeys } from '../editors/editor-queries'
 import { useFieldCtx } from './field-context'
@@ -344,6 +345,33 @@ export function PickerTab() {
                     ) ?? {}
                 })
               )
+            }
+          />
+          <CascadeWriter
+            layoutId={Number(env.bundle.layout.id)}
+            collection={env.collection}
+            field={info.field}
+            rules={rules}
+            currentOptionFilter={
+              globalOptions.option_filter &&
+              typeof globalOptions.option_filter === 'object' &&
+              !Array.isArray(globalOptions.option_filter)
+                ? (globalOptions.option_filter as Record<string, unknown>)
+                : null
+            }
+            parentFields={parents.filter((p) => p.kind === 'M2O').map((p) => p.field)}
+            disabled={ctx.readOnly}
+            onApply={(next, label) =>
+              ctx.proposeGlobal('field.cascade_filters', next.rules, label, (d) => ({
+                ...d,
+                dependency_config:
+                  withKey(
+                    d.dependency_config,
+                    'cascade_filters',
+                    next.rules.length ? next.rules : undefined
+                  ) ?? {},
+                options: withKey(d.options, 'option_filter', next.optionFilter ?? undefined) ?? {}
+              }))
             }
           />
         </Setting>
