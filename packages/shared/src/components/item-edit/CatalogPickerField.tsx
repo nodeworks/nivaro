@@ -15,6 +15,7 @@ import { useNivaroClient, useParentDraft, useReimportHandler } from '../../conte
 import { canOpenCatalogItem, openCatalogItem } from '../../lib/catalog-item-open'
 import { del, get, patch, post } from '../../lib/commands'
 import { evaluateBoolean } from '../../lib/expression'
+import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
 import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
@@ -890,6 +891,9 @@ export function CatalogPickerField({
         : [],
     [config.submission_errors]
   )
+  // #2450 — RecordLiveSync refreshes ['erp-submissions', collection, id] on the record's
+  // `$integrations` notice; the poll is a 5-minute safety net while the socket is live.
+  const submissionsPoll = useLiveRefetchInterval(60_000)
   const { data: erpSubs } = useQuery({
     queryKey: ['erp-submissions', parentCollection ?? '', String(parentId)],
     queryFn: () =>
@@ -900,7 +904,7 @@ export function CatalogPickerField({
         .then((r) => r.data ?? []),
     enabled: submissionErrorsEnabled && !isNew && !!parentCollection,
     staleTime: 15_000,
-    refetchInterval: 60_000
+    refetchInterval: submissionsPoll
   })
   const failedSubmission = useMemo(() => {
     const latest = (erpSubs ?? [])[0]

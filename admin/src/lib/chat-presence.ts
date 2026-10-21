@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { useLocation } from 'react-router'
-import { idleState, onIdleChange, trackActivity } from '@nivaro/shared'
+import { idleState, onIdleChange, trackActivity, useLiveRefetchInterval } from '@nivaro/shared'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { getSocket, onCollectionUpdate } from '@/lib/socket'
@@ -180,6 +180,10 @@ export function usePresenceHeartbeat() {
 export function useOnlineUsers(): { users: OnlineUser[]; loading: boolean } {
   const { user } = useAuth()
   const qc = useQueryClient()
+  // #2450 — presence:changed (connects, disconnects, idle flips) and the user_presence feed below
+  // keep the list current; while the socket is live the poll is a 5-minute safety net.
+  usePresenceLive()
+  const backstop = useLiveRefetchInterval(HEARTBEAT_MS)
   const { data, isLoading } = useQuery({
     queryKey: ['admin-online-users'],
     queryFn: async () => {
@@ -200,7 +204,7 @@ export function useOnlineUsers(): { users: OnlineUser[]; loading: boolean } {
     // The server broadcasts presence:changed on every connect, disconnect and
     // idle flip, so this poll is only a backstop for a dropped socket rather
     // than how the list keeps up.
-    refetchInterval: HEARTBEAT_MS,
+    refetchInterval: backstop,
     staleTime: 2_000
   })
   useEffect(

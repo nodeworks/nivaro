@@ -1,4 +1,10 @@
-import { signalSentence, useFreshIds, useLiveOps, useTopicPresence } from '@nivaro/shared'
+import {
+  signalSentence,
+  useFreshIds,
+  useLiveOps,
+  useLiveRefetchInterval,
+  useTopicPresence
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertOctagon,
@@ -665,11 +671,14 @@ export function IssuesPage() {
   if (sourceFilter) params.set('source', sourceFilter)
   const qs = params.toString()
 
+  // #2450 — the `issues` topic below refreshes the list; the poll is a 5-minute safety net while
+  // the socket is live.
+  const issuesPoll = useLiveRefetchInterval(60_000)
   const { data: issues = [], isLoading } = useQuery<Issue[]>({
     queryKey: ['issues', qs],
     queryFn: () =>
       api.get<{ data: Issue[] }>(`/issues${qs ? `?${qs}` : ''}`).then((r) => r.data.data),
-    refetchInterval: 60_000
+    refetchInterval: issuesPoll
   })
 
   const { data: summary } = useQuery<{

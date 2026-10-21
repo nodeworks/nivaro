@@ -18,6 +18,7 @@ import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from '
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { get, post } from '../lib/commands'
+import { useLiveRefetchInterval } from '../lib/live-queries'
 import {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
@@ -169,10 +170,14 @@ export function NotificationBell({
     void qc.invalidateQueries({ queryKey: ['notifications'] })
   }
 
+  // #2450 — with a socket hookup new notifications arrive through `subscribe` and reads from
+  // other tabs through read:changed (useUserSync), so the count only needs a slow safety poll.
+  // Two minutes, not five: a timed snooze coming back sends no event.
+  const countPoll = useLiveRefetchInterval(60_000, { enabled: !!subscribe, safetyMs: 120_000 })
   const { data: counts } = useQuery({
     queryKey: ['notification-count'],
     queryFn: () => client.request(readUnreadNotificationCount()),
-    refetchInterval: 60_000
+    refetchInterval: countPoll
   })
   const unread = counts?.unread ?? 0
   // An older server answers only `unread` — fall back to it so the badge

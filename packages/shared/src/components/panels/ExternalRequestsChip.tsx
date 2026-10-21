@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { integrationChipSummary } from '../../lib/integration-chip'
+import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { cn, formatRelative } from '../../lib/utils'
 import { type ErpSubmission, SubmissionRow } from '../integrations/console/SubmissionRow'
 import {
@@ -49,6 +50,9 @@ export function ExternalRequestsChip({
     const el = document.querySelector(`[data-submission-id="${focusId}"]`)
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [open, focusId])
+  // #2450 — RecordLiveSync refreshes ['erp-submissions', collection, id] on the record's
+  // `$integrations` notice; the poll is a 5-minute safety net while the socket is live.
+  const submissionsPoll = useLiveRefetchInterval(60_000)
   const { data, isLoading } = useQuery({
     queryKey: ['erp-submissions', collection, String(itemId)],
     queryFn: () =>
@@ -59,7 +63,7 @@ export function ExternalRequestsChip({
         .then((r) => r.data ?? []),
     enabled: !!collection && !!itemId,
     staleTime: 15_000,
-    refetchInterval: 60_000
+    refetchInterval: submissionsPoll
   })
   const retry = useMutation({
     mutationFn: (id: number) =>
