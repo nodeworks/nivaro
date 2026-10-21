@@ -3,11 +3,15 @@ import { useLocation } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { getSocket, usesWorkerSocket } from '@/lib/socket'
 import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 
 /**
  * Reports which admin page the current user is on (presence map feed).
  * One lightweight socket for the whole session; re-emits on route change.
+ *
+ * On the shared socket (#2475) the ping rides the browser's one connection: the worker keeps
+ * each tab's last page and reports the tab the person used last.
  */
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
@@ -22,10 +26,13 @@ export function usePagePresence() {
 
   useEffect(() => {
     if (!user) return
-    const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
+    const shared = usesWorkerSocket()
+    const socket = shared
+      ? getSocket()
+      : io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
     socketRef.current = socket
 
-    socket.on('connect', async () => {
+    const onConnect = async () => {
       let token = user.static_token ?? null
       if (!token) {
         try {
@@ -36,19 +43,28 @@ export function usePagePresence() {
         }
       }
       if (token) socket.emit('auth', { token })
-    })
-    socket.on('auth:ok', () => {
+    }
+    const onAuth = () => {
       readyRef.current = true
       socket.emit('page:at', { path: pathRef.current, app: 'admin' })
-    })
-    socket.on('disconnect', () => {
+    }
+    const onDisconnect = () => {
       readyRef.current = false
-    })
+    }
+    // The shared socket signs itself in (the worker does); a tab-local one does it here.
+    if (!shared) socket.on('connect', onConnect)
+    socket.on('auth:ok', onAuth)
+    socket.on('disconnect', onDisconnect)
+    // Attached to a connection that is already up: say where this tab is now.
+    if (shared && socket.connected) onAuth()
 
     return () => {
       readyRef.current = false
       socketRef.current = null
-      socket.disconnect()
+      socket.off('connect', onConnect)
+      socket.off('auth:ok', onAuth)
+      socket.off('disconnect', onDisconnect)
+      if (!shared) socket.disconnect()
     }
   }, [user])
 

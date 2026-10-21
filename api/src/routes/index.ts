@@ -189,6 +189,7 @@ import { qualityCheckRoutes } from './quality-checks.js'
 import { queuesRoutes } from './queues.js'
 import { readinessRoutes } from './readiness.js'
 import { realtimeRoutes, recordViewersRoutes } from './realtime.js'
+import { realtimeWorkerRoutes } from './realtime-worker.js'
 import { recordGraphRoutes } from './record-graph.js'
 import { recordIntegrationsRoutes } from './record-integrations.js'
 import { recordLinkRoutes } from './record-links.js'
@@ -473,6 +474,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(exportPresetRoutes, { prefix: '/export-presets' })
   await app.register(recordMergeRoutes, { prefix: '/record-merge' })
   await app.register(realtimeRoutes, { prefix: '/realtime' })
+  // #2475 — the SharedWorker script (no sign-in: code, not data); apart from the admin routes.
+  await app.register(realtimeWorkerRoutes, { prefix: '/realtime' })
   await app.register(trafficMapRoutes, { prefix: '/traffic-map' })
   await app.register(recordViewersRoutes, { prefix: '/presence' })
   await app.register(geocodeRoutes)

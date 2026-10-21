@@ -13,6 +13,8 @@ const fakeSocket = {
 vi.mock('socket.io-client', () => ({ io: vi.fn(() => fakeSocket) }))
 const sink: { current: (event: string, payload: unknown) => void } = { current: () => {} }
 vi.mock('@nivaro/shared', () => ({
+  // #2475 — these tests exercise the per-tab socket and the leader relay, not the worker.
+  shouldUseWorkerSocket: () => false,
   createLeaderSocket: (
     _key: string,
     cbs: {

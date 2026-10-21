@@ -428,6 +428,7 @@ export { RecordGridEditor } from './components/RecordGridEditor'
 export { type ReadViewLayout, RecordReadView } from './components/RecordReadView'
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
+export { RowPresence } from './components/RowPresence'
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
 export {
   buildReportPayload,
@@ -613,6 +614,20 @@ export {
   pagePattern
 } from './lib/page-context'
 export {
+  type FieldFocus,
+  type FieldFocusOptions,
+  type RecordPresence,
+  type RowPresenceOptions,
+  type RowRef,
+  type RowViewers,
+  rowPresenceKey,
+  type Typing,
+  useFieldFocus,
+  usePresence,
+  useRowPresence,
+  useTyping
+} from './lib/presence-hooks'
+export {
   applySignal,
   expirePeers,
   type RecordSignalKind,
@@ -777,5 +792,6 @@ export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'
 export { canViewAs, registerViewAsOpener, type ViewAsOpener, viewAs } from './lib/view-as'
+export * from './lib/worker-socket'
 export * from './lib/write-formula'
 export * from './types'

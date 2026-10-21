@@ -27,6 +27,8 @@ const { stopMasquerade, setServerClockOffset, readMasquerade } = vi.hoisted(() =
 vi.mock('@/lib/masquerade', () => ({ readMasquerade, stopMasquerade }))
 vi.mock('@/lib/page-context', () => ({ clientVersion: () => ({}) }))
 vi.mock('@nivaro/shared', () => ({
+  // #2475 — these tests exercise the per-tab socket and the leader relay, not the worker.
+  shouldUseWorkerSocket: () => false,
   createLeaderSocket: (
     _key: string,
     cbs: { becomeLeader: (deliver: unknown, emit: { current: unknown }) => void }

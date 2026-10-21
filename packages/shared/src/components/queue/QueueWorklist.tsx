@@ -20,7 +20,6 @@ import {
   Bell,
   Check,
   ChevronDown,
-  Eye,
   FileDiff,
   Flame,
   GripVertical,
@@ -61,6 +60,7 @@ import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
+import { rowPresenceKey, useRowPresence } from '../../lib/presence-hooks'
 import { buildGroups } from '../../lib/queue-grouping'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
@@ -91,6 +91,7 @@ import { LiveRowMark } from '../LiveRowMark'
 import { RealtimeStaleMark } from '../RealtimeStatusBanner'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
+import { RowPresence } from '../RowPresence'
 import { TickerNumber } from '../TickerNumber'
 import { UnseenDot } from '../UnseenDot'
 import { Badge } from '../ui/badge'
@@ -1134,10 +1135,6 @@ export function QueueWorklist({
       })
   }
 
-  // Record-viewer counts (#272): per-node presence — polled every 30s for the
-  // visible rows; chips render only at 2+ viewers (you are usually one).
-  const [viewerCounts, setViewerCounts] = useState<Record<string, number>>({})
-
   // Triage labels (#109): the queue's distinct label vocabulary.
   const { data: triageLabels = [] } = useQuery<string[]>({
     queryKey: ['queue-triage-labels', queueId],
@@ -1271,34 +1268,16 @@ export function QueueWorklist({
   const isRefetching =
     ((isFetching && !isLoading) || (isPlaceholderData && isFetching)) && !liveRefetchRef.current
 
-  // Poll record-viewer counts for the current page (#272). Per-node data —
-  // treated as a hint, never as truth.
-  const viewerRowsKey = (serverGrouped ? [] : (data?.data ?? []))
-    .slice(0, 100)
-    .map((r) => `${r.collection}:${r.item_id}`)
-    .join(',')
-  useEffect(() => {
-    if (!viewerRowsKey) return
-    let alive = true
-    const pairs = viewerRowsKey.split(',').map((k) => {
-      const i = k.indexOf(':')
-      return { collection: k.slice(0, i), item_id: k.slice(i + 1) }
-    })
-    const load = () => {
-      client
-        .request<{ data: Record<string, number> }>(post('/presence/record-viewers', { pairs }))
-        .then((r) => {
-          if (alive) setViewerCounts(r.data ?? {})
-        })
-        .catch(() => {})
-    }
-    load()
-    const t = setInterval(load, 30_000)
-    return () => {
-      alive = false
-      clearInterval(t)
-    }
-  }, [viewerRowsKey, client])
+  // Who has each row open (#272 → #2486): pushed through the presence room when the host has
+  // a realtime adapter, a 30 s count poll otherwise. Per-node data — a hint, never truth.
+  const presenceRows = useMemo(
+    () =>
+      (serverGrouped ? [] : (data?.data ?? []))
+        .slice(0, 100)
+        .map((r) => ({ collection: r.collection, item: r.item_id })),
+    [serverGrouped, data?.data]
+  )
+  const rowViewers = useRowPresence(presenceRows)
   // Long-request honesty (#370)
   const loadElapsed = useElapsedLoading(isFetching && !liveRefetchRef.current)
 
@@ -2417,15 +2396,10 @@ export function QueueWorklist({
               {l}
             </span>
           ))}
-          {viewerCounts[`${row.collection}:${row.item_id}`] > 1 && (
-            <span
-              className='inline-flex shrink-0 items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-px text-[9.5px] text-slate-500 dark:bg-muted dark:text-muted-foreground'
-              data-tip='People with this record open right now'
-            >
-              <Eye className='h-2.5 w-2.5' />
-              {viewerCounts[`${row.collection}:${row.item_id}`]}
-            </span>
-          )}
+          <RowPresence
+            viewers={rowViewers[rowPresenceKey(row.collection, row.item_id)]}
+            dataAttr='data-queue-presence'
+          />
         </span>
       )
     },

@@ -17,6 +17,12 @@ import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
 import {
+  distinctViewerIds,
+  PRESENCE_WATCH_MAX,
+  parseWatchItems,
+  rowsRoomName
+} from '../services/presence-rows.js'
+import {
   addTopicViewer,
   cleanSelectionKey,
   cleanSignalState,
@@ -135,6 +141,8 @@ export interface SocketMeta {
   transport: string | null
   /** #1681 — the client said it understands coalesced collection:update messages. */
   coalesce: boolean
+  /** #2475 — the connection is a browser's shared worker, carrying every tab of that app. */
+  shared_worker: boolean
 }
 const socketMeta = new Map<string, SocketMeta>()
 let _ioRef: SocketIOServer | null = null
@@ -572,7 +580,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       app: null,
       version: null,
       transport: socket.conn?.transport?.name ?? null,
-      coalesce: false
+      coalesce: false,
+      shared_worker: false
     })
     socket.conn?.on?.('upgrade', (t: { name?: string }) => {
       const meta = socketMeta.get(socket.id)
@@ -711,10 +720,17 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // #1048 — and which build the tab runs (build / api / tab / loaded, see client-version).
     socket.on(
       'client:hello',
-      (payload: { reconnects?: number; app?: string; features?: unknown; transport?: string }) => {
+      (payload: {
+        reconnects?: number
+        app?: string
+        features?: unknown
+        transport?: string
+        shared_worker?: boolean
+      }) => {
         const meta = socketMeta.get(socket.id)
         if (!meta) return
         if (typeof payload?.reconnects === 'number') meta.reconnects = payload.reconnects
+        if (payload?.shared_worker === true) meta.shared_worker = true
         if (typeof payload?.app === 'string') meta.app = payload.app.slice(0, 50)
         noteSocketApp(socket.id, payload?.app)
         // #1681 — opt-in: only a client that understands merged messages gets them, so an older
@@ -1229,6 +1245,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         item: m?.[2] ?? null,
         viewers
       })
+      // #2486 — lists watching this row (ids only; names come from /presence/people).
+      if (m)
+        io.to(rowsRoomName(room)).emit('presence:rows', {
+          collection: m[1],
+          item: m[2],
+          user_ids: distinctViewerIds(viewers)
+        })
+    }
+    /** `{collection, item}` of a record room, so a record-room event names its record and a
+     *  client holding several records on one socket (#2475) can route it. */
+    const recordOf = (room: string | null): { collection: string | null; item: string | null } => {
+      const m = room ? /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room) : null
+      return { collection: m?.[1] ?? null, item: m?.[2] ?? null }
     }
     const leaveOneRoom = (room: string) => {
       joinedRecordRooms.delete(room)
@@ -1323,6 +1352,63 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       leaveRecordRoom(payload)
     )
 
+    // ── Presence on list rows (#2486) ───────────────────────────────────────
+    // A list watches the rows on its page; viewer changes arrive as `presence:rows` instead
+    // of a 30 s count poll. Gated per collection by the read permission (the rows themselves
+    // already passed the list's read gate); capped per socket; ids only.
+    const watchedRows = new Set<string>()
+    const watchableCollections = new Map<string, Promise<boolean>>()
+    const mayWatch = (user: User, collection: string): Promise<boolean> => {
+      let p = watchableCollections.get(collection)
+      if (!p) {
+        p = db('nivaro_roles')
+          .where({ id: user.role })
+          .first('admin_access')
+          .then((role) => !!role?.admin_access || can(user, 'read', collection))
+          .catch(() => false)
+        watchableCollections.set(collection, p)
+      }
+      return p
+    }
+    const onPresenceWatch = async (payload: { collection?: string; items?: unknown }) => {
+      const user = authenticatedUser
+      const collection = payload?.collection
+      if (!user || typeof collection !== 'string' || !collection) return
+      const items = parseWatchItems(payload?.items)
+      if (items.length === 0 || watchedRows.size + items.length > PRESENCE_WATCH_MAX) return
+      if (!(await mayWatch(user, collection))) return
+      if (process.env.CLOUD_META_DB_URL && !recordTenant) {
+        const t = await socketTenant(socket)
+        if (!t) return
+        recordTenant = t.tenantId || t.slug
+      }
+      for (const item of items) {
+        const room = recordRoom(collection, item)
+        const watch = rowsRoomName(room)
+        if (!watchedRows.has(watch)) {
+          watchedRows.add(watch)
+          socket.join(watch)
+        }
+        // The current state, so a page shows who is there without waiting for a change.
+        const ids = distinctViewerIds(recordViewers.get(room)?.values())
+        if (ids.length > 0) socket.emit('presence:rows', { collection, item, user_ids: ids })
+      }
+    }
+    socket.on('presence:watch', inSocketTenant(socket, onPresenceWatch))
+    socket.on('presence:unwatch', (payload?: { collection?: string; items?: unknown }) => {
+      const collection = payload?.collection
+      if (typeof collection !== 'string' || !collection) {
+        for (const watch of watchedRows) socket.leave(watch)
+        watchedRows.clear()
+        return
+      }
+      const items = parseWatchItems(payload?.items)
+      for (const item of items) {
+        const watch = rowsRoomName(recordRoom(collection, item))
+        if (watchedRows.delete(watch)) socket.leave(watch)
+      }
+    })
+
     // Mission-control pulse — admin-only live activity stream
     socket.on(
       'pulse:join',
@@ -1394,6 +1480,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const room = roomFor(payload)
       if (!user || !room || typeof payload?.field !== 'string') return
       socket.to(room).emit('field:editing', {
+        ...recordOf(room),
         field: payload.field,
         user: { id: user.id, name: displayName(user) }
       })
@@ -1410,6 +1497,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const value =
           typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
         socket.to(room).emit('field:changed', {
+          ...recordOf(room),
           field: payload.field,
           value,
           user: { id: user.id, name: displayName(user) }
@@ -1421,7 +1509,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const user = authenticatedUser
       const room = roomFor(payload)
       if (!user || !room || typeof payload?.field !== 'string') return
-      socket.to(room).emit('field:editing', { field: payload.field, user: null })
+      socket.to(room).emit('field:editing', { ...recordOf(room), field: payload.field, user: null })
     })
 
     // Upload presence (#282): "Beth is uploading quote.pdf" chips for

@@ -406,6 +406,51 @@ const { viewers, replying, signalReplying } = useTopicPresence(\`ticket:\${ticke
 // Once in the app shell (cross-tab read state and preferences):
 useUserSync({ onPrefsChanged: refetchMe })`
     },
+    { type: 'h3', id: 'presence-signals-rows', text: 'Who has a row open' },
+    {
+      type: 'p',
+      text: 'List rows in the collection browser and in queues show who else has that record open right now: up to three small avatars where the unseen dot usually sits (the browser) or after the label (queues), "+N" when more people are there, and the names in the tooltip. It arrives live through the presence room — a list tells the server which rows it shows (`presence:watch`) and hears `presence:rows` whenever a record\'s viewers change — instead of the old 30 second count poll, which remains the fallback for a host without a realtime adapter. Your own tabs are never counted. Only people you may see as people (the same rule as the Online tab) get a face and a name; the rest count towards the number.'
+    },
+    { type: 'h3', id: 'presence-signals-hooks', text: 'Presence hooks for headless apps' },
+    {
+      type: 'pre',
+      code: `import { usePresence, useFieldFocus, useTyping, useRowPresence, RowPresence,
+  rowPresenceKey } from '@nivaro/react'
+
+// Who else has this record open (joins its room over the host's realtime adapter):
+const { viewers } = usePresence('orders', id)
+
+// The field or grid cell each co-viewer is in; announce your own:
+const { editing, focus, blur } = useFieldFocus('orders', id, { capture: true })
+
+// "Beth is writing a note" on the comment thread:
+const { typing, setTyping } = useTyping('orders', id)
+
+// A list: who has each row open, keyed collection:item
+const rowViewers = useRowPresence(rows.map((r) => ({ collection: 'orders', item: r.id })))
+<RowPresence viewers={rowViewers[rowPresenceKey('orders', row.id)]} />`
+    },
+    {
+      type: 'ul',
+      items: [
+        "All four need the host's `RealtimeContext` adapter — `createSocketRealtime({ socket })` over the app's socket, or the shared-worker socket below. Without one they are inert.",
+        'Names only, server-gated: the record room admits only people who may open the record; `presence:rows` carries user ids and the names come from `GET /presence/people`, which answers only with people you may see.',
+        "The admin's own record page keeps its `useRecordPresence`; these hooks are for portals and headless frontends."
+      ]
+    },
+    { type: 'h3', id: 'presence-signals-worker', text: 'One socket per browser' },
+    {
+      type: 'p',
+      text: "With several tabs open, one browser used to hold one live connection per tab (plus one per open record page). Now every tab of an app attaches to one SharedWorker, served by the API at `/api/realtime/worker.js`, which owns the single connection: it signs in once, keeps the union of every tab's rooms (a room is joined when the first tab needs it and left when the last one goes), runs one catch-up after a reconnect, routes each collection, record and chat room's events to the tabs that hold it, and reports the tab you used last as your current page. Tabs talk to it through `createWorkerSocket` (`@nivaro/react`), which looks like a socket.io socket, so chat, presence and every live surface work unchanged."
+    },
+    {
+      type: 'ul',
+      items: [
+        'Fallbacks are automatic: no SharedWorker (Safari before 16), a "View as" tab, an API on another origin, a worker that does not answer, speaks another protocol version or goes silent, or a worker whose socket cannot connect while the API answers HTTP — the tab opens its own socket and the older leader-tab relay (one tab carries the noisy rooms over a BroadcastChannel) takes over.',
+        "Off switches: `REALTIME_SHARED_WORKER=off` on the server (the script answers 404), or `localStorage.setItem('nvr-realtime-worker', 'off')` in one browser. `/realtime` lists shared-worker connections with the `shared_worker` flag in their hello.",
+        'A new release is picked up by the next worker start; a running worker lives until its last tab closes, and a tab meeting a worker from another protocol version simply uses its own socket.'
+      ]
+    },
     {
       type: 'note',
       text: 'Everything here is best effort and per server node, like the viewer avatars: with several API replicas a viewer list may show only the people connected to the same node.'

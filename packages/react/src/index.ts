@@ -25,6 +25,8 @@ export type {
   ExprNode,
   ExprValue,
   FieldDrilldownConfig,
+  FieldFocus,
+  FieldFocusOptions,
   FieldInterfaceHandle,
   FieldInterfacePlugin,
   FieldInterfaceProps,
@@ -55,13 +57,20 @@ export type {
   ReadViewLayout,
   RealtimeAdapter,
   RealtimeStatus,
+  RecordPresence,
   RenderFieldProps,
   ReportViewProps,
+  RowPresenceOptions,
+  RowRef,
+  RowViewers,
   SocketLike,
   SocketRealtime,
   SocketRealtimeOptions,
   SocketRealtimeWindowEvent,
-  TokenResolver
+  TokenResolver,
+  Typing,
+  WorkerSocket,
+  WorkerSocketOptions
 } from '@nivaro/shared'
 // ─── Realtime sprint 2026-08-24 ─────────────────────────────────────────────
 // ─── Parity sweep 2026-08-19 — shared surfaces headless hosts need ──────────
@@ -170,6 +179,7 @@ export {
   createLeaderSocket,
   createLiveQueryBridge,
   createSocketRealtime,
+  createWorkerSocket,
   DataTable,
   DbTuningView,
   DEMO_USER,
@@ -446,6 +456,7 @@ export {
   RevisionsPanel,
   ROW_HIGHLIGHT_TINTS,
   type RoomInfo,
+  RowPresence,
   rankSignals,
   rankTeamForFilters,
   registerCatalogItemOpener,
@@ -464,6 +475,7 @@ export {
   restoreMetadata,
   rowHighlightClass,
   rowHighlightTextClass,
+  rowPresenceKey,
   rumRouteChange,
   rumWidget,
   runNotificationTarget,
@@ -495,6 +507,8 @@ export {
   setRecordingSelf,
   setServerClockOffset,
   setTimeDisplay,
+  sharedWorkerSupported,
+  shouldUseWorkerSocket,
   signalSentence,
   splitMessageTokens,
   startApiVersionWatch,
@@ -553,6 +567,7 @@ export {
   useEventPath,
   useFeatureFlag,
   useFeatureFlags,
+  useFieldFocus,
   useFileHealth,
   useGridFlush,
   useHelpVideo,
@@ -583,6 +598,7 @@ export {
   usePeerReadAt,
   usePersonProfile,
   usePlanGridHost,
+  usePresence,
   usePublishAskContext,
   useQuickPickerSteps,
   useRealtimeStatus,
@@ -593,6 +609,7 @@ export {
   useRequiredVideos,
   useRoomMembership,
   useRoomPins,
+  useRowPresence,
   userOptionFilter,
   useScopeDimensions,
   useSendChatMessage,
@@ -604,6 +621,7 @@ export {
   useTogglePin,
   useToggleReaction,
   useTopicPresence,
+  useTyping,
   useTypingIndicator,
   useUnreadChirp,
   useUserSearch,
@@ -616,7 +634,8 @@ export {
   WorkflowPanel,
   wipeMetadataCache,
   withClipKind,
-  withGetCoalescing
+  withGetCoalescing,
+  workerSocketPreference
 } from '@nivaro/shared'
 export { BooleanField } from './components/fields/BooleanField'
 export { DateField } from './components/fields/DateField'
