@@ -40,6 +40,7 @@ import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layo
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
+import { applyTemplateToNewLayout, layoutReuseRoutes, loadFormTemplate } from './layout-reuse.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, slugify }
 
@@ -440,7 +441,9 @@ const SEED_SKIP_FIELDS = new Set([
  */
 export async function seedLayoutFields(
   layout: { id: number; collection: string },
-  trx: Knex | Knex.Transaction
+  trx: Knex | Knex.Transaction,
+  /** #2585 / #2616: only these fields, in this order (unknown names left out). */
+  only?: string[]
 ) {
   const fields = (await trx('nivaro_fields')
     .where({ collection: layout.collection })
@@ -450,9 +453,16 @@ export async function seedLayoutFields(
       { column: 'id', order: 'asc' }
     ])) as Array<{ field: string; hidden: unknown; type: string | null; interface: string | null }>
   const pseudo = (v: string | null) => /^(group-|presentation-)/.test(v ?? '')
-  const keep = fields.filter(
+  let keep = fields.filter(
     (f) => !f.hidden && !SEED_SKIP_FIELDS.has(f.field) && !pseudo(f.type) && !pseudo(f.interface)
   )
+  if (only) {
+    // A chosen list may name hidden or system fields on purpose; never pseudo ones.
+    const byName = new Map(
+      fields.filter((f) => !pseudo(f.type) && !pseudo(f.interface)).map((f) => [f.field, f])
+    )
+    keep = [...new Set(only)].flatMap((n) => byName.get(n) ?? [])
+  }
   await trx('nivaro_field_groups').insert({
     collection: layout.collection,
     key: 'main',
@@ -478,6 +488,8 @@ export async function seedLayoutFields(
 let driftCheckRegistered = false
 
 export async function collectionLayoutsRoutes(app: FastifyInstance) {
+  // Templates, section library, copy a section to another layout (#2584/#2594/#2606).
+  await layoutReuseRoutes(app)
   if (!driftCheckRegistered) {
     driftCheckRegistered = true
     registerReadinessCheck({
@@ -970,8 +982,12 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       name: string
       slug?: string | null
       layout_type?: string
-      /** "Create first form": one "Main" section holding every visible field. */
-      seed_fields?: boolean
+      /** "Create first form": one "Main" section holding every visible field;
+       *  a list (#2585 from a record, #2616 from a column list): those fields, in order. */
+      seed_fields?: boolean | string[]
+      /** #2594: start from a saved form template (field_map renames its fields). */
+      template_id?: number
+      field_map?: Record<string, string | null>
     }
     if (!body.collection || !body.name)
       return reply.code(400).send({ error: 'collection and name are required' })
@@ -980,6 +996,15 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         .code(400)
         .send({ error: `layout_type must be one of ${LAYOUT_TYPES.join(', ')}` })
     }
+    if (
+      Array.isArray(body.seed_fields) &&
+      (body.seed_fields.length > 2000 || !body.seed_fields.every((f) => typeof f === 'string'))
+    )
+      return reply.code(400).send({ error: 'seed_fields must be a list of field names' })
+    const template = body.template_id != null ? await loadFormTemplate(body.template_id) : null
+    if (body.template_id != null && !template)
+      return reply.code(404).send({ error: 'No form template with that id' })
+    if (template && body.layout_type === undefined) body.layout_type = template.layout_type
 
     const maxSortRow = await db('nivaro_collection_layouts')
       .where({ collection: body.collection })
@@ -1009,6 +1034,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
           .orderBy('id', 'desc')
           .first()
         if (body.seed_fields === true && row) await seedLayoutFields(row, trx)
+        else if (Array.isArray(body.seed_fields) && row)
+          await seedLayoutFields(row, trx, body.seed_fields)
         return row
       })
     } catch (err: unknown) {
@@ -1019,6 +1046,22 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       throw err
     }
 
+    // A template lands through the ops service (one version, normal history);
+    // when it cannot, the empty layout it made is removed again.
+    let fromTemplate: Awaited<ReturnType<typeof applyTemplateToNewLayout>> | null = null
+    if (template) {
+      fromTemplate = await applyTemplateToNewLayout(
+        created,
+        template,
+        body.field_map ?? {},
+        req.user?.id
+      )
+      if ('error' in fromTemplate) {
+        await db('nivaro_collection_layouts').where({ id: created.id }).delete()
+        return reply.code(400).send({ error: fromTemplate.error })
+      }
+    }
+
     await logActivity({
       action: 'create',
       user: req.user?.id,
@@ -1026,7 +1069,16 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       item: String(created.id),
       req
     })
-    return reply.code(201).send({ data: created })
+    return reply.code(201).send({
+      data: created,
+      ...(fromTemplate && 'unmapped' in fromTemplate
+        ? {
+            unmapped: fromTemplate.unmapped,
+            dropped: fromTemplate.dropped,
+            already: fromTemplate.already
+          }
+        : {})
+    })
   })
 
   // GET /collection-layouts/:id

@@ -261,6 +261,38 @@ describe('POST /collection-layouts seed_fields', () => {
     expect(fake.tables.nivaro_field_groups ?? []).toEqual([])
   })
 
+  it('a seed_fields list places those fields in that order, unknown and pseudo names left out', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [],
+      nivaro_fields: [
+        { field: 'title', hidden: false, type: 'string' },
+        { field: 'amount', hidden: false, type: 'decimal' },
+        { field: 'secret', hidden: true, type: 'string' },
+        { field: 'divider', hidden: false, type: 'alias', interface: 'presentation-divider' }
+      ]
+    })
+    const res = await call('POST', '', {
+      collection: 'things',
+      name: 'From a list',
+      seed_fields: ['amount', 'nope', 'divider', 'secret', 'title', 'amount']
+    })
+    expect(res.statusCode).toBe(201)
+    const assigned = fake.inserts
+      .filter((i) => i.table === 'nivaro_layout_field_assignments')
+      .flatMap((i) => i.rows)
+    expect(assigned.map((a) => [a.field, a.sort])).toEqual([
+      ['amount', 0],
+      ['secret', 1],
+      ['title', 2]
+    ])
+  })
+
+  it('refuses a seed_fields list that is not field names', async () => {
+    fake.reset({ nivaro_collection_layouts: [] })
+    const res = await call('POST', '', { collection: 'things', name: 'X', seed_fields: [1, 2] })
+    expect(res.statusCode).toBe(400)
+  })
+
   it('without seed_fields creates an empty layout', async () => {
     fake.reset({ nivaro_collection_layouts: [] })
     const res = await call('POST', '', { collection: 'things', name: 'Empty' })

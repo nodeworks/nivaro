@@ -1,5 +1,5 @@
 import { ChevronLeft, Eye, History, Redo2, Undo2, UserRound, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { useRelationOptions } from '../../hooks/useRelationOptions'
@@ -177,7 +177,8 @@ export function EditorTopBar({
   showHidden,
   onShowHidden,
   onBack,
-  backLabel = 'Layouts'
+  backLabel = 'Layouts',
+  more
 }: {
   collection: string
   layoutId: number
@@ -196,6 +197,8 @@ export function EditorTopBar({
   onBack: () => void
   /** What the back button returns to ("Layouts", or the record in overlay mode). */
   backLabel?: string
+  /** The ⋯ menu (Save as template, New form from this record). */
+  more?: ReactNode
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const pill = row ? rowPill(row) : null
@@ -295,6 +298,7 @@ export function EditorTopBar({
           )}
         </PopoverContent>
       </Popover>
+      {more}
       <StatusChip draft={draft} />
     </header>
   )

@@ -5,6 +5,7 @@ import { RoleConditionRow } from '../editors/lock-conditions'
 import { O2MAggFieldCombobox } from '../editors/o2m-agg-field'
 import { SwapConfigEditor } from '../editors/swap-config'
 import { IconPicker } from '../pickers/icon-picker'
+import { SectionReuseActions } from '../reuse/SectionReuseActions'
 import { useCollectionMeta } from './field-context'
 import {
   Choice,
@@ -464,6 +465,10 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
           allFields={globals.map((f) => ({ field: f.field, type: f.type ?? undefined }))}
           onGroupSettings={(_id, patch) => update(patch, `Change the field swap of ${name}`)}
         />
+      )}
+
+      {!readOnly && (
+        <SectionReuseActions bundle={env.bundle} collection={env.collection} group={group} />
       )}
 
       <div
