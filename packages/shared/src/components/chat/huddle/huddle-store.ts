@@ -733,6 +733,8 @@ class HuddleStore {
         await sender.replaceTrack(track).catch(() => null)
       }
     }
+    // A large huddle (#2859) sends the mic through the SFU, not the mesh links.
+    if (this.sfu) await this.sfu.replaceMic(track).catch(() => null)
     for (const t of old?.getTracks() ?? []) t.stop()
     this.set({ micLabel: track.label || null })
   }

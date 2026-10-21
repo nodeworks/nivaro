@@ -98,6 +98,14 @@ export class SfuSession {
     })
   }
 
+  /** Swap the published microphone for another device's track in place (#2847 device picker). */
+  async replaceMic(track: MediaStreamTrack): Promise<void> {
+    if (!this.room || !this.lk) return
+    const pub = this.room.localParticipant.getTrackPublication(this.lk.Track.Source.Microphone)
+    if (pub?.track) await pub.track.replaceTrack(track, { userProvidedTrack: true })
+    else await this.publishMic(track)
+  }
+
   async publishScreen(track: MediaStreamTrack): Promise<void> {
     if (!this.room || !this.lk) return
     await this.room.localParticipant.publishTrack(track, {
