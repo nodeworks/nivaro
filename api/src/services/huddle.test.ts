@@ -270,6 +270,49 @@ describe('registerHuddle', () => {
     expect((await huddlePeers(redis, null, 'ch:ops')).map((p) => p.socket)).toEqual(['S2'])
   })
 
+  it('ping and state re-check access: revoked mid-call drops the person', async () => {
+    const io = fakeIo()
+    let allowed = true
+    const { d } = deps(redis, { canSeeRoom: async () => allowed })
+    const a = fakeSocket('S1')
+    const b = fakeSocket('S2')
+    registerHuddle(io as never, a.socket as never, () => rob, scope, d)
+    registerHuddle(io as never, b.socket as never, () => amy, scope, d)
+    await a.fire('huddle:join', { room: 'ch:ops' })
+    await b.fire('huddle:join', { room: 'ch:ops' })
+
+    allowed = false
+    await a.fire('huddle:ping', { room: 'ch:ops' })
+    expect(a.emitted.at(-1)).toEqual({
+      event: 'huddle:denied',
+      payload: { room: 'ch:ops', reason: 'no-access' }
+    })
+    expect(a.socket.data.huddle).toBeUndefined()
+    expect((await huddlePeers(redis, null, 'ch:ops')).map((p) => p.socket)).toEqual(['S2'])
+    // Everyone with the room open saw the roster shrink.
+    const last = io.sent.filter((s) => s.event === 'huddle:peers').at(-1)?.payload as {
+      peers: Array<{ socket: string }>
+    }
+    expect(last.peers.map((p) => p.socket)).toEqual(['S2'])
+
+    await b.fire('huddle:state', { room: 'ch:ops', muted: true })
+    expect(b.emitted.at(-1)?.event).toBe('huddle:denied')
+    expect((await huddlePeers(redis, null, 'ch:ops')).length).toBe(0)
+  })
+
+  it('a ping from a socket whose sign-in is gone removes it', async () => {
+    const io = fakeIo()
+    const { d } = deps(redis)
+    let user: User | null = rob
+    const a = fakeSocket('S1')
+    registerHuddle(io as never, a.socket as never, () => user, scope, d)
+    await a.fire('huddle:join', { room: 'ch:ops' })
+    user = null
+    await a.fire('huddle:ping', { room: 'ch:ops' })
+    expect(a.socket.data.huddle).toBeUndefined()
+    expect((await huddlePeers(redis, null, 'ch:ops')).length).toBe(0)
+  })
+
   it('state updates ride the peer list; the last leave ends the huddle with its duration', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-21T12:00:00Z'))

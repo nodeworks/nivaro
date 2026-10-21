@@ -26,13 +26,18 @@ export function useHuddle(room: string | null) {
   const support = useMemo(huddleSupport, [])
   const usable = !!realtime && support.audio && !!room
 
+  // With a room, the answer carries a TURN credential for it; the plain lookup below only
+  // asks whether huddles are on.
   const fetchIce = useCallback(
-    () => client.request<{ data: IceConfig }>(get('/chat/huddle/ice')).then((r) => r.data),
+    (forRoom?: string) =>
+      client
+        .request<{ data: IceConfig }>(get('/chat/huddle/ice', forRoom ? { room: forRoom } : {}))
+        .then((r) => r.data),
     [client]
   )
   const { data: ice } = useQuery({
     queryKey: ['nvr-huddle-ice'],
-    queryFn: fetchIce,
+    queryFn: () => fetchIce(),
     enabled: usable,
     staleTime: 5 * 60_000
   })

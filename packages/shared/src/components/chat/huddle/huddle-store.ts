@@ -137,8 +137,9 @@ class HuddleStore {
   private offs: Array<() => void> = []
   private links = new Map<string, PeerLink>()
   private mic: MediaStream | null = null
-  private ice: { at: number; cfg: IceConfig } | null = null
-  private fetchIce: (() => Promise<IceConfig>) | null = null
+  /** The last /ice answer, per room: TURN credentials are minted for the room being joined. */
+  private ice: { room: string; at: number; cfg: IceConfig } | null = null
+  private fetchIce: ((room: string) => Promise<IceConfig>) | null = null
   private ping: ReturnType<typeof setInterval> | null = null
   /** One hidden <audio> per peer, owned here so sound survives any room view unmounting. */
   private audio = new Map<string, HTMLAudioElement>()
@@ -175,7 +176,7 @@ class HuddleStore {
 
   // ── Transport ─────────────────────────────────────────────────────────────
   /** Bind the host's socket adapter once; later calls with the same adapter are no-ops. */
-  attach(transport: HuddleTransport, fetchIce: () => Promise<IceConfig>) {
+  attach(transport: HuddleTransport, fetchIce: (room: string) => Promise<IceConfig>) {
     this.fetchIce = fetchIce
     if (this.transport === transport) return
     for (const off of this.offs) off()
@@ -198,11 +199,11 @@ class HuddleStore {
     ]
   }
 
-  private async iceServers(): Promise<RTCIceServer[]> {
+  private async iceServers(room: string): Promise<RTCIceServer[]> {
     if (!this.fetchIce) return []
     const ttl = this.ice ? Math.min(this.ice.cfg.ttl_s, 3600) * 1000 * 0.8 : 0
-    if (!this.ice || Date.now() - this.ice.at > ttl) {
-      this.ice = { at: Date.now(), cfg: await this.fetchIce() }
+    if (!this.ice || this.ice.room !== room || Date.now() - this.ice.at > ttl) {
+      this.ice = { room, at: Date.now(), cfg: await this.fetchIce(room) }
     }
     return this.ice.cfg.iceServers
   }
@@ -232,7 +233,7 @@ class HuddleStore {
       return
     }
     for (const t of this.mic.getAudioTracks()) t.enabled = !this.state.muted
-    await this.iceServers().catch(() => null)
+    await this.iceServers(room).catch(() => null)
     this.transport.emit('huddle:join', { room })
   }
 
@@ -346,7 +347,7 @@ class HuddleStore {
     const self = this.state.self
     const room = this.state.room
     if (!self || !room || !this.transport) return null
-    const iceServers = await this.iceServers().catch(() => [] as RTCIceServer[])
+    const iceServers = await this.iceServers(room).catch(() => [] as RTCIceServer[])
     if (this.links.has(socket)) return this.links.get(socket) ?? null
     const pc = new RTCPeerConnection({ iceServers })
     const link: PeerLink = {

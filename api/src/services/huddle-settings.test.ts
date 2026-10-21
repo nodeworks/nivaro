@@ -7,6 +7,7 @@ vi.mock('./instance-key.js', () => ({ instanceKey: () => 'test' }))
 import {
   HUDDLE_DEFAULTS,
   HUDDLE_MASK,
+  iceResponseFor,
   iceServersFrom,
   maskHuddleSettings,
   mergeHuddlePatch,
@@ -102,6 +103,15 @@ describe('ICE servers', () => {
     })
   })
 
+  it('a lookup without turn: true gets STUN at most', () => {
+    const s = normalizeHuddleSettings({
+      stun_urls: ['stun:s:3478'],
+      turn_urls: ['turn:t:3478'],
+      turn_secret: 'shh'
+    })
+    expect(iceServersFrom(s, 'U', Date.now(), false)).toEqual([{ urls: ['stun:s:3478'] }])
+  })
+
   it('hands out a static credential pair when there is no shared secret', () => {
     const s = normalizeHuddleSettings({
       turn_urls: ['turn:t:3478'],
@@ -113,5 +123,39 @@ describe('ICE servers', () => {
       username: 'u',
       credential: 'p'
     })
+  })
+})
+
+describe('iceResponseFor (the /ice answer)', () => {
+  const s = normalizeHuddleSettings({
+    stun_urls: ['stun:s:3478'],
+    turn_urls: ['turn:t:3478'],
+    turn_secret: 'shh'
+  })
+  const seeOnly = (ok: string) => async (room: string) => room === ok
+
+  it('gives nothing at all while huddles are off — not even STUN', async () => {
+    const off = normalizeHuddleSettings({ ...s, enabled: false })
+    const r = await iceResponseFor(off, 'U', 'ch:ops', seeOnly('ch:ops'))
+    expect(r).toMatchObject({ enabled: false, iceServers: [] })
+  })
+
+  it('without a room: STUN only, no TURN credential', async () => {
+    const r = await iceResponseFor(s, 'U', null, seeOnly('ch:ops'))
+    expect(r.iceServers).toEqual([{ urls: ['stun:s:3478'] }])
+  })
+
+  it('a room the person cannot see: STUN only', async () => {
+    const r = await iceResponseFor(s, 'U', 'ch:secret', seeOnly('ch:ops'))
+    expect(r.iceServers).toEqual([{ urls: ['stun:s:3478'] }])
+    expect(JSON.stringify(r)).not.toContain('turn:')
+  })
+
+  it('a room the person can see: TURN credential minted for them', async () => {
+    const r = await iceResponseFor(s, 'U', 'ch:ops', seeOnly('ch:ops'))
+    expect(r.iceServers).toHaveLength(2)
+    expect(r.iceServers[1].urls).toEqual(['turn:t:3478'])
+    expect(r.iceServers[1].username).toMatch(/^\d+:U$/)
+    expect(JSON.stringify(r)).not.toContain('shh')
   })
 })

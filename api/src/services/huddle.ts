@@ -257,6 +257,15 @@ export function registerHuddle(
     }
   }
 
+  /** Every heartbeat, state change and signal re-asks canSeeRoom: access revoked mid-call
+   *  removes the person (peers drop the link on the next huddle:peers broadcast). */
+  async function stillAllowed(user: User, room: string): Promise<boolean> {
+    if (await deps.canSeeRoom(user, room)) return true
+    deny(room, 'no-access')
+    await leave(room)
+    return false
+  }
+
   socket.on('huddle:join', inSocketTenant(socket, join))
 
   socket.on(
@@ -307,6 +316,7 @@ export function registerHuddle(
         const user = getUser()
         if (!user) return
         try {
+          if (!(await stillAllowed(user, room))) return
           const tenant = scope.tenantNow()
           const k = keys(tenant, room)
           const raw = await deps.redis.hget(k.meta, socket.id)
@@ -333,7 +343,14 @@ export function registerHuddle(
     inSocketTenant(socket, async (payload: { room?: unknown }) => {
       const room = payload?.room
       if (typeof room !== 'string' || data()?.room !== room) return
+      const user = getUser()
+      if (!user) {
+        await leave(room)
+        return
+      }
       try {
+        // A ping is what keeps a member listed: no access, no heartbeat.
+        if (!(await stillAllowed(user, room))) return
         await touch(deps.redis, scope.tenantNow(), room, socket.id)
       } catch {
         /* the next ping tries again */

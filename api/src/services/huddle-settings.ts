@@ -196,12 +196,22 @@ export function turnRestCredential(
   return { username, credential }
 }
 
-/** The ICE servers a signed-in person's browser gets (pure given the settings). Nothing
- *  configured = an empty list: host candidates reach people on the same network. */
-export function iceServersFrom(s: HuddleSettings, userId: string, now = Date.now()): IceServer[] {
+/**
+ * The ICE servers a signed-in person's browser gets (pure given the settings). Nothing
+ * configured = an empty list: host candidates reach people on the same network. TURN
+ * entries (a relay anyone holding the credential can push traffic through) go out only
+ * with `turn: true` — the caller has proven the person is about to talk in a room they
+ * can see; a plain lookup gets STUN at most.
+ */
+export function iceServersFrom(
+  s: HuddleSettings,
+  userId: string,
+  now = Date.now(),
+  turn = true
+): IceServer[] {
   const out: IceServer[] = []
   if (s.stun_urls.length) out.push({ urls: s.stun_urls })
-  if (s.turn_urls.length) {
+  if (turn && s.turn_urls.length) {
     if (s.turn_secret) {
       out.push({
         urls: s.turn_urls,
@@ -216,17 +226,38 @@ export function iceServersFrom(s: HuddleSettings, userId: string, now = Date.now
   return out
 }
 
-export async function iceServersFor(userId: string): Promise<{
+export interface IceResponse {
   enabled: boolean
   iceServers: IceServer[]
   ttl_s: number
   max_participants: number
-}> {
-  const s = await getHuddleSettings()
-  return {
-    enabled: s.enabled,
-    iceServers: iceServersFrom(s, userId),
+}
+
+/**
+ * The /ice answer (pure given the settings): nothing at all while huddles are off, STUN only
+ * for a lookup without a room, TURN credentials only for a room the person can see (checked
+ * by the caller-supplied `canSee`).
+ */
+export async function iceResponseFor(
+  s: HuddleSettings,
+  userId: string,
+  room: string | null,
+  canSee: (room: string) => Promise<boolean>,
+  now = Date.now()
+): Promise<IceResponse> {
+  const base = {
     ttl_s: s.turn_secret ? s.turn_ttl_s : 86_400,
     max_participants: s.max_participants
   }
+  if (!s.enabled) return { enabled: false, iceServers: [], ...base }
+  const turn = !!room && (await canSee(room))
+  return { enabled: true, iceServers: iceServersFrom(s, userId, now, turn), ...base }
+}
+
+export async function iceServersFor(
+  userId: string,
+  room: string | null,
+  canSee: (room: string) => Promise<boolean>
+): Promise<IceResponse> {
+  return iceResponseFor(await getHuddleSettings(), userId, room, canSee)
 }

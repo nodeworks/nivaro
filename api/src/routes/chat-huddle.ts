@@ -13,7 +13,8 @@ import { currentTenantKey } from '../services/tenant-rooms.js'
 
 /**
  * Huddles (#2457) over REST — registered under /chat/huddle:
- *   GET  /ice            the signed-in person's ICE servers (TURN credential minted per call)
+ *   GET  /ice?room=      the signed-in person's ICE servers; a TURN credential is minted only
+ *                        for a huddle-capable room the person can see, and nothing while off
  *   GET  /presence?room= who is in the room's huddle (canSeeRoom-gated, like every room read)
  *   GET  /settings       admin: this instance's STUN/TURN settings, secrets masked
  *   PATCH /settings      admin: save; a masked secret re-submitted keeps the stored value
@@ -22,7 +23,9 @@ export async function chatHuddleRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
   app.get('/ice', async (req, reply) => {
-    const data = await iceServersFor(String(req.user!.id))
+    const raw = String((req.query as { room?: string }).room ?? '')
+    const room = huddleRoomKind(raw) === 'ok' ? raw : null
+    const data = await iceServersFor(String(req.user!.id), room, (r) => canSeeRoom(req.user!, r))
     return reply.send({ data })
   })
 
