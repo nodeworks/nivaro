@@ -984,3 +984,82 @@ export function startMasquerade(userId: string): Command<{
 export function stopMasquerade(): Command<{ ok: boolean }> {
   return cmd('DELETE', '/auth/masquerade')
 }
+
+// ─── Instance MCP tools (#2464, #2465) ───────────────────────────────────────
+
+/** A tool this instance adds to MCP: an extension's, or a custom query / flow
+ *  an administrator exposed under its own name. */
+export interface InstanceToolEntry {
+  name: string
+  title: string
+  description: string
+  /** JSON Schema object for the tool's input. */
+  input_schema: Record<string, unknown>
+  read_only: boolean
+  source:
+    | { kind: 'extension'; extension: string }
+    | { kind: 'custom_query'; slug: string }
+    | { kind: 'flow'; flow_id: string }
+}
+
+/** The instance tools the caller may use. */
+export function listInstanceTools(): Command<{ data: InstanceToolEntry[] }> {
+  return cmd('GET', '/mcp-tools')
+}
+
+/** Run one instance tool as the caller. */
+export function callInstanceTool(
+  name: string,
+  input?: Record<string, unknown>
+): Command<{ data: unknown }> {
+  return cmd('POST', `/mcp-tools/${encodeURIComponent(name)}/call`, undefined, {
+    input: input ?? {}
+  })
+}
+
+/** A custom query or flow an administrator exposed as a named MCP tool. */
+export interface NamedMcpToolConfig {
+  name: string
+  title?: string
+  description: string
+  kind: 'custom_query' | 'flow'
+  /** The query's slug, or the flow's id. */
+  ref: string
+  access: 'admin' | 'authenticated'
+  read_only: boolean
+  enabled: boolean
+  params?: Array<{
+    name: string
+    type: 'string' | 'number' | 'integer' | 'boolean' | 'date'
+    required?: boolean
+    description?: string
+  }>
+}
+
+export interface McpToolsConfig {
+  /** False until the database has migration 473. */
+  ready: boolean
+  tools: NamedMcpToolConfig[]
+  extension_tools: Array<{
+    name: string
+    title: string
+    extension: string
+    description: string
+    read_only: boolean
+    enabled: boolean
+    stats: { calls: number; errors: number; last_used_at: string | null; last_error: string | null }
+  }>
+  builtin_names: string[]
+}
+
+/** Named MCP tools + extension tools (admin). */
+export function readMcpToolsConfig(): Command<{ data: McpToolsConfig }> {
+  return cmd('GET', '/mcp-tools/config')
+}
+
+/** Replace the named MCP tools (admin). */
+export function saveMcpToolsConfig(
+  tools: NamedMcpToolConfig[]
+): Command<{ data: { tools: NamedMcpToolConfig[] } }> {
+  return cmd('PUT', '/mcp-tools/config', undefined, { tools })
+}

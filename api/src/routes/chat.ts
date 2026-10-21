@@ -730,6 +730,81 @@ export async function chatRoutes(app: FastifyInstance) {
     return { data: { posted_message_id: posted, reply: out.reply ?? null } }
   })
 
+  // ── Message actions (#2763) ───────────────────────────────────────────────
+
+  /** Extension items for a message's ⋯ menu in a room the caller can see. */
+  app.get('/message-actions', async (req, reply) => {
+    const room = String((req.query as { room?: string }).room ?? '')
+    if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    const { listChatMessageActions } = await import('../services/chat-message-actions.js')
+    return { data: await listChatMessageActions(room) }
+  })
+
+  /** Run one AS the caller; text it returns is posted through the normal send path. */
+  app.post<{ Params: { id: string } }>('/messages/:id/actions', async (req, reply) => {
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
+    if (!msg || msg.deleted_at) return reply.code(404).send({ error: 'Not found' })
+    const room = String(msg.room)
+    if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    const key = String((req.body as { action?: string } | null)?.action ?? '')
+    const { runChatMessageAction } = await import('../services/chat-message-actions.js')
+    let out: Awaited<ReturnType<typeof runChatMessageAction>>
+    try {
+      out = await runChatMessageAction(
+        key,
+        {
+          id: Number(msg.id),
+          room,
+          message: String(msg.message ?? ''),
+          sender: msg.sender ? String(msg.sender) : null,
+          sender_name: msg.sender_name ?? null,
+          parent_id: msg.parent_id ?? null,
+          attachments: parseAttachments(msg.attachments),
+          date_created: new Date(msg.date_created).toISOString()
+        },
+        String(req.user!.id)
+      )
+    } catch (err) {
+      app.log.warn({ err, action: key }, 'chat message action failed')
+      return reply.code(502).send({ error: 'That action failed' })
+    }
+    if (!out) return reply.code(404).send({ error: 'Unknown action' })
+    let posted: number | null = null
+    if (out.post) {
+      try {
+        const row = await postChatMessage(
+          app,
+          {
+            user: req.user!,
+            isAdmin: !!req.isAdmin,
+            masqueradeAdminId: req.masqueradeAdminId ?? null
+          },
+          {
+            room,
+            message: out.post,
+            parentId: out.in_thread ? Number(msg.parent_id ?? msg.id) : null
+          }
+        )
+        posted = row.id
+      } catch (err) {
+        if (err instanceof ChatSendError)
+          return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+        throw err
+      }
+    }
+    void logActivity({
+      action: 'chat-message-action',
+      user: req.user!.id,
+      collection: 'chat_messages',
+      item: String(msg.id),
+      comment: key.slice(0, 120),
+      req
+    })
+    return {
+      data: { posted_message_id: posted, reply: out.reply ?? null, open_url: out.open_url ?? null }
+    }
+  })
+
   // ── Polls (#2337) ─────────────────────────────────────────────────────────
 
   /** Post a poll into a room. The question is the message; options + votes

@@ -74,6 +74,14 @@ import type {
   TrafficLensDef,
   TrafficNodeDef
 } from './signals.js'
+import type {
+  ChatMessageActionDef,
+  ExtensionAiMembers,
+  ExtensionMcpMembers,
+  ExtensionToolDef,
+  ExtensionToolHandler,
+  ToolInputSchema
+} from './tools.js'
 import type { ExtensionUser } from './user.js'
 
 // ─── In-memory knex ─────────────────────────────────────────────────────────
@@ -458,6 +466,9 @@ export interface TestContext extends ExtensionContext {
     flowTriggers: FlowTriggerRegistration[]
     botTools: BotToolDef[]
     chatCommands: ChatCommandDef[]
+    mcpTools: ExtensionToolDef[]
+    aiTools: Array<ExtensionToolDef & { replayable?: boolean }>
+    chatMessageActions: ChatMessageActionDef[]
   }
   /** Run the registered hooks for a write, as the items service would. */
   runHooks(
@@ -484,6 +495,20 @@ export interface TestContext extends ExtensionContext {
       user?: ExtensionUser | null
     }
   ): Promise<{ status: number; body: unknown }>
+}
+
+/** Either registerTool spelling → one declaration (the positional form's
+ *  options ride the fourth argument). */
+function toolDefOf(args: unknown[]): ExtensionToolDef & { replayable?: boolean } {
+  if (typeof args[0] === 'object' && args[0]) return args[0] as ExtensionToolDef
+  const opts = (args[3] ?? {}) as Partial<ExtensionToolDef> & { replayable?: boolean }
+  return {
+    ...opts,
+    name: String(args[0]),
+    description: opts.description ?? '',
+    input_schema: args[1] as ToolInputSchema,
+    handler: args[2] as ExtensionToolHandler
+  }
 }
 
 const defaultUser: ExtensionUser = {
@@ -573,7 +598,10 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     flowOps: [],
     flowTriggers: [],
     botTools: [],
-    chatCommands: []
+    chatCommands: [],
+    mcpTools: [],
+    aiTools: [],
+    chatMessageActions: []
   }
   let nextObligation = 1
   const logAt =
@@ -697,7 +725,11 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
         calls.chat.push({ room, text, opts: o })
         return calls.chat.length
       },
-      registerCommand: (def) => registered.chatCommands.push(def)
+      registerCommand: (def) => registered.chatCommands.push(def),
+      registerMessageAction: (def) => {
+        registered.chatMessageActions.push(def)
+        return true
+      }
     },
     hooks: {
       before: (collection, action, fn) =>
@@ -793,6 +825,18 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
       }
     },
     chatBot: { registerTool: (d) => registered.botTools.push(d) },
+    mcp: {
+      registerTool: (...args: unknown[]) => {
+        registered.mcpTools.push(toolDefOf(args))
+        return true
+      }
+    } as ExtensionMcpMembers,
+    ai: {
+      registerTool: (...args: unknown[]) => {
+        registered.aiTools.push(toolDefOf(args))
+        return true
+      }
+    } as ExtensionAiMembers,
     auth: {
       authenticate: async () => {},
       requireAuth: async () => {},

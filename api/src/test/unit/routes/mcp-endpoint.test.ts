@@ -50,6 +50,9 @@ vi.mock('../../../services/mcp-calls.js', async (orig) => ({
   })
 }))
 
+// No database here: named instance tools (migration 473) read as "not there yet".
+vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: async () => false }))
+
 const { mcpRoutes } = await import('../../../routes/mcp.js')
 
 let app: FastifyInstance

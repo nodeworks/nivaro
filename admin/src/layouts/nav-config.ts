@@ -34,6 +34,7 @@ import {
   GitCompare,
   Globe,
   Grid3x3,
+  Hammer,
   HeartPulse,
   House,
   Inbox,
@@ -636,6 +637,13 @@ export const navCategories: NavCategory[] = [
         to: '/mcp-connections',
         section: 'APIs',
         keywords: 'ai assistant agent claude chatgpt oauth connected apps'
+      },
+      {
+        icon: Hammer,
+        label: 'Assistant Tools',
+        to: '/mcp-tools',
+        section: 'APIs',
+        keywords: 'mcp claude chatgpt codex tools'
       },
       { icon: Braces, label: 'GraphQL', to: '/graphql', section: 'APIs', keywords: 'explorer' },
       { icon: Braces, label: 'Persisted Queries', to: '/persisted-queries', section: 'APIs' },

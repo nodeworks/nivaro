@@ -21,6 +21,7 @@ export * from './sections/data-safety.js'
 export * from './sections/db-tuning.js'
 export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
+export * from './sections/ext-assistant-tools.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
 export * from './sections/field-display.js'
@@ -176,6 +177,7 @@ import {
   devexWebhookDeliveries,
   devexWebhookSigning
 } from './sections/devex.js'
+import { extAssistantTools } from './sections/ext-assistant-tools.js'
 import {
   extContext,
   extCron,
@@ -626,6 +628,7 @@ export const navSections: NavGroup[] = [
       extExternalApis,
       extFlows,
       extRegistrations,
+      extAssistantTools,
       extExample,
       extPluginSystem,
       extPluginManifest,

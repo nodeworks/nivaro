@@ -16,6 +16,7 @@ import { WATCH_TOOLS } from './ai-watch-tool-defs.js'
 import { customQueryCacheKey, customQueryCacheValue } from './custom-query-cache.js'
 import { embedText, searchEmbeddings } from './embeddings.js'
 import type { PathNode } from './event-path/types.js'
+import { AI_RESERVED_NAMES } from './extension-tools.js'
 import { getApp } from './io-holder.js'
 import {
   applyConditions,
@@ -1729,10 +1730,21 @@ async function runChatTool(
       return executePanelTool(user, name, input)
     }
 
-    default:
+    default: {
+      // #2735 — a tool an extension registered with ctx.ai.registerTool, run
+      // AS the asker (built-in names never route here, see withExtensionAiTools).
+      const ext = await import('./extension-tools.js')
+      if (ext.extensionTool('ai', name) && !BUILTIN_TOOL_NAMES.has(name)) {
+        const result = await ext.runExtensionTool('ai', user, name, input)
+        return { result: result ?? null, summary: ext.summarizeToolResult(name, result) }
+      }
       throw new Error(`Unknown tool: ${name}`)
+    }
   }
 }
+
+/** Names Ask AI already uses — an extension tool may never shadow one. */
+export const BUILTIN_TOOL_NAMES = new Set([...CHAT_TOOLS.map((t) => t.name), ...AI_RESERVED_NAMES])
 
 export const CHAT_SYSTEM_PROMPT = `You are the data assistant inside Nivaro, a headless CMS. You answer questions about the user's business data by calling tools — never invent data.
 

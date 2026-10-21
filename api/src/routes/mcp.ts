@@ -143,6 +143,20 @@ export function mcpToolOptions(req: FastifyRequest): {
   }
 }
 
+/**
+ * The instance's own tools (#2464, #2465: extensions, named queries and flows) this caller
+ * gets, listed by name beside the built-ins — for /api/mcp and the admin MCP console alike.
+ * Calling one re-enters POST /api/mcp-tools/:name/call, which judges the caller with the same
+ * mcpCallerAccess rule.
+ */
+export async function mcpInstanceTools(req: FastifyRequest) {
+  const { instanceToolCatalog, mcpCallerAccess } = await import('../services/mcp-tools.js')
+  return instanceToolCatalog(mcpCallerAccess(req)).catch((err) => {
+    req.log.warn({ err }, 'mcp instance tool catalog failed')
+    return []
+  })
+}
+
 let mcpModules: Promise<{
   createNivaroMcpServer: typeof import('@nivaro/mcp').createNivaroMcpServer
   StreamableHTTPServerTransport: typeof import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport
@@ -201,11 +215,13 @@ export async function mcpRoutes(app: FastifyInstance) {
     // Loaded on first use: boot never depends on the MCP packages, and a process
     // nobody connects an assistant to never loads them.
     const { createNivaroMcpServer, StreamableHTTPServerTransport } = await loadMcp()
+    const instanceTools = await mcpInstanceTools(req)
     const { server } = createNivaroMcpServer({
       url: mcpPublicOrigin(),
       token,
       fetch: injectFetch(app, req),
       ...mcpToolOptions(req),
+      instanceTools,
       subscriptions: live ? subscriptionHost(app, req, live.session) : undefined
     } as Parameters<typeof createNivaroMcpServer>[0])
     const transport = new StreamableHTTPServerTransport({

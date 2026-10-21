@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
+import { ExtensionToolsTab } from './ai-quality/ExtensionToolsTab'
 import { ModelsTab } from './ai-quality/ModelsTab'
 import { PromptCostTab } from './ai-quality/PromptCostTab'
 import { SavingsTab } from './ai-quality/SavingsTab'
@@ -27,6 +28,7 @@ type Tab =
   | 'compare'
   | 'replay'
   | 'live'
+  | 'ext-tools'
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'review', label: 'Review queue' },
   { id: 'spend', label: 'Spend' },
@@ -38,7 +40,8 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'health', label: 'Provider health' },
   { id: 'compare', label: 'Compare models' },
   { id: 'replay', label: 'Replay questions' },
-  { id: 'live', label: 'Live calls' }
+  { id: 'live', label: 'Live calls' },
+  { id: 'ext-tools', label: 'Extension tools' }
 ]
 
 const usd = (n: number | null | undefined) => (n == null ? '—' : `$${n.toFixed(4)}`)
@@ -103,6 +106,7 @@ export function AiQualityPage() {
         {tab === 'compare' && <CompareTab />}
         {tab === 'replay' && <ReplayTab />}
         {tab === 'live' && <LiveTab />}
+        {tab === 'ext-tools' && <ExtensionToolsTab />}
       </div>
     </div>
   )

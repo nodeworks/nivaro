@@ -68,6 +68,16 @@ import {
 } from '@nivaro/extension-kit'
 import { registerCacheWarmer } from '../services/cache-warmers.js'
 import {
+  describeChatMessageActions,
+  registerChatMessageAction,
+  unregisterChatMessageActions
+} from '../services/chat-message-actions.js'
+import {
+  describeExtensionTools,
+  registerExtensionTool,
+  unregisterExtensionTools
+} from '../services/extension-tools.js'
+import {
   forgetLayoutDependencies,
   registerLayoutDependency
 } from '../services/layout-dependencies.js'
@@ -599,6 +609,16 @@ export function registrationMembers(
         note('chat')
         void import('../services/chat-commands.js').then((m) => m.registerChatCommand(extId, def))
       },
+      registerMessageAction: (def) => {
+        note('chat')
+        // Validated synchronously so register() learns of a bad action and
+        // nothing half-registers; a bad one is logged, never thrown.
+        const ok = registerChatMessageAction(extId, def)
+        if (ok) own('chat_message_actions', `${def.id} · ${def.label}`)
+        else
+          ctx.logger.warn(`[extensions] ${extId}: chat message action skipped — bad id/label/when`)
+        return ok
+      },
       post: async (room, text, o) => {
         note('chat')
         try {
@@ -1024,6 +1044,24 @@ export function registrationMembers(
         emitTrigger(triggerType, payload, ctx.logger)
       }
     },
+    mcp: {
+      registerTool: (...args: unknown[]) => {
+        note('mcp')
+        const r = registerExtensionTool('mcp', extId, args)
+        if (r.ok) own('mcp_tools', r.name)
+        else ctx.logger.warn(`[extensions] ${extId}: MCP tool skipped — ${r.error}`)
+        return r.ok
+      }
+    } as NonNullable<ExtensionContext['mcp']>,
+    ai: {
+      registerTool: (...args: unknown[]) => {
+        note('ai')
+        const r = registerExtensionTool('ai', extId, args)
+        if (r.ok) own('ai_tools', r.name)
+        else ctx.logger.warn(`[extensions] ${extId}: Ask AI tool skipped — ${r.error}`)
+        return r.ok
+      }
+    } as NonNullable<ExtensionContext['ai']>,
     chatBot: {
       registerTool: (def) => {
         note('chat-bot')
@@ -1293,6 +1331,8 @@ async function loadExtension(
     clearHelpVideoRegistrations(extId)
     unregisterExtensionLenses(extId)
     void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(extId))
+    unregisterChatMessageActions(extId)
+    unregisterExtensionTools(extId)
 
     // Capability manifest (#660): the ctx members register() touches are noted
     // as observed capabilities, compared against the declared list in the UI.
@@ -1757,6 +1797,8 @@ export function removeExtension(id: string): boolean {
   unregisterExtensionLenses(id)
   forgetLayoutDependencies(id)
   void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(id))
+  unregisterChatMessageActions(id)
+  unregisterExtensionTools(id)
 
   const config = readConfig()
   delete config[id]
@@ -1993,6 +2035,9 @@ export async function describeExtensionRegistry(
         paused: !!c.paused
       })),
     registrations: getExtensionRegistrations(extId),
+    // #2465 / #2735 / #2763 — assistant tools + message actions, with detail.
+    ...describeExtensionTools(extId),
+    chat_message_actions: describeChatMessageActions(extId),
     settings: getExtensionSettingsSchema(extId).map((d) => ({
       key: d.key,
       label: d.label,

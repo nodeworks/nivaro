@@ -20,6 +20,7 @@ import { MAIN_MODEL_TOOLS, saysCannotAnswer } from './ai-routing.js'
 import { consumeText, isAbortError, streamMessage } from './ai-stream.js'
 import { compactToolResult } from './ai-tool-payload.js'
 import type { ToolReuse } from './ai-tool-reuse.js'
+import { isReplayableExtensionTool, withExtensionAiTools } from './extension-tools.js'
 
 /**
  * The Ask AI tool loop (#688 moved it out of the route so it can stream).
@@ -95,7 +96,8 @@ export interface ChatRouting {
 }
 
 /** A read-only (replay) run may call only the replayable read tools; every other tool is refused. */
-export const readOnlyAllows = (tool: string): boolean => REPLAYABLE_TOOLS.has(tool)
+export const readOnlyAllows = (tool: string): boolean =>
+  REPLAYABLE_TOOLS.has(tool) || isReplayableExtensionTool(tool)
 
 export interface ChatLoopOptions extends ChatLoopCallbacks {
   client: Anthropic
@@ -202,9 +204,14 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let plans: Array<Record<string, unknown>> = []
   let choices: Array<Record<string, unknown>> = []
   let memorySuggestions: AiMemorySuggestion[] = []
-  // A read-only run is never even offered a tool that could change data.
-  const offered = opts.readOnly ? CHAT_TOOLS.filter((t) => readOnlyAllows(t.name)) : CHAT_TOOLS
-  const tools = opts.memorySuggestions ? [...offered, SUGGEST_MEMORY_TOOL] : offered
+  // #2735 — plus every enabled extension's ctx.ai tools whose name is free. A read-only run
+  // is never even offered a tool that could change data (extension tools included).
+  const all = await withExtensionAiTools(
+    opts.memorySuggestions ? [...CHAT_TOOLS, SUGGEST_MEMORY_TOOL] : CHAT_TOOLS
+  )
+  const tools = opts.readOnly
+    ? all.filter((t) => t.name === SUGGEST_MEMORY_TOOL_NAME || readOnlyAllows(t.name))
+    : all
 
   // #2471 — which model the next call goes to. Without routing: the main one.
   const routing = opts.routing ?? null

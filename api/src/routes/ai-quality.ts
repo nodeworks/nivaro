@@ -179,6 +179,22 @@ export async function aiQualityRoutes(app: FastifyInstance) {
     return reply.send({ data: next })
   })
 
+  // ─── extension tools (#2735) ──────────────────────────────────────────────
+
+  /** Ask AI tools extensions registered, with the extension's name and calls since boot. */
+  app.get('/quality/extension-tools', { preHandler: requireAdmin }, async () => {
+    const { extensionToolRoster } = await import('../services/extension-tools.js')
+    const { BUILTIN_TOOL_NAMES } = await import('../services/ai-chat.js')
+    const tools = await extensionToolRoster('ai')
+    return {
+      data: tools.map(({ input_schema: _s, ...t }) => ({
+        ...t,
+        // A name a built-in already uses is never offered to Ask AI.
+        shadowed: BUILTIN_TOOL_NAMES.has(t.name)
+      }))
+    }
+  })
+
   // ─── budgets ──────────────────────────────────────────────────────────────
 
   /** What is left for the caller today (#1893). `enabled:false` = nothing to show. */

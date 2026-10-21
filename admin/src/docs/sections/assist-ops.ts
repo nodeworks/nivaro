@@ -428,6 +428,10 @@ export const aiQualityDocs: DocSection = {
       text: 'A nightly check asks the provider which models it offers (its list where it has one, otherwise a one-token probe per known model). New and retired models are listed. A new model automatically runs Compare and a small replay of saved questions so the side-by-side is waiting; a model still named in the settings that was retired raises a readiness warning and tells admins. Nothing ever switches a model by itself.'
     },
     {
+      type: 'p',
+      text: 'Extension tools lists the tools extensions give Ask AI (`ctx.ai.registerTool`): the extension each comes from, whether answers that used it may be shared (only a read-only tool its extension declared replayable), and its calls and failures since the server started. A tool whose name a built-in already uses is marked and never offered.'
+    },
+    {
       type: 'pre',
       code: `GET  /api/ai/spend/forecast     admin: month so far, projection, last month, alerts
 GET  /api/ai/spend/reconcile    admin: logged vs billed per month and model

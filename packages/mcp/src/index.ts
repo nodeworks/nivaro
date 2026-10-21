@@ -13,7 +13,13 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { createNivaro, type NivaroClient, readMcpCapabilities, readMe } from '@nivaro/sdk'
+import {
+  createNivaro,
+  type InstanceToolEntry,
+  type NivaroClient,
+  readMcpCapabilities,
+  readMe
+} from '@nivaro/sdk'
 import { identifyingFetch, tagToolCalls } from './identify.js'
 import { registerRecordResource, type SubscriptionHost } from './record-resource.js'
 import { registerResources } from './resources.js'
@@ -24,6 +30,7 @@ import { registerApprovalTools } from './tools/approvals.js'
 import { type ChatAccess, registerChatTools } from './tools/chat.js'
 import { registerCollectionTools } from './tools/collections.js'
 import { registerDashboardTools } from './tools/dashboards.js'
+import { registerInstanceTools, registerNamedInstanceTools } from './tools/instance.js'
 import { registerItemTools } from './tools/items.js'
 import { registerLayoutTools } from './tools/layouts.js'
 import { registerLookupTools } from './tools/lookup.js'
@@ -63,6 +70,12 @@ export interface NivaroMcpOptions {
    * refuses chat to an OAuth connection without it anyway.
    */
   chatAccess?: ChatAccess
+  /**
+   * The instance's own tools (GET /api/mcp-tools as this user) to list under
+   * their own names (#2464, #2465). The hosted endpoint passes them; the stdio
+   * server reaches the same tools through list_instance_tools / call_instance_tool.
+   */
+  instanceTools?: InstanceToolEntry[]
 }
 
 export interface NivaroMcp {
@@ -111,7 +124,9 @@ export const TOOL_NAMES = [
   'sla_status',
   'list_dashboards',
   'read_dashboard',
-  'run_report'
+  'run_report',
+  'list_instance_tools',
+  'call_instance_tool'
 ] as const
 
 /** Chat tools (#2492): the first two with chatAccess 'read', all three with 'post'. */
@@ -227,12 +242,16 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   registerApprovalTools(server, client)
   registerStatusTools(server, client)
   registerDashboardTools(server, client)
+  registerInstanceTools(server, client)
   registerChatTools(server, client, chatAccess)
   if (options.adminTools === true) {
     registerAdminTools(server, client)
     registerAccessTools(server, client)
     registerLayoutTools(server, client)
   }
+  // After every built-in, so a built-in name always wins.
+  if (options.instanceTools?.length)
+    registerNamedInstanceTools(server, client, options.instanceTools)
   registerResources(server, client)
   registerRecordResource(server, client, options.subscriptions)
 
@@ -256,6 +275,7 @@ export { registerChatTools } from './tools/chat.js'
 export type { CollectionSchema, CollectionSummary, FieldSummary } from './tools/collections.js'
 export { summarizeCollection, summarizeSchema } from './tools/collections.js'
 export { compactFigure, registerDashboardTools } from './tools/dashboards.js'
+export { registerInstanceTools, registerNamedInstanceTools, zodShapeOf } from './tools/instance.js'
 export { registerLayoutTools } from './tools/layouts.js'
 export type { PipelineStateView } from './tools/pipeline.js'
 export { buildPipelineView } from './tools/pipeline.js'

@@ -29,6 +29,7 @@ export {
   requesterSelectColumns
 } from './requester-columns.js'
 export type * from './signals.js'
+export type * from './tools.js'
 export type * from './user.js'
 
 /** Type-checks an extension's default export without changing it. */

@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { mcpPublicOrigin } from '../services/mcp-config.js'
-import { injectFetch, loadMcp, mcpToolOptions } from './mcp.js'
+import { injectFetch, loadMcp, mcpInstanceTools, mcpToolOptions } from './mcp.js'
 
 /**
  * Admin MCP console (#2468) — /api/mcp-console.
@@ -125,7 +125,8 @@ async function connect(req: FastifyRequest, f: typeof fetch) {
     // A placeholder: the console's fetch forwards the administrator's own session or bearer.
     token: 'mcp-console',
     fetch: f,
-    ...mcpToolOptions(req)
+    ...mcpToolOptions(req),
+    instanceTools: await mcpInstanceTools(req)
   } as Parameters<typeof createNivaroMcpServer>[0])
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: 'nivaro-mcp-console', version: '1.0.0' })

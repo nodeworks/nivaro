@@ -125,7 +125,9 @@ describe('createNivaroMcpServer', () => {
       'support_claim',
       'support_reply',
       'support_set_status',
-      'decide_approval'
+      'decide_approval',
+      // an instance tool may write
+      'call_instance_tool'
     ])
     for (const tool of tools) {
       const a = tool.annotations
