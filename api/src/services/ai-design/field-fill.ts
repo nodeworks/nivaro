@@ -1,3 +1,4 @@
+import { overWindowLimit } from '../windowed-limit.js'
 import { cleanText } from './model.js'
 
 /**
@@ -105,19 +106,14 @@ export function cleanFieldValue(text: string, maxLength: number | null): string 
   return maxLength && maxLength > 0 ? t.slice(0, maxLength) : t
 }
 
-/** In-process per-person limit: a button people click, never a loop. */
-const WINDOW_MS = 5 * 60_000
+/** Per-person limit, cluster-wide (Redis; this process alone when Redis is down): a button
+ *  people click, never a loop. */
+const WINDOW_S = 5 * 60
 export const FIELD_FILL_PER_WINDOW = 30
-const calls = new Map<string, number[]>()
 
-export function takeFieldFillSlot(userId: string, now = Date.now()): boolean {
-  const recent = (calls.get(userId) ?? []).filter((t) => now - t < WINDOW_MS)
-  if (recent.length >= FIELD_FILL_PER_WINDOW) {
-    calls.set(userId, recent)
-    return false
-  }
-  recent.push(now)
-  calls.set(userId, recent)
-  if (calls.size > 5000) for (const k of [...calls.keys()].slice(0, 1000)) calls.delete(k)
-  return true
+export async function takeFieldFillSlot(
+  redis: Parameters<typeof overWindowLimit>[0],
+  userId: string
+): Promise<boolean> {
+  return !(await overWindowLimit(redis, `ai-field-fill:${userId}`, FIELD_FILL_PER_WINDOW, WINDOW_S))
 }

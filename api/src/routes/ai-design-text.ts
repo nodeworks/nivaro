@@ -27,6 +27,7 @@ import {
   READING_SYSTEM,
   readingItems,
   readingProposals,
+  relabelChoices,
   TEXT_TOOLS,
   type TextModel,
   type TextResult,
@@ -325,15 +326,10 @@ export async function aiDesignTextRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: 'Field not found' })
     const options = parseDeep(row.options)
     const current = choicesFrom(options)
-    if (!current) return reply.code(409).send({ error: 'The field has no choices' })
+    if (!current || !Array.isArray(options.choices))
+      return reply.code(409).send({ error: 'The field has no choices' })
     const previous = current.map((c) => ({ text: c.text, value: c.value }))
-    let changed = 0
-    const next = current.map((c) => {
-      const text = wanted.get(String(c.value))
-      if (!text || text === c.text) return { text: c.text, value: c.value }
-      changed++
-      return { text, value: c.value }
-    })
+    const { next, changed } = relabelChoices(options.choices, wanted)
     if (changed === 0) return reply.send({ data: { field, changed: 0 } })
     await db('nivaro_fields')
       .where({ id: row.id })

@@ -5,9 +5,12 @@ import { readOne } from '../services/items.js'
 import {
   FORM_CHANGE_CATEGORY,
   FORM_CHANGE_DESCRIPTION,
+  FORM_CHANGE_LINK_PREFIX,
+  type FormChangeLink,
+  formChangeMessage,
   formChangeTitle,
   formChangeTrailer,
-  parseFormChange
+  parseFormChangeLink
 } from '../services/layout-change-requests.js'
 import { getLayoutOwnerId, ownerFirst } from '../services/layout-notify.js'
 import {
@@ -18,7 +21,9 @@ import {
   type TicketRow,
   userName
 } from '../services/support-tickets.js'
+import { overWindowLimit } from '../services/windowed-limit.js'
 import { resolveFriendlyId } from '../services/workflow-transitions.js'
+import type { User } from '../types.js'
 import { raiseTicket } from './support.js'
 
 /**
@@ -50,20 +55,97 @@ async function findCategory(): Promise<CategoryRow | undefined> {
     .first()) as CategoryRow | undefined
 }
 
-/** The "Form change" type, made on first use (admins route it like any other type). */
-async function ensureCategory(): Promise<CategoryRow> {
+const CORE_EXT = 'nivaro-core'
+const REQUESTS_PER_HOUR = 10
+let creatingCategory: Promise<CategoryRow> | null = null
+
+/**
+ * The "Form change" type, made on first use (admins route it like any other type).
+ * Idempotent: one creation in flight per process, and a process that loses a race with
+ * another removes its own row again — the oldest row is the type everyone uses.
+ */
+export async function ensureCategory(): Promise<CategoryRow> {
   const found = await findCategory()
   if (found) return found
-  await db('nivaro_task_categories').insert({
-    name: FORM_CHANGE_CATEGORY,
-    description: FORM_CHANGE_DESCRIPTION,
-    collection: null,
-    team_id: null,
-    default_assignee: null,
-    is_active: true,
-    sort: 900
+  creatingCategory ??= (async () => {
+    let mine: number | null = null
+    try {
+      const [row] = (await db('nivaro_task_categories')
+        .insert({
+          name: FORM_CHANGE_CATEGORY,
+          description: FORM_CHANGE_DESCRIPTION,
+          collection: null,
+          team_id: null,
+          default_assignee: null,
+          is_active: true,
+          sort: 900
+        })
+        .returning('id')) as Array<{ id: number } | number>
+      mine = Number(typeof row === 'object' ? row.id : row)
+    } catch {
+      /* a unique name index (where there is one) refused a duplicate: use the winner */
+    }
+    const winner = await findCategory()
+    if (!winner) throw new Error('Could not create the Form change request type')
+    if (mine != null && Number.isFinite(mine) && mine !== Number(winner.id))
+      await db('nivaro_task_categories')
+        .where({ id: mine })
+        .delete()
+        .catch(() => undefined)
+    return winner
+  })().finally(() => {
+    creatingCategory = null
   })
-  return (await findCategory()) as CategoryRow
+  return creatingCategory
+}
+
+/** Server-written: which form (and field) a request is about. Never read from the text. */
+async function saveFormChangeLink(taskId: number, link: FormChangeLink): Promise<void> {
+  await db('nivaro_extension_settings').insert({
+    extension_id: CORE_EXT,
+    key: `${FORM_CHANGE_LINK_PREFIX}${taskId}`,
+    value: JSON.stringify(link),
+    updated_at: new Date()
+  })
+}
+
+async function loadFormChangeLinks(taskIds: number[]): Promise<Map<number, FormChangeLink>> {
+  const out = new Map<number, FormChangeLink>()
+  if (taskIds.length === 0) return out
+  const rows = (await db('nivaro_extension_settings')
+    .where({ extension_id: CORE_EXT })
+    .whereIn(
+      'key',
+      taskIds.map((id) => `${FORM_CHANGE_LINK_PREFIX}${id}`)
+    )
+    .select('key', 'value')
+    .catch(() => [])) as Array<{ key: string; value: string | null }>
+  for (const r of rows) {
+    const link = parseFormChangeLink(r.value)
+    if (link) out.set(Number(r.key.slice(FORM_CHANGE_LINK_PREFIX.length)), link)
+  }
+  return out
+}
+
+/**
+ * The form's owner hears first (#2656) — only when they can open the record itself, so a
+ * notice never carries a record label its reader could not see; never the requester.
+ */
+async function ownerToTell(
+  layoutId: number,
+  collection: string,
+  item: string,
+  requesterId: string
+): Promise<string[]> {
+  const ownerId = await getLayoutOwnerId(layoutId).catch(() => null)
+  const first = ownerFirst(ownerId, [], requesterId).map((r) => r.userId)
+  if (first.length === 0) return []
+  const owner = (await db('nivaro_users').where({ id: first[0] }).first()) as
+    | (User & { is_redacted?: unknown })
+    | undefined
+  if (owner?.status !== 'active' || owner.is_redacted) return []
+  const row = await readOne(owner, collection, item, undefined, ['id']).catch(() => null)
+  return row ? first : []
 }
 
 export async function layoutChangeRequestRoutes(app: FastifyInstance) {
@@ -95,6 +177,18 @@ export async function layoutChangeRequestRoutes(app: FastifyInstance) {
     const category = await ensureCategory()
     if (!category.is_active)
       return reply.code(403).send({ error: 'Form change requests are turned off' })
+    if (
+      await overWindowLimit(
+        app.redis,
+        `form-change:${String(req.user!.id)}`,
+        REQUESTS_PER_HOUR,
+        3600
+      )
+    )
+      return reply
+        .code(429)
+        .header('Retry-After', '3600')
+        .send({ error: 'You have sent a lot of form suggestions — try again in an hour' })
 
     // The form they were looking at, when it is one of this collection's.
     let layout: { id: number; name: string } | null = null
@@ -127,12 +221,15 @@ export async function layoutChangeRequestRoutes(app: FastifyInstance) {
       attachments: [],
       replay: null,
       // The form's owner hears first, then the desk (#2656); never the requester.
-      notifyFirst: layout
-        ? ownerFirst(await getLayoutOwnerId(layout.id).catch(() => null), [], req.user!.id).map(
-            (r) => r.userId
-          )
-        : []
+      notifyFirst: layout ? await ownerToTell(layout.id, collection, item, req.user!.id) : []
     })
+    if (layout)
+      await saveFormChangeLink(Number(s.id), {
+        layout_id: layout.id,
+        layout_name: layout.name,
+        field: field?.name ?? null,
+        field_label: field?.label ?? null
+      }).catch((err) => req.log.warn({ err }, 'form change link not stored'))
     return reply.code(201).send({ data: { id: s.id, title: s.title } })
   })
 
@@ -160,6 +257,7 @@ export async function layoutChangeRequestRoutes(app: FastifyInstance) {
       )
     if (q.status !== 'all') query = query.whereIn('t.status', ['open', 'in_progress'])
     const rows = (await query) as Array<Record<string, unknown>>
+    const links = await loadFormChangeLinks(rows.map((r) => Number(r.id)))
     const labels = new Map<string, string>()
     await Promise.all(
       [...new Set(rows.map((r) => String(r.item)))].map(async (i) => {
@@ -168,15 +266,15 @@ export async function layoutChangeRequestRoutes(app: FastifyInstance) {
     )
     return reply.send({
       data: rows.map((r) => {
-        const parsed = parseFormChange(r.description as string | null)
+        const link = links.get(Number(r.id)) ?? null
         return {
           id: Number(r.id),
           title: String(r.title ?? ''),
-          message: parsed.message,
-          layout_id: parsed.layout_id,
-          layout_name: parsed.layout_name,
-          field: parsed.field,
-          field_label: parsed.field_label,
+          message: formChangeMessage(r.description as string | null, link),
+          layout_id: link?.layout_id ?? null,
+          layout_name: link?.layout_name ?? null,
+          field: link?.field ?? null,
+          field_label: link?.field_label ?? null,
           status: String(r.status),
           item: String(r.item),
           record_label: labels.get(String(r.item)) ?? String(r.item),

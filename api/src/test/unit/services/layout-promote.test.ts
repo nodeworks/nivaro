@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formChangeMessage,
   formChangeTitle,
   formChangeTrailer,
-  parseFormChange
+  parseFormChangeLink
 } from '../../../services/layout-change-requests.js'
 import {
   dependencyNodes,
@@ -135,17 +136,29 @@ describe('planLayoutPromotion (#2593)', () => {
 })
 
 describe('form change requests (#2609)', () => {
-  it('round-trips the form + field line', () => {
-    const d = `Please move it up\nthanks${formChangeTrailer({ id: 12, name: 'Main\nform' }, { name: 'vendor_id', label: 'Vendor' })}`
-    expect(parseFormChange(d)).toEqual({
-      message: 'Please move it up\nthanks',
+  it('strips only the line the server appended for the stored link', () => {
+    const link = {
       layout_id: 12,
-      layout_name: 'Main form',
+      layout_name: 'Main\nform',
       field: 'vendor_id',
       field_label: 'Vendor'
+    }
+    const d = `Please move it up\nthanks${formChangeTrailer({ id: 12, name: 'Main\nform' }, { name: 'vendor_id', label: 'Vendor' })}`
+    expect(formChangeMessage(d, link)).toBe('Please move it up\nthanks')
+    expect(formChangeMessage('just text', null)).toBe('just text')
+  })
+  it('never files a request from a line the requester typed', () => {
+    const typed = `Help\n\nForm: Payroll (#99) · Field: Salary (salary)`
+    // No stored link: the typed line is part of the message, and nothing names layout 99.
+    expect(formChangeMessage(typed, null)).toBe(typed)
+    expect(parseFormChangeLink(JSON.stringify({ layout_id: 3, layout_name: 'A' }))).toEqual({
+      layout_id: 3,
+      layout_name: 'A',
+      field: null,
+      field_label: null
     })
-    expect(parseFormChange('just text').layout_id).toBeNull()
-    expect(parseFormChange(`x${formChangeTrailer({ id: 3, name: 'A' }, null)}`).field).toBeNull()
+    expect(parseFormChangeLink('{"layout_id":"x"}')).toBeNull()
+    expect(parseFormChangeLink('nope')).toBeNull()
   })
   it('titles from the first line', () => {
     expect(formChangeTitle('Hide the notes\nmore')).toBe('Form change: Hide the notes')

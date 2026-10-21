@@ -25,6 +25,7 @@ import {
   placeholderProposals,
   readingItems,
   readingProposals,
+  relabelChoices,
   ruleChoiceLabel,
   ruleExample,
   translateCandidates,
@@ -331,5 +332,37 @@ describe('translation drafts (#2683)', () => {
     ])
     // amount has help text but no help translation; kind is approved already.
     expect(r.dropped).toBe(2)
+  })
+})
+
+describe('relabelChoices (#2681 on the field)', () => {
+  it('changes only text and keeps every other key, the order and untouched choices', () => {
+    const raw = [
+      { text: 'A', value: 'a', color: '#f00', icon: 'star', extra: { x: 1 } },
+      { text: 'B', value: 'b', color: '#0f0' },
+      'c',
+      { value: 'd', foreground: '#000' }
+    ]
+    const wanted = new Map([
+      ['a', 'Alpha'],
+      ['c', 'Charlie'],
+      ['d', 'Delta'],
+      ['zzz', 'Nope']
+    ])
+    const { next, changed } = relabelChoices(raw, wanted)
+    expect(changed).toBe(3)
+    expect(next).toEqual([
+      { text: 'Alpha', value: 'a', color: '#f00', icon: 'star', extra: { x: 1 } },
+      { text: 'B', value: 'b', color: '#0f0' },
+      { text: 'Charlie', value: 'c' },
+      { text: 'Delta', value: 'd', foreground: '#000' }
+    ])
+    expect(next[1]).toBe(raw[1])
+  })
+  it('counts nothing when the labels already match', () => {
+    const raw = [{ text: 'A', value: 'a', color: '#f00' }]
+    const { next, changed } = relabelChoices(raw, new Map([['a', 'A']]))
+    expect(changed).toBe(0)
+    expect(next[0]).toBe(raw[0])
   })
 })

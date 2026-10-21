@@ -15,6 +15,10 @@ const TOKEN_RE = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
 export interface AiFillConfig {
   enabled: boolean
   prompt: string | null
+  /** Non-admins never receive the prompt: the server sends `has_prompt` + the field names
+   *  its {{tokens}} name (api services/layout-editor-notes.ts). */
+  hasPrompt: boolean
+  tokens: string[]
 }
 
 export function readAiFill(overrides: unknown): AiFillConfig | null {
@@ -31,7 +35,17 @@ export function readAiFill(overrides: unknown): AiFillConfig | null {
   const o = raw as Record<string, unknown>
   const prompt =
     typeof o.prompt === 'string' && o.prompt.trim() ? o.prompt.slice(0, PROMPT_MAX) : null
-  return { enabled: o.enabled === true, prompt }
+  const tokens = prompt
+    ? promptTokens(prompt)
+    : Array.isArray(o.tokens)
+      ? o.tokens.filter((t): t is string => typeof t === 'string')
+      : []
+  return {
+    enabled: o.enabled === true,
+    prompt,
+    hasPrompt: !!prompt || o.has_prompt === true,
+    tokens
+  }
 }
 
 /** Field names a template names, in order, once each. */
@@ -56,6 +70,6 @@ export function showsAiButton(
   eligible: boolean
 ): { show: boolean; perField: boolean } {
   const cfg = readAiFill(overrides)
-  if (cfg) return { show: cfg.enabled && !!cfg.prompt, perField: true }
+  if (cfg) return { show: cfg.enabled && cfg.hasPrompt, perField: true }
   return { show: eligible && !!layoutAiEnabled, perField: false }
 }

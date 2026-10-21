@@ -177,6 +177,36 @@ export function choicesFrom(options: Obj): Choice[] | null {
   return out
 }
 
+/**
+ * New labels for a field's own choices, applied to the RAW choices array: only `text`
+ * changes on a choice whose value is in `wanted`; value, colour, icon, any other key, the
+ * order and every untouched choice stay exactly as stored. A bare (non-object) choice that
+ * gets a new label becomes `{ text, value }` — the only way to give it a label.
+ */
+export function relabelChoices(
+  raw: unknown[],
+  wanted: Map<string, string>
+): { next: unknown[]; changed: number } {
+  let changed = 0
+  const next = raw.map((c) => {
+    if (c && typeof c === 'object') {
+      const o = c as { text?: unknown; value?: unknown }
+      const value = o.value ?? o.text
+      const text = wanted.get(String(value))
+      const current = o.text == null ? String(value ?? '') : String(o.text)
+      if (!text || text === current) return c
+      changed++
+      return { ...o, text }
+    }
+    if (c == null) return c
+    const text = wanted.get(String(c))
+    if (!text || text === String(c)) return c
+    changed++
+    return { text, value: c }
+  })
+  return { next, changed }
+}
+
 const isRealField = (p: PlacementRow) =>
   !p.field.startsWith('__') && p.widget_id == null && p.group_key !== '__header__'
 

@@ -172,6 +172,69 @@ describe('what’s new', () => {
   })
 })
 
+describe('what’s new — role-restricted forms', () => {
+  it('is 404 for a role the form is not open to, on read and on seen', async () => {
+    m.layout = {
+      id: 5,
+      name: 'PO',
+      collection: 'orders',
+      layout_type: 'grouped',
+      conditions: JSON.stringify({ role_ids: ['other-role'] })
+    }
+    const app = await build()
+    const r = await app.inject({ method: 'GET', url: '/layout-collab/5/whats-new' })
+    expect(r.statusCode).toBe(404)
+    const seen = await app.inject({
+      method: 'POST',
+      url: '/layout-collab/5/whats-new/seen',
+      payload: { rev: 'f'.repeat(64) }
+    })
+    expect(seen.statusCode).toBe(404)
+    expect(m.seen).toEqual([])
+  })
+  it('answers when the reader’s role is listed', async () => {
+    m.layout = {
+      id: 5,
+      name: 'PO',
+      collection: 'orders',
+      layout_type: 'grouped',
+      conditions: JSON.stringify({ role_ids: ['R2'] })
+    }
+    const app = await build()
+    const r = await app.inject({ method: 'GET', url: '/layout-collab/5/whats-new' })
+    expect(r.statusCode).toBe(200)
+  })
+})
+
+describe('form owner (admin)', () => {
+  it('requires an active owner who can read the form’s records', async () => {
+    const app = await build()
+    m.creator = { id: 'o1', status: 'active', role: 'r1' }
+    m.canRead = false
+    const no = await app.inject({
+      method: 'PUT',
+      url: '/layout-collab/5/owner',
+      payload: { user_id: 'o1' }
+    })
+    expect(no.statusCode).toBe(400)
+    m.canRead = true
+    m.creator = { id: 'o1', status: 'active', role: 'r1', is_redacted: true }
+    const redacted = await app.inject({
+      method: 'PUT',
+      url: '/layout-collab/5/owner',
+      payload: { user_id: 'o1' }
+    })
+    expect(redacted.statusCode).toBe(400)
+    m.creator = { id: 'o1', status: 'active', role: 'r1' }
+    const ok = await app.inject({
+      method: 'PUT',
+      url: '/layout-collab/5/owner',
+      payload: { user_id: 'o1' }
+    })
+    expect(ok.statusCode).toBe(200)
+  })
+})
+
 describe('preview links (admin)', () => {
   it('refuses a non-form layout', async () => {
     m.layout = { id: 5, name: 'Grid', collection: 'orders', layout_type: 'table' }
@@ -205,6 +268,27 @@ describe('public form preview', () => {
     const app = await build()
     const r = await app.inject({ method: 'GET', url: '/form-preview/good' })
     expect(r.statusCode).toBe(404)
+  })
+  it('dies when its creator is redacted', async () => {
+    m.creator = { id: 'c1', status: 'active', role: 'r1', is_redacted: 1 }
+    const app = await build()
+    const r = await app.inject({ method: 'GET', url: '/form-preview/good' })
+    expect(r.statusCode).toBe(404)
+  })
+  it('sends a CSP whose nonce matches the page’s one script', async () => {
+    const app = await build()
+    const r = await app.inject({ method: 'GET', url: '/form-preview/good' })
+    const csp = String(r.headers['content-security-policy'])
+    expect(csp).toContain("default-src 'none'")
+    expect(csp).toContain("frame-ancestors 'none'")
+    expect(csp).toContain("base-uri 'none'")
+    expect(csp).toContain("connect-src 'self'")
+    const nonce = csp.match(/script-src 'nonce-([^']+)'/)?.[1]
+    expect(nonce).toBeTruthy()
+    expect(r.body).toContain(`<script nonce="${nonce}">`)
+    expect(r.body.match(/<script/g)).toHaveLength(1)
+    const bad = await app.inject({ method: 'GET', url: '/form-preview/bad' })
+    expect(String(bad.headers['content-security-policy'])).toContain("script-src 'none'")
   })
   it('takes a comment on a readable field, refuses one on a hidden field', async () => {
     const app = await build()

@@ -14,10 +14,10 @@ import {
 } from '../services/ai-design/field-fill.js'
 import { AiUnavailableError, defaultComplete, titleCase } from '../services/ai-design/model.js'
 import { canUpdateItem, readOne } from '../services/items.js'
-import { parseRecordConditions } from '../services/layout-patch.js'
+import { parseRecordConditions, roleAllows } from '../services/layout-patch.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { isSystemCollection } from '../services/system-collections.js'
-import { matchesRecordConditions, roleAllows } from './collection-layouts.js'
+import { matchesRecordConditions } from './collection-layouts.js'
 
 /**
  * POST /ai/field-fill (#2692) — the AI button a layout turns on for one field.
@@ -29,13 +29,18 @@ import { matchesRecordConditions, roleAllows } from './collection-layouts.js'
  * match the record; a placement of the field on that form (or the form it
  * inherits from) with `ai_generate.enabled`; the record visible to the caller
  * (readOne null = 404) and updatable by them (canUpdateItem), or create
- * permission for a new record; the field in the caller's writable fields; a
- * per-person rate limit. Token values are read as the caller and only from
+ * permission for a new record (never on a form with record rules); the field
+ * in the caller's writable fields (`*` = all); a per-person rate limit
+ * (cluster-wide). Token values are read as the caller and only from
  * fields they may read (encrypted fields never). The answer is a proposal the
  * form puts in the draft — nothing is saved here.
  */
 
 const MAX_PARENT_HOPS = 3
+
+/** getAllowedFields semantics: null = every field; a literal `*` in the list too. */
+const fieldAllowed = (list: string[] | null, field: string) =>
+  list == null || list.includes('*') || list.includes(field)
 
 async function placementOverrides(layoutId: number, field: string): Promise<unknown | null> {
   let id: number | null = layoutId
@@ -106,12 +111,17 @@ export async function aiFieldFillRoutes(app: FastifyInstance) {
           .catch(() => null)) as Record<string, unknown> | null
         if (!raw || !matchesRecordConditions(rules, raw)) return denied()
       }
-    } else if (!(await can(user, 'create', collection))) return denied()
+    } else {
+      if (!(await can(user, 'create', collection))) return denied()
+      // A form with record rules is never a new record's form (layout resolution needs a
+      // saved record to test them), so it offers no AI fill before the record exists.
+      if (parseRecordConditions(layout.record_conditions) && !req.isAdmin) return denied()
+    }
 
     const writable = await getAllowedFields(user, itemId ? 'update' : 'create', collection)
-    if (writable && !writable.includes(field)) return denied()
+    if (!fieldAllowed(writable, field)) return denied()
 
-    if (!takeFieldFillSlot(String(user.id)))
+    if (!(await takeFieldFillSlot(app.redis, String(user.id))))
       return reply
         .code(429)
         .send({ error: 'Too many AI fills in a few minutes — try again shortly' })
@@ -128,7 +138,7 @@ export async function aiFieldFillRoutes(app: FastifyInstance) {
     const readable = (name: string) => {
       const row = byName.get(name)
       if (!row || row.is_encrypted === true || row.is_encrypted === 1) return false
-      return readFields == null || readFields.includes(name)
+      return fieldAllowed(readFields, name)
     }
     // The draft wins over the stored record: the person may have typed since.
     const draft =

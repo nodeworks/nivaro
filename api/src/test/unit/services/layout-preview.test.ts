@@ -2,7 +2,41 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
-const { cleanComment, renderFormPreviewHtml } = await import('../../../services/layout-preview.js')
+const { db } = await import('../../../db/index.js')
+const { cleanComment, previewLinkByToken, renderFormPreviewHtml } = await import(
+  '../../../services/layout-preview.js'
+)
+
+describe('previewLinkByToken', () => {
+  const token = 'a'.repeat(48)
+  const withRow = (row: Record<string, unknown>) =>
+    vi.mocked(db).mockImplementation((() => ({
+      where: () => ({ first: () => Promise.resolve(row) })
+    })) as never)
+  const base = {
+    id: 'l1',
+    token,
+    item: '__form_preview__',
+    layout_id: 5,
+    collection: 'orders',
+    is_active: 1,
+    created_by: 'c1'
+  }
+  it('accepts an active link whose expiry is ahead', async () => {
+    withRow({ ...base, expires_at: '2099-01-01T00:00:00Z' })
+    expect(await previewLinkByToken(token)).toMatchObject({ id: 'l1', layout_id: 5 })
+  })
+  it('refuses a link without an expiry, an expired one and a revoked one', async () => {
+    withRow({ ...base, expires_at: null })
+    expect(await previewLinkByToken(token)).toBeNull()
+    withRow({ ...base, expires_at: '2001-01-01T00:00:00Z' })
+    expect(await previewLinkByToken(token)).toBeNull()
+    withRow({ ...base, expires_at: 'not a date' })
+    expect(await previewLinkByToken(token)).toBeNull()
+    withRow({ ...base, expires_at: '2099-01-01T00:00:00Z', is_active: 0 })
+    expect(await previewLinkByToken(token)).toBeNull()
+  })
+})
 
 describe('cleanComment', () => {
   const paths = ['title', 'due']
@@ -71,8 +105,10 @@ describe('renderFormPreviewHtml', () => {
         }
       ],
       token: 'abc123',
-      expiresAt: '2026-11-01T00:00:00Z'
+      expiresAt: '2026-11-01T00:00:00Z',
+      nonce: 'n0nce'
     })
+    expect(html).toContain('<script nonce="n0nce">')
     expect(html).toContain('&lt;b&gt;PO&lt;/b&gt;')
     expect(html).not.toContain('<img src=x')
     expect(html).toContain('Rename &quot;this&quot;')

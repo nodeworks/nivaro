@@ -60,6 +60,9 @@ class SourceError extends Error {
   }
 }
 
+/** A pasted config snapshot / layout file: one layout's bundle is far below this. */
+const PROMOTE_BODY_LIMIT = 32 * 1024 * 1024
+
 type PromoteBody = {
   component_id?: unknown
   file?: unknown
@@ -276,7 +279,7 @@ export async function layoutPromoteRoutes(app: FastifyInstance) {
   // → what applying the other copy would change here. Writes nothing.
   app.post(
     '/:id/promote/preview',
-    { preHandler: requireAdmin, bodyLimit: 128 * 1024 * 1024 },
+    { preHandler: requireAdmin, bodyLimit: PROMOTE_BODY_LIMIT },
     async (req, reply) => {
       // Read-only POST under a metadata route: no cache flush, no config:update.
       markConfigRead(req)
@@ -312,7 +315,7 @@ export async function layoutPromoteRoutes(app: FastifyInstance) {
   // the layout changed since the preview.
   app.post(
     '/:id/promote/apply',
-    { preHandler: requireAdmin, bodyLimit: 128 * 1024 * 1024 },
+    { preHandler: requireAdmin, bodyLimit: PROMOTE_BODY_LIMIT },
     async (req, reply) => {
       const { id } = req.params as { id: string }
       if (!isRowId(id)) return reply.code(400).send({ error: 'id must be a number' })

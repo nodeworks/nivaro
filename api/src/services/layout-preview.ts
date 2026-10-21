@@ -92,7 +92,8 @@ export async function revokePreviewLink(linkId: string): Promise<boolean> {
   return Number(n) > 0
 }
 
-/** A live link by token: active, not expired. null otherwise. */
+/** A live link by token: active, with an expiry still ahead. null otherwise (a preview link
+ *  without an expiry was not made by createPreviewLink, so it never works). */
 export async function previewLinkByToken(token: string): Promise<PreviewLink | null> {
   if (!/^[0-9a-f]{16,64}$/i.test(token)) return null
   const row = (await db('nivaro_share_links')
@@ -100,7 +101,9 @@ export async function previewLinkByToken(token: string): Promise<PreviewLink | n
     .first()
     .catch(() => null)) as Record<string, unknown> | null | undefined
   if (!row?.is_active || row.layout_id == null) return null
-  if (row.expires_at && new Date(row.expires_at as string).getTime() < Date.now()) return null
+  if (row.expires_at == null) return null
+  const expires = new Date(row.expires_at as string).getTime()
+  if (!Number.isFinite(expires) || expires < Date.now()) return null
   return toLink(row)
 }
 
@@ -224,6 +227,8 @@ export function renderFormPreviewHtml(input: {
   comments: PreviewComment[]
   token: string
   expiresAt: string | null
+  /** CSP nonce for the page's one inline script. */
+  nonce?: string
 }): string {
   const byField = new Map<string, PreviewComment[]>()
   for (const c of input.comments) {
@@ -297,7 +302,7 @@ ${sections}
 <div class="general"><h2>About the whole form</h2>${box('', 'the whole form')}</div>
 <p class="foot">Form preview</p>
 </div>
-<script>
+<script${input.nonce ? ` nonce="${esc(input.nonce)}"` : ''}>
 (function(){
   var token=${JSON.stringify(input.token)};
   var key='nvr-form-preview-name';
