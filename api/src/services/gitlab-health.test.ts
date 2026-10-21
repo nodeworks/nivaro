@@ -134,6 +134,18 @@ describe('loadGitlabHealth', () => {
     expect(JSON.stringify(v)).not.toContain('tok-secret')
   })
 
+  it('never returns credentials baked into the base URL', async () => {
+    setGitlabFetchForTests(async () => new Response('', { status: 500 }))
+    const v = await loadGitlabHealth({
+      base: 'https://user:tok@gitlab.x',
+      token: 't',
+      projects: []
+    })
+    expect(v.base).not.toContain('user')
+    expect(v.base).not.toContain('tok@')
+    expect(v.base).toMatch(/^https:\/\/(\*\*\*@)?gitlab\.x$/)
+  })
+
   it('sends the health token only to the health endpoints, as a query value', async () => {
     process.env.GITLAB_HEALTH_TOKEN = 'hk-secret'
     const urls: string[] = []

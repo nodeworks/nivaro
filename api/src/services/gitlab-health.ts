@@ -11,6 +11,7 @@
  */
 import { db } from '../db/index.js'
 import { type ContainerResource, loadContainerResources } from './container-resources.js'
+import { stripUrlCredentials } from './docker-source.js'
 import { lq, metricsQuery, storeConfig } from './telemetry-store.js'
 
 export interface GitlabTarget {
@@ -367,7 +368,8 @@ export async function loadGitlabHealth(target: GitlabTarget | null): Promise<Git
   ])
   return {
     configured: true,
-    base: target.base,
+    // The component's git_url may carry user:token (calls still use it; the view never shows it).
+    base: stripUrlCredentials(target.base),
     health: h,
     version: v,
     runners: r,
