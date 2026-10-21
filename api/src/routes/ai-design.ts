@@ -40,6 +40,7 @@ import {
 import { DEFAULT_DAYS, suggestRoleViews } from '../services/ai-design/role-views.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { loadLayoutBundle } from '../services/layout-ops.js'
+import { aiDesignRuleRoutes } from './ai-design-rules.js'
 
 /**
  * AI design helpers (#1920 #1964 #1912 #2010 #1965) — admin only.
@@ -66,6 +67,8 @@ function uiRoutesFrom(v: unknown): UiRoute[] {
 export async function aiDesignRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
   app.addHook('preHandler', resolveWorkspace)
+  // AI rule writers (#2673 #2674 #2675 #2680) — same admin gate.
+  await aiDesignRuleRoutes(app)
 
   // ── Layout review (#1920) + apply (#1964) ──────────────────────────────────
 

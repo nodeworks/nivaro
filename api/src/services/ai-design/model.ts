@@ -24,11 +24,24 @@ export class AiUnavailableError extends Error {
   }
 }
 
-/** The configured provider, or null when none is set up. */
-export async function defaultComplete(): Promise<AiComplete | null> {
-  const client = await getAiClient()
+/**
+ * The configured provider, or null when none is set up. `feature` picks the
+ * per-feature model (Settings → AI Features): 'chat' for reasoning over a
+ * schema, 'generate' for writing; omitted = the default model.
+ */
+export async function defaultComplete(feature?: 'chat' | 'generate'): Promise<AiComplete | null> {
+  let model: string
+  let client: Awaited<ReturnType<typeof getAiClient>>
+  if (feature) {
+    const settings = await getAiModelSettings()
+    model = feature === 'chat' ? settings.chatModel : settings.generateModel
+    client = await getAiClient({ model })
+  } else {
+    client = await getAiClient()
+    if (!client) return null
+    model = (await getAiModelSettings()).model
+  }
   if (!client) return null
-  const { model } = await getAiModelSettings()
   return async ({ system, user, maxTokens }) => {
     const msg = await client.messages.create({
       model,

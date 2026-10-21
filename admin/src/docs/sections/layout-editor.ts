@@ -232,6 +232,21 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Required is set per form, not per role: "make Zone required for Finance" makes it required on this form and says so when the form is not limited to Finance (give Finance its own form to require it only there). Text the palette cannot read can go to the AI (admins, when AI is set up): it answers in the same commands, shown in the same preview before anything changes. Without AI the typed commands still work.'
     },
+    { type: 'h3', id: 'layout-editor-ai-rules', text: 'Write rules with AI' },
+    {
+      type: 'p',
+      text: "Admins with AI set up can describe a rule in words beside the setting it changes. The AI answers in the form's own rule format; names it cannot match are left out and listed. It sees field names, labels, choices and the layout — never stored values."
+    },
+    {
+      type: 'ul',
+      items: [
+        'A step\'s "Only when" and a field\'s "Read-only when" → Write with AI. "Hide this step when Is Sparing is yes or Warehouse is 3" becomes conditions the step checks. Before Apply you see how many of the newest 500 records it shows on (or locks on), next to today\'s count. Apply is one undo step and is saved with the form.',
+        "Steps can show and hide by a field's value; single fields cannot. A field locks by pipeline state or by role, not by another field's value. The AI says so instead of guessing.",
+        'Picker tab → Narrow the options → Write with AI: "only regions of the record\'s zone" becomes a cascade filter or an option filter. Pick a record to see its options today and with the change, side by side. Use this adds it to the field\'s every-form change, which you confirm.',
+        'Rules tab → Default for new records → Write a rule with AI: "Default Zone from the project\'s zone" becomes a field rule, tried on five records (now, after the rule, and what a new record gets). It is saved only when you confirm, and then runs on every form and API write.',
+        'Rules tab → Checks → Suggest checks: patterns, ranges and lengths learned from the values stored today, each with how many existing values it would refuse. Nothing is applied until you pick a check and confirm the every-form change. Without AI the pattern-based checks still appear.'
+      ]
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
@@ -343,7 +358,20 @@ GET  /api/collection-layouts/field-access?collection=orders      // administrato
                            hidden_fields, readonly_fields }] } }   // every role's field permissions
 
 GET  /api/widgets-internal/:id/placements
-     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`
+     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget
+
+# AI rule writers — administrators; propose only, never write. 503 when AI is not set up.
+POST /api/ai-design/layouts/:id/rule  { text, target?: { kind: 'step', group } | { kind: 'lock', field } }
+     → { data: { proposal, ops, sentence, replaces, dropped, notes,
+                 test: { checked, matched, current, roles } } }   // newest 500 records
+POST /api/ai-design/layouts/:id/cascade  { field, text }
+     → { data: { related, cascade_filters, option_filter, sentences, dropped } }
+POST /api/ai-design/layouts/:id/field-rule  { text, field? }
+     → { data: { rule, sentence, dry_run: [{ id, label, before_label, after_label, new_record_label }] } }
+     // save with POST /api/field-rules { ...rule }
+POST /api/ai-design/layouts/:id/validation  { field, ai?: false }
+     → { data: { checked, empty, capped, current, suggestions: [{ rule, sentence, source, fails }] } }
+     // newest 5,000 values; the AI sees value shapes (masks, lengths, ranges), never values`
     },
     {
       type: 'table',

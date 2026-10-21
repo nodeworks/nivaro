@@ -452,7 +452,23 @@ export async function evaluateRulesForTrigger(
     // Table may not exist yet before migration runs — non-fatal.
     return {}
   }
+  return evaluateRuleRows(database, collection, triggerField, triggerValue, draft, rules, logger)
+}
 
+/**
+ * The rule engine over a given list of rules (all with `trigger_field` =
+ * `triggerField`): stored rules above, and a DRAFT rule the AI rule writer
+ * dry-runs before an admin saves it (#2675) — one evaluator, no fork.
+ */
+export async function evaluateRuleRows(
+  database: Knex,
+  collection: string,
+  triggerField: string,
+  triggerValue: unknown,
+  draft: Record<string, unknown>,
+  rules: FieldRuleRow[],
+  logger: Logger = consoleLogger
+): Promise<Record<string, unknown>> {
   const updates: Record<string, unknown> = {}
   for (const rule of rules) {
     if (!matchesTrigger(rule.trigger_op, triggerValue, rule.trigger_value)) continue
