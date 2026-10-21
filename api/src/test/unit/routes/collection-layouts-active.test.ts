@@ -95,6 +95,9 @@ describe('matchesRecordConditions', () => {
 
 // ─── GET /collection-layouts/active — selection precedence ────────────────
 
+/** The ORDER BY each candidate read asked for (fetchLayoutsForCollection). */
+const candidateOrders: string[] = []
+
 function makeActiveDbMock(opts: {
   slugRow?: Record<string, unknown>
   layouts: Record<string, unknown>[]
@@ -115,7 +118,10 @@ function makeActiveDbMock(opts: {
           // The route narrows to record-form layouts with a second, callback
           // form of .where() before ordering, so this stage must be chainable.
           const stage: Record<string, unknown> = {
-            orderByRaw: vi.fn(() => Promise.resolve(opts.layouts))
+            orderByRaw: vi.fn((order: string) => {
+              candidateOrders.push(order)
+              return Promise.resolve(opts.layouts)
+            })
           }
           stage.where = vi.fn(() => stage)
           return stage
@@ -326,9 +332,12 @@ describe('GET /collection-layouts/active — record-condition precedence', () =>
       }) as unknown as typeof db
     )
 
+    candidateOrders.length = 0
     const res = await getActive({ collection: 'workflows', item: 'w1' })
     expect(res.statusCode).toBe(200)
     expect((JSON.parse(res.body).data.layout as { id: number }).id).toBe(2)
+    // id last: equal sorts resolve the same way here and in the overview's sentences.
+    expect(candidateOrders).toContain('is_active desc, sort asc, id asc')
   })
 
   it('unknown item id falls through as if no item was supplied (no 404)', async () => {

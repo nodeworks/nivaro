@@ -75,12 +75,21 @@ export function bustLayoutReferences(): void {
   refsMemo.clear()
 }
 
+/** How many collections the memo holds (tests: expired entries must not pile up). */
+export function layoutReferencesMemoSize(): number {
+  return refsMemo.size
+}
+
 export function findLayoutReferences(collection: string): Promise<Refs> {
   const key = `${getTenantId() ?? ''}\u0000${collection}`
+  const now = Date.now()
+  // Expired entries go on every read, so the map holds at most the last TTL's worth of
+  // tenant × collection keys (cloud) instead of every one ever asked for.
+  for (const [k, v] of refsMemo) if (now - v.at >= REFS_TTL_MS) refsMemo.delete(k)
   const hit = refsMemo.get(key)
-  if (hit && Date.now() - hit.at < REFS_TTL_MS) return hit.refs
+  if (hit) return hit.refs
   const refs = loadLayoutReferences(collection)
-  refsMemo.set(key, { at: Date.now(), refs })
+  refsMemo.set(key, { at: now, refs })
   refs.catch(() => {
     if (refsMemo.get(key)?.refs === refs) refsMemo.delete(key)
   })

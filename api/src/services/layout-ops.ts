@@ -15,7 +15,13 @@ import {
   UNGROUPED_KEY,
   ungroupedGroup
 } from './layout-ops-apply.js'
-import { type LayoutPatchBody, normalizeLayoutPatch, parseLayoutRow } from './layout-patch.js'
+import {
+  isUniqueViolation,
+  LAYOUT_NAME_TAKEN,
+  type LayoutPatchBody,
+  normalizeLayoutPatch,
+  parseLayoutRow
+} from './layout-patch.js'
 import { layoutStateHash, snapshotLayoutVersion } from './layout-versions.js'
 
 export * from './layout-ops-apply.js'
@@ -390,6 +396,15 @@ export async function runLayoutOps(
       const at = input.ops.map((op) => op.op).lastIndexOf('layout_update')
       return { status: 400, error: err.message, op_index: at >= 0 ? at : undefined }
     }
+    // A rename that raced another into the same name after the check (UNIQUE collection +
+    // name). A 400, not a 409: the editor reads 409 as "someone else saved".
+    const renameAt = input.ops
+      .map(
+        (op) => op.op === 'layout_update' && (op.patch as { name?: unknown })?.name !== undefined
+      )
+      .lastIndexOf(true)
+    if (renameAt >= 0 && isUniqueViolation(err))
+      return { status: 400, error: LAYOUT_NAME_TAKEN, op_index: renameAt }
     throw err
   }
 }

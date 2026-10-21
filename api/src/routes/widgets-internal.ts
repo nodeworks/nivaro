@@ -779,6 +779,7 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
   // them, so the layout editor names them before saving.
   app.get('/:id/placements', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    if (!/^\d{1,10}$/.test(id)) return reply.code(400).send({ error: 'id must be a number' })
     const rows = (await db('nivaro_layout_field_assignments as a')
       .join('nivaro_collection_layouts as l', 'l.id', 'a.layout_id')
       .where('a.widget_id', Number(id))

@@ -196,6 +196,23 @@ export function parseLayoutRow<T extends Record<string, unknown>>(row: T): T {
   return row
 }
 
+/** A layout id from a route param: digits only (anything else would reach SQL as NaN). */
+export const isRowId = (id: unknown): boolean => typeof id === 'string' && /^\d{1,10}$/.test(id)
+
+/** UNIQUE (collection, name) on nivaro_collection_layouts, said the same way by every writer. */
+export const LAYOUT_NAME_TAKEN = 'A layout with that name already exists'
+
+/** MSSQL 2627 / 2601 (duplicate key), also when knex wraps it in an AggregateError. */
+export function isUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const isCode = (n: unknown) => n === 2627 || n === 2601
+  const top = err as { number?: unknown; errors?: unknown }
+  if (isCode(top.number)) return true
+  return (
+    Array.isArray(top.errors) && top.errors.some((e) => isCode((e as { number?: unknown })?.number))
+  )
+}
+
 export type LayoutPatchResult =
   | { patch: Record<string, unknown>; status?: undefined; error?: undefined }
   | { status: 400 | 409; error: string; patch?: undefined }
@@ -220,7 +237,27 @@ export async function normalizeLayoutPatch(
   }
 
   const patch: Record<string, unknown> = {}
-  if (body.name !== undefined) patch.name = body.name
+  if (body.name !== undefined) {
+    // Names are unique per collection (case-insensitive, like the column's collation): say so
+    // instead of letting the write fail on the constraint.
+    if (typeof body.name === 'string' && body.name.trim()) {
+      const wanted = body.name.trimEnd().toLowerCase()
+      const others = (await q('nivaro_collection_layouts')
+        .where({ collection: existing.collection })
+        .whereNot({ id: Number(id) })
+        .select('name')) as Array<{ name: string | null }>
+      if (
+        others.some(
+          (o) =>
+            String(o.name ?? '')
+              .trimEnd()
+              .toLowerCase() === wanted
+        )
+      )
+        return { status: 409, error: LAYOUT_NAME_TAKEN }
+    }
+    patch.name = body.name
+  }
   // A slug re-sent unchanged stays as stored: migration 092 kept characters
   // like ( & / that slugify would rewrite, and nothing cascades a rename to
   // ?layout= links, queue item_layout or grid layout_slug references.
