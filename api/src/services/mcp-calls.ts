@@ -130,6 +130,46 @@ export function rpcCallOf(body: unknown): RpcCall {
   return { method, tool, id }
 }
 
+export interface RpcToolCalls {
+  /** Every `tools/call` in the POST — valid tool name or not: each one is counted. */
+  calls: number
+  /** The first valid tool name, for the log row. */
+  tool: string | null
+  id: string | number | null
+}
+
+/**
+ * Every tool call a POST /api/mcp body carries (#2469 rate limit): a JSON-RPC batch counts each
+ * `tools/call`, and a call whose name is missing or odd counts too — the limit is never dodged
+ * by batching or by a name the log would not keep. A string body is parsed the way the transport
+ * would; anything unreadable carries no tool call (the transport refuses it).
+ */
+export function rpcToolCallsOf(body: unknown): RpcToolCalls {
+  let b = body
+  if (typeof b === 'string') {
+    try {
+      b = JSON.parse(b)
+    } catch {
+      return { calls: 0, tool: null, id: null }
+    }
+  }
+  const msgs = Array.isArray(b) ? b : [b]
+  let calls = 0
+  let tool: string | null = null
+  let id: string | number | null = null
+  for (const msg of msgs) {
+    if (!msg || typeof msg !== 'object') continue
+    const m = msg as { method?: unknown; params?: { name?: unknown } | null; id?: unknown }
+    if (m.method !== 'tools/call') continue
+    calls++
+    const name = m.params?.name
+    if (!tool && typeof name === 'string' && TOOL_RE.test(name)) tool = name
+    if (id == null && (typeof m.id === 'string' || typeof m.id === 'number')) id = m.id
+  }
+  if (id == null) id = rpcCallOf(b).id
+  return { calls, tool, id }
+}
+
 const isRefusalStatus = (s: unknown) => typeof s === 'number' && s >= 400 && s < 500
 
 /**

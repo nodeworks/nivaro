@@ -7,7 +7,7 @@ import {
   mcpClientNameOf,
   mcpConnOf,
   readMcpSettings,
-  rpcCallOf,
+  rpcToolCallsOf,
   toolAnswerMessage,
   watchResponse
 } from '../services/mcp-calls.js'
@@ -129,7 +129,7 @@ export async function mcpRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'The MCP endpoint is turned off (MCP_HTTP)' })
     const token = bearerOf(req)
     if (!token) return unauthorized(reply, 'Sign in to connect to Nivaro', false)
-    const rpc = rpcCallOf(req.body)
+    const rpc = rpcToolCallsOf(req.body)
     try {
       await authenticate(req, reply)
     } catch (err) {
@@ -142,7 +142,9 @@ export async function mcpRoutes(app: FastifyInstance) {
     // #2466 — a tool call is logged on this row: its connection, tool, outcome and bytes.
     // #2469 — and counted against the connection's tool-call limit.
     const conn = mcpConnOf(req)
-    if (rpc.tool && conn) {
+    // Every tools/call in the POST is counted (a batch spends one per call, an odd tool name
+    // counts too); over the limit the whole POST is refused.
+    if (rpc.calls > 0 && conn) {
       const name = mcpClientNameOf(req)
       req.mcpCall = { conn, client: clientSlug(name), tool: rpc.tool }
       const limit = connectionLimit(await readMcpSettings(), conn)
@@ -151,6 +153,7 @@ export async function mcpRoutes(app: FastifyInstance) {
           await enforceRateLimit(req, reply, {
             bucket: `mcp:${conn}`,
             limit,
+            cost: rpc.calls,
             code: 'MCP_CONNECTION_RATE_LIMITED',
             message: (wait) =>
               `${name} may make ${limit} tool calls a minute on this connection, so one assistant cannot crowd out everyone else using Nivaro. Wait ${wait} seconds and carry on; an administrator can raise the limit for this connection.`

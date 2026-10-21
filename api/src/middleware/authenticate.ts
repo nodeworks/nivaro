@@ -91,9 +91,17 @@ async function enforceKeyRateLimit(
 export async function enforceRateLimit(
   req: FastifyRequest,
   reply: FastifyReply,
-  opts: { bucket: string; limit: number; code: string; message: (waitSeconds: number) => string }
+  opts: {
+    bucket: string
+    limit: number
+    code: string
+    message: (waitSeconds: number) => string
+    /** How many units this request spends (a batch of MCP tool calls spends one each). */
+    cost?: number
+  }
 ): Promise<void> {
   const { bucket, limit } = opts
+  const cost = Math.max(1, Math.floor(opts.cost ?? 1))
   const nowSec = Math.floor(Date.now() / 1000)
   const windowStart = Math.floor(nowSec / KEY_WINDOW_SECONDS) * KEY_WINDOW_SECONDS
   const resetAt = windowStart + KEY_WINDOW_SECONDS
@@ -101,7 +109,7 @@ export async function enforceRateLimit(
   try {
     const results = await req.server.redis
       .multi()
-      .incr(`nvr:keyrl:${bucket}:${windowStart}`)
+      .incrby(`nvr:keyrl:${bucket}:${windowStart}`, cost)
       .expire(`nvr:keyrl:${bucket}:${windowStart}`, KEY_WINDOW_SECONDS + 5)
       .exec()
     count = Number(results?.[0]?.[1] ?? 0)

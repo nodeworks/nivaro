@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 process.env.MCP_PUBLIC_URL = 'https://nivaro.example'
 
 // The endpoint authenticates like any route; here a fixed token stands for a person.
+const costs = vi.hoisted(() => [] as number[])
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: async (req: {
     headers: Record<string, string>
@@ -20,8 +21,9 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   enforceRateLimit: async (
     req: { headers: Record<string, string> },
     _reply: unknown,
-    opts: { code: string; message: (wait: number) => string }
+    opts: { code: string; message: (wait: number) => string; cost?: number }
   ) => {
+    costs.push(opts.cost ?? 1)
     if (req.headers['x-test-over-limit'])
       throw Object.assign(new Error(opts.message(12)), {
         statusCode: 429,
@@ -166,6 +168,36 @@ describe('POST /api/mcp', () => {
     expect(body.error.message).toMatch(/120 tool calls a minute.*Wait 12 seconds/)
     expect(body.error.data).toEqual({ code: 'MCP_CONNECTION_RATE_LIMITED', retry_after_s: 12 })
     expect(stamps.at(-1)).toMatchObject({ tool: 'whoami', outcome: 'refused' })
+  })
+
+  it('spends one unit per tool call of a batch and refuses the whole POST over the limit', async () => {
+    const batch = [
+      { jsonrpc: '2.0', id: 7, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'whoami', arguments: {} } },
+      { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'Not A Tool!' } }
+    ]
+    costs.length = 0
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/mcp',
+      headers: {
+        authorization: 'Bearer good-token',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'x-test-over-limit': '1'
+      },
+      payload: JSON.stringify(batch)
+    })
+    expect(costs).toEqual([2])
+    expect(res.statusCode).toBe(429)
+    expect(res.json().id).toBe(8)
+  })
+
+  it('counts a tool call whose name the log would not keep', async () => {
+    costs.length = 0
+    await rpc({ jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'Bad Name' } })
+    expect(costs).toEqual([1])
+    expect(stamps.at(-1)).toMatchObject({ tool: null })
   })
 
   it('has no standalone stream (stateless)', async () => {

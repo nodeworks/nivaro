@@ -14,6 +14,7 @@ import {
   mcpStampOf,
   mergeMcpSettings,
   rpcCallOf,
+  rpcToolCallsOf,
   toolAnswerMessage,
   watchResponse
 } from '../../../services/mcp-calls.js'
@@ -122,6 +123,31 @@ describe('JSON-RPC', () => {
     })
     expect(rpcCallOf([{ method: 'tools/call', params: { name: 'x' }, id: 1 }]).tool).toBe('x')
     expect(rpcCallOf(null).method).toBeNull()
+  })
+
+  it('counts every tools/call of a batch, odd names included, for the rate limit', () => {
+    const call = (name: unknown, id: number) => ({
+      jsonrpc: '2.0',
+      id,
+      method: 'tools/call',
+      params: { name }
+    })
+    expect(
+      rpcToolCallsOf([
+        { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+        call('read_items', 2),
+        call('DROP TABLE', 3),
+        call(42, 4)
+      ])
+    ).toEqual({ calls: 3, tool: 'read_items', id: 2 })
+    expect(rpcToolCallsOf(call('', 9))).toEqual({ calls: 1, tool: null, id: 9 })
+    expect(rpcToolCallsOf(JSON.stringify([call('a', 1), call('b', 2)])).calls).toBe(2)
+    expect(rpcToolCallsOf('not json').calls).toBe(0)
+    expect(rpcToolCallsOf({ jsonrpc: '2.0', id: 5, method: 'tools/list' })).toEqual({
+      calls: 0,
+      tool: null,
+      id: 5
+    })
   })
 
   it('classifies an answer as ok, refused or error', () => {
