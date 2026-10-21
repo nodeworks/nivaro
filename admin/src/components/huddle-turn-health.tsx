@@ -99,7 +99,7 @@ export function HuddleTurnHealth({ disabled }: { disabled?: boolean }) {
   return (
     <div className='space-y-3 rounded-lg border border-slate-200 px-4 py-3 dark:border-border'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
+        <div className='min-w-[240px] flex-1'>
           <p className='text-[13px] font-medium text-slate-900 dark:text-foreground'>
             Server health
           </p>

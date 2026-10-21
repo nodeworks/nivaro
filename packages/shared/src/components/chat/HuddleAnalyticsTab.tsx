@@ -48,6 +48,12 @@ function minutesText(m: number | null): string {
   return r ? `${h} h ${r} min` : `${h} h`
 }
 
+/** "Sep 22" for an axis end (noon, so no time zone moves the date). */
+function dayLabel(day: string | undefined): string {
+  if (!day) return ''
+  return new Date(`${day}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 function Figure({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className='rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
@@ -205,8 +211,8 @@ export function HuddleAnalyticsTab() {
                   ))}
                 </div>
                 <div className='mt-1 flex justify-between border-t border-slate-200 pt-1 text-[10.5px] tabular-nums text-slate-500 dark:border-border dark:text-slate-400'>
-                  <span>{perDay[0]?.day}</span>
-                  <span>{perDay[perDay.length - 1]?.day}</span>
+                  <span>{dayLabel(perDay[0]?.day)}</span>
+                  <span>{dayLabel(perDay[perDay.length - 1]?.day)}</span>
                 </div>
               </section>
 
@@ -224,21 +230,32 @@ export function HuddleAnalyticsTab() {
                     Only direct huddles so far; those are counted but never named.
                   </p>
                 ) : (
-                  <table className='w-full text-[12.5px] tabular-nums'>
+                  <table className='w-full table-fixed text-[12.5px] tabular-nums'>
+                    <thead>
+                      <tr className='text-left text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+                        <th className='pb-1 pr-2 font-medium'>Room</th>
+                        <th className='w-[64px] pb-1 pr-2 text-right font-medium'>Huddles</th>
+                        <th className='w-[84px] pb-1 text-right font-medium'>Time</th>
+                      </tr>
+                    </thead>
                     <tbody>
                       {data.busiest_rooms.map((r) => (
-                        <tr
-                          key={r.room}
-                          className='border-t border-slate-100 first:border-0 dark:border-border'
-                        >
-                          <td className='max-w-0 truncate py-1.5 pr-2 text-slate-800 dark:text-slate-100'>
-                            {r.label}
-                            <span className='ml-1.5 text-[11px] text-slate-400'>
-                              {r.kind === 'record'
-                                ? 'record'
-                                : r.kind === 'general'
-                                  ? 'General'
-                                  : 'channel'}
+                        <tr key={r.room} className='border-t border-slate-100 dark:border-border'>
+                          <td className='py-1.5 pr-2'>
+                            <span className='flex min-w-0 items-baseline gap-1.5'>
+                              <span
+                                className='truncate text-slate-800 dark:text-slate-100'
+                                data-tip={r.label}
+                              >
+                                {r.label}
+                              </span>
+                              <span className='shrink-0 text-[11px] text-slate-500 dark:text-slate-400'>
+                                {r.kind === 'record'
+                                  ? 'record'
+                                  : r.kind === 'general'
+                                    ? 'General'
+                                    : 'channel'}
+                              </span>
                             </span>
                           </td>
                           <td className='py-1.5 pr-2 text-right text-slate-600 dark:text-slate-300'>

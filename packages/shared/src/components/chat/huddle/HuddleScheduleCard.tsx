@@ -127,7 +127,7 @@ export function HuddleScheduleCard({
         <div className='min-w-0 flex-1'>
           <p
             className={cn(
-              'truncate text-[12.5px] font-semibold',
+              'line-clamp-2 break-words text-[12.5px] font-semibold',
               phase === 'cancelled' && 'line-through opacity-60'
             )}
           >
