@@ -247,6 +247,23 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'History lists the saved versions of the layout — one per editing burst, sections included — with who saved and the change\'s name. "What the last save changed" shows the newest difference first; any version can be compared with the layout now. Restore replaces the layout with that version exactly (sections added since are removed) after keeping the current one as a version first. Versions survive a layout delete.'
     },
+    { type: 'h3', id: 'layout-editor-every-form', text: 'Every form at once' },
+    {
+      type: 'p',
+      text: "Every form (in the editor's top bar and on the overview) changes all layouts of the collection in one go. Each run shows a preview first: per form, what will change, what is already like that, and which forms are skipped and why. Untick a form to leave it out. A form with unsaved changes in the editor is left out until you save or discard them."
+    },
+    {
+      type: 'ul',
+      items: [
+        'Retire a field: takes it off every form — its placements, the header, section summaries, the quick picker, its form default, row order and PDF cover title. The preview counts the records that still hold a value; the values stay in the database. Rules that still read the field are named, not changed.',
+        'One change: place a field after or before another (forms without that field are skipped and listed), set its width, make it required, read-only or hidden (or the reverse), or remove it.',
+        'Macros: in the editor, Every form → Macros → Record writes down every change you make until Stop; name it and keep it. Replay previews it on the collection\'s forms: fields are matched by name and sections by label, a position becomes "after this field", and a step that does not fit a form is skipped and listed. Your macros are your own.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Each changed form saves its own version first (its History shows "Before <the change>"), so any one form can be put back from History. Right after a run, Undo this bulk change puts every changed form back at once — except a form someone changed since, which you restore from its History.'
+    },
     { type: 'h3', text: 'Inherited layouts' },
     {
       type: 'p',
@@ -431,6 +448,32 @@ POST /api/field-config/:collection/project  { assignments: [...] }   // administ
 GET  /api/collection-layouts/field-access?collection=orders      // administrators
      → { data: { roles: [{ role: { id, name, admin_access }, can_read, can_update,
                            hidden_fields, readonly_fields }] } }   // every role's field permissions
+
+GET  /api/collection-layouts/bulk/fields?collection=orders
+     → { data: [{ field, forms }] }   // every field placed on a form, with how many forms hold it
+
+POST /api/collection-layouts/bulk/preview  { collection, action, labels?, layout_ids? }
+     → { data: { label, forms: [{ layout_id, name, rev, status: 'change'|'same'|'skip',
+                                  reason, changes, notes }], values } }
+     // action: { kind: 'retire', field }
+     //       | { kind: 'change', change: { type: 'place_after'|'place_before', field, anchor }
+     //                                 | { type: 'set_width', field, width: 12|6|4|3 }
+     //                                 | { type: 'set_flag', field, flag: 'required'|'readonly'|'hidden', on }
+     //                                 | { type: 'remove', field } }
+     //       | { kind: 'macro', name, steps }
+     // values (retire only): { populated, total, note } — records that still hold a value
+
+POST /api/collection-layouts/bulk/apply  { …same, revs: { [layout_id]: rev } }
+     → { data: { label, forms: [{ layout_id, status: 'applied'|'same'|'skipped'|'failed',
+                                  reason, version_id, rev }] } }
+     // a form whose rev moved since the preview is skipped
+
+POST /api/collection-layouts/bulk/undo  { collection, items: [{ layout_id, version_id, rev }] }
+     // restores each form unless it changed since the bulk change
+
+GET  /api/collection-layouts/macros              // your own macros
+POST /api/collection-layouts/macros  { id?, name, collection, steps, source_layout_id? }
+POST /api/collection-layouts/macros/:id/delete
 
 GET  /api/widgets-internal/:id/placements
      → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`

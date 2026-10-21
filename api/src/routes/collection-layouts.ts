@@ -42,6 +42,7 @@ import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
 import { registerLayoutAnalysisRoutes } from './layout-analysis.js'
+import { layoutBulkRoutes } from './layout-bulk.js'
 import { applyTemplateToNewLayout, layoutReuseRoutes, loadFormTemplate } from './layout-reuse.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, slugify }
@@ -2208,4 +2209,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       })
     return reply.send(result.bundle)
   })
+
+  // One change on many layouts + recorded macros (#2639 / #2662 / #2663).
+  await layoutBulkRoutes(app)
 }
