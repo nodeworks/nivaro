@@ -1,5 +1,6 @@
 import { InlineDisplaySection } from '../editors/inline-display'
 import { showsDateMode, showsInputMask, showsNumbers } from './applies'
+import { ColumnFit } from './ColumnFit'
 import { useFieldCtx } from './field-context'
 import { currentInterface, interfaceLabel, interfaceOptions } from './interfaces'
 import {
@@ -14,6 +15,7 @@ import {
   useGlobalValue
 } from './kit'
 import { inlineDisplayOf, withInlineDisplay } from './model'
+import { FieldTranslations } from './Translations'
 
 const WIDTHS = [
   { value: '12', label: 'Full' },
@@ -161,6 +163,7 @@ export function LookTab() {
           />
         </Setting>
       )}
+      <ColumnFit />
 
       {info.relKind === 'M2O' && info.relatedCollection && (
         <Section title='Show under the value'>
@@ -335,6 +338,7 @@ export function LookTab() {
           />
         </Setting>
       )}
+      <FieldTranslations />
     </div>
   )
 }

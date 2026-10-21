@@ -17,6 +17,7 @@ import { fieldSpot, placeOp, sectionOp, slotSpot } from './add-target'
 import type { DesignTarget } from './design-context'
 import type { AddSource } from './dnd/collision'
 import { useAddDragSource } from './dnd/node'
+import { useFormFields } from './inspect/inspect-api'
 import { useOverviewFields } from './overview/overview-api'
 import { slotName } from './slot-names'
 import type { ApplyOptions } from './useLayoutDraft'
@@ -28,7 +29,7 @@ import type { ApplyOptions } from './useLayoutDraft'
 // drag onto the canvas (inside the editor's LayoutDndProvider): the drop is
 // one `place` op where the line shows.
 
-interface FieldRow {
+export interface AddFieldRow {
   field: string
   label?: string | null
   type?: string | null
@@ -79,7 +80,7 @@ function widgetPatch(w: WidgetRow): PlacementPatch {
   }
 }
 
-function typeWord(f: FieldRow): string {
+function typeWord(f: AddFieldRow): string {
   const ifc = f.interface ?? ''
   if (ifc.includes('o2m') || ifc === 'list-o2m' || ifc === 'inline-grid') return 'Grid'
   if (ifc.includes('m2m') || ifc.includes('m2a')) return 'Several records'
@@ -286,7 +287,16 @@ export function AddPanel({
     onSelect(targetOf({ field, group_key: spot.group_key } as PlacementRow))
   }
 
-  const fieldRows = (fields as FieldRow[])
+  // #2638: fields this collection's other forms (of the same kind) place but
+  // this one does not, by how many of them carry each.
+  const { data: forms = [] } = useFormFields(collection)
+  const suggested = useMemo(
+    () => otherFormSuggestions(bundle, forms, fields as AddFieldRow[]),
+    [bundle, forms, fields]
+  )
+  const suggestionRows = suggested.filter((f) => matches(f.title, f.field)).slice(0, 8)
+
+  const fieldRows = (fields as AddFieldRow[])
     .filter((f) => f.field && !f.field.startsWith('__'))
     .map((f) => ({ ...f, title: f.label || titleCase(f.field) }))
     .filter((f) => matches(f.title, f.field))
@@ -347,6 +357,25 @@ export function AddPanel({
               if (section.op === 'group_create') onSelect({ kind: 'group', key: section.key })
             }}
           />
+        </>
+      )}
+
+      {to === 'form' && suggestionRows.length > 0 && (
+        <>
+          <p className={head}>On other forms</p>
+          {suggestionRows.map((f) => (
+            <Row
+              key={f.field}
+              title={f.title}
+              sub={`On ${f.count} of ${f.of} other forms · ${f.names.join(', ')}`}
+              attrs={{ 'data-add-suggested': f.field }}
+              aside={
+                <Plus className='h-3.5 w-3.5 shrink-0 text-slate-400 opacity-0 group-hover:opacity-100' />
+              }
+              onClick={() => pick(f.field, f.title)}
+              drag={dragOf(f.field, f.title, null)}
+            />
+          ))}
         </>
       )}
 
@@ -453,4 +482,35 @@ export function AddPanel({
         })}
     </div>
   )
+}
+
+/** Fields placed on the collection's other layouts of this layout's kind but
+ *  not on this one, most-carried first (ties by label). */
+export function otherFormSuggestions(
+  bundle: LayoutBundle,
+  forms: Array<{ layout_id: number; name: string; layout_type: string; fields: string[] }>,
+  fields: AddFieldRow[]
+): Array<{ field: string; title: string; count: number; of: number; names: string[] }> {
+  const type = String(bundle.layout.layout_type || 'grouped')
+  const others = forms.filter(
+    (f) => Number(f.layout_id) !== Number(bundle.layout.id) && f.layout_type === type
+  )
+  if (!others.length) return []
+  const here = new Set(
+    bundle.placements.filter((p) => p.group_key !== HEADER_GROUP_KEY).map((p) => p.field)
+  )
+  const known = new Map(fields.map((f) => [f.field, f]))
+  const by = new Map<string, string[]>()
+  for (const form of others)
+    for (const field of form.fields)
+      if (!here.has(field) && known.has(field)) by.set(field, [...(by.get(field) ?? []), form.name])
+  return [...by.entries()]
+    .map(([field, names]) => ({
+      field,
+      title: known.get(field)?.label || titleCase(field),
+      count: names.length,
+      of: others.length,
+      names: names.slice(0, 3).concat(names.length > 3 ? [`${names.length - 3} more`] : [])
+    }))
+    .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title))
 }

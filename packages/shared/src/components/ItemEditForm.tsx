@@ -74,6 +74,7 @@ import {
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
 import { type LayoutGrantFlags, layoutGrantedTools } from '../lib/layout-grants'
+import { formLocale, translateFieldRow, translateGroup } from '../lib/layout-i18n'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useRecordReader } from '../lib/record-loader'
@@ -1241,6 +1242,12 @@ function ApiProvenanceChip({
   )
 }
 
+/** Field labels and help text in the reader's language, where the form has them (#2665). */
+function translateFields(rows: CMSField[]): CMSField[] {
+  const locale = formLocale()
+  return rows.map((r) => translateFieldRow(r, locale))
+}
+
 /**
  * The record form. With `design` (the layout editor's canvas) the whole form —
  * its own hooks included — runs inside DesignCanvas: a client that cannot
@@ -1387,6 +1394,8 @@ function ItemEditFormView({
     staleTime: 60_000,
     // A draft edit re-asks; the canvas keeps the last answer meanwhile.
     placeholderData: designAssignments ? (prev: CMSField[] | undefined) => prev : undefined,
+    // Layout text in the reader's language (#2665); the canvas edits the text as written.
+    select: designAssignments ? undefined : translateFields,
     // Wait for the layout either way, not just when a slug pins one. Without
     // this the field config fetched immediately with layoutId = null — the
     // LAYOUT-LESS default field set — painted that, then refetched under a new
@@ -4567,8 +4576,11 @@ function ItemEditFormView({
   }, [fieldConfig, assignedFieldSet, layoutSlug, activeLayoutData, viewAs.active, viewAs.hidden])
 
   const groups = useMemo<FieldGroup[]>(() => {
-    return (activeLayoutData?.groups ?? []).sort((a, b) => a.sort - b.sort)
-  }, [activeLayoutData])
+    const all = activeLayoutData?.groups ?? []
+    // Section names in the reader's language (#2665), never on the design canvas.
+    const shown = designOn ? all : all.map((g) => translateGroup(g, formLocale()))
+    return shown.sort((a, b) => a.sort - b.sort)
+  }, [activeLayoutData, designOn])
 
   // Aggregate configs extracted from all groups' summary_fields
   const summaryAggConfigs = useMemo<Record<string, SummaryAggConfig>>(() => {

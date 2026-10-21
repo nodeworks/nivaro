@@ -135,6 +135,25 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Add a field, section, panel or widget opens a searchable list showing labels (the key as secondary text), the type and an "on this form" mark for what is already placed. Click a row to add it after the selection, or drag it onto the canvas. A field already on the form can be added again ("Add another copy") — the same field may sit in two places, such as the header strip and a section.'
     },
+    {
+      type: 'p',
+      text: "On other forms lists, above the fields, the fields this collection's other forms of the same kind place and this one does not, most-carried first, with how many forms carry each and their names."
+    },
+    { type: 'h3', id: 'layout-editor-checks', text: 'Checks against the database' },
+    {
+      type: 'ul',
+      items: [
+        "Stored as (Look tab): the database type and size behind the field, for example nvarchar(50). A warning shows when this form's default value, the input mask or the label cannot fit: a default longer than the column or past its digits, a mask that stores more characters than the column holds, or a label longer than the field's width shows.",
+        'Check the width against stored values (Look tab, single-line fields): reads the newest 5,000 stored values, never the whole table, and says how long 95% of them are and how much the current width shows. When the width cuts them off, or is far wider than needed, Use ⅓ (or the width it names) sets it in one Undo step.',
+        "Options for a record (Picker tab): pick a saved record and see the options this picker would offer it — the cascade filters and option filter worked out as the record form works them out (the draft you are editing included), then the picker exclusions — with the count left after each step and the first 50 options. When the target collection has a picker filter, the count it would leave is shown too: the record form's picker does not apply it; enforced API writes do.",
+        "Placements that point at nothing (overview): placements whose column was dropped, whose widget was deleted, whose grid's table or link column is gone (relations are a claim: the table and column must exist) or whose section no longer exists. Remove it / Remove N takes them off that layout in one save, with a version kept like any other edit."
+      ]
+    },
+    { type: 'h3', id: 'layout-editor-translations', text: 'Translations' },
+    {
+      type: 'p',
+      text: "When Settings → Localization lists more than one language, the first is the one the form is written in and the others get a Translations section: a field's label and help text (Look tab) and a section's, tab's or step's name (its inspector). Translations save with the layout and version with it. The record form shows them to people reading in that language — their chosen admin language, else the page's, else the browser's — and the text as written where a translation is missing. The overview counts the missing translations per form. Section names need migration 465; field labels and help text work without it. Record values are translated separately (field translations)."
+    },
     { type: 'h3', text: 'Drag and drop' },
     {
       type: 'ul',
@@ -257,7 +276,24 @@ GET  /api/collection-layouts/field-access?collection=orders      // administrato
                            hidden_fields, readonly_fields }] } }   // every role's field permissions
 
 GET  /api/widgets-internal/:id/placements
-     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`
+     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget
+
+// Inspector reads (administrators, read-only)
+GET  /api/layout-inspect/:collection/columns
+     → { data: { <column>: { type, max_length, precision, scale, nullable } } }
+GET  /api/layout-inspect/:collection/value-lengths?field=code
+     → { data: { field, sampled, filled, p50, p95, max, capped } }   // newest 5,000 rows by id
+GET  /api/layout-inspect/:collection/form-fields
+     → { data: [{ layout_id, name, layout_type, fields: [...] }] }
+GET  /api/layout-inspect/:collection/orphans
+     → { data: [{ layout_id, name, layout_type, placements: [{ field, group_key, reason }] }] }
+     // reason: column_dropped | widget_deleted | grid_missing | section_missing
+GET  /api/layout-inspect/:collection/translations
+     → { data: { base, locales, groups_supported, layouts: [{ layout_id, name, missing, total }] } }
+POST /api/layout-inspect/picker-preview
+     { collection: <target>, steps: [{ key, label, filter }], fields?, sort? }
+     → { data: { total, steps: [{ key, label, count, applies }], excluded, offered,
+                 picker_filter, with_picker_filter, rows } }`
     },
     {
       type: 'table',

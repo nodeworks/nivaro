@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { activateLayout, lockLayout } from './layout-activation.js'
+import { groupI18nSupported } from './layout-inspect.js'
 import {
   applyLayoutOps,
   type GroupRow,
@@ -80,8 +81,10 @@ export function placementColumns(a: PlacementPatch & { group_key?: string | null
   }
 }
 
-function groupColumns(g: GroupRow) {
+function groupColumns(g: GroupRow, i18n: boolean) {
   return {
+    // Section label translations (#2665): only once migration 465 added the column.
+    ...(i18n ? { i18n: g.i18n ?? null } : {}),
     label: g.label,
     type: g.type,
     icon: g.icon,
@@ -147,7 +150,8 @@ export async function loadLayoutBundle(
     visible_when: str(g.visible_when),
     hidden_for_roles: str(g.hidden_for_roles),
     locked_for_roles: str(g.locked_for_roles),
-    read_width: str(g.read_width)
+    read_width: str(g.read_width),
+    i18n: str(g.i18n)
   }))
 
   let ungroupedSort: number | null = null
@@ -253,6 +257,7 @@ async function writeGroups(
   const now = real(after)
   const idByKey = new Map<string, number>()
   for (const g of was.values()) if (g.id != null) idByKey.set(g.key, g.id)
+  const i18n = await groupI18nSupported()
 
   // New groups first (unhooked), so every parent has an id to point at.
   for (const g of now.values()) {
@@ -261,7 +266,7 @@ async function writeGroups(
       collection,
       layout_id: layoutId,
       key: g.key,
-      ...groupColumns(g),
+      ...groupColumns(g, i18n),
       container_id: null
     })
     const created = (await trx('nivaro_field_groups')
@@ -276,7 +281,7 @@ async function writeGroups(
     if (!prev && containerId == null) continue
     await trx('nivaro_field_groups')
       .where({ id: idByKey.get(g.key) })
-      .update({ ...groupColumns(g), container_id: containerId })
+      .update({ ...groupColumns(g, i18n), container_id: containerId })
   }
   // container_id is a NO ACTION self-FK (migration 096): unhook, then delete.
   const goneIds = [...was.values()]

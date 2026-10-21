@@ -201,7 +201,8 @@ export const GROUP_PATCH_KEYS = [
   'visible_when',
   'hidden_for_roles',
   'locked_for_roles',
-  'read_width'
+  'read_width',
+  'i18n'
 ] as const
 
 export const LAYOUT_PATCH_KEYS = [

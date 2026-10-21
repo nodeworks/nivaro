@@ -37,6 +37,7 @@ import {
   describeReason,
   type Segment
 } from './describe-conditions'
+import { InspectStrip } from './InspectStrip'
 import {
   btnOutline,
   btnPrimary,
@@ -949,6 +950,7 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
     <div className='flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-background'>
       {header}
       {banner}
+      {rows.length > 0 && <InspectStrip collection={collection} onChanged={invalidate} />}
       {explain && (
         <ExplainStrip
           result={explain}

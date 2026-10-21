@@ -4,6 +4,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { nameConfigCollection } from '../services/config-live.js'
 import { lockLayout } from '../services/layout-activation.js'
+import { groupI18nSupported } from '../services/layout-inspect.js'
 import { snapshotLayoutVersion } from '../services/layout-versions.js'
 
 export async function fieldGroupsRoutes(app: FastifyInstance) {
@@ -51,7 +52,9 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
         'visible_when',
         'hidden_for_roles',
         'locked_for_roles',
-        'read_width'
+        'read_width',
+        // Section label translations (#2665), once migration 465 added the column.
+        ...((await groupI18nSupported()) ? ['i18n'] : [])
       )
       .orderBy('sort', 'asc')
 
