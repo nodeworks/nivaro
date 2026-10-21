@@ -1,11 +1,13 @@
 import { type DockerHost, dockerGet } from '../docker-source.js'
-import { type EngineConfig, type EngineSecret, type EngineService, iso } from './engine.js'
+import { type EngineSecret, type EngineService, iso } from './engine.js'
 import { loadSwarmObjects } from './stacks.js'
 
 /**
- * #2839 Secret and config usage map: names and metadata ONLY. The Engine never returns secret
- * data, but config objects carry their (base64) data and configs often hold credentials, so every
- * config is stripped to named metadata fields before anything else touches it.
+ * #2839 Secret and config usage map: names and metadata ONLY. Swarm secrets are listed from
+ * /secrets (the Engine never returns their values). Configs are NEVER read: /configs returns each
+ * config's contents, which often hold credentials, so docker-source refuses it. Config names come
+ * from the service specs that reference them (TaskTemplate.ContainerSpec.Configs), which means a
+ * config no service uses cannot be listed.
  */
 
 export interface SwarmObjectRef {
@@ -28,6 +30,8 @@ export interface SwarmObjectVersion {
 
 export interface SwarmObjectGroup {
   kind: 'secret' | 'config'
+  /** swarm = listed from the swarm's objects; service-specs = only names services reference. */
+  source: 'swarm' | 'service-specs'
   /** The name without its version suffix (`db_password_v2` → `db_password`). */
   base: string
   versions: SwarmObjectVersion[]
@@ -44,7 +48,7 @@ export interface HostSecrets {
     unused: number
     stale: number
   }
-  /** Sections the proxy refused (`secrets`, `configs`). */
+  /** Sections the proxy refused (`secrets`). */
   unavailable: string[]
 }
 
@@ -57,7 +61,7 @@ type Meta = {
 }
 
 /** Copies named metadata only — never `Spec.Data`, never anything unlisted. */
-export function stripObject(o: EngineSecret | EngineConfig): Meta {
+export function stripObject(o: EngineSecret): Meta {
   return {
     ID: String(o.ID),
     CreatedAt: o.CreatedAt,
@@ -73,6 +77,16 @@ export function splitVersion(name: string): { base: string; version: number | nu
   return m ? { base: m[1], version: Number(m[2]) } : { base: name, version: null }
 }
 
+function dedupeRefs(refs: SwarmObjectRef[]): SwarmObjectRef[] {
+  const seen = new Set<string>()
+  return refs.filter((r) => {
+    const k = `${r.service_id}|${r.target}`
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+}
+
 function refsFor(services: EngineService[], kind: 'secret' | 'config') {
   const byId = new Map<string, SwarmObjectRef[]>()
   const byName = new Map<string, SwarmObjectRef[]>()
@@ -85,10 +99,28 @@ function refsFor(services: EngineService[], kind: 'secret' | 'config') {
     for (const r of list) {
       const ref = { service_id: s.ID, service: s.Spec?.Name ?? s.ID, target: r.file?.Name ?? null }
       if (r.id) byId.set(r.id, [...(byId.get(r.id) ?? []), ref])
-      else if (r.name) byName.set(r.name, [...(byName.get(r.name) ?? []), ref])
+      if (r.name) byName.set(r.name, [...(byName.get(r.name) ?? []), ref])
     }
   }
   return { byId, byName }
+}
+
+/** The configs services reference, by id (or name when a spec carries no id); no dates known. */
+export function configsFromServices(services: EngineService[]): Meta[] {
+  const seen = new Map<string, Meta>()
+  for (const s of services)
+    for (const r of s.Spec?.TaskTemplate?.ContainerSpec?.Configs ?? []) {
+      const name = r.ConfigName ?? r.ConfigID
+      if (!name) continue
+      const key = r.ConfigID ?? `name:${name}`
+      if (!seen.has(key))
+        seen.set(key, {
+          ID: r.ConfigID ?? name,
+          Name: name,
+          stack: s.Spec?.Labels?.['com.docker.stack.namespace'] ?? null
+        })
+    }
+  return [...seen.values()]
 }
 
 function groupObjects(
@@ -96,6 +128,7 @@ function groupObjects(
   objects: Meta[],
   services: EngineService[]
 ): SwarmObjectGroup[] {
+  const source: SwarmObjectGroup['source'] = kind === 'config' ? 'service-specs' : 'swarm'
   const refs = refsFor(services, kind)
   const groups = new Map<string, SwarmObjectVersion[]>()
   for (const o of objects) {
@@ -109,7 +142,7 @@ function groupObjects(
       created_at: iso(o.CreatedAt),
       updated_at: iso(o.UpdatedAt),
       stack: o.stack,
-      used_by: used.sort((a, b) => a.service.localeCompare(b.service)),
+      used_by: dedupeRefs(used).sort((a, b) => a.service.localeCompare(b.service)),
       unused: used.length === 0,
       latest: false
     })
@@ -135,18 +168,17 @@ function groupObjects(
             }))
           : []
       )
-      return { kind, base, versions, stale }
+      return { kind, source, base, versions, stale }
     })
     .sort((a, b) => a.base.localeCompare(b.base))
 }
 
 export function deriveSecrets(input: {
   secrets: Array<EngineSecret> | null
-  configs: Array<EngineConfig> | null
   services: EngineService[]
 }): HostSecrets {
   const secrets = (input.secrets ?? []).map(stripObject)
-  const configs = (input.configs ?? []).map(stripObject)
+  const configs = configsFromServices(input.services)
   const groups = [
     ...groupObjects('secret', secrets, input.services),
     ...groupObjects('config', configs, input.services)
@@ -179,16 +211,11 @@ export async function loadSecrets(host: DockerHost): Promise<HostSecrets> {
       unavailable: []
     }
   const off: string[] = []
-  const [secrets, configs] = await Promise.all([
-    dockerGet<EngineSecret[]>(host, '/secrets', { cacheMs: 15_000 }).catch(() => {
+  const secrets = await dockerGet<EngineSecret[]>(host, '/secrets', { cacheMs: 15_000 }).catch(
+    () => {
       off.push('secrets')
       return null
-    }),
-    // Never cached (configs carry their data); stripped by deriveSecrets before anything reads them.
-    dockerGet<EngineConfig[]>(host, '/configs', { cacheMs: 0 }).catch(() => {
-      off.push('configs')
-      return null
-    })
-  ])
-  return { ...deriveSecrets({ secrets, configs, services: swarm.services }), unavailable: off }
+    }
+  )
+  return { ...deriveSecrets({ secrets, services: swarm.services }), unavailable: off }
 }

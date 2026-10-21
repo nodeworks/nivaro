@@ -3,7 +3,6 @@
  * the fields that matter, extra noise kept where a derivation must ignore it).
  */
 import type {
-  EngineConfig,
   EngineContainerInspect,
   EngineContainerSummary,
   EngineInfo,
@@ -151,7 +150,8 @@ export const services: EngineService[] = [
       TaskTemplate: {
         ContainerSpec: {
           Image: IMG_OLD,
-          Secrets: [{ SecretID: 'sec-db-v1', SecretName: 'nivaro_db_password_v1' }]
+          Secrets: [{ SecretID: 'sec-db-v1', SecretName: 'nivaro_db_password_v1' }],
+          Configs: [{ ConfigID: 'cfg-traefik-v2', ConfigName: 'traefik_yml_v2' }]
         }
       },
       Mode: { Replicated: { Replicas: 1 } }
@@ -383,21 +383,5 @@ export const secrets: EngineSecret[] = [
     ID: 'sec-old-token',
     CreatedAt: '2026-08-01T10:00:00Z',
     Spec: { Name: 'legacy_token' }
-  }
-]
-
-/** Base64 of "password=hunter2" — must never reach a response. */
-export const CONFIG_DATA = 'cGFzc3dvcmQ9aHVudGVyMg=='
-
-export const configs: EngineConfig[] = [
-  {
-    ID: 'cfg-traefik-v1',
-    CreatedAt: '2026-09-01T10:00:00Z',
-    Spec: { Name: 'traefik_yml_v1', Data: CONFIG_DATA, Labels: {} }
-  },
-  {
-    ID: 'cfg-traefik-v2',
-    CreatedAt: '2026-10-10T10:00:00Z',
-    Spec: { Name: 'traefik_yml_v2', Data: CONFIG_DATA }
   }
 ]

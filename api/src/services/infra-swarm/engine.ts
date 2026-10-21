@@ -193,8 +193,6 @@ export interface EngineSecret {
   Spec?: { Name?: string; Labels?: Record<string, string>; Driver?: unknown; Data?: string }
 }
 
-export type EngineConfig = EngineSecret
-
 /** `repo/name:tag@sha256:<hex>` → name without the digest, and a 12-character digest. */
 export function splitImage(ref: string | null | undefined): {
   image: string | null

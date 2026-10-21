@@ -202,7 +202,8 @@ function HostSwarmView({ data }: { data: HostSwarm }) {
       />
       {!c && data.manager && (
         <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-          Cluster settings are not readable here: the proxy does not allow the swarm section.
+          Cluster settings are not in this host's system info (older engine, or the info section is
+          off on the proxy).
         </p>
       )}
       {data.manager ? (
