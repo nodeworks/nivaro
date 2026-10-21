@@ -21,6 +21,8 @@ vi.mock('@nivaro/shared', () => ({
     stats: () => ({ gaps: 0, missed: 0, replayed: 0, refetched: 0 })
   }),
   refetchEventsFor: () => [],
+  // #2476 — the replay socket tap is exercised in packages/shared (replay-socket.test.ts).
+  tapReplaySocket: () => {},
   createLeaderSocket: (
     _key: string,
     cbs: {
