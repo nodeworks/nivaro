@@ -1163,6 +1163,7 @@ export interface PickerExclusionStatus {
 
 /**
  * Check whether a specific item is excluded from relation pickers.
+ * @deprecated Use `readPickerExclusion` (commands/layout-editor).
  */
 export function getPickerExclusionStatus(
   collection: string,
@@ -1173,6 +1174,8 @@ export function getPickerExclusionStatus(
 
 /**
  * Exclude an item from appearing in relation pickers across the admin UI.
+ * @deprecated Use `excludeFromPickers`, which can pass the record's `layout` so a
+ * non-admin whose form grants it may call it.
  */
 export function excludeFromPicker(
   collection: string,
@@ -1183,6 +1186,7 @@ export function excludeFromPicker(
 
 /**
  * Remove a picker exclusion — the item will appear in relation pickers again.
+ * @deprecated Use `includeInPickers`, which can pass the record's `layout`.
  */
 export function includeInPicker(
   collection: string,
@@ -1194,6 +1198,7 @@ export function includeInPicker(
 /**
  * Check exclusion status for multiple items in one call.
  * Returns the list of ids that ARE excluded.
+ * @deprecated Use `readPickerExclusions` (commands/layout-editor).
  */
 export function batchPickerExclusionStatus(
   collection: string,
