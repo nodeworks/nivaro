@@ -2,12 +2,12 @@ import type { DocSection } from '../types.js'
 
 export const infrastructureInventory: DocSection = {
   id: 'infrastructure-inventory',
-  label: 'Infrastructure inventory',
+  label: 'Containers, volumes and images',
   content: [
-    { type: 'h1', id: 'infrastructure-inventory', text: 'Infrastructure inventory' },
+    { type: 'h1', id: 'infrastructure-inventory', text: 'Containers, volumes and images' },
     {
       type: 'p',
-      text: 'Four tabs on the Infrastructure page list what runs on each Docker host: Containers, Volumes, Images and Provenance. They read through the same read-only Docker socket proxy as the rest of the page (DOCKER_HOSTS). Nothing on them changes a host, and a host that does not answer shows its error while the other hosts still load. Administrators only; not available in cloud mode.'
+      text: 'Four tabs on the Infrastructure page list what runs on each Docker host: Containers, Volumes, Images and Provenance. They read through the same read-only Docker proxy as the rest of the page, set up as described in the Infrastructure overview, and nothing on them changes a host.'
     },
     { type: 'h2', id: 'infrastructure-containers', text: 'Containers' },
     {

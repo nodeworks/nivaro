@@ -32,6 +32,8 @@ export * from './sections/ideas.js'
 export * from './sections/import-templates.js'
 export * from './sections/infrastructure.js'
 export * from './sections/infrastructure-edge.js'
+export * from './sections/infrastructure-host.js'
+export * from './sections/infrastructure-inventory.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
@@ -697,8 +699,7 @@ export const navSections: NavGroup[] = [
       smtpConfig,
       smsConfig,
       digestEmails,
-      aiExplainGuide,
-      infrastructureHostGuide
+      aiExplainGuide
     ]
   },
   {
@@ -781,8 +782,7 @@ export const navSections: NavGroup[] = [
       securityRetentionPolicies,
       rowLevelSecurity,
       roleUiPermissions,
-      zeroDowntimeMigrations,
-      infrastructureInventory
+      zeroDowntimeMigrations
     ]
   },
   {
@@ -904,7 +904,6 @@ export const navSections: NavGroup[] = [
       dbHealthDocs,
       dbTuning,
       sqlChecksDocs,
-      infrastructureDocs,
       configReviewDocs,
       opsConsoleDocs,
       opsAssistantDocs,
@@ -918,8 +917,17 @@ export const navSections: NavGroup[] = [
       opsContentPromotion,
       opsFileUsage,
       opsPermissionSimulator,
-      opsErdView,
-      infrastructureEdgeDocs
+      opsErdView
+    ]
+  },
+  {
+    id: 'infrastructure',
+    label: 'Infrastructure',
+    items: [
+      infrastructureDocs,
+      infrastructureInventory,
+      infrastructureEdgeDocs,
+      infrastructureHostGuide
     ]
   },
   {

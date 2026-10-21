@@ -2,12 +2,16 @@ import type { DocSection } from '../types.js'
 
 export const infrastructureDocs: DocSection = {
   id: 'infrastructure',
-  label: 'Infrastructure',
+  label: 'Infrastructure overview',
   content: [
     { type: 'h1', id: 'infrastructure', text: 'Infrastructure' },
     {
       type: 'p',
       text: 'The Infrastructure page at /infrastructure (Operations → Health) shows the Docker hosts this instance runs on: stacks and containers, rolling updates, healthchecks, the swarm itself and its secrets. It is read-only and for administrators. Nivaro never mounts the Docker socket: a deployment runs a socket proxy that allows GET requests only, on an internal network, and names it in DOCKER_HOSTS (name=url pairs, comma-separated) or DOCKER_API_URL. Each host is read separately, so a host that does not answer shows its error and the others still render. In cloud mode the page is off.'
+    },
+    {
+      type: 'p',
+      text: 'The page has sixteen tabs, grouped in this documentation by what they look at. This section covers Stacks, Updates, Health, Swarm and Secrets, and how to ask about all of it in plain words. Containers, Volumes, Images and Provenance are in “Containers, volumes and images”; Proxy, Resources and GitLab are in “Proxy, resources and GitLab”; Hosts, Reboot and Logs are in “Host health, reboot and logs”.'
     },
     {
       type: 'note',
