@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { dockerGet, dockerHosts, forEachDockerHost } from '../services/docker-source.js'
 import { storeEnabled } from '../services/telemetry-store.js'
+import { infrastructureHostRoutes } from './infrastructure-host.js'
 
 /**
  * Infrastructure (Docker hosts, stacks, containers, the proxy, host health), read-only.
@@ -47,4 +48,5 @@ export async function infrastructureRoutes(app: FastifyInstance): Promise<void> 
   })
 
   // Area routes (one line each).
+  await app.register(infrastructureHostRoutes)
 }
