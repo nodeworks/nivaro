@@ -31,6 +31,8 @@ export interface LayoutDesign {
   marks?(t: DesignTarget): DesignMark[]
   /** "Who sees this field" overlay: a tint and a clickable chip on the node. */
   overlay?(t: DesignTarget): DesignOverlay | null
+  /** How often a field is filled across the collection's records (#2588); null = unknown or off. */
+  fillRate?(field: string): number | null
 }
 
 export interface DesignMark {

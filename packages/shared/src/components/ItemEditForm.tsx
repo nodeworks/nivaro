@@ -193,6 +193,7 @@ import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-e
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
+import { useFormUsageBeacon } from './item-edit/useFormUsageBeacon'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
@@ -5383,6 +5384,14 @@ function ItemEditFormView({
     }
     scrollBodyTop()
   }
+  // Form usage per layout (#2597/#2598): time per step, saves, abandoned new records.
+  const formUsage = useFormUsageBeacon({
+    enabled: !designOn,
+    layoutId: layoutId != null ? Number(layoutId) : null,
+    collection,
+    itemId: isNew ? null : String(itemId),
+    step: hasTabs ? activeTab : '__form__'
+  })
   // Older engines and jsdom have no Element.scrollTo — a tab switch must
   // never throw over it.
   function scrollBodyTop() {
@@ -7200,6 +7209,7 @@ function ItemEditFormView({
       return savedId
     },
     onSuccess: (id) => {
+      formUsage.markSaved()
       // Save ceremony (#318): the button morphs to a check and each field the
       // user actually touched gets a one-time glow sweep. Purely cosmetic —
       // read from userTouchedRef BEFORE the dirty state clears.

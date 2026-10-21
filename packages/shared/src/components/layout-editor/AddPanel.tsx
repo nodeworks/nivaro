@@ -19,6 +19,7 @@ import type { AddSource } from './dnd/collision'
 import { useAddDragSource } from './dnd/node'
 import { useOverviewFields } from './overview/overview-api'
 import { slotName } from './slot-names'
+import { fillText, useFieldFillRates } from './usage/usage-api'
 import type { ApplyOptions } from './useLayoutDraft'
 
 // "+ Add": everything that can go on the form — the collection's fields by
@@ -197,6 +198,7 @@ export function AddPanel({
   const [q, setQ] = useState('')
   const [to, setTo] = useState<'form' | 'header'>('form')
   const { data: fields = [] } = useOverviewFields(collection)
+  const { data: fill } = useFieldFillRates(collection)
   const { data: widgets = [], error: widgetsError } = useQuery<WidgetRow[]>({
     queryKey: ['layout-editor', 'widgets'],
     queryFn: () =>
@@ -357,7 +359,9 @@ export function AddPanel({
           <div key={f.field}>
             <Row
               title={f.title}
-              sub={[f.field, typeWord(f)].filter(Boolean).join(' · ')}
+              sub={[f.field, typeWord(f), fill ? fillText(fill.pct.get(f.field), fill.total) : null]
+                .filter(Boolean)
+                .join(' · ')}
               attrs={{ 'data-add-field': f.field, 'data-on-form': on ? 'true' : undefined }}
               aside={
                 on ? (

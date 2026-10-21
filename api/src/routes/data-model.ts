@@ -1,23 +1,24 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { judgeFieldRemoval } from '../services/deprecation-policy.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { parseAutoIdPattern, validateAutoIdPattern } from '../services/auto-ids.js'
 import { clearMetadataCache } from '../services/collections.js'
+import { chunkArray } from '../services/db-batch.js'
+import { judgeFieldRemoval } from '../services/deprecation-policy.js'
+import { cachedFieldUsage, isUsageTable } from '../services/field-usage.js'
+import {
+  bustRollupContributorCache,
+  parseRollupFormula,
+  recalcRollupsForParent
+} from '../services/rollups.js'
 import {
   deleteSyntheticBatch,
   describeSyntheticPlan,
   generateSynthetic,
   listSyntheticBatches
 } from '../services/synthetic-records.js'
-import { chunkArray } from '../services/db-batch.js'
-import {
-  bustRollupContributorCache,
-  parseRollupFormula,
-  recalcRollupsForParent
-} from '../services/rollups.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -446,43 +447,17 @@ export async function dataModelRoutes(app: FastifyInstance) {
     return reply.send({ data: { days, sampled_revisions: rows.length, fields: out } })
   })
 
-  app.get<{ Params: { table: string } }>('/:table/field-usage', async (req, reply) => {
-    const { table } = req.params
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || /^nivaro_|^directus_/i.test(table)) {
-      return reply.code(400).send({ error: 'Invalid table' })
+  // Fill rates (#2588: also the layout editor's "filled on N%"): cached 5 min, read-gated.
+  app.get<{ Params: { table: string }; Querystring: { fresh?: string } }>(
+    '/:table/field-usage',
+    async (req, reply) => {
+      const { table } = req.params
+      if (!isUsageTable(table)) return reply.code(400).send({ error: 'Invalid table' })
+      const usage = await cachedFieldUsage(table, req.user?.id, { fresh: req.query.fresh === '1' })
+      if (!usage) return reply.code(404).send({ error: 'No such table' })
+      return { data: usage }
     }
-    const cols = (
-      (await db.raw(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?`, [
-        table
-      ])) as Array<{ COLUMN_NAME: string }>
-    )
-      .map((c) => c.COLUMN_NAME)
-      .filter((c) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(c))
-    if (cols.length === 0) return reply.code(404).send({ error: 'No such table' })
-    const usage: Array<{ field: string; populated: number }> = []
-    let total = 0
-    for (let i = 0; i < cols.length; i += 60) {
-      const chunk = cols.slice(i, i + 60)
-      const exprs = chunk.map((c) => `COUNT([${c}]) AS [${c}]`).join(', ')
-      const rows = (await db.raw(`SELECT COUNT(*) AS __total, ${exprs} FROM [${table}]`)) as Array<
-        Record<string, number>
-      >
-      const row = rows[0] ?? {}
-      total = Number(row.__total ?? 0)
-      for (const c of chunk) usage.push({ field: c, populated: Number(row[c] ?? 0) })
-    }
-    return {
-      data: {
-        total,
-        fields: usage
-          .map((u) => ({
-            ...u,
-            pct: total > 0 ? Math.round((u.populated / total) * 1000) / 10 : 0
-          }))
-          .sort((a, b) => a.pct - b.pct)
-      }
-    }
-  })
+  )
 
   // ─── GET / — list all tables ──────────────────────────────────────────────
 

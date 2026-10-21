@@ -213,6 +213,35 @@ export const layoutEditor: DocSection = {
       text: 'Edits are the same operations, saving and History as in the Layout tab. People who are not administrators never see the button and never download the editor: it is a separate chunk, loaded only when an admin turns the mode on (efp-new loads it through the `@nivaro/react/layout-editor` subpath export).'
     },
 
+    { type: 'h2', id: 'layout-editor-usage', text: 'Usage: how a form is used' },
+    {
+      type: 'p',
+      text: 'Each field on the canvas shows how often it is filled across the collection\'s records ("62% filled"; amber under 10%). The Add panel shows the same figure under each field ("filled on 3%"). The numbers are the Table Editor\'s Field usage figures and refresh every five minutes. Turn the canvas hints off in the Usage tab.'
+    },
+    {
+      type: 'p',
+      text: 'The record form records one small event each time someone closes it: which form, which record, how long they spent on each step, whether they saved, and, for a new record, the step they left it on without creating it. Design mode records nothing.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Edit layout on a record page adds how many people used this form on how many records today (UTC day) to its banner.',
+        "The editor's Usage tab shows today's opens, people and records; the last 30 days' opens, saves and new records left unfinished; the average time on each step with how many new records were left on it; and the fields changed most often within 24 hours of a record being created (last 90 days; on records opened with this form once 20 of them are known, otherwise across the collection).",
+        'Suggested sections: fields people change in the same save (Jaccard over the last 90 days of revisions) that sit in different sections. Move into (the section) moves the strays next to the others in one step, which Undo reverses. Not now hides a suggestion until the editor reopens.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `POST /api/layout-usage/beacon            { events: [{ layout_id, collection, item, open, saved, abandoned_step, steps }] } → 204 (signed in; max 20)
+GET  /api/layout-usage/:layoutId/today   → { data: { ready, day, opens, people, records } }              (admin)
+GET  /api/layout-usage/:layoutId/friction?days=30 → { data: { opens, saves, abandons, steps, changed_after_save } } (admin)
+GET  /api/layout-usage/co-changes/:collection → { data: { revisions, fields, pairs: [{ a, b, together, jaccard }] } } (admin)`
+    },
+    {
+      type: 'note',
+      text: 'Usage is kept per form per day (nivaro_layout_usage_daily, nivaro_layout_usage_seen) and deleted after 180 days by the nightly layout-usage-prune job. Only counts are stored; people and records are counted, never listed.'
+    },
+
     { type: 'h2', id: 'layout-editor-warning', text: 'Instances whose layouts are replaced' },
     {
       type: 'p',
