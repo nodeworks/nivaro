@@ -161,6 +161,14 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Journey Trail** — session-by-session page breadcrumbs with time-on-page per user (admin-only, 30-day retention)
 - **Import Templates** — file-to-form import with declarative mapping
 - **Full SDK Coverage** — ~175 typed SDK commands spanning every feature area, explorable in the in-browser SDK playground
+- **Team Chat: huddles & clips** — start a huddle from any room, record screen clips to share in a thread, custom emoji, drafts that follow you across devices, an outbox that retries unsent messages, and long rooms that load by window
+- **MCP live & console** — assistants subscribe to live record updates, call this instance's own named tools, and an MCP console shows connections and agent activity
+- **Ask AI research & drafts** — long questions run in the background and notify when ready, sessions can be shared, answers can start a dashboard draft, and cheaper models handle routine questions (cost routing)
+- **AI spend & model watch** — spend, forecast and the bill by feature, prompt cost per question, tool reliability, and a model catalogue that flags retired or changed models
+- **Realtime delivery** — one socket per browser (SharedWorker), a delivery SLO with a health view, and chaos drills that prove clients recover from drops
+- **Faster reads** — ETag/304 on config and list reads, cached totals, keyset paging, hover prefetch, and slow reads that run in the background and report progress
+- **Layout Editor extras** — staged edits until you save, A/B tests between two forms, merge two forms, phone versions, freeze edits, row groups, soft-required fields, display formulas, and form-shaped spreadsheets
+- **Product analytics** — searches that found nothing, dead and rage clicks, support-request trends, first-open and acted-on rates, and cumulative flow for pipelines
 
 ---
 
