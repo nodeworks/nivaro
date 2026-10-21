@@ -863,6 +863,32 @@ export const collabChat: DocSection = {
         'The LiveKit client library downloads only when a huddle first goes large; mesh-only instances never fetch it.'
       ]
     },
+    { type: 'h3', id: 'collab-chat-huddle-audio', text: 'Sound, devices and connection' },
+    {
+      type: 'ul',
+      items: [
+        'Whoever is talking gets a green ring around their picture in the huddle strip, and the strip moves the most recent speaker to the front (at most every 2 seconds, so it does not jump around). With reduced motion turned on in your system, the ring stays still instead of pulsing. When you talk into a muted microphone, the strip says so.',
+        'The gear in the huddle controls picks your microphone and, in browsers that allow it (Chrome, Edge), your speaker. The bar under the microphone moves as you talk; **Test speaker** plays a short chime. Noise suppression, echo cancellation and automatic volume can be turned off there. Changes apply straight away without dropping the call, and your choices are remembered in this browser.',
+        'To check your microphone before joining, use the small arrow next to the huddle button: it shows the same choices and level bar with a **Join huddle** button. The huddle button itself still joins in one click.',
+        'Plug in a headset during a huddle and the call moves onto it ("Switched to …"); unplug the microphone you are using and it falls back to the default one.',
+        'Each person in the strip has four connection bars; hover them for the delay, packet loss, jitter, whether the connection is direct or goes through the relay, and the bitrate. When your own connection has been poor for 10 seconds (more than 5 % loss or over 400 ms delay to everyone), the strip says "Your connection is poor". While you share your screen, a poor link to someone gets a lighter version of your screen until it recovers, so your voice stays clear.'
+      ]
+    },
+    {
+      type: 'table',
+      head: ['Shortcut (while in a huddle)', 'Action'],
+      rows: [
+        ['Hold Space', 'Talk while muted (push to talk); letting go mutes again'],
+        ['M', 'Mute or unmute'],
+        ['Shift+S', 'Share your screen, or stop sharing'],
+        ['L', 'Leave the huddle (press it twice while you are sharing)'],
+        ['?', 'Show the shortcut list next to the controls']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Shortcuts never fire while you are typing in a field. Space on another button presses that button as usual; on the huddle controls it is push to talk. Switching to another window or tab while holding Space mutes you again.'
+    },
     {
       type: 'p',
       text: 'A screen clip is a short recording — up to 60 seconds of your screen and microphone — made from the clapperboard button in the composer and sent like any other attachment. The button becomes the clock while it records; Stop, the 60 s mark or the browser’s "Stop sharing" ends it. The clip arrives with a poster frame and plays inline in the message. It is an ordinary file in the file manager (tagged `chat-clip`), not a help video.'

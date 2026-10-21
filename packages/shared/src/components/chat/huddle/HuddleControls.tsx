@@ -1,12 +1,42 @@
-import { Headphones, Mic, MicOff, PhoneOff, ScreenShare, ScreenShareOff } from 'lucide-react'
+import {
+  ChevronDown,
+  Headphones,
+  Mic,
+  MicOff,
+  PhoneOff,
+  ScreenShare,
+  ScreenShareOff
+} from 'lucide-react'
 import type React from 'react'
 import { cn } from '../../../lib/utils'
 import { canOpenChatRoom, openChatRoom } from '../chat-core'
+import { DeviceSettingsButton, PreJoinCheck, ShortcutSheetAnchor } from './HuddleAudioUi'
 import { peerSummary } from './huddle-store'
 import type { HuddleHandle } from './useHuddle'
+import { useHuddleShortcuts, useHuddleSpeaking } from './useHuddleAudio'
 
 const ghost =
   'flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+
+const prejoinChevron =
+  'flex h-7 w-4 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-500 dark:hover:bg-white/10 dark:hover:text-slate-100'
+
+/** #2847: the small chevron beside Start / Join that opens the pre-join microphone check. */
+function CheckFirst({ onJoin }: { onJoin: () => void }) {
+  return (
+    <PreJoinCheck onJoin={onJoin}>
+      <button
+        type='button'
+        className={prejoinChevron}
+        aria-label='Check your microphone before joining'
+        data-tip='Check your microphone first'
+        data-huddle-prejoin
+      >
+        <ChevronDown className='h-3 w-3' strokeWidth={2} />
+      </button>
+    </PreJoinCheck>
+  )
+}
 
 /**
  * The huddle affordance in a room header (#2457). Three faces: a quiet
@@ -27,7 +57,11 @@ export function HuddleControls({
   renderAvatar: (id: string, name: string | null) => React.ReactNode
 }) {
   const { enabled, support, state, roster, inThis, inOther } = huddle
+  // #2845 / #2846: who is talking right now, and whether Space holds my mic open.
+  const speaking = useHuddleSpeaking()
+  const { talking } = useHuddleShortcuts()
   if (!enabled) return null
+  const anyoneSpeaking = speaking.selfSpeaking || Object.keys(speaking.speaking).length > 0
 
   if (inOther && state.room) {
     const other = state.room
@@ -39,8 +73,10 @@ export function HuddleControls({
         data-tip={canOpenChatRoom() ? 'Back to the room you are talking in' : 'Leave that huddle'}
         data-huddle-elsewhere
       >
-        <span className='relative flex h-2 w-2'>
-          <span className='absolute inline-flex h-full w-full rounded-full bg-nvr-cyan opacity-60 motion-safe:animate-ping' />
+        <span className='relative flex h-2 w-2' data-huddle-elsewhere-speaking={anyoneSpeaking}>
+          {anyoneSpeaking && (
+            <span className='absolute inline-flex h-full w-full rounded-full bg-nvr-cyan opacity-60 motion-safe:animate-ping' />
+          )}
           <span className='relative inline-flex h-2 w-2 rounded-full bg-nvr-cyan' />
         </span>
         In a huddle
@@ -64,12 +100,17 @@ export function HuddleControls({
             'flex h-6 w-6 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-40',
             state.muted
               ? 'bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300'
-              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10'
+              : talking || speaking.selfSpeaking
+                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+                : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10'
           )}
           aria-pressed={state.muted}
           aria-label={state.muted ? 'Unmute microphone' : 'Mute microphone'}
-          data-tip={state.muted ? 'Unmute' : 'Mute'}
+          data-tip={
+            talking ? 'Talking — let go of Space to mute' : state.muted ? 'Unmute (M)' : 'Mute (M)'
+          }
           data-huddle-mute={state.muted ? 'on' : 'off'}
+          data-huddle-ptt={talking ? 'on' : undefined}
         >
           {state.muted ? (
             <MicOff className='h-3.5 w-3.5' strokeWidth={2} />
@@ -90,7 +131,7 @@ export function HuddleControls({
             )}
             aria-pressed={state.sharing}
             aria-label={state.sharing ? 'Stop sharing your screen' : 'Share your screen'}
-            data-tip={state.sharing ? 'Stop sharing' : 'Share screen'}
+            data-tip={state.sharing ? 'Stop sharing (Shift+S)' : 'Share screen (Shift+S)'}
             data-huddle-share={state.sharing ? 'on' : 'off'}
           >
             {state.sharing ? (
@@ -100,6 +141,7 @@ export function HuddleControls({
             )}
           </button>
         )}
+        {!joining && <DeviceSettingsButton muted={state.muted} />}
         <button
           type='button'
           onClick={huddle.leave}
@@ -110,6 +152,7 @@ export function HuddleControls({
           <PhoneOff className='h-3.5 w-3.5' strokeWidth={2} />
           Leave
         </button>
+        <ShortcutSheetAnchor />
       </fieldset>
     )
   }
@@ -117,45 +160,51 @@ export function HuddleControls({
   if (roster.length > 0) {
     const shown = roster.slice(0, 3)
     return (
-      <button
-        type='button'
-        onClick={huddle.join}
-        className='flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white pl-1 pr-2 text-[11px] font-medium text-slate-700 transition-colors hover:border-nvr-cyan hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-slate-100'
-        data-tip={`${peerSummary(roster)} in a huddle — join`}
-        aria-label={`Join the huddle in ${roomLabel} (${peerSummary(roster)})`}
-        data-huddle-join
-      >
-        <span className='flex -space-x-1.5'>
-          {shown.map((p) => (
-            <span
-              key={p.socket}
-              className='rounded-full ring-2 ring-white dark:ring-card'
-              style={{ lineHeight: 0 }}
-            >
-              {renderAvatar(p.user, p.name)}
-            </span>
-          ))}
-        </span>
-        {roster.length > 3 && (
-          <span className='text-slate-500 dark:text-slate-400'>+{roster.length - 3}</span>
-        )}
-        <Headphones className='h-3.5 w-3.5 text-nvr-cyan' strokeWidth={2} />
-        Join
-      </button>
+      <span className='flex items-center'>
+        <button
+          type='button'
+          onClick={huddle.join}
+          className='flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white pl-1 pr-2 text-[11px] font-medium text-slate-700 transition-colors hover:border-nvr-cyan hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-slate-100'
+          data-tip={`${peerSummary(roster)} in a huddle — join`}
+          aria-label={`Join the huddle in ${roomLabel} (${peerSummary(roster)})`}
+          data-huddle-join
+        >
+          <span className='flex -space-x-1.5'>
+            {shown.map((p) => (
+              <span
+                key={p.socket}
+                className='rounded-full ring-2 ring-white dark:ring-card'
+                style={{ lineHeight: 0 }}
+              >
+                {renderAvatar(p.user, p.name)}
+              </span>
+            ))}
+          </span>
+          {roster.length > 3 && (
+            <span className='text-slate-500 dark:text-slate-400'>+{roster.length - 3}</span>
+          )}
+          <Headphones className='h-3.5 w-3.5 text-nvr-cyan' strokeWidth={2} />
+          Join
+        </button>
+        <CheckFirst onJoin={huddle.join} />
+      </span>
     )
   }
 
   return (
-    <button
-      type='button'
-      onClick={huddle.join}
-      className={ghost}
-      aria-label={`Start a huddle in ${roomLabel}`}
-      data-tip='Start a huddle — talk with whoever is here'
-      data-huddle-start
-      data-room={room}
-    >
-      <Headphones className='h-4 w-4' strokeWidth={2} />
-    </button>
+    <span className='flex items-center'>
+      <button
+        type='button'
+        onClick={huddle.join}
+        className={ghost}
+        aria-label={`Start a huddle in ${roomLabel}`}
+        data-tip='Start a huddle — talk with whoever is here'
+        data-huddle-start
+        data-room={room}
+      >
+        <Headphones className='h-4 w-4' strokeWidth={2} />
+      </button>
+      <CheckFirst onJoin={huddle.join} />
+    </span>
   )
 }
