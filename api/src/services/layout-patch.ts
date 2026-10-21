@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { changeNoteColumnReady, normalizeChangeNote } from './layout-change-note.js'
+import { entryConfigColumnReady, normalizeEntryConfig, parseEntryConfig } from './layout-entry.js'
 
 /**
  * Layout settings — the parsers, validators and the PATCH body → column
@@ -204,6 +205,7 @@ export type LayoutPatchBody = Partial<{
   header_fields: string[] | null
   hide_empty: boolean
   change_note: string | null
+  entry_config: Record<string, unknown> | null
 }>
 
 /** A layout row as the API returns it: JSON settings parsed, flags as booleans. */
@@ -216,6 +218,7 @@ export function parseLayoutRow<T extends Record<string, unknown>>(row: T): T {
   r.header_fields = parseQuickPicker(r.header_fields)
   r.hide_empty = !!r.hide_empty
   r.changes_tray = !!r.changes_tray
+  r.entry_config = parseEntryConfig(r.entry_config)
   return row
 }
 
@@ -406,6 +409,14 @@ export async function normalizeLayoutPatch(
     if (!(await changeNoteColumnReady(q)))
       return { status: 400, error: 'Change notes need migration 462 to run first' }
     patch.change_note = res.value
+  }
+  // Entry ergonomics (#2702 #2707 #2708 #2710 #2728): the column comes with migration 491.
+  if (body.entry_config !== undefined) {
+    const res = normalizeEntryConfig(body.entry_config)
+    if ('error' in res) return { status: 400, error: res.error }
+    if (!(await entryConfigColumnReady()))
+      return { status: 400, error: 'Entry settings need migration 491 to run first' }
+    patch.entry_config = res.value
   }
 
   // Settings the renderers read that this route used to drop.

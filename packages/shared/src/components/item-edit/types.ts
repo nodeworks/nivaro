@@ -117,6 +117,8 @@ export interface LayoutMeta {
   default_values?: Record<string, unknown> | null
   /** Quick picker: relation fields walked one step at a time on create. */
   quick_picker?: string[] | null
+  /** Entry ergonomics (#2702-#2728): keyboard, tab order, mode, badge — see lib/entry-config. */
+  entry_config?: Record<string, unknown> | null
 }
 
 export interface ActiveLayoutData {

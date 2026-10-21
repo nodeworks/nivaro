@@ -10,6 +10,7 @@ import { markConfigRead, nameConfigCollection } from '../services/config-live.js
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
 import { stripEditorNotes } from '../services/layout-editor-notes.js'
+import { parseEntryConfig } from '../services/layout-entry.js'
 import { afterLayoutSaved } from '../services/layout-notify.js'
 import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
 import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
@@ -719,6 +720,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.default_values = parseDefaultValues(layout.default_values)
     layout.quick_picker = parseQuickPicker(layout.quick_picker)
     layout.changes_tray = !!layout.changes_tray
+    layout.entry_config = parseEntryConfig(layout.entry_config)
 
     let [groupsRaw, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
@@ -851,6 +853,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.header_fields = parseQuickPicker(layout.header_fields)
     layout.hide_empty = !!layout.hide_empty
     layout.changes_tray = !!layout.changes_tray
+    layout.entry_config = parseEntryConfig(layout.entry_config)
 
     const [groups, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
@@ -891,6 +894,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.header_fields = parseQuickPicker(layout.header_fields)
     layout.hide_empty = !!layout.hide_empty
     layout.changes_tray = !!layout.changes_tray
+    layout.entry_config = parseEntryConfig(layout.entry_config)
     const [groups, assignments] = await Promise.all([
       db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
@@ -1123,6 +1127,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     row.header_fields = parseQuickPicker(row.header_fields)
     row.hide_empty = !!row.hide_empty
     row.changes_tray = !!row.changes_tray
+    row.entry_config = parseEntryConfig(row.entry_config)
     return reply.send({ data: row })
   })
 

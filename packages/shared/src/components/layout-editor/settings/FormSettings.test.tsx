@@ -719,3 +719,58 @@ describe('FormSettings', () => {
     )
   })
 })
+
+describe('FormSettings: Entering data (#2707 #2708 #2710 #2728)', () => {
+  const entryOp = (apply: { mock: { calls: unknown[][] } }) =>
+    (apply.mock.calls.at(-1)?.[0] as LayoutOp[])[0] as Extract<LayoutOp, { op: 'layout_update' }>
+
+  it('turns on keyboard-first entry as one undoable step in entry_config', async () => {
+    const { apply } = await mount(bundleOf('grouped'))
+    await click(setting('layout.enter_next')?.querySelector('[role="switch"]') ?? null)
+    expect(entryOp(apply).patch).toEqual({ entry_config: { enter_next: true } })
+    expect((apply.mock.calls.at(-1)?.[1] as ApplyOptions).label).toMatch(/Enter/)
+  })
+
+  it('keeps the other entry settings when one changes', async () => {
+    const { apply } = await mount(
+      bundleOf('grouped', { entry_config: { tab_order: ['a', 'b'], enter_next: true } })
+    )
+    await click(setting('layout.focus_first')?.querySelector('[role="switch"]') ?? null)
+    expect(entryOp(apply).patch).toEqual({
+      entry_config: { tab_order: ['a', 'b'], enter_next: true, focus_first: true }
+    })
+  })
+
+  it('clears the tab order and says how many fields it holds', async () => {
+    const { apply } = await mount(bundleOf('grouped', { entry_config: { tab_order: ['a', 'b'] } }))
+    expect(setting('layout.tab_order')?.textContent).toContain('2 fields in order')
+    const clear = Array.from(setting('layout.tab_order')?.querySelectorAll('button') ?? []).find(
+      (b) => b.textContent === 'Clear'
+    )
+    await click(clear ?? null)
+    expect(entryOp(apply).patch).toEqual({ entry_config: null })
+  })
+
+  it('only lets the records-before-tabs count be typed once guided steps are on', async () => {
+    await mount(bundleOf('grouped'))
+    const input = setting('layout.adaptive_threshold')?.querySelector('input')
+    expect(input?.disabled).toBe(true)
+  })
+
+  it('saves the form badge with its tag and colour', async () => {
+    const { apply } = await mount(bundleOf('grouped'))
+    await type(setting('layout.badge')?.querySelector('input[type="text"]') ?? null, 'Sparing')
+    await blur(setting('layout.badge')?.querySelector('input[type="text"]') ?? null)
+    expect(entryOp(apply).patch).toEqual({
+      entry_config: { badge: { tag: 'Sparing', color: 'orange' } }
+    })
+  })
+
+  it('lists presets and deletes one', async () => {
+    const preset = { id: 'p1', name: 'Narrow', parts: ['width'], col_span: 6 }
+    const { apply } = await mount(bundleOf('grouped', { entry_config: { presets: [preset] } }))
+    expect(setting('layout.presets')?.textContent).toContain('Narrow')
+    await click(q('[aria-label="Delete preset Narrow"]'))
+    expect(entryOp(apply).patch).toEqual({ entry_config: null })
+  })
+})

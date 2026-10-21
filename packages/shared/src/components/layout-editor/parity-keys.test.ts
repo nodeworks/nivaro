@@ -27,6 +27,7 @@ const SECTIONS: Record<string, string[]> = {
     'PDF',
     'Addendum',
     'Defaults for new records',
+    'Entering data',
     'Inheritance',
     'AI review, previews, version history'
   ],

@@ -2626,5 +2626,77 @@
     "scope": "form",
     "status": "add",
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "layout.focus_first",
+    "label": "Start on the first empty required field",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.enter_next",
+    "label": "Enter moves to the next field",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.tab_order",
+    "label": "Tab order",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.adaptive_mode",
+    "label": "Guided steps for new people",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.adaptive_threshold",
+    "label": "Records before tabs",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.badge",
+    "label": "Form badge",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.glossary",
+    "label": "Glossary tooltips in help text",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.presets",
+    "label": "Placement presets",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
   }
 ]

@@ -109,7 +109,9 @@ const PER_FORM_KEYS = new Set([
   'parent_layout_id',
   'addendum_layout_id',
   'create_label',
-  'create_hidden'
+  'create_hidden',
+  // The badge, tab order and presets belong to one form (#2728 #2708 #2702).
+  'entry_config'
 ])
 
 const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_.$-]{0,127}$/
