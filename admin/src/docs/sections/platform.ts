@@ -740,8 +740,10 @@ DELETE /api/collection-layouts/:id`
 // List all layouts
 const layouts = await cms.request(readCollectionLayouts('articles'))
 
-// Read active layout with groups + assignments
+// Read active layout with groups + assignments (col_span rides each placement)
 const active = await cms.request(readActiveLayout('articles'))
+
+// Editor reads and atomic ops saves: see SDK — Layout Editor (readLayoutBundle, submitLayoutOps)
 
 // Use a specific layout in @nivaro/react
 useNivaroForm('articles', { mode: 'create', layoutId: 42 })`
