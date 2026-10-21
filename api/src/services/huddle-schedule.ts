@@ -151,10 +151,16 @@ async function usersById(ids: string[]): Promise<Map<string, User>> {
   return out
 }
 
-/** Make a schedule as `user`; invitees who cannot see the room are dropped. */
+/**
+ * Make a schedule as `user`; invitees who cannot see the room are dropped.
+ * The card is posted AS the person through the normal send path, so every
+ * posting rule (visibility, announce-only channels) applies: a refused post
+ * refuses the schedule and the row is removed — never swallowed.
+ */
 export async function createHuddleSchedule(
   app: FastifyInstance,
   user: User,
+  isAdmin: boolean,
   input: ScheduleInput
 ): Promise<HuddleScheduleCard> {
   const people = await usersById(input.invitees)
@@ -177,22 +183,28 @@ export async function createHuddleSchedule(
     })
     .returning('id')
   const id = Number(typeof ins === 'object' && ins !== null ? (ins as { id: number }).id : ins)
-  // The card line, as the organizer, through the one send path.
+  // The card line, as the organizer, through the one send path (its rules decide).
+  let messageId: number
   try {
     const { postChatMessage } = await import('./chat-send.js')
     const msg = await postChatMessage(
       app,
-      { user },
+      { user, isAdmin },
       {
         room: input.room,
         message: `Scheduled a huddle ${scheduleMarker(id)}`,
         clientId: `huddle-${id}`
       }
     )
-    await db(TABLE).where({ id }).update({ message_id: msg.id })
+    messageId = msg.id
   } catch (err) {
-    app.log.warn({ err, id }, 'huddle schedule: card message failed')
+    await db(TABLE)
+      .where({ id })
+      .delete()
+      .catch(() => undefined)
+    throw err
   }
+  await db(TABLE).where({ id }).update({ message_id: messageId })
   const when = new Date(input.starts_at)
   void Promise.all(
     invitees.map((uid) =>
@@ -298,12 +310,14 @@ export async function cancelHuddleSchedule(
     await db(TABLE).where({ id, status: 'scheduled' }).update({ status: 'cancelled' })
   )
   if (!n) return false
+  // A platform line carries fixed text only — never the schedule's title (user text
+  // that would otherwise bypass the room's posting rules). The card itself shows it.
   try {
     const { postChatMessage } = await import('./chat-send.js')
     await postChatMessage(
       app,
       { user: null, senderId: null, senderName: 'Nivaro', system: true, skipVisibility: true },
-      { room: row.room, message: `${nameOf(by) ?? 'Someone'} cancelled the huddle "${row.title}"` }
+      { room: row.room, message: 'A scheduled huddle was cancelled' }
     )
   } catch (err) {
     app.log.warn({ err, id }, 'huddle schedule: cancel line failed')

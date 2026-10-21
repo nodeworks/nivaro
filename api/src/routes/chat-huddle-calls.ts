@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { canSeeRoom } from '../services/chat.js'
+import { ChatSendError } from '../services/chat-send.js'
 import { type HuddleRedis, huddlePeers, huddleRoomKind } from '../services/huddle.js'
 import {
   cancelHuddleSchedule,
@@ -97,7 +98,15 @@ export async function chatHuddleCallRoutes(app: FastifyInstance) {
     const parsed = parseScheduleInput(req.body)
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
     if (!(await canSeeRoom(req.user!, parsed.value.room))) return reply.code(404).send(notFound)
-    const card = await createHuddleSchedule(app, req.user!, parsed.value)
+    let card: Awaited<ReturnType<typeof createHuddleSchedule>>
+    try {
+      card = await createHuddleSchedule(app, req.user!, !!req.isAdmin, parsed.value)
+    } catch (err) {
+      // The send path refused the card (announce-only channel, lost access…): same answer.
+      if (err instanceof ChatSendError)
+        return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+      throw err
+    }
     await logActivity({
       action: 'create',
       collection: 'nivaro_chat_huddle_schedules',
