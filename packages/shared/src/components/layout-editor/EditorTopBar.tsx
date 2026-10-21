@@ -1,5 +1,5 @@
 import { ChevronLeft, Eye, History, Redo2, Undo2, UserRound, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { useRelationOptions } from '../../hooks/useRelationOptions'
@@ -177,7 +177,8 @@ export function EditorTopBar({
   showHidden,
   onShowHidden,
   onBack,
-  backLabel = 'Layouts'
+  backLabel = 'Layouts',
+  tools
 }: {
   collection: string
   layoutId: number
@@ -196,6 +197,8 @@ export function EditorTopBar({
   onBack: () => void
   /** What the back button returns to ("Layouts", or the record in overlay mode). */
   backLabel?: string
+  /** Editing tools the host adds after Undo / Redo (view toggle, auto-arrange). */
+  tools?: ReactNode
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const pill = row ? rowPill(row) : null
@@ -253,6 +256,7 @@ export function EditorTopBar({
           <Redo2 className='h-4 w-4' />
         </button>
       </div>
+      {tools}
       <PreviewAsButton collection={collection} value={preview} onChange={onPreview} />
       <label
         className='inline-flex h-8 cursor-pointer items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'

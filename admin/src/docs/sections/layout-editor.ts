@@ -128,8 +128,24 @@ export const layoutEditor: DocSection = {
         'The whole element is the handle: field, section header, tab, step or slot card. Keyboard drag works too (focus, Space to lift, arrows to move, Space to drop, Escape to cancel).',
         'The drag preview is a copy of the element as it looks on the form, under the cursor at any scroll position; the canvas scrolls when you near its edge.',
         'An insertion slot opens where the element will land, within a section or across sections, including into an empty section. Dropping on a section header puts the field first in that section; sections reorder by dropping anywhere on the target section.',
-        "Widths change with the inspector's width control, snapping to the grid fractions."
+        "Widths change with the inspector's width control, snapping to the grid fractions.",
+        'Alt+arrow moves the selected item in one keystroke, without picking it up. A field: Alt+↑ / Alt+↓ moves it one place in its section; Alt+← / Alt+→ moves it to the end of the previous section or the start of the next. A section moves up or down the page; a tab or step moves left or right. Each keystroke is one Undo step.'
       ]
+    },
+    { type: 'h3', id: 'layout-editor-multi-select', text: 'Several fields at once' },
+    {
+      type: 'p',
+      text: 'Shift-click (or ⌘ / Ctrl-click) fields to select several; click one again to take it out. The inspector then shows what they share: width, Required, Read-only, Hidden and Section. Each change applies to all of them as one Undo step. "Section" moves them to the end of that section, in the order they are on the form; a field the section already holds stays where it is. Sections, header items and page cards are selected one at a time. Dragging moves one item; use Section to move several.'
+    },
+    { type: 'h3', id: 'layout-editor-auto-arrange', text: 'Auto-arrange' },
+    {
+      type: 'p',
+      text: 'Auto-arrange packs fields into tidy rows of the 12-column grid. A row with room left takes the widest of the next few fields that fits, so the order mostly holds, and "Widen fields to fill rows" stretches the fields of a row that still has room. The popover lists what changes per section (rows, gaps closed, fields moved and widened) before you press Arrange; the whole change is one Undo step. The top bar arranges the whole form; a section\'s inspector arranges that section only. Hidden fields stay next to the field they followed.'
+    },
+    { type: 'h3', id: 'layout-editor-table-view', text: 'Table view' },
+    {
+      type: 'p',
+      text: 'Canvas | Table in the top bar switches the centre to a table of every field on the form, grouped by section: the label on this form, section, width, Required, Read-only and Hidden, all editable in place. Shift- or ⌘-click rows (or tick their boxes) to select several and change them together in the inspector. Fields that come from a parent layout are not listed. Table and PDF layouts keep their own canvases.'
     },
     { type: 'h3', id: 'layout-editor-saving', text: 'Saving, undo and conflicts' },
     {

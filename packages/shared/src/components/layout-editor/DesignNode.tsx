@@ -11,7 +11,7 @@ import {
 } from 'react'
 import { cn } from '../../lib/utils'
 import type { DesignTarget, LayoutDesign } from './design-context'
-import { targetKey, useLayoutDesign } from './design-context'
+import { isSelectedIn, targetKey, useLayoutDesign } from './design-context'
 import { NO_DND, useDesignDndNode, useDesignDropBody } from './dnd/node'
 
 type ChildProps = {
@@ -100,7 +100,7 @@ export function DesignNode({
   if (!design) return <>{children}</>
 
   const key = targetKey(target)
-  const selected = design.selected != null && targetKey(design.selected) === key
+  const selected = isSelectedIn(design, target)
   const mark = design.roleMark?.(target) ?? null
   const dragProps = (locked ? {} : nd.props) as Props
   const dragging = nd.dragging
@@ -131,7 +131,9 @@ export function DesignNode({
   const onClickCapture = (e: MouseEvent<HTMLElement>) => {
     const t = e.target as Element
     if (t.closest('[data-design-target]') !== e.currentTarget) return
-    design.onSelect(target)
+    // Shift / ⌘ / Ctrl-click adds to the selection (several fields at once).
+    if (e.shiftKey || e.metaKey || e.ctrlKey) design.onSelect(target, { additive: true })
+    else design.onSelect(target)
     const through = t.closest('[data-design-pass]')
     if (through && e.currentTarget.contains(through)) return
     e.preventDefault()
@@ -145,7 +147,8 @@ export function DesignNode({
     if (e.key !== 'Enter' || e.target !== e.currentTarget) return
     if (e.currentTarget.tagName === 'BUTTON') return
     e.preventDefault()
-    design.onSelect(target)
+    if (e.shiftKey) design.onSelect(target, { additive: true })
+    else design.onSelect(target)
   }
   // A step or tab button: a chip above it would sit on the step labels.
   const tabLike =

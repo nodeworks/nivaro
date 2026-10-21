@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Plus } from 'lucide-react'
+import { AlertTriangle, LayoutGrid, Plus, Table2 } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
@@ -14,13 +14,22 @@ import { cn } from '../../lib/utils'
 import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
+import { AutoArrangeButton } from './AutoArrange'
 import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
-import { type DesignTarget, type LayoutDesign, targetKey } from './design-context'
+import {
+  type DesignTarget,
+  type LayoutDesign,
+  nextSelection,
+  type SelectOptions,
+  targetKey
+} from './design-context'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { useLayoutEditorHost } from './host'
+import { BulkInspector } from './inspector/BulkInspector'
 import { FormSettings, Inspector } from './inspector-slot'
+import { ARROW_DIRS, altArrowMove } from './keyboard-move'
 import { LayoutsRail } from './LayoutsRail'
 import type { DescribeField, Segment } from './overview/describe-conditions'
 import {
@@ -32,6 +41,7 @@ import {
 } from './overview/overview-api'
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
+import { PlacementsTable } from './PlacementsTable'
 import { useRolePreview } from './settings/settings-api'
 import {
   type LayoutDraft,
@@ -96,6 +106,44 @@ function useUndoKeys(draft: LayoutDraft) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [draft.undo, draft.redo])
+}
+
+/**
+ * Alt+arrow moves the one selected field or section (#2603): one keystroke,
+ * one apply, one undo step. Never while typing, during a keyboard or pointer
+ * drag (Space picks up, arrows move the drag), or with a popover or menu open.
+ * Focus follows the moved node so the next Alt+arrow continues from it.
+ */
+function useAltArrowKeys(
+  bundle: LayoutBundle | null,
+  selection: DesignTarget[],
+  apply: LayoutDraft['apply'],
+  dragging: { current: boolean },
+  onMoved: (next: DesignTarget) => void
+) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const dir = ARROW_DIRS[e.key]
+      if (!dir || !e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || e.defaultPrevented) return
+      if (!bundle || selection.length !== 1 || dragging.current || isTyping(e.target)) return
+      if (document.querySelector('[data-radix-popper-content-wrapper], [role="menu"]')) return
+      e.preventDefault()
+      const move = altArrowMove(bundle, selection[0], dir)
+      if (!move) return
+      apply(move.ops, { label: move.label })
+      onMoved(move.next)
+      const key = targetKey(move.next)
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLElement>(
+          `[data-layout-editor] [data-design-target="${CSS.escape(key)}"]`
+        )
+        el?.focus({ preventScroll: true })
+        el?.scrollIntoView?.({ block: 'nearest' })
+      })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [bundle, selection, apply, dragging, onMoved])
 }
 
 /** Unsent typing or a batch still in flight: warn before the tab closes, send what can be sent. */
@@ -207,6 +255,7 @@ function Canvas({
   preview,
   record,
   selected,
+  selection,
   onSelect,
   showHidden,
   apply,
@@ -218,7 +267,8 @@ function Canvas({
   preview: PreviewAs
   record: Record<string, unknown> | null
   selected: DesignTarget | null
-  onSelect: (t: DesignTarget) => void
+  selection: DesignTarget[]
+  onSelect: (t: DesignTarget, opts?: SelectOptions) => void
   showHidden: boolean
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
   whenIdle: () => Promise<void>
@@ -238,13 +288,14 @@ function Canvas({
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
+      selection,
       onSelect,
       showHidden,
       inheritedFrom: (t) => canvas.inherited.get(targetKey(t)) ?? null,
       dnd,
       roleMark
     }),
-    [selected, onSelect, showHidden, canvas.inherited, dnd, roleMark]
+    [selected, selection, onSelect, showHidden, canvas.inherited, dnd, roleMark]
   )
   return (
     <EditorCanvas
@@ -309,6 +360,43 @@ function EditingBanner({
   )
 }
 
+/** Canvas | Table: the form itself, or every placement as an editable row (#2602). */
+function ViewToggle({
+  view,
+  onView
+}: {
+  view: 'canvas' | 'table'
+  onView: (v: 'canvas' | 'table') => void
+}) {
+  const opt = (v: 'canvas' | 'table', label: string, Icon: typeof LayoutGrid, tip: string) => (
+    <button
+      type='button'
+      aria-pressed={view === v}
+      data-editor-view={v}
+      data-tip={tip}
+      onClick={() => onView(v)}
+      className={cn(
+        'inline-flex h-7 items-center gap-1 rounded px-2 text-[12px] font-medium transition-colors',
+        view === v
+          ? 'bg-white text-slate-900 shadow-sm dark:bg-background dark:text-foreground'
+          : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+      )}
+    >
+      <Icon className='h-3.5 w-3.5' />
+      {label}
+    </button>
+  )
+  return (
+    <fieldset
+      aria-label='Show the layout as'
+      className='m-0 inline-flex h-8 min-w-0 items-center gap-0.5 rounded-md border-0 bg-slate-100 p-0.5 dark:bg-muted'
+    >
+      {opt('canvas', 'Canvas', LayoutGrid, 'The form as people see it')}
+      {opt('table', 'Table', Table2, 'Every field as a row: label, section, width, rules')}
+    </fieldset>
+  )
+}
+
 const leftTab = (on: boolean) =>
   cn(
     'inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-[12px] font-medium transition-colors',
@@ -335,7 +423,10 @@ export function LayoutEditor({
 
   const [left, setLeft] = useState<'layouts' | 'add'>('layouts')
   const [panel, setPanel] = useState<'inspector' | 'settings'>('inspector')
-  const [selected, setSelected] = useState<DesignTarget | null>(null)
+  // Several fields can be selected (Shift / ⌘-click); the last one is `selected`.
+  const [selection, setSelection] = useState<DesignTarget[]>([])
+  const selected = selection.length > 0 ? selection[selection.length - 1] : null
+  const [view, setView] = useState<'canvas' | 'table'>('canvas')
   const [showHidden, setShowHidden] = useState(false)
   const [preview, setPreview] = useState<PreviewAs>({
     record: previewRecordId ? { id: previewRecordId, label: `#${previewRecordId}` } : null,
@@ -362,10 +453,12 @@ export function LayoutEditor({
     onBack(saved)
   }, [draft.whenIdle, invalidateLayouts, onBack])
 
-  // Undo, redo or another writer removed what was selected: nothing is.
+  // Undo, redo or another writer removed what was selected: it is not any more.
   useEffect(() => {
-    if (selected && bundle && !targetExists(selected, bundle, parent)) setSelected(null)
-  }, [selected, bundle, parent])
+    if (!bundle || selection.length === 0) return
+    const kept = selection.filter((t) => targetExists(t, bundle, parent))
+    if (kept.length !== selection.length) setSelection(kept)
+  }, [selection, bundle, parent])
 
   const overlay = mode === 'overlay'
   // Where the overlay mounts: resolved from a marker where it is declared.
@@ -376,10 +469,12 @@ export function LayoutEditor({
   }, [])
   const dialogRef = useOverlayDialog(overlay && marker != null, leave, dragging)
 
-  const onSelect = useCallback((t: DesignTarget) => {
-    setSelected(t)
+  const onSelect = useCallback((t: DesignTarget, opts?: SelectOptions) => {
+    setSelection((cur) => nextSelection(cur, t, opts))
     setPanel('inspector')
   }, [])
+  const onMoved = useCallback((t: DesignTarget) => setSelection([t]), [])
+  useAltArrowKeys(bundle, selection, draft.apply, dragging, onMoved)
 
   // Form settings' "Preview as role" and the top bar's role are one choice.
   const onPreviewRoleChange = useCallback(
@@ -391,13 +486,16 @@ export function LayoutEditor({
     setPanel('inspector')
     if (id === currentId) return
     draft.flush()
-    setSelected(null)
+    setSelection([])
     setCurrentId(id)
     onLayoutChange?.(id)
   }
 
   const layoutName = String(bundle?.layout.name ?? row?.name ?? '')
   const layoutType = String(bundle?.layout.layout_type ?? row?.layout_type ?? 'grouped')
+  // Forms and read views lay fields out on the 12-column grid: the placements
+  // table and auto-arrange are theirs (table and PDF layouts have their own canvases).
+  const arrangeable = layoutType !== 'table' && layoutType !== 'file'
   const warning = host.warning ?? overview?.warning ?? null
 
   // Overlay mode is a modal dialog over the record page.
@@ -434,6 +532,14 @@ export function LayoutEditor({
         onShowHidden={setShowHidden}
         onBack={leave}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
+        tools={
+          bundle && arrangeable ? (
+            <>
+              <ViewToggle view={view} onView={setView} />
+              <AutoArrangeButton bundle={bundle} apply={draft.apply} />
+            </>
+          ) : null
+        }
       />
       {overlay && (
         <EditingBanner
@@ -508,7 +614,17 @@ export function LayoutEditor({
             </div>
           </aside>
           <main className='min-w-0 flex-1 overflow-y-auto'>
-            {bundle ? (
+            {bundle && arrangeable && view === 'table' ? (
+              <PlacementsTable
+                bundle={bundle}
+                collection={collection}
+                apply={draft.apply}
+                flush={draft.flush}
+                selection={selection}
+                onSelect={onSelect}
+                onSelection={setSelection}
+              />
+            ) : bundle ? (
               <Canvas
                 collection={collection}
                 bundle={bundle}
@@ -516,6 +632,7 @@ export function LayoutEditor({
                 preview={preview}
                 record={record}
                 selected={selected}
+                selection={selection}
                 onSelect={onSelect}
                 showHidden={showHidden}
                 apply={draft.apply}
@@ -543,6 +660,14 @@ export function LayoutEditor({
                   collection={collection}
                   previewRoleId={preview.roleId}
                   onPreviewRoleChange={onPreviewRoleChange}
+                />
+              ) : selection.length > 1 ? (
+                <BulkInspector
+                  bundle={bundle}
+                  selection={selection}
+                  apply={draft.apply}
+                  collection={collection}
+                  onSelection={setSelection}
                 />
               ) : (
                 <Inspector
