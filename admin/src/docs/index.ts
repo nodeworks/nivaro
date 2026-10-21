@@ -242,6 +242,7 @@ import { helpVideosApi, helpVideosGuide, sdkHelpVideos } from './sections/help-v
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
 import { infrastructureEdgeDocs } from './sections/infrastructure-edge.js'
+import { infrastructureHostGuide } from './sections/infrastructure-host.js'
 import { infrastructureInventory } from './sections/infrastructure-inventory.js'
 import { integrationObligations } from './sections/integration-obligations.js'
 import {
@@ -692,7 +693,8 @@ export const navSections: NavGroup[] = [
       smtpConfig,
       smsConfig,
       digestEmails,
-      aiExplainGuide
+      aiExplainGuide,
+      infrastructureHostGuide
     ]
   },
   {

@@ -3,6 +3,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { dockerGet, dockerHosts, forEachDockerHost } from '../services/docker-source.js'
 import { storeEnabled } from '../services/telemetry-store.js'
 import { infrastructureEdgeRoutes } from './infrastructure-edge.js'
+import { infrastructureHostRoutes } from './infrastructure-host.js'
 import { infrastructureInventoryRoutes } from './infrastructure-inventory.js'
 
 /**
@@ -51,4 +52,5 @@ export async function infrastructureRoutes(app: FastifyInstance): Promise<void> 
   // Area routes (one line each).
   await app.register(infrastructureInventoryRoutes)
   await app.register(infrastructureEdgeRoutes)
+  await app.register(infrastructureHostRoutes)
 }

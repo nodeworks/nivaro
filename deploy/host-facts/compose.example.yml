@@ -1,0 +1,53 @@
+# Nivaro host facts collector, run as a container on each Docker host (no sudo needed).
+#
+#   docker compose -f compose.example.yml up -d --build
+#
+# The node_exporter (or Alloy) on the same host reads the `host-facts` volume as its textfile
+# directory, so the nivaro_host_* metrics reach the telemetry store with the other host metrics.
+services:
+  host-facts:
+    build: .
+    image: nivaro-host-facts:local
+    restart: unless-stopped
+    # Host PID namespace: /host/proc shows the host's processes (D state, host mount table).
+    pid: host
+    environment:
+      # The name this host has in DOCKER_HOSTS on the Nivaro instance.
+      NIVARO_HOST_NAME: staging
+      # Preferred: the read-only Docker socket proxy Nivaro already reads (GET only; needs the
+      # CONTAINERS section). The collector only runs `docker ps` and `docker inspect`.
+      DOCKER_HOST: tcp://docker-proxy:2375
+    volumes:
+      # The host's / read only. Nothing on the host is written.
+      - /:/host:ro
+      - host-facts:/textfile
+      - host-facts-state:/state
+      # Without a socket proxy, mount the socket instead and drop DOCKER_HOST above. Note that
+      # ':ro' only stops the socket file being replaced; the Docker API behind it is not read
+      # only, so prefer the proxy.
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker-proxy]
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+
+  # Example consumer: node_exporter reading the same volume as its textfile directory.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --collector.textfile.directory=/textfile
+    volumes:
+      - /:/host:ro,rslave
+      - host-facts:/textfile:ro
+
+volumes:
+  host-facts:
+  host-facts-state:
+
+networks:
+  docker-proxy:
+    external: true

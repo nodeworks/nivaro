@@ -1,0 +1,13 @@
+[Unit]
+Description=Nivaro host facts for node_exporter (textfile collector)
+After=docker.service
+
+[Service]
+Type=oneshot
+Environment=TEXTFILE_DIR=/var/lib/node_exporter/textfile
+# NIVARO_HOST_NAME (the name this host has in DOCKER_HOSTS) and any other setting go here.
+EnvironmentFile=-/etc/default/nivaro-host-facts
+ExecStart=/usr/local/sbin/nivaro-host-facts.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=600
