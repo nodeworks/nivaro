@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useContext, useEffect, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import type { CascadeRule } from '../../item-edit/helpers'
 import { CascadeWriter } from '../ai-rules/CascadeWriter'
 import { type CascadeFilterRule, CascadeFiltersEditor } from '../editors/cascade-filters'
 import { editorQueryKeys } from '../editors/editor-queries'
@@ -16,6 +17,7 @@ import {
   useGlobalValue
 } from './kit'
 import { asArray, asObject, describeField, relKindOf, withKey } from './model'
+import { PickerPreview } from './PickerPreview'
 
 type Rel = {
   many_collection?: string
@@ -211,6 +213,10 @@ export function PickerTab() {
             )
           }
         />
+      )}
+
+      {(isM2O || isM2M) && info.iface !== 'files-m2m' && (
+        <PickerPreview rules={rules as CascadeRule[]} />
       )}
 
       {(isM2O || isM2M || isPath) && (

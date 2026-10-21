@@ -66,6 +66,8 @@ export interface GroupPatch {
   read_width?: string | null
   /** #2608: an editor-only note, JSON {text, by, by_name, at}. Never sent to record pages. */
   editor_note?: string | null
+  /** Label translations per locale, JSON `{ "es": { "label": "…" } }` (#2665). */
+  i18n?: string | null
 }
 
 export interface GroupRow {
@@ -92,6 +94,8 @@ export interface GroupRow {
   read_width: string | null
   /** #2608 — absent on databases without the column (migration 460). */
   editor_note?: string | null
+  /** Label translations per locale (#2665); absent before migration 465. */
+  i18n?: string | null
 }
 
 /** The layout settings PATCH /collection-layouts/:id accepts. */
@@ -211,7 +215,8 @@ export const GROUP_PATCH_KEYS = [
   'hidden_for_roles',
   'locked_for_roles',
   'read_width',
-  'editor_note'
+  'editor_note',
+  'i18n'
 ] as const
 
 export const LAYOUT_PATCH_KEYS = [

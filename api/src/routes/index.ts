@@ -136,6 +136,7 @@ import { layoutUsageRoutes } from './layout-usage.js'
 import { layoutChangeRequestRoutes } from './layout-change-requests.js'
 import { formPreviewPublicRoutes, layoutCollabRoutes } from './layout-collab.js'
 import { layoutDependencyRoutes } from './layout-dependencies.js'
+import { layoutInspectRoutes } from './layout-inspect.js'
 import { layoutPromoteRoutes } from './layout-promote.js'
 import { layoutWhyRoutes } from './layout-why.js'
 import { legalHoldRoutes } from './legal-holds.js'
@@ -608,6 +609,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(layoutWhyRoutes, { prefix: '/collection-layouts' })
   await app.register(layoutCollabRoutes, { prefix: '/layout-collab' })
   await app.register(formPreviewPublicRoutes, { prefix: '/form-preview' })
+  await app.register(layoutInspectRoutes, { prefix: '/layout-inspect' })
   await app.register(virtualCollectionsRoutes, { prefix: '/virtual-collections' })
   await app.register(recordTemplatesRoutes, { prefix: '/record-templates' })
   await app.register(collectionPresetsRoutes, { prefix: '/collection-presets' })

@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { activateLayout, lockLayout } from './layout-activation.js'
+import { groupI18nSupported } from './layout-inspect.js'
 import {
   CHANGE_NOTE_REQUIRED,
   changeNotePolicy,
@@ -87,10 +88,12 @@ export function placementColumns(a: PlacementPatch & { group_key?: string | null
   }
 }
 
-// #2608: the section note column (migration 460) is written only where it exists.
-function groupColumns(g: GroupRow, withNote = false) {
+// Optional columns are written only where their migration ran: the section note
+// (#2608, migration 460) and section label translations (#2665, migration 465).
+function groupColumns(g: GroupRow, cols: { note: boolean; i18n: boolean }) {
   return {
-    ...(withNote ? { editor_note: g.editor_note ?? null } : {}),
+    ...(cols.note ? { editor_note: g.editor_note ?? null } : {}),
+    ...(cols.i18n ? { i18n: g.i18n ?? null } : {}),
     label: g.label,
     type: g.type,
     icon: g.icon,
@@ -172,7 +175,8 @@ export function bundleFromRows(
     hidden_for_roles: str(g.hidden_for_roles),
     locked_for_roles: str(g.locked_for_roles),
     read_width: str(g.read_width),
-    editor_note: str(g.editor_note)
+    editor_note: str(g.editor_note),
+    i18n: str(g.i18n)
   }))
 
   let ungroupedSort: number | null = null
@@ -294,6 +298,7 @@ async function writeGroups(
   const withNote = await hasColumn('nivaro_field_groups', 'editor_note')
   const idByKey = new Map<string, number>()
   for (const g of was.values()) if (g.id != null) idByKey.set(g.key, g.id)
+  const i18n = await groupI18nSupported()
 
   // New groups first (unhooked), so every parent has an id to point at.
   for (const g of now.values()) {
@@ -302,7 +307,7 @@ async function writeGroups(
       collection,
       layout_id: layoutId,
       key: g.key,
-      ...groupColumns(g, withNote),
+      ...groupColumns(g, { note: withNote, i18n }),
       container_id: null
     })
     const created = (await trx('nivaro_field_groups')
@@ -317,7 +322,7 @@ async function writeGroups(
     if (!prev && containerId == null) continue
     await trx('nivaro_field_groups')
       .where({ id: idByKey.get(g.key) })
-      .update({ ...groupColumns(g, withNote), container_id: containerId })
+      .update({ ...groupColumns(g, { note: withNote, i18n }), container_id: containerId })
   }
   // container_id is a NO ACTION self-FK (migration 096): unhook, then delete.
   const goneIds = [...was.values()]

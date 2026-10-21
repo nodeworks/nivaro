@@ -67,6 +67,7 @@ import {
   describeReason,
   type Segment
 } from './describe-conditions'
+import { InspectStrip } from './InspectStrip'
 import {
   btnOutline,
   btnPrimary,
@@ -1210,6 +1211,7 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
             </div>
           </div>
         )}
+        {rows.length > 0 && <InspectStrip collection={collection} onChanged={invalidate} />}
         <CoverageStrip
           rows={rows}
           checking={analysis.checking}

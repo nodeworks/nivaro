@@ -22,6 +22,7 @@ import {
   useInspectorEnv
 } from './kit'
 import { asArray, describeField, groupFields, relatedCollectionOf, relKindOf } from './model'
+import { GroupTranslations } from './Translations'
 
 const TYPE_LABELS: Record<string, string> = {
   section: 'Section',
@@ -509,6 +510,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
       {!readOnly && (
         <SectionReuseActions bundle={env.bundle} collection={env.collection} group={group} />
       )}
+      <GroupTranslations group={group} />
 
       <div
         data-setting='group.delete'
