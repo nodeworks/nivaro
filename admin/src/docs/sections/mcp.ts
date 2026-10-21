@@ -75,14 +75,38 @@ export const mcpDocs: DocSection = {
       type: 'p',
       text: 'Every assistant you allowed is a connection: `GET /api/oauth/connections` lists them (name, when you connected, when it was last used) and `DELETE /api/oauth/connections/:id` disconnects one — its tokens stop working at once. Connecting and disconnecting are logged in Activity (`oauth-connect`, `oauth-revoke`). Suspending an account ends its connections too: every request checks the account is still active.'
     },
+    { type: 'h2', id: 'mcp-live', text: 'Live record updates' },
+    {
+      type: 'p',
+      text: 'Connect to `/api/mcp?live=1` instead of `/api/mcp` and the assistant can follow records. Every record is a resource, `nivaro://record/<collection>/<id>`; reading it reads the record as you. Subscribing to one tells the assistant when it changes: Nivaro sends `notifications/resources/updated` with the record’s address and the names of the fields that changed (`_meta`), never their values. The assistant reads the record again to see the new values, with your permissions.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A live connection gets a session id on its first answer and listens on `GET /api/mcp` (an event stream). `DELETE /api/mcp` ends the session.',
+        'You can only follow a record you can read, at most 50 at a time per connection. Access is checked again every two minutes: a record you can no longer read is dropped, with one last notice.',
+        'Sessions last 24 hours after the last use. The event stream closes when your sign-in ends; the assistant reconnects with its renewed sign-in and keeps its subscriptions.',
+        'A plain `/api/mcp` connection works exactly as before, with no session.'
+      ]
+    },
+    { type: 'h2', id: 'mcp-console', text: 'MCP console' },
+    {
+      type: 'p',
+      text: 'Developer → MCP Console (`/mcp-console`, administrators) lists the tools an assistant connected as you would get, with a form built from each tool’s inputs (or JSON, for the raw arguments). Running a tool goes through the same MCP server the endpoint uses, as you, and shows the result as the assistant sees it, the raw JSON answer, how long it took, how large it is, and every API call the tool made.'
+    },
+    {
+      type: 'p',
+      text: 'Tools that change data start in **dry run**. A tool that can rehearse (create_item) rehearses: rules and validation run and nothing is stored. Any other tool runs but its changes are held: the console does not send them and lists each one under API calls. Turn dry run off and confirm to run it for real.'
+    },
     { type: 'h2', id: 'mcp-settings', text: 'Settings and how it works' },
     {
       type: 'ul',
       items: [
         '`MCP_HTTP=off` turns the hosted endpoint off (the npm server keeps working with a key); `MCP_OAUTH=off` turns sign-in off and leaves API keys working on `/api/mcp`.',
+        '`MCP_SESSIONS=off` turns live sessions off: `?live=1` is ignored and every connection is answered without a session.',
         '`MCP_PUBLIC_URL` names the address assistants reach this API on, when it is not the API’s own host — the sign-in must start and end there, and that address must be registered with your identity provider.',
         'Discovery: `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`. Clients register themselves (`/oauth/register`, public clients only), must use PKCE (S256), and may only return to https addresses or to `localhost` on your machine.',
-        'Each `/api/mcp` request is answered on its own (no server-side session), so any API replica can serve it, and every tool call inside it is an ordinary API request — rate limits, the maintenance freeze and the request log apply to each call. Traffic Map counts connected assistants with people.'
+        'Each `/api/mcp` request is answered on its own (a live session only remembers its subscriptions, in Redis), so any API replica can serve it, and every tool call inside it is an ordinary API request — rate limits, the maintenance freeze and the request log apply to each call. Traffic Map counts connected assistants with people.'
       ]
     }
   ]
