@@ -128,7 +128,7 @@ function EventList({ events, showChannel }: { events: MembershipEvent[]; showCha
           </span>
           <span
             className='shrink-0 text-[11px] text-slate-500 dark:text-slate-400'
-            title={new Date(e.at).toLocaleString()}
+            data-tip={new Date(e.at).toLocaleString()}
           >
             {formatRelative(e.at)}
           </span>
@@ -170,9 +170,13 @@ export function MembershipHistory({ channelId, border }: { channelId: number; bo
               <Skeleton className='h-4 w-2/3' />
             </div>
           ) : isError ? (
-            <p className='p-2 text-[11.5px] text-slate-500'>Could not load the history.</p>
+            <p className='p-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
+              Could not load the history.
+            </p>
           ) : !data || data.length === 0 ? (
-            <p className='p-2 text-[11.5px] text-slate-500'>No joins or leaves recorded yet.</p>
+            <p className='p-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
+              No joins or leaves recorded yet.
+            </p>
           ) : (
             <EventList events={data} />
           )}
@@ -225,7 +229,8 @@ function ChannelRows({ rows, empty }: { rows: ArchiveRow[]; empty: string }) {
   const reopen = useMutation({
     mutationFn: (id: number) =>
       client.request(post(`/chat/channels/${id}/archive-suggestion`, { action: 'keep' })),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-chat-archive-overview'] })
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-chat-archive-overview'] }),
+    onError: (e) => toast.error(errorText(e, 'Could not keep that channel open'))
   })
   if (rows.length === 0)
     return <p className='py-2 text-[12px] text-slate-500 dark:text-slate-400'>{empty}</p>
@@ -245,10 +250,11 @@ function ChannelRows({ rows, empty }: { rows: ArchiveRow[]; empty: string }) {
           {r.suggested_at && (
             <button
               type='button'
+              disabled={reopen.isPending}
               onClick={() => reopen.mutate(r.id)}
-              className='shrink-0 text-[11.5px] font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
+              className='shrink-0 rounded text-[11.5px] font-medium text-slate-600 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-50 dark:text-slate-300 dark:hover:text-white'
             >
-              Keep open
+              {reopen.isPending && reopen.variables === r.id ? 'Keeping…' : 'Keep open'}
             </button>
           )}
         </li>
@@ -271,6 +277,8 @@ export function ChannelsAdminTab() {
   const [days, setDays] = useState<string | null>(null)
   const idle = overview.data?.idle_days
   const shownDays = days ?? (idle === undefined ? '' : String(idle))
+  const daysNum = days === null || days.trim() === '' ? null : Number(days)
+  const daysBad = daysNum !== null && (!Number.isInteger(daysNum) || daysNum < 0 || daysNum > 3650)
   const refresh = (d?: ArchiveOverview) => {
     if (d) qc.setQueryData(['nvr-chat-archive-overview'], d)
     else void qc.invalidateQueries({ queryKey: ['nvr-chat-archive-overview'] })
@@ -297,7 +305,9 @@ export function ChannelsAdminTab() {
     onSuccess: (d) => {
       refresh(d.overview)
       toast.success(
-        d.suggested === 0 ? 'No quiet channels found' : `${d.suggested} suggestion(s) sent`
+        d.suggested === 0
+          ? 'No quiet channels found'
+          : `${d.suggested} ${d.suggested === 1 ? 'suggestion' : 'suggestions'} sent`
       )
     },
     onError: (e) => toast.error(errorText(e, 'Could not run the check'))
@@ -332,15 +342,21 @@ export function ChannelsAdminTab() {
               max={3650}
               value={shownDays}
               onChange={(e) => setDays(e.target.value)}
-              className='h-7 w-16 rounded-md border border-slate-200 bg-white px-2 text-[12px] tabular-nums outline-none focus:border-nvr-cyan dark:border-border dark:bg-card'
+              aria-invalid={daysBad || undefined}
+              className={cn(
+                'h-7 w-16 rounded-md border bg-white px-2 text-[12px] tabular-nums outline-none focus:border-nvr-cyan dark:bg-card',
+                daysBad
+                  ? 'border-red-400 dark:border-red-500/60'
+                  : 'border-slate-200 dark:border-border'
+              )}
               aria-label='Idle days before an archive suggestion'
             />
             days (0 turns it off)
           </label>
           <button
             type='button'
-            disabled={days === null || save.isPending}
-            onClick={() => save.mutate(days === '' ? null : Number(days))}
+            disabled={days === null || daysBad || save.isPending}
+            onClick={() => save.mutate(daysNum)}
             className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[12px] font-medium text-white disabled:opacity-40'
           >
             Save
@@ -360,7 +376,9 @@ export function ChannelsAdminTab() {
             <Skeleton className='h-4 w-1/2' />
           </div>
         ) : overview.isError ? (
-          <p className='text-[12px] text-slate-500'>Could not load the channel lists.</p>
+          <p className='text-[12px] text-slate-500 dark:text-slate-400'>
+            Could not load the channel lists.
+          </p>
         ) : (
           <div className='space-y-4'>
             <div>
@@ -406,7 +424,9 @@ export function ChannelsAdminTab() {
         {history.isLoading ? (
           <Skeleton className='h-16 w-full' />
         ) : history.isError ? (
-          <p className='text-[12px] text-slate-500'>Could not load membership changes.</p>
+          <p className='text-[12px] text-slate-500 dark:text-slate-400'>
+            Could not load membership changes.
+          </p>
         ) : (history.data ?? []).length === 0 ? (
           <p className='py-2 text-[12px] text-slate-500 dark:text-slate-400'>
             No joins or leaves in the last {period} days.
