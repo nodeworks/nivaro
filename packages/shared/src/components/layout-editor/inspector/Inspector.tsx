@@ -57,6 +57,7 @@ import { PickerTab } from './PickerTab'
 import { RulesTab } from './RulesTab'
 import { SlotInspector } from './SlotInspector'
 import { SubtitleInspector } from './SubtitleInspector'
+import { useInspectorTabRequest } from './tab-request'
 import { WidgetInspector } from './WidgetInspector'
 
 export interface InspectorProps {
@@ -576,6 +577,8 @@ function FieldInspector({
     { key: 'advanced', label: 'Advanced' }
   ]
   const [tab, setTab] = useState<TabKey>('look')
+  // A canvas chip asked for one of this field's tabs (#2632).
+  useInspectorTabRequest(row.field, (t) => setTab(t as TabKey))
   const tabsId = useId()
   const active = tabs.some((t) => t.key === tab) ? tab : 'look'
   // Tabs still switch in a read-only (inherited) view; the fieldset disables the controls.

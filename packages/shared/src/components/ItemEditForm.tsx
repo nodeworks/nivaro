@@ -1372,7 +1372,7 @@ function ItemEditFormView({
   // exactly as GET formats a saved layout (POST …/project only reads).
   const designAssignments = designOn ? design.layout.assignments : null
   const {
-    data: fieldConfig,
+    data: projectedFieldConfig,
     isLoading: fieldsLoading,
     isFetched: fieldConfigFetched
   } = useQuery<CMSField[]>({
@@ -1406,6 +1406,16 @@ function ItemEditFormView({
     // asking".
     enabled: activeLayoutData !== undefined
   })
+  // Design mode on a new record: the value each field would start with shows
+  // as its placeholder (#2633, the layout editor's default ghosts). Display only.
+  const designGhost = designCtx?.ghost
+  const fieldConfig = useMemo(() => {
+    if (!designGhost || !isNew || !projectedFieldConfig) return projectedFieldConfig
+    return projectedFieldConfig.map((f) => {
+      const ghost = designGhost(f.field)
+      return ghost ? { ...f, placeholder: ghost } : f
+    })
+  }, [designGhost, isNew, projectedFieldConfig])
 
   const { data: relations = [], isFetched: relationsFetched } = useQuery<CMSRelation[]>({
     queryKey: ['relations', collection],

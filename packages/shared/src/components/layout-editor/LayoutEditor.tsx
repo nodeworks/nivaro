@@ -51,12 +51,18 @@ import { useDraftRecovery } from './draft-recovery'
 import { canvasRenderer, EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { noteKey, notesOf } from './editor-notes'
+import { explainMarks, RuleLoopsBanner, RulesToggle, useRulesView } from './explain/CanvasRules'
+import { useDriverHover } from './explain/driver-hover'
+import type { OpenSource } from './explain/field-sources'
+import type { RuleDep } from './explain/rule-graph'
+import { useCanvasExplain, useDefaultGhosts } from './explain/use-explain'
 import { FindReplaceButton } from './FindReplace'
 import { FormMapButton } from './FormMapButton'
 import { useSectionChanges } from './history-api'
 import { useLayoutEditorHost } from './host'
 import { overriddenTargets, overrideMark } from './inheritance'
 import { BulkInspector } from './inspector/BulkInspector'
+import { requestInspectorTab } from './inspector/tab-request'
 import { FormSettings, Inspector } from './inspector-slot'
 import { isTyping } from './is-typing'
 import { ARROW_DIRS, altArrowMove } from './keyboard-move'
@@ -352,6 +358,9 @@ function Canvas({
   stateKey = null,
   marks,
   overlay,
+  ruleMarks,
+  ghost,
+  deps,
   noDnd = false,
   record,
   selected,
@@ -380,6 +389,12 @@ function Canvas({
   stateKey?: string | null
   marks?: (t: DesignTarget) => DesignMark[]
   overlay?: (t: DesignTarget) => DesignOverlay | null
+  /** The Rules view's tags (explain/CanvasRules), after the preview modes' own. */
+  ruleMarks?: (t: DesignTarget) => DesignMark[]
+  /** Default-value ghosts (#2633). */
+  ghost?: (field: string) => string | null
+  /** What each field drives: hovering a driver rings what it controls (#2641). */
+  deps: RuleDep[]
   /** The second pane of a side-by-side preview: selectable, never draggable. */
   noDnd?: boolean
   record: Record<string, unknown> | null
@@ -433,7 +448,15 @@ function Canvas({
   )
   // #2608: notes pinned to fields and sections show as markers on the canvas.
   const notes = useMemo(() => notesOf(bundle), [bundle])
-  const allMarks = usePinMarks(bundle, overrideMarks)
+  // Rules view tags (#2632 #2640) join the override and preview tags; pins go last.
+  const ruleMarked = useMemo(
+    () =>
+      overrideMarks && ruleMarks
+        ? (t: DesignTarget) => [...overrideMarks(t), ...ruleMarks(t)]
+        : (overrideMarks ?? ruleMarks),
+    [overrideMarks, ruleMarks]
+  )
+  const allMarks = usePinMarks(bundle, ruleMarked)
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
@@ -457,7 +480,8 @@ function Canvas({
       diffMark: compare ? (t) => compare.diff.marks.get(targetKey(t)) ?? null : undefined,
       lastChange: lastChanges
         ? (t) => (t.kind === 'group' ? (lastChanges[t.key] ?? null) : null)
-        : undefined
+        : undefined,
+      ghost
     }),
     [
       selected,
@@ -476,20 +500,24 @@ function Canvas({
       unsaved,
       peers,
       compare,
-      lastChanges
+      lastChanges,
+      ghost
     ]
   )
+  const hoverRef = useDriverHover(deps)
   return (
-    <EditorCanvas
-      collection={collection}
-      bundle={shown}
-      layout={layout}
-      record={record}
-      stateKey={stateKey}
-      design={design}
-      apply={apply}
-      whenIdle={whenIdle}
-    />
+    <div ref={hoverRef} className='flex min-h-full flex-col'>
+      <EditorCanvas
+        collection={collection}
+        bundle={shown}
+        layout={layout}
+        record={record}
+        stateKey={stateKey}
+        design={design}
+        apply={apply}
+        whenIdle={whenIdle}
+      />
+    </div>
   )
 }
 
@@ -671,6 +699,11 @@ export function LayoutEditor({
     }
   }, [aiPins])
 
+  // The Rules view (#2632 #2640 #2633): rule tags and default ghosts on the canvas.
+  const [rulesOn, setRulesOn] = useRulesView()
+  const explain = useCanvasExplain(collection, canvasLayout, rulesOn)
+  const ghosts = useDefaultGhosts(collection, canvasLayout, rulesOn && !preview.record)
+
   // Required change note (#2654): the server's copy decides (turning it off asks too).
   const { data: serverBundle } = useLayoutBundle(currentId)
   const notePolicy = changeNotePolicyOf(serverBundle?.layout) ?? changeNotePolicyOf(bundle?.layout)
@@ -772,6 +805,56 @@ export function LayoutEditor({
     setPanel('inspector')
   }, [])
   const onMoved = useCallback((t: DesignTarget) => setSelection([t]), [])
+
+  // A rule tag clicked: open what causes it (#2632) — the field's inspector
+  // tab, the section, or the pipeline / field rules page (asks first when
+  // there are unsaved changes).
+  const openSource = useCallback(
+    (source: OpenSource, t: DesignTarget) => {
+      if (source.kind === 'group') return onSelect({ kind: 'group', key: source.key })
+      if (source.kind === 'tab') {
+        onSelect(t)
+        if (t.kind === 'field' || t.kind === 'header') requestInspectorTab(t.field, source.tab)
+        return
+      }
+      if (source.kind === 'pipeline')
+        return guard('open the pipeline', () =>
+          host.navigate(`/pipelines/${encodeURIComponent(source.id)}`)
+        )
+      guard('open the field rules', () =>
+        host.navigate(`/data-model/${encodeURIComponent(collection)}?tab=rules`)
+      )
+    },
+    [onSelect, guard, host, collection]
+  )
+  const ruleMarks = useMemo(() => {
+    // Yes/no and multi-pick inputs show no placeholder: their ghost is a tag.
+    const ghostTags = new Map<string, string>()
+    for (const [f, g] of ghosts)
+      if (g.type === 'boolean' || g.text.endsWith(' linked')) ghostTags.set(f, g.text)
+    return explainMarks(explain, { chips: rulesOn, ghostTags, open: openSource })
+  }, [explain, rulesOn, ghosts, openSource])
+  const ghost = useMemo(
+    () => (ghosts.size > 0 ? (f: string) => ghosts.get(f)?.text ?? null : undefined),
+    [ghosts]
+  )
+  const showField = useCallback(
+    (field: string) => {
+      const p = bundle?.placements.find((x) => x.field === field)
+      if (!p) return
+      const t: DesignTarget =
+        p.group_key === HEADER_GROUP_KEY
+          ? { kind: 'header', field }
+          : { kind: 'field', field, group_key: p.group_key }
+      onSelect(t)
+      requestAnimationFrame(() =>
+        document
+          .querySelector(`[data-layout-editor] [data-design-target="${CSS.escape(targetKey(t))}"]`)
+          ?.scrollIntoView?.({ block: 'center' })
+      )
+    },
+    [bundle, onSelect]
+  )
   useAltArrowKeys(bundle, selection, draft.apply, dragging, onMoved)
 
   // Who else is here and what they selected (#2651).
@@ -923,6 +1006,7 @@ export function LayoutEditor({
             {bundle && arrangeable && (
               <>
                 <ViewToggle view={view} onView={setView} />
+                <RulesToggle on={rulesOn} onChange={setRulesOn} />
                 <AutoArrangeButton bundle={bundle} apply={draft.apply} />
                 <FindReplaceButton bundle={bundle} apply={draft.apply} collection={collection} />
               </>
@@ -1045,6 +1129,7 @@ export function LayoutEditor({
           {warning}
         </div>
       )}
+      <RuleLoopsBanner explain={explain} onShow={showField} />
       {/* Drag and drop spans the whole body: Add panel rows drag onto the canvas. */}
       <LayoutDndProvider
         bundle={bundle}
@@ -1195,6 +1280,9 @@ export function LayoutEditor({
                       stateKey={pane.stateKey}
                       marks={withAiMarks(pane.marks)}
                       overlay={pane.overlay}
+                      ruleMarks={ruleMarks}
+                      ghost={ghost}
+                      deps={explain.deps}
                       noDnd={pane.noDnd}
                       record={pane.record}
                       selected={selected}

@@ -50,6 +50,8 @@ export interface LayoutDesign {
   diffMark?(t: DesignTarget): DiffMark | null
   /** Sections: who last changed it and when (#2611), from version history. */
   lastChange?(t: DesignTarget): LastChange | null
+  /** A new record's starting value for the field, as grey placeholder text (#2633). */
+  ghost?(field: string): string | null
 }
 
 export interface DiffMark {
@@ -99,6 +101,8 @@ export interface DesignMark {
   highlight?: boolean
   /** A small icon before the text (a pinned section's pin, #2628). */
   icon?: 'pin'
+  /** Clickable: opens what the tag explains (the node is selected first). */
+  onClick?: () => void
 }
 
 export interface DesignOverlay {

@@ -629,7 +629,16 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       ids.length
         ? db('nivaro_field_groups')
             .whereIn('layout_id', ids)
-            .select('id', 'key', 'type', 'container_id', 'tab_mode', 'layout_id')
+            .select(
+              'id',
+              'key',
+              'label',
+              'type',
+              'container_id',
+              'tab_mode',
+              'visible_when',
+              'layout_id'
+            )
         : [],
       ids.length
         ? db('nivaro_layout_field_assignments')
