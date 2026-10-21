@@ -2,8 +2,10 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   ChatPanel,
   ChatProvider,
+  defaultItemUrl,
   ItemEditAuthContext,
   isChatPanelPinned,
+  NavigationContext,
   NivaroProvider,
   registerDmOpener,
   registerRoomOpener,
@@ -96,25 +98,37 @@ export function AdminChatProvider({ children }: { children: React.ReactNode }) {
     () => ({ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }),
     [user]
   )
+  // The dock sits outside the page outlet's navigation: huddle Follow me (#2855) and other
+  // shared chat links route through the app's router here, never window.location.
+  const navValue = useMemo(
+    () => ({
+      navigate: (path: string) => navigate(path),
+      itemUrl: defaultItemUrl,
+      helpVideosPath: '/help-videos'
+    }),
+    [navigate]
+  )
 
   return (
     <NivaroProvider client={client}>
-      <ItemEditAuthContext.Provider value={authValue}>
-        <ChatProvider
-          me={me}
-          onlineUsers={users}
-          realtime={onCollectionUpdate}
-          subscribeRooms={subscribeChatRooms}
-          setTypingRoom={setTypingRoom}
-          navigate={(url) => navigate(url)}
-          entityUrl={entityUrl}
-          recordUrl={(collection, id) => `/collections/${collection}/${id}`}
-          // Admin owns the replay page — deep-link straight to the recording.
-          sessionUrl={(recordingId) => `/session-replays?recording=${recordingId}`}
-        >
-          {children}
-        </ChatProvider>
-      </ItemEditAuthContext.Provider>
+      <NavigationContext.Provider value={navValue}>
+        <ItemEditAuthContext.Provider value={authValue}>
+          <ChatProvider
+            me={me}
+            onlineUsers={users}
+            realtime={onCollectionUpdate}
+            subscribeRooms={subscribeChatRooms}
+            setTypingRoom={setTypingRoom}
+            navigate={(url) => navigate(url)}
+            entityUrl={entityUrl}
+            recordUrl={(collection, id) => `/collections/${collection}/${id}`}
+            // Admin owns the replay page — deep-link straight to the recording.
+            sessionUrl={(recordingId) => `/session-replays?recording=${recordingId}`}
+          >
+            {children}
+          </ChatProvider>
+        </ItemEditAuthContext.Provider>
+      </NavigationContext.Provider>
     </NivaroProvider>
   )
 }

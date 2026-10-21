@@ -835,7 +835,21 @@ export const collabChat: DocSection = {
     { type: 'h2', id: 'collab-chat-huddles', text: 'Huddles and screen clips' },
     {
       type: 'p',
-      text: 'A huddle is a voice call inside a channel, General or a record’s room, started from the headphones button in the room header. While one runs, the header shows who is in it with a Join button; a strip under the header shows the people, how long it has run and, when someone shares their screen, that screen. The room gets a line when a huddle starts and when it ends. You can open other rooms while you talk — the huddle keeps going and the header says so. Huddles are not recorded, and they do not run in direct messages.'
+      text: 'A huddle is a voice call inside a channel, General or a record’s room, started from the headphones button in the room header. While one runs, the header shows who is in it with a Join button; a strip under the header shows the people, how long it has run and, when someone shares their screen, that screen. The room gets a line when a huddle starts and when it ends. You can open other rooms while you talk — the huddle keeps going and the header says so. Huddles are not recorded.'
+    },
+    {
+      type: 'h3',
+      id: 'collab-chat-huddle-calls',
+      text: 'Calls, invitations and scheduled huddles'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Starting a huddle in a direct message (or a group conversation) calls the other people: each of them gets a call card at the top of the screen with Accept and Decline, a ring with their own notification sound, and a notification through the normal path (category "Huddles & calls" in Profile → Notification rules), so a closed tab still learns of it through push. Under do not disturb the card and the ring are held. Nobody answers in 30 seconds and the room reads "No answer from …"; a Decline reads "… declined the call". The caller sees "Ringing …" in the strip under the header, with a way to stop ringing.',
+        'Add people from the strip while you talk: the picker lists only people who can see that room (the server checks each one), and whoever you pick is called the same way. An invitation never grants access to a room.',
+        'While you are in a huddle your presence reads "In a huddle" wherever people are listed (beside any status you set, never instead of it), and notification toasts and sounds are held: the strip shows how many are waiting, and when you leave they are released as one summary with one sound. Turn that off under Profile → Notification rules → "Hold notifications during huddles". The inbox and the badges move either way; a critical notification still breaks through.',
+        'Schedule a huddle from the room header’s ⋯ menu: a title, a start, how long, and who to invite (in a direct message the other person is already in). The room gets a card showing the time and the people, with Join while it is on, a calendar file (.ics) and an "Outlook" link that opens a pre-filled event — nothing is written to anyone’s calendar. Five minutes before the start everyone invited gets a reminder; at the start the invitees are called. The organizer or an administrator can cancel it from the card.'
+      ]
     },
     {
       type: 'ul',
@@ -902,6 +916,33 @@ export const collabChat: DocSection = {
         'Camera: the camera button in the controls turns your camera on (it is off when you join). People with their camera on show as tiles in the strip — one, two side by side or a 2×2 grid, and a sideways strip on a narrow screen; your own tile is mirrored. Only the first four cameras turned on are sent: a fifth sees "Video paused to keep the call smooth" on their own tile, and their video starts by itself when someone turns theirs off.',
         'Point and draw: over a screen someone shares, the small tool strip lets you point, draw or drop an arrow; everyone in the huddle sees your marks in your own colour, and the person sharing sees them on their preview with "2 people are pointing". Marks fade after four seconds; the eraser clears every mark on that screen. Press Esc or click the tool again to stop. Marks go browser to browser and never through the server.',
         'Mini-player: in Chrome and Edge the pop-out button in the strip opens a small window that stays on top of other windows and apps, with who is here (and who is speaking), the timer, mute, leave and a thumbnail of a shared screen. It keeps going when you close the chat panel or open another room; closing it changes nothing, and leaving the huddle closes it. The first time you switch away from the tab during a huddle, coming back offers it once — **Every time** makes the browser pop it out by itself whenever you leave the tab. Other browsers do not show the button.'
+      ]
+    },
+    { type: 'h3', id: 'collab-chat-huddle-notes', text: 'Huddle notes' },
+    {
+      type: 'p',
+      text: 'While you are in a huddle, **Notes** in the huddle strip opens one shared note for everyone in the call. Anyone in the huddle can type in it; changes reach the others about half a second after you stop typing, and if two people type at once the last change wins. **Preview** shows it with the same formatting as chat messages (bold, italic, lists, code). Notes are written by hand — nothing is transcribed.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'When the huddle ends, a note that is not empty is posted to the room as one message headed "Huddle notes · 24 min · written by Ana and Ben" — sent as the person who edited it last, under the room’s normal posting rules, and only when everyone who wrote in it may post in that room. Then the room gets the end line with how long it ran and everyone who joined ("Huddle ended after 24 min · Ana, Ben and Chris").',
+        'If any writer may not post in the room (an announcement channel, for example), the notes are not posted: the end line says why, and the last person to leave gets a **Copy notes** offer. The notes stay available for about two minutes, only to the people who were in that huddle; a new huddle in the room starts with an empty note.',
+        'A note holds up to 20 KB. It lives only as long as the huddle; if every browser drops out without leaving, it is gone with the huddle.',
+        'Only people in the huddle receive the note, and the server checks on every change that you can still see the room.'
+      ]
+    },
+    { type: 'h3', id: 'collab-chat-huddle-follow', text: 'Follow me on a record' },
+    {
+      type: 'p',
+      text: 'In a huddle in a record’s room, **Follow me** makes everyone else’s page follow yours on that record: they are taken to the record, and when you change tab or scroll to another section their page does the same. A chip at the bottom of their screen says "Following Ana" with **Stop**; going to another page or picking another tab themselves also stops following, and **Follow** on the chip picks it up again.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Only one person presents at a time. While someone does, the button reads **Ask to present**: the presenter sees the request on their chip and can **Hand over** or **Keep presenting**. The presenter leaving the huddle ends it for everyone.',
+        'Following is only navigation. Each person sees the record with their own permissions — someone who cannot read it gets the usual not-found page — and only the record the room is about can be followed (the server names it, not the presenter’s browser).',
+        'Follow me stays on the one record and its tabs; it does not follow into related records or other pages.'
       ]
     },
     {

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { useOptionalRealtime } from '../../../lib/realtime'
+import { huddleCalls } from './huddle-calls'
 import { installHuddleCamera } from './huddle-camera'
 import { installHuddleDraw } from './huddle-draw'
 import { installHuddleReactions } from './huddle-reactions'
@@ -65,6 +66,8 @@ export function useHuddle(room: string | null) {
     installHuddleDraw()
     huddleStore.attach(realtime, fetchIce, fetchSfu)
     startHuddleExtras() // #2845–#2848
+    // #2843 — ringing rides the same adapter (the stage shows who I am calling).
+    huddleCalls.attach(realtime)
   }, [realtime, support.audio, fetchIce, fetchSfu])
 
   const state: HuddleState = useSyncExternalStore(huddleStore.subscribe, huddleStore.getSnapshot)

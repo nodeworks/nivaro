@@ -118,6 +118,7 @@ import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { matchesVisibleWhen } from '../lib/visible-when'
 import { CopyAsButton } from './CopyAsButton'
+import { useHuddleFollowSurface } from './chat/huddle/huddle-follow-bus'
 import { FormWhatsNew } from './FormWhatsNew'
 import { showFormVideosButton } from './help-videos/viewer/format'
 import { HelpVideoButton } from './help-videos/viewer/HelpVideoButton'
@@ -5525,6 +5526,14 @@ function ItemEditFormView({
     }
     scrollBodyTop()
   }
+  // Follow me in a record-room huddle (#2855): this page names its tab, and a
+  // follower's page switches tab when the presenter's does.
+  useHuddleFollowSurface({
+    collection,
+    itemId: isNew || designOn || !documentTitle ? null : String(itemId),
+    step: hasTabs ? activeTab : null,
+    setStep: setActiveTab
+  })
   // Form usage per layout (#2597/#2598): time per step, saves, abandoned new records.
   const formUsage = useFormUsageBeacon({
     enabled: !designOn,

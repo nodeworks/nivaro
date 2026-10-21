@@ -654,6 +654,19 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       }
     }
 
+    // #2852 — in a huddle right now (a transient mark beside any status they set).
+    let huddling = new Set<string>()
+    try {
+      const { huddlingUsers } = await import('../services/huddle-presence.js')
+      huddling = await huddlingUsers(
+        app.redis as unknown as Parameters<typeof huddlingUsers>[0],
+        currentTenantKey() || null,
+        userIds
+      )
+    } catch {
+      /* decoration only */
+    }
+
     // Who is really at the keyboard: an admin masquerading as this user
     // refreshes a short-lived marker on every request (masquerade-marker.ts).
     const masqByUser = await activeMasquerades(app.redis, userIds.map(String))
@@ -764,6 +777,7 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           typing_room: r.typing_room,
           // Flat list for the subtitle line, keyed map for grouping.
           custom_status: statusByUser.get(uid) ?? null,
+          in_huddle: huddling.has(uid),
           scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
           scopes_by_dimension: Object.fromEntries(scopesByUser.get(uid) ?? []),
           recording_id: recordingByUser.get(uid) ?? null,

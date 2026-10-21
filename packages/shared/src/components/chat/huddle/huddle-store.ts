@@ -196,6 +196,8 @@ class HuddleStore {
   private remoteVideo = new Map<string, Map<string, { stream: MediaStream; live: boolean }>>()
   private exts = new Set<HuddleExtension>()
   private extOffs = new Map<HuddleExtension, Array<() => void>>()
+  /** Called just before Leave goes out (#2854: a pending note edit is sent first). */
+  private beforeLeave = new Set<(room: string) => void>()
 
   // ── React plumbing ────────────────────────────────────────────────────────
   subscribe = (l: Listener) => {
@@ -210,6 +212,16 @@ class HuddleStore {
     return () => {
       this.rosterListeners.delete(l)
     }
+  }
+  onBeforeLeave(cb: (room: string) => void) {
+    this.beforeLeave.add(cb)
+    return () => {
+      this.beforeLeave.delete(cb)
+    }
+  }
+  /** The host's socket adapter, for modules that ride the huddle (huddle-collab-store.ts). */
+  transportNow(): HuddleTransport | null {
+    return this.transport
   }
   roster(room: string): HuddlePeer[] | undefined {
     return this.rosters.get(room)
@@ -355,6 +367,8 @@ class HuddleStore {
   leave(): void {
     const room = this.state.room
     if (room) {
+      // #2854: a pending note edit goes out first.
+      for (const cb of this.beforeLeave) cb(room)
       // Sent before the leave, on the same socket, so the server tallies it into the session.
       const report = aggregateQuality([...this.linkStats.values()], this.iceFailed)
       if (report && this.state.status === 'live') {

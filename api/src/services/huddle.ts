@@ -3,7 +3,27 @@ import type { FastifyInstance } from 'fastify'
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
+import {
+  collabLeft,
+  finishHuddleEnd,
+  huddleEndLine,
+  huddleNotesMessage,
+  notePostReason,
+  readHuddleEnd,
+  recordAttendee,
+  settleCollabWrites,
+  touchCollab
+} from './huddle-collab.js'
 import { LIVE_ROOM, pokeHuddleLive, registerHuddleLive } from './huddle-live.js'
+import { markHuddling, unmarkHuddling } from './huddle-presence.js'
+import {
+  answerRing,
+  cancelRing,
+  defaultRingDeps,
+  type RingDeps,
+  ringTargets,
+  ringUsers
+} from './huddle-ring.js'
 import {
   clampQuality,
   defaultSessionRecorder,
@@ -79,6 +99,8 @@ export interface HuddleRedis {
   set(key: string, value: string, mode: 'EX', ttl: number): Promise<unknown>
   get(key: string): Promise<string | null>
   del(...keys: string[]): Promise<unknown>
+  /** Optional: one round trip for the "in a huddle" presence marks (#2852). */
+  mget?(...keys: string[]): Promise<Array<string | null>>
 }
 
 function keys(tenant: string | null, room: string) {
@@ -92,11 +114,10 @@ function keys(tenant: string | null, room: string) {
   }
 }
 
-/** Rooms a huddle may run in: channels, General and record rooms (DMs are not in v1). */
+/** Rooms a huddle may run in: channels, General, record rooms and, since #2843, direct messages. */
 export function huddleRoomKind(room: string): 'ok' | 'dm' | 'bad' {
   if (typeof room !== 'string' || !room || room.length > ROOM_MAX) return 'bad'
   const kind = parseRoom(room).kind
-  if (kind === 'dm') return 'dm'
   return kind === 'unknown' ? 'bad' : 'ok'
 }
 
@@ -194,7 +215,13 @@ export async function huddlePeers(
   return out
 }
 
-async function touch(redis: HuddleRedis, tenant: string | null, room: string, socketId: string) {
+async function touch(
+  redis: HuddleRedis,
+  tenant: string | null,
+  room: string,
+  socketId: string,
+  userId?: string
+) {
   const k = keys(tenant, room)
   await redis.zadd(k.set, Date.now(), socketId)
   await redis.expire(k.set, KEY_TTL_S)
@@ -202,6 +229,9 @@ async function touch(redis: HuddleRedis, tenant: string | null, room: string, so
   await redis.expire(k.start, KEY_TTL_S)
   await redis.expire(k.mode, KEY_TTL_S)
   await redis.expire(k.session, KEY_TTL_S)
+  // #2852 — the person reads "In a huddle" wherever presence is shown.
+  if (userId) await markHuddling(redis, tenant, userId, room).catch(() => undefined)
+  await touchCollab(redis, tenant, room, KEY_TTL_S)
 }
 
 /** The huddle's session id (#2859): random per huddle, names its LiveKit room; null = no huddle. */
@@ -232,8 +262,18 @@ export interface HuddleDeps {
     sfu?: boolean
     switch_at?: number
   }>
-  /** Post a platform line in the room (chat-send.ts). */
+  /** Post a platform line in the room (chat-send.ts). Fixed server text only. */
   postLine(room: string, text: string): Promise<void>
+  /**
+   * #2854 — may this writer of the notes post a top-level message in the room under the normal
+   * rules (active account, canSeeRoom, announce channels)? null = yes, else the plain reason.
+   */
+  noteWriterRefusal(room: string, writer: { id: string; name: string }): Promise<string | null>
+  /**
+   * #2854 — post the notes AS A PERSON (their last editor), through postChatMessage's normal
+   * visibility and posting rules. Resolves null when posted, or the plain reason it was not.
+   */
+  postNote(room: string, authorId: string, text: string): Promise<string | null>
   warn(obj: Record<string, unknown>, msg: string): void
   /** #2849 — per-session tallies written to the admin analytics when a huddle ends. */
   sessions?: HuddleSessionRecorder
@@ -247,6 +287,13 @@ export interface HuddleDeps {
     session: string
     identity: string | null
   }): Promise<void>
+  /**
+   * #2843 — the other members of a direct conversation (a `dm:` room or a
+   * group DM channel), rung when its huddle starts; null for any other room.
+   */
+  directMembers?(room: string): Promise<string[] | null>
+  /** #2843/#2844 — ringing; absent = huddles never ring (tests, hosts without io). */
+  ring?: RingDeps
 }
 
 export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
@@ -279,7 +326,61 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
       const name = sfuRoomName(tenant, room, session)
       if (identity) await sfuRemoveParticipant(server, name, identity)
       else await sfuDeleteRoom(server, name)
+    },
+    async noteWriterRefusal(room, writer) {
+      const { getUser } = await import('./users.js')
+      const u = await getUser(writer.id).catch(() => undefined)
+      if (u?.status !== 'active') return `${writer.name} can no longer post here`
+      const { chatPostRefusal } = await import('./chat-send.js')
+      const { isAdminRole } = await import('./permissions.js')
+      const refused = await chatPostRefusal(u, room, await isAdminRole(u).catch(() => false))
+      if (!refused) return null
+      return refused.code === 'ANNOUNCE_ONLY'
+        ? `${writer.name} cannot post in this announcement channel`
+        : `${writer.name} cannot post in this room`
+    },
+    async postNote(room, authorId, text) {
+      const { getUser } = await import('./users.js')
+      const author = await getUser(authorId).catch(() => undefined)
+      if (author?.status !== 'active') return 'their writer can no longer post here'
+      try {
+        const { postChatMessage } = await import('./chat-send.js')
+        const { isAdminRole } = await import('./permissions.js')
+        await postChatMessage(
+          app,
+          { user: author, isAdmin: await isAdminRole(author).catch(() => false) },
+          { room, message: text }
+        )
+        return null
+      } catch (err) {
+        const status = (err as { statusCode?: number })?.statusCode
+        if (!status || status >= 500) app.log.warn({ err, room }, 'huddle notes post failed')
+        return notePostReason(err)
+      }
     }
+  }
+}
+
+/** The members of a direct conversation, or null when the room is not one. */
+export async function directMembersOf(room: string): Promise<string[] | null> {
+  const parsed = parseRoom(room)
+  if (parsed.kind === 'dm') return parsed.participants ?? []
+  if (parsed.kind !== 'channel') return null
+  const { channels } = await import('./chat.js')
+  const ch = (await channels()).get(parsed.channelKey ?? '')
+  if (!ch?.is_direct) return null
+  const { db } = await import('../db/index.js')
+  const ids = (await db('nivaro_chat_memberships').where({ room }).pluck('user')) as string[]
+  return ids.map((u) => String(u).toUpperCase())
+}
+
+/** The deps with ringing wired in (socketio.ts); defaultHuddleDeps alone never rings. */
+export function fullHuddleDeps(app: FastifyInstance): HuddleDeps {
+  const base = defaultHuddleDeps(app)
+  return {
+    ...base,
+    directMembers: directMembersOf,
+    ring: defaultRingDeps(app, base)
   }
 }
 
@@ -345,21 +446,61 @@ export function registerHuddle(
   setHuddleStaleEvictor(staleEvictorFor(deps))
   const peersOf = (room: string) => huddlePeers(deps.redis, scope.tenantNow(), room)
 
-  /** Nobody left: close the SFU room, forget the keys, say how long it ran. */
+  /**
+   * Nobody left: close the SFU room, forget the keys, record the session, post the notes as a
+   * person (#2854) and say how long it ran. The start key is the claim: a second caller finds
+   * it gone and returns.
+   */
   async function endHuddle(room: string) {
     const tenant = scope.tenantNow()
     const k = keys(tenant, room)
     const start = await deps.redis.get(k.start)
     if (start == null) return
-    const [mode, session] = await Promise.all([
+    // #2854 — a last note edit on this socket lands before the notes are read.
+    await settleCollabWrites(socket)
+    const [mode, session, end] = await Promise.all([
       huddleMode(deps.redis, tenant, room),
-      huddleSession(deps.redis, tenant, room)
+      huddleSession(deps.redis, tenant, room),
+      readHuddleEnd(deps.redis, tenant, room)
     ])
     await deps.redis.del(k.start, k.meta, k.set, k.mode, k.session)
     if (mode === 'sfu') await evict(room, session, null)
     const ms = Date.now() - Number(start)
     await record(() => deps.sessions?.end(tenant, room), room)
-    await deps.postLine(room, `Huddle ended after ${formatHuddleDuration(ms)}`)
+    const duration = formatHuddleDuration(ms)
+    // The notes are people's words: they post as a person (never the system line), and
+    // only when EVERY writer may post here — nobody's words go out under another's rights.
+    // Refused = not posted, frozen for the attendees instead.
+    let unposted: string | null = null
+    const writers = end.writers.length
+      ? end.writers
+      : end.noteBy
+        ? [{ id: end.noteBy, name: 'Someone' }]
+        : []
+    if (end.note) {
+      if (!writers.length) unposted = 'nobody from the huddle could post them'
+      for (const w of writers) {
+        if (unposted) break
+        unposted = await deps.noteWriterRefusal(room, w)
+      }
+      const author = end.noteBy ?? writers.at(-1)?.id
+      if (!unposted && author) {
+        const names = writers.map((w) => w.name)
+        unposted = await deps.postNote(room, author, huddleNotesMessage(duration, names, end.note))
+      }
+    }
+    await finishHuddleEnd(
+      deps.redis,
+      tenant,
+      room,
+      unposted && end.note
+        ? { text: end.note, attendees: end.attendees, writers: writers.map((w) => w.id) }
+        : null,
+      KEY_TTL_S
+    )
+    const line = huddleEndLine(duration, end.names)
+    await deps.postLine(room, unposted ? `${line} · notes were not posted: ${unposted}` : line)
+    if (unposted) socket.emit('huddle:note:unposted', { room, reason: unposted })
   }
 
   async function broadcast(room: string) {
@@ -383,7 +524,7 @@ export function registerHuddle(
     const user = getUser()
     if (!user) return deny(room, 'not-signed-in')
     const kind = huddleRoomKind(room as string)
-    if (kind !== 'ok') return deny(room, kind === 'dm' ? 'no-dm' : 'bad-room')
+    if (kind !== 'ok') return deny(room, 'bad-room')
     const r = room as string
     try {
       const settings = await deps.settings()
@@ -402,7 +543,8 @@ export function registerHuddle(
         socket.id,
         JSON.stringify({ user: user.id, name: nameOf(user), muted: false, screen: false, since })
       )
-      await touch(deps.redis, tenant, r, socket.id)
+      await touch(deps.redis, tenant, r, socket.id, user.id)
+      await recordAttendee(deps.redis, tenant, r, user.id, nameOf(user))
       setData({ room: r })
       const name = await scope.scopedRoom(`huddle:${r}`)
       if (name) socket.join(name)
@@ -442,6 +584,13 @@ export function registerHuddle(
         r
       )
       if (first) await deps.postLine(r, `${nameOf(user) ?? 'Someone'} started a huddle`)
+      // #2843 — the first person in a direct conversation's huddle calls the others.
+      if (first && deps.ring && deps.directMembers) {
+        const members = await deps.directMembers(r).catch(() => null)
+        if (members?.length) {
+          await ringUsers(deps.ring, { tenant, room: r, from: user, users: members })
+        }
+      }
     } catch (err) {
       deps.warn({ err, room: r }, 'huddle:join failed')
       deny(r, 'unavailable')
@@ -466,9 +615,16 @@ export function registerHuddle(
       }
       await deps.redis.zrem(k.set, socket.id)
       await deps.redis.hdel(k.meta, socket.id)
+      if (user) {
+        await unmarkHuddling(deps.redis, tenant, user.id, room).catch(() => undefined)
+        // Leaving while people are still ringing hangs up on them.
+        if (deps.ring) await cancelRing(deps.ring, { tenant, room, by: user }).catch(() => false)
+      }
       if (data()?.room === room) setData(undefined)
       const name = scope.scopedRoomNow(`huddle:${room}`)
       if (name) socket.leave(name)
+      // #2855 — the presenter leaving ends Follow me (before the roster read that may end it all).
+      await collabLeft(io, scope, deps.redis, tenant, room, socket.id)
       // The broadcast's roster read ends the huddle when nobody is left.
       await broadcast(room)
     } catch (err) {
@@ -555,7 +711,7 @@ export function registerHuddle(
             ...stagePatch(payload, prev)
           }
           await deps.redis.hset(k.meta, socket.id, JSON.stringify(next))
-          await touch(deps.redis, tenant, room, socket.id)
+          await touch(deps.redis, tenant, room, socket.id, user.id)
           if (next.screen) await record(() => deps.sessions?.screenShared(tenant, room), room)
           await broadcast(room)
         } catch (err) {
@@ -578,7 +734,7 @@ export function registerHuddle(
       try {
         // A ping is what keeps a member listed: no access, no heartbeat.
         if (!(await stillAllowed(user, room))) return
-        await touch(deps.redis, scope.tenantNow(), room, socket.id)
+        await touch(deps.redis, scope.tenantNow(), room, socket.id, user.id)
       } catch {
         /* the next ping tries again */
       }
@@ -615,6 +771,57 @@ export function registerHuddle(
     canSeeRoom: deps.canSeeRoom,
     warn: deps.warn
   })
+
+  // ── Calls (#2843 invite #2844) — the ring state machine lives in huddle-ring.ts ──
+  socket.on(
+    'huddle:invite',
+    inSocketTenant(socket, async (payload: { room?: unknown; users?: unknown }) => {
+      const room = payload?.room
+      const user = getUser()
+      if (!user || !deps.ring || typeof room !== 'string' || data()?.room !== room) return
+      const users = ringTargets(user.id, payload?.users)
+      if (!users.length) return
+      try {
+        if (!(await stillAllowed(user, room))) return
+        await ringUsers(deps.ring, { tenant: scope.tenantNow(), room, from: user, users })
+      } catch (err) {
+        deps.warn({ err, room }, 'huddle:invite failed')
+      }
+    })
+  )
+
+  socket.on(
+    'huddle:ring-answer',
+    inSocketTenant(socket, async (payload: { room?: unknown; accept?: unknown }) => {
+      const room = payload?.room
+      const user = getUser()
+      if (!user || !deps.ring || typeof room !== 'string' || huddleRoomKind(room) !== 'ok') return
+      try {
+        await answerRing(deps.ring, {
+          tenant: scope.tenantNow(),
+          room,
+          user,
+          accept: payload?.accept === true
+        })
+      } catch (err) {
+        deps.warn({ err, room }, 'huddle:ring-answer failed')
+      }
+    })
+  )
+
+  socket.on(
+    'huddle:ring-cancel',
+    inSocketTenant(socket, async (payload: { room?: unknown }) => {
+      const room = payload?.room
+      const user = getUser()
+      if (!user || !deps.ring || typeof room !== 'string') return
+      try {
+        await cancelRing(deps.ring, { tenant: scope.tenantNow(), room, by: user })
+      } catch (err) {
+        deps.warn({ err, room }, 'huddle:ring-cancel failed')
+      }
+    })
+  )
 
   socket.on(
     'disconnect',

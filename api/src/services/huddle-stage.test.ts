@@ -124,6 +124,9 @@ function deps(redis: HuddleRedis, over: Partial<HuddleDeps> = {}) {
       lines.push({ room, text })
     },
     warn: () => {},
+    // #2854 (huddle notes) made these required.
+    noteWriterRefusal: async () => null,
+    postNote: async () => null,
     ...over
   }
   return { d, lines }
