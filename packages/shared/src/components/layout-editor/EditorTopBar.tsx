@@ -317,7 +317,9 @@ export function EditorTopBar({
   onSelectField,
   onShowOnCanvas,
   onReviewChanges,
-  reviewing = false
+  reviewing = false,
+  testing,
+  beforeSave
 }: {
   collection: string
   layoutId: number
@@ -380,6 +382,10 @@ export function EditorTopBar({
   /** "Review changes" beside Save: the unsaved changes on the canvas (#2591). */
   onReviewChanges?: () => void
   reviewing?: boolean
+  /** The Test popover (test records, new-record walkthrough, form cost), after History. */
+  testing?: ReactNode
+  /** Beside Save while changes wait for it (Check impact). */
+  beforeSave?: ReactNode
 }) {
   // A save notice links here with ?history=1 (#2655): History opens on arrival.
   const [historyOpen, setHistoryOpen] = useState(
@@ -494,6 +500,7 @@ export function EditorTopBar({
           )}
         </PopoverContent>
       </Popover>
+      {testing}
       {more}
       {draft.setAutosave && (
         <BarSwitch
@@ -534,6 +541,7 @@ export function EditorTopBar({
           draft={{ unsavedOps: draft.unsavedOps, discard: draft.discard, unsavedCount: unsaved }}
         />
       )}
+      {draft.save && !draft.autosave && unsaved > 0 && beforeSave}
       {draft.save && !draft.autosave && (
         <button
           type='button'

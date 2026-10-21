@@ -12,6 +12,7 @@ import { LayoutOpsBlocks } from '../ops/LayoutOpsBlocks'
 import { useRoleNames } from '../overview/overview-api'
 import { labelText, tintCard } from '../panel-style'
 import { RelationPicker } from '../pickers/relation-picker'
+import { CostLimitSetting } from '../testing/CostLimitSetting'
 import { humanizeOpError } from '../useLayoutDraft'
 import { PickList, quietText, Segmented, Setting, smallBtn, useSettingVisible } from './controls'
 import type { SectionProps } from './section-props'
@@ -35,6 +36,7 @@ export function ToolsSection(props: ToolsSectionProps) {
       <SlotSetting k='tool.describe' layoutId={id} />
       <SlotSetting k='tool.ai_review' layoutId={id} bundle={props.bundle} apply={props.apply} />
       <AiTextSetting {...props} />
+      <CostLimitSetting {...props} />
       <HistorySetting layoutId={id} />
       <ChangeNoteSetting {...props} />
       <DriftSetting layoutId={id} />

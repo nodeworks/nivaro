@@ -5,6 +5,7 @@ import { DependencyDiagram } from '../ops/DependencyDiagram'
 import { useLayoutDependencies } from '../ops/ops-api'
 import { LAYOUT_TYPES } from '../overview/OverviewActions'
 import { useRoleNames } from '../overview/overview-api'
+import { roleIdsPatch } from '../testing/testing-model'
 import { quietText, Segmented, Setting, smallBtn } from './controls'
 import { changeLabel, flag, type SectionProps } from './section-props'
 import { useCollectionLayoutList, useFieldSources } from './settings-api'
@@ -77,7 +78,8 @@ export function WhoSection(props: SectionProps) {
           roles={roles}
           onChange={(ids) =>
             props.set(
-              { conditions: ids.length ? { role_ids: ids } : null },
+              // Keeps the layout's pinned test records (conditions.testing).
+              roleIdsPatch(layout.conditions, ids),
               ids.length > roleIds.length ? 'Add a role' : 'Remove a role'
             )
           }

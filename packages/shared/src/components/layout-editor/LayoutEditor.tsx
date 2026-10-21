@@ -94,6 +94,7 @@ import { FormMoreMenu } from './reuse/FormMoreMenu'
 import { useRailCopy } from './reuse/useRailCopy'
 import { useRolePreview } from './settings/settings-api'
 import { StructureActions, usePinMarks } from './StructureMenu'
+import { ImpactButton, TestingButton } from './testing/TestingPanels'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import { describeTarget, targetFromKey, unsavedKeys } from './unsaved-marks'
 import { UsagePanel } from './usage/UsagePanel'
@@ -1049,6 +1050,32 @@ export function LayoutEditor({
               recorder={recorder}
             />
           </>
+        }
+        testing={
+          bundle ? (
+            <TestingButton
+              collection={collection}
+              layoutId={currentId}
+              bundle={bundle}
+              parent={parent}
+              apply={draft.apply}
+              dirty={draft.dirty}
+              fields={fields}
+            />
+          ) : null
+        }
+        beforeSave={
+          bundle ? (
+            <ImpactButton
+              collection={collection}
+              layoutId={currentId}
+              bundle={bundle}
+              parent={parent}
+              apply={draft.apply}
+              dirty={draft.dirty}
+              fields={fields}
+            />
+          ) : null
         }
         previewExtra={
           <PreviewModes

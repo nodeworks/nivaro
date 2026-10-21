@@ -675,6 +675,15 @@
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "tool.cost_limit",
+    "label": "Form cost limit",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "detail", "summary"]
+  },
+  {
     "key": "tool.layout_drift",
     "label": "Layout drift",
     "home": "form_settings",
