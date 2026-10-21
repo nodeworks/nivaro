@@ -13,6 +13,7 @@ const base = {
   docsVersion: 'v1',
   admin: false,
   locale: 'en',
+  timeZone: 'America/New_York',
   command: null,
   question: 'How do I add a delegate?'
 }
@@ -31,6 +32,7 @@ describe('shared answer key (#2455)', () => {
     expect(sharedAnswerKey({ ...base, locale: 'fr' })).not.toBe(k)
     expect(sharedAnswerKey({ ...base, command: 'steps' })).not.toBe(k)
     expect(sharedAnswerKey({ ...base, tenant: 't1' })).not.toBe(k)
+    expect(sharedAnswerKey({ ...base, timeZone: 'Europe/London' })).not.toBe(k)
   })
   it('the personal key is unchanged from #723', () => {
     expect(personalAnswerKey('u1', null, 'Hi  There')).toBe(

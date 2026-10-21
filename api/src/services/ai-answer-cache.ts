@@ -9,7 +9,15 @@ import { createHash } from 'node:crypto'
  * attachments) reads the same for everyone with the same docs audience, so
  * it is also kept under a shared key: the normalized question + the
  * docs-index version + admin/non-admin (admins see more sections) + locale +
- * tenant. Any data tool in the trace keeps the answer private.
+ * tenant + time zone. Any data tool in the trace keeps the answer private.
+ *
+ * The prompt is per person too (readable collections, saved queries, queues,
+ * saved views, playbooks drawn from other people's questions), and a docs
+ * answer could quote any of it. So a question that may be shared is ANSWERED
+ * from a catalogue-free prompt (`catalogues: false`, no playbooks — the room
+ * bot's prompt), decided BEFORE the answer: `sharedDocsCandidate`. Only those
+ * answers are ever written under the shared key; every other answer keeps
+ * the full prompt and stays per person.
  */
 
 export function normalizeAskQuestion(question: string): string {
@@ -22,11 +30,44 @@ export function personalAnswerKey(userId: string, command: string | null, questi
     .digest('hex')}`
 }
 
+// "How do I…", "what does … mean", "where can I…", "is there a way…" — the
+// questions the docs answer. Anything else keeps the full per-person prompt
+// (a data question answered without its catalogue costs an extra round).
+const DOCS_QUESTION =
+  /^(?:how (?:do|can|should|would|does|to)\b|where (?:do|can|is|are|does)\b|is (?:it|there) (?:possible|a way)\b|can (?:i|we|you)\b|what (?:does|do) .{1,80}\b(?:mean|do)\b|what happens (?:when|if)\b|what (?:is|are) (?:an? |the )?[\w-]+(?: [\w-]+){0,3}\??$|why (?:does|do|can['’]?t|cannot|is|are)\b|help\b)/i
+
+export function looksLikeDocsQuestion(question: string): boolean {
+  return DOCS_QUESTION.test(normalizeAskQuestion(question))
+}
+
+/**
+ * Whether this question may be answered for everyone: a standalone docs-style
+ * question with no page context and no remembered notes, while the answer
+ * cache is on. Decided before the prompt is built (see the module comment).
+ */
+export function sharedDocsCandidate(opts: {
+  standalone: boolean
+  pageContext: boolean
+  memoryNotes: number
+  cacheOn: boolean
+  question: string
+}): boolean {
+  return (
+    opts.cacheOn &&
+    opts.standalone &&
+    !opts.pageContext &&
+    opts.memoryNotes === 0 &&
+    looksLikeDocsQuestion(opts.question)
+  )
+}
+
 export function sharedAnswerKey(opts: {
   tenant: string
   docsVersion: string
   admin: boolean
   locale: string
+  /** "Today is …" and the time instructions in the prompt follow the asker's zone. */
+  timeZone: string
   command: string | null
   question: string
 }): string {
@@ -36,6 +77,7 @@ export function sharedAnswerKey(opts: {
         opts.docsVersion,
         opts.admin ? 'admin' : 'user',
         opts.locale,
+        opts.timeZone,
         opts.command ?? '',
         normalizeAskQuestion(opts.question)
       ].join('|')

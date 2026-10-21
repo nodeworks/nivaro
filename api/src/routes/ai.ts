@@ -41,6 +41,8 @@ import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { currentTraceMeta, runInTrace } from '../services/request-trace.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { isAdminRole } from '../services/user-scopes.js'
+import { userTimeZone } from '../services/user-time.js'
 import type { User } from '../types.js'
 
 /** AI governance (#407): per-feature toggles — settings.ai_disabled_features
@@ -1830,45 +1832,57 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         { ...last, content: last.content + commandDirective(answerCommand) }
       ]
     }
-    const playbooks = await retrievePlaybooks(question)
     // #1835 #1886 #1842 #1993 #1837 — what the page handed the question,
     // read again as the asker (unreadable ids are dropped). Last in the
     // prompt: it changes with every page, the long prefix stays cached.
     const { normalizeAskContext, resolveAskContext } = await import('../services/ai-ask-context.js')
     const pageContext = await resolveAskContext(app, req.user!, normalizeAskContext(context))
+    // `convo` below aliases `history` and grows per round — judge "standalone" now.
+    const standalone = history.length === 1
+    const redis = (req.server as FastifyInstance & { redis?: import('ioredis').Redis }).redis
+    const answerCache = await import('../services/ai-answer-cache.js')
+    // #2455 — a docs-style question that may be answered for everyone is
+    // answered from a prompt with nothing of the asker's in it: no readable
+    // collections, saved queries, queues, saved views or playbooks (the room
+    // bot's prompt). Only such an answer is ever kept under the shared key.
+    const docsShare = answerCache.sharedDocsCandidate({
+      standalone,
+      pageContext: !!pageContext.trace,
+      memoryNotes: memoryNotes.length,
+      cacheOn: answerCacheMinutes > 0 && !!redis,
+      question
+    })
+    const playbooks = docsShare ? [] : await retrievePlaybooks(question)
     const system =
       (await buildChatSystemPrompt(req.user!, {
         playbooks: formatPlaybooksForPrompt(playbooks),
-        question
+        question,
+        ...(docsShare ? { catalogues: false } : {})
       })) +
       memoryBlock +
       pageContext.block
     const playbooksUsed = playbooks.length
-    // `convo` below aliases `history` and grows per round — judge "standalone" now.
-    const standalone = history.length === 1
     // #723 — the same standalone question by the same person inside the
     // window answers from cache (per person: answers are permission-scoped).
     // A question asked with page context never is: the page, its rows and
     // the person's access to them all move under the same words.
-    const redis = (req.server as FastifyInstance & { redis?: import('ioredis').Redis }).redis
-    const answerCache = await import('../services/ai-answer-cache.js')
     const cacheKey =
       standalone && !pageContext.trace && answerCacheMinutes > 0 && redis
         ? answerCache.personalAnswerKey(String(req.user!.id), answerCommand ?? null, question)
         : null
-    // #2455 — an answer written only from the docs is the same for everyone
-    // with the same docs audience: kept under a shared key as well. Never
-    // with memory notes (they may shape the answer) or page context.
-    const docsVersion = cacheKey
+    // The docs audience is the one search_docs uses (the asker's role), and
+    // the time zone rides the key because the prompt's date follows it.
+    const docsVersion = docsShare
       ? await import('../services/docs-search.js').then((m) => m.docsIndexVersion())
       : 'none'
     const sharedKey =
-      cacheKey && memoryNotes.length === 0 && docsVersion !== 'none'
+      docsShare && cacheKey && docsVersion !== 'none'
         ? answerCache.sharedAnswerKey({
             tenant: currentTenantKey(),
             docsVersion,
-            admin: !!req.isAdmin,
+            admin: await isAdminRole(req.user!.role),
             locale: answerCache.askLocale(req.user!.preferences, req.headers['accept-language']),
+            timeZone: await userTimeZone(req.user! as { preferences?: unknown }),
             command: answerCommand ?? null,
             question
           })
