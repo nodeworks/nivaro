@@ -130,6 +130,7 @@ function deps(redis: HuddleRedis, over: Partial<HuddleDeps> = {}) {
     postLine: async (room, text) => {
       lines.push({ room, text })
     },
+    noteWriterRefusal: async () => null,
     postNote: async () => null,
     warn: () => {},
     ...over

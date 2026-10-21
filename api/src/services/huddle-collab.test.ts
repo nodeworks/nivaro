@@ -122,16 +122,19 @@ const scope = {
   tenantNow: () => ''
 }
 
-function setup(over: { allowed?: () => boolean; record?: boolean; refuseNote?: string } = {}) {
+function setup(
+  over: {
+    allowed?: () => boolean
+    record?: boolean
+    /** Writers (by user id) the room refuses, with the reason. */
+    refuseWriters?: Record<string, string>
+  } = {}
+) {
   const redis = fakeRedis()
   const io = fakeIo()
   const lines: Array<{ room: string; text: string }> = []
-  const notes: Array<{
-    room: string
-    editor: string | null
-    fallback: string | null
-    text: string
-  }> = []
+  const notes: Array<{ room: string; author: string; text: string }> = []
+  const checked: string[] = []
   const canSeeRoom = async () => (over.allowed ? over.allowed() : true)
   const hd: HuddleDeps = {
     redis,
@@ -140,9 +143,13 @@ function setup(over: { allowed?: () => boolean; record?: boolean; refuseNote?: s
     postLine: async (room, text) => {
       lines.push({ room, text })
     },
-    postNote: async (room, editor, fallback, text) => {
-      notes.push({ room, editor, fallback: fallback?.id ?? null, text })
-      return over.refuseNote ?? null
+    noteWriterRefusal: async (_room, w) => {
+      checked.push(w.id)
+      return over.refuseWriters?.[w.id] ?? null
+    },
+    postNote: async (room, author, text) => {
+      notes.push({ room, author, text })
+      return null
     },
     warn: () => {}
   }
@@ -160,7 +167,7 @@ function setup(over: { allowed?: () => boolean; record?: boolean; refuseNote?: s
     registerHuddleCollab(io as never, s.socket as never, () => user, scope, cd)
     return s
   }
-  return { redis, io, lines, notes, connect }
+  return { redis, io, lines, notes, checked, connect }
 }
 
 describe('huddle notes (#2854)', () => {
@@ -216,23 +223,24 @@ describe('huddle notes (#2854)', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-21T12:00:00Z'))
     try {
-      const { redis, lines, notes, connect } = setup()
+      const { redis, lines, notes, checked, connect } = setup()
       const a = connect('S1', rob)
       const b = connect('S2', amy)
       await a.fire('huddle:join', { room: 'ch:ops' })
       await b.fire('huddle:join', { room: 'ch:ops' })
-      await b.fire('huddle:note', { room: 'ch:ops', text: '  Ship Friday  ', rev: 0 })
+      await a.fire('huddle:note', { room: 'ch:ops', text: 'Ship', rev: 0 })
+      await b.fire('huddle:note', { room: 'ch:ops', text: '  Ship Friday  ', rev: 1 })
       await b.fire('huddle:leave', { room: 'ch:ops' })
       vi.setSystemTime(new Date('2026-10-21T12:24:00Z'))
       await a.fire('huddle:leave', { room: 'ch:ops' })
-      // The note is people's words: it goes out as Amy (who wrote it last), Rob as fallback —
-      // never through the system line.
+      // Every writer was checked; the note goes out as Amy (the last editor), naming both
+      // writers — never through the system line.
+      expect(checked).toEqual(['U-ROB', 'U-AMY'])
       expect(notes).toEqual([
         {
           room: 'ch:ops',
-          editor: 'U-AMY',
-          fallback: 'U-ROB',
-          text: '**Huddle notes · 24 min · Rob Lee, Amy**\n\nShip Friday'
+          author: 'U-AMY',
+          text: '**Huddle notes · 24 min · written by Rob Lee and Amy**\n\nShip Friday'
         }
       ])
       expect(lines.slice(1)).toEqual([
@@ -240,42 +248,72 @@ describe('huddle notes (#2854)', () => {
       ])
       expect(redis.store.has('nvr:huddle:-:ch:ops:note')).toBe(false)
       expect(redis.store.has('nvr:huddle:-:ch:ops:who')).toBe(false)
+      expect(redis.store.has('nvr:huddle:-:ch:ops:writers')).toBe(false)
+      expect(redis.store.has('nvr:huddle:-:ch:ops:note:ended')).toBe(false)
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('a room that refuses the writer keeps the note for the attendees and says why', async () => {
-    const { redis, io, lines, notes, connect } = setup({
-      refuseNote: 'only the channel owner and admins post here'
-    })
+  it('one writer who may not post blocks the post — even when an owner edits last', async () => {
+    const reason = 'Rob Lee cannot post in this announcement channel'
+    const { redis, io, lines, notes, connect } = setup({ refuseWriters: { 'U-ROB': reason } })
     const a = connect('S1', rob)
+    const b = connect('S2', amy)
     await a.fire('huddle:join', { room: 'ch:news' })
-    await a.fire('huddle:note', { room: 'ch:news', text: 'Draft announcement', rev: 0 })
+    await b.fire('huddle:join', { room: 'ch:news' })
+    await a.fire('huddle:note', { room: 'ch:news', text: 'Rob’s words', rev: 0 })
+    // Amy (the channel owner) makes the final edit: Rob's words still never go out as hers.
+    await b.fire('huddle:note', { room: 'ch:news', text: 'Rob’s words.', rev: 1 })
+    await b.fire('huddle:leave', { room: 'ch:news' })
     await a.fire('huddle:leave', { room: 'ch:news' })
-    expect(notes).toHaveLength(1)
+    expect(notes).toEqual([])
     expect(lines.at(-1)?.text).toBe(
-      'Huddle ended after under a minute · Rob Lee · notes were not posted: only the channel owner and admins post here'
+      `Huddle ended after under a minute · Rob Lee and Amy · notes were not posted: ${reason}`
     )
     expect(a.emitted.at(-1)).toEqual({
       event: 'huddle:note:unposted',
-      payload: { room: 'ch:news', reason: 'only the channel owner and admins post here' }
+      payload: { room: 'ch:news', reason }
     })
-    expect(redis.store.has('nvr:huddle:-:ch:news:note')).toBe(true)
-    // Nothing of it reached the room's viewers.
+    // Frozen apart from the live keys; nothing of it reached the room's viewers.
+    expect(redis.store.has('nvr:huddle:-:ch:news:note')).toBe(false)
+    expect(redis.store.has('nvr:huddle:-:ch:news:note:ended')).toBe(true)
     expect(
       io.sent.filter((s) => s.to === 'chat:ch:news' && s.event.startsWith('huddle:note'))
     ).toEqual([])
 
-    // An attendee can fetch it back; someone who was not in the huddle cannot.
+    // An attendee fetches it back; someone who was not in that huddle cannot.
     await a.fire('huddle:note:fetch', { room: 'ch:news' })
     expect(a.emitted.at(-1)).toEqual({
       event: 'huddle:note:kept',
-      payload: { room: 'ch:news', text: 'Draft announcement' }
+      payload: { room: 'ch:news', text: 'Rob’s words.' }
     })
-    const stranger = connect('S7', amy)
+    const cara = { id: 'U-CARA', first_name: 'Cara', last_name: null, email: 'c@x' } as User
+    const stranger = connect('S7', cara)
     await stranger.fire('huddle:note:fetch', { room: 'ch:news' })
     expect(stranger.emitted).toEqual([])
+  })
+
+  it('a new huddle in the room starts empty and never hands out the last one’s note', async () => {
+    const { connect } = setup({ refuseWriters: { 'U-ROB': 'Rob Lee cannot post in this room' } })
+    const a = connect('S1', rob)
+    await a.fire('huddle:join', { room: 'ch:news' })
+    await a.fire('huddle:note', { room: 'ch:news', text: 'Old session', rev: 0 })
+    await a.fire('huddle:leave', { room: 'ch:news' })
+
+    const cara = { id: 'U-CARA', first_name: 'Cara', last_name: null, email: 'c@x' } as User
+    const c = connect('S3', cara)
+    await c.fire('huddle:join', { room: 'ch:news' })
+    await c.fire('huddle:collab:sync', { room: 'ch:news' })
+    expect(c.emitted.filter((e) => e.event === 'huddle:note')).toEqual([])
+    await c.fire('huddle:note:fetch', { room: 'ch:news' })
+    expect(c.emitted.filter((e) => e.event === 'huddle:note:kept')).toEqual([])
+    // The new session's first edit starts again at rev 1.
+    await c.fire('huddle:note', { room: 'ch:news', text: 'New session', rev: 0 })
+    expect(c.emitted.filter((e) => e.event === 'huddle:note:denied')).toEqual([])
+    // Rob attended the old one: he can still fetch it.
+    await a.fire('huddle:note:fetch', { room: 'ch:news' })
+    expect(a.emitted.at(-1)?.payload).toEqual({ room: 'ch:news', text: 'Old session' })
   })
 
   it('only the server moves the rev: huge, fractional and negative revs are refused', async () => {
@@ -447,7 +485,7 @@ describe('helpers', () => {
     expect(attendeeList(['Ana', 'Ben', 'Chris'])).toBe('Ana, Ben and Chris')
     expect(huddleEndLine('24 min', [])).toBe('Huddle ended after 24 min')
     expect(huddleNotesMessage('24 min', ['Ana', 'Ben'], 'x')).toBe(
-      '**Huddle notes · 24 min · Ana, Ben**\n\nx'
+      '**Huddle notes · 24 min · written by Ana and Ben**\n\nx'
     )
     expect(cleanKey('  lines ')).toBe('lines')
     expect(cleanKey('a\nb')).toBeNull()

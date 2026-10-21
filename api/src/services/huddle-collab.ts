@@ -47,7 +47,15 @@ const RECORD_CACHE_MS = 60_000
 
 export function collabKeys(tenant: string | null, room: string) {
   const base = `nvr:huddle:${tenant || '-'}:${room}`
-  return { note: `${base}:note`, who: `${base}:who`, present: `${base}:present` }
+  return {
+    note: `${base}:note`,
+    who: `${base}:who`,
+    /** Everyone whose edit of the note was accepted (user id → name). */
+    writers: `${base}:writers`,
+    present: `${base}:present`,
+    /** A finished huddle's unposted note, frozen apart from the live keys (huddle:note:fetch). */
+    ended: `${base}:note:ended`
+  }
 }
 
 /** Keep the collab keys alive exactly as long as the huddle's own keys (huddle.ts touch). */
@@ -60,7 +68,9 @@ export async function touchCollab(
   const k = collabKeys(tenant, room)
   await redis.expire(k.note, ttlS)
   await redis.expire(k.who, ttlS)
+  await redis.expire(k.writers, ttlS)
   await redis.expire(k.present, ttlS)
+  // Never k.ended: a finished huddle's note lapses on its own clock.
 }
 
 /** Everyone who was in the huddle at any point, for the end line (huddle.ts join). */
@@ -93,40 +103,74 @@ export function parseNote(raw: string | null): StoredNote | null {
 }
 
 /** What the end of a huddle reports: who came, the note and who wrote it last. */
+export interface HuddleEnd {
+  /** Everyone who was in the huddle at any point (names, for the end line). */
+  names: string[]
+  attendees: string[]
+  note: string | null
+  noteBy: string | null
+  /** Everyone whose edit was accepted, in order of first edit. */
+  writers: Array<{ id: string; name: string }>
+}
+
 export async function readHuddleEnd(
   redis: HuddleRedis,
   tenant: string | null,
   room: string
-): Promise<{ names: string[]; note: string | null; noteBy: string | null }> {
+): Promise<HuddleEnd> {
   const k = collabKeys(tenant, room)
-  const [who, raw] = await Promise.all([
+  const [who, raw, writers] = await Promise.all([
     redis.hgetall(k.who).catch(() => ({}) as Record<string, string>),
-    redis.get(k.note).catch(() => null)
+    redis.get(k.note).catch(() => null),
+    redis.hgetall(k.writers).catch(() => ({}) as Record<string, string>)
   ])
   const names = [...new Set(Object.values(who ?? {}).filter(Boolean))]
   const parsed = parseNote(raw)
-  return { names, note: parsed?.text.trim() || null, noteBy: parsed?.by ?? null }
+  return {
+    names,
+    attendees: Object.keys(who ?? {}),
+    note: parsed?.text.trim() || null,
+    noteBy: parsed?.by ?? null,
+    writers: Object.entries(writers ?? {}).map(([id, name]) => ({ id, name: name || 'Someone' }))
+  }
+}
+
+export interface EndedNote {
+  text: string
+  attendees: string[]
+  writers: string[]
 }
 
 /**
- * Clear the huddle's collab keys. A note that could not be posted is kept (with the attendee
- * list that gates huddle:note:fetch) until the TTL, so the people who wrote it can copy it.
+ * Close the huddle's collab state. The live keys always go, so a new huddle in the room starts
+ * empty; a note that could not be posted is frozen into its own key (with the attendees that
+ * gate huddle:note:fetch) for `ttlS`, never extended by a later huddle.
  */
-export async function clearHuddleEnd(
+export async function finishHuddleEnd(
   redis: HuddleRedis,
   tenant: string | null,
   room: string,
-  keepNote: boolean,
+  unposted: EndedNote | null,
   ttlS: number
 ): Promise<void> {
   const k = collabKeys(tenant, room)
-  if (!keepNote) {
-    await redis.del(k.who, k.note, k.present)
-    return
+  if (unposted) await redis.set(k.ended, JSON.stringify(unposted), 'EX', ttlS)
+  await redis.del(k.who, k.note, k.writers, k.present)
+}
+
+export function parseEnded(raw: string | null): EndedNote | null {
+  if (!raw) return null
+  try {
+    const e = JSON.parse(raw) as Partial<EndedNote>
+    if (typeof e.text !== 'string' || !Array.isArray(e.attendees)) return null
+    return {
+      text: e.text,
+      attendees: e.attendees.map(String),
+      writers: (e.writers ?? []).map(String)
+    }
+  } catch {
+    return null
   }
-  await redis.del(k.present)
-  await redis.expire(k.note, ttlS)
-  await redis.expire(k.who, ttlS)
 }
 
 /** The plain reason a refused note post shows in the end line. */
@@ -153,8 +197,10 @@ export function huddleEndLine(duration: string, names: string[]): string {
 }
 
 /** The note as one message: "Huddle notes · 24 min · Ana, Ben, Chris" then the text. */
-export function huddleNotesMessage(duration: string, names: string[], note: string): string {
-  const head = ['Huddle notes', duration, names.join(', ')].filter(Boolean).join(' · ')
+/** The note as one message: "Huddle notes · 24 min · written by Ana and Ben" then the text. */
+export function huddleNotesMessage(duration: string, writers: string[], note: string): string {
+  const by = attendeeList(writers)
+  const head = ['Huddle notes', duration, by ? `written by ${by}` : ''].filter(Boolean).join(' · ')
   return `**${head}**\n\n${note}`
 }
 
@@ -332,6 +378,10 @@ export function registerHuddleCollab(
       name: nameOf(user)
     }
     await deps.redis.set(k.note, JSON.stringify(next), 'EX', ttlS)
+    // Every writer is checked before the end posts the note (#2854): words never go out under
+    // someone else's posting rights.
+    await deps.redis.hset(k.writers, user.id, next.name || 'Someone')
+    await deps.redis.expire(k.writers, ttlS)
     toHuddle(room, 'huddle:note', {
       room,
       text: next.text,
@@ -408,11 +458,11 @@ export function registerHuddleCollab(
       if (!user || typeof room !== 'string' || !room) return
       try {
         if (!(await allowed(user, room))) return
-        const k = collabKeys(scope.tenantNow(), room)
-        const who = await deps.redis.hgetall(k.who)
-        if (!who || !(user.id in who)) return
-        const note = parseNote(await deps.redis.get(k.note))
-        if (note) socket.emit('huddle:note:kept', { room, text: note.text })
+        // Only the frozen note of a finished huddle, and only for the people who were in it.
+        const ended = parseEnded(await deps.redis.get(collabKeys(scope.tenantNow(), room).ended))
+        const me = String(user.id).toUpperCase()
+        if (!ended || !ended.attendees.some((a) => a.toUpperCase() === me)) return
+        socket.emit('huddle:note:kept', { room, text: ended.text })
       } catch (err) {
         deps.warn({ err, room }, 'huddle:note:fetch failed')
       }

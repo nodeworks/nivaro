@@ -3,8 +3,8 @@ import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
 import {
-  clearHuddleEnd,
   collabLeft,
+  finishHuddleEnd,
   huddleEndLine,
   huddleNotesMessage,
   notePostReason,
@@ -139,16 +139,15 @@ export interface HuddleDeps {
   /** Post a platform line in the room (chat-send.ts). Fixed server text only. */
   postLine(room: string, text: string): Promise<void>
   /**
-   * #2854 — post the huddle's notes AS A PERSON (people wrote them): the note's last editor,
-   * else `fallback` (the last one to leave), through the normal visibility and posting rules.
-   * Resolves null when posted, or the plain reason it was not.
+   * #2854 — may this writer of the notes post a top-level message in the room under the normal
+   * rules (active account, canSeeRoom, announce channels)? null = yes, else the plain reason.
    */
-  postNote(
-    room: string,
-    editorId: string | null,
-    fallback: User | null,
-    text: string
-  ): Promise<string | null>
+  noteWriterRefusal(room: string, writer: { id: string; name: string }): Promise<string | null>
+  /**
+   * #2854 — post the notes AS A PERSON (their last editor), through postChatMessage's normal
+   * visibility and posting rules. Resolves null when posted, or the plain reason it was not.
+   */
+  postNote(room: string, authorId: string, text: string): Promise<string | null>
   warn(obj: Record<string, unknown>, msg: string): void
 }
 
@@ -165,11 +164,22 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
         { room, message: text }
       )
     },
-    async postNote(room, editorId, fallback, text) {
+    async noteWriterRefusal(room, writer) {
       const { getUser } = await import('./users.js')
-      const editor = editorId ? await getUser(editorId).catch(() => undefined) : undefined
-      const author = editor && editor.status === 'active' ? editor : fallback
-      if (!author) return 'nobody from the huddle could post them'
+      const u = await getUser(writer.id).catch(() => undefined)
+      if (!u || u.status !== 'active') return `${writer.name} can no longer post here`
+      const { chatPostRefusal } = await import('./chat-send.js')
+      const { isAdminRole } = await import('./permissions.js')
+      const refused = await chatPostRefusal(u, room, await isAdminRole(u).catch(() => false))
+      if (!refused) return null
+      return refused.code === 'ANNOUNCE_ONLY'
+        ? `${writer.name} cannot post in this announcement channel`
+        : `${writer.name} cannot post in this room`
+    },
+    async postNote(room, authorId, text) {
+      const { getUser } = await import('./users.js')
+      const author = await getUser(authorId).catch(() => undefined)
+      if (!author || author.status !== 'active') return 'their writer can no longer post here'
       try {
         const { postChatMessage } = await import('./chat-send.js')
         const { isAdminRole } = await import('./permissions.js')
@@ -298,17 +308,40 @@ export function registerHuddle(
         const end = await readHuddleEnd(deps.redis, tenant, room)
         const ms = start ? Date.now() - Number(start) : 0
         const duration = formatHuddleDuration(ms)
-        // The notes are people's words: they post as a person (never the system line), and a
-        // person the room refuses means they are not posted — kept for the attendees instead.
-        const unposted = end.note
-          ? await deps.postNote(
+        // The notes are people's words: they post as a person (never the system line), and
+        // only when EVERY writer may post here — nobody's words go out under another's rights.
+        // Refused = not posted, frozen for the attendees instead.
+        let unposted: string | null = null
+        const writers = end.writers.length
+          ? end.writers
+          : end.noteBy
+            ? [{ id: end.noteBy, name: 'Someone' }]
+            : []
+        if (end.note) {
+          if (!writers.length) unposted = 'nobody from the huddle could post them'
+          for (const w of writers) {
+            if (unposted) break
+            unposted = await deps.noteWriterRefusal(room, w)
+          }
+          const author = end.noteBy ?? writers.at(-1)?.id
+          if (!unposted && author) {
+            const names = writers.map((w) => w.name)
+            unposted = await deps.postNote(
               room,
-              end.noteBy,
-              getUser(),
-              huddleNotesMessage(duration, end.names, end.note)
+              author,
+              huddleNotesMessage(duration, names, end.note)
             )
-          : null
-        await clearHuddleEnd(deps.redis, tenant, room, !!unposted, KEY_TTL_S)
+          }
+        }
+        await finishHuddleEnd(
+          deps.redis,
+          tenant,
+          room,
+          unposted && end.note
+            ? { text: end.note, attendees: end.attendees, writers: writers.map((w) => w.id) }
+            : null,
+          KEY_TTL_S
+        )
         await deps.redis.del(k.start, k.meta, k.set)
         const line = huddleEndLine(duration, end.names)
         await deps.postLine(room, unposted ? `${line} · notes were not posted: ${unposted}` : line)
