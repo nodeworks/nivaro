@@ -184,12 +184,12 @@ function SwitchRow({
         {...data}
         className={cn(
           'relative mt-0.5 h-4 w-7 shrink-0 rounded-full transition-colors',
-          on ? 'bg-nvr-cyan' : 'bg-slate-300 dark:bg-border'
+          on ? 'bg-nvr-cyan' : 'bg-slate-300 dark:bg-white/35'
         )}
       >
         <span
           className={cn(
-            'absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
+            'absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform',
             on ? 'translate-x-3.5' : 'translate-x-0.5'
           )}
         />

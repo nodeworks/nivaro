@@ -9636,8 +9636,17 @@ function ItemEditFormView({
                                     {/* min-width floor: without it flex crushes this block to
                                       zero width before the row ever overflows, so HeaderTools'
                                       scrollWidth check never fires and the toolbar squishes the
-                                      title instead of collapsing (the 1700-2050px squish bug). */}
-                                    <div className='flex min-w-[180px] flex-col md:min-w-[260px]'>
+                                      title instead of collapsing (the 1700-2050px squish bug).
+                                      The layout editor canvas is far narrower than the viewport
+                                      the md: floor reads, so design mode keeps a smaller floor
+                                      or the folded toolbar's Create/Save clips at the edge. */}
+                                    <div
+                                      className={
+                                        designMode
+                                          ? 'flex min-w-[200px] flex-col'
+                                          : 'flex min-w-[180px] flex-col md:min-w-[260px]'
+                                      }
+                                    >
                                       <div className='group/title flex items-center gap-1.5'>
                                         <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
                                           {isNew ? `New ${singularTitle}` : itemTitle}
@@ -10458,9 +10467,12 @@ function ItemEditFormView({
                                                   size='sm'
                                                   variant='outline'
                                                   className='gap-1.5 text-destructive hover:text-destructive'
+                                                  aria-label='Delete this record'
+                                                  data-tip='Delete this record (asks to confirm)'
                                                   onClick={() => setConfirmDelete(true)}
                                                 >
                                                   <Trash2 className='h-3.5 w-3.5' />
+                                                  Delete
                                                 </Button>
                                               ))}
                                           </HeaderMenu>

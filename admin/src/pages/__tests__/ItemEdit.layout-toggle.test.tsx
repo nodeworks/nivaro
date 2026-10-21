@@ -208,7 +208,7 @@ describe('record page Edit layout toggle', () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50))
     })
-    expect(screen.queryByRole('button', { name: /edit layout/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /edit form/i })).toBeNull()
     expect(state.chunkLoads).toBe(0)
   })
 
@@ -238,7 +238,7 @@ describe('record page Edit layout toggle', () => {
   it('shows Edit layout for admins', async () => {
     state.user = { id: 'u1', is_admin: true }
     renderWith(<ItemEditPage />, HostProvider)
-    const toggle = await screen.findByRole('button', { name: /edit layout/i })
+    const toggle = await screen.findByRole('button', { name: /edit form/i })
     // A More-menu row, not a header button.
     expect(toggle.closest('[data-testid="more-menu"]')).not.toBeNull()
     expect(toggle.hasAttribute('data-nvr-menu-close')).toBe(true)
@@ -264,7 +264,7 @@ describe('record page Edit layout toggle', () => {
     state.user = { id: 'u1', is_admin: true }
     renderWith(<ItemEditPage />, HostProvider)
     const form = () => screen.getByTestId('item-form').getAttribute('data-layout-editing')
-    fireEvent.click(await screen.findByRole('button', { name: /edit layout/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /edit form/i }))
     await screen.findByTestId('record-layout-editor')
     expect(form()).toBe('true')
 

@@ -7,7 +7,7 @@ export const layoutEditor: DocSection = {
     { type: 'h1', id: 'layout-editor', text: 'Layout Editor' },
     {
       type: 'p',
-      text: 'Every form in Nivaro is a layout: which fields a record shows, in which sections, tabs or steps, with which panels and rules. The layout editor is where they are built. It opens from Data Model → a collection → Layout tab, and from any record page with Edit layout (admins only, in Nivaro admin and in headless frontends such as efp-new). The canvas is the real record form, so what you arrange is exactly what people get.'
+      text: 'Every form in Nivaro is a layout: which fields a record shows, in which sections, tabs or steps, with which panels and rules. The layout editor is where they are built. It opens from Data Model → a collection → Layout tab, and from any record page with Edit form (admins only, in Nivaro admin and in headless frontends such as efp-new). The canvas is the real record form, so what you arrange is exactly what people get.'
     },
 
     { type: 'h2', id: 'layout-editor-overview', text: 'Which form does each record get?' },
@@ -212,10 +212,10 @@ export const layoutEditor: DocSection = {
         'Summary and detail layouts edit on the read view they render as, with the same selection and drag handles.'
       ]
     },
-    { type: 'h3', id: 'layout-editor-record-page', text: 'Edit layout from a record' },
+    { type: 'h3', id: 'layout-editor-record-page', text: 'Edit form from a record' },
     {
       type: 'p',
-      text: "On a record page an admin finds Edit layout in the record's More menu (Nivaro admin ItemEdit and efp-new RecordDetail). It switches that page's form into design mode on the layout this record resolved to, with the layouts list, inspector and add panel as side panels over the page. The editor keeps the layout it opened on even if a save changes which layout the record resolves to. Back to record closes it at once; the record re-reads its layout as soon as the last change has saved, so it never shows the form from before your last edit. When the collection has no layout yet, the same menu row reads Create the first form and opens the Layout tab. When the page's ?layout= link names a form that doesn't exist, it reads Form not found and opens the collection's forms instead."
+      text: "On a record page an admin finds Edit form in the record's More menu (Nivaro admin ItemEdit and efp-new RecordDetail). It switches that page's form into design mode on the layout this record resolved to, with the layouts list, inspector and add panel as side panels over the page. The editor keeps the layout it opened on even if a save changes which layout the record resolves to. Back to record closes it at once; the record re-reads its layout as soon as the last change has saved, so it never shows the form from before your last edit. When the collection has no layout yet, the same menu row reads Create the first form and opens the Layout tab. When the page's ?layout= link names a form that doesn't exist, it reads Form not found and opens the collection's forms instead."
     },
     {
       type: 'p',
@@ -566,7 +566,7 @@ export const layoutEditor: DocSection = {
         'Layout templates: ⋯ → Save as template… in the editor saves the whole form (sections, panels, header, how it behaves). New form → Start with → Template makes a new form from one. Rules for who gets a form, defaults and links to other layouts stay behind.',
         "Another collection: fields with no field of the same name get their closest match (by name or label), which you can change or set to Leave out. Step conditions, skip-if-filled, field swaps, lock conditions and grid bindings are written in the other collection's terms and are left out.",
         'New form → Start with → Field list: paste names (one per line or separated by commas) or upload a CSV or text file. Names are matched to fields by name or label, with close spellings marked "?"; names with no match are left out. The form gets one section with the matched fields in that order.',
-        "New form from this record: Test a record on the overview, or the editor's ⋯ while previewing a record (also from a record's Edit layout), makes a form with one section holding the fields that record has filled in, in field order. New form → Start with → A record does the same."
+        "New form from this record: Test a record on the overview, or the editor's ⋯ while previewing a record (also from a record's Edit form), makes a form with one section holding the fields that record has filled in, in field order. New form → Start with → A record does the same."
       ]
     },
 
@@ -582,7 +582,7 @@ export const layoutEditor: DocSection = {
     {
       type: 'ul',
       items: [
-        'Edit layout on a record page adds how many people used this form on how many records today (UTC day) to its banner.',
+        'Edit form on a record page adds how many people used this form on how many records today (UTC day) to its banner.',
         "The editor's Usage tab shows today's opens, people and records; the last 30 days' opens, saves and new records left unfinished; the average time on each step with how many new records were left on it; and the fields changed most often within 24 hours of a record being created (last 90 days; on records opened with this form once 20 of them are known, otherwise across the collection).",
         'Suggested sections: fields people change in the same save (Jaccard over the last 90 days of revisions) that sit in different sections. Move into (the section) moves the strays next to the others in one step, which Undo reverses. Not now hides a suggestion until the editor reopens.'
       ]
@@ -660,7 +660,7 @@ export const layoutEditor: DocSection = {
     { type: 'h2', id: 'layout-editor-warning', text: 'Instances whose layouts are replaced' },
     {
       type: 'p',
-      text: 'Layout configuration travels one way: development → staging every night (promote:config copies the layout, section and placement tables), staging → production at go-live. An edit made on staging is therefore gone the next morning. Set `LAYOUT_EDIT_WARNING` on such an instance and every layout editing surface — the overview, the editor and record-page Edit layout — shows it as an always-visible banner. Unset = no banner. The editor still works either way.'
+      text: 'Layout configuration travels one way: development → staging every night (promote:config copies the layout, section and placement tables), staging → production at go-live. An edit made on staging is therefore gone the next morning. Set `LAYOUT_EDIT_WARNING` on such an instance and every layout editing surface — the overview, the editor and record-page Edit form — shows it as an always-visible banner. Unset = no banner. The editor still works either way.'
     },
     {
       type: 'pre',

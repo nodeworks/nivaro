@@ -108,11 +108,12 @@ export function HeaderTools({ children }: { children: ReactNode }) {
         type='button'
         data-nvr-header-tools-btn
         aria-expanded={open}
-        title='More tools'
+        aria-label='More tools'
+        data-tip='More tools'
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          'inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground',
-          open && 'bg-accent text-accent-foreground'
+          'inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground dark:bg-transparent dark:hover:bg-accent',
+          open && 'bg-accent text-accent-foreground dark:bg-accent'
         )}
       >
         <MoreHorizontal className='h-4 w-4' />
@@ -207,11 +208,12 @@ export function HeaderMenu({
         data-nvr-header-menu-btn
         aria-haspopup='menu'
         aria-expanded={open}
-        title='More actions'
+        aria-label={label}
+        data-tip='More actions'
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          'inline-flex h-9 items-center gap-1 rounded-md border border-input bg-background px-2.5 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground',
-          open && 'bg-accent text-accent-foreground'
+          'inline-flex h-9 items-center gap-1 rounded-md border border-input bg-background px-2.5 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground dark:bg-transparent dark:hover:bg-accent',
+          open && 'bg-accent text-accent-foreground dark:bg-accent'
         )}
       >
         <MoreHorizontal className='h-4 w-4' />

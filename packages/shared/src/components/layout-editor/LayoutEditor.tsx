@@ -1272,7 +1272,15 @@ export function LayoutEditor({
         onDropOnLayout={copyToLayout}
       >
         <div className='flex min-h-0 flex-1 overflow-hidden'>
-          <aside className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
+          {/* The outline takes the left panel's place while it is open: three side
+            panels at once left the canvas ~330px wide at 1440. Hidden, not unmounted,
+            so the Add / Usage tab and its scroll survive. */}
+          <aside
+            className={cn(
+              'flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card',
+              outlineShown && 'hidden'
+            )}
+          >
             <div
               role='tablist'
               aria-label='Left panel'
@@ -1348,7 +1356,7 @@ export function LayoutEditor({
           {outlineShown && bundle && (
             <aside
               data-editor-outline-panel=''
-              className='flex w-[240px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'
+              className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'
             >
               <OutlinePanel
                 bundle={bundle}

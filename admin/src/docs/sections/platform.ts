@@ -699,7 +699,7 @@ export const collectionLayouts: DocSection = {
     { type: 'h3', text: 'Managing layouts' },
     {
       type: 'p',
-      text: 'Open Data Model → select a collection → Layout tab. It opens on "Which form does each record get?" — every layout of the collection in the order the server checks them, with the conditions in plain words — and opens a layout in the layout editor from there. Admins can also edit a record\'s form from the record page with Edit layout. See Layout Editor for the overview, the editor, saving and history.'
+      text: 'Open Data Model → select a collection → Layout tab. It opens on "Which form does each record get?" — every layout of the collection in the order the server checks them, with the conditions in plain words — and opens a layout in the layout editor from there. Admins can also edit a record\'s form from the record page with Edit form. See Layout Editor for the overview, the editor, saving and history.'
     },
     {
       type: 'table',

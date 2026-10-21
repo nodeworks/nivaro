@@ -1157,11 +1157,11 @@ export function ItemEditPage() {
                       size='sm'
                       className='gap-1.5'
                       data-nvr-menu-close
-                      data-tip='Edit the layout this record opens with'
+                      data-tip='Edit the form this record opens with'
                       onClick={() => setEditingLayoutId(editableLayoutId)}
                     >
                       <LayoutTemplate className='h-3.5 w-3.5' />
-                      Edit layout
+                      Edit form
                     </Button>
                   ) : user?.is_admin && activeLayoutData && !activeLayoutData.layout ? (
                     // /active answers 404 both for a collection with no layout and for a
