@@ -273,7 +273,7 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'Name a version to keep it: older unnamed versions are pruned (the newest 30 are kept), named ones never are. "Name the saved layout…" keeps the layout as it is saved now ("Go-live baseline"); Name / Rename on a version names that one, and clearing the name lets it be pruned again. Compare any later state against a named version like any other.'
+      text: 'Name a version to keep it: older unnamed versions are pruned (the newest 30 are kept), named ones never are. "Name the saved form…" keeps the form as it is saved now ("Go-live baseline"); Name / Rename on a version names that one, and clearing the name lets it be pruned again. Compare any later state against a named version like any other.'
     },
     {
       type: 'p',

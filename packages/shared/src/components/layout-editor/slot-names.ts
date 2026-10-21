@@ -12,7 +12,8 @@ const SLOT_NAMES: Record<string, string> = {
   __subtitle__: 'Subtitle',
   __addendums__: 'Addendums',
   __referenced_by__: 'Referenced by',
-  __related_records__: 'Related records'
+  __related_records__: 'Related records',
+  __ungrouped_pos__: 'Fields outside sections'
 }
 
 export function slotName(field: string): string {

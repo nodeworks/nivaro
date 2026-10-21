@@ -32,7 +32,9 @@ export function TipLayer() {
     const over = (e: MouseEvent) => {
       const el = (e.target as HTMLElement)?.closest?.('[data-tip]')
       const text = el?.getAttribute('data-tip')
-      if (!el || !text) {
+      // A button whose menu or popover is open says nothing: its tip would
+      // cover the first rows of what it opened.
+      if (!el || !text || el.getAttribute('aria-expanded') === 'true') {
         setTip((t) => (t ? null : t))
         return
       }
@@ -40,10 +42,14 @@ export function TipLayer() {
       setTip({ x: r.left, y: r.bottom + 4, text })
     }
     const clear = () => setTip(null)
+    // A press acts on the element (opens its menu, switches a panel): the tip
+    // goes and comes back on the next hover.
     window.addEventListener('mouseover', over)
+    window.addEventListener('pointerdown', clear, true)
     window.addEventListener('scroll', clear, true)
     return () => {
       window.removeEventListener('mouseover', over)
+      window.removeEventListener('pointerdown', clear, true)
       window.removeEventListener('scroll', clear, true)
     }
   }, [owns])

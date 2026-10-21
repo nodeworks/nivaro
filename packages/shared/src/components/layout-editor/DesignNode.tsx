@@ -76,10 +76,11 @@ const MARK_CLS = 'inline-block max-w-[260px] truncate rounded px-1 text-left tex
 
 // Hovering a field that drives others (#2641, explain/driver-hover.ts): what
 // it controls gets a dashed amber ring; the field itself a "Controls n" tag
-// (top left, after the note marker when the field has one).
+// (bottom right: top left sat on the label, top right is the tag row; an
+// opaque fill in dark too, as it sits on the field's border).
 const DRIVER_CLS = [
   'data-[rule-dependent]:outline-dashed data-[rule-dependent]:outline-2 data-[rule-dependent]:outline-amber-400 dark:data-[rule-dependent]:outline-amber-400/80',
-  'data-[rule-drives]:after:pointer-events-none data-[rule-drives]:after:absolute data-[rule-drives]:after:-top-2 data-[rule-drives]:after:z-10 data-[rule-drives]:after:rounded data-[rule-drives]:after:bg-amber-50 data-[rule-drives]:after:px-1 data-[rule-drives]:after:text-[11px] data-[rule-drives]:after:text-amber-800 data-[rule-drives]:after:ring-1 data-[rule-drives]:after:ring-amber-200 data-[rule-drives]:after:content-[attr(data-rule-drives)] dark:data-[rule-drives]:after:bg-amber-500/15 dark:data-[rule-drives]:after:text-amber-200 dark:data-[rule-drives]:after:ring-amber-500/30'
+  'data-[rule-drives]:after:pointer-events-none data-[rule-drives]:after:absolute data-[rule-drives]:after:-bottom-2 data-[rule-drives]:after:right-1 data-[rule-drives]:after:z-10 data-[rule-drives]:after:rounded data-[rule-drives]:after:bg-amber-50 data-[rule-drives]:after:px-1 data-[rule-drives]:after:text-[11px] data-[rule-drives]:after:text-amber-800 data-[rule-drives]:after:ring-1 data-[rule-drives]:after:ring-amber-200 data-[rule-drives]:after:content-[attr(data-rule-drives)] dark:data-[rule-drives]:after:bg-[#413727] dark:data-[rule-drives]:after:text-amber-200 dark:data-[rule-drives]:after:ring-amber-500/30'
 ].join(' ')
 
 // Without a provider-measured spot: a full-width line just above / below.
@@ -160,7 +161,6 @@ export function DesignNode({
     overlay?.className,
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan',
     DRIVER_CLS,
-    note ? 'data-[rule-drives]:after:left-7' : 'data-[rule-drives]:after:left-1',
     // The section's "Changed by" shows while the pointer is over it.
     '[&:hover>[data-design-last-change]]:visible',
     dragging && 'opacity-40',
@@ -328,18 +328,28 @@ export function DesignNode({
     })
   const { shown, rest: moreTags } = rankChips(chips)
   const tags = extra.length > 0 || overlay != null || peers.length > 0
+  // Steps clip to their arrow shape, so a chip above one is cut off (and one
+  // wider than the step spills over its neighbours): a step or tab gets a dot
+  // above its label instead, every tag in its tip.
+  const tabTags = tabLike && !diff ? [...chips.map((c) => c.text), ...peers.map((p) => p.name)] : []
+  if (tabTags.length > 0)
+    own['data-tip'] = parent && !mark && !tags ? `From ${parent}` : tabTags.join(' · ')
   const badge =
     tabLike && diff ? (
       <span data-design-badges='' className='pointer-events-none absolute -top-2 right-0 z-10'>
         <DiffTag diff={diff} />
       </span>
-    ) : tabLike && parent && !mark && !tags ? (
-      // Steps and tabs: a dot above the label, the parent's name in the tip.
+    ) : tabTags.length > 0 ? (
       <span
         data-design-badges=''
-        className='pointer-events-none absolute left-1/2 top-1 z-10 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-slate-500 dark:bg-slate-400'
+        className={cn(
+          'pointer-events-none absolute left-1/2 top-1 z-10 h-1.5 w-1.5 -translate-x-1/2 rounded-full',
+          parent && !mark && !tags
+            ? 'bg-slate-500 dark:bg-slate-400'
+            : 'bg-violet-500 dark:bg-violet-400'
+        )}
       >
-        <span className='sr-only'>from {parent}</span>
+        <span className='sr-only'>{tabTags.join(' · ')}</span>
       </span>
     ) : chips.length > 0 || peers.length > 0 || fill != null ? (
       <span
@@ -379,7 +389,11 @@ export function DesignNode({
   const dot = unsaved ? (
     <span
       data-unsaved-dot=''
-      className='pointer-events-none absolute -left-1 -top-1 z-10 h-2 w-2 rounded-full bg-nvr-cyan ring-2 ring-white dark:ring-slate-900'
+      className={cn(
+        'pointer-events-none absolute z-10 h-2 w-2 rounded-full bg-nvr-cyan ring-2 ring-white dark:ring-slate-900',
+        // A step clips its corners away: the dot sits inside, before the arrow.
+        tabLike ? 'right-4 top-1' : '-left-1 -top-1'
+      )}
     >
       <span className='sr-only'>unsaved change</span>
     </span>

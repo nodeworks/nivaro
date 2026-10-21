@@ -185,6 +185,27 @@ describe('DesignNode', () => {
     expect(badge.querySelector('.sr-only')).not.toBeNull()
   })
 
+  it('a step with rule tags gets a dot and every tag in its tip (a step clips chips above it)', () => {
+    const d = design({
+      marks: () => [{ tone: 'slate', text: 'Skipped when Unit is filled' }]
+    })
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={{ kind: 'group', key: 'basic' }} asChild>
+            <div data-design-tab=''>Basic Information</div>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    expect(node.getAttribute('data-tip')).toBe('Skipped when Unit is filled')
+    const badge = node.querySelector('[data-design-badges]') as HTMLElement
+    expect(badge.className).toContain('rounded-full')
+    expect(badge.querySelector('[data-design-mark]')).toBeNull()
+    expect(badge.textContent).toBe('Skipped when Unit is filled')
+  })
+
   it('marks what a previewed role cannot see (faint, tagged) or change (lock tag)', () => {
     const marks: Record<string, 'hidden' | 'readonly'> = { title: 'hidden', amount: 'readonly' }
     const d = design({
@@ -435,7 +456,7 @@ describe('DesignNode tag row (design review)', () => {
     expect(tag().className).not.toContain('invisible')
   })
 
-  it('the "Controls n" tag moves right of a note marker', () => {
+  it('the "Controls n" tag sits bottom right, clear of the label and a note marker', () => {
     const note = { text: 'Ask Finance first', by: null, by_name: null, at: '2020-01-01T00:00:00Z' }
     const render = (withNote: boolean) =>
       act(() =>
@@ -449,9 +470,11 @@ describe('DesignNode tag row (design review)', () => {
       )
     render(false)
     const node = () => host.querySelector('[data-design-target]') as HTMLElement
-    expect(node().className).toContain('data-[rule-drives]:after:left-1')
+    expect(node().className).toContain('data-[rule-drives]:after:-bottom-2')
+    expect(node().className).toContain('data-[rule-drives]:after:right-1')
     render(true)
-    expect(node().className).toContain('data-[rule-drives]:after:left-7')
+    expect(node().className).toContain('data-[rule-drives]:after:right-1')
+    expect(node().className).not.toContain('data-[rule-drives]:after:left-')
     expect(host.querySelector('[data-editor-note-marker]')).not.toBeNull()
   })
 })

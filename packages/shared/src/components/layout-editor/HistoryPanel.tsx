@@ -8,6 +8,7 @@ import type { LayoutBundle } from '../../lib/layout-ops'
 import { ExplainDiffButton } from './assist/ExplainDiff'
 import { fetchVersionBundle, useVersionNaming } from './history-api'
 import { SessionHistory } from './SessionHistory'
+import { slotName } from './slot-names'
 import { layoutDraftKeys, parseSaveFailure, type SessionSteps } from './useLayoutDraft'
 
 interface VersionRow {
@@ -62,18 +63,25 @@ function fmt(v: unknown): string {
 
 const changes = (cs: DiffChange[]) => cs.map((c) => `${c.field} ${fmt(c.from)} → ${fmt(c.to)}`)
 
+/** Slot rows (`__comments__`, `__ungrouped_pos__`) by their plain names. */
+const entityLabel = (label: string) => (label.startsWith('__') ? slotName(label) : label)
+
 function diffRows(diff: DiffDto): Array<{ kind: string; text: string }> {
   const rows: Array<{ kind: string; text: string }> = []
   for (const c of diff.layout)
-    rows.push({ kind: 'Layout', text: `${c.field}: ${fmt(c.from)} → ${fmt(c.to)}` })
+    rows.push({ kind: 'Form', text: `${c.field}: ${fmt(c.from)} → ${fmt(c.to)}` })
   for (const g of diff.groups.added) rows.push({ kind: 'Group added', text: g })
   for (const g of diff.groups.removed) rows.push({ kind: 'Group removed', text: g })
   for (const g of diff.groups.changed)
     rows.push({ kind: 'Group', text: `${g.label}: ${changes(g.changes).join(' · ')}` })
-  for (const a of diff.assignments.added) rows.push({ kind: 'Field added', text: a })
-  for (const a of diff.assignments.removed) rows.push({ kind: 'Field removed', text: a })
+  for (const a of diff.assignments.added) rows.push({ kind: 'Field added', text: entityLabel(a) })
+  for (const a of diff.assignments.removed)
+    rows.push({ kind: 'Field removed', text: entityLabel(a) })
   for (const a of diff.assignments.changed)
-    rows.push({ kind: 'Field', text: `${a.label}: ${changes(a.changes).join(' · ')}` })
+    rows.push({
+      kind: 'Field',
+      text: `${entityLabel(a.label)}: ${changes(a.changes).join(' · ')}`
+    })
   return rows
 }
 
@@ -82,7 +90,7 @@ function DiffBody({ diff }: { diff: DiffDto }) {
   if (diff.total === 0) {
     return (
       <p className='mt-1 text-[12px] text-slate-500 dark:text-slate-400'>
-        Nothing differs from that version. The layout is exactly as it was saved.
+        Nothing differs from that version. The form is exactly as it was saved.
       </p>
     )
   }
@@ -311,7 +319,7 @@ export function HistoryPanel({
             className={`${btn} inline-flex items-center gap-1`}
           >
             <Bookmark className='h-3 w-3' />
-            Name the saved layout…
+            Name the saved form…
           </button>
         )}
       </div>

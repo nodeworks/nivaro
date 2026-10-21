@@ -39,7 +39,7 @@ function PlacementLine({
   ].filter(Boolean)
   const name = (
     <>
-      <span className='font-medium text-slate-800 group-hover:text-[#0089ad] dark:text-foreground dark:group-hover:text-nvr-cyan'>
+      <span className='text-[12.5px] font-medium text-slate-800 group-hover:text-[#0089ad] dark:text-foreground dark:group-hover:text-nvr-cyan'>
         {p.layout_name}
       </span>
       {p.layout_type !== 'grouped' && (

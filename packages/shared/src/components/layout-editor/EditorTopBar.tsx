@@ -18,6 +18,7 @@ import { useDebounced } from '../../hooks/useDebounced'
 import { useRelationOptions } from '../../hooks/useRelationOptions'
 import type { LayoutBundle } from '../../lib/layout-ops'
 import { cn } from '../../lib/utils'
+import { useOverflowTip } from '../TipLayer'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { AiChangeCheck } from './ai/ChangeCheck'
@@ -78,6 +79,7 @@ const BAR_CSS = `
 @container letb (max-width: 1499px){[data-editor-topbar] [data-tb-sentence]{display:none}}
 @container letb (max-width: 1399px){[data-editor-topbar] [data-tb-xwide]{display:none}}
 @container letb (max-width: 1099px){[data-editor-topbar] [data-tb-wide],[data-editor-topbar] [data-tb-menu-label]{display:none}}
+@container letb (min-width: 1100px){[data-editor-topbar] [data-tb-name]{min-width:140px}}
 `
 
 function StatusChip({
@@ -247,7 +249,9 @@ function PreviewAsButton({
       <PopoverTrigger asChild>
         <button
           type='button'
-          className={cn(barBtn, 'min-w-0 max-w-[260px]', open && barBtnOn)}
+          // The one bar button that shrinks: its summary gives way before the
+          // form's name does (the unsaved count and Save take room when changes wait).
+          className={cn(barBtn, 'min-w-[110px] max-w-[260px] shrink', open && barBtnOn)}
           aria-label='Preview as'
           data-preview-as=''
           data-tip='Show the form with a real record’s values, as a role sees it'
@@ -464,6 +468,7 @@ export function EditorTopBar({
       : []
   const manual = !!draft.save && !draft.autosave
   const waiting = manual && unsaved > 0
+  const nameRef = useOverflowTip<HTMLHeadingElement>(layoutName)
 
   return (
     <header
@@ -482,8 +487,13 @@ export function EditorTopBar({
         <span data-tb-wide=''>{backLabel}</span>
       </button>
       <Sep />
-      <div className='flex min-w-[64px] flex-1 items-center gap-2'>
-        <h2 className='min-w-0 truncate text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+      {/* From 1100 px the name keeps room to read (BAR_CSS): what is missing
+          comes off the Preview summary instead. */}
+      <div data-tb-name='' className='flex min-w-[64px] flex-1 items-center gap-2'>
+        <h2
+          ref={nameRef}
+          className='min-w-0 truncate text-[14px] font-semibold text-slate-900 dark:text-foreground'
+        >
           {layoutName}
         </h2>
         {pill && (
