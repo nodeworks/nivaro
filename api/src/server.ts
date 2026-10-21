@@ -1020,6 +1020,23 @@ export async function buildServer() {
         }
       )
 
+      // Scheduled layout changes (#2590): each minute, apply the due ones
+      // through the layout ops service (or fail them and tell who scheduled).
+      app.cron.schedule(
+        'layout-schedules',
+        '* * * * *',
+        async () => {
+          const { runDueSchedules } = await import('./services/layout-schedules.js')
+          await runDueSchedules()
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Applies layout changes an admin scheduled in the layout editor; a change that no longer fits the layout is not applied and its scheduler is told.'
+        }
+      )
+
       // Ops monitors: freshness / deploy-regression / synthetic checks.
       app.cron.schedule('ops-monitors', '*/5 * * * *', async () => {
         // #365 — alert engines pause during maintenance: a planned freeze must

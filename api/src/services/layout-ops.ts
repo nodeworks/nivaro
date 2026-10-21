@@ -117,14 +117,27 @@ export async function loadLayoutBundle(
     | Record<string, unknown>
     | undefined
   if (!raw) return null
-  const layout = parseLayoutRow({ ...raw }) as LayoutRow
   const groupRows = (await q('nivaro_field_groups')
     .where({ layout_id: layoutId })
     .orderBy([{ column: 'sort' }, { column: 'id' }])) as Array<Record<string, unknown>>
   const asgRows = (await q('nivaro_layout_field_assignments')
     .where({ layout_id: layoutId })
     .orderBy([{ column: 'sort' }, { column: 'id' }])) as Array<Record<string, unknown>>
+  const rev = (await layoutStateHash(layoutId, q)) ?? ''
+  return rowsToBundle(raw, groupRows, asgRows, rev)
+}
 
+/**
+ * Stored rows (as the tables, or a version snapshot, hold them) → the editor's
+ * bundle. Rows must come in (sort, id) order, as loadLayoutBundle reads them.
+ */
+export function rowsToBundle(
+  raw: Record<string, unknown>,
+  groupRows: Array<Record<string, unknown>>,
+  asgRows: Array<Record<string, unknown>>,
+  rev: string
+): LayoutBundle {
+  const layout = parseLayoutRow({ ...raw }) as LayoutRow
   const keyById = new Map(groupRows.map((g) => [Number(g.id), String(g.key)]))
   const groups: GroupRow[] = groupRows.map((g) => ({
     id: Number(g.id),
@@ -188,8 +201,23 @@ export async function loadLayoutBundle(
     )
   )
 
-  const rev = (await layoutStateHash(layoutId, q)) ?? ''
   return { layout, ...sortBundleRows({ groups, placements }), rev }
+}
+
+/** A version snapshot as a bundle (History's "Show on canvas"); its rev names the version. */
+export function snapshotToBundle(
+  snap: {
+    layout: Record<string, unknown>
+    groups: Array<Record<string, unknown>>
+    assignments: Array<Record<string, unknown>>
+  },
+  rev: string
+): LayoutBundle {
+  const order = (rows: Array<Record<string, unknown>>) =>
+    [...rows].sort(
+      (a, b) => Number(a.sort ?? 0) - Number(b.sort ?? 0) || Number(a.id ?? 0) - Number(b.id ?? 0)
+    )
+  return rowsToBundle(snap.layout, order(snap.groups ?? []), order(snap.assignments ?? []), rev)
 }
 
 /** Thrown when the merged settings fail validation at write time (rolls the batch back). */

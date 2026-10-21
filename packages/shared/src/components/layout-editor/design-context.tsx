@@ -26,6 +26,22 @@ export interface LayoutDesign {
   /** "Preview as role": what that role's field permissions do to the node
    *  (hidden: faint with a tag, still selectable; read-only: a lock tag). */
   roleMark?(t: DesignTarget): RoleMark | null
+  /** "Show on canvas" (#2591): what a comparison says happened to the node.
+   *  'removed' nodes are ghosts put back for the comparison: faint, never dragged or selected. */
+  diffMark?(t: DesignTarget): DiffMark | null
+  /** Sections: who last changed it and when (#2611), from version history. */
+  lastChange?(t: DesignTarget): LastChange | null
+}
+
+export interface DiffMark {
+  kind: 'added' | 'moved' | 'removed' | 'changed'
+  /** moved: "from Basics"; changed: the settings that differ. */
+  detail?: string
+}
+
+export interface LastChange {
+  by: string | null
+  at: string | null
 }
 
 export interface RoleMark {

@@ -23,7 +23,27 @@ import { activateLayout } from './layout-activation.js'
 
 const KEEP = 30
 
-interface Snapshot {
+// Migration 457 adds `name` (named versions outlive pruning). Until it has run,
+// versions work as before: unnamed, pruned to KEEP. A missing column is
+// re-checked each minute; once present it is remembered.
+let nameColumn: { has: boolean; at: number } | null = null
+export async function versionsHaveName(q: Knex | Knex.Transaction = db): Promise<boolean> {
+  if (nameColumn && (nameColumn.has || Date.now() - nameColumn.at < 60_000)) return nameColumn.has
+  let has = false
+  try {
+    has = await q.schema.hasColumn('nivaro_layout_versions', 'name')
+  } catch {
+    has = false
+  }
+  nameColumn = { has, at: Date.now() }
+  return has
+}
+/** Tests: forget what the column check found. */
+export function resetVersionNameCheck(): void {
+  nameColumn = null
+}
+
+export interface Snapshot {
   layout: Record<string, unknown>
   groups: Array<Record<string, unknown>>
   assignments: Array<Record<string, unknown>>
@@ -111,11 +131,14 @@ export async function snapshotLayoutVersion(
     })
 
     // Prune beyond KEEP — the debounced editor would otherwise grow a version
-    // per editing burst forever.
-    const versions = (await q('nivaro_layout_versions')
-      .where({ layout_id: layoutId })
-      .orderBy('version', 'desc')
-      .select('id', 'version')) as Array<{ id: number; version: number }>
+    // per editing burst forever. Named versions (#2610) are never pruned and
+    // do not count toward KEEP.
+    let prunable = q('nivaro_layout_versions').where({ layout_id: layoutId })
+    if (await versionsHaveName(q)) prunable = prunable.whereNull('name')
+    const versions = (await prunable.orderBy('version', 'desc').select('id', 'version')) as Array<{
+      id: number
+      version: number
+    }>
     if (versions.length > KEEP) {
       const dropIds = versions.slice(KEEP).map((v) => v.id)
       await q('nivaro_layout_versions').whereIn('id', dropIds).delete()
@@ -520,4 +543,206 @@ export async function layoutDriftSweep(): Promise<
       })
   }
   return out
+}
+
+// ─── Named versions (#2610) ──────────────────────────────────────────────────
+
+const NAME_MAX = 120
+
+/** Trimmed, length-capped name; '' / null = unname. */
+export function cleanVersionName(v: unknown): string | null {
+  if (v == null) return null
+  if (typeof v !== 'string') return null
+  const t = v.trim().replace(/\s+/g, ' ')
+  return t ? t.slice(0, NAME_MAX) : null
+}
+
+/** Name (or unname) one version. false when the version is not this layout's. */
+export async function nameLayoutVersion(
+  layoutId: number,
+  versionId: number,
+  name: string | null
+): Promise<boolean> {
+  const n = await db('nivaro_layout_versions')
+    .where({ id: versionId, layout_id: layoutId })
+    .update({ name })
+  return Number(n) > 0
+}
+
+/**
+ * Name the layout as it is saved now. The newest version is the state before
+ * the last save, so the current state gets a version of its own (never
+ * deduplicated: it must exist to carry the name). null when the layout is gone.
+ */
+export async function nameCurrentLayoutState(
+  layoutId: number,
+  name: string,
+  userId?: string | null
+): Promise<{ id: number; version: number } | null> {
+  const snap = await buildSnapshot(layoutId)
+  if (!snap) return null
+  return db.transaction(async (trx: Knex.Transaction) => {
+    const latest = (await trx('nivaro_layout_versions')
+      .where({ layout_id: layoutId })
+      .orderBy('version', 'desc')
+      .first('version')) as { version: number } | undefined
+    const version = (latest?.version ?? 0) + 1
+    await trx('nivaro_layout_versions').insert({
+      layout_id: layoutId,
+      version,
+      snapshot: JSON.stringify(snap),
+      note: `named "${name}"`.slice(0, 255),
+      name,
+      created_by: userId ?? null,
+      created_at: new Date()
+    })
+    const row = (await trx('nivaro_layout_versions')
+      .where({ layout_id: layoutId, version })
+      .first('id', 'version')) as { id: number; version: number }
+    return { id: Number(row.id), version: Number(row.version) }
+  })
+}
+
+// ─── Last changed by, per section (#2611) ────────────────────────────────────
+//
+// A version is the state BEFORE the edit of the person who made it, so the
+// difference between version k and the next one (or the current state, for
+// the newest) is that person's change, made from version k's time on.
+// Comparing each section's content across consecutive states names who last
+// touched it and when. Only history the versions keep is seen (30 unnamed).
+
+/** The key the canvas uses for the zone of fields outside any section. */
+export const UNGROUPED_SECTION = '__ungrouped__'
+const UNGROUPED_POS = '__ungrouped_pos__'
+const SECTION_IGNORE = new Set([
+  'id',
+  'layout_id',
+  'created_at',
+  'updated_at',
+  'sort',
+  'container_id',
+  'group_key'
+])
+
+function stripRow(r: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(r).sort()) if (!SECTION_IGNORE.has(k)) out[k] = norm(r[k])
+  return out
+}
+
+const bySortId = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+  Number(a.sort ?? 0) - Number(b.sort ?? 0) || Number(a.id ?? 0) - Number(b.id ?? 0)
+
+/**
+ * One string per section key: its own settings, where it sits (parent), and
+ * its fields in order with their settings. A sibling moving around it (sort
+ * renumbering) is not a change to it.
+ */
+export function sectionSignatures(snap: Snapshot): Map<string, string> {
+  const keyById = new Map(snap.groups.map((g) => [Number(g.id), String(g.key)]))
+  const out = new Map<string, string>()
+  const fields = new Map<string, Array<Record<string, unknown>>>()
+  for (const a of [...snap.assignments].sort(bySortId)) {
+    if (a.field === UNGROUPED_POS) continue
+    const k = a.group_key == null || a.group_key === '' ? UNGROUPED_SECTION : String(a.group_key)
+    const list = fields.get(k) ?? []
+    list.push(stripRow(a))
+    fields.set(k, list)
+  }
+  for (const g of snap.groups) {
+    const key = String(g.key)
+    const parent = g.container_id == null ? null : (keyById.get(Number(g.container_id)) ?? null)
+    out.set(key, JSON.stringify({ g: stripRow(g), parent, f: fields.get(key) ?? [] }))
+  }
+  for (const [k, f] of fields) if (!out.has(k)) out.set(k, JSON.stringify({ f }))
+  return out
+}
+
+export interface SectionChange {
+  by: string | null
+  by_id: string | null
+  at: string | null
+}
+
+/**
+ * Pure core of sectionLastChanges: `versions` oldest first, `current` the
+ * layout now. Keys that are not on the layout now are left out.
+ */
+export function sectionChangesFrom(
+  versions: Array<{
+    created_by: string | null
+    created_by_name: string | null
+    created_at: string | Date | null
+    snap: Snapshot
+  }>,
+  current: Snapshot
+): Record<string, SectionChange> {
+  const states = [...versions.map((v) => v.snap), current]
+  const sigs = states.map(sectionSignatures)
+  const last: Record<string, SectionChange> = {}
+  for (let i = 0; i < versions.length; i++) {
+    const before = sigs[i]
+    const after = sigs[i + 1]
+    const v = versions[i]
+    const at = v.created_at instanceof Date ? v.created_at.toISOString() : (v.created_at ?? null)
+    for (const [key, sig] of after) {
+      if (before.get(key) === sig) continue
+      last[key] = { by: v.created_by_name || null, by_id: v.created_by ?? null, at }
+    }
+  }
+  const now = sigs[sigs.length - 1]
+  for (const k of Object.keys(last)) if (!now.has(k)) delete last[k]
+  return last
+}
+
+const sectionCache = new Map<number, { stamp: string; data: Record<string, SectionChange> }>()
+
+/**
+ * Who last changed each section of a layout, and when. Cached per layout
+ * against its rev plus the newest version id (a save changes both; a restore
+ * or a named version changes one), so an open editor re-asking is cheap.
+ */
+export async function sectionLastChanges(
+  layoutId: number
+): Promise<Record<string, SectionChange> | null> {
+  const current = await buildSnapshot(layoutId)
+  if (!current) return null
+  const head = (await db('nivaro_layout_versions')
+    .where({ layout_id: layoutId })
+    .max({ id: 'id' })
+    .count({ n: '*' })
+    .first()) as { id: number | null; n: number | string } | undefined
+  const stamp = `${hashSnapshot(current)}:${head?.id ?? 0}:${head?.n ?? 0}`
+  const hit = sectionCache.get(layoutId)
+  if (hit && hit.stamp === stamp) return hit.data
+
+  const rows = (await db('nivaro_layout_versions as v')
+    .leftJoin('nivaro_users as u', 'v.created_by', 'u.id')
+    .where('v.layout_id', layoutId)
+    .orderBy('v.version', 'asc')
+    .select(
+      'v.snapshot',
+      'v.created_by',
+      'v.created_at',
+      db.raw(
+        "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as created_by_name"
+      )
+    )) as Array<{
+    snapshot: string
+    created_by: string | null
+    created_at: Date | string | null
+    created_by_name: string | null
+  }>
+  const versions: Parameters<typeof sectionChangesFrom>[0] = []
+  for (const r of rows) {
+    try {
+      versions.push({ ...r, snap: JSON.parse(r.snapshot) as Snapshot })
+    } catch {
+      /* an unreadable snapshot breaks the chain at that point only */
+    }
+  }
+  const data = sectionChangesFrom(versions, current)
+  if (sectionCache.size > 500) sectionCache.clear()
+  sectionCache.set(layoutId, { stamp, data })
+  return data
 }

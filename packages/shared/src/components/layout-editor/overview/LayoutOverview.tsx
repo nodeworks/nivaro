@@ -31,6 +31,7 @@ import { del, patch, post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
+import { type ScheduleRow, useLayoutSchedules } from '../history-api'
 import {
   type ChoiceLabels,
   type DescribeField,
@@ -53,6 +54,7 @@ import {
   useRuleChoiceLabels
 } from './overview-api'
 import { Pill, Sentence, shapeLine, TYPE_USE } from './purpose'
+import { ScheduledChanges } from './ScheduledChanges'
 import type {
   LayoutType,
   OverviewReason,
@@ -373,6 +375,9 @@ interface RowProps {
   only: boolean
   onOpen: (id: number) => void
   onChanged: () => void
+  /** This form's scheduled layout changes (#2590). */
+  scheduled?: ScheduleRow[]
+  collection?: string
   drag?: {
     setNodeRef: (el: HTMLElement | null) => void
     style: CSSProperties
@@ -381,7 +386,18 @@ interface RowProps {
   }
 }
 
-function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }: RowProps) {
+function RowView({
+  row,
+  fields,
+  choices,
+  tested,
+  only,
+  onOpen,
+  onChanged,
+  scheduled,
+  collection,
+  drag
+}: RowProps) {
   const client = useNivaroClient()
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState(row.name)
@@ -491,6 +507,7 @@ function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }
               {w}
             </div>
           ))}
+          {scheduled && collection && <ScheduledChanges rows={scheduled} collection={collection} />}
         </td>
         <td className={cn(cell, 'w-[22%] text-[12.5px] text-slate-500 dark:text-muted-foreground')}>
           {row.section === 'unused' ? (
@@ -799,6 +816,13 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
     }
   }
 
+  const { data: schedules } = useLayoutSchedules(collection)
+  const schedulesByLayout = useMemo(() => {
+    const m = new Map<number, ScheduleRow[]>()
+    for (const s of schedules ?? []) m.set(s.layout_id, [...(m.get(s.layout_id) ?? []), s])
+    return m
+  }, [schedules])
+
   const renderRow = (row: OverviewRow, draggable?: boolean) => {
     const common = {
       row,
@@ -807,7 +831,9 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
       tested: explain?.layout_id === row.layout_id,
       only: rows.length === 1,
       onOpen,
-      onChanged: invalidate
+      onChanged: invalidate,
+      scheduled: schedulesByLayout.get(row.layout_id),
+      collection
     }
     return draggable === undefined ? (
       <RowView key={row.layout_id} {...common} />

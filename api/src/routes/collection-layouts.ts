@@ -33,13 +33,15 @@ import {
   getLayoutVersion,
   layoutDriftSweep,
   restoreLayoutVersion,
-  snapshotLayoutVersion
+  snapshotLayoutVersion,
+  versionsHaveName
 } from '../services/layout-versions.js'
 import { generatePdfFromLayout } from '../services/pdf-layout.js'
 import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layout-themes.js'
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
+import { layoutHistoryRoutes } from './layout-history.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, slugify }
 
@@ -1907,6 +1909,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // GET /collection-layouts/:id/versions — snapshot history (see migration 211)
   app.get('/:id/versions', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    const named = await versionsHaveName()
     const rows = await db('nivaro_layout_versions as v')
       .leftJoin('nivaro_users as u', 'v.created_by', 'u.id')
       .where('v.layout_id', Number(id))
@@ -1920,6 +1923,10 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
           "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as created_by_name"
         )
       )
+      // Named versions (#2610, migration 457) — absent until the column exists.
+      .modify((q) => {
+        if (named) q.select('v.name')
+      })
     return reply.send({ data: rows })
   })
 
@@ -2135,4 +2142,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       })
     return reply.send(result.bundle)
   })
+
+  // Named versions, version bundles, section last-changed, scheduled changes.
+  await layoutHistoryRoutes(app)
 }

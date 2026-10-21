@@ -758,6 +758,38 @@ describe('useLayoutDraft — manual save (autosave off, the default)', () => {
     expect(draft.canRedo).toBe(true)
   })
 
+  it('session history lists every step, marks saved vs unsaved, and jumps both ways (#2618)', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    const original = content(draft.bundle)
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    await act(async () => {
+      await draft.save()
+    })
+    act(() => draft.apply([removeNotes], { label: 'Remove Notes' }))
+    expect(draft.session).toEqual({
+      done: [
+        { label: 'Move Status', state: 'saved' },
+        { label: 'Remove Notes', state: 'unsaved' }
+      ],
+      undone: []
+    })
+
+    // Back to the start: two undos (the unsaved one pops, the saved one becomes unsaved).
+    act(() => draft.jump(-2))
+    expect(content(draft.bundle)).toEqual(original)
+    expect(draft.session.done).toEqual([])
+    expect(draft.session.undone.map((s) => s.label)).toEqual(['Move Status', 'Remove Notes'])
+    expect(server.posts).toHaveLength(1)
+
+    // Forward again past both; a jump beyond the end stops at the end.
+    act(() => draft.jump(5))
+    expect(draft.session.done.map((s) => s.label)).toEqual(['Move Status', 'Remove Notes'])
+    expect(draft.session.undone).toEqual([])
+    expect(fieldsIn(draft.bundle, 'main')).toEqual(['status', 'title'])
+    expect(fieldsIn(draft.bundle, 'details')).toEqual([])
+  })
+
   it('a stale Save rebases the unsaved steps onto the newer layout and keeps them', async () => {
     const server = fakeServer()
     await mount(server.client)

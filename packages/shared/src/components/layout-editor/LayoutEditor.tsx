@@ -17,16 +17,19 @@ import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
 import { AutoArrangeButton } from './AutoArrange'
 import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
+import { type CanvasCompare, CompareBanner, useCanvasCompare } from './CanvasCompare'
 import {
   type DesignTarget,
+  type LastChange,
   type LayoutDesign,
   nextSelection,
   type SelectOptions,
   targetKey
 } from './design-context'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
-import { EditorCanvas } from './EditorCanvas'
+import { canvasRenderer, EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
+import { useSectionChanges } from './history-api'
 import { useLayoutEditorHost } from './host'
 import { BulkInspector } from './inspector/BulkInspector'
 import { FormSettings, Inspector } from './inspector-slot'
@@ -313,7 +316,9 @@ function Canvas({
   onSelect,
   showHidden,
   apply,
-  whenIdle
+  whenIdle,
+  compare,
+  lastChanges
 }: {
   collection: string
   bundle: LayoutBundle
@@ -326,9 +331,18 @@ function Canvas({
   showHidden: boolean
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
   whenIdle: () => Promise<void>
+  /** A comparison drawn on the form (#2591): ghosts back in place, marks per node. */
+  compare: CanvasCompare | null
+  /** Who last changed each section (#2611), by section key. */
+  lastChanges: Record<string, LastChange> | undefined
 }) {
   const dnd = useLayoutDnd()
-  const canvas = useMemo(() => bundleToActiveLayout(bundle, parent), [bundle, parent])
+  // Removed things come back as ghosts on the form and read view; table and PDF canvases
+  // edit from the bundle itself, so they get the marks only.
+  const renderer = canvasRenderer(String(bundle.layout.layout_type ?? 'grouped'))
+  const ghosts = renderer === 'item-edit-form' || renderer === 'read-view'
+  const shown = (ghosts && compare?.diff.bundle) || bundle
+  const canvas = useMemo(() => bundleToActiveLayout(shown, parent), [shown, parent])
   const layout = useMemo(
     () => previewForRole(canvas.active, preview.roleId, showHidden),
     [canvas.active, preview.roleId, showHidden]
@@ -347,14 +361,28 @@ function Canvas({
       showHidden,
       inheritedFrom: (t) => canvas.inherited.get(targetKey(t)) ?? null,
       dnd,
-      roleMark
+      roleMark,
+      diffMark: compare ? (t) => compare.diff.marks.get(targetKey(t)) ?? null : undefined,
+      lastChange: lastChanges
+        ? (t) => (t.kind === 'group' ? (lastChanges[t.key] ?? null) : null)
+        : undefined
     }),
-    [selected, selection, onSelect, showHidden, canvas.inherited, dnd, roleMark]
+    [
+      selected,
+      selection,
+      onSelect,
+      showHidden,
+      canvas.inherited,
+      dnd,
+      roleMark,
+      compare,
+      lastChanges
+    ]
   )
   return (
     <EditorCanvas
       collection={collection}
-      bundle={bundle}
+      bundle={shown}
       layout={layout}
       record={record}
       design={design}
@@ -495,6 +523,10 @@ export function LayoutEditor({
     bundle?.layout.parent_layout_id != null ? Number(bundle.layout.parent_layout_id) : null
   const { data: parent = null } = useLayoutBundle(parentId)
   const { data: record = null } = usePreviewRecord(collection, preview.record?.id ?? null)
+  // History compare / Review changes on the canvas (#2591); who changed each section (#2611).
+  const { data: savedBundle } = useLayoutBundle(currentId)
+  const compareState = useCanvasCompare(bundle, savedBundle ?? null, draft.unsavedCount, currentId)
+  const { data: lastChanges } = useSectionChanges(currentId, bundle != null)
 
   useUndoKeys(draft)
   useLeaveGuard(draft)
@@ -639,6 +671,9 @@ export function LayoutEditor({
         onShowHidden={setShowHidden}
         onBack={leave}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
+        onShowOnCanvas={compareState.showVersion}
+        onReviewChanges={compareState.toggleReview}
+        reviewing={compareState.compare?.kind === 'unsaved'}
         tools={
           bundle && arrangeable ? (
             <>
@@ -742,6 +777,9 @@ export function LayoutEditor({
             </div>
           </aside>
           <main className='min-w-0 flex-1 overflow-y-auto'>
+            {compareState.compare && (view === 'canvas' || !arrangeable) && (
+              <CompareBanner compare={compareState.compare} onClose={compareState.close} />
+            )}
             {bundle && arrangeable && view === 'table' ? (
               <PlacementsTable
                 bundle={bundle}
@@ -765,6 +803,8 @@ export function LayoutEditor({
                 showHidden={showHidden}
                 apply={draft.apply}
                 whenIdle={draft.whenIdle}
+                compare={compareState.compare}
+                lastChanges={compareState.compare ? undefined : lastChanges}
               />
             ) : draft.error ? (
               <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
