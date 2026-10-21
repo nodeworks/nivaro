@@ -2,47 +2,77 @@
 #
 #   docker compose -f compose.example.yml up -d --build
 #
-# The node_exporter (or Alloy) on the same host reads the `host-facts` volume as its textfile
-# directory, so the nivaro_host_* metrics reach the telemetry store with the other host metrics.
+# The node_exporter (or Alloy) already running on the host reads the `host-facts` volume as its
+# textfile directory (e.g. `-v host-facts:/textfile:ro --collector.textfile.directory=/textfile`),
+# so the nivaro_host_* metrics reach the telemetry store with the other host metrics.
+#
+# Security: no extra capability (cap_drop ALL, nothing added), read-only root filesystem,
+# no-new-privileges, and only the host paths the script reads, each read-only, at the same place
+# under /host. Docker is reached through the GET-only socket proxy, never the socket itself.
+# See README.md ("Run as a container (no sudo)").
 services:
   host-facts:
     build: .
     image: nivaro-host-facts:local
     restart: unless-stopped
-    # Host PID namespace: /host/proc shows the host's processes (D state, host mount table).
-    pid: host
     environment:
       # The name this host has in DOCKER_HOSTS on the Nivaro instance.
       NIVARO_HOST_NAME: staging
-      # Preferred: the read-only Docker socket proxy Nivaro already reads (GET only; needs the
-      # CONTAINERS section). The collector only runs `docker ps` and `docker inspect`.
+      # The read-only Docker socket proxy Nivaro already reads (GET only; CONTAINERS section on).
+      # The collector only runs `docker ps` and `docker inspect`.
       DOCKER_HOST: tcp://docker-proxy:2375
-    volumes:
-      # The host's / read only. Nothing on the host is written.
-      - /:/host:ro
-      - host-facts:/textfile
-      - host-facts-state:/state
-      # Without a socket proxy, mount the socket instead and drop DOCKER_HOST above. Note that
-      # ':ro' only stops the socket file being replaced; the Docker API behind it is not read
-      # only, so prefer the proxy.
-      # - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks: [docker-proxy]
     read_only: true
     cap_drop: [ALL]
-    cap_add: [DAC_READ_SEARCH]
     security_opt: [no-new-privileges:true]
-
-  # Example consumer: node_exporter reading the same volume as its textfile directory.
-  node-exporter:
-    image: prom/node-exporter:v1.8.2
-    restart: unless-stopped
-    pid: host
-    command:
-      - --path.rootfs=/host
-      - --collector.textfile.directory=/textfile
+    networks: [docker-proxy]
     volumes:
-      - /:/host:ro,rslave
-      - host-facts:/textfile:ro
+      - host-facts:/textfile
+      - host-facts-state:/state
+
+      # Always present.
+      - /proc:/host/proc:ro # D-state processes, boot time, uptime, the host mount table (/proc/1/mounts)
+      - /etc/hostname:/host/etc/hostname:ro # default host label
+      - /etc/fstab:/host/etc/fstab:ro # remote mounts and nofail
+      - /boot:/host/boot:ro # installed kernels, /boot free space
+      - /etc/systemd/system:/host/etc/systemd/system:ro # docker.service drop-ins
+      - /usr/lib/systemd/system:/host/usr/lib/systemd/system:ro # docker.service
+      - /var/lib/docker/containers:/host/var/lib/docker/containers:ro # container log sizes
+      - /var/lib/docker/volumes:/host/var/lib/docker/volumes:ro # newest write per volume
+
+      # Optional: remove any whose source does not exist on this host. create_host_path: false
+      # makes a missing one fail loudly instead of Docker creating an empty folder on the host.
+      - type: bind # persistent journal: hung-task and NFS kernel messages
+        source: /var/log/journal
+        target: /host/var/log/journal
+        read_only: true
+        bind: { create_host_path: false }
+      # - type: bind # runtime journal, on hosts without a persistent one
+      #   source: /run/log/journal
+      #   target: /host/run/log/journal
+      #   read_only: true
+      #   bind: { create_host_path: false }
+      # Debian / Ubuntu: pending security updates (apt-get -s against the host's own lists).
+      # - type: bind
+      #   source: /etc/apt
+      #   target: /host/etc/apt
+      #   read_only: true
+      #   bind: { create_host_path: false }
+      # - type: bind
+      #   source: /var/lib/apt/lists
+      #   target: /host/var/lib/apt/lists
+      #   read_only: true
+      #   bind: { create_host_path: false }
+      # - type: bind
+      #   source: /var/lib/dpkg
+      #   target: /host/var/lib/dpkg
+      #   read_only: true
+      #   bind: { create_host_path: false }
+      # RHEL / Rocky / Alma: installed kernel from the rpm database when /boot has none.
+      # - type: bind
+      #   source: /var/lib/rpm
+      #   target: /host/var/lib/rpm
+      #   read_only: true
+      #   bind: { create_host_path: false }
 
 volumes:
   host-facts:

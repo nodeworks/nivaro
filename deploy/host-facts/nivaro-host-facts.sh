@@ -3,9 +3,9 @@
 #
 # Writes node_exporter textfile metrics (nivaro_host_*) that the telemetry store scrapes:
 #   ${TEXTFILE_DIR:-/var/lib/node_exporter/textfile}/nivaro_host.prom
-# Runs as root every minute (cron or nivaro-host-facts.timer), or in a container with the host's
-# / mounted read-only at HOST_ROOT (Dockerfile + compose.example.yml beside this script; no sudo
-# needed, only the docker group). The slow parts (pending security updates, needs-restarting,
+# Runs as root every minute (cron or nivaro-host-facts.timer), or in a container with no extra
+# capability and the host paths it reads mounted read-only under HOST_ROOT (Dockerfile +
+# compose.example.yml beside this script; no sudo needed, only the docker group). The slow parts (pending security updates, needs-restarting,
 # volume last-write scan) run every HOST_FACTS_HEAVY_SECONDS (30 min) and are cached in
 # HOST_FACTS_STATE_DIR. Every probe fails soft: a missing tool or file just leaves its metric out.
 # Needs bash, coreutils and awk; docker, openssl, systemctl, journalctl, dnf/yum,
@@ -18,7 +18,7 @@
 #   HOST_FACTS_STATE_DIR     cache for the slow probes (default /var/lib/nivaro-host-facts)
 #   HOST_FACTS_HEAVY_SECONDS how often the slow probes run (default 1800)
 #   DOCKER_ROOT              Docker data root (default /var/lib/docker)
-#   HOST_ROOT                container mode: where the host's / is mounted (e.g. /host). Every
+#   HOST_ROOT                container mode: where host paths are mounted (e.g. /host). Every
 #                            host file is read under it; kernel messages come from the host's
 #                            journal files (journalctl -D), docker.service from its unit files,
 #                            security updates from the host's apt lists (Debian/Ubuntu only);
@@ -107,16 +107,23 @@ esc() {
   printf '%s' "$1" | awk 'BEGIN { ORS = "" } { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); if (NR > 1) print "\\n"; print }'
 }
 
+# GNU or BSD stat/find, decided once: falling back on a non-zero exit would also fire when GNU
+# find merely hit an unreadable folder (and BSD `stat -f` means something else on GNU).
+if stat -c %s / >/dev/null 2>&1; then GNU_STAT=1; else GNU_STAT=0; fi
+if find / -maxdepth 0 -printf '' >/dev/null 2>&1; then GNU_FIND=1; else GNU_FIND=0; fi
+
 file_size() {
-  stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null
+  if [ "$GNU_STAT" = 1 ]; then stat -c %s "$1" 2>/dev/null; else stat -f %z "$1" 2>/dev/null; fi
 }
 
-# Newest mtime (epoch seconds) under a directory, at most 3 levels deep.
+# Newest mtime (epoch seconds) under a directory, at most 3 levels deep. Folders this user may not
+# enter (a volume owned by the container's own user) only count with their own mtime.
 newest_mtime() {
-  {
-    find "$1" -maxdepth 3 -printf '%T@\n' 2>/dev/null ||
-      find "$1" -maxdepth 3 -exec stat -f %m {} + 2>/dev/null
-  } | awk 'BEGIN { m = 0 } { v = int($1); if (v > m) m = v } END { if (m > 0) print m }'
+  if [ "$GNU_FIND" = 1 ]; then
+    find "$1" -maxdepth 3 -printf '%T@\n' 2>/dev/null
+  else
+    find "$1" -maxdepth 3 -exec stat -f %m {} + 2>/dev/null
+  fi | awk 'BEGIN { m = 0 } { v = int($1); if (v > m) m = v } END { if (m > 0) print m }'
 }
 
 # "Jan  1 00:00:00 2027 GMT" -> epoch seconds (GNU date, else BSD date).

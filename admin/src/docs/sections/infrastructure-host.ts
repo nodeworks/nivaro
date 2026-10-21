@@ -17,7 +17,7 @@ export const infrastructureHostGuide: DocSection = {
     {
       type: 'ul',
       items: [
-        "Install the script and its systemd timer as the README beside it describes, or, without sudo on the host, run it as a container (Dockerfile and compose.example.yml in the same folder) with the host's / mounted read-only.",
+        'Install the script and its systemd timer as the README beside it describes, or, without sudo on the host, run it as a container (Dockerfile and compose.example.yml in the same folder) with no extra capability and only the host paths it reads mounted read-only.',
         'Set NIVARO_HOST_NAME to the name the host has in DOCKER_HOSTS, so its facts line up with its containers.',
         'Point node_exporter (or Alloy) at the textfile folder. Until the first figures arrive the tabs say "Host facts are not collected".'
       ]
