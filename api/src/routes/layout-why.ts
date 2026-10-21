@@ -30,6 +30,8 @@ function reasonText(reason: PickReason | null, isAdmin: boolean): string | null 
       return 'no other form fits'
     case 'slug':
       return 'a link opened it'
+    case 'ab':
+      return 'your role is trying out a new version of this form'
     default:
       return null
   }
@@ -64,7 +66,8 @@ export async function layoutWhyRoutes(app: FastifyInstance) {
       collection,
       item: recordId,
       role: user.role ?? null,
-      isAdmin
+      isAdmin,
+      userId: user.id ? String(user.id) : null
     })
     const layout = res.row
     if (!layout) return reply.send({ data: null })

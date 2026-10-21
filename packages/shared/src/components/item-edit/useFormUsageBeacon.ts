@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useApiFetchConfig } from '../../context'
-import { queueFormUsage, StepClock, sessionEvent } from '../../lib/form-usage-beacon'
+import {
+  onSectionUse,
+  queueFormUsage,
+  SectionTally,
+  StepClock,
+  sessionEvent
+} from '../../lib/form-usage-beacon'
 
 /**
  * Records how a form is used (#2597/#2598): one session per (layout, record)
@@ -34,6 +40,7 @@ export function useFormUsageBeacon({
     openSent: boolean
     saved: boolean
     elapsed: number
+    saveMs: number | null
   } | null>(null)
 
   const on = enabled && layoutId != null && !!collection
@@ -45,12 +52,19 @@ export function useFormUsageBeacon({
       clock: new StepClock(stepRef.current, Date.now(), visible()),
       openSent: false,
       saved: false,
-      elapsed: 0
+      elapsed: 0,
+      saveMs: null as number | null
     }
     session.current = s
+    // Sections shown and opened on this form (#2730), sent once each per session.
+    const sections = new SectionTally()
+    const offSections = onSectionUse((u) => {
+      if (u.layoutId === layoutId && u.collection === collection) sections.note(u.kind, u.key)
+    })
     const send = (final: boolean) => {
       const { steps, total } = s.clock.take(Date.now())
       s.elapsed += total
+      const pending = sections.pending()
       const ev = sessionEvent({
         layoutId,
         collection,
@@ -61,11 +75,15 @@ export function useFormUsageBeacon({
         steps,
         total,
         elapsed: s.elapsed,
-        final
+        final,
+        sections: pending,
+        saveMs: s.saveMs
       })
       if (!ev) return
+      sections.markSent(pending)
       s.openSent = true
       s.saved = false
+      s.saveMs = null
       const { apiBase, authHeaders, credentials } = cfgRef.current
       queueFormUsage(ev, { apiBase, authHeaders, credentials })
     }
@@ -83,6 +101,7 @@ export function useFormUsageBeacon({
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('pagehide', onPageHide)
       send(true)
+      offSections()
       if (session.current === s) session.current = null
     }
   }, [on, layoutId, collection, itemId])
@@ -92,7 +111,11 @@ export function useFormUsageBeacon({
   }, [step])
 
   const markSaved = useCallback(() => {
-    if (session.current) session.current.saved = true
+    const s = session.current
+    if (!s) return
+    // Time to save (#2614): the whole session so far, counted once per save.
+    if (!s.saved) s.saveMs = s.elapsed + s.clock.peek(Date.now())
+    s.saved = true
   }, [])
   return { markSaved }
 }

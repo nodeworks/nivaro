@@ -196,6 +196,11 @@ export function setReadinessRedis(r: Redis | null): void {
   redis = r
 }
 
+/** The Redis checks may keep their own state in (#2720); null without one. */
+export function getReadinessRedis(): Redis | null {
+  return redis
+}
+
 /** Tenant + version: a tenant never reads another's results, and a new image
  *  never reads the previous image's. */
 function scopeKey(): string {

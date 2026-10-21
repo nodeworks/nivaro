@@ -406,6 +406,10 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'What changes (Save ▾ → What changes, while changes wait) runs the same check before you save and lists what changes for the pinned records ("Record 284212 loses the Zone field", "lands on another form") and the form cost against its limit. It only reads.'
     },
+    {
+      type: 'p',
+      text: 'After each deploy the readiness scorecard (Configuration → "Pinned test records still see their forms as before") opens every pinned record the way its role would and compares it with what the previous version showed: which form it opens on, which fields it shows and which its role may edit. A difference is a warning naming the record and the change. Accept what test records see now makes the current view the one later checks compare with. Show-when rules on tabs are not judged.'
+    },
 
     { type: 'h2', id: 'layout-editor-rules', text: 'Rules and checks' },
     { type: 'h3', id: 'layout-editor-rules-view', text: 'Rules on the canvas' },
@@ -671,8 +675,18 @@ export const layoutEditor: DocSection = {
       items: [
         'Edit form on a record page adds how many people used this form on how many records today (UTC day) to its banner.',
         "The editor's Usage tab shows today's opens, people and records; the last 30 days' opens, saves and new records left unfinished; the average time on each step with how many new records were left on it; and the fields changed most often within 24 hours of a record being created (last 90 days; on records opened with this form once 20 of them are known, otherwise across the collection).",
-        'Suggested sections: fields people change in the same save (Jaccard over the last 90 days of revisions) that sit in different sections. Move into (the section) moves the strays next to the others in one step, which Undo reverses. Not now hides a suggestion until the editor reopens.'
+        'Suggested sections: fields people change in the same save (Jaccard over the last 90 days of revisions) that sit in different sections. Move into (the section) moves the strays next to the others in one step, which Undo reverses. Not now hides a suggestion until the editor reopens.',
+        'Rarely opened sections: the form also counts, per visit, each section it showed and whether the person opened it (expanded it, clicked or typed in it). A section that starts open and was opened on 10% of visits or fewer (at least 20 visits) is suggested to start collapsed; the first section of the form or of a step is never suggested, nor any section on an accordion form. Start them collapsed is one change, which Undo reverses.'
       ]
+    },
+    { type: 'h3', id: 'layout-editor-ab-test', text: 'A/B test two versions of a form' },
+    {
+      type: 'p',
+      text: 'At the bottom of the Usage tab, Start test shows a new version of this form to half of one role: pick the role and either a copy of this form (it opens so you can change it) or another form of the collection that is not the default. Each person lands in the same half every time (a stable hash of their id), administrators always get the original, and a link name (?layout=) still opens either version. The new version never wins on its own: it only stands in for the original, so the overview lists it right after the original with an A/B pill, and Test a record shows the split.'
+    },
+    {
+      type: 'p',
+      text: 'The test compares the halves side by side: people in each half, visits, saves and save rate, average time from opening the form to saving, new records left unfinished, and records created by people in each half with how many were edited again within a day. The better side of each line is in bold once each half has 20 visits. End test asks which version everyone should get: Keep the original simply stops the test; Use the new version copies its sections, fields and settings onto the original (its name, link name and who gets it stay), so links and history are kept and History can put it back.'
     },
     {
       type: 'note',
@@ -717,6 +731,7 @@ export const layoutEditor: DocSection = {
       items: [
         'Watch: ⋯ → Watch this form in the editor top bar. While it is on you get a notification (your Profile → Notification rules decide the channels, category Watch) whenever someone saves a change to the form or restores one of its versions. It says who saved, what changed in counts (for example "2 fields moved, 1 section added") and the version note, and opens the editor with History showing. You never hear about your own saves. A watch is listed with your other notification subscriptions, where you can also remove it.',
         'Owner: Share → Owner names the business owner of a form. The overview shows "Owner: …" under the form. The owner hears about every saved change even without watching, and is told first; change requests about the form go to the owner first too.',
+        "Review reminder: Share → Review reminder sets how long a form may stay unchanged before its owner is asked to review it: 3, 6 or 12 months, never, or the default (6 months). The reminder arrives on a weekday morning (category Watch) with the form's health score and its last 30 days of use (visits, people, saves, new records left unfinished), and comes again every that many months while the form stays unchanged. Any saved change starts the count over.",
         'Preview link: Share → Preview link makes a read-only link that lasts 7, 14, 30 or 90 days, for people who are not administrators. It shows the last saved version of the form, with only the fields you may read, and never shows record data. Anyone with the link can leave a comment on a field or on the whole form; comments appear under Share → Comments from previews (the count shows on the Share button), where Select this field finds the field on the canvas and Resolve removes the comment. Turn off ends a link for everyone.'
       ]
     },
@@ -901,11 +916,21 @@ POST /api/layout-usage/beacon  { events: [{ layout_id, collection, item, open, s
 GET  /api/layout-usage/:layoutId/today            → { data: { ready, day, opens, people, records } }   (admin)
 GET  /api/layout-usage/:layoutId/friction?days=30 → { data: { opens, saves, abandons, steps, changed_after_save } }   (admin)
 GET  /api/layout-usage/co-changes/:collection     → { data: { revisions, fields, pairs: [{ a, b, together, jaccard }] } }   (admin)
+     // beacon events may also carry sections: { shown: [group key], opened: [group key] } and save_ms;
+     // friction answers sections: [{ key, shown, opened }]
+
+# A/B test (administrators)
+GET    /api/collection-layouts/:id/ab-test           → { data: { control, variant, role, started_at, started_by, side } | null }
+GET    /api/collection-layouts/:id/ab-test/results   → { data: { since, a: {...}, b: {...} } }   // per half
+POST   /api/collection-layouts/:id/ab-test  { variant_id, role_id }   // start, on the original
+DELETE /api/collection-layouts/:id/ab-test?keep=control|variant      // end
+GET    /api/collection-layouts/explain?collection=&item=&user_id=   // user_id: that person's half
 
 # Owner, watching and preview links
 GET  /api/layout-collab/:id                        // administrators
-     → { data: { owner: { id, name } | null, watching, watchers: [{ id, name }] } }
+     → { data: { owner: { id, name } | null, watching, watchers: [{ id, name }], review } }
 PUT  /api/layout-collab/:id/watch  { on }          // administrators: watch or stop watching
+PUT  /api/layout-collab/:id/review { months }      // administrators: 0-36, 0 = never, null = default (6)
 PUT  /api/layout-collab/:id/owner  { user_id }     // administrators: null clears the owner;
                                                    // the owner must be active and able to read the form's records
 GET  /api/layout-collab/owners                     // administrators → { data: { <layout id>: { id, name } } }

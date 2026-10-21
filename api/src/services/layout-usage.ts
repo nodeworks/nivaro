@@ -2,6 +2,7 @@ import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { addArm, emptyArm, parseArm } from './layout-ab.js'
 import { sharedGatedRead } from './read-gate.js'
 
 /**
@@ -38,6 +39,14 @@ export interface UsageEvent {
   abandoned_step: string | null
   /** Milliseconds spent on each step (one key `__form__` for a form without steps). */
   steps: Record<string, number>
+  /**
+   * Sections (#2730): group keys first shown in this session since its last
+   * event, and those the person opened or worked in (expanded, clicked or
+   * focused inside). Each key at most once per session per list.
+   */
+  sections?: { shown: string[]; opened: string[] }
+  /** A save in this chunk: milliseconds from opening the form to saving (#2614). */
+  save_ms?: number | null
 }
 
 export interface StepStat {
@@ -53,6 +62,26 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const STEP_KEY = /^[A-Za-z0-9_:. -]{1,100}$/
 const MAX_STEP_MS = 2 * 60 * 60_000
 const MAX_STEPS = 30
+const MAX_SECTIONS = 60
+
+/**
+ * step_stats keys that are not steps start with `~` (a step key never can):
+ * `~s:<group key>` = a section's { n: sessions shown, o: sessions opened }
+ * (#2730), `~ab:<salt>` = an A/B test arm's counts (#2614, services/layout-ab).
+ */
+const META = '~'
+const SECTION_META = '~s:'
+const AB_META = '~ab:'
+
+function sectionKeys(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out = new Set<string>()
+  for (const k of raw) {
+    if (out.size >= MAX_SECTIONS) break
+    if (typeof k === 'string' && STEP_KEY.test(k)) out.add(k)
+  }
+  return [...out]
+}
 
 /** Machine-maintained columns that change on every save: never "changed by a person". */
 const MACHINE_KEYS = new Set([
@@ -109,6 +138,11 @@ export function sanitizeUsageEvent(raw: unknown): UsageEvent | null {
     STEP_KEY.test(r.abandoned_step)
       ? r.abandoned_step
       : null
+  const sec = (r.sections && typeof r.sections === 'object' ? r.sections : {}) as Record<
+    string,
+    unknown
+  >
+  const saveMs = Number(r.save_ms)
   return {
     layout_id: layoutId,
     collection,
@@ -116,28 +150,61 @@ export function sanitizeUsageEvent(raw: unknown): UsageEvent | null {
     open: r.open === true,
     saved,
     abandoned_step: abandoned,
-    steps
+    steps,
+    sections: { shown: sectionKeys(sec.shown), opened: sectionKeys(sec.opened) },
+    save_ms:
+      saved && Number.isFinite(saveMs) && saveMs > 0
+        ? Math.min(MAX_STEP_MS, Math.round(saveMs))
+        : null
   }
 }
 
-export function parseStepStats(json: unknown): Record<string, StepStat> {
+function parseStatsObject(json: unknown): Record<string, unknown> {
   if (typeof json !== 'string' || !json) return {}
   try {
-    const v = JSON.parse(json) as Record<string, Partial<StepStat>>
-    if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
-    const out: Record<string, StepStat> = {}
-    for (const [k, s] of Object.entries(v)) {
-      if (!s || typeof s !== 'object') continue
-      out[k] = { ms: Number(s.ms) || 0, n: Number(s.n) || 0, a: Number(s.a) || 0 }
-    }
-    return out
+    const v = JSON.parse(json) as Record<string, unknown>
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {}
   } catch {
     return {}
   }
 }
 
-/** Adds one event's step time and abandon to a day's stored step stats. */
-export function mergeStepStats(prev: unknown, ev: UsageEvent): string {
+/** The steps of a day's step_stats (section and A/B entries left out). */
+export function parseStepStats(json: unknown): Record<string, StepStat> {
+  const out: Record<string, StepStat> = {}
+  for (const [k, raw] of Object.entries(parseStatsObject(json))) {
+    if (k.startsWith(META) || !raw || typeof raw !== 'object') continue
+    const s = raw as Partial<StepStat>
+    out[k] = { ms: Number(s.ms) || 0, n: Number(s.n) || 0, a: Number(s.a) || 0 }
+  }
+  return out
+}
+
+export interface SectionStat {
+  /** Sessions the section was shown in. */
+  n: number
+  /** Sessions the person opened or worked in it. */
+  o: number
+}
+
+/** The sections of a day's step_stats: group key → shown / opened sessions. */
+export function parseSectionStats(json: unknown): Record<string, SectionStat> {
+  const out: Record<string, SectionStat> = {}
+  for (const [k, raw] of Object.entries(parseStatsObject(json))) {
+    if (!k.startsWith(SECTION_META) || !raw || typeof raw !== 'object') continue
+    const s = raw as Partial<SectionStat>
+    out[k.slice(SECTION_META.length)] = { n: Number(s.n) || 0, o: Number(s.o) || 0 }
+  }
+  return out
+}
+
+/**
+ * Adds one event to a day's stored step stats: step time and abandon, the
+ * sections it showed and opened, and (with `arm`, the salt of the A/B test the
+ * session belongs to) that test's counts. Entries it does not touch are kept.
+ */
+export function mergeStepStats(prev: unknown, ev: UsageEvent, arm: string | null = null): string {
+  const raw = parseStatsObject(prev)
   const stats = parseStepStats(prev)
   const bump = (k: string) => {
     if (!stats[k]) stats[k] = { ms: 0, n: 0, a: 0 }
@@ -149,7 +216,53 @@ export function mergeStepStats(prev: unknown, ev: UsageEvent): string {
     s.n += 1
   }
   if (ev.abandoned_step) bump(ev.abandoned_step).a += 1
-  return JSON.stringify(stats)
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(raw)) if (k.startsWith(META)) out[k] = v
+  Object.assign(out, stats)
+  const section = (k: string): SectionStat => {
+    const key = `${SECTION_META}${k}`
+    const cur = out[key] as Partial<SectionStat> | undefined
+    const s = { n: Number(cur?.n) || 0, o: Number(cur?.o) || 0 }
+    out[key] = s
+    return s
+  }
+  for (const k of ev.sections?.shown ?? []) section(k).n += 1
+  for (const k of ev.sections?.opened ?? []) section(k).o += 1
+  if (arm) {
+    const key = `${AB_META}${arm}`
+    const add = emptyArm()
+    add.o = ev.open ? 1 : 0
+    add.s = ev.saved ? 1 : 0
+    add.a = ev.abandoned_step ? 1 : 0
+    add.ms = Object.values(ev.steps).reduce((a, b) => a + b, 0)
+    if (ev.save_ms != null) {
+      add.t = ev.save_ms
+      add.tn = 1
+    }
+    out[key] = addArm(parseArm(out[key]), add)
+  }
+  return JSON.stringify(out)
+}
+
+export interface SectionUse {
+  key: string
+  shown: number
+  opened: number
+}
+
+/** Several days of rows → per-section shown / opened sessions (most shown first). */
+export function rollUpSections(rows: Array<{ step_stats?: unknown }>): SectionUse[] {
+  const sum = new Map<string, SectionStat>()
+  for (const r of rows)
+    for (const [k, s] of Object.entries(parseSectionStats(r.step_stats))) {
+      const t = sum.get(k) ?? { n: 0, o: 0 }
+      t.n += s.n
+      t.o += s.o
+      sum.set(k, t)
+    }
+  return [...sum.entries()]
+    .map(([key, s]) => ({ key, shown: s.n, opened: Math.min(s.o, s.n) }))
+    .sort((a, b) => b.shown - a.shown || a.key.localeCompare(b.key))
 }
 
 export interface FrictionStep {
@@ -323,7 +436,7 @@ export async function layoutCollection(layoutId: number): Promise<string | null>
   return (await layoutUsageInfo(layoutId))?.collection ?? null
 }
 
-async function upsertDaily(ev: UsageEvent, day: string): Promise<void> {
+async function upsertDaily(ev: UsageEvent, day: string, arm: string | null): Promise<void> {
   await db.transaction(async (trx) => {
     const row = (await trx(DAILY)
       .where({ layout_id: ev.layout_id, day })
@@ -331,7 +444,7 @@ async function upsertDaily(ev: UsageEvent, day: string): Promise<void> {
       .first('id', 'opens', 'saves', 'abandons', 'step_stats')) as
       | { id: number; opens: number; saves: number; abandons: number; step_stats: string | null }
       | undefined
-    const step_stats = mergeStepStats(row?.step_stats ?? null, ev)
+    const step_stats = mergeStepStats(row?.step_stats ?? null, ev, arm)
     const opens = ev.open ? 1 : 0
     const saves = ev.saved ? 1 : 0
     const abandons = ev.abandoned_step ? 1 : 0
@@ -371,15 +484,22 @@ async function markSeen(layoutId: number, day: string, kind: 'u' | 'r', ref: str
   }
 }
 
-/** Store one form session's event (the caller has checked the layout and access). */
-export async function recordUsage(ev: UsageEvent, userId: string | null): Promise<void> {
+/**
+ * Store one form session's event (the caller has checked the layout and access).
+ * `arm` = the salt of the A/B test (#2614) the session counts for, when it does.
+ */
+export async function recordUsage(
+  ev: UsageEvent,
+  userId: string | null,
+  arm: string | null = null
+): Promise<void> {
   const day = utcDay()
   try {
-    await upsertDaily(ev, day)
+    await upsertDaily(ev, day, arm)
   } catch (err) {
     // Two first events of the day raced to insert: the loser adds onto the winner.
     if (!isUniqueViolation(err)) throw err
-    await upsertDaily(ev, day)
+    await upsertDaily(ev, day, arm)
   }
   if (ev.open && userId) await markSeen(ev.layout_id, day, 'u', userId.slice(0, 64))
   if (ev.open && ev.item) await markSeen(ev.layout_id, day, 'r', ev.item)
@@ -410,6 +530,15 @@ export async function usageToday(layoutId: number): Promise<UsageToday> {
 
 const TTL_MS = 10 * 60_000
 const memo = new Map<string, { at: number; value: unknown }>()
+
+/** A read-gated, 10-minute cached usage read (per tenant). */
+export async function cachedUsageRead<T>(
+  key: string,
+  who: string | null | undefined,
+  fn: () => Promise<T>
+): Promise<T> {
+  return cached(key, who, fn)
+}
 
 async function cached<T>(key: string, who: string | null | undefined, fn: () => Promise<T>) {
   const k = `${getTenantId() ?? ''}|${key}`
@@ -461,6 +590,8 @@ export interface LayoutFriction {
   saves: number
   abandons: number
   steps: FrictionStep[]
+  /** Sessions each section was shown in and opened in (#2730). */
+  sections: SectionUse[]
   changed_after_save: {
     /** 'layout' = records opened with this form; 'collection' = every record (too few seen yet). */
     scope: 'layout' | 'collection'
@@ -480,14 +611,16 @@ export async function layoutFriction(
 ): Promise<LayoutFriction> {
   return cached(`layout-friction|${layoutId}|${days}`, who, async () => {
     const ready = await usageTablesReady()
+    const dailyRows = ready
+      ? ((await db(DAILY)
+          .where({ layout_id: layoutId })
+          .where('day', '>=', utcDay(daysAgo(days)))
+          .select('opens', 'saves', 'abandons', 'step_stats')) as Array<Record<string, unknown>>)
+      : []
     const rolled = ready
-      ? rollUpFriction(
-          await db(DAILY)
-            .where({ layout_id: layoutId })
-            .where('day', '>=', utcDay(daysAgo(days)))
-            .select('opens', 'saves', 'abandons', 'step_stats')
-        )
+      ? rollUpFriction(dailyRows)
       : { opens: 0, saves: 0, abandons: 0, steps: [] }
+    const sections = rollUpSections(dailyRows)
     let scope: 'layout' | 'collection' = 'collection'
     if (ready) {
       const seen = (await db(SEEN)
@@ -506,6 +639,7 @@ export async function layoutFriction(
       ready,
       days,
       ...rolled,
+      sections,
       changed_after_save: {
         scope,
         revisions: deltas.length,

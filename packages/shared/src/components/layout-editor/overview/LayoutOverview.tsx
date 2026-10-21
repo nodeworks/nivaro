@@ -793,6 +793,8 @@ function explainWords(
       return [{ text: 'no rule caught it and no form is default, so it gets the first in order' }]
     case 'slug':
       return [{ text: 'pinned by the form’s link name' }]
+    case 'ab':
+      return [{ text: 'this person is in the half of the role trying a new version (A/B test)' }]
     default:
       return reason.type_use ? [{ text: reason.type_use }] : []
   }

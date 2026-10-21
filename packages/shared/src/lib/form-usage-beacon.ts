@@ -17,6 +17,10 @@ export interface FormUsageEvent {
   saved: boolean
   abandoned_step: string | null
   steps: Record<string, number>
+  /** Sections first shown / opened since this session's last event (#2730). */
+  sections?: { shown: string[]; opened: string[] }
+  /** On a save: milliseconds from opening the form to the save (#2614). */
+  save_ms?: number | null
 }
 
 export interface BeaconTransport {
@@ -127,6 +131,12 @@ export class StepClock {
     return this.current
   }
 
+  /** The time so far in this chunk, without starting afresh. */
+  peek(now: number): number {
+    const running = this.since == null ? 0 : Math.max(0, now - this.since)
+    return Object.values(this.steps).reduce((a, b) => a + b, 0) + running
+  }
+
   /** The time so far, and start counting afresh (the clock keeps running). */
   take(now: number): { steps: Record<string, number>; total: number } {
     this.settle(now)
@@ -158,10 +168,14 @@ export function sessionEvent(s: {
   total: number
   elapsed: number
   final: boolean
+  /** Sections first shown / opened since the last event (#2730). */
+  sections?: { shown: string[]; opened: string[] }
+  /** Milliseconds from opening the form to the save, when it saved (#2614). */
+  saveMs?: number | null
 }): FormUsageEvent | null {
   if (!s.saved && !s.openSent && s.elapsed < MIN_SESSION_MS) return null
   if (!s.saved && s.openSent && s.total <= 0) return null
-  return {
+  const ev: FormUsageEvent = {
     layout_id: s.layoutId,
     collection: s.collection,
     item: s.item,
@@ -170,5 +184,78 @@ export function sessionEvent(s: {
     abandoned_step:
       s.final && s.item == null && !s.saved && s.elapsed >= MIN_ABANDON_MS ? s.step : null,
     steps: s.steps
+  }
+  if (s.sections && (s.sections.shown.length || s.sections.opened.length)) ev.sections = s.sections
+  if (s.saved && s.saveMs != null && s.saveMs > 0) ev.save_ms = Math.round(s.saveMs)
+  return ev
+}
+
+// ─── Section use (#2730) ────────────────────────────────────────────────────
+
+export interface SectionUse {
+  layoutId: number
+  collection: string
+  /** 'shown' = the section rendered; 'opened' = the person expanded it or worked in it. */
+  kind: 'shown' | 'opened'
+  key: string
+}
+
+const sectionListeners = new Set<(u: SectionUse) => void>()
+// Sections mount (and report) before the form's own effect subscribes: the
+// last few seconds of reports replay to a new listener.
+const recentSections: Array<SectionUse & { at: number }> = []
+const REPLAY_MS = 5000
+
+/** A form section says it was shown or used (GroupSection); the open form's session listens. */
+export function reportSectionUse(u: SectionUse): void {
+  const now = Date.now()
+  recentSections.push({ ...u, at: now })
+  while (
+    recentSections.length > 200 ||
+    (recentSections[0] && now - recentSections[0].at > REPLAY_MS)
+  )
+    recentSections.shift()
+  for (const l of sectionListeners) {
+    try {
+      l(u)
+    } catch {
+      // never let telemetry throw
+    }
+  }
+}
+
+export function onSectionUse(listener: (u: SectionUse) => void): () => void {
+  const now = Date.now()
+  for (const r of recentSections) if (r.kind === 'shown' && now - r.at <= REPLAY_MS) listener(r)
+  sectionListeners.add(listener)
+  return () => {
+    sectionListeners.delete(listener)
+  }
+}
+
+/** A session's section keys not yet sent; marks them sent. */
+export class SectionTally {
+  private shown = new Set<string>()
+  private opened = new Set<string>()
+  private sentShown = new Set<string>()
+  private sentOpened = new Set<string>()
+
+  note(kind: 'shown' | 'opened', key: string) {
+    if (kind === 'opened') {
+      this.shown.add(key)
+      this.opened.add(key)
+    } else this.shown.add(key)
+  }
+
+  pending(): { shown: string[]; opened: string[] } {
+    return {
+      shown: [...this.shown].filter((k) => !this.sentShown.has(k)),
+      opened: [...this.opened].filter((k) => !this.sentOpened.has(k))
+    }
+  }
+
+  markSent(p: { shown: string[]; opened: string[] }) {
+    for (const k of p.shown) this.sentShown.add(k)
+    for (const k of p.opened) this.sentOpened.add(k)
   }
 }

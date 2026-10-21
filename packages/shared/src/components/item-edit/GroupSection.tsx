@@ -11,6 +11,7 @@ import {
 } from '../../context'
 import { get, post } from '../../lib/commands'
 import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
+import { reportSectionUse } from '../../lib/form-usage-beacon'
 import { useRecordReader } from '../../lib/record-loader'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
 import { DesignDropZone, designWrap } from '../layout-editor/DesignNode'
@@ -1178,12 +1179,22 @@ export function GroupSection({
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
   const controlled = onToggle !== undefined
   const collapsed = designFolded ?? (controlled ? !isOpen : localCollapsed)
-  const toggle =
+  const baseToggle =
     designFolded !== null
       ? () => setDesignFolded((v) => !v)
       : controlled
         ? onToggle
         : () => setLocalCollapsed((v) => !v)
+  // Section use (#2730): expanding a section, or working inside it, counts as opening it.
+  const usageOn = !design && layoutId != null
+  const reportOpened = () => {
+    if (usageOn)
+      reportSectionUse({ layoutId: Number(layoutId), collection, kind: 'opened', key: group.key })
+  }
+  const toggle = () => {
+    if (collapsed) reportOpened()
+    baseToggle?.()
+  }
   const hasErrors = !displayOnly && fields.some((f) => errors[f.field])
 
   // Section visibility rules (layout-configured)
@@ -1250,10 +1261,20 @@ export function GroupSection({
         displayOnly && 'bg-slate-50/60 dark:bg-slate-900/20',
         hiddenWhenEmpty && 'hidden'
       )}
+      onPointerDownCapture={(e) => {
+        if (!(e.target as Element | null)?.closest?.('[data-usage-header]')) reportOpened()
+      }}
+      onFocusCapture={(e) => {
+        if (!(e.target as Element | null)?.closest?.('[data-usage-header]')) reportOpened()
+      }}
     >
+      {usageOn && !hiddenWhenEmpty && (
+        <SectionShown layoutId={Number(layoutId)} collection={collection} sectionKey={group.key} />
+      )}
       {withSectionVideo(
         <button
           type='button'
+          data-usage-header=''
           onClick={toggle}
           // Layout editor: a field dropped on the header goes first in the section.
           data-design-group-header={design ? '' : undefined}
@@ -1729,4 +1750,20 @@ export function GroupSection({
       )}
     </div>
   )
+}
+
+/** Says once, on mount, that a section rendered (#2730 section use). */
+function SectionShown({
+  layoutId,
+  collection,
+  sectionKey
+}: {
+  layoutId: number
+  collection: string
+  sectionKey: string
+}) {
+  useEffect(() => {
+    reportSectionUse({ layoutId, collection, kind: 'shown', key: sectionKey })
+  }, [layoutId, collection, sectionKey])
+  return null
 }

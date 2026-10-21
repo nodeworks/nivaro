@@ -46,7 +46,8 @@ export async function recordToolRefusal(
     slug: null,
     item: itemId,
     role,
-    isAdmin: false
+    isAdmin: false,
+    userId: user.id ? String(user.id) : null
   })
   let granted = !!row?.[grant]
   if (!granted && opts.layout) {

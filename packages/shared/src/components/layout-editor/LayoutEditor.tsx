@@ -1414,6 +1414,7 @@ export function LayoutEditor({
                   apply={draft.apply}
                   showFill={showFill}
                   onShowFill={setShowFill}
+                  onOpenLayout={openLayout}
                 />
               ) : (
                 <LayoutsRail

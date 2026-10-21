@@ -38,8 +38,23 @@ describe('sanitizeUsageEvent', () => {
       open: true,
       saved: true,
       abandoned_step: null,
-      steps: { basics: 1500, review: 7_200_000 }
+      steps: { basics: 1500, review: 7_200_000 },
+      sections: { shown: [], opened: [] },
+      save_ms: null
     })
+  })
+
+  it('keeps valid section keys and a save time only on a save (#2730 #2614)', () => {
+    const out = sanitizeUsageEvent({
+      layout_id: 1,
+      collection: 'a',
+      saved: true,
+      save_ms: 1234.6,
+      sections: { shown: ['basics', 'basics', 'bad$', 5], opened: 'basics' }
+    })
+    expect(out?.sections).toEqual({ shown: ['basics'], opened: [] })
+    expect(out?.save_ms).toBe(1235)
+    expect(sanitizeUsageEvent({ layout_id: 1, collection: 'a', save_ms: 50 })?.save_ms).toBeNull()
   })
 
   it('refuses bad layout ids and collections', () => {

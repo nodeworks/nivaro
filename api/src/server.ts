@@ -998,6 +998,28 @@ export async function buildServer() {
         { description: 'Deletes form usage counts (per layout and day) older than 180 days.' }
       )
 
+      // Review reminders (#2718): owners of forms left unchanged for their set months.
+      app.cron.schedule(
+        'layout-review-reminders',
+        '30 7 * * 1-5',
+        async () => {
+          const { withJobRun } = await import('./services/job-runs.js')
+          await withJobRun(
+            'cron',
+            'layout-review-reminders',
+            { label: 'Forms: review reminders' },
+            async () => {
+              const { runReviewReminders } = await import('./services/layout-review.js')
+              return runReviewReminders(app)
+            }
+          )
+        },
+        {
+          description:
+            'Reminds the owner of each form that has not changed for its set number of months (default 6) to review it, with its health score and last 30 days of use.'
+        }
+      )
+
       // Config review (#1913/#2020/#1999): monthly report of configuration
       // problems, cleanup suggestions and label inconsistencies, with the
       // model re-wording reasons when AI is configured; admins are told.
