@@ -535,6 +535,7 @@ export {
   TrafficMiniMap,
   type TuningProposal,
   type TuningSummary,
+  tapReplaySocket,
   titleCase,
   toneForOutcome,
   trackActivity,
