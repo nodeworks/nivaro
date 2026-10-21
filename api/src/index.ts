@@ -181,6 +181,18 @@ async function main() {
     shuttingDown = true
     // /ready answers 503 from here, so the proxy routes new requests elsewhere.
     markShuttingDown()
+    // Behind a proxy that finds tasks by polling (traefik's swarm provider, its
+    // /api/ready health check), the proxy keeps sending new requests and socket
+    // reconnects to this address for several seconds after it stopped: they hung
+    // against a closed task, and shared-worker sockets could stay wedged. With
+    // SHUTDOWN_DRAIN_DELAY_MS the task keeps serving (only /ready says 503) until
+    // the proxy has routed around it, then closes. The container's stop grace
+    // period must cover this delay plus the drain deadline below.
+    const drainDelayMs = Math.max(0, Number(process.env.SHUTDOWN_DRAIN_DELAY_MS) || 0)
+    if (drainDelayMs > 0) {
+      app.log.info(`${signal} received — not ready; serving ${drainDelayMs}ms more before the drain`)
+      await new Promise((r) => setTimeout(r, drainDelayMs))
+    }
     app.log.info(`${signal} received — draining in-flight requests`)
     // A drain that never finishes (a pool that will not release, a socket
     // that will not close) must not keep the old process alive: tsx watch

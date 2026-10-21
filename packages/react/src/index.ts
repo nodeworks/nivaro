@@ -182,6 +182,8 @@ export {
   createLiveQueryBridge,
   createSocketRealtime,
   createWorkerSocket,
+  installStaleChunkRecovery,
+  isStaleChunkError,
   DataTable,
   DbTuningView,
   DEMO_USER,
