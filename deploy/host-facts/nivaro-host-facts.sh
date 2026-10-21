@@ -3,10 +3,12 @@
 #
 # Writes node_exporter textfile metrics (nivaro_host_*) that the telemetry store scrapes:
 #   ${TEXTFILE_DIR:-/var/lib/node_exporter/textfile}/nivaro_host.prom
-# Runs as root every minute (cron or nivaro-host-facts.timer). The slow parts (pending security
-# updates, needs-restarting, volume last-write scan) run every HOST_FACTS_HEAVY_SECONDS (30 min)
-# and are cached in HOST_FACTS_STATE_DIR. Every probe fails soft: a missing tool or file just
-# leaves its metric out. Needs bash, coreutils and awk; docker, openssl, systemctl, dnf/yum,
+# Runs as root every minute (cron or nivaro-host-facts.timer), or in a container with the host's
+# / mounted read-only at HOST_ROOT (Dockerfile + compose.example.yml beside this script; no sudo
+# needed, only the docker group). The slow parts (pending security updates, needs-restarting,
+# volume last-write scan) run every HOST_FACTS_HEAVY_SECONDS (30 min) and are cached in
+# HOST_FACTS_STATE_DIR. Every probe fails soft: a missing tool or file just leaves its metric out.
+# Needs bash, coreutils and awk; docker, openssl, systemctl, journalctl, dnf/yum,
 # needs-restarting and apt-get are used when present.
 #
 # Settings (environment):
@@ -16,6 +18,11 @@
 #   HOST_FACTS_STATE_DIR     cache for the slow probes (default /var/lib/nivaro-host-facts)
 #   HOST_FACTS_HEAVY_SECONDS how often the slow probes run (default 1800)
 #   DOCKER_ROOT              Docker data root (default /var/lib/docker)
+#   HOST_ROOT                container mode: where the host's / is mounted (e.g. /host). Every
+#                            host file is read under it; kernel messages come from the host's
+#                            journal files (journalctl -D), docker.service from its unit files,
+#                            security updates from the host's apt lists (Debian/Ubuntu only);
+#                            what cannot be read that way is left out
 #   HOST_FACTS_FIXTURE_DIR   test mode: read /proc, /etc/fstab, /boot, the Docker root and
 #                            every command's output from this folder (cmd/<name>, optional
 #                            cmd/<name>.exit) instead of the live host
@@ -26,7 +33,9 @@ umask 022
 export LC_ALL=C
 
 FIX=${HOST_FACTS_FIXTURE_DIR:-}
-ROOT=${FIX}
+HOST_ROOT=${HOST_ROOT:-}
+HOST_ROOT=${HOST_ROOT%/}
+ROOT=${HOST_ROOT:-$FIX}
 TEXTFILE_DIR=${TEXTFILE_DIR:-/var/lib/node_exporter/textfile}
 STATE_DIR=${HOST_FACTS_STATE_DIR:-/var/lib/nivaro-host-facts}
 HEAVY_EVERY=${HOST_FACTS_HEAVY_SECONDS:-1800}
@@ -36,6 +45,9 @@ HOST=${NIVARO_HOST_NAME:-}
 if [ -z "$HOST" ]; then
   if [ -n "$FIX" ] && [ -f "$FIX/cmd/hostname" ]; then
     HOST=$(head -n1 "$FIX/cmd/hostname")
+  elif [ -n "$HOST_ROOT" ] && [ -s "$HOST_ROOT/etc/hostname" ]; then
+    # In a container hostname(1) names the container; the host's own name is in its /etc.
+    HOST=$(head -n1 "$HOST_ROOT/etc/hostname" | cut -d. -f1)
   else
     HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)
   fi
@@ -138,6 +150,10 @@ if [ -d "$ROOT/boot" ]; then
   installed=$(ls -1 "$ROOT/boot" 2>/dev/null | sed -n 's/^vmlinuz-//p' | grep -v rescue |
     sort -V 2>/dev/null | tail -n1)
 fi
+if [ -z "$installed" ] && [ -d "$ROOT/var/lib/rpm" ] && have rpm rpm_kernel; then
+  installed=$(fx rpm_kernel rpm --root "${ROOT:-/}" -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' \
+    kernel-core kernel 2>/dev/null | grep -v 'not installed' | sort -V 2>/dev/null | tail -n1)
+fi
 [ -n "$installed" ] && metric nivaro_host_kernel_installed_info gauge \
   'Newest kernel installed under /boot (used after the next reboot).' \
   "$H,version=\"$(esc "$installed")\"" 1
@@ -147,7 +163,7 @@ btime=$(awk '$1 == "btime" { print $2; exit }' "$ROOT/proc/stat" 2>/dev/null)
 [ -n "$btime" ] && metric nivaro_host_boot_time_seconds gauge \
   'When this host last booted (epoch seconds).' "$H" "$btime"
 
-boot_free=$(fx df_boot df -Pk /boot 2>/dev/null | awk 'NR == 2 { print $4 * 1024 }')
+boot_free=$(fx df_boot df -Pk "${HOST_ROOT}/boot" 2>/dev/null | awk 'NR == 2 { print $4 * 1024 }')
 [ -n "$boot_free" ] && metric nivaro_host_boot_free_bytes gauge \
   'Free space on the filesystem holding /boot.' "$H" "$boot_free"
 
@@ -159,7 +175,24 @@ if [ -d "$ROOT/proc" ]; then
     'Processes in uninterruptible sleep (D state), usually waiting on IO.' "$H" "$dstate"
 fi
 
-if dmesg_out=$(fx dmesg dmesg 2>/dev/null) && [ -n "$dmesg_out" ]; then
+# Kernel messages as "[seconds since boot] text" lines. In a container dmesg would need
+# CAP_SYSLOG, so read this boot's kernel messages from the host's journal files instead.
+kernel_messages() {
+  if [ -z "$HOST_ROOT" ]; then
+    fx dmesg dmesg
+    return
+  fi
+  local d
+  for d in "$ROOT/var/log/journal" "$ROOT/run/log/journal"; do
+    if [ -d "$d" ] || [ -n "$FIX" ]; then
+      fx journal_kernel -t 60 journalctl -D "$d" -k -b -q --no-pager -o short-monotonic \
+        -g 'blocked for more than|nfs: server' && return
+    fi
+  done
+  return 1
+}
+
+if dmesg_out=$(kernel_messages 2>/dev/null) && [ -n "$dmesg_out" ]; then
   uptime_s=$(awk '{ print int($1) }' "$ROOT/proc/uptime" 2>/dev/null)
   if [ -n "$uptime_s" ]; then
     hung=$(printf '%s\n' "$dmesg_out" | awk -v since=$((uptime_s - 900)) '
@@ -177,7 +210,9 @@ fi
 
 # NFS servers: every server mounted from, plus any the kernel complained about. 1 = its last
 # kernel message was "not responding".
-nfs_servers=$(awk '$3 ~ /^nfs4?$/ { split($1, a, ":"); print a[1] }' "$ROOT/proc/mounts" 2>/dev/null)
+mounts_file="$ROOT/proc/mounts"
+[ -n "$HOST_ROOT" ] && [ -r "$ROOT/proc/1/mounts" ] && mounts_file="$ROOT/proc/1/mounts"
+nfs_servers=$(awk '$3 ~ /^nfs4?$/ { split($1, a, ":"); print a[1] }' "$mounts_file" 2>/dev/null)
 if [ -n "${dmesg_out:-}" ]; then
   nfs_state=$(printf '%s\n' "$dmesg_out" | awk '
     /nfs: server [^ ]+ not responding/ { for (i = 1; i <= NF; i++) if ($i == "server") s[$(i + 1)] = 1 }
@@ -205,7 +240,41 @@ remote_mounts=$(awk '
     print $2, $3, nofail
   }' "$ROOT/etc/fstab" 2>/dev/null)
 
-docker_show=$(fx systemctl_docker systemctl show docker -p RequiresMountsFor -p After 2>/dev/null)
+# RequiresMountsFor= / After= of docker.service from its unit file and drop-ins under ROOT, in
+# systemd's precedence order (an empty assignment resets the list). Prints systemctl-show lines.
+docker_unit_from_files() {
+  local base="" d f
+  for d in /etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
+    if [ -f "$ROOT$d/docker.service" ]; then
+      base="$ROOT$d/docker.service"
+      break
+    fi
+  done
+  [ -n "$base" ] || return 1
+  {
+    cat "$base"
+    for d in /usr/lib/systemd/system /lib/systemd/system /usr/local/lib/systemd/system /run/systemd/system /etc/systemd/system; do
+      for f in "$ROOT$d"/docker.service.d/*.conf; do
+        [ -f "$f" ] && cat "$f"
+      done
+    done
+  } | awk -F= '
+    /^[[:space:]]*[#;]/ { next }
+    /^[[:space:]]*\[/ { unit = ($0 ~ /^[[:space:]]*\[Unit\]/); next }
+    unit && $1 ~ /^[[:space:]]*(RequiresMountsFor|After)[[:space:]]*$/ {
+      k = $1; gsub(/[[:space:]]/, "", k)
+      v = substr($0, index($0, "=") + 1); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      if (v == "") val[k] = ""; else val[k] = (val[k] == "" ? v : val[k] " " v)
+    }
+    END { print "RequiresMountsFor=" val["RequiresMountsFor"]; print "After=" val["After"] }'
+}
+
+if [ -n "$HOST_ROOT" ]; then
+  docker_show=$(docker_unit_from_files 2>/dev/null)
+else
+  docker_show=$(fx systemctl_docker systemctl show docker -p RequiresMountsFor -p After 2>/dev/null) ||
+    docker_show=$(docker_unit_from_files 2>/dev/null)
+fi
 docker_known=$?
 requires=$(printf '%s\n' "$docker_show" | sed -n 's/^RequiresMountsFor=//p')
 after=$(printf '%s\n' "$docker_show" | sed -n 's/^After=//p')
@@ -268,7 +337,17 @@ heavy() {
 
   # Pending security updates (left out when the package tool fails, e.g. no repository access).
   local list="" rc=127
-  if have dnf dnf_security; then
+  if [ -n "$HOST_ROOT" ]; then
+    # Container mode: apt can simulate against the host's own lists and dpkg status, read only.
+    # RPM hosts are left out (dnf needs the host's repositories and cache).
+    if [ -f "$ROOT/var/lib/dpkg/status" ] && have apt-get apt_upgrade; then
+      list=$(fx apt_upgrade -t 300 apt-get -s -o Debug::NoLocking=1 -o Dir="$ROOT" \
+        -o Dir::State::status="$ROOT/var/lib/dpkg/status" -o Dir::Cache::pkgcache= \
+        -o Dir::Cache::srcpkgcache= upgrade 2>/dev/null)
+      rc=$?
+      v=$(printf '%s\n' "$list" | awk 'tolower($0) ~ /^inst .*security/ { n++ } END { print n + 0 }')
+    fi
+  elif have dnf dnf_security; then
     list=$(fx dnf_security -t 300 dnf -q updateinfo list --security 2>/dev/null)
     rc=$?
     v=$(printf '%s\n' "$list" | awk 'NF >= 3 { n++ } END { print n + 0 }')
@@ -288,7 +367,7 @@ heavy() {
   local req=""
   if [ -f "$ROOT/var/run/reboot-required" ] || [ -f "$ROOT/run/reboot-required" ]; then
     req=1
-  elif have needs-restarting needs_restarting; then
+  elif [ -z "$HOST_ROOT" ] && have needs-restarting needs_restarting; then
     fx needs_restarting -t 120 needs-restarting -r >/dev/null 2>&1
     case $? in 0) req=0 ;; 1) req=1 ;; esac
   fi

@@ -43,6 +43,45 @@ Without systemd timers, use cron (the lock stops a slow run from overlapping the
 * * * * * root NIVARO_HOST_NAME=staging flock -n /run/nivaro-host-facts.lock /usr/local/sbin/nivaro-host-facts.sh
 ```
 
+## Run as a container (no sudo)
+
+When you cannot install anything as root on the host, run the collector as a container, the way
+node_exporter and cAdvisor run. Being in the `docker` group is enough.
+
+```bash
+cd deploy/host-facts
+# edit NIVARO_HOST_NAME and the Docker access in compose.example.yml first
+docker compose -f compose.example.yml up -d --build
+docker compose -f compose.example.yml exec host-facts cat /textfile/nivaro_host.prom
+```
+
+What the example does:
+
+- Mounts the host's `/` read-only at `/host` and sets `HOST_ROOT=/host`. Every host file is read
+  under it: `/proc` (with `pid: host`, so processes and the host's mount table are the host's),
+  `/etc/fstab`, `/boot`, `/var/lib/docker`, the systemd unit files.
+- Runs the script every 60 seconds (`HOST_FACTS_INTERVAL`); the slow probes stay cached for
+  30 minutes in the `host-facts-state` volume.
+- Writes `nivaro_host.prom` to the `host-facts` volume, which node_exporter (or Alloy) on the same
+  host reads as its textfile directory.
+- Runs read-only, with every capability dropped except `DAC_READ_SEARCH` (to read root-only files
+  such as container logs and journal files) and `no-new-privileges`.
+- Talks to Docker for `docker ps` and `docker inspect` only. Point `DOCKER_HOST` at the read-only
+  Docker socket proxy Nivaro already reads (it needs the CONTAINERS section). Mounting
+  `/var/run/docker.sock` also works, but `:ro` on a socket only stops the file being replaced: the
+  Docker API behind it is not read-only, so prefer the proxy.
+
+In container mode some facts come from different sources, and a few cannot be read:
+
+| Fact | On the host | In the container |
+|---|---|---|
+| Kernel messages (hung tasks, NFS) | `dmesg` | The host's journal files (`journalctl -D /host/var/log/journal`, this boot only). Without a persistent or runtime journal under `/host`, the hung-task and NFS-message metrics are left out. |
+| docker.service mounts | `systemctl show docker` | Parsed from `docker.service` and its drop-ins under `/host` (`RequiresMountsFor=`, `After=` in `[Unit]`). |
+| Installed kernel | `/boot/vmlinuz-*` | The same under `/host/boot`, else the host's rpm database (`rpm --root /host`). |
+| Security updates | `dnf` / `yum` / `apt-get` | Debian / Ubuntu: `apt-get -s` against the host's own package lists, read only. RPM hosts: left out (dnf needs the host's repositories). |
+| Reboot required | `/run/reboot-required`, `needs-restarting -r` | `/host/run/reboot-required`, else running kernel ≠ newest installed kernel. |
+| Host name | `hostname -s` | `NIVARO_HOST_NAME`, else `/host/etc/hostname`. |
+
 ## Wire it into the collector
 
 node_exporter:
@@ -76,6 +115,8 @@ the scraper adds `instance` or `job` labels.
 | `HOST_FACTS_STATE_DIR` | `/var/lib/nivaro-host-facts` | Cache for the slow probes. Created with mode 0700; the script refuses to run when it is a symlink or owned by another user. |
 | `HOST_FACTS_HEAVY_SECONDS` | `1800` | How often the slow probes run (security updates, needs-restarting, volume scan). |
 | `DOCKER_ROOT` | `/var/lib/docker` | Docker data root. |
+| `HOST_ROOT` | empty | Container mode: where the host's `/` is mounted (e.g. `/host`). See "Run as a container". |
+| `HOST_FACTS_INTERVAL` | `60` | Container image only: seconds between runs. |
 
 `HOST_FACTS_FIXTURE_DIR` and `HOST_FACTS_NOW` are for the tests
 (`api/src/services/host-facts-script.test.ts`): the script then reads `/proc`, `/etc/fstab`,

@@ -265,6 +265,82 @@ describe('nivaro-host-facts.sh', () => {
     expect(one(fresh, 'nivaro_host_security_updates')[0].value).toBe(2)
   })
 
+  it('container mode (HOST_ROOT) reads the host from its files, not from the container', () => {
+    const f = fixture()
+    const r = f.root
+    put(r, 'etc/hostname', 'stg-docker-01.example.com\n')
+    put(r, 'cmd/uname', '6.1.0-25-amd64\n')
+    put(r, 'boot/vmlinuz-6.1.0-26-amd64', '')
+    put(r, 'proc/stat', 'btime 1760000000\n')
+    put(r, 'proc/uptime', '10000.00 1.00\n')
+    put(r, 'proc/7/stat', '7 (cp) D 1 0 0 0\n')
+    // The container's own mount table has no NFS; the host's (pid 1) has.
+    put(r, 'proc/mounts', 'overlay / overlay rw 0 0\n')
+    put(r, 'proc/1/mounts', 'nas01:/export /mnt/data nfs4 rw 0 0\n')
+    put(
+      r,
+      'etc/fstab',
+      'nas01:/export /mnt/data nfs4 defaults 0 0\nnas02:/b /mnt/b nfs nofail 0 0\n'
+    )
+    // Kernel messages come from the host journal; dmesg (needs CAP_SYSLOG) is never called.
+    put(r, 'var/log/journal/.keep', '')
+    put(
+      r,
+      'cmd/journal_kernel',
+      '[ 9500.123456] stg kernel: INFO: task cp:7 blocked for more than 120 seconds.\n[ 9600.000000] stg kernel: nfs: server nas01 not responding, still trying\n'
+    )
+    put(r, 'cmd/dmesg', '[ 9900.0] INFO: task a blocked for more than 120 seconds.\n'.repeat(5))
+    // docker.service comes from its unit file + drop-ins, never systemctl.
+    put(
+      r,
+      'usr/lib/systemd/system/docker.service',
+      '[Unit]\nDescription=Docker\nAfter=network-online.target containerd.service\nRequiresMountsFor=/var/lib/docker\n\n[Service]\nRequiresMountsFor=/mnt/data\n'
+    )
+    put(
+      r,
+      'etc/systemd/system/docker.service.d/10-mounts.conf',
+      '[Unit]\nRequiresMountsFor=\nRequiresMountsFor=/mnt/b/sub\n'
+    )
+    put(r, 'cmd/systemctl_docker', 'RequiresMountsFor=/mnt/data\nAfter=remote-fs.target\n')
+    // Packages: apt against the host's lists; dnf and needs-restarting are host-only.
+    put(r, 'var/lib/dpkg/status', 'Package: libc6\n')
+    put(
+      r,
+      'cmd/apt_upgrade',
+      'Inst libssl3 [3.0.13-1] (3.0.15-1 Debian-Security:12/stable-security [amd64])\nInst curl [7.88] (7.88.2 Debian-Security:12/stable-security [amd64])\nInst vim [9.0] (9.0.1 Debian:12.7/stable [amd64])\n'
+    )
+    put(r, 'cmd/dnf_security', 'A Important/Sec. a\n'.repeat(9))
+    put(r, 'cmd/needs_restarting', '')
+    put(r, 'cmd/needs_restarting.exit', '0')
+
+    const s = samples(run(f, { HOST_ROOT: r, NIVARO_HOST_NAME: '' }))
+    const v = (name: string, where: Record<string, string> = {}) => one(s, name, where)[0]?.value
+    expect(s.every((x) => x.labels.host === 'stg-docker-01')).toBe(true)
+    expect(v('nivaro_host_dstate_processes')).toBe(1)
+    expect(v('nivaro_host_hung_task_events')).toBe(1)
+    expect(v('nivaro_host_nfs_not_responding', { server: 'nas01' })).toBe(1)
+    // The drop-in reset the list, then named /mnt/b/sub; [Service] lines do not count.
+    expect(v('nivaro_host_docker_waits_for_mounts', { mountpoint: '/mnt/b' })).toBe(1)
+    expect(v('nivaro_host_docker_waits_for_mounts', { mountpoint: '/mnt/data' })).toBe(0)
+    expect(v('nivaro_host_security_updates')).toBe(2)
+    // Running 6.1.0-25, /boot has 6.1.0-26: reboot needed (needs-restarting is not consulted).
+    expect(v('nivaro_host_reboot_required')).toBe(1)
+  })
+
+  it('container mode leaves out what it cannot read from the host files', () => {
+    const f = fixture()
+    put(f.root, 'cmd/dmesg', '[ 1.0] INFO: task a blocked for more than 120 seconds.\n')
+    put(f.root, 'proc/uptime', '100.00 1.00\n')
+    put(f.root, 'cmd/dnf_security', 'A Important/Sec. a\n')
+    put(f.root, 'cmd/systemctl_docker', 'RequiresMountsFor=/mnt/data\n')
+    put(f.root, 'etc/fstab', 'nas01:/export /mnt/data nfs4 defaults 0 0\n')
+    const s = samples(run(f, { HOST_ROOT: f.root }))
+    expect(one(s, 'nivaro_host_hung_task_events')).toHaveLength(0)
+    expect(one(s, 'nivaro_host_security_updates')).toHaveLength(0)
+    expect(one(s, 'nivaro_host_docker_waits_for_mounts')).toHaveLength(0)
+    expect(one(s, 'nivaro_host_mount_nofail')).toHaveLength(1)
+  })
+
   it('leaves security updates out when the package tool fails', () => {
     const f = fixture()
     put(f.root, 'cmd/dnf_security', 'Error: Failed to download metadata\n')

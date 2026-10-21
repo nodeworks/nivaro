@@ -137,7 +137,7 @@ export function FactsNotCollected({ compact, title }: { compact?: boolean; title
         <code className='rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-muted'>
           deploy/host-facts/nivaro-host-facts.sh
         </code>{' '}
-        on the host with its systemd timer, set{' '}
+        on the host with its systemd timer (or run it as a container — no sudo needed), set{' '}
         <code className='rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-muted'>
           NIVARO_HOST_NAME
         </code>{' '}
