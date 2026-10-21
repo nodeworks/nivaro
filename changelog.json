@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-21T22:26:22.938Z",
+  "generated_at": "2026-10-21T22:49:11.794Z",
   "releases": [
+    {
+      "version": "0.2.81",
+      "tag": "v0.2.81",
+      "date": "2026-10-21T18:48:57-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Shutdown closes socket transports instead of kicking clients",
+              "hash": "ef75995aa"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.80",
       "tag": "v0.2.80",
-      "date": "2026-10-21T18:26:04-04:00",
+      "date": "2026-10-21T18:26:23-04:00",
       "sections": [
         {
           "label": "Other",
