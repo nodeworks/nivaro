@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-21T20:52:07.034Z",
+  "generated_at": "2026-10-21T22:26:22.938Z",
   "releases": [
+    {
+      "version": "0.2.80",
+      "tag": "v0.2.80",
+      "date": "2026-10-21T18:26:04-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Rolling deploys no longer strand realtime tabs",
+              "hash": "d4357d513"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "publish-github: moved tags are not re-pushed to the mirror",
+              "hash": "324ce03ba"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.79",
       "tag": "v0.2.79",
-      "date": "2026-10-21T16:51:54-04:00",
+      "date": "2026-10-21T16:52:07-04:00",
       "sections": [
         {
           "label": "Added",
