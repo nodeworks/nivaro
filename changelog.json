@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-21T01:41:07.467Z",
+  "generated_at": "2026-10-21T01:52:30.652Z",
   "releases": [
+    {
+      "version": "0.2.77",
+      "tag": "v0.2.77",
+      "date": "2026-10-20T21:52:15-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Create the first form is a regular More-menu row",
+              "hash": "f70e3c35"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Edit layout moves into the record's More menu",
+              "hash": "b17395c7"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.76",
       "tag": "v0.2.76",
-      "date": "2026-10-20T21:40:54-04:00",
+      "date": "2026-10-20T21:41:07-04:00",
       "sections": [
         {
           "label": "Added",
