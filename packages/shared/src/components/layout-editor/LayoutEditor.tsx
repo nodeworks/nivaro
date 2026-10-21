@@ -61,6 +61,7 @@ import {
   type SelectOptions,
   targetKey
 } from './design-context'
+import { WIDTH_LABELS } from './field-zones'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
 import { useDraftRecovery } from './draft-recovery'
@@ -501,7 +502,22 @@ function Canvas({
       lastChange: lastChanges
         ? (t) => (t.kind === 'group' ? (lastChanges[t.key] ?? null) : null)
         : undefined,
-      ghost
+      ghost,
+      resizeWidth: noDnd
+        ? undefined
+        : (t, span) => {
+            if (t.kind !== 'field' && t.kind !== 'slot') return
+            apply(
+              [
+                {
+                  op: 'update_placement',
+                  at: { field: t.field, group_key: t.group_key },
+                  patch: { col_span: span === 12 ? null : span }
+                }
+              ],
+              { label: `Set the width to ${WIDTH_LABELS[span] ?? span}` }
+            )
+          }
     }),
     [
       selected,
@@ -521,7 +537,9 @@ function Canvas({
       peers,
       compare,
       lastChanges,
-      ghost
+      ghost,
+      apply,
+      noDnd
     ]
   )
   const hoverRef = useDriverHover(deps)

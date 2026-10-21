@@ -10,10 +10,12 @@ import {
   useOptionalNivaroClient
 } from '../../context'
 import { get, post } from '../../lib/commands'
+import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
 import { useRecordReader } from '../../lib/record-loader'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
 import { DesignDropZone, designWrap } from '../layout-editor/DesignNode'
 import { type DesignTarget, revealGroupKey, useLayoutDesign } from '../layout-editor/design-context'
+import { GridGuides } from '../layout-editor/grid-guides'
 import { UserAvatar } from '../UserAvatar'
 import {
   DropdownMenu,
@@ -23,6 +25,7 @@ import {
 } from '../ui/dropdown-menu'
 import { type InputBinding, WidgetSlot } from '../WidgetSlot'
 import { FieldRow } from './FieldRow'
+import { FoldArea, RowGroupCell, rowMemberField } from './form-structure-ui'
 import { FormHelpVideoButton, useFormHelpVideos } from './FormHelpVideoButton'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
 import { SectionIntro } from './LayoutContentBlock'
@@ -1142,6 +1145,8 @@ export function GroupSection({
   alternateWidths?: Record<string, 1 | 2>
 }) {
   const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
+  // #2698: "Show N more" opened by hand (a folded field with a value opens it on its own).
+  const [foldOpen, setFoldOpen] = useState(false)
   // Layout editor canvas: every placement is a selectable shell, the section
   // always shows (rules and emptiness never hide it), hidden fields can show
   // as faint placeholders. Null on a record page.
@@ -1330,16 +1335,31 @@ export function GroupSection({
             // Merge fields + optional inline owners/pdf/widgets into a sorted render list
             type RenderItem = { _k: string; sort: number } & (
               | { _t: 'field'; f: CMSField }
+              | { _t: 'row'; row: RowUnit['row']; members: CMSField[] }
               | { _t: 'owners'; slot: SlotAssignment }
               | { _t: 'pdf'; slot: SlotAssignment }
               | { _t: 'widget'; slot: SlotAssignment }
             )
-            const items: RenderItem[] = visibleFields_.map((f) => ({
-              _k: f.field,
-              sort: f.sort ?? 0,
-              _t: 'field' as const,
-              f
-            }))
+            // #2697 rows and #2698 the fold (lib/form-structure.ts). The
+            // metadata (record info) view lists its values as they are.
+            const plan = planFieldGrid(visibleFields_, {
+              rows: displayOnly ? [] : readGroupStructure(group.swap_config).rows,
+              folded: (f) => !displayOnly && isFolded(f._overrides),
+              keep: (f) => !!f.required,
+              filled: (f) => !isEmptyValue(draft[f.field]) || !!errors[f.field]
+            })
+            type RowUnit = Extract<(typeof plan.units)[number], { kind: 'row' }>
+            const items: RenderItem[] = plan.units.map((u) =>
+              u.kind === 'row'
+                ? {
+                    _k: `row:${u.row.key}`,
+                    sort: u.members[0].sort ?? 0,
+                    _t: 'row' as const,
+                    row: u.row,
+                    members: u.members
+                  }
+                : { _k: u.field.field, sort: u.field.sort ?? 0, _t: 'field' as const, f: u.field }
+            )
             if (ownersAssignment) {
               items.push({
                 _k: '__owners__',
@@ -1361,10 +1381,14 @@ export function GroupSection({
             }
             items.sort((a, b) => a.sort - b.sort)
 
-            if (design && items.length === 0) return <DesignDropZone />
+            if (design && items.length === 0 && plan.folded.length === 0) return <DesignDropZone />
 
             return displayOnly ? (
-              <div ref={gridRef} className='grid grid-cols-12 gap-x-6 gap-y-3'>
+              <div
+                ref={gridRef}
+                className={cn(design && 'relative', 'grid grid-cols-12 gap-x-6 gap-y-3')}
+              >
+                <GridGuides gapClass='gap-x-6' />
                 {items.map((item) => {
                   if (item._t === 'owners') {
                     const span = item.slot.col_span ?? 12
@@ -1385,6 +1409,7 @@ export function GroupSection({
                   }
                   if (item._t === 'pdf') return null
                   if (item._t === 'widget') return null
+                  if (item._t === 'row') return null
                   const f = item.f
                   const m2oRel = relations.find(
                     (r) =>
@@ -1430,8 +1455,40 @@ export function GroupSection({
                 })}
               </div>
             ) : (
-              <div ref={gridRef} className='grid grid-cols-12 gap-4 items-start'>
-                {items.map((item) => {
+              (() => {
+                const renderItem = (item: RenderItem): ReactNode => {
+                  if (item._t === 'row')
+                    return (
+                      <RowGroupCell
+                        key={item._k}
+                        row={item.row}
+                        members={item.members}
+                        containerWidth={containerWidth}
+                        errors={errors}
+                        renderMember={(m) =>
+                          shell(
+                            { kind: 'field', field: m.field, group_key: group.key },
+                            <div key={m.field}>
+                              <FieldRow
+                                field={rowMemberField(m)}
+                                draft={draft}
+                                onChange={onChange}
+                                relations={relations}
+                                collection={collection}
+                                itemId={itemId}
+                                error={errors[m.field]}
+                                visible={visibleFields.has(m.field) || !visibleFields.size}
+                                forceVisible={hiddenInDesign(m) || undefined}
+                                locked={lockedFields.has(m.field)}
+                                layoutAiEnabled={layoutAiEnabled}
+                                renderField={renderField}
+                                onCountChange={onCountChange}
+                              />
+                            </div>
+                          )
+                        }
+                      />
+                    )
                   if (item._t === 'owners') {
                     const span = item.slot.col_span ?? 12
                     return shell(
@@ -1632,8 +1689,39 @@ export function GroupSection({
                       )}
                     </div>
                   )
-                })}
-              </div>
+                }
+                const folded: RenderItem[] = plan.folded.map((f) => ({
+                  _k: f.field,
+                  sort: f.sort ?? 0,
+                  _t: 'field' as const,
+                  f
+                }))
+                return (
+                  <>
+                    <div
+                      ref={gridRef}
+                      className={cn(design && 'relative', 'grid grid-cols-12 gap-4 items-start')}
+                    >
+                      <GridGuides />
+                      {items.map(renderItem)}
+                    </div>
+                    <FoldArea
+                      count={folded.length}
+                      open={foldOpen}
+                      forcedOpen={plan.forcedOpen}
+                      design={!!design}
+                      onToggle={() => setFoldOpen((v) => !v)}
+                    >
+                      <div
+                        className={cn(design && 'relative', 'grid grid-cols-12 gap-4 items-start')}
+                      >
+                        <GridGuides />
+                        {folded.map(renderItem)}
+                      </div>
+                    </FoldArea>
+                  </>
+                )
+              })()
             )
           })()}
           {footerSlot && <div className='mt-4'>{footerSlot}</div>}

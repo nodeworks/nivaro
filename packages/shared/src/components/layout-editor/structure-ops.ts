@@ -10,6 +10,7 @@ import {
   type PlacementRow,
   UNGROUPED_KEY
 } from '../../lib/layout-ops'
+import { withGroupStructure } from '../../lib/form-structure'
 import { titleCase } from '../../lib/utils'
 import { newGroupKey } from './add-target'
 import type { DesignTarget } from './design-context'
@@ -136,7 +137,8 @@ export function duplicatePlan(bundle: LayoutBundle, t: DesignTarget | null): Str
     for (let n = 2; used.has(key); n++) key = `${src.key}_copy_${n}`
     used.add(key)
     const patch = groupSettings(src)
-    patch.swap_config = withPin(src.swap_config, false)
+    // The copy is never pinned, nor sticky: one sticky section per form (#2699).
+    patch.swap_config = withGroupStructure(withPin(src.swap_config, false), { sticky: false })
     ops.push({
       op: 'group_create',
       key,
