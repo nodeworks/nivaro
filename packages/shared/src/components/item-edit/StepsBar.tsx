@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useDesignWrap } from '../layout-editor/DesignNode'
+import { useLayoutDesign } from '../layout-editor/design-context'
 import type { StepDef } from './types'
 
 type StepState = 'active' | 'done' | 'error' | 'inactive'
@@ -71,6 +72,7 @@ export function StepsBar({
 }) {
   // Layout editor canvas: a step selects its group and still switches to it.
   const designWrap = useDesignWrap()
+  const designing = useLayoutDesign() != null
   return (
     <div
       className={cn(
@@ -92,7 +94,7 @@ export function StepsBar({
         const step = (
           <div
             key={s.key}
-            data-design-tab=''
+            data-design-tab={designing ? '' : undefined}
             data-design-hidden={hiddenSteps?.has(s.key) ? '' : undefined}
             className={cn('relative min-w-0 flex-1', hiddenSteps?.has(s.key) && 'opacity-40')}
             style={{

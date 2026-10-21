@@ -130,6 +130,7 @@ import {
 } from './item-edit/ChangeReasonDialog'
 import { type ChangeItem, ChangesTray } from './item-edit/ChangesTray'
 import { CloneDialog } from './item-edit/CloneDialog'
+import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
 import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
 import { FieldAffordancesContext, type RemoteFieldChange } from './item-edit/FieldAffordances'
@@ -1702,20 +1703,19 @@ function ItemEditFormView({
     return () => window.removeEventListener('nvr:set-field', onSet)
   })
   // Config hot-push (#268, #1740): a schema/layout/rule/pipeline edit re-resolves this form's
-  // definition in place AND says so — "This form was changed, reload to see the new version".
-  // An event naming another collection is not about this form. What the person typed is kept:
+  // definition in place AND, when it names this collection, says so — "This form was changed,
+  // reload to see the new version" (configUpdateReaction). What the person typed is kept:
   // the draft store writes it ~1s after the last keystroke and offers it back after the reload.
   const [configUpdated, setConfigUpdated] = useState(false)
   useEffect(() => {
     const onConfig = (e: Event) => {
       const changed = (e as CustomEvent<{ collection?: string }>).detail?.collection
-      if (changed && changed !== collection) return
+      const reaction = configUpdateReaction(changed, collection, designMode)
+      if (reaction === 'ignore') return
       void qc.invalidateQueries({ queryKey: ['field-config'] })
       void qc.invalidateQueries({ queryKey: ['active-layout'] })
       void qc.invalidateQueries({ queryKey: ['collection-meta'] })
-      // An event naming no collection (a surface-wide push) is about no form in particular; and
-      // in design mode the canvas already re-reads the layout, so a Reload prompt means nothing.
-      if (changed === collection && !designMode) setConfigUpdated(true)
+      if (reaction === 'banner') setConfigUpdated(true)
     }
     window.addEventListener('nvr:config-update', onConfig)
     return () => window.removeEventListener('nvr:config-update', onConfig)
@@ -8953,7 +8953,7 @@ function ItemEditFormView({
                 key={t.key}
                 type='button'
                 data-tab-key={t.key}
-                data-design-tab=''
+                data-design-tab={designOn ? '' : undefined}
                 data-design-hidden={designHiddenTabs?.has(t.key) ? '' : undefined}
                 onClick={() => setActiveTab(t.key)}
                 className={cn(
