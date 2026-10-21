@@ -16,6 +16,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { Switch } from '../../ui/switch'
+import type { DesignTarget } from '../design-context'
 import { useFocusBuffer } from '../focus-buffer'
 import { effectText, groupTitle, inputBase, labelText, segOption, segTrack } from '../panel-style'
 import type { ApplyOptions } from '../useLayoutDraft'
@@ -31,6 +32,8 @@ export interface InspectorEnv {
   layoutType: string
   /** The active grouped layout — the one the server enforces rules from. */
   defaultForm: boolean
+  /** Select something else on the canvas (the breadcrumb's parts). */
+  select?: (t: DesignTarget) => void
 }
 
 export const InspectorEnvContext = createContext<InspectorEnv | null>(null)

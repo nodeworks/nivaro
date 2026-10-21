@@ -23,8 +23,10 @@ import {
   type DesignMark,
   type DesignOverlay,
   type DesignTarget,
+  type FoldSignal,
   type LayoutDesign,
   nextSelection,
+  type RevealSignal,
   type SelectOptions,
   targetKey
 } from './design-context'
@@ -44,6 +46,10 @@ import { LintButton, LintPanel } from './lint/LintPanel'
 import { useLayoutLint } from './lint/lint-api'
 import { FieldStateMatrix } from './matrix/FieldStateMatrix'
 import { RoleSectionMatrix } from './matrix/RoleSectionMatrix'
+import { NavTools } from './nav/NavTools'
+import { OutlinePanel } from './nav/OutlinePanel'
+import { useEditorNav } from './nav/useEditorNav'
+import { COMPACT_ZOOM } from './nav/view-prefs'
 import type { DescribeField, Segment } from './overview/describe-conditions'
 import {
   useApproxRecordCount,
@@ -339,6 +345,8 @@ function Canvas({
   selection,
   onSelect,
   showHidden,
+  fold = null,
+  reveal = null,
   apply,
   whenIdle,
   fillRate
@@ -346,6 +354,9 @@ function Canvas({
   collection: string
   bundle: LayoutBundle
   parent: LayoutBundle | null
+  /** Expand all / Collapse all and Find's reveal (#2627 #2620). */
+  fold?: FoldSignal | null
+  reveal?: RevealSignal | null
   /** Preview as this role (null: any role). */
   roleId: string | null
   /** Preview as if the record were in this pipeline state. */
@@ -407,7 +418,9 @@ function Canvas({
       note: (t) => {
         const k = noteKey(t)
         return k ? (notes.get(k) ?? null) : null
-      }
+      },
+      fold,
+      reveal
     }),
     [
       selected,
@@ -420,7 +433,9 @@ function Canvas({
       allMarks,
       overlay,
       fillRate,
-      notes
+      notes,
+      fold,
+      reveal
     ]
   )
   return (
@@ -703,6 +718,18 @@ export function LayoutEditor({
   // Forms and read views lay fields out on the 12-column grid: the placements
   // table and auto-arrange are theirs (table and PDF layouts have their own canvases).
   const arrangeable = layoutType !== 'table' && layoutType !== 'file'
+  // Find, outline, breadcrumb, shortcut sheet, compact canvas, expand / collapse all.
+  const nav = useEditorNav({
+    bodyRef,
+    bundle,
+    parent,
+    fields,
+    onSelect,
+    showHidden,
+    setShowHidden,
+    canvasShown: !(arrangeable && view === 'table')
+  })
+  const outlineShown = nav.outlineOpen && !!bundle && arrangeable
   const warning = host.warning ?? overview?.warning ?? null
 
   // Overlay mode is a modal dialog over the record page.
@@ -749,6 +776,30 @@ export function LayoutEditor({
                 <ViewToggle view={view} onView={setView} />
                 <AutoArrangeButton bundle={bundle} apply={draft.apply} />
               </>
+            )}
+            {bundle && (
+              <NavTools
+                find={nav.find}
+                shortcuts={nav.shortcuts}
+                outline={
+                  arrangeable
+                    ? {
+                        open: nav.outlineOpen,
+                        onToggle: () => nav.setOutlineOpen(!nav.outlineOpen)
+                      }
+                    : null
+                }
+                view={
+                  arrangeable && view === 'canvas'
+                    ? {
+                        compact: nav.compact,
+                        onCompact: nav.setCompact,
+                        onExpandAll: nav.expandAll,
+                        onCollapseAll: nav.collapseAll
+                      }
+                    : null
+                }
+              />
             )}
             <BulkChangesButton
               collection={collection}
@@ -908,6 +959,22 @@ export function LayoutEditor({
               )}
             </div>
           </aside>
+          {outlineShown && bundle && (
+            <aside
+              data-editor-outline-panel=''
+              className='flex w-[240px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'
+            >
+              <OutlinePanel
+                bundle={bundle}
+                nodes={nav.nodes}
+                selection={selection}
+                onPick={nav.selectAndReveal}
+                onMoved={onMoved}
+                apply={draft.apply}
+                onClose={() => nav.setOutlineOpen(false)}
+              />
+            </aside>
+          )}
           <main className='min-w-0 flex-1 overflow-y-auto'>
             {bundle && arrangeable && view === 'states' ? (
               <FieldStateMatrix
@@ -935,35 +1002,44 @@ export function LayoutEditor({
                 onSelection={setSelection}
               />
             ) : bundle ? (
-              <PreviewPanes
-                collection={collection}
-                bundle={bundle}
-                parent={parent}
-                preview={preview}
-                onPreview={setPreview}
-                record={record}
-                fields={fields}
-                renderPane={(pane) => (
-                  <Canvas
-                    collection={collection}
-                    bundle={bundle}
-                    parent={parent}
-                    roleId={pane.roleId}
-                    stateKey={pane.stateKey}
-                    marks={pane.marks}
-                    overlay={pane.overlay}
-                    noDnd={pane.noDnd}
-                    record={pane.record}
-                    selected={selected}
-                    selection={selection}
-                    onSelect={onSelect}
-                    showHidden={showHidden}
-                    apply={draft.apply}
-                    whenIdle={draft.whenIdle}
-                    fillRate={fillRate}
-                  />
-                )}
-              />
+              <div
+                data-canvas-density={nav.compact && arrangeable ? 'compact' : 'normal'}
+                // Compact (#2627): editor-only zoom; the record page is unchanged.
+                style={nav.compact && arrangeable ? { zoom: COMPACT_ZOOM } : undefined}
+                className='min-h-full'
+              >
+                <PreviewPanes
+                  collection={collection}
+                  bundle={bundle}
+                  parent={parent}
+                  preview={preview}
+                  onPreview={setPreview}
+                  record={record}
+                  fields={fields}
+                  renderPane={(pane) => (
+                    <Canvas
+                      collection={collection}
+                      bundle={bundle}
+                      parent={parent}
+                      roleId={pane.roleId}
+                      stateKey={pane.stateKey}
+                      marks={pane.marks}
+                      overlay={pane.overlay}
+                      noDnd={pane.noDnd}
+                      record={pane.record}
+                      selected={selected}
+                      selection={selection}
+                      onSelect={onSelect}
+                      showHidden={showHidden}
+                      fold={nav.fold}
+                      reveal={nav.reveal}
+                      apply={draft.apply}
+                      whenIdle={draft.whenIdle}
+                      fillRate={fillRate}
+                    />
+                  )}
+                />
+              </div>
             ) : draft.error ? (
               <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
             ) : (
@@ -1012,6 +1088,7 @@ export function LayoutEditor({
                   flush={draft.flush}
                   collection={collection}
                   openLayout={openLayout}
+                  onSelect={nav.selectAndReveal}
                 />
               ))}
           </aside>

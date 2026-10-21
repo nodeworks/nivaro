@@ -181,6 +181,17 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "Roles in the top bar shows every section and tab against every role. Click a cell to make the section Can edit, Read-only or Hidden for that role (the section's Hidden for and Read-only for). Each cell is one change to save. Administrator roles are greyed: they always see and edit everything. Field permissions still apply inside a section."
     },
+    { type: 'h3', id: 'layout-editor-find', text: 'Finding your way on a long form' },
+    {
+      type: 'ul',
+      items: [
+        'Find (⌘F / Ctrl+F in the editor, or the search button in the top bar) finds a field, panel, step, tab or section by label or key. Picking a match opens the step or tab it sits on, unfolds its section, scrolls to it and selects it. Hidden fields and fields a rule hides are found too; picking one turns on Show hidden when the form would not show it.',
+        'Outline (the tree button in the top bar) lists the header strip, steps, tabs, sections and their fields beside the canvas. Clicking a row selects it on the canvas, and selecting on the canvas marks its row. Drag rows to reorder: the same moves as dragging on the canvas, one Undo step each. Parts that come from a parent layout show but do not move. The outline stays open for you until you close it.',
+        "The inspector's header shows where the selection sits, for example Field · Flow › Billing. Click a part to select that step, tab or section.",
+        'The canvas view button has Compact canvas (smaller spacing and inputs in the editor only, kept for you in this browser; the record page is unchanged), Expand all (every section open and every step and tab laid out one under another) and Collapse all (every section folded; steps and tabs back to one at a time).',
+        'Press ? (when not typing) or the keyboard button for every shortcut, grouped by area: undo and redo, duplicate, moving with Alt+arrows or Space, find, the command palette and save.'
+      ]
+    },
     { type: 'h3', id: 'layout-editor-saving', text: 'Saving, undo and conflicts' },
     {
       type: 'p',

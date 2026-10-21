@@ -36,6 +36,30 @@ export interface LayoutDesign {
   fillRate?(field: string): number | null
   /** #2608: the editor note pinned to the node, shown as a marker on the canvas. */
   note?(t: DesignTarget): EditorNote | null
+  /** Expand all / Collapse all (#2627): every section folds open or shut;
+   *  open also lays every step and tab out one under another. */
+  fold?: FoldSignal | null
+  /** Find / outline / breadcrumb (#2620): open the step, tab or section holding this. */
+  reveal?: RevealSignal | null
+}
+
+/** A press of Expand all or Collapse all; `seq` changes on every press. */
+export interface FoldSignal {
+  open: boolean
+  seq: number
+}
+
+/** A request to bring `target` into view; `seq` changes on every request. */
+export interface RevealSignal {
+  target: DesignTarget
+  seq: number
+}
+
+/** The group a reveal opens: the target group itself, or the group a placement sits in. */
+export function revealGroupKey(t: DesignTarget): string | null {
+  if (t.kind === 'group') return t.key
+  if (t.kind === 'header') return null
+  return t.group_key
 }
 
 export interface DesignMark {

@@ -13,7 +13,7 @@ import { get, post } from '../../lib/commands'
 import { useRecordReader } from '../../lib/record-loader'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
 import { DesignDropZone, designWrap } from '../layout-editor/DesignNode'
-import { type DesignTarget, useLayoutDesign } from '../layout-editor/design-context'
+import { type DesignTarget, revealGroupKey, useLayoutDesign } from '../layout-editor/design-context'
 import { UserAvatar } from '../UserAvatar'
 import {
   DropdownMenu,
@@ -1156,10 +1156,28 @@ export function GroupSection({
   const [widgetContent, setWidgetContent] = useState<Record<string, boolean>>({})
   // #2615: help videos on this collection's sections (one shared query per form).
   const { data: formVideos } = useFormHelpVideos(collection)
+  // Layout editor: Expand all / Collapse all and Find (#2627 #2620) fold the
+  // section open or shut over whatever it was; its chevron then flips that.
+  const fold = design?.fold ?? null
+  const reveal = design?.reveal ?? null
+  const [designFolded, setDesignFolded] = useState<boolean | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one fold per press (seq)
+  useEffect(() => {
+    if (fold) setDesignFolded(!fold.open)
+  }, [fold?.seq])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one reveal per request (seq)
+  useEffect(() => {
+    if (reveal && revealGroupKey(reveal.target) === group.key) setDesignFolded(false)
+  }, [reveal?.seq])
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
   const controlled = onToggle !== undefined
-  const collapsed = controlled ? !isOpen : localCollapsed
-  const toggle = controlled ? onToggle : () => setLocalCollapsed((v) => !v)
+  const collapsed = designFolded ?? (controlled ? !isOpen : localCollapsed)
+  const toggle =
+    designFolded !== null
+      ? () => setDesignFolded((v) => !v)
+      : controlled
+        ? onToggle
+        : () => setLocalCollapsed((v) => !v)
   const hasErrors = !displayOnly && fields.some((f) => errors[f.field])
 
   // Section visibility rules (layout-configured)
