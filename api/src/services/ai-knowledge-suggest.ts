@@ -249,7 +249,7 @@ export async function thumbsDownSignals(since: Date): Promise<CorrectionSignal[]
   return out
 }
 
-async function businessCollections(): Promise<
+export async function businessCollections(): Promise<
   Array<{ collection: string; display_name: string | null }>
 > {
   return (await db('nivaro_collections')
@@ -323,7 +323,7 @@ async function existingFingerprints(): Promise<Set<string>> {
   return new Set(rows.map((r) => r.fingerprint))
 }
 
-async function ask(system: string, user: string): Promise<string> {
+export async function ask(system: string, user: string): Promise<string> {
   const client = await getAiClient()
   if (!client) throw Object.assign(new Error('AI is not configured'), { statusCode: 503 })
   const { model } = await getAiModelSettings()

@@ -38,6 +38,26 @@ export const aiKnowledgeDocs: DocSection = {
       type: 'p',
       text: 'Every docs search that finds no section answering the question is logged. The Docs gaps tab groups those questions by topic with counts, people and examples — a list of docs to write. A topic drops off by itself once a docs section answers it; Dismiss removes it by hand. The "try" box runs the same search Ask AI uses.'
     },
+    { type: 'h2', id: 'ai-knowledge-conflicts', text: 'Conflict check' },
+    {
+      type: 'p',
+      text: 'The Conflicts tab lists glossary terms and data guides that work against each other: the same word defined two different ways, near-duplicate terms with different meanings, and terms or guides that name a collection, field or saved query that no longer exists. The check runs when you save a term or guide and every night at 03:45 (the nightly run also asks the AI to read the definitions for contradictions a word match cannot see). Each finding links to both sides. A finding resolves by itself when you fix the cause; Dismiss hides one you have decided to keep.'
+    },
+    { type: 'h2', id: 'ai-knowledge-topics', text: 'Topic map' },
+    {
+      type: 'p',
+      text: 'The Topic map groups recent Ask AI questions by meaning and shows each topic by role: how many questions, how many went unanswered, how many got a thumbs-down and what they cost on average. A topic marked Gap goes wrong often and nothing in the glossary, data guides or playbooks matches its questions: write one. Topics have generated names; the questions themselves stay hidden unless you tick "Show sample questions", which is written to the activity log. Admins only.'
+    },
+    { type: 'h2', id: 'ai-knowledge-index', text: 'Search index' },
+    {
+      type: 'p',
+      text: 'Search by meaning only finds records that have been embedded. The Search index tab shows, per collection, how many records have no embedding yet or changed since their last one, how long the oldest of those has waited, and whether the embedding provider changed since the vectors were written (vectors from different providers cannot be compared, so the collection needs a reindex). Reindex embeds what is missing; after a provider switch it rebuilds every vector. A collection is flagged when a twentieth of its records are behind or a change has waited more than a day.'
+    },
+    { type: 'h2', id: 'ai-knowledge-first-week', text: 'First-week checklists' },
+    {
+      type: 'p',
+      text: 'On the First week tab pick a role and choose Draft with AI. The draft is built from what the role touches: its forms, the queues it can read, videos required of it and views shared with it, and every step points at something the role really has. Edit the steps, then Publish. Nothing reaches people until you do. A person whose role was set in the last two weeks sees the published list at the top of My Work; a step ticks itself when they open its link, finish its video or save a record in its collection, and they can hide the list. Redrafting never touches the published version.'
+    },
     {
       type: 'pre',
       code: `GET    /api/ai-knowledge/glossary                 (everyone)
@@ -52,7 +72,17 @@ POST   /api/ai-knowledge/suggestions/:id/accept   (admin) {payload?}
 POST   /api/ai-knowledge/suggestions/:id/dismiss  (admin)
 GET    /api/ai-knowledge/docs-gaps?days=          (admin)
 POST   /api/ai-knowledge/docs-gaps/dismiss        (admin) {ids[]}
-GET    /api/ai-knowledge/docs-search?q=           (signed in)`
+GET    /api/ai-knowledge/docs-search?q=           (signed in)
+GET    /api/ai-knowledge/findings?status=         (admin)
+POST   /api/ai-knowledge/findings/run             (admin) {ai?: boolean}
+POST   /api/ai-knowledge/findings/:id/dismiss|reopen (admin)
+GET    /api/ai-knowledge/topic-map?days=&questions= (admin)
+GET    /api/search/freshness                      (admin)
+POST   /api/search/reindex/:collection?force=1    (admin)
+GET    /api/role-checklists[/:roleId]             (admin)
+POST   /api/role-checklists/:roleId/draft|publish|unpublish (admin)
+PUT    /api/role-checklists/:roleId               (admin) {steps[]}
+GET    /api/my-work/first-week                    (signed in)`
     }
   ]
 }

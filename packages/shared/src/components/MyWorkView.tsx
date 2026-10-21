@@ -1,16 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation } from '../context'
+import { useLiveEvent } from '../lib/live'
+import { useFreshIds, useLiveOps } from '../lib/live-ops'
 import {
   type NotificationRouteMap,
   resolveNotificationTarget,
   runNotificationTarget
 } from '../lib/notification-target'
-import { useLiveEvent } from '../lib/live'
-import { useFreshIds, useLiveOps } from '../lib/live-ops'
 import { useOptionalRealtime } from '../lib/realtime'
 import { slaChip, withinDay } from '../lib/sla-chip'
 import { cn } from '../lib/utils'
+import { FirstWeekCard } from './ai/FirstWeekCard'
 import { canOpenChatRoom, openChatRoom } from './chat/chat-core'
 import { useMyRecordRooms } from './chat/chat-hooks'
 import { LearningPathCard } from './help-videos/viewer/LearningPathCard'
@@ -264,7 +265,9 @@ export function MyWorkView({
     ...(data?.notifications ?? []).map((n) => `n:${n.id}`)
   ])
   const hl = (key: string) =>
-    freshKeys.has(key) ? 'bg-nvr-cyan/10 transition-colors duration-700' : 'transition-colors duration-700'
+    freshKeys.has(key)
+      ? 'bg-nvr-cyan/10 transition-colors duration-700'
+      : 'transition-colors duration-700'
 
   const liveCollections = useMemo(() => {
     const set = new Set<string>()
@@ -375,6 +378,7 @@ export function MyWorkView({
 
   return (
     <div className='space-y-5 p-6' data-my-work>
+      <FirstWeekCard onOpenPath={onOpenPath} />
       <div className='flex items-start justify-between'>
         <div className='grid flex-1 grid-cols-2 gap-3 lg:grid-cols-4'>
           <Tile label='Waiting on you' value={data.counts.owned} />
@@ -553,7 +557,9 @@ export function MyWorkView({
                       <li
                         key={`${o.collection}:${o.item}`}
                         className={hl(`o:${o.collection}:${o.item}`)}
-                        data-my-work-fresh={freshKeys.has(`o:${o.collection}:${o.item}`) || undefined}
+                        data-my-work-fresh={
+                          freshKeys.has(`o:${o.collection}:${o.item}`) || undefined
+                        }
                       >
                         <button
                           type='button'

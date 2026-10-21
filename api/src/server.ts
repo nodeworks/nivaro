@@ -2204,6 +2204,22 @@ export async function buildServer() {
             "Nightly 03:30 — reads every procedure, function, view and trigger definition (plus import definitions' stored procedure bodies and custom queries), checks them for NULL-unsafe MERGE keys (with live NULL and duplicate counts), writes without WHERE, transactions without XACT_ABORT, local-time clocks, NOT IN over nullable columns and SELECT * on wide tables, optionally lints them through the SQLFluff sidecar (SQL_LINT_URL), and records findings on SQL checks. Reads only. Runs when SQL checks are turned on (setting, or SQL_CHECKS=on)."
         }
       )
+      // #2480 — nightly glossary / data-guide conflict check, with an AI read of the definitions
+      // when AI is configured. Reads the knowledge tables and writes only its own findings.
+      app.cron.schedule(
+        'ai-knowledge-check',
+        '45 3 * * *',
+        async () => {
+          const { runKnowledgeCheck } = await import('./services/ai-knowledge-check.js')
+          const r = await runKnowledgeCheck({ ai: true })
+          app.log.info(`ai-knowledge-check: ${r.open} open, ${r.new} new, ${r.resolved} resolved`)
+        },
+        {
+          idempotent: 'safe',
+          description:
+            'Nightly 03:45 — checks the AI glossary and data guides for terms that contradict each other, near-duplicate terms with different meanings, and entries naming collections, fields or saved queries that no longer exist (plus an AI read of the definitions when AI is configured). Findings are listed on AI Knowledge; fixed ones resolve by themselves.'
+        }
+      )
       app.cron.schedule(
         'db-tuning-watch',
         '55 * * * *',

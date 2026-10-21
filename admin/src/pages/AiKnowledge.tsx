@@ -7,11 +7,28 @@ import { useAuth } from '@/lib/auth'
 // AI Knowledge — what Ask AI knows beyond the data (migration 434): the
 // shared glossary (everyone reads it; term links from answers land here with
 // ?term=<slug>), per-collection data guides, drafted suggestions and the docs
-// gaps report (admins). ?tab=glossary|guides|suggestions|gaps.
+// gaps report (admins). ?tab=glossary|guides|suggestions|gaps|conflicts|topics|index|checklists.
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
-type Tab = 'glossary' | 'guides' | 'suggestions' | 'gaps'
-const TABS: Tab[] = ['glossary', 'guides', 'suggestions', 'gaps']
+type Tab =
+  | 'glossary'
+  | 'guides'
+  | 'suggestions'
+  | 'gaps'
+  | 'conflicts'
+  | 'topics'
+  | 'index'
+  | 'checklists'
+const TABS: Tab[] = [
+  'glossary',
+  'guides',
+  'suggestions',
+  'gaps',
+  'conflicts',
+  'topics',
+  'index',
+  'checklists'
+]
 
 export function AiKnowledgePage() {
   const { user } = useAuth()

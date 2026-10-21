@@ -14,6 +14,12 @@ import {
   normalizeGuideInput
 } from '../services/ai-knowledge.js'
 import {
+  decideFinding,
+  listFindings,
+  runKnowledgeCheck,
+  scheduleKnowledgeCheck
+} from '../services/ai-knowledge-check.js'
+import {
   acceptSuggestion,
   dismissSuggestion,
   draftGlossarySuggestions,
@@ -21,6 +27,7 @@ import {
   listSuggestions,
   type SuggestionStatus
 } from '../services/ai-knowledge-suggest.js'
+import { buildTopicMap } from '../services/ai-topic-map.js'
 import { loadDocsIndex, rankDocs } from '../services/docs-search.js'
 import { can } from '../services/permissions.js'
 
@@ -78,6 +85,7 @@ export async function aiKnowledgeRoutes(app: FastifyInstance) {
       updated_at: now
     })
     bustKnowledgeCaches()
+    scheduleKnowledgeCheck()
     await logActivity({
       action: 'ai-glossary-create',
       user: req.user!.id,
@@ -116,6 +124,7 @@ export async function aiKnowledgeRoutes(app: FastifyInstance) {
           updated_at: new Date()
         })
       bustKnowledgeCaches()
+      scheduleKnowledgeCheck()
       await logActivity({
         action: 'ai-glossary-update',
         user: req.user!.id,
@@ -140,6 +149,7 @@ export async function aiKnowledgeRoutes(app: FastifyInstance) {
       if (!cur) return reply.code(404).send({ error: 'No such term' })
       await db('nivaro_ai_glossary').where({ id }).del()
       bustKnowledgeCaches()
+      scheduleKnowledgeCheck()
       await logActivity({
         action: 'ai-glossary-delete',
         user: req.user!.id,
@@ -196,6 +206,7 @@ export async function aiKnowledgeRoutes(app: FastifyInstance) {
         await db('nivaro_ai_data_guides').insert({ collection, ...row })
       }
       bustKnowledgeCaches()
+      scheduleKnowledgeCheck()
       await logActivity({
         action: 'ai-data-guide-update',
         user: req.user!.id,
@@ -267,6 +278,7 @@ export async function aiKnowledgeRoutes(app: FastifyInstance) {
           : null
       try {
         const r = await acceptSuggestion(Number(req.params.id), req.user!.id, edits)
+        scheduleKnowledgeCheck()
         await logActivity({
           action: 'ai-knowledge-accept',
           user: req.user!.id,
@@ -292,6 +304,85 @@ export async function aiKnowledgeRoutes(app: FastifyInstance) {
       const ok = await dismissSuggestion(Number(req.params.id), req.user!.id)
       if (!ok) return reply.code(404).send({ error: 'No pending suggestion with that id' })
       return { data: { ok: true } }
+    }
+  )
+
+  // ─── Conflict check (#2480) ───────────────────────────────────────────────
+  app.get<{ Querystring: { status?: string } }>(
+    '/findings',
+    { preHandler: requireAdmin },
+    async (req) => {
+      const raw = req.query?.status
+      const status =
+        raw === 'dismissed' || raw === 'resolved' || raw === 'all' ? raw : ('open' as const)
+      return { data: await listFindings(status) }
+    }
+  )
+
+  app.post('/findings/run', { preHandler: requireAdmin }, async (req, reply) => {
+    const ai = (req.body as { ai?: unknown } | null)?.ai === true
+    try {
+      const r = await runKnowledgeCheck({ ai })
+      await logActivity({
+        action: 'ai-knowledge-check',
+        user: req.user!.id,
+        collection: 'nivaro_ai_knowledge_findings',
+        comment: `${r.open} open, ${r.new} new, ${r.resolved} resolved${ai ? ' (with AI read)' : ''}`,
+        req
+      })
+      return { data: r }
+    } catch (err) {
+      const code = statusOf(err)
+      if (code >= 500) req.log.warn({ err }, 'Knowledge check failed')
+      return reply.code(code).send({ error: code >= 500 ? 'Check failed' : (err as Error).message })
+    }
+  })
+
+  app.post<{ Params: { id: string; action: string } }>(
+    '/findings/:id/:action',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { action } = req.params
+      if (action !== 'dismiss' && action !== 'reopen')
+        return reply.code(404).send({ error: 'Unknown action' })
+      const ok = await decideFinding(
+        Number(req.params.id),
+        action === 'dismiss' ? 'dismissed' : 'open',
+        req.user!.id
+      )
+      if (!ok) return reply.code(404).send({ error: 'No such finding in that state' })
+      return { data: { ok: true } }
+    }
+  )
+
+  // ─── Topic map (#2734) ────────────────────────────────────────────────────
+  // Admin only. Topics carry generated names; the questions behind a topic are
+  // sent only with ?questions=1 and that read is logged like any admin look at
+  // other people's AI questions.
+  app.get<{ Querystring: { days?: string; fresh?: string; questions?: string } }>(
+    '/topic-map',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const withQuestions = req.query?.questions === '1'
+      try {
+        const data = await buildTopicMap({
+          days: Number(req.query?.days) || undefined,
+          fresh: req.query?.fresh === '1',
+          withQuestions
+        })
+        if (withQuestions)
+          await logActivity({
+            action: 'ai-topic-map-questions',
+            user: req.user!.id,
+            collection: 'nivaro_ai_calls',
+            comment: `sample questions for ${data.topics.length} topic(s), last ${data.days} days`,
+            req
+          })
+        return { data }
+      } catch (err) {
+        req.log.warn({ err }, 'Topic map failed')
+        return reply.code(500).send({ error: 'The topic map could not be built' })
+      }
     }
   )
 

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 
 // ---------------------------------------------------------------------------
 // Embeddings service
@@ -108,6 +109,13 @@ export async function embeddingProvider(): Promise<{
   return { provider: 'local', model: null }
 }
 
+/** The tag stored on each vector (#2482): which embedder wrote it. A change of
+ *  tag is a provider switch — the old vectors live in a different space. */
+export async function embeddingProviderTag(): Promise<string> {
+  const p = await embeddingProvider()
+  return p.model ? `${p.provider}:${p.model}` : p.provider
+}
+
 export async function embedText(text: string): Promise<number[]> {
   const voyageKey = process.env.VOYAGE_API_KEY
   if (voyageKey) return voyageEmbed(text, voyageKey)
@@ -139,20 +147,30 @@ export async function upsertItemEmbedding(
   collection: string,
   item: string,
   field: string,
-  text: string
+  text: string,
+  opts: { force?: boolean } = {}
 ): Promise<boolean> {
   const contentHash = createHash('sha256').update(text).digest('hex')
+  const tracked = await hasColumn('nivaro_embeddings', 'provider')
+  const tag = tracked ? await embeddingProviderTag() : null
 
   const existing = (await db('nivaro_embeddings')
     .where({ collection, item, field })
-    .first('id', 'content_hash')) as { id: number; content_hash: string } | undefined
-  if (existing?.content_hash === contentHash) return false
+    .first('id', 'content_hash', ...(tracked ? ['provider'] : []))) as
+    | { id: number; content_hash: string; provider?: string | null }
+    | undefined
+  // Unchanged text is skipped — unless the vector came from another embedder
+  // (a provider switch) or the caller forces a rebuild. A vector with no tag
+  // was written before tagging; it is kept, a forced reindex retags it.
+  const sameSpace = !tracked || !existing?.provider || existing.provider === tag
+  if (existing?.content_hash === contentHash && sameSpace && !opts.force) return false
 
   const vec = await embedText(text)
   const row = {
     content_hash: contentHash,
     embedding: JSON.stringify(vec),
-    updated_at: new Date()
+    updated_at: new Date(),
+    ...(tracked ? { provider: tag } : {})
   }
 
   if (existing) {

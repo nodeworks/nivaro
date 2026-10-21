@@ -11,6 +11,10 @@ import { Input } from '../ui/input'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Textarea } from '../ui/textarea'
 import { DataGuideCard, type DataGuideRow } from './DataGuideCard'
+import { EmbeddingFreshnessTab } from './EmbeddingFreshnessTab'
+import { type FindingSide, KnowledgeFindingsTab } from './KnowledgeFindingsTab'
+import { RoleChecklistsTab } from './RoleChecklistsTab'
+import { TopicMapTab } from './TopicMapTab'
 
 /**
  * What Ask AI knows beyond the data (migration 434), one console:
@@ -23,13 +27,25 @@ import { DataGuideCard, type DataGuideRow } from './DataGuideCard'
  *    grouped by topic.
  */
 
-export type AiKnowledgeTab = 'glossary' | 'guides' | 'suggestions' | 'gaps'
+export type AiKnowledgeTab =
+  | 'glossary'
+  | 'guides'
+  | 'suggestions'
+  | 'gaps'
+  | 'conflicts'
+  | 'index'
+  | 'topics'
+  | 'checklists'
 
 const TABS: Array<{ id: AiKnowledgeTab; label: string; admin: boolean }> = [
   { id: 'glossary', label: 'Glossary', admin: false },
   { id: 'guides', label: 'Data guides', admin: true },
   { id: 'suggestions', label: 'Suggestions', admin: true },
-  { id: 'gaps', label: 'Docs gaps', admin: true }
+  { id: 'gaps', label: 'Docs gaps', admin: true },
+  { id: 'conflicts', label: 'Conflicts', admin: true },
+  { id: 'topics', label: 'Topic map', admin: true },
+  { id: 'index', label: 'Search index', admin: true },
+  { id: 'checklists', label: 'First week', admin: true }
 ]
 
 const errMsg = (e: unknown, fallback: string) => (e as { message?: string })?.message || fallback
@@ -919,6 +935,11 @@ export function AiKnowledgeView({
   const tabs = TABS.filter((t) => isAdmin || !t.admin)
   const requested = tab ?? local
   const active = tabs.some((t) => t.id === requested) ? requested : 'glossary'
+  const [localTerm, setLocalTerm] = useState<string | null>(null)
+  const openSide = (side: FindingSide) => {
+    if (side.type === 'glossary') setLocalTerm(side.ref)
+    select(side.type === 'glossary' ? 'glossary' : 'guides')
+  }
   const select = (t: AiKnowledgeTab) => {
     setLocal(t)
     onTabChange?.(t)
@@ -945,10 +966,16 @@ export function AiKnowledgeView({
           ))}
         </div>
       )}
-      {active === 'glossary' && <GlossaryTab isAdmin={isAdmin} focusTerm={focusTerm} />}
+      {active === 'glossary' && (
+        <GlossaryTab isAdmin={isAdmin} focusTerm={localTerm ?? focusTerm} />
+      )}
       {active === 'guides' && <GuidesTab />}
       {active === 'suggestions' && <SuggestionsTab />}
       {active === 'gaps' && <GapsTab />}
+      {active === 'conflicts' && <KnowledgeFindingsTab onOpenSide={openSide} />}
+      {active === 'topics' && <TopicMapTab onOpenSuggestions={() => select('suggestions')} />}
+      {active === 'index' && <EmbeddingFreshnessTab />}
+      {active === 'checklists' && <RoleChecklistsTab />}
     </div>
   )
 }
