@@ -1,10 +1,275 @@
 {
-  "generated_at": "2026-10-21T01:52:30.652Z",
+  "generated_at": "2026-10-21T14:06:26.870Z",
   "releases": [
+    {
+      "version": "0.2.78",
+      "tag": "v0.2.78",
+      "date": "2026-10-21T10:06:13-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: minor fixes from the light/dark screenshot pass",
+              "hash": "bbf37543"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Sync docs: History wording after the screenshot pass",
+              "hash": "801a4f65"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: fixes from the live light/dark screenshot pass",
+              "hash": "922c232c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Sync docs: layout editor labels after the design pass",
+              "hash": "2ddf2027"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: design review fixes (one-row top bar, menus, findings strip)",
+              "hash": "3c99375d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Close the preview-item bypass and make limiter keys always expire",
+              "hash": "c0425c3c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor security fixes from the review (items 2-11)",
+              "hash": "018ac56b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor docs pass and lint of the merged branches",
+              "hash": "d809ec70"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix flaky Check impact test: wait for the record label",
+              "hash": "49f7e93e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Form change requests tell the form's owner first",
+              "hash": "390205a7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout AI: MCP layout tools, ask about this form, find a setting, explain two forms (#2694 #2695 #2676 #2693)",
+              "hash": "62dceee4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: test records, impact on save, new-record walkthrough, form cost (#2646 #2647 #2648 #2649)",
+              "hash": "84747c65"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout translations use the AI draft shape; SDK mirror carries group i18n",
+              "hash": "1c652e01"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of le-structure: nav uses the shared isTyping",
+              "hash": "8d662e06"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout inspector: column fit, width check, picker preview, suggestions, orphans, translations",
+              "hash": "62ceb538"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI gateway: retry without pictures when the model refuses them (#2669)",
+              "hash": "838f67dc"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: AI wording tools (#2677 #2678 #2679 #2681 #2682 #2683)",
+              "hash": "ee4ac361"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: rules on the canvas, driver hover, rule loops, default ghosts (#2632 #2640 #2641 #2642 #2633)",
+              "hash": "001faab5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: AI rule, cascade, field-rule and check writers",
+              "hash": "a89baff5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor AI tools: persona test, visual critique, autofill tuning, AI fill per field (#2685 #2690 #2691 #2692)",
+              "hash": "ad28ca90"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: build forms with AI (#2668 #2669 #2670 #2671 #2672)",
+              "hash": "fc946df8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Scheduled layout changes re-check their scheduler before applying (#2590)",
+              "hash": "108e5258"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SDK layout-ops mirror: change_note key, reason/ticket on submitLayoutOps (#2654)",
+              "hash": "b227d996"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: watch, owner, what's new, preview links, layout.updated (#2655 #2656 #2657 #2666 #2667)",
+              "hash": "e13ce4b1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: presence, rebase, recovery, unsaved markers, change note",
+              "hash": "6521c8c1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor AI assists: change check, help conflicts, same meaning, entry order, sensitive fields",
+              "hash": "21fcf497"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout overview across forms: labels, near copies, compare, find a field, sketches",
+              "hash": "b8f9d4cb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor history: session steps, named versions, section authors, canvas diff, scheduled changes",
+              "hash": "f56b0cf0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: duplicate, wrap, convert, pin, copy rules, replace",
+              "hash": "d3694dec"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: find, outline, breadcrumb, shortcuts, compact canvas (#2620 #2621 #2622 #2626 #2627)",
+              "hash": "c0474018"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: change every form at once (#2639 #2662 #2663)",
+              "hash": "013caea9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: field x state and role x section matrices, reset to parent",
+              "hash": "5f8f3875"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of le-help: SDK layout-ops mirror carries editor_note",
+              "hash": "fc58d514"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor help: field/section videos, why-locked, canvas notes, form map",
+              "hash": "dbdd6ba5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout ops: promote one layout, form change suggestions, dependency diagram",
+              "hash": "e3635c1b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: reuse forms and sections (#2584 #2594 #2606 #2585 #2616)",
+              "hash": "d1a4e01a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: command palette and AI restructure change sets",
+              "hash": "a08406fa"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout checks, coverage and health score (#2581 #2582 #2592 #2607 #2612)",
+              "hash": "d02c97af"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: changes wait for Save; Autosave is a switch (#2619)",
+              "hash": "eca45131"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor preview modes: roles side by side, who sees, state, device, what if",
+              "hash": "1c43fc64"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: usage hints, live usage, form friction, suggested sections",
+              "hash": "3da5314e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Layout editor: multi-select, Alt+arrow, auto-arrange, table view",
+              "hash": "24b116da"
+            }
+          ]
+        }
+      ],
+      "count": 42
+    },
     {
       "version": "0.2.77",
       "tag": "v0.2.77",
-      "date": "2026-10-20T21:52:15-04:00",
+      "date": "2026-10-20T21:52:30-04:00",
       "sections": [
         {
           "label": "Other",
