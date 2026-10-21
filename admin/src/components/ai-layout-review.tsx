@@ -1,3 +1,4 @@
+import type { LayoutReviewContext } from '@nivaro/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Sparkles, Undo2 } from 'lucide-react'
 import { useState } from 'react'
@@ -10,6 +11,10 @@ import { cn } from '@/lib/utils'
  * settings rail. Findings come from POST /ai-design/layouts/:id/review (rules
  * first, the model only for labels + help text). Apply writes the fix through
  * the server, which captures a layout version first; Undo restores it.
+ *
+ * Restructure change sets (#2587): a crowded step or section also carries a
+ * whole split (several new steps + the moves) previewed as a list and applied
+ * through the editor's draft as ONE batch — one undo step in the top bar.
  */
 
 type LayoutFix =
@@ -18,6 +23,17 @@ type LayoutFix =
   | { type: 'help_text'; field: string; text: string }
   | { type: 'label'; field: string; text: string }
   | { type: 'show_field'; field: string }
+
+type LayoutOp = Parameters<LayoutReviewContext['apply']>[0][number]
+
+interface LayoutChangeSet {
+  kind: 'split'
+  title: string
+  steps: string[]
+  ops: LayoutOp[]
+  parts: number
+  source: 'rules' | 'ai'
+}
 
 interface LayoutFinding {
   id: string
@@ -30,6 +46,7 @@ interface LayoutFinding {
   message: string
   suggestion: string
   fix: LayoutFix | null
+  change_set?: LayoutChangeSet
 }
 
 interface ReviewResult {
@@ -50,7 +67,14 @@ const FIX_VERB: Record<LayoutFix['type'], string> = {
   show_field: 'Show field'
 }
 
-export function LayoutReviewSection({ layoutId }: { layoutId: number }) {
+export function LayoutReviewSection({
+  layoutId,
+  ctx
+}: {
+  layoutId: number
+  /** The editor's draft: change sets apply through it (one undo step). */
+  ctx?: LayoutReviewContext
+}) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [result, setResult] = useState<ReviewResult | null>(null)
@@ -60,6 +84,23 @@ export function LayoutReviewSection({ layoutId }: { layoutId: number }) {
   // applied fix offers it (an older one would also roll back the later ones).
   const [lastApplied, setLastApplied] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
+  // finding id whose change set preview is open / finding ids whose change set was applied
+  const [openSet, setOpenSet] = useState<string | null>(null)
+  const [appliedSets, setAppliedSets] = useState<Set<string>>(new Set())
+
+  const applyChangeSet = (f: LayoutFinding, cs: LayoutChangeSet) => {
+    if (!ctx) return
+    const problem = ctx.check(cs.ops)
+    if (problem) {
+      toast.error(`The form changed since the review (${problem}) — review again`)
+      return
+    }
+    const where = f.group?.label ? `"${f.group.label}"` : 'the section'
+    ctx.apply(cs.ops, { label: `${cs.title.replace(/^Split/, `Split ${where}`)}` })
+    setAppliedSets((s) => new Set(s).add(f.id))
+    setOpenSet(null)
+    toast.success(`${cs.title} — Undo in the top bar reverses the whole change`)
+  }
 
   const review = useMutation({
     mutationFn: (ai: boolean) =>
@@ -71,6 +112,8 @@ export function LayoutReviewSection({ layoutId }: { layoutId: number }) {
       setApplied({})
       setLastApplied(null)
       setDrafts({})
+      setOpenSet(null)
+      setAppliedSets(new Set())
     },
     onError: (e) => toast.error(errOf(e, 'Review failed'))
   })
@@ -174,7 +217,9 @@ export function LayoutReviewSection({ layoutId }: { layoutId: number }) {
           )}
           <div className='max-h-[420px] space-y-1.5 overflow-y-auto'>
             {findings.map((f) => {
-              const fix = fixFor(f)
+              const cs = f.change_set
+              const setDone = appliedSets.has(f.id)
+              const fix = setDone ? null : fixFor(f)
               const done = f.id in applied
               const editable = f.fix?.type === 'help_text' || f.fix?.type === 'label'
               return (
@@ -199,6 +244,57 @@ export function LayoutReviewSection({ layoutId }: { layoutId: number }) {
                       className='mt-1 w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] dark:border-border dark:bg-background'
                       aria-label='Suggested text'
                     />
+                  )}
+                  {cs && (
+                    <div className='mt-1' data-change-set={cs.kind}>
+                      {setDone ? (
+                        <span className='text-emerald-600 dark:text-emerald-400'>
+                          Applied as one change — Undo in the top bar reverses it
+                        </span>
+                      ) : openSet === f.id ? (
+                        <div className='space-y-1.5 rounded border border-slate-200 bg-white p-1.5 dark:border-border dark:bg-background'>
+                          <p className='font-medium text-slate-700 dark:text-slate-200'>
+                            {cs.title}
+                            {cs.source === 'ai' && <span className='ml-1 text-nvr-cyan'>· AI</span>}
+                          </p>
+                          <ol className='list-decimal space-y-0.5 pl-4 text-slate-600 dark:text-slate-300'>
+                            {cs.steps.map((s, i) => (
+                              <li key={`${i}:${s}`}>{s}</li>
+                            ))}
+                          </ol>
+                          {ctx ? (
+                            <div className='flex items-center gap-2'>
+                              <button
+                                type='button'
+                                onClick={() => applyChangeSet(f, cs)}
+                                data-change-set-apply=''
+                                className='rounded bg-nvr-cyan px-1.5 py-0.5 font-medium text-white'
+                              >
+                                Apply all
+                              </button>
+                              <button
+                                type='button'
+                                onClick={() => setOpenSet(null)}
+                                className='text-slate-500 underline'
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <p className='text-slate-500'>Open the layout editor to apply this.</p>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          type='button'
+                          onClick={() => setOpenSet(f.id)}
+                          data-change-set-open=''
+                          className='rounded border border-slate-300 px-1.5 py-0.5 font-medium text-slate-700 hover:bg-muted dark:border-border dark:text-slate-200'
+                        >
+                          {cs.title}…
+                        </button>
+                      )}
+                    </div>
                   )}
                   {fix && (
                     <div className='mt-1 flex items-center gap-2'>

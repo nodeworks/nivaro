@@ -808,6 +808,48 @@ describe('LayoutEditor', () => {
     await mount()
     expect(document.querySelector('[data-editing-banner]')).toBeNull()
   })
+
+  it('⌘K opens the command palette; a command previews in words and applies as one batch', async () => {
+    const { calls } = await mount()
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))
+    })
+    await settle(() => !!document.querySelector('[data-command-input]'))
+    const input = document.querySelector('[data-command-input]') as HTMLInputElement
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        input,
+        'move Notes to Main; make Title required'
+      )
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => {
+      input.form?.requestSubmit()
+    })
+    await settle(() => !!document.querySelector('[data-command-preview]'))
+    const preview = document.querySelector('[data-command-preview]')?.textContent ?? ''
+    expect(preview).toContain('Move Notes to Main')
+    expect(preview).toContain('Make Title required')
+    expect(opsCalls(calls)).toEqual([])
+    click(document.querySelector('[data-command-apply]'))
+    await settle(() => opsCalls(calls).length > 0)
+    expect(opsCalls(calls)).toEqual([
+      [
+        {
+          op: 'move',
+          from: { field: 'notes', group_key: 'extra' },
+          to_group_key: 'main',
+          index: 2
+        },
+        {
+          op: 'update_placement',
+          at: { field: 'title', group_key: 'main' },
+          patch: { overrides: { required: true } }
+        }
+      ]
+    ])
+    expect(document.querySelector('[data-command-input]')).toBeNull()
+  })
 })
 
 describe('isTyping', () => {

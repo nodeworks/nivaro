@@ -85,7 +85,8 @@ export function FormSettings({
         ),
       setText: (patch: LayoutPatch, label: string) =>
         apply([{ op: 'layout_update', patch }], { label, text: true }),
-      flush: doFlush
+      flush: doFlush,
+      apply: (ops: LayoutOp[], opts: { label: string }) => apply(ops, opts)
     }),
     [bundle, kind, collection, apply, doFlush]
   )

@@ -10,10 +10,12 @@ import { type AiComplete, asArray, cleanText, parseJsonLoose, titleCase } from '
  *      fields, a required field inside a collapsed section, a required field
  *      the layout hides, required/rule-bound fields with no help text, two
  *      fields showing the same label, empty sections.
- *   2. The model (optional) — reads the same field list and answers two
- *      things only: which labels are confusing (with a better one) and help
- *      text for the fields pass 1 flagged. Its answer is data: every field it
- *      names must be on the layout, every text is capped, the rest is dropped.
+ *   2. The model (optional) — reads the same field list and answers only:
+ *      which labels are confusing (with a better one) and help
+ *      text for the fields pass 1 flagged — plus, for a crowded step or
+ *      section, how to divide it (#2587, checked in layout-split.ts). Its
+ *      answer is data: every field it names must be on the layout, every
+ *      text is capped, the rest is dropped.
  *
  * Each finding names its field and carries a `fix` the admin can apply. A fix
  * only ever touches THIS layout's rows (its groups and field assignments —
@@ -386,15 +388,30 @@ export function reviewLayoutRules(model: LayoutModel): LayoutFinding[] {
 export interface AiLayoutAnswer {
   help: Map<string, string>
   labels: Array<{ field: string; problem: string; suggested_label: string }>
+  /** group key → the model's raw parts for a crowded group (#2587); layout-split validates them. */
+  splits: Map<string, unknown>
+}
+
+/** A crowded step or section the model is asked to divide (#2587). */
+export interface SplitWanted {
+  group: string
+  label: string
+  parts: number
+  fields: string[]
 }
 
 const LAYOUT_SYSTEM = `You review a data-entry form for usability. You get the form's fields as JSON.
 Answer with ONE JSON object and nothing else:
 {"labels":[{"field":"<field key>","problem":"<why the label confuses>","suggested_label":"<better label, <=40 chars>"}],
  "help":[{"field":"<field key>","text":"<one sentence of help text, <=160 chars>"}]}
+When the input has split_wanted, also answer "splits":[{"group":"<group key>","parts":[{"label":"<short name, <=40 chars>","fields":["<field key>",...]}]}] — divide each listed group's fields into about the given number of parts of related fields, every listed field exactly once, keeping the form's order where it makes sense.
 Rules: only use field keys from the input. "labels" lists at most 8 labels that are genuinely unclear (jargon, abbreviations, machine names, ambiguous pairs); an empty list is fine. "help" covers ONLY the fields listed under help_wanted. Help text tells a person what to enter and why, in plain words, never repeating the label.`
 
-export function buildLayoutPrompt(model: LayoutModel, wanted: LayoutFieldInfo[]): string {
+export function buildLayoutPrompt(
+  model: LayoutModel,
+  wanted: LayoutFieldInfo[],
+  splitWanted: SplitWanted[] = []
+): string {
   const groupLabel = new Map(model.groups.map((g) => [g.key, g.label]))
   const fields = model.fields
     .filter((f) => !f.hidden)
@@ -411,7 +428,17 @@ export function buildLayoutPrompt(model: LayoutModel, wanted: LayoutFieldInfo[])
     collection: model.layout.collection,
     layout: model.layout.name,
     fields,
-    help_wanted: wanted.map((f) => f.field)
+    help_wanted: wanted.map((f) => f.field),
+    ...(splitWanted.length
+      ? {
+          split_wanted: splitWanted.map((s) => ({
+            group: s.group,
+            label: s.label,
+            parts: s.parts,
+            fields: s.fields
+          }))
+        }
+      : {})
   })
 }
 
@@ -448,7 +475,13 @@ export function parseLayoutAnswer(
     })
     if (labels.length >= 8) break
   }
-  return { help, labels }
+  // Splits stay raw here: layout-split checks each against the group's fields.
+  const splits = new Map<string, unknown>()
+  for (const sp of asArray(parsed.splits)) {
+    const o = sp as { group?: unknown; parts?: unknown }
+    if (typeof o?.group === 'string' && Array.isArray(o.parts)) splits.set(o.group, o.parts)
+  }
+  return { help, labels, splits }
 }
 
 /** Fold the model's answer into the rule findings. */
@@ -498,27 +531,39 @@ export function mergeAiFindings(
 
 export async function reviewLayout(
   model: LayoutModel,
-  complete: AiComplete | null
-): Promise<{ findings: LayoutFinding[]; ai_used: boolean; ai_error: string | null }> {
+  complete: AiComplete | null,
+  /** Crowded groups to ask the model to divide, given the rule findings (#2587). */
+  splitWanted: (findings: LayoutFinding[]) => SplitWanted[] = () => []
+): Promise<{
+  findings: LayoutFinding[]
+  ai_used: boolean
+  ai_error: string | null
+  splits: Map<string, unknown>
+}> {
   const findings = reviewLayoutRules(model)
-  if (!complete) return { findings, ai_used: false, ai_error: null }
+  const none = new Map<string, unknown>()
+  if (!complete) return { findings, ai_used: false, ai_error: null, splits: none }
   const wanted = helpCandidates(model)
+  const splitAsk = splitWanted(findings)
   try {
     const text = await complete({
       system: LAYOUT_SYSTEM,
-      user: buildLayoutPrompt(model, wanted),
-      maxTokens: 2500
+      user: buildLayoutPrompt(model, wanted, splitAsk),
+      maxTokens: splitAsk.length ? 4000 : 2500
     })
+    const answer = parseLayoutAnswer(text, model, wanted)
     return {
-      findings: mergeAiFindings(findings, model, parseLayoutAnswer(text, model, wanted)),
+      findings: mergeAiFindings(findings, model, answer),
       ai_used: true,
-      ai_error: null
+      ai_error: null,
+      splits: answer.splits
     }
   } catch (err) {
     return {
       findings,
       ai_used: false,
-      ai_error: (err instanceof Error ? err.message : String(err)).slice(0, 300)
+      ai_error: (err instanceof Error ? err.message : String(err)).slice(0, 300),
+      splits: none
     }
   }
 }

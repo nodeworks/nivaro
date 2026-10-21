@@ -1,4 +1,4 @@
-import type { LayoutBundle, LayoutPatch } from '../../../lib/layout-ops'
+import type { LayoutBundle, LayoutOp, LayoutPatch } from '../../../lib/layout-ops'
 import { type LayoutKind, settingDef } from './settings-registry'
 
 /** What every Form settings section gets from the panel. */
@@ -13,6 +13,8 @@ export interface SectionProps {
   /** Typing: coalesced per setting and sent after a pause; call flush() on blur. */
   setText(patch: LayoutPatch, label: string): void
   flush(): void
+  /** The draft's apply for multi-op changes (AI review change sets); one call = one undo step. */
+  apply?(ops: LayoutOp[], opts: { label: string }): void
 }
 
 /** A stored bit / boolean read as a boolean. */

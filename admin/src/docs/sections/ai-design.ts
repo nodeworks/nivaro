@@ -18,6 +18,10 @@ export const aiDesignDocs: DocSection = {
       type: 'p',
       text: "Each finding names the field and, where it can, carries a fix: **Open section**, **Move field** (to the emptiest sibling step or section), **Add help text**, **Rename** or **Show field**. Help text and labels are editable before you apply them and are written as this layout's overrides, so other layouts keep theirs. A layout version is captured before every fix, so the newest fix offers **Undo** and any of them can be rolled back from Version history."
     },
+    {
+      type: 'p',
+      text: 'A crowded step or section also offers a whole restructure: **Split into 3 steps…** (or sections) previews every change as a list — the new steps, where each sits and which fields move into it — and **Apply all** makes them as ONE change through the editor, so a single Undo in the top bar reverses the whole split. When AI is set up the model groups related fields and names the parts; its answer is used only if it places every field exactly once, otherwise the fields are split into equal runs in their current order ("Details (2)", "Details (3)"). Hidden fields stay where they are. The single **Move field** fix stays available beside it.'
+    },
     { type: 'h2', id: 'ai-design-help-text', text: 'Field help text drafts' },
     {
       type: 'p',
@@ -42,6 +46,7 @@ export const aiDesignDocs: DocSection = {
       type: 'pre',
       code: `POST /api/ai-design/layouts/:id/review        { ai?: boolean }  → { findings[], ai_used, ai_error, ai_configured }
 POST /api/ai-design/layouts/:id/apply         { fix }           → { applied, undo_version_id }
+POST /api/ai-design/layouts/:id/command       { text }          → { intents[], explanation, dropped } (422 when it cannot)
 GET  /api/ai-design/help-text/:collection                       → { candidates[] }
 POST /api/ai-design/help-text/:collection/draft { fields? }     → { drafts[] }
 POST /api/ai-design/help-text/:collection/apply { field, text } → { field, note, previous }
@@ -51,7 +56,9 @@ POST /api/ai-design/roles/apply    { proposal, hash }           → 201 { id, na
 POST /api/ai-design/role-views/suggest { days?, ai? }           → { suggestions[], ai_used, ai_error }
 POST /api/ai-design/role-views/apply { role, collection, name, filters, sort?, columns? } → 201 { id }
 
-All routes require an administrator. Drafting and role design answer 503 when AI is not set up;
+Crowded-group findings carry change_set { kind: 'split', title, steps[], ops[], base_rev, parts, source };
+the editor applies ops through its draft (POST /api/collection-layouts/:id/ops), one batch.
+All routes require an administrator. Drafting, role design and commands answer 503 when AI is not set up;
 the layout review and view suggestions still run their rule checks without it.`
     }
   ]
