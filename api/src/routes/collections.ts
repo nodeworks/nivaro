@@ -458,6 +458,11 @@ export async function collectionsRoutes(app: FastifyInstance) {
     // Audit level is cached per collection in the activity hook — bust it so an
     // accountability change takes effect on the next write, not 60s later.
     if ('accountability' in body) clearAccountabilityCache(collection)
+    // #2490 — `browser_config.live_events` switches the collection's live record events.
+    if ('browser_config' in body) {
+      const { forgetLiveMode } = await import('../services/collection-live-mode.js')
+      forgetLiveMode(collection)
+    }
     await logActivity({
       action: 'update',
       user: req.user?.id,

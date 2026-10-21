@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
+import { SocketHealthTab } from './realtime/SocketHealthTab'
 
 /**
  * Realtime console (#270 diagnostics, #273 now-editing, #275 concurrency
@@ -13,7 +14,15 @@ import { cn } from '@/lib/utils'
  * route says so in its payload.
  */
 
-type Tab = 'sockets' | 'payload' | 'traffic' | 'editing' | 'concurrency' | 'firehose' | 'pipeline'
+type Tab =
+  | 'sockets'
+  | 'health'
+  | 'payload'
+  | 'traffic'
+  | 'editing'
+  | 'concurrency'
+  | 'firehose'
+  | 'pipeline'
 
 interface SocketRow {
   id: string
@@ -92,6 +101,7 @@ export default function Realtime() {
           {(
             [
               ['sockets', 'Sockets & rooms'],
+              ['health', 'Socket health'],
               ['payload', 'Payload size'],
               ['traffic', 'Live traffic'],
               ['editing', 'Now editing'],
@@ -118,6 +128,7 @@ export default function Realtime() {
       </header>
       <div className='flex-1 overflow-y-auto p-6'>
         {tab === 'sockets' && <SocketsTab />}
+        {tab === 'health' && <SocketHealthTab />}
         {tab === 'payload' && <PayloadTab />}
         {tab === 'traffic' && <TrafficTab />}
         {tab === 'editing' && <EditingTab />}
@@ -558,7 +569,26 @@ interface InspectView {
   rooms: string[]
   recording: boolean
   ring: number
-  events: Array<{ at: string; event: string; room: string | null; bytes: number }>
+  events: Array<{
+    at: string
+    event: string
+    room: string | null
+    bytes: number
+    /** #2779 — 'in' = an event the client sent, with its handler time. */
+    dir?: 'in' | 'out'
+    ms?: number
+  }>
+  /** #2460 / #2488 — what is waiting to be sent to this client. */
+  buffer?: {
+    waiting: number
+    peak: number
+    mode: 'ok' | 'soft'
+    soft_since: string | null
+    soft_count: number
+    held_rooms: number
+    suppressed: number
+    limits: { soft: number; hard: number }
+  } | null
 }
 
 function SocketInspector({ id, onClose }: { id: string; onClose: () => void }) {
@@ -606,6 +636,25 @@ function SocketInspector({ id, onClose }: { id: string; onClose: () => void }) {
         </p>
       ) : (
         <div className='space-y-3 p-3'>
+          {data.buffer && (
+            <p className='text-[12px] text-slate-600 dark:text-slate-300' data-inspect-buffer>
+              {formatBytes(data.buffer.waiting)} waiting to send (peak{' '}
+              {formatBytes(data.buffer.peak)}).{' '}
+              {data.buffer.mode === 'soft' ? (
+                <span className='font-medium text-amber-700 dark:text-amber-300'>
+                  Held back since{' '}
+                  {data.buffer.soft_since
+                    ? new Date(data.buffer.soft_since).toLocaleTimeString()
+                    : 'just now'}
+                  : {data.buffer.held_rooms} room(s) to refetch once it catches up.
+                </span>
+              ) : data.buffer.soft_count > 0 ? (
+                `Held back ${data.buffer.soft_count} time(s); ${data.buffer.suppressed} event(s) replaced by refetch notices.`
+              ) : (
+                'Keeping up.'
+              )}
+            </p>
+          )}
           <div>
             <div className='mb-1 text-[10.5px] uppercase tracking-wide text-slate-400'>
               Rooms ({data.rooms.length})
@@ -623,7 +672,7 @@ function SocketInspector({ id, onClose }: { id: string; onClose: () => void }) {
           </div>
           <div>
             <div className='mb-1 text-[10.5px] uppercase tracking-wide text-slate-400'>
-              Events sent since you opened this ({data.events.length} of last {data.ring})
+              Events since you opened this ({data.events.length} of last {data.ring})
             </div>
             {data.events.length === 0 ? (
               <p className='text-[12px] text-slate-400'>Nothing sent yet — waiting for traffic.</p>
@@ -637,11 +686,35 @@ function SocketInspector({ id, onClose }: { id: string; onClose: () => void }) {
                         <td className='px-2 py-1 text-slate-500'>
                           {new Date(e.at).toLocaleTimeString()}
                         </td>
-                        <td className='px-2 py-1 font-mono text-[11px]'>{e.event}</td>
-                        <td className='px-2 py-1 font-mono text-[11px] text-slate-500'>
-                          {e.room ?? 'direct'}
+                        <td className='px-2 py-1 font-mono text-[11px]'>
+                          <span
+                            className='mr-1.5 text-slate-400'
+                            data-tip={e.dir === 'in' ? 'Sent by the client' : 'Sent to the client'}
+                          >
+                            {e.dir === 'in' ? '←' : '→'}
+                          </span>
+                          {e.event}
                         </td>
-                        <td className='px-2 py-1 text-right'>{e.bytes} B</td>
+                        <td className='px-2 py-1 font-mono text-[11px] text-slate-500'>
+                          {e.dir === 'in' ? 'handled' : (e.room ?? 'direct')}
+                        </td>
+                        <td className='px-2 py-1 text-right'>
+                          {e.dir === 'in' && e.ms != null ? (
+                            <span
+                              className={cn(
+                                e.ms >= 1000
+                                  ? 'text-red-600 dark:text-red-400'
+                                  : e.ms >= 100
+                                    ? 'text-amber-700 dark:text-amber-300'
+                                    : undefined
+                              )}
+                            >
+                              {e.ms < 10 ? e.ms.toFixed(1) : Math.round(e.ms)} ms
+                            </span>
+                          ) : (
+                            `${e.bytes} B`
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

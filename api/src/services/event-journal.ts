@@ -8,6 +8,7 @@ import {
 import { publishToStream, streamActive } from './event-stream.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
+import { livePayload } from './socket-transport.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -33,6 +34,9 @@ const JOURNAL_KEY = 'nvr:ev:journal'
 const JOURNAL_MAX = 5000
 const JOURNAL_TTL_S = 900
 const REPLAY_CAP = 500
+/** #2462 — one counter per room (`nvr:ev:rseq:<room>`), dropped after an hour without events. */
+const ROOM_SEQ_PREFIX = 'nvr:ev:rseq:'
+const ROOM_SEQ_TTL_S = 3600
 
 let _redis: Redis | null = null
 export function setJournalRedis(redis: Redis): void {
@@ -51,6 +55,8 @@ export interface JournalEntry {
   room: string
   event: string
   payload: Record<string, unknown>
+  /** #2462 — the room's own sequence number (absent on entries written before it existed). */
+  rseq?: number
 }
 
 export interface EmitResult {
@@ -85,11 +91,25 @@ export async function journaledEmit(
   const io = getIo()
   if (!io) return { seq: null, path: 'none', room }
   let seq: number | null = null
+  let rseq: number | null = null
   const t0 = observer ? performance.now() : 0
   try {
     if (_redis) {
-      seq = await _redis.incr(SEQ_KEY)
-      const entry: JournalEntry = { seq, room, event, payload }
+      // #2462 — the global position and this room's own counter in one transaction, so the
+      // room sequence follows the global order. A connected client that sees a room's counter
+      // skip knows it missed an event there and catches that room up alone.
+      const rkey = `${ROOM_SEQ_PREFIX}${room}`
+      const counted = await _redis
+        .multi()
+        .incr(SEQ_KEY)
+        .incr(rkey)
+        .expire(rkey, ROOM_SEQ_TTL_S)
+        .exec()
+      seq = Number(counted?.[0]?.[1])
+      const r = Number(counted?.[1]?.[1])
+      if (!Number.isFinite(seq) || seq <= 0) throw new Error('no sequence')
+      if (Number.isFinite(r) && r > 0) rseq = r
+      const entry: JournalEntry = { seq, room, event, payload, ...(rseq ? { rseq } : {}) }
       await _redis
         .multi()
         .zadd(JOURNAL_KEY, seq, JSON.stringify(entry))
@@ -99,11 +119,14 @@ export async function journaledEmit(
     }
   } catch {
     seq = null // Redis down — emit unjournaled (fail open)
+    rseq = null
   }
-  const out = seq == null ? payload : { ...payload, _seq: seq }
+  // `_room` is the room as the client joined it (tenant prefix off), so it can key its counter.
+  const out =
+    seq == null ? payload : livePayload({ seq, room, event, payload, ...(rseq ? { rseq } : {}) })
   let path: EmitResult['path'] = 'adapter'
   if (seq != null) {
-    const entry: JournalEntry = { seq, room, event, payload }
+    const entry: JournalEntry = { seq, room, event, payload, ...(rseq ? { rseq } : {}) }
     recordDurable(entry) // #1673 — buffered, never awaited
     // #1737 — stream first; the local emit only once the other replicas will hear it.
     if (streamActive() && (await publishToStream(entry, { self: opts.selfViaStream }))) {

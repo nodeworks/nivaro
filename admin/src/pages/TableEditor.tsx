@@ -7211,6 +7211,10 @@ interface BrowserConfig {
   record_tabs?: boolean
   /** Registry bulk actions (keys) the bar shows; null/absent = all. */
   bulk_actions?: string[] | null
+  /** #2490 — live record events: on (default), batched id lists, or off (lists poll). */
+  live_events?: 'on' | 'batched' | 'off'
+  /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
+  [key: string]: unknown
 }
 
 // #620 — custom collection empty state. (The slug picker that briefly lived
@@ -7323,6 +7327,65 @@ function EmptyStateSlugSection({ tableName }: { tableName: string }) {
   )
 }
 
+const LIVE_EVENT_CHOICES: Array<{ value: 'on' | 'batched' | 'off'; label: string; hint: string }> =
+  [
+    {
+      value: 'on',
+      label: 'Every change',
+      hint: 'Open lists and records hear each change the moment it is saved.'
+    },
+    {
+      value: 'batched',
+      label: 'Batched',
+      hint: 'Changes are gathered for 2 seconds and sent as one list of ids — for collections that change in bursts.'
+    },
+    {
+      value: 'off',
+      label: 'Off',
+      hint: 'No live updates for this collection; lists refresh every 30 seconds instead. For import staging tables and other rows nobody watches live.'
+    }
+  ]
+
+/** #2490 — the collection's live record events: every change, batched id lists, or none. */
+function LiveEventsSetting({
+  value,
+  onChange
+}: {
+  value: 'on' | 'batched' | 'off'
+  onChange: (v: 'on' | 'batched' | 'off') => void
+}) {
+  const current = LIVE_EVENT_CHOICES.find((c) => c.value === value) ?? LIVE_EVENT_CHOICES[0]
+  return (
+    <div className='flex items-start justify-between gap-4' data-live-events={value}>
+      <div className='min-w-0'>
+        <p className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'>
+          Live updates
+        </p>
+        <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>{current.hint}</p>
+      </div>
+      <fieldset className='inline-flex shrink-0 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'>
+        <legend className='sr-only'>Live updates</legend>
+        {LIVE_EVENT_CHOICES.map((c) => (
+          <button
+            key={c.value}
+            type='button'
+            aria-pressed={value === c.value}
+            onClick={() => value !== c.value && onChange(c.value)}
+            className={cn(
+              'rounded px-2.5 py-1 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60',
+              value === c.value
+                ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+            )}
+          >
+            {c.label}
+          </button>
+        ))}
+      </fieldset>
+    </div>
+  )
+}
+
 function BrowserSettingsSection({ tableName }: { tableName: string }) {
   const qc = useQueryClient()
   const { data: col } = useQuery({
@@ -7355,8 +7418,22 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
 
   const patch = async (partial: BrowserConfig) => {
     const next = { ...cfg, ...partial }
-    // Drop defaults so the stored JSON stays minimal.
+    // Drop defaults so the stored JSON stays minimal. Keys this card does not edit
+    // (export_filename, fulfilment, …) are kept as they are.
+    const OWN = new Set([
+      'checkbox_selection',
+      'show_actions',
+      'allow_create',
+      'copy_as',
+      'page_size',
+      'quick_filters',
+      'default_sort',
+      'record_tabs',
+      'bulk_actions',
+      'live_events'
+    ])
     const clean: BrowserConfig = {}
+    for (const [k, v] of Object.entries(next)) if (!OWN.has(k) && v !== undefined) clean[k] = v
     if (next.checkbox_selection === false) clean.checkbox_selection = false
     if (next.show_actions === false) clean.show_actions = false
     if (next.allow_create === false) clean.allow_create = false
@@ -7366,6 +7443,8 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.default_sort?.trim()) clean.default_sort = next.default_sort.trim()
     if (next.record_tabs === true) clean.record_tabs = true
     if (Array.isArray(next.bulk_actions)) clean.bulk_actions = next.bulk_actions
+    if (next.live_events === 'batched' || next.live_events === 'off')
+      clean.live_events = next.live_events
     await api.patch(`/collections/${tableName}`, {
       browser_config: Object.keys(clean).length > 0 ? clean : null
     })
@@ -7435,6 +7514,10 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
             onCheckedChange={(v) => void patch({ record_tabs: v })}
           />
         </div>
+        <LiveEventsSetting
+          value={cfg.live_events ?? 'on'}
+          onChange={(v) => void patch({ live_events: v })}
+        />
         <div className='flex items-center justify-between gap-4'>
           <div>
             <p className='text-[12.5px] font-medium text-slate-700'>Page size</p>

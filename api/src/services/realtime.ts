@@ -1,5 +1,12 @@
 import type { Server as SocketIOServer } from 'socket.io'
-import { journaledEmit } from './event-journal.js'
+import {
+  type LiveMode,
+  liveModeNow,
+  liveModeOf,
+  noteLiveSuppressed,
+  queueBatched
+} from './collection-live-mode.js'
+import { type EmitResult, journaledEmit } from './event-journal.js'
 import { publishCollectionTouched, publishItemEvent } from './item-events.js'
 import { noteCollectionWrite, readCachesActive } from './read-caches.js'
 import { publishSseEvent } from './sse-hub.js'
@@ -47,27 +54,44 @@ export function broadcastCollectionUpdate(
       at: Date.now()
     })
   }
-  // SSE mirror (#602): /events/stream consumers get the same minimal payload.
-  publishSseEvent({
-    collection,
-    item,
-    action: extra?.action,
-    changed_fields: extra?.changed_fields?.slice(0, 50)
-  })
   // #1826 — a staged import run writing through the items service says so, so a form open on
   // the record can warn "an import is updating this record" instead of looking like a person.
   const source = extra?.source ?? (currentTrafficSource()?.kind === 'import' ? 'import' : undefined)
-  const journaled = journaledEmit(`collection:${collection}`, 'collection:update', {
+  const payload = {
     collection,
     item,
     ...(extra?.action ? { action: extra.action } : {}),
     ...(extra?.changed_fields?.length ? { changed_fields: extra.changed_fields.slice(0, 50) } : {}),
     ...(source ? { source } : {}),
     ...(extra?.bulk != null ? { bulk: extra.bulk } : {})
-  })
+  }
+  // #2490 — the collection's realtime switch: every write live (default), one batched id list
+  // per window, or nothing live at all (lists on it poll).
+  const deliver = (mode: LiveMode): Promise<EmitResult | null> => {
+    if (mode === 'off') {
+      noteLiveSuppressed()
+      return Promise.resolve(null)
+    }
+    // SSE mirror (#602): /events/stream consumers get the same minimal payload.
+    publishSseEvent({
+      collection,
+      item,
+      action: extra?.action,
+      changed_fields: extra?.changed_fields?.slice(0, 50)
+    })
+    if (mode === 'batched') {
+      queueBatched(collection, payload)
+      return Promise.resolve(null)
+    }
+    return journaledEmit(`collection:${collection}`, 'collection:update', payload)
+  }
+  // Not read yet in this process: this write goes out live as before while the mode loads.
+  const known = liveModeNow(collection)
+  if (!known) void liveModeOf(collection).catch(() => {})
+  const journaled = deliver(known ?? 'on')
   // GraphQL subscriptions hear the same minimal event, once it has its journal position: the
   // SSE transport sends that as the event id, so a reconnect resumes from it (#1749).
-  if (extra?.action) {
+  if (extra?.action && known !== 'off') {
     const ev = {
       collection,
       item: String(item),
@@ -75,13 +99,21 @@ export function broadcastCollectionUpdate(
       changed_fields: extra.changed_fields?.slice(0, 50) ?? []
     }
     void journaled.then(
-      (r) => publishItemEvent(r.seq == null ? ev : { ...ev, seq: r.seq }),
+      (r) => {
+        // A collection switched off sends nothing; a temporary or list read cache elsewhere
+        // still hears it.
+        if (r == null && liveModeNow(collection) === 'off') {
+          if (tempCacheActive() || readCachesActive()) publishCollectionTouched(collection)
+          return
+        }
+        publishItemEvent(r?.seq == null ? ev : { ...ev, seq: r.seq })
+      },
       () => publishItemEvent(ev)
     )
   } else if (tempCacheActive() || readCachesActive()) {
-    // #2273 — no itemMutated event (a record aspect, a raw write): other replicas' temporary
-    // caches (and list read caches, #2443/#2444) still have to hear it. Only while one holds
-    // something; subscriptions see nothing new.
+    // #2273 — no itemMutated event (a record aspect, a raw write, a collection switched off):
+    // other replicas' temporary caches (and list read caches, #2443/#2444) still have to hear
+    // it. Only while one holds something; subscriptions see nothing new.
     publishCollectionTouched(collection)
   }
 }

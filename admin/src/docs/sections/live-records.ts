@@ -300,8 +300,31 @@ useLiveEvent('conformance:progress', (p) => setProgress(p), { includeOwn: true }
         "Tasks: assigning, claiming, editing, completing and deleting a task refresh the record's Tasks section (`$tasks`).",
         'Record chips in chat and linked record tokens update their state pill when the record moves. No state name travels in the notice; each viewer re-reads the pill with their own access.',
         'Queue item sheets follow their record (state, comments) the way the full record page does; drill sheets rendered by the record form already did.',
-        "Realtime console, Sockets and rooms, Inspect: pick a connected client to see its rooms and the last 100 events sent to it (name, room, size, time, never the payload). Recording is off until an administrator opens the panel and stops when it closes or after 10 minutes unread. Routes (administrators only, caller's tenant only): `GET|POST|DELETE /realtime/sockets/:id/inspect`."
+        "Realtime console, Sockets and rooms, Inspect: pick a connected client to see its rooms and the last 100 events sent to it (name, room, size, time, never the payload). Recording is off until an administrator opens the panel and stops when it closes or after 10 minutes unread. Routes (administrators only, caller's tenant only): `GET|POST|DELETE /realtime/sockets/:id/inspect`.",
+        'The inspector also lists the events the client sent, with how long the server took to handle each one, and how many bytes are waiting to reach that client.'
       ]
+    },
+    { type: 'h2', id: 'socket-health', text: 'Socket health' },
+    {
+      type: 'p',
+      text: 'Realtime console → Socket health shows every API server at once (each one reports through Redis every 10 seconds): bytes waiting to be sent, the clients with the most waiting, the biggest rooms, waiting bytes over the last 10 minutes, how long each socket event handler takes (p50, p95, slowest, and the longest stretch one call kept the server busy), and how often a connected client caught up a room after missing an event. Route: `GET /realtime/health` (administrators only, your tenant only).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Slow clients: once more than `SOCKET_BUFFER_SOFT_BYTES` (default 1 MB) is waiting to reach a client, it stops getting each room event. When it has caught up it gets one `realtime:stale {rooms}` and reloads what those rooms show.',
+        'Past `SOCKET_BUFFER_HARD_BYTES` (default 8 MB) the client is disconnected and its queued events dropped, so one slow client cannot hold server memory. When that tab reconnects it reloads its lists and records instead of replaying (`catchup:full {reason: "slow-consumer"}`).',
+        'Missed events while connected: journaled events carry the room they went to (`_room`) and that room’s own counter (`_rseq`). A client that sees the counter skip asks for that room alone (`catchup:room {room, cursor, missed}` → `catchup:room:events {room, full, events}`) instead of reloading everything. The admin app and `createSocketRealtime` both do this.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Binary socket frames (msgpack) were measured against JSON with per-message compression on the realtime message mix and not adopted: compressed, msgpack sent about 5% more bytes, and encoding and decoding took about twice as long.'
+    },
+    { type: 'h2', id: 'live-events-switch', text: 'Turning live updates down for one collection' },
+    {
+      type: 'p',
+      text: 'Table Editor → Settings → Collection Browser → Live updates (`browser_config.live_events`): Every change (default), Batched (changes gathered for 2 seconds and sent as one list of ids) or Off (no live record events, no journal entry, no cross-server stream; lists on the collection refresh every 30 seconds instead). Use Off for import staging tables and other high-churn rows nobody watches live. Other API servers pick up a change within 30 seconds.'
     }
   ]
 }

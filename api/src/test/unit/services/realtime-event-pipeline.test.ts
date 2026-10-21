@@ -54,7 +54,18 @@ function fakeRedis(journal: Array<{ seq: number; entry: unknown }>, seq: number)
   return {
     incr: vi.fn(async () => seq + 1),
     multi: () => {
-      const m = { zadd: () => m, zremrangebyrank: () => m, expire: () => m, exec: async () => [] }
+      // #2462 — the sequence and the room counter come from one transaction.
+      const results: Array<[null, number]> = []
+      const m = {
+        incr: () => {
+          results.push([null, results.length === 0 ? seq + 1 : 1])
+          return m
+        },
+        zadd: () => m,
+        zremrangebyrank: () => m,
+        expire: () => m,
+        exec: async () => results
+      }
       return m
     },
     zrange: vi.fn(async () =>

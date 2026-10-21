@@ -286,6 +286,9 @@ export interface InspectedEvent {
   /** The room the broadcast went to, tenant prefix off; null = a direct emit or a sign-in room. */
   room: string | null
   bytes: number
+  /** #2779 — 'in' = an event this client sent, with how long its handler took. */
+  dir?: 'in' | 'out'
+  ms?: number
 }
 
 interface Inspection {
@@ -339,6 +342,26 @@ export function noteInspected(
   if (i.ring.length > INSPECT_RING) i.ring.splice(0, i.ring.length - INSPECT_RING)
 }
 
+/** #2779 — one inbound event handled for an inspected socket: its name and handler time. */
+export function noteInspectedHandler(
+  socketId: string,
+  event: string,
+  ms: number,
+  now = Date.now()
+): void {
+  const i = inspections.get(socketId)
+  if (!i || now - i.touched > INSPECT_IDLE_MS) return
+  i.ring.push({
+    at: new Date(now).toISOString(),
+    event,
+    room: null,
+    bytes: 0,
+    dir: 'in',
+    ms: Math.round(ms * 100) / 100
+  })
+  if (i.ring.length > INSPECT_RING) i.ring.splice(0, i.ring.length - INSPECT_RING)
+}
+
 /** The recorded events, newest first; null when this socket is not being inspected for `tenant`. */
 export function inspectedEvents(
   socketId: string,
@@ -352,6 +375,28 @@ export function inspectedEvents(
 }
 
 // ── Packet helpers ─────────────────────────────────────────────────────────
+
+/**
+ * What a socket receives for a journaled event: its payload with the global position (`_seq`)
+ * and, since #2462, the room's own position (`_rseq`) and the room as the client joined it
+ * (`_room`, tenant prefix off) — so a connected client can tell it missed an event in that room.
+ */
+export function livePayload(entry: {
+  seq: number | null
+  room: string
+  event?: string
+  payload: Record<string, unknown>
+  rseq?: number
+}): Record<string, unknown> {
+  if (entry.seq == null) return entry.payload
+  if (typeof entry.rseq !== 'number') return { ...entry.payload, _seq: entry.seq }
+  return {
+    ...entry.payload,
+    _seq: entry.seq,
+    _rseq: entry.rseq,
+    _room: splitTenantRoom(entry.room).room
+  }
+}
 
 /**
  * The event name of an encoded socket.io EVENT packet for the default namespace
@@ -399,6 +444,10 @@ export interface CoalescedUpdate {
   changed_fields?: string[]
   coalesced: true
   _seq?: number
+  /** #2462 — the room's sequence range the merged message covers (`_rseq_min`…`_rseq`). */
+  _rseq?: number
+  _rseq_min?: number
+  _room?: string
 }
 
 /** Collapse several `collection:update` payloads for one collection into one message. */
@@ -413,6 +462,9 @@ export function mergeUpdates(
   const fields = new Set<string>()
   let anyAllFields = false
   let seq: number | undefined
+  let rseq: number | undefined
+  let rseqMin: number | undefined
+  let room: string | undefined
   for (const p of list) {
     const id = p.item as string | number | null | undefined
     if (id != null && !seen.has(String(id))) {
@@ -424,6 +476,12 @@ export function mergeUpdates(
     if (Array.isArray(cf) && cf.length) for (const f of cf) fields.add(String(f))
     else anyAllFields = true
     if (typeof p._seq === 'number' && (seq == null || p._seq > seq)) seq = p._seq
+    if (typeof p._rseq === 'number') {
+      if (rseq == null || p._rseq > rseq) rseq = p._rseq
+      const lo = typeof p._rseq_min === 'number' ? p._rseq_min : p._rseq
+      if (rseqMin == null || lo < rseqMin) rseqMin = lo
+    }
+    if (typeof p._room === 'string') room = p._room
   }
   const many = ids.length > cap
   const out: CoalescedUpdate = {
@@ -438,6 +496,11 @@ export function mergeUpdates(
   // A message with no field list means "anything may have changed" — the union stays open.
   if (!anyAllFields && fields.size) out.changed_fields = [...fields].slice(0, 50)
   if (seq != null) out._seq = seq
+  if (rseq != null && room) {
+    out._rseq = rseq
+    out._rseq_min = rseqMin
+    out._room = room
+  }
   return out
 }
 
