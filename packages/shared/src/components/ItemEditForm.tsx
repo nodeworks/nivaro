@@ -626,6 +626,11 @@ export interface ItemEditFormProps {
   /** Layout editor canvas (spec §7.3): render this draft layout with the
    *  preview record's values, every placement selectable, nothing written. */
   design?: LayoutDesignProp
+  /** The host has Edit layout open on this collection over this form, or closed it and its
+   *  last save has not settled yet (useLayoutEditingQuiet). Config pushes naming this
+   *  collection are then the admin's own saves: no "This form was changed" banner and no
+   *  refetch per save — the host re-reads the layout queries once the editor's saves land. */
+  layoutEditing?: boolean
 }
 
 export interface HeaderWidgetInfo {
@@ -1284,7 +1289,8 @@ function ItemEditFormView({
   initialValues,
   initialLinks,
   initialRows,
-  design
+  design,
+  layoutEditing = false
 }: ItemEditFormProps) {
   const designOn = design != null
   const designCtx = design?.context ?? null
@@ -1704,13 +1710,14 @@ function ItemEditFormView({
   })
   // Config hot-push (#268, #1740): a schema/layout/rule/pipeline edit re-resolves this form's
   // definition in place AND, when it names this collection, says so — "This form was changed,
-  // reload to see the new version" (configUpdateReaction). What the person typed is kept:
+  // reload to see the new version" (configUpdateReaction) — unless the host's own Edit layout
+  // session made the change (layoutEditing). What the person typed is kept:
   // the draft store writes it ~1s after the last keystroke and offers it back after the reload.
   const [configUpdated, setConfigUpdated] = useState(false)
   useEffect(() => {
     const onConfig = (e: Event) => {
       const changed = (e as CustomEvent<{ collection?: string }>).detail?.collection
-      const reaction = configUpdateReaction(changed, collection, designMode)
+      const reaction = configUpdateReaction(changed, collection, designMode, layoutEditing)
       if (reaction === 'ignore') return
       void qc.invalidateQueries({ queryKey: ['field-config'] })
       void qc.invalidateQueries({ queryKey: ['active-layout'] })
@@ -1719,7 +1726,7 @@ function ItemEditFormView({
     }
     window.addEventListener('nvr:config-update', onConfig)
     return () => window.removeEventListener('nvr:config-update', onConfig)
-  }, [qc, collection, designMode])
+  }, [qc, collection, designMode, layoutEditing])
   // Condensing header (#321): long forms shrink the header to a mini-bar
   // (title + state + save) once the body scrolls past ~90px.
   const [headerCondensed, setHeaderCondensed] = useState(false)

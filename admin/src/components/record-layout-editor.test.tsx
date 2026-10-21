@@ -47,6 +47,8 @@ describe('RecordLayoutEditor', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(onClose).toHaveBeenCalledTimes(1)
+    // The host gets the save too: its record form stays quiet until it settles.
+    expect(onClose.mock.calls[0][0]).toBeInstanceOf(Promise)
     expect(invalidate).not.toHaveBeenCalled()
 
     await act(async () => {

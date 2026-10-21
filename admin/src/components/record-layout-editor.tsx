@@ -18,11 +18,12 @@ export default function RecordLayoutEditor({
   collection: string
   layoutId: number
   recordId: string | null
-  onClose: () => void
+  /** Closed; `saved` settles once the editor's last save has landed. */
+  onClose: (saved: Promise<void>) => void
 }) {
   const qc = useQueryClient()
   const onBack = (saved: Promise<void>) => {
-    onClose()
+    onClose(saved)
     void saved.then(() => invalidateRecordLayoutQueries(qc, collection))
   }
   return (
