@@ -227,6 +227,8 @@ export async function raiseTicket(
     attachments: string[]
     replay: { recording_id: string; offset_ms: number | null } | null
     issueId?: number | null
+    /** Told before the desk, e.g. a form's owner for a form change request (#2609/#2656). */
+    notifyFirst?: string[]
   }
 ) {
   const replayCols =
@@ -265,7 +267,10 @@ export async function raiseTicket(
   const [s] = await serializeTickets([t])
   const where = s.record_label ? ` on ${s.record_label}` : ' (General Support)'
   const who = s.requester_name ?? 'Someone'
-  const audience = t.assignee ? [t.assignee] : await supportAudience(t.team_id)
+  const audience = [
+    ...(f.notifyFirst ?? []),
+    ...(t.assignee ? [t.assignee] : await supportAudience(t.team_id))
+  ]
   await notifyTicket(app, t, audience, {
     subject: `New support request: ${s.title}`,
     message: `${who} asked${where}${s.category_name ? ` · ${s.category_name}` : ''}.${

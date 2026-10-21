@@ -9,6 +9,7 @@ import {
   formChangeTrailer,
   parseFormChange
 } from '../services/layout-change-requests.js'
+import { getLayoutOwnerId, ownerFirst } from '../services/layout-notify.js'
 import {
   logTicketEvent,
   nameOf,
@@ -124,7 +125,13 @@ export async function layoutChangeRequestRoutes(app: FastifyInstance) {
       category,
       priority: 'normal',
       attachments: [],
-      replay: null
+      replay: null,
+      // The form's owner hears first, then the desk (#2656); never the requester.
+      notifyFirst: layout
+        ? ownerFirst(await getLayoutOwnerId(layout.id).catch(() => null), [], req.user!.id).map(
+            (r) => r.userId
+          )
+        : []
     })
     return reply.code(201).send({ data: { id: s.id, title: s.title } })
   })
