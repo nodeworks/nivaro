@@ -31,6 +31,8 @@ export interface JobProgressEvent {
   href?: string | null
   /** A file the job produced — the tray shows a download chip. */
   file_id?: string | null
+  /** API path (under /api) the tray POSTs to cancel a running job (#2456). */
+  cancel_path?: string | null
   /** Import queue: 1 = next up. */
   position?: number | null
   eta_seconds?: number | null

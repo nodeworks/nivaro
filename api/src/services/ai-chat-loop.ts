@@ -40,6 +40,8 @@ export interface ChatLoopCallbacks {
   onStatus?: (status: ChatStepStatus) => void
   /** Polled between deltas — true stops the loop at once. */
   shouldStop?: () => boolean
+  /** Each finished tool call as it lands in the trace (#2739 live mirror). */
+  onTrace?: (entry: ChatTraceEntry) => void
 }
 
 export interface ChatStepStatus {
@@ -81,8 +83,11 @@ export interface ChatLoopOptions extends ChatLoopCallbacks {
   /** The conversation; the loop APPENDS to it. */
   convo: Anthropic.MessageParam[]
   maxTokens?: number
-  /** Replay runs (#1916): only REPLAYABLE_TOOLS run, so a re-run never writes or logs. */
+  /** Replay runs (#1916) and background research (#2456): only REPLAYABLE_TOOLS are
+   *  offered and run, so the run never writes or logs. */
   readOnly?: boolean
+  /** Tool rounds before the wrap-up (default MAX_ROUNDS) — background research gets more. */
+  maxRounds?: number
   warn?: (err: unknown, msg: string) => void
   /** #1845 — offer the suggest_memory tool; `existing` = the asker's notes.
    *  Only the asker's own Ask AI opts in (never the chat-room bot). */
@@ -159,14 +164,17 @@ function textOf(message: Anthropic.Message): string {
 }
 
 export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult> {
-  const { client, model, system, user, convo, onDelta, onStatus, shouldStop } = opts
+  const { client, model, system, user, convo, onDelta, onStatus, shouldStop, onTrace } = opts
   const maxTokens = opts.maxTokens ?? 1500
+  const maxRounds = Math.max(1, opts.maxRounds ?? MAX_ROUNDS)
   const trace: ChatTraceEntry[] = []
   const proposals: Array<Record<string, unknown>> = []
   const plans: Array<Record<string, unknown>> = []
   const choices: Array<Record<string, unknown>> = []
   const memorySuggestions: AiMemorySuggestion[] = []
-  const tools = opts.memorySuggestions ? [...CHAT_TOOLS, SUGGEST_MEMORY_TOOL] : CHAT_TOOLS
+  // A read-only run is never even offered a tool that could change data.
+  const offered = opts.readOnly ? CHAT_TOOLS.filter((t) => readOnlyAllows(t.name)) : CHAT_TOOLS
+  const tools = opts.memorySuggestions ? [...offered, SUGGEST_MEMORY_TOOL] : offered
   const done = (r: Omit<ChatLoopResult, 'memorySuggestions'>): ChatLoopResult => ({
     ...r,
     memorySuggestions
@@ -227,7 +235,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     }
   }
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
+  for (let round = 0; round < maxRounds; round++) {
     if (shouldStop?.())
       return done({
         text: '',
@@ -293,7 +301,9 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         if (opts.readOnly && !readOnlyAllows(block.name))
           throw new Error('That tool is disabled in a replay run (it could change data)')
         const { result, summary } = await executeChatTool(user, block.name, input)
-        trace.push({ tool: block.name, input, summary, result_hash: hashToolResult(result) })
+        const entry = { tool: block.name, input, summary, result_hash: hashToolResult(result) }
+        trace.push(entry)
+        onTrace?.(entry)
         onStatus?.({
           round,
           tool: block.name,
@@ -318,7 +328,9 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         })
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Tool failed'
-        trace.push({ tool: block.name, input, summary: `error: ${msg}` })
+        const entry = { tool: block.name, input, summary: `error: ${msg}` }
+        trace.push(entry)
+        onTrace?.(entry)
         onStatus?.({ round, tool: block.name, text, step, done: true, failed: true })
         results.push({
           type: 'tool_result',
@@ -365,10 +377,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let text = ''
   let stopped = false
   try {
-    onStatus?.({ round: MAX_ROUNDS, tool: '', text: 'Wrapping up…' })
+    onStatus?.({ round: maxRounds, tool: '', text: 'Wrapping up…' })
     const final = await call(
       { model, max_tokens: maxTokens, system, messages: buildWrapUpMessages(convo) },
-      MAX_ROUNDS
+      maxRounds
     )
     stopped = final.stopped
     text = (final.stopped ? final.partial : textOf(final.message)).trim()
@@ -381,7 +393,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     proposals,
     plans,
     choices,
-    rounds: MAX_ROUNDS,
+    rounds: maxRounds,
     truncated: true,
     stopped
   })

@@ -32,6 +32,8 @@ export interface ConversationTurn {
   /** Earlier turns for the model, as the asker may read them. */
   history: Array<{ role: 'user' | 'assistant'; content: string }>
   questionMessageId: string
+  /** Owner + the people it is shared with, the asker included (#2739 live mirror). */
+  participants: string[]
   record: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   fail: () => Promise<void>
 }
@@ -65,6 +67,8 @@ export async function openConversationTurn(
     question: string
     /** The asker's history opt-out, when the caller already read it. */
     historyOff?: boolean
+    /** A background run (#2456): the asker's own other tabs hear the turn too. */
+    notifyAsker?: boolean
   }
 ): Promise<TurnOpenResult> {
   const wanted = typeof opts.conversationId === 'string' ? opts.conversationId.trim() : ''
@@ -104,13 +108,17 @@ export async function openConversationTurn(
   const participants = await participantsOf(conv).catch(() => [] as string[])
   const asker = String(user.id)
   const base = { conversation_id: conv.id, by: asker }
-  emitTo(app, participants, asker, { ...base, message_id: questionMessageId, state: 'asking' })
+  // The asker is skipped unless the answer arrives outside their request.
+  const except = opts.notifyAsker ? '' : asker
+  const listeners = opts.notifyAsker && !participants.length ? [asker] : participants
+  emitTo(app, listeners, except, { ...base, message_id: questionMessageId, state: 'asking' })
 
   const c = conv
   return {
     conversation: c,
     history,
     questionMessageId,
+    participants,
     record: async (payload) => {
       const meta: Record<string, unknown> = {}
       for (const k of [
@@ -123,7 +131,8 @@ export async function openConversationTurn(
         'plans',
         'choices',
         'followups',
-        'memory_suggestions'
+        'memory_suggestions',
+        'research'
       ]) {
         const v = payload[k]
         if (v != null && v !== false && !(Array.isArray(v) && v.length === 0)) meta[k] = v
@@ -136,7 +145,7 @@ export async function openConversationTurn(
         proposals: Array.isArray(payload.proposals) ? payload.proposals : [],
         meta
       })
-      emitTo(app, participants, asker, { ...base, message_id: messageId, state: 'answered' })
+      emitTo(app, listeners, except, { ...base, message_id: messageId, state: 'answered' })
       return {
         conversation_id: c.id,
         message_id: messageId,
@@ -154,7 +163,7 @@ export async function openConversationTurn(
         return
       }
       await deleteMessage(c.id, questionMessageId).catch(() => {})
-      emitTo(app, participants, asker, { ...base, message_id: questionMessageId, state: 'failed' })
+      emitTo(app, listeners, except, { ...base, message_id: questionMessageId, state: 'failed' })
     }
   }
 }
