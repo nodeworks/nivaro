@@ -563,6 +563,15 @@ export const SETTINGS: SettingDef[] = [
     keywords: 'change note reason ticket audit required'
   },
   {
+    key: 'layout.email_summary_group',
+    section: 'tools',
+    label: 'Section for notification emails',
+    effect:
+      'Notification emails summarise the record with this section’s fields, in this form’s order, cut to what each person may see. None keeps the header strip. Only the default form’s choice counts.',
+    types: NEW_MENU,
+    keywords: 'email mail notification summary body section'
+  },
+  {
     key: 'tool.cost_limit',
     section: 'tools',
     label: 'Form cost limit',

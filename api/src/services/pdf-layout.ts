@@ -748,7 +748,7 @@ export async function generatePdfFromLayout(params: {
 /** Render an HTML string to a PDF buffer (JS disabled, backgrounds on). */
 export async function htmlToPdf(
   html: string,
-  opts: { format?: 'A4' | 'Letter'; landscape?: boolean } = {}
+  opts: { format?: 'A4' | 'Letter'; landscape?: boolean; margin?: string } = {}
 ): Promise<Buffer> {
   const b = await getBrowser()
   const page = await b.newPage()
@@ -759,7 +759,12 @@ export async function htmlToPdf(
       format: opts.format ?? 'A4',
       landscape: !!opts.landscape,
       printBackground: true,
-      margin: { top: '0', right: '0', bottom: '0', left: '0' }
+      margin: {
+        top: opts.margin ?? '0',
+        right: opts.margin ?? '0',
+        bottom: opts.margin ?? '0',
+        left: opts.margin ?? '0'
+      }
     })
     return Buffer.from(pdfBuf)
   } finally {
