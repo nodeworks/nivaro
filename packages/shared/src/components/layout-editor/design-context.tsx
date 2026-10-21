@@ -31,6 +31,8 @@ export interface LayoutDesign {
   marks?(t: DesignTarget): DesignMark[]
   /** "Who sees this field" overlay: a tint and a clickable chip on the node. */
   overlay?(t: DesignTarget): DesignOverlay | null
+  /** A new record's starting value for the field, as grey placeholder text (#2633). */
+  ghost?(field: string): string | null
 }
 
 export interface DesignMark {
@@ -39,6 +41,8 @@ export interface DesignMark {
   /** Instant tooltip (data-tip) with the detail. */
   tip?: string
   highlight?: boolean
+  /** Clickable: opens what the tag explains (the node is selected first). */
+  onClick?: () => void
 }
 
 export interface DesignOverlay {

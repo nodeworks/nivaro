@@ -68,6 +68,16 @@ const MARK_TONE: Record<DesignMark['tone'], string> = {
     'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700'
 }
 
+// One look for every tag on a node; long rule sentences cut off (the tip has them whole).
+const MARK_CLS = 'inline-block max-w-[260px] truncate rounded px-1 text-left text-[11px] ring-1'
+
+// Hovering a field that drives others (#2641, explain/driver-hover.ts): what
+// it controls gets a dashed amber ring; the field itself a "Controls n" tag.
+const DRIVER_CLS = [
+  'data-[rule-dependent]:outline-dashed data-[rule-dependent]:outline-2 data-[rule-dependent]:outline-amber-400 dark:data-[rule-dependent]:outline-amber-400/80',
+  'data-[rule-drives]:after:pointer-events-none data-[rule-drives]:after:absolute data-[rule-drives]:after:-top-2 data-[rule-drives]:after:left-1 data-[rule-drives]:after:z-10 data-[rule-drives]:after:rounded data-[rule-drives]:after:bg-amber-50 data-[rule-drives]:after:px-1 data-[rule-drives]:after:text-[11px] data-[rule-drives]:after:text-amber-800 data-[rule-drives]:after:ring-1 data-[rule-drives]:after:ring-amber-200 data-[rule-drives]:after:content-[attr(data-rule-drives)] dark:data-[rule-drives]:after:bg-amber-500/15 dark:data-[rule-drives]:after:text-amber-200 dark:data-[rule-drives]:after:ring-amber-500/30'
+].join(' ')
+
 // Without a provider-measured spot: a full-width line just above / below.
 const FALLBACK_INDICATOR: Record<'before' | 'after', CSSProperties> = {
   before: { top: -5, left: 0, right: 0, height: 3 },
@@ -136,6 +146,7 @@ export function DesignNode({
         : 'hover:outline hover:outline-1 hover:outline-slate-300 dark:hover:outline-slate-600',
     overlay?.className,
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan',
+    DRIVER_CLS,
     dragging && 'opacity-40',
     // Hidden for the previewed role: faint, its tags not.
     mark?.kind === 'hidden' && '[&>:not([data-design-badges])]:opacity-40'
@@ -209,20 +220,32 @@ export function DesignNode({
             {mark.kind === 'hidden' ? 'Hidden' : 'Read-only'} for {mark.role}
           </span>
         )}
-        {extra.map((m) => (
-          <span
-            key={m.text}
-            data-design-mark=''
-            data-tip={m.tip}
-            className={cn(
-              'inline-flex items-center rounded px-1 text-[11px] ring-1',
-              m.tip && 'pointer-events-auto',
-              MARK_TONE[m.tone]
-            )}
-          >
-            {m.text}
-          </span>
-        ))}
+        {extra.map((m, i) =>
+          m.onClick ? (
+            <button
+              // biome-ignore lint/suspicious/noArrayIndexKey: two tags may read the same
+              key={`${i}:${m.text}`}
+              type='button'
+              data-design-mark=''
+              data-design-pass=''
+              data-tip={m.tip}
+              onClick={m.onClick}
+              className={cn(MARK_CLS, 'pointer-events-auto hover:brightness-95', MARK_TONE[m.tone])}
+            >
+              {m.text}
+            </button>
+          ) : (
+            <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: two tags may read the same
+              key={`${i}:${m.text}`}
+              data-design-mark=''
+              data-tip={m.tip}
+              className={cn(MARK_CLS, m.tip && 'pointer-events-auto', MARK_TONE[m.tone])}
+            >
+              {m.text}
+            </span>
+          )
+        )}
         {parent && (
           <span className='rounded bg-slate-100 px-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300'>
             from {parent}

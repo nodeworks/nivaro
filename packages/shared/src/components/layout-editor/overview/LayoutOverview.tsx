@@ -31,6 +31,10 @@ import { del, patch, post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
+import { useCollectionBody } from '../collection-meta'
+import { overviewLoops } from '../explain/overview-loops'
+import type { RuleFieldRow } from '../explain/rule-graph'
+import { useFieldRuleRows } from '../explain/use-explain'
 import {
   type ChoiceLabels,
   type DescribeField,
@@ -728,6 +732,15 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
   const [otherOrder, setOtherOrder] = useState<number[] | null>(null)
   const rows = useMemo(() => data?.rows ?? [], [data])
   const choices = useRuleChoiceLabels(collection, fields, rows)
+  // Rule loops (#2642): on the form whose sections loop, or once for the collection.
+  const { data: fieldRows = [] } = useCollectionBody(collection, {
+    select: (b) => (Array.isArray(b?.fields) ? (b.fields as RuleFieldRow[]) : [])
+  })
+  const { data: fieldRules = [] } = useFieldRuleRows(collection)
+  const loops = useMemo(
+    () => overviewLoops(rows, fieldRows, fieldRules, fields),
+    [rows, fieldRows, fieldRules, fields]
+  )
   // biome-ignore lint/correctness/useExhaustiveDependencies: a fresh server read resets the local order
   useEffect(() => setOtherOrder(null), [data])
   // biome-ignore lint/correctness/useExhaustiveDependencies: a test result belongs to one collection
@@ -799,7 +812,11 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
     }
   }
 
-  const renderRow = (row: OverviewRow, draggable?: boolean) => {
+  const renderRow = (stored: OverviewRow, draggable?: boolean) => {
+    const own = loops.byLayout.get(stored.layout_id)
+    const row = own
+      ? { ...stored, warnings: [...stored.warnings, ...own.map((t) => `rule loop: ${t}`)] }
+      : stored
     const common = {
       row,
       fields,
@@ -949,6 +966,22 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
     <div className='flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-background'>
       {header}
       {banner}
+      {loops.collection.length > 0 && (
+        <div
+          role='note'
+          data-rule-loops=''
+          className='flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12.5px] text-amber-800 dark:border-amber-500/30 dark:bg-[#2b2111] dark:text-amber-200'
+        >
+          <AlertTriangle className='mt-[2px] h-3.5 w-3.5 shrink-0' />
+          <div className='min-w-0'>
+            {loops.collection.map((t) => (
+              <p key={t} className='m-0'>
+                Rule loop on every form: {t}.
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
       {explain && (
         <ExplainStrip
           result={explain}

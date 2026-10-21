@@ -470,3 +470,56 @@ describe('buildLayoutOverview — matches the renderer and the New menu', () => 
     expect(byId(rows, 3).new_menu).toEqual({ label: 'Typed', hidden: false })
   })
 })
+
+describe('buildLayoutOverview rule_shape (#2642)', () => {
+  const grouped = (over: Partial<OverviewLayoutInput>): OverviewLayoutInput => ({
+    id: 1,
+    name: 'L',
+    layout_type: 'grouped',
+    is_active: 0,
+    sort: 0,
+    slug: null,
+    ...over
+  })
+  it('carries sections with their show-when rules and field places for forms only', () => {
+    const rows = buildLayoutOverview(
+      [
+        grouped({
+          id: 1,
+          name: 'Form',
+          is_active: 1,
+          groups: [
+            { id: 10, key: 'tabs', label: 'Tabs', type: 'container' },
+            {
+              id: 11,
+              key: 'extra',
+              type: 'tab',
+              container_id: 10,
+              visible_when: '[{"field":"x","op":"eq","value":"1"}]'
+            }
+          ],
+          assignments: [
+            { field: 'x', group_key: 'extra' },
+            { field: '__comments__', group_key: null }
+          ]
+        }),
+        grouped({ id: 2, name: 'Read', sort: 1, layout_type: 'summary' })
+      ],
+      new Map(),
+      []
+    )
+    expect(byId(rows, 1).rule_shape).toEqual({
+      groups: [
+        { key: 'tabs', label: 'Tabs', parent_key: null, visible_when: null },
+        {
+          key: 'extra',
+          label: null,
+          parent_key: 'tabs',
+          visible_when: '[{"field":"x","op":"eq","value":"1"}]'
+        }
+      ],
+      placements: [{ field: 'x', group_key: 'extra' }]
+    })
+    expect(byId(rows, 2).rule_shape).toBeUndefined()
+  })
+})

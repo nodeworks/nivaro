@@ -183,6 +183,28 @@ export function useRuleChoiceLabels(
   fields: DescribeField[],
   rows: OverviewRow[]
 ): ChoiceLabels {
+  const pairs = useMemo(() => {
+    const out: Array<{ field: string; value: unknown }> = []
+    for (const row of rows)
+      for (const rule of row.reason.rules ?? [])
+        if (rule.op === 'eq' || rule.op === 'neq')
+          out.push({ field: rule.field, value: rule.value })
+    return out
+  }, [rows])
+  return useValueLabels(collection, fields, pairs)
+}
+
+/**
+ * Choice labels for `fields`, plus the label of each record named by a
+ * (field, value) pair whose field is a many-to-one: the record's display
+ * template (a user's name for user fields). Until a label loads, the value
+ * stays as stored. The layout editor's rule sentences and default ghosts use it.
+ */
+export function useValueLabels(
+  collection: string,
+  fields: DescribeField[],
+  pairs: Array<{ field: string; value: unknown }>
+): ChoiceLabels {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { data: relations = [] } = useCollectionBody(collection, {
@@ -192,30 +214,28 @@ export function useRuleChoiceLabels(
 
   const wanted = useMemo(() => {
     const out = new Map<string, { field: string; value: string; related: string }>()
-    for (const row of rows) {
-      for (const rule of row.reason.rules ?? []) {
-        if (rule.op !== 'eq' && rule.op !== 'neq') continue
-        if (rule.value == null || rule.value === '' || base[rule.field]) continue
-        if (typeof rule.value === 'string' && rule.value.includes('{{')) continue
-        const rel = relations.find(
-          (r: {
-            many_collection?: string
-            many_field?: string
-            one_collection?: string
-            junction_field?: unknown
-          }) =>
-            r.many_collection === collection &&
-            r.many_field === rule.field &&
-            r.junction_field == null &&
-            !!r.one_collection
-        )
-        if (!rel?.one_collection) continue
-        const value = String(rule.value)
-        out.set(`${rule.field}:${value}`, { field: rule.field, value, related: rel.one_collection })
-      }
+    for (const p of pairs) {
+      if (p.value == null || p.value === '' || base[p.field]) continue
+      if (typeof p.value === 'object') continue
+      if (typeof p.value === 'string' && p.value.includes('{{')) continue
+      const rel = relations.find(
+        (r: {
+          many_collection?: string
+          many_field?: string
+          one_collection?: string
+          junction_field?: unknown
+        }) =>
+          r.many_collection === collection &&
+          r.many_field === p.field &&
+          r.junction_field == null &&
+          !!r.one_collection
+      )
+      if (!rel?.one_collection) continue
+      const value = String(p.value)
+      out.set(`${p.field}:${value}`, { field: p.field, value, related: rel.one_collection })
     }
     return [...out.values()]
-  }, [rows, relations, base, collection])
+  }, [pairs, relations, base, collection])
 
   const results = useQueries({
     queries: wanted.map((w) => ({

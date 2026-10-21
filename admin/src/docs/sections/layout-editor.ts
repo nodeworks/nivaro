@@ -161,6 +161,27 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Canvas | Table in the top bar switches the centre to a table of every field on the form, grouped by section: the label on this form, section, width, Required, Read-only and Hidden, all editable in place. Shift- or ⌘-click rows (or tick their boxes) to select several and change them together in the inspector. Fields that come from a parent layout are not listed. Table and PDF layouts keep their own canvases.'
     },
+    { type: 'h3', id: 'layout-editor-rules-view', text: 'Rules on the canvas' },
+    {
+      type: 'p',
+      text: "The Rules switch in the top bar (on by default, remembered per browser) puts small tags on the canvas that say why each field behaves as it does: Required here or Required field (this form or every form), Needed to Approve (a pipeline move requires it), Read-only here, Read-only field, Calculated, Locked for Finance, Locked in Approved, Hidden here, Hidden field, and Filled by a rule. Hover a tag for the whole sentence; click it to open what causes it: the field's Rules, Look or Advanced tab, the section, the pipeline or the field rules page."
+    },
+    {
+      type: 'p',
+      text: 'Sections carry their rules as sentences too, worded as on the overview: "Shows when Is Sparing is Yes", "Skipped when Project is filled", "Hidden for Finance", "Read-only for Finance".'
+    },
+    {
+      type: 'p',
+      text: 'Hover a field whose value decides something else: every section it shows or hides, picker it filters, field a rule fills and grid whose lines or row rules read it gets a dashed amber ring, and the field a "Controls n" tag.'
+    },
+    {
+      type: 'p',
+      text: 'Without a preview record, each input shows in grey the value a new record on this form starts with: "Default: Open" from the form\'s defaults, "By rule: …" when a field rule fills it from those defaults, "From Project: …" when a cross-record default copies it from a record a default picks. Yes/no and multi-pick fields show it as a tag. Nothing is saved; preview a record to see its real values instead.'
+    },
+    {
+      type: 'p',
+      text: 'Rule loops are flagged in a banner above the canvas and on the overview: a section that shows only by a field placed inside that same section (once hidden, nobody can change the field back), or fields whose rules, cascades and section rules decide each other in a circle. The fields involved get a Rule loop tag; Show selects the first one. A loop of field rules alone is the same on every form, so the overview says it once above the list.'
+    },
     { type: 'h3', id: 'layout-editor-saving', text: 'Saving, undo and conflicts' },
     {
       type: 'p',

@@ -39,6 +39,19 @@ export interface OverviewRow {
   }
   references: OverviewReference[]
   warnings: string[]
+  /** Forms only: the sections (with their show-when rules) and where each field
+   *  sits — the editor's rule-loop check (#2642) runs on it client-side. */
+  rule_shape?: RuleShape
+}
+
+export interface RuleShape {
+  groups: Array<{
+    key: string
+    label: string | null
+    parent_key: string | null
+    visible_when: string | null
+  }>
+  placements: Array<{ field: string; group_key: string | null }>
 }
 
 export interface OverviewLayoutInput {
@@ -59,6 +72,8 @@ export interface OverviewLayoutInput {
     type?: string | null
     container_id?: number | null
     tab_mode?: string | null
+    label?: string | null
+    visible_when?: string | null
   }>
   assignments?: Array<{ field: string; group_key?: string | null; is_visible?: unknown }>
 }
@@ -111,6 +126,22 @@ function shapeOf(l: OverviewLayoutInput): OverviewRow['shape'] {
       .map((a) => a.field)
   ).size
   return { groups: sections, steps_or_tabs, fields, container_mode }
+}
+
+function ruleShapeOf(l: OverviewLayoutInput): RuleShape {
+  const groups = l.groups ?? []
+  const keyOfId = new Map(groups.map((g) => [Number(g.id), g.key]))
+  return {
+    groups: groups.map((g) => ({
+      key: g.key,
+      label: g.label ?? null,
+      parent_key: g.container_id == null ? null : (keyOfId.get(Number(g.container_id)) ?? null),
+      visible_when: g.visible_when ? String(g.visible_when) : null
+    })),
+    placements: (l.assignments ?? [])
+      .filter((a) => !SENTINEL_RE.test(a.field))
+      .map((a) => ({ field: a.field, group_key: a.group_key ?? null }))
+  }
 }
 
 // String(value) exactly as matchesRecordConditions compares it: `eq null`
@@ -210,7 +241,8 @@ export function buildLayoutOverview(
       new_menu,
       shape: shapeOf(l),
       references: refsByLayout.get(Number(l.id)) ?? [],
-      warnings: []
+      warnings: [],
+      ...(isGrouped(l) || l.layout_type === 'addendum' ? { rule_shape: ruleShapeOf(l) } : {})
     }
   }
   const withRoles = (reason: PickReason, ids: string[]): PickReason =>

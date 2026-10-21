@@ -49,6 +49,16 @@ export interface OverviewRow {
   }
   references: OverviewReference[]
   warnings: string[]
+  /** Forms only: sections (with show-when rules) and field places, for the rule-loop check. */
+  rule_shape?: {
+    groups: Array<{
+      key: string
+      label: string | null
+      parent_key: string | null
+      visible_when: string | null
+    }>
+    placements: Array<{ field: string; group_key: string | null }>
+  }
 }
 
 export interface OverviewResponse {
