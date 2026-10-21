@@ -115,6 +115,8 @@ export function DesignNode({
   const mark = design.roleMark?.(target) ?? null
   const extra = design.marks?.(target) ?? []
   const overlay = design.overlay?.(target) ?? null
+  const unsaved = design.unsaved?.(target) ?? false
+  const peers = design.peers?.(target) ?? []
   const highlight = extra.some((m) => m.highlight)
   const dragProps = (locked ? {} : nd.props) as Props
   const dragging = nd.dragging
@@ -131,9 +133,11 @@ export function DesignNode({
     !child && (inline ? 'inline-block' : 'block'),
     selected
       ? 'outline outline-2 outline-nvr-cyan'
-      : highlight
-        ? 'outline-dashed outline-2 outline-violet-400 dark:outline-violet-400/70'
-        : 'hover:outline hover:outline-1 hover:outline-slate-300 dark:hover:outline-slate-600',
+      : peers.length > 0
+        ? `outline outline-2 ${peers[0].outline}`
+        : highlight
+          ? 'outline-dashed outline-2 outline-violet-400 dark:outline-violet-400/70'
+          : 'hover:outline hover:outline-1 hover:outline-slate-300 dark:hover:outline-slate-600',
     overlay?.className,
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan',
     dragging && 'opacity-40',
@@ -177,6 +181,7 @@ export function DesignNode({
     'data-design-pass': pass ? '' : undefined,
     'data-drop-slot': slot ?? undefined,
     'data-role-mark': mark?.kind,
+    'data-unsaved': unsaved ? '' : undefined,
     // Locked nodes get no dnd attributes; they still take focus to be selected.
     ...(locked ? { role: 'button', tabIndex: 0 } : {}),
     ...(tabLike && parent ? { 'data-tip': `From ${parent}` } : {}),
@@ -185,7 +190,7 @@ export function DesignNode({
     onKeyDown
   }
   const MarkIcon = mark?.kind === 'hidden' ? EyeOff : Lock
-  const tags = extra.length > 0 || overlay != null
+  const tags = extra.length > 0 || overlay != null || peers.length > 0
   const badge =
     tabLike && parent && !mark && !tags ? (
       // Steps and tabs: a dot above the label, the parent's name in the tip.
@@ -233,8 +238,26 @@ export function DesignNode({
             {overlay.chip}
           </span>
         )}
+        {peers.map((p) => (
+          <span
+            key={p.id}
+            data-design-peer={p.id}
+            className={cn('inline-flex items-center rounded px-1 text-[11px] ring-1', p.chip)}
+          >
+            {p.name.split(/\s+/)[0]}
+          </span>
+        ))}
       </span>
     ) : null
+  // Unsaved change (#2629): a dot on the node's corner until Save.
+  const dot = unsaved ? (
+    <span
+      data-unsaved-dot=''
+      className='pointer-events-none absolute -left-1 -top-1 z-10 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-white dark:bg-amber-400 dark:ring-slate-900'
+    >
+      <span className='sr-only'>unsaved change</span>
+    </span>
+  ) : null
   // The insertion line: absolutely placed inside the node, so showing it
   // never moves anything (a border would grow the node and make the drop
   // target jitter under the pointer).
@@ -253,8 +276,9 @@ export function DesignNode({
       child,
       // The child's own classes, style, ref and handlers are kept and merged.
       mergeProps(childOwn, rest as Props, dragProps, own) as ChildProps,
-      badge || indicator ? (
+      badge || indicator || dot ? (
         <>
+          {dot}
           {badge}
           {indicator}
           {inner}
@@ -267,6 +291,7 @@ export function DesignNode({
   const Tag = inline ? 'span' : 'div'
   return (
     <Tag {...mergeProps(rest as Props, dragProps, own)}>
+      {dot}
       {badge}
       {indicator}
       {children}

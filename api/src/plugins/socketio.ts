@@ -18,11 +18,14 @@ import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
 import {
   addTopicViewer,
+  cleanSelectionKey,
   cleanSignalState,
   isPresenceTopic,
+  isSelectionTopic,
   RECORD_SIGNAL_KINDS,
   removeSocketFromTopics,
   removeTopicViewer,
+  setTopicViewerSelection,
   TOPIC_SIGNAL_KINDS,
   topicViewers
 } from '../services/presence-topics.js'
@@ -1158,13 +1161,24 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
     // Who is on a ticket or issue page (names only), and who is replying. The sender must
     // already sit in the topic's room, so a signal reaches only people who passed its gate.
+    type OpsSignalPayload = { topic?: string; kind?: string; state?: string; target?: unknown }
     socket.on(
       'ops:signal',
-      inSocketTenant(socket, async (payload: { topic?: string; kind?: string; state?: string }) => {
+      inSocketTenant(socket, async (payload: OpsSignalPayload) => {
         const spec = opsTopicGate(payload?.topic)
         const user = authenticatedUser
         const state = cleanSignalState(payload?.state)
         if (!spec || !user || !state || !isPresenceTopic(spec.topic)) return
+        // Layout editor (#2651): what this person has selected rides their viewer entry,
+        // so a late joiner gets everyone's selection with the viewer list.
+        if (payload?.kind === 'select' && isSelectionTopic(spec.topic)) {
+          const room = await opsRoomOf(spec.topic)
+          if (!room || !socket.rooms.has(room)) return
+          const target = state === 'start' ? cleanSelectionKey(payload.target) : null
+          if (setTopicViewerSelection(room, socket.id, target))
+            broadcastTopicViewers(spec.topic, room)
+          return
+        }
         if (!TOPIC_SIGNAL_KINDS.has(String(payload?.kind))) return
         const room = await opsRoomOf(spec.topic)
         if (!room || !socket.rooms.has(room)) return

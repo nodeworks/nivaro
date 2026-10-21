@@ -31,6 +31,19 @@ export interface LayoutDesign {
   marks?(t: DesignTarget): DesignMark[]
   /** "Who sees this field" overlay: a tint and a clickable chip on the node. */
   overlay?(t: DesignTarget): DesignOverlay | null
+  /** An unsaved change touched this node (#2629): a dot until it is saved. */
+  unsaved?(t: DesignTarget): boolean
+  /** Other people in the editor who have this node selected (#2651). */
+  peers?(t: DesignTarget): DesignPeer[]
+}
+
+export interface DesignPeer {
+  id: string
+  name: string
+  /** Outline classes for the node they selected (light and dark). */
+  outline: string
+  /** Name tag classes. */
+  chip: string
 }
 
 export interface DesignMark {

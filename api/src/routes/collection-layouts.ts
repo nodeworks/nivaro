@@ -2111,7 +2111,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   app.post('/:id/ops', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     if (!isRowId(id)) return reply.code(400).send({ error: 'id must be a number' })
-    const body = (req.body ?? {}) as { ops?: unknown; base_rev?: unknown; note?: unknown }
+    const body = (req.body ?? {}) as {
+      ops?: unknown
+      base_rev?: unknown
+      note?: unknown
+      reason?: unknown
+      ticket?: unknown
+    }
     if (!Array.isArray(body.ops)) return reply.code(400).send({ error: 'ops array required' })
     // One manual Save carries a whole editing session (#2619); the write is a diff, not per op.
     if (body.ops.length > 5000) return reply.code(400).send({ error: 'At most 5000 ops per batch' })
@@ -2122,7 +2128,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       {
         ops: body.ops,
         base_rev: body.base_rev,
-        note: typeof body.note === 'string' ? body.note : null
+        note: typeof body.note === 'string' ? body.note : null,
+        reason: typeof body.reason === 'string' ? body.reason : null,
+        ticket: typeof body.ticket === 'string' ? body.ticket : null
       },
       req.user?.id
     )
@@ -2132,7 +2140,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (result.status === 409)
       return reply.code(409).send({ error: 'stale', bundle: result.bundle })
     if (result.status === 400)
-      return reply.code(400).send({ error: result.error, op_index: result.op_index })
+      return reply
+        .code(400)
+        .send({ error: result.error, op_index: result.op_index, code: result.code })
     if (result.changed)
       await logActivity({
         action: 'update',

@@ -621,6 +621,15 @@
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "layout.change_note",
+    "label": "Ask for a reason (and optionally a ticket link) on every save",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
     "key": "tool.ai_review",
     "label": "Review this layout (AI) + Apply fix + Undo",
     "home": "form_settings",

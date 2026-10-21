@@ -11,8 +11,8 @@ import type { DescribeField } from './overview/describe-conditions'
 import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overview/overview-api'
 import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
-import { unsavedText } from './UnsavedConfirm'
 import type { PreviewDevice } from './preview/preview-model'
+import { unsavedText } from './UnsavedConfirm'
 import type { LayoutDraft } from './useLayoutDraft'
 
 // The editor's top bar: which layout this is and when it is used, Preview as,
@@ -42,9 +42,12 @@ const inputCls =
 const labelCls = 'mb-1 block text-[11.5px] font-semibold text-slate-600 dark:text-muted-foreground'
 
 function StatusChip({
-  draft
+  draft,
+  onOpen
 }: {
   draft: Pick<LayoutDraft, 'status' | 'error'> & Partial<Pick<LayoutDraft, 'unsavedCount'>>
+  /** The unsaved count opens the list of unsaved changes (#2629). */
+  onOpen?: (anchor: HTMLElement) => void
 }) {
   const { status, error } = draft
   const unsaved = draft.unsavedCount ?? 0
@@ -61,7 +64,7 @@ function StatusChip({
           : pendingOnly
             ? unsavedText(unsaved)
             : 'Saved'
-  return (
+  const chip = (
     <span
       role='status'
       data-save-status={status}
@@ -88,6 +91,18 @@ function StatusChip({
     >
       {text}
     </span>
+  )
+  if (!pendingOnly || !onOpen) return chip
+  return (
+    <button
+      type='button'
+      data-unsaved-list-open=''
+      aria-label={`${unsavedText(unsaved)} — list them`}
+      onClick={(e) => onOpen(e.currentTarget)}
+      className='inline-flex rounded-full transition-opacity hover:opacity-80'
+    >
+      {chip}
+    </button>
   )
 }
 
@@ -278,7 +293,9 @@ export function EditorTopBar({
   onBack,
   backLabel = 'Layouts',
   tools,
-  previewExtra
+  previewExtra,
+  presence,
+  onOpenUnsaved
 }: {
   collection: string
   layoutId: number
@@ -303,6 +320,10 @@ export function EditorTopBar({
   tools?: ReactNode
   /** More preview modes inside the Preview as popover. */
   previewExtra?: ReactNode
+  /** Who else has this layout open (#2651), after the layout's name. */
+  presence?: ReactNode
+  /** Opens the unsaved-changes list from the unsaved count (#2629). */
+  onOpenUnsaved?: (anchor: HTMLElement) => void
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const unsaved = draft.unsavedCount ?? 0
@@ -339,6 +360,7 @@ export function EditorTopBar({
           </span>
         )}
       </div>
+      {presence}
       <div className='flex items-center gap-0.5'>
         <button
           type='button'
@@ -409,7 +431,7 @@ export function EditorTopBar({
           data={{ 'data-autosave-switch': '' }}
         />
       )}
-      <StatusChip draft={draft} />
+      <StatusChip draft={draft} onOpen={onOpenUnsaved} />
       {draft.save && !draft.autosave && (
         <button
           type='button'

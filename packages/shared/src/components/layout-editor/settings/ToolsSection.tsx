@@ -9,7 +9,7 @@ import { useLayoutEditorHost } from '../host'
 import { useRoleNames } from '../overview/overview-api'
 import { labelText, tintCard } from '../panel-style'
 import { RelationPicker } from '../pickers/relation-picker'
-import { PickList, quietText, Setting, smallBtn, useSettingVisible } from './controls'
+import { PickList, quietText, Segmented, Setting, smallBtn, useSettingVisible } from './controls'
 import type { SectionProps } from './section-props'
 import { type RolePreview, useRolePreview } from './settings-api'
 import { settingDef } from './settings-registry'
@@ -31,8 +31,45 @@ export function ToolsSection(props: ToolsSectionProps) {
       <SlotSetting k='tool.describe' layoutId={id} />
       <SlotSetting k='tool.ai_review' layoutId={id} />
       <HistorySetting layoutId={id} />
+      <ChangeNoteSetting {...props} />
       <DriftSetting layoutId={id} />
     </>
+  )
+}
+
+const CHANGE_NOTE_LABELS = {
+  off: 'Turn off Ask why on every save',
+  note: 'Ask for a reason on every save',
+  note_ticket: 'Ask for a reason and a ticket on every save'
+} as const
+
+/** Required change note (#2654): Save asks for a reason (and a ticket link). */
+function ChangeNoteSetting({ layout, set }: SectionProps) {
+  const v = layout.change_note
+  const value: keyof typeof CHANGE_NOTE_LABELS = v === 'note' || v === 'note_ticket' ? v : 'off'
+  return (
+    <Setting
+      k='layout.change_note'
+      control={
+        <Segmented
+          ariaLabel='Ask why on every save'
+          value={value}
+          options={[
+            { value: 'off', label: 'Off' },
+            { value: 'note', label: 'Reason' },
+            { value: 'note_ticket', label: 'Reason + ticket' }
+          ]}
+          onChange={(next) =>
+            set({ change_note: next === 'off' ? null : next }, CHANGE_NOTE_LABELS[next])
+          }
+        />
+      }
+      note={
+        value === 'off'
+          ? null
+          : 'Autosave stays off for this layout: every save waits for its reason.'
+      }
+    />
   )
 }
 

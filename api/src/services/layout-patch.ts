@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { changeNoteColumnReady, normalizeChangeNote } from './layout-change-note.js'
 
 /**
  * Layout settings — the parsers, validators and the PATCH body → column
@@ -181,6 +182,7 @@ export type LayoutPatchBody = Partial<{
   sheet_width: number | null
   header_fields: string[] | null
   hide_empty: boolean
+  change_note: string | null
 }>
 
 /** A layout row as the API returns it: JSON settings parsed, flags as booleans. */
@@ -376,6 +378,14 @@ export async function normalizeLayoutPatch(
     patch.header_fields = hf ? JSON.stringify(hf) : null
   }
   if (body.hide_empty !== undefined) patch.hide_empty = body.hide_empty === true
+  // Required change note (#2654): the column comes with migration 462.
+  if (body.change_note !== undefined) {
+    const res = normalizeChangeNote(body.change_note)
+    if ('error' in res) return { status: 400, error: res.error }
+    if (!(await changeNoteColumnReady(q)))
+      return { status: 400, error: 'Change notes need migration 462 to run first' }
+    patch.change_note = res.value
+  }
 
   // Settings the renderers read that this route used to drop.
   for (const key of [

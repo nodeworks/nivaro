@@ -13,13 +13,32 @@
 export interface TopicViewer {
   id: string
   name: string
+  /** Layout editor (#2651): the design target key this person has selected, if any. */
+  selected?: string | null
+  /** When `selected` last changed (ms) — the newest of one person's tabs wins. */
+  at?: number
 }
 
 /** Topics whose room also keeps a viewer list. */
-const PRESENCE_TOPIC = /^(ticket|issue-view):\d{1,12}$/
+const PRESENCE_TOPIC = /^(ticket|issue-view|layout):\d{1,12}$/
 
 export function isPresenceTopic(topic: string): boolean {
   return PRESENCE_TOPIC.test(topic)
+}
+
+/** Topics whose viewers may say what they have selected (the layout editor). */
+export function isSelectionTopic(topic: string): boolean {
+  return /^layout:\d{1,12}$/.test(topic)
+}
+
+/**
+ * A design target key as the layout editor writes it (`field:<f>:<group>`,
+ * `group:<key>`, `slot:…`, `header:<f>`) — identifiers and colons only, short.
+ * Anything else is no selection.
+ */
+export function cleanSelectionKey(v: unknown): string | null {
+  if (typeof v !== 'string' || v.length > 200) return null
+  return /^(field|slot|group|header):[A-Za-z0-9_:.-]*$/.test(v) ? v : null
 }
 
 /** Kinds a person may announce on a record they sit in. */
@@ -60,15 +79,30 @@ export function removeSocketFromTopics(socketId: string): string[] {
   return changed
 }
 
-/** One entry per person, whatever the number of tabs. */
+/** A viewer's selection changed; false when the socket is not a viewer of the room. */
+export function setTopicViewerSelection(
+  room: string,
+  socketId: string,
+  selected: string | null
+): boolean {
+  const v = viewersByRoom.get(room)?.get(socketId)
+  if (!v) return false
+  v.selected = selected
+  v.at = Date.now()
+  return true
+}
+
+/** One entry per person, whatever the number of tabs (the latest selection wins). */
 export function topicViewers(room: string): TopicViewer[] {
-  const seen = new Set<string>()
-  const out: TopicViewer[] = []
+  const byPerson = new Map<string, TopicViewer>()
   for (const v of viewersByRoom.get(room)?.values() ?? []) {
     const key = v.id.toUpperCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(v)
+    const cur = byPerson.get(key)
+    if (!cur || (v.at ?? 0) > (cur.at ?? 0)) byPerson.set(key, v)
   }
-  return out
+  return [...byPerson.values()].map((v) =>
+    v.selected === undefined
+      ? { id: v.id, name: v.name }
+      : { id: v.id, name: v.name, selected: v.selected }
+  )
 }

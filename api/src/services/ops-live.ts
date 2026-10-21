@@ -45,11 +45,14 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
  * Topics with a per-id room: `issue:<id>` streams occurrences (names a person → admin);
  * `ticket:<id>` and `issue-view:<id>` carry who is looking at / replying to one ticket or
  * issue (services/presence-topics.ts) — a ticket's room only admits people who can see it.
+ * `layout:<id>` is who has that layout open in the layout editor and what each has
+ * selected (#2651) — administrators only, like the editor's routes.
  */
 const ID_TOPICS: Record<string, OpsGate> = {
   issue: 'admin',
   ticket: 'ticket',
-  'issue-view': 'auth'
+  'issue-view': 'auth',
+  layout: 'admin'
 }
 
 /** A client-supplied topic string → its room suffix and gate, or null when not a real topic. */

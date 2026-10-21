@@ -11,6 +11,7 @@ import {
   type LayoutOp,
   UNGROUPED_KEY
 } from '../../lib/layout-ops'
+import { useMyUserId } from '../../lib/presence-signals'
 import { cn } from '../../lib/utils'
 import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
@@ -18,8 +19,18 @@ import { AddPanel } from './AddPanel'
 import { AutoArrangeButton } from './AutoArrange'
 import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
 import {
+  ChangeNoteFields,
+  ChangeNoteSave,
+  type ChangeNoteValue,
+  changeNoteMeta,
+  changeNotePolicyOf,
+  changeNoteReady
+} from './ChangeNote'
+import { DroppedBanner, PresenceAvatars, RecoveryBanner, UnsavedList } from './CollabParts'
+import {
   type DesignMark,
   type DesignOverlay,
+  type DesignPeer,
   type DesignTarget,
   type LayoutDesign,
   nextSelection,
@@ -28,6 +39,7 @@ import {
 } from './design-context'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
+import { useDraftRecovery } from './draft-recovery'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { useLayoutEditorHost } from './host'
@@ -46,10 +58,12 @@ import {
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { PlacementsTable } from './PlacementsTable'
+import { peersByTarget, useLayoutPresence } from './presence'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
 import { useRolePreview } from './settings/settings-api'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
+import { describeTarget, targetFromKey, unsavedKeys } from './unsaved-marks'
 import {
   type LayoutDraft,
   layoutDraftKeys,
@@ -322,7 +336,9 @@ function Canvas({
   onSelect,
   showHidden,
   apply,
-  whenIdle
+  whenIdle,
+  unsaved,
+  peers
 }: {
   collection: string
   bundle: LayoutBundle
@@ -342,6 +358,10 @@ function Canvas({
   showHidden: boolean
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
   whenIdle: () => Promise<void>
+  /** Nodes an unsaved change touched (#2629). */
+  unsaved?: (t: DesignTarget) => boolean
+  /** Other people's selections (#2651). */
+  peers?: (t: DesignTarget) => DesignPeer[]
 }) {
   const liveDnd = useLayoutDnd()
   const dnd = noDnd ? NO_DND : liveDnd
@@ -366,9 +386,23 @@ function Canvas({
       dnd,
       roleMark,
       marks,
-      overlay
+      overlay,
+      unsaved,
+      peers
     }),
-    [selected, selection, onSelect, showHidden, canvas.inherited, dnd, roleMark, marks, overlay]
+    [
+      selected,
+      selection,
+      onSelect,
+      showHidden,
+      canvas.inherited,
+      dnd,
+      roleMark,
+      marks,
+      overlay,
+      unsaved,
+      peers
+    ]
   )
   return (
     <EditorCanvas
@@ -521,7 +555,39 @@ export function LayoutEditor({
     [bundle, parent]
   )
 
-  useUndoKeys(draft)
+  // Required change note (#2654): the server's copy decides (turning it off asks too).
+  const { data: serverBundle } = useLayoutBundle(currentId)
+  const notePolicy = changeNotePolicyOf(serverBundle?.layout) ?? changeNotePolicyOf(bundle?.layout)
+  const [note, setNote] = useState<ChangeNoteValue>({ reason: '', ticket: '' })
+  // Where the change-note Save popover sits; null = closed.
+  const [noteAnchor, setNoteAnchor] = useState<HTMLElement | null>(null)
+  const noteRef = useRef(note)
+  noteRef.current = note
+  const saveNow = useCallback(async () => {
+    const meta = notePolicy ? changeNoteMeta(noteRef.current) : undefined
+    await draft.save(meta)
+    const ok = draft.unsavedOps().length === 0
+    if (ok && meta) setNote((n) => ({ ...n, reason: '' }))
+    return ok
+  }, [draft.save, draft.unsavedOps, notePolicy])
+  // Save (button, ⌘S): straight away, or ask for the reason first.
+  const requestSave = useCallback(() => {
+    if (!notePolicy) return draft.save()
+    if (draft.unsavedOps().length > 0)
+      setNoteAnchor(
+        bodyRef.current?.querySelector<HTMLElement>('[data-editor-save]') ??
+          bodyRef.current?.querySelector<HTMLElement>('[data-editor-topbar]') ??
+          null
+      )
+    return Promise.resolve()
+  }, [notePolicy, draft.save, draft.unsavedOps])
+  // Every save needs a reason: nothing may save on its own.
+  useEffect(() => {
+    if (notePolicy && draft.autosave) draft.setAutosave(false)
+  }, [notePolicy, draft.autosave, draft.setAutosave])
+  const barDraft = notePolicy ? { ...draft, save: requestSave, setAutosave: undefined } : draft
+
+  useUndoKeys(notePolicy ? { ...draft, save: requestSave } : draft)
   useLeaveGuard(draft)
 
   // Unsaved changes: anything that leaves asks first, beside what asked.
@@ -537,10 +603,7 @@ export function LayoutEditor({
       null
     setLeaveAsk({ what, go, anchor: anchor ?? fallback })
   }, [])
-  const confirmSave = useCallback(async () => {
-    await draft.save()
-    return draft.unsavedOps().length === 0
-  }, [draft.save, draft.unsavedOps])
+  const confirmSave = saveNow
   useLinkGuard(draft.dirty, (go, anchor) => guard('leave this page', go, anchor))
   useEffect(() => {
     onDirtyChange?.(draft.dirty)
@@ -594,6 +657,40 @@ export function LayoutEditor({
   }, [])
   const onMoved = useCallback((t: DesignTarget) => setSelection([t]), [])
   useAltArrowKeys(bundle, selection, draft.apply, dragging, onMoved)
+
+  // Who else is here and what they selected (#2651).
+  const peers = useLayoutPresence(currentId, selected ? targetKey(selected) : null)
+  const peerMap = useMemo(() => peersByTarget(peers), [peers])
+  const peersOf = useCallback(
+    (t: DesignTarget): DesignPeer[] =>
+      (peerMap.get(targetKey(t)) ?? []).map((p) => ({
+        id: p.id,
+        name: p.name,
+        outline: p.tone.outline,
+        chip: p.tone.chip
+      })),
+    [peerMap]
+  )
+  // Dots on what unsaved changes touched (#2629).
+  const dirtyKeys = useMemo(() => unsavedKeys(draft.unsavedSteps), [draft.unsavedSteps])
+  const unsavedOf = useCallback((t: DesignTarget) => dirtyKeys.has(targetKey(t)), [dirtyKeys])
+  const [listAnchor, setListAnchor] = useState<HTMLElement | null>(null)
+  // Select a node on the canvas and bring it into view (unsaved list, a peer's avatar).
+  const jumpTo = useCallback((t: DesignTarget) => {
+    setView('canvas')
+    setSelection([t])
+    setPanel('inspector')
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(
+        `[data-layout-editor] [data-design-target="${CSS.escape(targetKey(t))}"]`
+      )
+      el?.scrollIntoView?.({ block: 'center' })
+      el?.focus({ preventScroll: true })
+    })
+  }, [])
+  // A draft left behind by a crash or a closed tab (#2653).
+  const me = useMyUserId()
+  const recovery = useDraftRecovery(draft, currentId, me)
 
   // Form settings' "Preview as role" and the top bar's role are one choice.
   const onPreviewRoleChange = useCallback(
@@ -657,13 +754,29 @@ export function LayoutEditor({
         layoutType={layoutType}
         row={row}
         fields={fields}
-        draft={draft}
+        draft={barDraft}
         preview={preview}
         onPreview={setPreview}
         showHidden={showHidden}
         onShowHidden={setShowHidden}
         onBack={leave}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
+        onOpenUnsaved={setListAnchor}
+        presence={
+          <PresenceAvatars
+            peers={peers}
+            describe={(key) => {
+              const t = targetFromKey(key)
+              return t && bundle && targetExists(t, bundle, parent)
+                ? describeTarget(t, bundle, fields)
+                : null
+            }}
+            onJump={(key) => {
+              const t = targetFromKey(key)
+              if (t) jumpTo(t)
+            }}
+          />
+        }
         tools={
           bundle && arrangeable ? (
             <>
@@ -713,6 +826,12 @@ export function LayoutEditor({
           </button>
         </div>
       )}
+      <DroppedBanner labels={draft.dropped} onDismiss={draft.clearDropped} />
+      <RecoveryBanner
+        state={recovery.state}
+        onRecover={recovery.recover}
+        onDismiss={recovery.dismiss}
+      />
       {warning && (
         <div
           role='note'
@@ -812,6 +931,8 @@ export function LayoutEditor({
                     showHidden={showHidden}
                     apply={draft.apply}
                     whenIdle={draft.whenIdle}
+                    unsaved={unsavedOf}
+                    peers={peersOf}
                   />
                 )}
               />
@@ -865,7 +986,42 @@ export function LayoutEditor({
         onSave={confirmSave}
         onDiscard={draft.discard}
         onKeep={() => setLeaveAsk(null)}
+        note={
+          notePolicy ? (
+            <ChangeNoteFields policy={notePolicy} value={note} onChange={setNote} />
+          ) : undefined
+        }
+        canSave={changeNoteReady(notePolicy, note)}
       />
+      {notePolicy && noteAnchor && (
+        <ChangeNoteSave
+          open
+          anchor={noteAnchor}
+          policy={notePolicy}
+          count={draft.unsavedCount}
+          value={note}
+          onChange={setNote}
+          onSave={saveNow}
+          onClose={() => setNoteAnchor(null)}
+        />
+      )}
+      {listAnchor && (
+        <UnsavedList
+          anchor={listAnchor}
+          steps={draft.unsavedSteps}
+          exists={(t) => !!bundle && targetExists(t, bundle, parent)}
+          describe={(t) => describeTarget(t, bundle, fields)}
+          onJump={(t) => {
+            setListAnchor(null)
+            jumpTo(t)
+          }}
+          onSettings={() => {
+            setListAnchor(null)
+            setPanel('settings')
+          }}
+          onClose={() => setListAnchor(null)}
+        />
+      )}
     </div>
   )
 

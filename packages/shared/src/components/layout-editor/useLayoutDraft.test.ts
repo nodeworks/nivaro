@@ -22,7 +22,9 @@ import {
   inverseOps,
   type LayoutDraft,
   type LayoutDraftOptions,
+  partlyRebasedMessage,
   rebasedMessage,
+  replayedMessage,
   saveNote,
   touchesOverview,
   useLayoutDraft
@@ -294,7 +296,7 @@ describe('useLayoutDraft', () => {
     expect(draft.canUndo).toBe(false)
   })
 
-  it('reloads on 409', async () => {
+  it('replays a batch refused as stale on top of the other save (#2652)', async () => {
     const server = fakeServer()
     await mount(server.client)
     server.otherWriter([{ op: 'remove', at: { field: 'notes', group_key: 'details' } }])
@@ -311,10 +313,59 @@ describe('useLayoutDraft', () => {
         { label: 'Width' }
       )
     )
-    await settle(() => draft.status === 'conflict')
+    await settle(() => draft.status === 'saved')
+    expect(server.posts.map((p) => p.base_rev)).toEqual(['r1', 'r2'])
+    expect(fieldsIn(server.current, 'details')).toEqual([])
+    expect(server.current.placements.find((p) => p.field === 'title')?.col_span).toBe(6)
+    expect(content(draft.bundle)).toEqual(content(server.current))
+    expect(h.toast).toHaveBeenCalledWith(replayedMessage(1))
+    expect(draft.dropped).toEqual([])
+    expect(draft.undoLabel).toBe('Width')
+  })
+
+  it('drops a stale batch that no longer fits and lists it', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    server.otherWriter([{ op: 'remove', at: { field: 'notes', group_key: 'details' } }])
+    act(() =>
+      draft.apply(
+        [
+          {
+            op: 'update_placement',
+            at: { field: 'notes', group_key: 'details' },
+            patch: { col_span: 6 }
+          }
+        ],
+        { label: 'Width of Notes' }
+      )
+    )
+    await settle(() => draft.dropped.length === 1)
+    expect(draft.dropped).toEqual(['Width of Notes'])
     expect(draft.bundle).toEqual(server.current)
-    expect(fieldsIn(draft.bundle, 'details')).toEqual([])
-    expect(draft.bundle?.placements.find((p) => p.field === 'title')?.col_span).toBe(null)
+    expect(server.posts).toHaveLength(1)
+    expect(draft.canUndo).toBe(false)
+    expect(h.toast).toHaveBeenCalledWith(partlyRebasedMessage(0, 1))
+    act(() => draft.clearDropped())
+    expect(draft.dropped).toEqual([])
+  })
+
+  it('reloads on a 409 without the stored layout', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    server.failNext(409, { error: 'stale' })
+    act(() =>
+      draft.apply(
+        [
+          {
+            op: 'update_placement',
+            at: { field: 'title', group_key: 'main' },
+            patch: { col_span: 6 }
+          }
+        ],
+        { label: 'Width' }
+      )
+    )
+    await settle(() => draft.status === 'conflict')
     expect(h.toast).toHaveBeenCalledWith('Someone else changed this layout — reloaded')
     expect(draft.canUndo).toBe(false)
   })
@@ -783,7 +834,7 @@ describe('useLayoutDraft — manual save (autosave off, the default)', () => {
     expect(fieldsIn(server.current, 'details')).toEqual([])
   })
 
-  it('a stale Save whose steps no longer fit keeps the draft in conflict; Discard reloads', async () => {
+  it('a stale Save keeps the steps that still fit and lists the ones that do not (#2652)', async () => {
     const server = fakeServer()
     await mount(server.client)
     server.otherWriter([removeNotes])
@@ -800,19 +851,91 @@ describe('useLayoutDraft — manual save (autosave off, the default)', () => {
         { label: 'Move Notes' }
       )
     )
-    const mine = draft.bundle
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
     await act(async () => {
       await draft.save()
     })
-    expect(draft.status).toBe('conflict')
-    expect(draft.dirty).toBe(true)
-    expect(draft.bundle).toEqual(mine)
+    expect(draft.status).toBe('idle')
+    expect(draft.dropped).toEqual(['Move Notes'])
+    expect(draft.unsavedSteps.map((s) => s.label)).toEqual(['Move Status'])
+    expect(fieldsIn(draft.bundle, 'main')).toEqual(['status', 'title'])
+    expect(fieldsIn(draft.bundle, 'details')).toEqual([])
+    expect(draft.undoLabel).toBe('Move Status')
+    expect(h.toast).toHaveBeenCalledWith(partlyRebasedMessage(1, 1))
 
     act(() => draft.discard())
     expect(draft.dirty).toBe(false)
-    expect(draft.status).toBe('idle')
-    expect(draft.bundle).toEqual(server.current)
+    expect(draft.dropped).toEqual([])
+    expect(content(draft.bundle)).toEqual(content(server.current))
     expect(draft.canUndo).toBe(false)
+  })
+
+  it('keeps the undo of a saved setting nobody else touched across a rebase', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    const width: LayoutOp = {
+      op: 'update_placement',
+      at: { field: 'title', group_key: 'main' },
+      patch: { col_span: 6 }
+    }
+    act(() => draft.apply([width], { label: 'Width' }))
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    await act(async () => {
+      await draft.save()
+    })
+    server.otherWriter([removeNotes])
+    act(() =>
+      draft.apply([{ op: 'layout_update', patch: { tab_mode: 'steps' } }], { label: 'Steps' })
+    )
+    await act(async () => {
+      await draft.save()
+    })
+    expect(draft.dirty).toBe(true)
+    // Steps (kept, unsaved) → Width (saved, its value still stands); Move Status (index-based) went.
+    act(() => draft.undo())
+    expect(draft.undoLabel).toBe('Width')
+    act(() => draft.undo())
+    expect(draft.bundle?.placements.find((p) => p.field === 'title')?.col_span).toBe(null)
+    expect(draft.canUndo).toBe(false)
+  })
+
+  it('save(meta) sends the change note with the batch (#2654)', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    await act(async () => {
+      await draft.save({ reason: 'Status first for triage', ticket: 'OPS-12' })
+    })
+    expect(server.posts[0]).toMatchObject({
+      note: 'Move Status',
+      reason: 'Status first for triage',
+      ticket: 'OPS-12'
+    })
+  })
+
+  it('unsavedSteps and baseRev describe the draft; restore re-applies steps (#2653)', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() => draft.apply([moveStatusFirst], { label: 'Move Status' }))
+    expect(draft.baseRev).toBe('r1')
+    const steps = draft.unsavedSteps
+    expect(steps).toEqual([{ label: 'Move Status', ops: [moveStatusFirst] }])
+    act(() => draft.discard())
+    let n = 0
+    act(() => {
+      n = draft.restore([
+        ...steps,
+        {
+          label: 'Width of Gone',
+          ops: [{ op: 'remove', at: { field: 'gone', group_key: 'main' } }]
+        }
+      ])
+    })
+    expect(n).toBe(1)
+    expect(draft.unsavedSteps.map((s) => s.label)).toEqual(['Move Status'])
+    expect(draft.dropped).toEqual(['Width of Gone'])
+    expect(fieldsIn(draft.bundle, 'main')).toEqual(['status', 'title'])
+    expect(server.posts).toHaveLength(0)
   })
 
   it('a refused Save keeps every change unsaved and says why', async () => {
