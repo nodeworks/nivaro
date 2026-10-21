@@ -113,8 +113,8 @@ export function TopicMapTab({ onOpenSuggestions }: { onOpenSuggestions?: () => v
         </label>
         {d && (
           <span className='text-[11.5px] text-muted-foreground'>
-            {d.total_questions} questions in {d.topics.length} topic
-            {d.topics.length === 1 ? '' : 's'}
+            {d.total_questions} {d.total_questions === 1 ? 'question' : 'questions'} in{' '}
+            {d.topics.length} {d.topics.length === 1 ? 'topic' : 'topics'}
           </span>
         )}
       </div>
@@ -151,7 +151,7 @@ export function TopicMapTab({ onOpenSuggestions }: { onOpenSuggestions?: () => v
                   type='button'
                   onClick={() => setOpen(isOpen ? null : t.id)}
                   aria-expanded={isOpen}
-                  className='flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-left'
+                  className='flex w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-lg px-4 py-3 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-muted/40'
                 >
                   {isOpen ? (
                     <ChevronDown className='h-3.5 w-3.5 shrink-0' />
@@ -159,7 +159,7 @@ export function TopicMapTab({ onOpenSuggestions }: { onOpenSuggestions?: () => v
                     <ChevronRight className='h-3.5 w-3.5 shrink-0' />
                   )}
                   <span className='min-w-[180px] flex-1 text-[13px] font-semibold'>{t.name}</span>
-                  <Fig label='questions' value={String(t.volume)} />
+                  <Fig label={t.volume === 1 ? 'question' : 'questions'} value={String(t.volume)} />
                   <Fig
                     label='unanswered'
                     value={pct(t.unanswered_rate)}

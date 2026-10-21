@@ -213,9 +213,8 @@ export function SavingsTab() {
 
       {!d.supported ? (
         <div className={cn(cardCls, 'text-[12px] text-slate-600 dark:text-muted-foreground')}>
-          The call log cannot record routing or payload sizes on this database yet — it needs
-          migration 469 (<span className='font-mono'>nivaro_ai_calls.meta</span>), which runs on the
-          next deploy. The switches above already work.
+          Routing and payload-size figures start once the latest database update has run. The
+          switches above already work.
         </div>
       ) : (
         <>

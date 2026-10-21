@@ -42,11 +42,14 @@ export function ToolsTab() {
     <div className='space-y-3'>
       <div className='flex flex-wrap items-center gap-3'>
         <DaysSelect value={days} onChange={setDays} options={[7, 14, 30, 90]} />
-        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-          From the tool steps saved with {whole(d.answers)} Ask AI answers
-          {d.capped ? ' (the newest ones)' : ''}. A retry is the same tool called again straight
-          after an error.
-        </p>
+        {d.answers > 0 && (
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+            From the tool steps saved with {whole(d.answers)} Ask AI{' '}
+            {d.answers === 1 ? 'answer' : 'answers'}
+            {d.capped ? ' (the newest ones)' : ''}. A retry is the same tool called again straight
+            after an error.
+          </p>
+        )}
       </div>
       {d.tools.length === 0 ? (
         <Empty>No Ask AI answers with tool steps in this period.</Empty>
