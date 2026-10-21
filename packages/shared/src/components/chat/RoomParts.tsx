@@ -5,9 +5,7 @@ import {
   FileText,
   Link2,
   Pin,
-  RotateCw,
   Sparkles,
-  Trash2,
   Users,
   X
 } from 'lucide-react'
@@ -18,11 +16,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   type ChatMessage,
   canOpenDm,
-  discardOutbox,
-  type OutboxItem,
   openDmWith,
   type PinnedMessage,
-  retryOutbox,
   useChatThread
 } from './chat-core'
 import { useRoomInfo, useRoomShared, useRoomSummary } from './chat-hooks'
@@ -145,61 +140,9 @@ export function ThreadPane({
   )
 }
 
-// ── Outbox bubbles (#983 / #984) ─────────────────────────────────────────────
+// ── Outbox bubbles (#983 / #984 / #2782) — OutboxBubbles.tsx ───────────────
 
-export function OutboxBubbles({ items, th }: { items: OutboxItem[]; th: Th }) {
-  if (items.length === 0) return null
-  return (
-    <>
-      {items.map((o) => (
-        <div key={o.client_id} className='flex flex-row-reverse gap-2' data-chat-outbox={o.status}>
-          <div className='max-w-[78%] text-right'>
-            <div
-              className={cn(
-                'inline-block whitespace-pre-wrap rounded-2xl rounded-br-md px-3 py-1.5 text-left text-[12.5px] leading-snug',
-                th.bubbleMine,
-                o.status !== 'failed' && 'opacity-70'
-              )}
-            >
-              {o.text ||
-                `${o.attachments.length} attachment${o.attachments.length === 1 ? '' : 's'}`}
-            </div>
-            <p className='mt-0.5 flex items-center justify-end gap-1.5 text-[10.5px]'>
-              {o.status === 'sending' && <span className='text-slate-500'>Sending…</span>}
-              {o.status === 'queued' && (
-                <span className='text-amber-700 dark:text-amber-300'>
-                  Waiting for a connection — it sends when you are back online
-                </span>
-              )}
-              {o.status === 'failed' && (
-                <>
-                  <span className='text-red-600 dark:text-red-400'>
-                    Not sent{o.error ? ` — ${o.error}` : ''}
-                  </span>
-                  <button
-                    type='button'
-                    onClick={() => retryOutbox(o.client_id)}
-                    className={cn('inline-flex items-center gap-0.5 font-medium', th.accentText)}
-                    data-chat-outbox-retry
-                  >
-                    <RotateCw className='h-3 w-3' /> Retry
-                  </button>
-                  <button
-                    type='button'
-                    onClick={() => discardOutbox(o.client_id)}
-                    className='inline-flex items-center gap-0.5 text-slate-500 hover:text-red-600'
-                  >
-                    <Trash2 className='h-3 w-3' /> Remove
-                  </button>
-                </>
-              )}
-            </p>
-          </div>
-        </div>
-      ))}
-    </>
-  )
-}
+export { OutboxBubbles } from './OutboxBubbles'
 
 // ── Channel purpose + pinned links (#936), welcome note (#961) ──────────────
 

@@ -195,7 +195,7 @@ export async function postChatMessage(
 ): Promise<ChatRow> {
   const started = Date.now()
   try {
-    const row = await postInner(app, actor, input)
+    const row = await withClientIdClaim(app, actor, input, () => postInner(app, actor, input))
     recordChatSend(Date.now() - started)
     return row
   } catch (err) {
@@ -203,6 +203,75 @@ export async function postChatMessage(
       recordChatSendFailure(err instanceof Error ? err.message : String(err))
     }
     throw err
+  }
+}
+
+// ── One send per client id (#2782) ──────────────────────────────────────────
+//
+// The outbox resends a message whose answer was lost, and a resend can arrive
+// while the first send is still being stored. The stored-row check in
+// postInner catches a retry after the first landed; this claim catches the
+// overlap: the second waits for the first to finish (it then finds the row)
+// instead of inserting beside it. In-process first, Redis across replicas;
+// fail-open after CLAIM_WAIT_MS so a lost claim never blocks a send.
+
+const CLAIM_TTL_MS = 30_000
+const CLAIM_WAIT_MS = 10_000
+const claimed = new Set<string>()
+
+type ClaimRedis = {
+  set: (...a: unknown[]) => Promise<unknown>
+  del: (k: string) => Promise<unknown>
+}
+
+/** Pure: the claim key of a send, or null when it carries no client id. */
+export function clientIdClaimKey(
+  senderId: string | null | undefined,
+  room: string,
+  clientId: string | null | undefined
+): string | null {
+  if (!senderId || !clientId || !room) return null
+  return `nvr:chatcid:${String(senderId).toUpperCase()}:${room}:${String(clientId).slice(0, 64)}`
+}
+
+async function tryClaim(redis: ClaimRedis | undefined, key: string): Promise<boolean> {
+  if (claimed.has(key)) return false
+  claimed.add(key)
+  if (!redis) return true
+  try {
+    const ok = await redis.set(key, '1', 'PX', CLAIM_TTL_MS, 'NX')
+    if (ok === 'OK' || ok === true) return true
+    claimed.delete(key)
+    return false
+  } catch {
+    // Redis down: the in-process claim still covers this replica.
+    return true
+  }
+}
+
+export async function withClientIdClaim<T>(
+  app: FastifyInstance,
+  actor: PostChatActor,
+  input: PostChatInput,
+  fn: () => Promise<T>
+): Promise<T> {
+  const senderId = actor.senderId !== undefined ? actor.senderId : (actor.user?.id ?? null)
+  const key = clientIdClaimKey(senderId, String(input.room ?? '').trim(), input.clientId)
+  if (!key) return fn()
+  const redis = (app as unknown as { redis?: ClaimRedis }).redis
+  const until = Date.now() + CLAIM_WAIT_MS
+  let held = await tryClaim(redis, key)
+  while (!held && Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 200))
+    held = await tryClaim(redis, key)
+  }
+  try {
+    return await fn()
+  } finally {
+    if (held) {
+      claimed.delete(key)
+      await redis?.del(key).catch(() => {})
+    }
   }
 }
 

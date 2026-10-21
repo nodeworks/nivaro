@@ -784,6 +784,20 @@ export const collabChat: DocSection = {
       type: 'p',
       text: 'Chat search also finds messages by meaning, listed after the exact matches and limited to rooms you can see. The room info drawer’s Files and Links tabs are searchable and each link has a Show jump. The @mention picker lists people who are online first.'
     },
+    {
+      type: 'h2',
+      id: 'collab-chat-cards',
+      text: 'Link cards, request ids, offline sending and long rooms'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Links to dashboards, queues, reports, saved views and custom queries show as a card with the page’s title, what kind of page it is and its description — never its data. The card is built for each reader: someone who cannot open the page sees the plain link. Custom queries are an administrator page, so only administrators get their card.',
+        'Paste a request id (the id an error message shows) or a trace id and it shows as a card. Administrators see the route, status, duration, who made it, when, and a link to the request on the Traffic Map (`GET /api/chat/request-card?id=`). Everyone else only sees that the id names a logged request. An id that names no request stays plain text.',
+        'Messages written while you are offline, or while the connection is coming back, wait in your browser and send by themselves when it returns, one at a time and in the order you wrote them. Each carries its own id, so a resend never posts twice. A waiting message can be edited or cancelled; while you edit it, the messages after it in that room wait too. A message that waited more than a day is not sent on its own: it shows Not sent with Retry, Edit and Remove. Signing out clears what is waiting.',
+        'Long rooms only draw the messages near the screen once more than 150 are loaded, and load earlier history as you scroll up. Your place is kept when history loads above you or when an image or card above you finishes loading. Link cards load as their message comes near the screen. Jumping to unread messages, a pinned message or a search result still lands on that message.'
+      ]
+    },
     { type: 'h2', id: 'collab-chat-assistant', text: 'The assistant in rooms' },
     {
       type: 'p',

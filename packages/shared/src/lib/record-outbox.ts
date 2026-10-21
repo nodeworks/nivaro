@@ -28,6 +28,11 @@
  * the record, and replaying it would create a second one.
  */
 
+import {
+  clearChatOutbox,
+  clearChatOutboxFor,
+  disableChatOutbox
+} from '../components/chat/chat-outbox'
 import { get, patch } from './commands'
 
 const DB_NAME = 'nivaro-record-outbox'
@@ -271,6 +276,8 @@ async function reload() {
  * fail as it normally would instead of waiting under someone else's name.
  */
 export function disableRecordOutbox(): void {
+  // The chat outbox (#2782) follows the same rules: nothing stored for the viewed person.
+  disableChatOutbox()
   disabled = true
   boundOwner = null
   entries = []
@@ -495,6 +502,8 @@ export async function discardRecordOutbox(
 
 /** Sign-out: every entry on this browser goes, whoever's it was. */
 export async function clearRecordOutbox(): Promise<void> {
+  // Messages waiting in the chat outbox (#2782) go too.
+  void clearChatOutbox()
   entries = []
   memoryStore.clear()
   emit()
@@ -509,6 +518,7 @@ export async function clearRecordOutbox(): Promise<void> {
 export async function clearRecordOutboxFor(userId: string): Promise<void> {
   const uid = userId.toLowerCase()
   if (!uid) return
+  void clearChatOutboxFor(uid)
   for (const e of await readAll())
     if (e && ownerUser(e.owner).toLowerCase() === uid) await deleteEntry(e.id)
   entries = entries.filter((e) => ownerUser(e.owner).toLowerCase() !== uid)
