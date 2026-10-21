@@ -159,7 +159,8 @@ describe('Check impact (#2647)', () => {
   it('lists what the unsaved changes do to the pinned records, and the form cost', async () => {
     const { calls } = await mount('impact', bundleWith(false, PINNED))
     await act(async () => (host.querySelector('[data-editor-impact]') as HTMLElement).click())
-    await settle(() => body().includes('loses the Zone field'))
+    // The record's label arrives after the impact list; wait for both.
+    await settle(() => body().includes('Record Acme order loses the Zone field'))
     expect(body()).toContain('Record Acme order loses the Zone field')
     const sent = calls.find((c) => c._path === '/collection-layouts/5/test-records')
     expect(sent?._method).toBe('POST')
