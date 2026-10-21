@@ -819,3 +819,4 @@ export { canViewAs, registerViewAsOpener, type ViewAsOpener, viewAs } from './li
 export * from './lib/worker-socket'
 export * from './lib/write-formula'
 export * from './types'
+export * from './lib/stale-chunk'

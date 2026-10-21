@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import './globals.css'
-import { disableRecordOutbox } from '@nivaro/shared'
+import { disableRecordOutbox, installStaleChunkRecovery } from '@nivaro/shared'
 import App from './App'
 import { registerCloudPlugin, registerExtensionPlugin } from './extensions/store'
 import { captureMasqueradeFromHash, installMasqueradeFetch, readMasquerade } from './lib/masquerade'
@@ -16,6 +16,15 @@ installMasqueradeFetch()
 // …and never queues an offline save under the person it is viewing as (#1678):
 // a failed save there shows the normal error.
 if (readMasquerade()) disableRecordOutbox()
+// A tab opened before a deploy asks for the previous build's screen files, which the new
+// release no longer serves: reload onto the current build (once — a second failure says so).
+installStaleChunkRecovery({
+  onGiveUp: () =>
+    toast.error('Nivaro was updated and this page could not load part of it.', {
+      duration: Number.POSITIVE_INFINITY,
+      action: { label: 'Reload', onClick: () => window.location.reload() }
+    })
+})
 // Every fetch to the API (SDK clients included) says which screen it came from (#1113 / #1116).
 // #1048 / #1180 — and which build this tab runs, so old tabs can be counted and reloaded alone.
 installPageContextFetch({
