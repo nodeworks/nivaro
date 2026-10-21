@@ -75,7 +75,7 @@ function SettingsStrip({
     onSuccess: onSaved
   })
   const field = (key: keyof typeof d, label: string, unit: string) => (
-    <label className='flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
+    <label className='flex shrink-0 items-center gap-2 whitespace-nowrap text-[12.5px] text-slate-600 dark:text-slate-300'>
       {label}
       <input
         inputMode='numeric'
@@ -145,8 +145,17 @@ function LimitCell({ c, onSaved }: { c: McpConnection; onSaved: () => void }) {
           if (e.key === 'Enter') commit()
         }}
         aria-label={`Tool calls a minute for ${c.name}`}
-        data-tip='Blank = the default limit'
-        className={cn(inputCls, 'h-7 w-16')}
+        aria-invalid={save.isError || undefined}
+        data-tip={
+          save.isError
+            ? (save.error as Error)?.message || 'Could not save the limit'
+            : 'Blank = the default limit'
+        }
+        className={cn(
+          inputCls,
+          'h-7 w-16',
+          save.isError && 'border-red-400 dark:border-red-500/60'
+        )}
       />
       {save.isPending && <Loader2 className='h-3.5 w-3.5 animate-spin text-slate-400' />}
     </span>
@@ -357,7 +366,7 @@ export function McpConnectionsAdminView({
                           title={
                             c.kind === 'api_key' ? `Switch off ${c.name}` : `Disconnect ${c.name}`
                           }
-                          className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:border-red-300 hover:text-red-600 disabled:opacity-40 dark:border-border dark:text-slate-200 dark:hover:border-red-500/50 dark:hover:text-red-400'
+                          className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 disabled:opacity-40 dark:border-border dark:text-slate-200 dark:hover:border-red-500/50 dark:hover:text-red-400'
                           armedClassName='border-red-300 bg-red-50 text-red-700 dark:border-red-500/50 dark:bg-red-500/10 dark:text-red-400'
                         >
                           {c.kind === 'api_key' ? 'Switch off' : 'Disconnect'}

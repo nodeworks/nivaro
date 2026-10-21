@@ -298,7 +298,7 @@ const FORM_DEFAULTS: FormState = {
 function MetaCell({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className='bg-white p-3 dark:bg-card'>
-      <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-400'>{label}</p>
+      <p className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>{label}</p>
       <p className='mt-0.5 text-[13px] text-slate-700 dark:text-slate-200'>{value}</p>
     </div>
   )
@@ -526,7 +526,7 @@ export function ApiKeysPage() {
           )}
 
           {creating ? (
-            <div className='mx-auto max-w-2xl space-y-5 p-6'>
+            <div className='space-y-5 p-6'>
               <h2 className='text-[14px] font-semibold text-slate-900 dark:text-slate-100'>
                 New API Key
               </h2>
@@ -648,7 +648,7 @@ export function ApiKeysPage() {
               </div>
             </div>
           ) : selected ? (
-            <div className='mx-auto max-w-2xl space-y-5 p-6'>
+            <div className='space-y-5 p-6'>
               <div className='flex items-center justify-between'>
                 <h2 className='flex items-center gap-2 text-[14px] font-semibold text-slate-900 dark:text-slate-100'>
                   {selected.name}
@@ -727,12 +727,12 @@ export function ApiKeysPage() {
               </div>
 
               <div>
-                <h3 className='mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400'>
+                <h3 className='mb-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
                   Scopes
                 </h3>
                 <div className='space-y-1.5'>
                   {selected.scopes.filter((s) => s.collection !== CHAT_SCOPE).length === 0 ? (
-                    <p className='text-[12px] text-slate-400'>
+                    <p className='text-[12px] text-slate-500 dark:text-slate-400'>
                       No collection scopes — the key reads and writes no records.
                     </p>
                   ) : (
@@ -772,7 +772,7 @@ export function ApiKeysPage() {
 
               {selected.ip_allowlist.length > 0 && (
                 <div>
-                  <h3 className='mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400'>
+                  <h3 className='mb-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
                     IP Allowlist
                   </h3>
                   <div className='rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
@@ -896,7 +896,8 @@ function KeyUsageSection({ keyId }: { keyId: string | number }) {
       <button
         type='button'
         onClick={() => setOpen((o) => !o)}
-        className='flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+        aria-expanded={open}
+        className='flex items-center gap-1.5 text-[12px] font-semibold text-slate-700 hover:text-slate-900 dark:text-slate-200 dark:hover:text-white'
       >
         <ChevronsUpDown className='h-3 w-3' />
         Usage (last 30 days)
@@ -964,7 +965,7 @@ function KeyUsageSection({ keyId }: { keyId: string | number }) {
                   <div className='overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
                     <table className='w-full bg-white text-[12px] tabular-nums dark:bg-card'>
                       <thead>
-                        <tr className='border-b border-slate-200 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:border-border'>
+                        <tr className='border-b border-slate-200 text-left text-[11px] font-medium text-slate-500 dark:border-border dark:text-slate-400'>
                           <th className='px-3 py-1.5'>Route</th>
                           <th className='px-3 py-1.5 text-right'>Requests</th>
                           <th className='px-3 py-1.5 text-right'>Avg ms</th>
@@ -1036,7 +1037,7 @@ function KeyPreviewSection({
   })
   return (
     <div>
-      <h3 className='mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400'>
+      <h3 className='mb-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
         Preview as this key
       </h3>
       <p className='mb-2 text-[12px] text-slate-500'>
