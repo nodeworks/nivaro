@@ -11,6 +11,7 @@ import {
 } from '../services/inbound-attribution.js'
 import { updateOne } from '../services/items.js'
 import { isMachineAccount } from '../services/machine-accounts.js'
+import { checkLastValueAccess, myLastValue } from '../services/my-last-value.js'
 import { originOfRow } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import { o2mParentVisibleTo, recordVisibleTo } from '../services/revision-access.js'
@@ -583,6 +584,19 @@ export async function revisionsRoutes(app: FastifyInstance) {
       req
     })
     return reply.send({ data: { success: true, restored: restoredRows.length } })
+  })
+
+  // GET /revisions/my-last-value?collection=&field=&exclude= — #2706 "Repeat
+  // last value": what the caller last entered for the field on another record
+  // of the collection, from their own revisions only.
+  app.get('/my-last-value', async (req, reply) => {
+    const q = req.query as { collection?: string; field?: string; exclude?: string }
+    const collection = String(q.collection ?? '')
+    const field = String(q.field ?? '')
+    const refusal = await checkLastValueAccess(req.user!, collection, field)
+    if (refusal) return reply.code(refusal.status).send({ error: refusal.error })
+    const data = await myLastValue(req.user!.id, collection, field, q.exclude ?? null)
+    return reply.send({ data })
   })
 
   app.get('/:id', async (req, reply) => {

@@ -38,6 +38,8 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'DELETE', path: '/api/items/:collection/:id' },
   { method: 'GET', path: '/api/items/:collection/resolve-paths' },
   { method: 'GET', path: '/api/items/:collection/:id/resolve-paths' },
+  // Repeat last value (#2706, FieldRow)
+  { method: 'GET', path: '/api/revisions/my-last-value' },
 
   // Files — list/filter (FileM2MField meta batch), serve/download, upload
   { method: 'GET', path: '/api/files/' },

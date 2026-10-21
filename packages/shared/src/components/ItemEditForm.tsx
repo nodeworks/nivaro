@@ -184,6 +184,16 @@ import {
   type StagedRelationsCtx,
   type StagedRelOps
 } from './item-edit/O2MStagingContext'
+import {
+  confirmChangeFields,
+  fieldCounterError,
+  fieldIsRecommended,
+  isDisplayFormulaRow,
+  missingRecommended,
+  placementBehaviourNeeds,
+  placementFieldText,
+  usePlacementTextContext
+} from './item-edit/placement-behaviour'
 import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
@@ -1425,6 +1435,10 @@ function ItemEditFormView({
       return ghost ? { ...f, placeholder: ghost } : f
     })
   }, [designGhost, isNew, projectedFieldConfig])
+  // #2703 / #2705: placement rules that read the viewer's role or the record's state.
+  const behaviourNeeds = useMemo(() => placementBehaviourNeeds(fieldConfig ?? []), [fieldConfig])
+  // The layout editor's canvas: its previewed role (state comes through `design`).
+  const outerPlacementText = usePlacementTextContext()
 
   const { data: relations = [], isFetched: relationsFetched } = useQuery<CMSRelation[]>({
     queryKey: ['relations', collection],
@@ -4121,7 +4135,7 @@ function ItemEditFormView({
         .request<{ data: { role?: string | null } }>(get('/users/me'))
         .then((r) => r.data ?? null),
     staleTime: 5 * 60_000,
-    enabled: hasLockConditions || addendumEnabled || summaryNeedsRole
+    enabled: hasLockConditions || addendumEnabled || summaryNeedsRole || behaviourNeeds.role
   })
   // #2596: the exact rule behind a lock (and, for admins, what rules hide) —
   // fetched on the first hover of a locked field; admins with the form.
@@ -4151,7 +4165,9 @@ function ItemEditFormView({
         .catch(() => null),
     staleTime: 30_000,
     enabled:
-      (hasLockConditions || addendumEnabled || summaryNeedsState) && !isNew && !designStateKey
+      (hasLockConditions || addendumEnabled || summaryNeedsState || behaviourNeeds.state) &&
+      !isNew &&
+      !designStateKey
   })
   const pipelineInstanceData = useMemo(
     () =>
@@ -4162,6 +4178,23 @@ function ItemEditFormView({
           }
         : pipelineInstanceQueried,
     [designStateKey, pipelineInstanceQueried]
+  )
+  // #2703: what label rules and confirm-on-change read — the record's state and
+  // the viewer's role (the previewed role under View as, the canvas's in the editor).
+  const recordStateKey = useMemo(() => {
+    const cur = pipelineInstanceData?.instance?.current_state ?? null
+    return cur
+      ? ((pipelineInstanceData?.states ?? []).find((st) => st.id === cur)?.key ?? null)
+      : null
+  }, [pipelineInstanceData])
+  const placementTextCtx = useMemo(
+    () => ({
+      stateKey: recordStateKey,
+      roleId: designOn
+        ? (outerPlacementText?.roleId ?? null)
+        : (viewAs.roleId ?? currentUserData?.role ?? null)
+    }),
+    [recordStateKey, designOn, outerPlacementText?.roleId, viewAs.roleId, currentUserData?.role]
   )
 
   const addendumCanCreate = useMemo(() => {
@@ -6029,7 +6062,9 @@ function ItemEditFormView({
     // Completeness = REQUIRED layout fields only — optional fields being
     // blank is normal, not incompleteness. No required fields → no pill.
     const required = fields.filter((f) => f.required)
-    if (required.length === 0) return null
+    // #2704: recommended fields are counted on their own, never as required.
+    const recommended = fields.filter((f) => fieldIsRecommended(f))
+    if (required.length === 0 && recommended.length === 0) return null
     const isFilled = (f: (typeof fields)[number]): boolean => {
       const alias = m2mAliasFieldsForRules.get(f.field)
       if (alias) return (m2mAliasFieldStates[f.field]?.ids ?? []).length > 0
@@ -6040,11 +6075,16 @@ function ItemEditFormView({
     }
     const filled = required.filter(isFilled)
     const requiredMissing = required.filter((f) => !isFilled(f))
+    const recommendedMissing = recommended.filter((f) => !isFilled(f))
     return {
-      pct: Math.round((filled.length / required.length) * 100),
+      hasRequired: required.length > 0,
+      pct: required.length ? Math.round((filled.length / required.length) * 100) : 100,
       filled: filled.length,
       total: required.length,
-      requiredMissing: requiredMissing.map((f) => f.label ?? f.field)
+      requiredMissing: requiredMissing.map((f) => f.label ?? f.field),
+      recommendedTotal: recommended.length,
+      recommendedFilled: recommended.length - recommendedMissing.length,
+      recommendedMissing: recommendedMissing.map((f) => f.label ?? f.field)
     }
   }, [
     fieldConfig,
@@ -6395,6 +6435,11 @@ function ItemEditFormView({
           }
         }
       }
+      // #2709: a placement's counter limit blocks the save once passed.
+      if (!errs[f.field]) {
+        const over = fieldCounterError(f, draft[f.field], f.label ?? titleCase(f.field))
+        if (over) errs[f.field] = over
+      }
     }
     if (Object.keys(errs).length > 0) {
       setValidationErrors(errs)
@@ -6550,15 +6595,71 @@ function ItemEditFormView({
     return () => registerSaveHandler(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ref indirection keeps the handle stable
   }, [registerSaveHandler])
+  // #2705: fields the layout marks "confirm and give a reason" that this save
+  // changes on an existing record (in the record's current state). The reason
+  // rides `_change_reason` like the collection-level requirement's.
+  function layoutConfirmChallenge(): ChangeReasonChallenge | null {
+    if (isNew || changeReasonRef.current) return null
+    const changed = new Set(
+      allFields
+        .filter(
+          (f) =>
+            !SYSTEM_FIELDS.has(f.field) &&
+            f.field in draft &&
+            !valuesEqual(draft[f.field], initialDataRef.current[f.field])
+        )
+        .map((f) => f.field)
+    )
+    if (!changed.size) return null
+    const hit = confirmChangeFields(allFields, changed, recordStateKey)
+    return hit.length
+      ? { fields_changed: hit, reasons: [], allow_free_text: true, confirm: true }
+      : null
+  }
+
+  // #2704: recommended fields still empty — named on save, never blocking it.
+  function nudgeRecommended() {
+    const missing = missingRecommended(
+      allFields,
+      draft,
+      (f) => visibleFields.size === 0 || visibleFields.has(f.field),
+      (f) => placementFieldText(f, placementTextCtx).label || titleCase(f.field)
+    )
+    if (!missing.length) return
+    toast.warning(
+      missing.length === 1
+        ? `${missing[0]} is recommended and still empty`
+        : `${missing.length} recommended fields are still empty`,
+      {
+        description: `${missing.slice(0, 6).join(', ')}${missing.length > 6 ? '…' : ''} — saved anyway; fill ${missing.length === 1 ? 'it' : 'them'} in when you can.`
+      }
+    )
+  }
+
   function handleSave() {
     if (recordGone) return
     if (!validateAll()) return
     void (async () => {
-      const challenge = await preflightChangeReason()
+      const collectionChallenge = await preflightChangeReason()
+      const layoutChallenge = layoutConfirmChallenge()
+      // One prompt: the collection's (its preset reasons) naming every field asked about.
+      const challenge =
+        collectionChallenge && layoutChallenge
+          ? {
+              ...collectionChallenge,
+              fields_changed: [
+                ...new Set([
+                  ...collectionChallenge.fields_changed,
+                  ...layoutChallenge.fields_changed
+                ])
+              ]
+            }
+          : (collectionChallenge ?? layoutChallenge)
       if (challenge) {
         setCrChallenge(challenge)
         return
       }
+      nudgeRecommended()
       saveMut.mutate()
     })()
   }
@@ -7537,6 +7638,13 @@ function ItemEditFormView({
   const saveThenTransition = async (): Promise<boolean> => {
     if (!validateAll()) return false
     if (!isDirty) return true
+    // #2705: a confirm-on-change field asks first; the move waits for that save.
+    const confirmFirst = layoutConfirmChallenge()
+    if (confirmFirst) {
+      setCrChallenge(confirmFirst)
+      return false
+    }
+    nudgeRecommended()
     try {
       await saveMut.mutateAsync()
       return true
@@ -7970,7 +8078,8 @@ function ItemEditFormView({
     applyToLines,
     openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id }),
     layoutId: layoutMeta?.id ?? null,
-    fromAutofill
+    fromAutofill,
+    placementText: placementTextCtx
   }
 
   // ── Design mode shells ─────────────────────────────────────────────────────
@@ -8004,7 +8113,8 @@ function ItemEditFormView({
       node
     )
   const fieldTarget = (f: CMSField): DesignTarget => ({
-    kind: 'field',
+    // A display formula is a `__calc_<n>__` placement — the editor's slot kind (#2712).
+    kind: isDisplayFormulaRow(f) ? 'slot' : 'field',
     field: f.field,
     group_key: f.group_key ?? null
   })
@@ -9688,7 +9798,7 @@ function ItemEditFormView({
                                           data-last-touch
                                         >
                                           {lastTouchText}
-                                          {completeness && (
+                                          {completeness?.hasRequired && (
                                             <span
                                               data-completeness-chip
                                               className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums transition-colors duration-300 ${
@@ -9707,6 +9817,16 @@ function ItemEditFormView({
                                               <span key={completeness.pct} className='nvr-fade-in'>
                                                 {completeness.pct}% complete
                                               </span>
+                                            </span>
+                                          )}
+                                          {(completeness?.recommendedMissing.length ?? 0) > 0 && (
+                                            <span
+                                              data-recommended-chip
+                                              className='inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[9.5px] font-semibold tabular-nums text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                                              data-tip={`${completeness?.recommendedFilled} of ${completeness?.recommendedTotal} recommended fields filled · missing: ${completeness?.recommendedMissing.slice(0, 5).join(', ')}${(completeness?.recommendedMissing.length ?? 0) > 5 ? '…' : ''}`}
+                                            >
+                                              {completeness?.recommendedMissing.length} recommended
+                                              to fill
                                             </span>
                                           )}
                                           {provenance && !provenance.api && (
@@ -10873,12 +10993,16 @@ function ItemEditFormView({
                                   challenge={crChallenge}
                                   fieldLabel={(f) => {
                                     const fc = allFields.find((af) => af.field === f)
-                                    return fc?.label || titleCase(f)
+                                    return (
+                                      (fc && placementFieldText(fc, placementTextCtx).label) ||
+                                      titleCase(f)
+                                    )
                                   }}
                                   onCancel={() => setCrChallenge(null)}
                                   onSubmit={(reason) => {
                                     changeReasonRef.current = reason
                                     setCrChallenge(null)
+                                    nudgeRecommended()
                                     saveMut.mutate()
                                   }}
                                 />

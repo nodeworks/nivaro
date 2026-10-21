@@ -40,7 +40,7 @@ import {
   snapshotLayoutVersion,
   versionsHaveName
 } from '../services/layout-versions.js'
-import { generatePdfFromLayout } from '../services/pdf-layout.js'
+import { generatePdfFromLayout, pdfTextContext } from '../services/pdf-layout.js'
 import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layout-themes.js'
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
@@ -1523,7 +1523,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       fieldMeta,
       relations,
       logoUrl,
-      generatedBy
+      generatedBy,
+      textContext: await pdfTextContext(
+        collection,
+        String(item_id),
+        assignments,
+        req.user?.role ?? null
+      )
     })
 
     await logActivity({
@@ -1684,7 +1690,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       relations,
       logoUrl,
       generatedBy,
-      childRowsOverride
+      childRowsOverride,
+      textContext: await pdfTextContext(
+        collection,
+        String(item_id),
+        assignments,
+        req.user?.role ?? null
+      )
     })
 
     // Save PDF to file storage

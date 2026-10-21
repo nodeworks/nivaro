@@ -740,6 +740,65 @@ describe('Inspector', () => {
     expect(host.querySelector('[data-reset-to-parent]')).toBeNull()
   })
 
+  describe('placement behaviour (#2703 #2704 #2705 #2706 #2709 #2712)', () => {
+    const lastOverrides = (apply: ReturnType<typeof vi.fn>) => {
+      const [ops] = apply.mock.calls.at(-1) ?? []
+      return (ops as Array<{ patch: { overrides: Record<string, unknown> } }>)[0].patch.overrides
+    }
+
+    it('Rules tab: recommended, confirm on change and repeat last write the placement', async () => {
+      const { apply } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      await click(host.querySelector('[data-setting="field.recommended"] [role="switch"]'))
+      expect(lastOverrides(apply)).toMatchObject({ recommended: true })
+      await click(host.querySelector('[data-setting="field.confirm_change.on"] [role="switch"]'))
+      expect(lastOverrides(apply)).toMatchObject({ confirm_change: { state_keys: [] } })
+      await click(host.querySelector('[data-setting="field.repeat_last"] [role="switch"]'))
+      expect(lastOverrides(apply)).toMatchObject({ repeat_last: true })
+    })
+
+    it('Look tab: a label rule and a counter', async () => {
+      const { apply } = await mount(field('title'))
+      await click(
+        [...host.querySelectorAll('[data-setting="field.text_rules"] button')].find((b) =>
+          /Add a rule/.test(b.textContent ?? '')
+        )
+      )
+      expect(lastOverrides(apply)).toMatchObject({
+        text_rules: [{ type: 'pipeline_state', state_keys: [] }]
+      })
+      await click(host.querySelector('[data-setting="field.counter.on"] [role="switch"]'))
+      expect(lastOverrides(apply)).toMatchObject({ counter: { unit: 'characters' } })
+    })
+
+    it('a display formula gets its own inspector and flags a broken formula', async () => {
+      const base = makeBundle()
+      const bundle: LayoutBundle = {
+        ...base,
+        placements: [
+          ...base.placements,
+          place('__calc_1__', 'main', {
+            overrides: { label: 'Remaining', display_formula: { expr: '{{amount}} -', format: '' } }
+          })
+        ]
+      }
+      const { apply } = await mount(
+        { kind: 'slot', field: '__calc_1__', group_key: 'main' },
+        { bundle }
+      )
+      expect(host.textContent).toContain('Remaining')
+      expect(host.querySelector('[data-formula-error]')).toBeTruthy()
+      const box = host.querySelector(
+        '[data-setting="display_formula.expr"] textarea'
+      ) as HTMLTextAreaElement
+      await typeInto(box, '{{amount}} - {{nope}}')
+      expect(lastOverrides(apply)).toMatchObject({
+        label: 'Remaining',
+        display_formula: { expr: '{{amount}} - {{nope}}' }
+      })
+    })
+  })
+
   it('Reset to parent on a section drops it and the fields the parent places', async () => {
     const base = makeBundle({ parent_layout_id: 3 })
     const bundle: LayoutBundle = {

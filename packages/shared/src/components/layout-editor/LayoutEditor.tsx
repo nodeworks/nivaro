@@ -533,6 +533,7 @@ function Canvas({
         layout={layout}
         record={record}
         stateKey={stateKey}
+        roleId={roleId}
         design={design}
         apply={apply}
         whenIdle={whenIdle}

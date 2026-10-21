@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, CopyPlus, LayoutPanelTop, Plus, Search } from 'lucide-react'
+import { Check, CopyPlus, LayoutPanelTop, Plus, Search, Sigma } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -12,6 +12,7 @@ import {
   type PlacementRow
 } from '../../lib/layout-ops'
 import { listLayoutSlots } from '../../lib/layout-slots'
+import { nextDisplayFormulaField } from '../../lib/placement-behaviour'
 import { cn, titleCase } from '../../lib/utils'
 import { fieldSpot, placeOp, sectionOp, slotSpot } from './add-target'
 import { MeaningSuggestions } from './ai-forms/MeaningSuggestions'
@@ -362,6 +363,26 @@ export function AddPanel({
           />
         </>
       )}
+      {/* #2712: a read-only figure from the form's fields, worked out on the page. */}
+      {to === 'form' &&
+        !['table', 'file'].includes(String(bundle.layout.layout_type ?? 'grouped')) &&
+        matches('Display formula', 'formula calculation remaining total') && (
+          <Row
+            title='Display formula'
+            sub='A read-only figure worked out from fields on the form, never saved'
+            attrs={{ 'data-add-formula': '' }}
+            aside={<Sigma className='h-3.5 w-3.5 text-slate-400' />}
+            onClick={() =>
+              place(
+                nextDisplayFormulaField(bundle.placements.map((p) => p.field)),
+                'a display formula',
+                {
+                  overrides: { label: 'Formula', display_formula: { expr: '', format: '' } }
+                }
+              )
+            }
+          />
+        )}
 
       {to === 'form' && !q.trim() && (
         <MeaningSuggestions bundle={bundle} collection={collection} apply={apply} />

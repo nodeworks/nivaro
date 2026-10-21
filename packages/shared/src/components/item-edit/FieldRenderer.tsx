@@ -15,6 +15,7 @@ import {
 } from '../../lib/field-interfaces'
 import { precisionOf } from '../../lib/format-value'
 import { resolveOptionFilterTokens } from '../../lib/option-filter-tokens'
+import { counterOf } from '../../lib/placement-behaviour'
 import { choiceLabel } from '../../lib/utils'
 import { Badge } from '../ui/badge'
 import { Input } from '../ui/input'
@@ -1051,8 +1052,9 @@ export function FieldRenderer({
       placeholder={field.placeholder ?? mask ?? undefined}
     />
   )
-  // Character counter (#183): shows once past 60% of the limit.
-  if (maxLen != null && maxLen > 0) {
+  // Character counter (#183): shows once past 60% of the limit — unless the
+  // layout gives this placement its own counter (#2709), drawn under the field.
+  if (maxLen != null && maxLen > 0 && !counterOf(field._overrides)) {
     const len = strVal.length
     return (
       <div>

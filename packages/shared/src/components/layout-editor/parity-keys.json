@@ -1521,6 +1521,24 @@
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "field.text_rules",
+    "label": "Label and help text by pipeline state or viewer role (#2703)",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.counter",
+    "label": "Character or word counter with a limit, default the column size (#2709)",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
     "key": "field.hidden",
     "label": "Hidden on this form",
     "home": "inspector",
@@ -1672,6 +1690,33 @@
     "scope": "form",
     "status": "keep",
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.recommended",
+    "label": "Recommended (soft-required): amber marker and a save nudge (#2704)",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.confirm_change",
+    "label": "Confirm and give a reason when changed on a saved record, optionally per state (#2705)",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.repeat_last",
+    "label": "Repeat last value from the person's own last revision (#2706)",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
   },
   {
     "key": "field.readonly",

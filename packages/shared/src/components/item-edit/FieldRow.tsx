@@ -43,6 +43,17 @@ import {
 } from './helpers'
 import { isDerivedForRecord } from './live-rollups'
 import { useM2MStaging } from './M2MStagingContext'
+import {
+  DisplayFormulaValue,
+  FieldCounter,
+  fieldCounterConfig,
+  fieldIsRecommended,
+  isDisplayFormulaRow,
+  placementFieldText,
+  RecommendedMarker,
+  RepeatLastButton,
+  usePlacementTextContext
+} from './placement-behaviour'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 
 const NUMERIC_TYPES = new Set(['integer', 'float', 'decimal', 'bigInteger', 'number'])
@@ -619,6 +630,8 @@ export function FieldRow({
     openRelated: affordances?.openRelated
   })
   const softLock = usePresenceSoftLock(wrapperRef)
+  // #2703: labels and help that change with the record's state or the viewer's role.
+  const textCtx = usePlacementTextContext()
   const remoteChange = affordances?.remoteChanges[field.field]
   const lockReason = affordances?.lockReasons[field.field]
   const applyToLines = affordances?.applyToLines[field.field]
@@ -732,7 +745,16 @@ export function FieldRow({
   )
     return null
   const value = draft[field.field] ?? null
-  const label = field.label ?? titleCase(field.field)
+  const shownText = placementFieldText(field, textCtx)
+  const label = shownText.label ?? titleCase(field.field)
+  // #2712: a display formula has no column — no history, watch, AI or input.
+  const isCalc = isDisplayFormulaRow(field)
+  const counter = isCalc ? null : fieldCounterConfig(field)
+  const repeatLast =
+    !isCalc &&
+    !locked &&
+    !field.readonly &&
+    (field._overrides as { repeat_last?: unknown } | null | undefined)?.repeat_last === true
   // A rollup with a parent_filter is only derived for records that MATCH it
   // (a hand-entered total is typed in — no lines to sum). The lineage
   // (Σ) affordance is a lie on those records, so it follows the same test.
@@ -918,21 +940,22 @@ export function FieldRow({
             <Label data-field-label className='text-sm font-medium'>
               <GlossaryLabel text={label} collection={collection} />
               {field.required && <span className='ml-0.5 text-destructive'>*</span>}
+              {fieldIsRecommended(field) && <RecommendedMarker />}
             </Label>
           )}
-          {field.note && (
+          {shownText.note && (
             <TooltipProvider delayDuration={100}>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Info className='h-3.5 w-3.5 shrink-0 cursor-help text-slate-400 hover:text-slate-600' />
                 </TooltipTrigger>
                 <TooltipContent side='top' className='max-w-[240px] text-[12px]'>
-                  {field.note}
+                  {shownText.note}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
-          {itemId && itemId !== 'new' && (
+          {!isCalc && itemId && itemId !== 'new' && (
             <FieldHistoryButton
               collection={collection}
               itemId={itemId}
@@ -940,13 +963,22 @@ export function FieldRow({
               onRestore={field.readonly ? undefined : (v) => onChange(field.field, v)}
             />
           )}
-          {itemId && itemId !== 'new' && (
+          {!isCalc && itemId && itemId !== 'new' && (
             <FieldWatchButton collection={collection} itemId={itemId} field={field.field} />
           )}
           {itemId && itemId !== 'new' && isActuallyComputed && (
             <FieldLineageButton collection={collection} itemId={itemId} field={field.field} />
           )}
-          {aiButton.show && !(aiButton.perField && (locked || field.readonly)) && (
+          {repeatLast && (
+            <RepeatLastButton
+              collection={collection}
+              itemId={itemId}
+              field={field.field}
+              label={label || titleCase(field.field)}
+              onFill={(v) => onChange(field.field, v)}
+            />
+          )}
+          {!isCalc && aiButton.show && !(aiButton.perField && (locked || field.readonly)) && (
             <button
               type='button'
               onClick={handleGenerate}
@@ -1108,7 +1140,9 @@ export function FieldRow({
               autoFillTick && 'nvr-autofill-glow'
             )}
           >
-            {autoIdPattern ? (
+            {isCalc ? (
+              <DisplayFormulaValue field={field} values={draft} />
+            ) : autoIdPattern ? (
               <AutoIdPreviewField
                 collection={collection}
                 field={field}
@@ -1155,6 +1189,7 @@ export function FieldRow({
           </div>
         </div>
       )}
+      {counter && <FieldCounter value={draft[field.field]} config={counter} />}
       {remoteChange && (
         <RemoteChangeGhost
           change={remoteChange}
