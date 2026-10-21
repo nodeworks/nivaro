@@ -2,6 +2,12 @@ import type { FastifyInstance } from 'fastify'
 import type { Server } from 'socket.io'
 import type { User } from '../types.js'
 import type { HuddleRedis } from './huddle.js'
+import {
+  type RingRefusalReason,
+  ringPairRefusal,
+  ringRateRefusal,
+  startRingCooldown
+} from './huddle-flood-guard.js'
 
 /**
  * Ringing (#2843, #2844): starting a huddle in a direct message, or adding
@@ -16,6 +22,11 @@ import type { HuddleRedis } from './huddle.js'
  * {room, users}` and `huddle:ring-result {room, user, name, accept, reason?}`.
  * Callee → server `huddle:ring-answer {room, accept}`; caller → server
  * `huddle:ring-cancel {room}`, `huddle:invite {room, users}`.
+ *
+ * Flood guards (huddle-flood-guard.ts): a cooldown after a decline / miss / hang-up, a cap per
+ * caller → callee and per caller per minute. A refused ring tells the caller
+ * `huddle:ring-refused {room, reason?, retry_in?, users: [{id, name, reason, retry_in}]}`.
+ * A scheduled huddle's start ring is capped where schedules are made instead.
  *
  * Lines ("Amy declined the call", "No answer from Amy") go through
  * chat-send.ts like every other platform line. Payloads carry ids and names
@@ -93,6 +104,25 @@ export async function ringUsers(
 ): Promise<Array<{ id: string; name: string | null }>> {
   const targets = ringTargets(input.from.id, input.users)
   if (!targets.length) return []
+  const guarded = input.scheduled == null
+  if (guarded) {
+    const wait = await ringRateRefusal(deps.redis, input.tenant, input.from.id)
+    if (wait != null) {
+      deps.io.to(`user:${input.from.id}`).emit('huddle:ring-refused', {
+        room: input.room,
+        reason: 'rate',
+        retry_in: wait,
+        users: []
+      })
+      return []
+    }
+  }
+  const refused: Array<{
+    id: string
+    name: string | null
+    reason: RingRefusalReason
+    retry_in: number
+  }> = []
   const rows = await deps.users(targets).catch(() => new Map<string, User>())
   const fromName = nameOf(input.from)
   const key = ringKey(input.tenant, input.room)
@@ -111,6 +141,13 @@ export async function ringUsers(
     const current = await deps.redis.hget(key, id).catch(() => null)
     // Already ringing (two invites in a row): one ring, one timer.
     if (current === 'ringing') continue
+    if (guarded) {
+      const no = await ringPairRefusal(deps.redis, input.tenant, input.from.id, id)
+      if (no) {
+        refused.push({ id, name: nameOf(callee), ...no })
+        continue
+      }
+    }
     await deps.redis.hset(key, id, 'ringing')
     rung.push({ id, name: nameOf(callee) })
     deps.io.to(`user:${id}`).emit('huddle:ring', {
@@ -128,6 +165,11 @@ export async function ringUsers(
         sender: input.from.id
       })
       .catch((err) => deps.warn({ err, room: input.room }, 'huddle ring notify failed'))
+  }
+  if (refused.length) {
+    deps.io
+      .to(`user:${input.from.id}`)
+      .emit('huddle:ring-refused', { room: input.room, users: refused })
   }
   if (!rung.length) return rung
   await deps.redis.hset(key, '_from', JSON.stringify({ id: input.from.id, name: fromName, at }))
@@ -201,7 +243,10 @@ export async function answerRing(
     name,
     accept: input.accept
   })
-  if (!input.accept) await deps.postLine(input.room, `${name ?? 'Someone'} declined the call`)
+  if (!input.accept) {
+    await startRingCooldown(deps.redis, input.tenant, call.from.id, id).catch(() => undefined)
+    await deps.postLine(input.room, `${name ?? 'Someone'} declined the call`)
+  }
   await settleIfDone(deps, input.tenant, input.room)
   return true
 }
@@ -221,6 +266,7 @@ export async function cancelRing(
   for (const [id, state] of call.callees) {
     if (state !== 'ringing') continue
     deps.io.to(`user:${id}`).emit('huddle:ring-cancel', { room: input.room, reason: 'cancelled' })
+    await startRingCooldown(deps.redis, input.tenant, call.from.id, id).catch(() => undefined)
   }
   await deps.redis.del(key)
   return true
@@ -236,6 +282,7 @@ export async function timeOut(deps: RingDeps, tenant: string | null, room: strin
     const names = new Map([...rows].map(([id, u]) => [id, nameOf(u)]))
     for (const id of missed) {
       deps.io.to(`user:${id}`).emit('huddle:ring-cancel', { room, reason: 'timeout' })
+      await startRingCooldown(deps.redis, tenant, call.from.id, id).catch(() => undefined)
       deps.io.to(`user:${call.from.id}`).emit('huddle:ring-result', {
         room,
         user: id,

@@ -11,6 +11,7 @@ import {
   setHuddleStaleEvictor,
   staleEvictorFor
 } from '../services/huddle.js'
+import { huddleCloudMode, platformDestinations } from '../services/huddle-destinations.js'
 import { getHuddleSettings, sfuConfigured } from '../services/huddle-settings.js'
 import { mintJoinToken, probeLiveKit, sfuTokenDecision } from '../services/huddle-sfu.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
@@ -77,6 +78,10 @@ export async function chatHuddleSfuRoutes(app: FastifyInstance) {
   })
 
   app.get('/settings/test-sfu', { preHandler: requireAdmin }, async (_req, reply) => {
+    // Cloud mode: the platform's media server or nothing (huddle-destinations.ts).
+    if (huddleCloudMode() && !platformDestinations().livekit_url) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
     const s = await getHuddleSettings()
     if (!sfuConfigured(s)) return reply.send({ data: { ok: false, reason: 'not-configured' } })
     const result = await probeLiveKit({

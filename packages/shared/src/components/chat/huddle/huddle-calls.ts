@@ -11,6 +11,7 @@
  * {room, accept}, `huddle:ring-cancel` {room}, `huddle:invite` {room, users}.
  */
 
+import { watchRingRefused } from './huddle-ring-refused'
 import type { HuddleTransport } from './huddle-store'
 
 /** A toast closes on its own after this long — the server's "No answer" line follows. */
@@ -143,7 +144,9 @@ class HuddleCallsStore {
           this.set({ outgoing: { ...this.state.outgoing, [p.room]: list } })
           this.fadeLater(p.room, p.user)
         }
-      )
+      ),
+      // A ring the server would not place says so (security review finding 1).
+      watchRingRefused(transport)
     ]
   }
 

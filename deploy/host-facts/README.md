@@ -95,6 +95,24 @@ What cannot be read without a capability is left out: a volume whose data folder
 another user with mode 0700 (a database volume, for example) reports only that folder's own
 change time.
 
+### Updating the base image
+
+The `Dockerfile` pins both bases by exact tag and digest (`debian:bookworm-<date>-slim@sha256:…`,
+`docker:<version>-cli@sha256:…`), so a rebuild gets the same image every time and a bad upstream
+push never lands in a container that reads `/proc`, `/boot` and the Docker folders. To take a newer
+Debian point release (do this monthly, or when a Debian security advisory names a package in the
+image):
+
+1. Pick the newest dated tag from <https://hub.docker.com/_/debian/tags?name=bookworm-> (the
+   `bookworm-YYYYMMDD-slim` form).
+2. Read its multi-arch digest: `docker buildx imagetools inspect debian:bookworm-YYYYMMDD-slim`
+   (the `Digest:` line at the top, not a per-platform one).
+3. Put both into the `FROM` line, rebuild, and run the container once (`docker compose run --rm
+   host-facts nivaro-host-facts.sh`) before rolling it out.
+
+The `docker:<version>-cli` stage only supplies the client binary; bump it the same way when the
+hosts' Docker Engine moves to a new major version.
+
 ### Where each fact comes from
 
 | Fact | On the host | In the container |

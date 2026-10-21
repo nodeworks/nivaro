@@ -1,6 +1,8 @@
 import { createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
+import { validIceUrl, validLiveKitUrl, withPlatformDestinations } from './huddle-destinations.js'
 import { instanceKey } from './instance-key.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Huddle (#2457) ICE configuration — the STUN/TURN servers browsers use to
@@ -76,9 +78,6 @@ const SECRET_KEYS: ReadonlySet<keyof HuddleSettings> = new Set([
   'livekit_api_secret'
 ])
 
-const URL_RE = /^(stuns?|turns?):[^\s]+$/i
-const LIVEKIT_URL_RE = /^wss?:\/\/[^\s/?#]+(?::\d+)?(?:\/[^\s]*)?$/i
-
 /** The SFU path exists only with a url, a key and a secret. */
 export function sfuConfigured(
   s: Pick<HuddleSettings, 'livekit_url' | 'livekit_api_key' | 'livekit_api_secret'>
@@ -91,7 +90,8 @@ function urlList(raw: unknown, scheme: RegExp): string[] {
   const out: string[] = []
   for (const v of list) {
     const s = String(v ?? '').trim()
-    if (!s || !URL_RE.test(s) || !scheme.test(s)) continue
+    // No user info, transport query only (finding 3): the probe dials these addresses.
+    if (!s || !validIceUrl(s, scheme)) continue
     if (!out.includes(s)) out.push(s)
     if (out.length >= 8) break
   }
@@ -113,7 +113,7 @@ export function normalizeHuddleSettings(raw: unknown): HuddleSettings {
   const switchAt = Number(src.switch_at)
   const livekitUrl = text(src.livekit_url, 300)
   const sfu = {
-    livekit_url: livekitUrl && LIVEKIT_URL_RE.test(livekitUrl) ? livekitUrl : null,
+    livekit_url: validLiveKitUrl(livekitUrl),
     livekit_api_key: text(src.livekit_api_key, 200),
     livekit_api_secret: text(src.livekit_api_secret)
   }
@@ -179,11 +179,12 @@ export function mergeHuddlePatch(stored: HuddleSettings, patch: unknown): Huddle
   return normalizeHuddleSettings(next)
 }
 
-// ── Storage (30 s cache; the PATCH route busts it) ───────────────────────────
-let cache: { at: number; value: HuddleSettings } | null = null
+// ── Storage (30 s cache per tenant; the PATCH route busts it) ─────────────────
+// Keyed by tenant: in cloud mode one process serves many tenants, each with its own row.
+const cache = new Map<string, { at: number; value: HuddleSettings }>()
 
 export function bustHuddleSettingsCache(): void {
-  cache = null
+  cache.clear()
 }
 
 async function readRow(): Promise<{ id: number; data: Record<string, unknown> } | null> {
@@ -201,15 +202,19 @@ async function readRow(): Promise<{ id: number; data: Record<string, unknown> } 
 
 /** This instance's huddle settings (defaults when the table is missing or unreadable). */
 export async function getHuddleSettings(): Promise<HuddleSettings> {
-  if (cache && Date.now() - cache.at < 30_000) return cache.value
+  const tenant = currentTenantKey()
+  const hit = cache.get(tenant)
+  if (hit && Date.now() - hit.at < 30_000) return hit.value
   let value = HUDDLE_DEFAULTS
   try {
     const row = await readRow()
-    value = normalizeHuddleSettings(row?.data[HUDDLE_OVERRIDE_KEY])
+    // Cloud mode: the platform's media servers, never a tenant's (huddle-destinations.ts).
+    value = withPlatformDestinations(normalizeHuddleSettings(row?.data[HUDDLE_OVERRIDE_KEY]))
   } catch {
     /* table absent / DB not ready — defaults */
+    value = withPlatformDestinations(HUDDLE_DEFAULTS)
   }
-  cache = { at: Date.now(), value }
+  cache.set(tenant, { at: Date.now(), value })
   return value
 }
 
@@ -230,7 +235,7 @@ export async function saveHuddleSettings(patch: unknown): Promise<HuddleSettings
     })
   }
   bustHuddleSettingsCache()
-  return next
+  return withPlatformDestinations(next)
 }
 
 export interface IceServer {

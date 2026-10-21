@@ -14,6 +14,7 @@ import {
   settleCollabWrites,
   touchCollab
 } from './huddle-collab.js'
+import { noteHuddleEnded, resumeRecentHuddle, roomLineAllowed } from './huddle-flood-guard.js'
 import { LIVE_ROOM, pokeHuddleLive, registerHuddleLive } from './huddle-live.js'
 import { invalidateHuddleMarks, registerHuddleMarks } from './huddle-marks.js'
 import { markHuddling, unmarkHuddling } from './huddle-presence.js'
@@ -503,7 +504,13 @@ export function registerHuddle(
       KEY_TTL_S
     )
     const line = huddleEndLine(duration, end.names)
-    await deps.postLine(room, unposted ? `${line} · notes were not posted: ${unposted}` : line)
+    // Finding 1 — join/leave churn: a restart that ended again at once, or a room past its
+    // line budget, gets no "ended" line (unposted notes always say so).
+    const quiet = await noteHuddleEnded(deps.redis, tenant, room, Number(start)).catch(() => false)
+    if (unposted) await deps.postLine(room, `${line} · notes were not posted: ${unposted}`)
+    else if (!quiet && (await roomLineAllowed(deps.redis, tenant, room).catch(() => true))) {
+      await deps.postLine(room, line)
+    }
     if (unposted) socket.emit('huddle:note:unposted', { room, reason: unposted })
   }
 
@@ -553,6 +560,11 @@ export function registerHuddle(
       const name = await scope.scopedRoom(`huddle:${r}`)
       if (name) socket.join(name)
       const first = peers.length === 0
+      // Finding 1 — the same huddle restarting within seconds keeps its start, posts no
+      // "started" line and rings nobody again.
+      const resumed = first
+        ? await resumeRecentHuddle(deps.redis, tenant, r, since).catch(() => null)
+        : null
       if (first) {
         // A fresh session: a new id (so a new LiveKit room), no leftover mode. Whatever the
         // previous session's SFU room still holds is closed first.
@@ -562,7 +574,7 @@ export function registerHuddle(
         }
         await deps.redis.del(k.mode)
         await deps.redis.set(k.session, randomBytes(12).toString('base64url'), 'EX', KEY_TTL_S)
-        await deps.redis.set(k.start, String(since), 'EX', KEY_TTL_S)
+        await deps.redis.set(k.start, String(resumed?.start ?? since), 'EX', KEY_TTL_S)
       }
       // #2859: one more person than the mesh comfortably carries → everyone moves to the SFU.
       const before = first ? 'mesh' : await huddleMode(deps.redis, tenant, r)
@@ -587,9 +599,11 @@ export function registerHuddle(
         () => deps.sessions?.joined(tenant, r, String(user.id), peers.length + (already ? 0 : 1)),
         r
       )
-      if (first) await deps.postLine(r, `${nameOf(user) ?? 'Someone'} started a huddle`)
+      if (first && !resumed && (await roomLineAllowed(deps.redis, tenant, r).catch(() => true))) {
+        await deps.postLine(r, `${nameOf(user) ?? 'Someone'} started a huddle`)
+      }
       // #2843 — the first person in a direct conversation's huddle calls the others.
-      if (first && deps.ring && deps.directMembers) {
+      if (first && !resumed && deps.ring && deps.directMembers) {
         const members = await deps.directMembers(r).catch(() => null)
         if (members?.length) {
           await ringUsers(deps.ring, { tenant, room: r, from: user, users: members })
