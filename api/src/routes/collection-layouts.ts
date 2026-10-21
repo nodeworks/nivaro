@@ -569,6 +569,15 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     })
   })
 
+  // Who sees each field (#2580): every role's field permissions on the
+  // collection, for the editor's "who can see this field" overlay. Admin-only.
+  app.get('/field-access', { preHandler: requireAdmin }, async (req, reply) => {
+    const { collection } = req.query as { collection?: string }
+    if (!collection) return reply.code(400).send({ error: 'collection is required' })
+    const { collectionFieldAccess } = await import('../services/layout-field-access.js')
+    return reply.send({ data: { roles: await collectionFieldAccess(collection) } })
+  })
+
   // ─── Overview + explain (layout editor) ──────────────────────────────────
   // "Which form does each kind of record get?" — every layout of the
   // collection, sectioned and ordered as /active checks them, with what

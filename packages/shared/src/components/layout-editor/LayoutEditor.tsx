@@ -15,8 +15,15 @@ import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
 import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
-import { type DesignTarget, type LayoutDesign, targetKey } from './design-context'
+import {
+  type DesignMark,
+  type DesignOverlay,
+  type DesignTarget,
+  type LayoutDesign,
+  targetKey
+} from './design-context'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
+import { NO_DND } from './dnd/node'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { useLayoutEditorHost } from './host'
@@ -32,6 +39,8 @@ import {
 } from './overview/overview-api'
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
+import { PreviewModes } from './preview/PreviewModes'
+import { PreviewPanes } from './preview/PreviewPanes'
 import { useRolePreview } from './settings/settings-api'
 import {
   type LayoutDraft,
@@ -204,7 +213,11 @@ function Canvas({
   collection,
   bundle,
   parent,
-  preview,
+  roleId,
+  stateKey = null,
+  marks,
+  overlay,
+  noDnd = false,
   record,
   selected,
   onSelect,
@@ -215,7 +228,14 @@ function Canvas({
   collection: string
   bundle: LayoutBundle
   parent: LayoutBundle | null
-  preview: PreviewAs
+  /** Preview as this role (null: any role). */
+  roleId: string | null
+  /** Preview as if the record were in this pipeline state. */
+  stateKey?: string | null
+  marks?: (t: DesignTarget) => DesignMark[]
+  overlay?: (t: DesignTarget) => DesignOverlay | null
+  /** The second pane of a side-by-side preview: selectable, never draggable. */
+  noDnd?: boolean
   record: Record<string, unknown> | null
   selected: DesignTarget | null
   onSelect: (t: DesignTarget) => void
@@ -223,17 +243,18 @@ function Canvas({
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
   whenIdle: () => Promise<void>
 }) {
-  const dnd = useLayoutDnd()
+  const liveDnd = useLayoutDnd()
+  const dnd = noDnd ? NO_DND : liveDnd
   const canvas = useMemo(() => bundleToActiveLayout(bundle, parent), [bundle, parent])
   const layout = useMemo(
-    () => previewForRole(canvas.active, preview.roleId, showHidden),
-    [canvas.active, preview.roleId, showHidden]
+    () => previewForRole(canvas.active, roleId, showHidden),
+    [canvas.active, roleId, showHidden]
   )
   // Field permissions of the previewed role (groups it loses are dropped above).
-  const { data: rolePreview = null } = useRolePreview(collection, preview.roleId)
+  const { data: rolePreview = null } = useRolePreview(collection, roleId)
   const roleMark = useMemo(
-    () => (preview.roleId ? roleMarker(rolePreview) : undefined),
-    [preview.roleId, rolePreview]
+    () => (roleId ? roleMarker(rolePreview) : undefined),
+    [roleId, rolePreview]
   )
   const design = useMemo<LayoutDesign>(
     () => ({
@@ -242,9 +263,11 @@ function Canvas({
       showHidden,
       inheritedFrom: (t) => canvas.inherited.get(targetKey(t)) ?? null,
       dnd,
-      roleMark
+      roleMark,
+      marks,
+      overlay
     }),
-    [selected, onSelect, showHidden, canvas.inherited, dnd, roleMark]
+    [selected, onSelect, showHidden, canvas.inherited, dnd, roleMark, marks, overlay]
   )
   return (
     <EditorCanvas
@@ -252,6 +275,7 @@ function Canvas({
       bundle={bundle}
       layout={layout}
       record={record}
+      stateKey={stateKey}
       design={design}
       apply={apply}
       whenIdle={whenIdle}
@@ -349,6 +373,11 @@ export function LayoutEditor({
     bundle?.layout.parent_layout_id != null ? Number(bundle.layout.parent_layout_id) : null
   const { data: parent = null } = useLayoutBundle(parentId)
   const { data: record = null } = usePreviewRecord(collection, preview.record?.id ?? null)
+  // The canvas layout, for the preview modes' What if (its visibility conditions).
+  const canvasLayout = useMemo(
+    () => (bundle ? bundleToActiveLayout(bundle, parent).active : null),
+    [bundle, parent]
+  )
 
   useUndoKeys(draft)
   useLeaveGuard(draft)
@@ -434,6 +463,15 @@ export function LayoutEditor({
         onShowHidden={setShowHidden}
         onBack={leave}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
+        previewExtra={
+          <PreviewModes
+            collection={collection}
+            value={preview}
+            onChange={setPreview}
+            layout={canvasLayout}
+            fields={fields}
+          />
+        }
       />
       {overlay && (
         <EditingBanner
@@ -509,17 +547,32 @@ export function LayoutEditor({
           </aside>
           <main className='min-w-0 flex-1 overflow-y-auto'>
             {bundle ? (
-              <Canvas
+              <PreviewPanes
                 collection={collection}
                 bundle={bundle}
                 parent={parent}
                 preview={preview}
+                onPreview={setPreview}
                 record={record}
-                selected={selected}
-                onSelect={onSelect}
-                showHidden={showHidden}
-                apply={draft.apply}
-                whenIdle={draft.whenIdle}
+                fields={fields}
+                renderPane={(pane) => (
+                  <Canvas
+                    collection={collection}
+                    bundle={bundle}
+                    parent={parent}
+                    roleId={pane.roleId}
+                    stateKey={pane.stateKey}
+                    marks={pane.marks}
+                    overlay={pane.overlay}
+                    noDnd={pane.noDnd}
+                    record={pane.record}
+                    selected={selected}
+                    onSelect={onSelect}
+                    showHidden={showHidden}
+                    apply={draft.apply}
+                    whenIdle={draft.whenIdle}
+                  />
+                )}
               />
             ) : draft.error ? (
               <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>

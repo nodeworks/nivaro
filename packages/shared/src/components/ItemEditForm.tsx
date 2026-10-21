@@ -103,6 +103,7 @@ import {
 } from '../lib/summary-mode'
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
+import { matchesVisibleWhen } from '../lib/visible-when'
 import { CopyAsButton } from './CopyAsButton'
 import { showFormVideosButton } from './help-videos/viewer/format'
 import { HelpVideoButton } from './help-videos/viewer/HelpVideoButton'
@@ -4091,7 +4092,10 @@ function ItemEditFormView({
     enabled: hasLockConditions || addendumEnabled || summaryNeedsRole
   })
 
-  const { data: pipelineInstanceData, isError: pipelineInstanceError } = useQuery<{
+  // Layout editor "preview by state" (#2599): the chosen state stands in for
+  // the record's own, so locks and summary rules evaluate for that step.
+  const designStateKey = design?.stateKey ?? null
+  const { data: pipelineInstanceQueried, isError: pipelineInstanceError } = useQuery<{
     instance?: { current_state?: string | null } | null
     states?: Array<{ id: string; key: string }>
   } | null>({
@@ -4108,8 +4112,19 @@ function ItemEditFormView({
         )
         .catch(() => null),
     staleTime: 30_000,
-    enabled: (hasLockConditions || addendumEnabled || summaryNeedsState) && !isNew
+    enabled:
+      (hasLockConditions || addendumEnabled || summaryNeedsState) && !isNew && !designStateKey
   })
+  const pipelineInstanceData = useMemo(
+    () =>
+      designStateKey
+        ? {
+            instance: { current_state: '__design_state__' },
+            states: [{ id: '__design_state__', key: designStateKey }]
+          }
+        : pipelineInstanceQueried,
+    [designStateKey, pipelineInstanceQueried]
+  )
 
   const addendumCanCreate = useMemo(() => {
     if (!addendumEnabled) return false
@@ -4748,38 +4763,7 @@ function ItemEditFormView({
   // Conditional wizard steps (#139): a group's visible_when rules
   // ([{field, op, value}], AND) hide the whole step until the record matches.
   const stepVisible = useCallback(
-    (g: { visible_when?: string | null }) => {
-      if (!g.visible_when) return true
-      let rules: Array<{ field?: string; op?: string; value?: unknown }>
-      try {
-        rules = JSON.parse(g.visible_when)
-      } catch {
-        return true
-      }
-      if (!Array.isArray(rules) || rules.length === 0) return true
-      return rules.every((r) => {
-        if (!r?.field) return true
-        const v = draft[r.field]
-        const want = r.value
-        switch (r.op ?? 'eq') {
-          case 'eq':
-            return String(v ?? '') === String(want ?? '')
-          case 'neq':
-            return String(v ?? '') !== String(want ?? '')
-          case 'null':
-            return v == null || v === ''
-          case 'nnull':
-            return v != null && v !== ''
-          case 'in':
-            return String(want ?? '')
-              .split(',')
-              .map((x) => x.trim())
-              .includes(String(v ?? ''))
-          default:
-            return true
-        }
-      })
-    },
+    (g: { visible_when?: string | null }) => matchesVisibleWhen(g.visible_when, draft),
     [draft]
   )
   const tabGroups = useMemo(

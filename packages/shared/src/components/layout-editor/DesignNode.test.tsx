@@ -312,3 +312,40 @@ describe('DesignNode', () => {
     expect(draggableProps).toHaveBeenCalledWith(tile, { disabled: true })
   })
 })
+
+describe('DesignNode preview marks and overlay', () => {
+  it('renders mode tags, rings highlighted nodes and passes overlay clicks through', () => {
+    const onChip = vi.fn()
+    const d = design({
+      marks: () => [
+        { text: 'Differs', tone: 'violet', tip: 'A: edit · B: hidden', highlight: true }
+      ],
+      overlay: () => ({
+        className: 'bg-emerald-50',
+        chip: (
+          <button type='button' id='chip' onClick={onChip}>
+            2/3 roles
+          </button>
+        )
+      })
+    })
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target}>
+            <span id='c'>hi</span>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    expect(node.className).toContain('outline-dashed')
+    expect(node.className).toContain('bg-emerald-50')
+    const tag = host.querySelector('[data-design-mark]') as HTMLElement
+    expect(tag.textContent).toBe('Differs')
+    expect(tag.getAttribute('data-tip')).toBe('A: edit · B: hidden')
+    act(() => (host.querySelector('#chip') as HTMLElement).click())
+    expect(d.onSelect).toHaveBeenCalledWith(target)
+    expect(onChip).toHaveBeenCalled()
+  })
+})

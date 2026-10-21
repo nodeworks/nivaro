@@ -70,6 +70,20 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Preview as picks a record: the canvas shows its real values, its steps, and the fields its rules show or hide. "As a role" previews the form the way a role sees it — hidden and read-only fields are marked.'
     },
+    {
+      type: 'p',
+      text: 'The same Preview as popover holds the other preview modes. A strip above the canvas says what each active mode changes; its × turns that mode off. Nothing in them changes a record.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Compare with a second role: the canvas splits in two, the same record as each role. Fields one role can edit and the other only read (or never see), and sections only one of them sees, are ringed and tagged Differs; hover the tag for both answers. Both halves are preview only: select to edit, but drag on a single canvas.',
+        'Workflow state: pick a state of a pipeline bound to the collection and the form shows it as if the record were there — the fields that state locks, and what each move out of it needs (tagged Needed to move on) — without finding a record in that state.',
+        'What if: pick a field a step’s "Only when" condition reads, then one of the values the condition tests, Empty, or any value. The canvas lays it over the record and tags the steps that appear (Appears) or disappear (Hides, seen with Show hidden).',
+        'Device: Desktop, Tablet (768 px) or Phone (390 px). The form measures its own width, so columns wrap exactly as on that screen.',
+        'Who sees each field: every field is tinted by how many roles see it (every role, most, some, few, none — legend in the strip) with a chip such as 3/5 roles; click the chip for the roles that can edit it, only read it, or never see it. It combines each role’s permissions with this form’s section and lock rules; administrators see everything and are not counted.'
+      ]
+    },
     { type: 'h3', text: 'Inspector' },
     {
       type: 'table',
@@ -209,6 +223,10 @@ POST /api/collection-layouts/:id/ops  { ops: LayoutOp[], base_rev, note? }
 POST /api/field-config/:collection/project  { assignments: [...] }   // administrators
      // the field rows GET /field-config would return if these placements were saved
      // (read-only: the canvas renders unsaved drafts through it; flushes no cache, pushes nothing)
+
+GET  /api/collection-layouts/field-access?collection=orders      // administrators
+     → { data: { roles: [{ role: { id, name, admin_access }, can_read, can_update,
+                           hidden_fields, readonly_fields }] } }   // every role's field permissions
 
 GET  /api/widgets-internal/:id/placements
      → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`

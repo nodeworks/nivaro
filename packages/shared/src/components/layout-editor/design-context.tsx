@@ -1,4 +1,4 @@
-import { type CSSProperties, createContext, useContext } from 'react'
+import { type CSSProperties, createContext, type ReactNode, useContext } from 'react'
 import type { ActiveLayoutData } from '../item-edit/types'
 import type { RefusedWrite } from './design-canvas'
 
@@ -18,6 +18,26 @@ export interface LayoutDesign {
   /** "Preview as role": what that role's field permissions do to the node
    *  (hidden: faint with a tag, still selectable; read-only: a lock tag). */
   roleMark?(t: DesignTarget): RoleMark | null
+  /** Preview modes' tags on a node (role differences, what-if changes, state
+   *  requirements). `highlight` rings the node so differences stand out. */
+  marks?(t: DesignTarget): DesignMark[]
+  /** "Who sees this field" overlay: a tint and a clickable chip on the node. */
+  overlay?(t: DesignTarget): DesignOverlay | null
+}
+
+export interface DesignMark {
+  text: string
+  tone: 'violet' | 'emerald' | 'amber' | 'slate'
+  /** Instant tooltip (data-tip) with the detail. */
+  tip?: string
+  highlight?: boolean
+}
+
+export interface DesignOverlay {
+  /** Classes tinting the node (background + ring), light and dark. */
+  className: string
+  /** Rendered in the node's badge row; clicks reach it (data-design-pass). */
+  chip: ReactNode
 }
 
 export interface RoleMark {
@@ -53,6 +73,8 @@ export interface LayoutDesignProp {
   /** Preview record (its values, steps and rules); null/absent = no values. */
   record?: Record<string, unknown> | null
   context: LayoutDesign
+  /** Preview the record as if it were in this pipeline state (state key). */
+  stateKey?: string | null
   /** Something on the canvas tried to write and was refused (tests, dev tooling). */
   onRefusedWrite?: (w: RefusedWrite) => void
 }

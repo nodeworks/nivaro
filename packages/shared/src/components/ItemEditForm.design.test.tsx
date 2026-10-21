@@ -477,6 +477,42 @@ describe('ItemEditForm design mode', () => {
     expect(host.querySelector('[data-field="amount"]')).toBeNull()
     expect(host.querySelector('[data-design-hidden]')).toBeNull()
   })
+  it('what if (#2601): values laid over the record show the step their rule waits for', async () => {
+    await mount(
+      {
+        design: {
+          layout: tabsLayout('tabs'),
+          record: { ...RECORD, status: 'closed' },
+          context: makeDesign()
+        }
+      },
+      () => !!host.querySelector('[data-field="title"]')
+    )
+    const later = host.querySelector('[data-design-target="group:t2"]')
+    expect(later).not.toBeNull()
+    expect(later?.hasAttribute('data-design-hidden')).toBe(false)
+  })
+
+  it('preview by state (#2599): the chosen state locks its fields', async () => {
+    const layout: ActiveLayoutData = {
+      ...LAYOUT,
+      assignments: LAYOUT.assignments.map((a) =>
+        a.field === 'title'
+          ? {
+              ...a,
+              lock_conditions: JSON.stringify([{ type: 'pipeline_state', state_keys: ['review'] }])
+            }
+          : a
+      )
+    }
+    const { calls } = await mount({
+      design: { layout, record: { ...RECORD }, context: makeDesign(), stateKey: 'review' }
+    })
+    expect(host.querySelector('[data-tip="Locked while the record is in Review"]')).not.toBeNull()
+    // The fake instance read answers no state: only the override can lock it.
+    expect(calls.some((c) => c._path === '/items/orders/1')).toBe(false)
+  })
+
   it('a draft edit re-renders in place: no loader, no remount', async () => {
     projectDelayMs = 120
     try {
