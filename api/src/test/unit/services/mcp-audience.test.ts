@@ -102,20 +102,36 @@ describe('chat consent (#2492)', () => {
     expect(oauthScopeRefusal(r({ url: '/api/items/workflows' }), ['nivaro'])).toBeNull()
   })
 
-  it('labels only MCP traffic, with the app or key name', () => {
+  it('labels every OAuth / API-key post from server-known facts, never from headers', () => {
     const h = (app?: string) => (app ? { 'x-nivaro-app': app } : {})
     expect(
       mcpAppLabel(
-        r({ headers: h(), mcpInner: true, authMethod: 'oauth', oauthClientName: 'ChatGPT' })
+        r({ headers: h(), authMethod: 'oauth', oauthClientId: 'nvc_1', oauthClientName: 'ChatGPT' })
       )
-    ).toBe('ChatGPT')
-    expect(mcpAppLabel(r({ headers: h('mcp'), authMethod: 'api_key', apiKeyName: 'Laptop' }))).toBe(
-      'Laptop'
+    ).toEqual({ name: 'ChatGPT', ref: 'oauth client nvc_1' })
+    // A key holder cannot drop the label by leaving the MCP header off — or spoofing another.
+    for (const app of [undefined, 'mcp', 'admin'])
+      expect(
+        mcpAppLabel(r({ headers: h(app), authMethod: 'api_key', apiKeyId: 12, apiKeyName: 'ERP' }))
+      ).toEqual({ name: 'ERP', ref: 'api key 12' })
+    // A self-registered name is cleaned and capped; it stays app text.
+    const long = mcpAppLabel(
+      r({
+        headers: h(),
+        authMethod: 'oauth',
+        oauthClientId: 'nvc_2',
+        oauthClientName: `Rob\u0000 Lee${' x'.repeat(80)}`
+      })
     )
-    expect(mcpAppLabel(r({ headers: h('mcp'), authMethod: 'token' }))).toBe('AI assistant')
-    expect(mcpAppLabel(r({ headers: h('admin'), authMethod: 'api_key', apiKeyName: 'ERP' }))).toBe(
-      null
-    )
-    expect(mcpAppLabel(r({ headers: h(), authMethod: 'session' }))).toBeNull()
+    expect(long?.name.startsWith('Rob Lee')).toBe(true)
+    expect(long?.name.length).toBe(60)
+    expect(
+      mcpAppLabel(r({ headers: h(), authMethod: 'oauth', oauthClientId: 'nvc_3' }))?.name
+    ).toBe('Connected app')
+    // The person themselves: never labelled, header or not.
+    expect(mcpAppLabel(r({ headers: h('mcp'), authMethod: 'session' }))).toBeNull()
+    expect(mcpAppLabel(r({ headers: h('mcp'), authMethod: 'token' }))).toBeNull()
+    // An OAuth flag without a client id is not trusted.
+    expect(mcpAppLabel(r({ headers: h(), authMethod: 'oauth' }))).toBeNull()
   })
 })

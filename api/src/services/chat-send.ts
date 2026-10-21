@@ -65,6 +65,8 @@ export interface PostChatActor {
    * person: stored in `via_app` and shown beside the message.
    */
   viaApp?: string | null
+  /** The credential behind viaApp ("oauth client nvc_…", "api key 12") — kept on the activity row. */
+  viaRef?: string | null
 }
 
 export interface ChatRow {
@@ -241,7 +243,7 @@ async function postInner(
   }
   const cols = await chatColumns()
   const senderId = actor.senderId !== undefined ? actor.senderId : (user?.id ?? null)
-  const viaApp = actor.viaApp ? String(actor.viaApp).trim().slice(0, 80) || null : null
+  const viaApp = actor.viaApp ? String(actor.viaApp).trim().slice(0, 60) || null : null
   const baseSenderName =
     actor.senderName !== undefined
       ? actor.senderName
@@ -250,7 +252,7 @@ async function postInner(
   // message still says who wrote it.
   const senderName =
     viaApp && !cols.has('via_app')
-      ? `${baseSenderName ?? 'Someone'} (via ${viaApp})`
+      ? `${baseSenderName ?? 'Someone'} (via app · ${viaApp})`
       : baseSenderName
   const system = !!actor.system
   const clientId = input.clientId ? String(input.clientId).slice(0, 64) : null
@@ -413,7 +415,7 @@ async function postInner(
     user: senderId,
     collection: 'chat_messages',
     item: String(id),
-    comment: `room ${room}${parentId ? ` · thread ${parentId}` : ''}${urgent ? ' · urgent' : ''}${viaApp ? ` · via ${viaApp}` : ''}`
+    comment: `room ${room}${parentId ? ` · thread ${parentId}` : ''}${urgent ? ' · urgent' : ''}${viaApp ? ` · via app ${viaApp}${actor.viaRef ? ` (${actor.viaRef})` : ''}` : ''}`
   })
   if (urgent) {
     void logActivity({

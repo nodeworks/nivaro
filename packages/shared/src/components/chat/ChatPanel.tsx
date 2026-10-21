@@ -1841,12 +1841,12 @@ export function ChatRoomView({
             {!mine && <span className='mr-auto' />}
             {m.via_app && (
               <span
-                className='inline-flex items-center gap-0.5'
-                data-tip={`Posted by ${m.via_app}, an AI assistant, for ${mine ? 'you' : (m.sender_name ?? 'this person')}`}
+                className='inline-flex max-w-[16rem] items-center gap-0.5 font-normal'
+                data-tip={`Posted for ${mine ? 'you' : (m.sender_name ?? 'this person')} through an app or API key named "${m.via_app}". The name is the app's own, not a person.`}
                 data-chat-message-via-app
               >
-                <Bot className='h-3 w-3' aria-hidden />
-                via {m.via_app}
+                <Bot className='h-3 w-3 shrink-0' aria-hidden />
+                <span className='truncate'>via app · {m.via_app}</span>
               </span>
             )}
             {m.edited_at && !deleted && <span className='italic'>(edited)</span>}

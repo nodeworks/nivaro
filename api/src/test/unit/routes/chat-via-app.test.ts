@@ -1,9 +1,10 @@
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// #2492: a chat message an AI assistant posts through MCP names the connected
-// app — `via_app` where migration 478 has run, the sender name otherwise — and
-// nothing else (the browser, flows) is ever labelled.
+// #2492: every chat message posted with an OAuth token or an API key names that
+// credential — `via_app` where migration 478 has run, the sender name otherwise —
+// from server-known facts only (headers never decide), and the activity row keeps
+// the client / key id. A person's own session is never labelled.
 
 const state = vi.hoisted(() => ({
   hasViaApp: true,
@@ -96,34 +97,51 @@ beforeEach(() => {
 
 describe('chat messages posted through MCP (#2492)', () => {
   it('an OAuth connection labels the message with the app name', async () => {
-    state.req = { authMethod: 'oauth', mcpInner: true, oauthClientName: 'Claude' }
+    state.req = {
+      authMethod: 'oauth',
+      mcpInner: true,
+      oauthClientId: 'nvc_abc',
+      oauthClientName: 'Claude'
+    }
     const res = await post()
     expect(res.statusCode).toBe(201)
     expect(lastInsert()).toMatchObject({ sender_name: 'Pat Lee', via_app: 'Claude' })
     expect(res.json().data.via_app).toBe('Claude')
+    const { logActivity } = await import('../../../services/activity.js')
+    const created = vi
+      .mocked(logActivity)
+      .mock.calls.map((c) => c[0] as { action?: string; comment?: string })
+      .find((a) => a.action === 'create')
+    expect(created?.comment).toContain('via app Claude (oauth client nvc_abc)')
   })
 
-  it('an API key over the stdio server labels it with the key name', async () => {
-    state.req = { authMethod: 'api_key', apiKeyName: 'Rob laptop Claude Code' }
+  it('an API key labels it with the key name whatever headers it sends', async () => {
+    state.req = { authMethod: 'api_key', apiKeyId: 12, apiKeyName: 'Rob laptop Claude Code' }
     await post({ 'x-nivaro-app': 'mcp' })
+    expect(lastInsert()?.via_app).toBe('Rob laptop Claude Code')
+    await post()
+    expect(lastInsert()?.via_app).toBe('Rob laptop Claude Code')
+    await post({ 'x-nivaro-app': 'admin' })
     expect(lastInsert()?.via_app).toBe('Rob laptop Claude Code')
   })
 
-  it('the browser and other API callers are never labelled', async () => {
+  it("the person's own session is never labelled, even with the MCP header", async () => {
     state.req = { authMethod: 'session' }
-    await post()
-    expect(lastInsert()?.via_app).toBeUndefined()
-    state.req = { authMethod: 'api_key', apiKeyName: 'ERP sync' }
-    const res = await post()
+    const res = await post({ 'x-nivaro-app': 'mcp' })
     expect(lastInsert()?.via_app).toBeUndefined()
     expect(res.json().data.via_app).toBeNull()
   })
 
   it('before migration 478 the label rides the sender name', async () => {
     state.hasViaApp = false
-    state.req = { authMethod: 'oauth', mcpInner: true, oauthClientName: 'ChatGPT' }
+    state.req = {
+      authMethod: 'oauth',
+      mcpInner: true,
+      oauthClientId: 'nvc_x',
+      oauthClientName: 'ChatGPT'
+    }
     await post()
-    expect(lastInsert()).toMatchObject({ sender_name: 'Pat Lee (via ChatGPT)' })
+    expect(lastInsert()).toMatchObject({ sender_name: 'Pat Lee (via app · ChatGPT)' })
     expect(lastInsert()?.via_app).toBeUndefined()
   })
 })

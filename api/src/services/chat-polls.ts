@@ -217,7 +217,14 @@ export interface CreatePollInput {
 /** Post a poll: the question as a message, then its poll row. */
 export async function createPoll(
   app: FastifyInstance,
-  actor: { user: User; isAdmin?: boolean; masqueradeAdminId?: string | null },
+  actor: {
+    user: User
+    isAdmin?: boolean
+    masqueradeAdminId?: string | null
+    /** The OAuth app / API key that posted it (#2492). */
+    viaApp?: string | null
+    viaRef?: string | null
+  },
   input: CreatePollInput
 ): Promise<{ message_id: number; poll_id: number }> {
   if (!(await pollTablesExist()))
@@ -246,7 +253,9 @@ export async function createPoll(
     {
       user: actor.user,
       isAdmin: actor.isAdmin,
-      masqueradeAdminId: actor.masqueradeAdminId ?? null
+      masqueradeAdminId: actor.masqueradeAdminId ?? null,
+      viaApp: actor.viaApp ?? null,
+      viaRef: actor.viaRef ?? null
     },
     { room: input.room, message: `📊 ${question}`, parentId: input.parentId ?? null }
   )

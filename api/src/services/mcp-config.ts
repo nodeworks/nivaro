@@ -144,14 +144,39 @@ export function oauthScopeRefusal(req: FastifyRequest, scopes: string[]): string
   return null
 }
 
+/** How long an app name shown on a chat message may be. */
+export const APP_LABEL_MAX = 60
+
+/** A registrant- or admin-chosen name made safe to show: no control characters, capped. */
+function cleanAppName(raw: string | undefined, fallback: string): string {
+  const s = [...String(raw ?? '')]
+    .filter((c) => {
+      const code = c.charCodeAt(0)
+      return code >= 0x20 && code !== 0x7f
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return (s || fallback).slice(0, APP_LABEL_MAX)
+}
+
 /**
- * The name a chat message posted through MCP is labelled with: the connected
- * app's registered name, else the API key's name. Null for anything that did
- * not come through the MCP server (the browser, flows, other integrations).
+ * The app a chat message was posted through, from server-known facts only
+ * (#2492): every post made with an OAuth access token carries the connected
+ * app's registered name, every post made with an API key (or as one) the key's
+ * name — whatever headers the caller sends. Sessions and static tokens are the
+ * person themselves: null. `ref` names the credential so an administrator can
+ * trace the message (the client id or key id rides the activity row); the name
+ * itself is the registrant's choice and is only ever shown as app text.
  */
-export function mcpAppLabel(req: FastifyRequest): string | null {
-  const viaMcp = !!req.mcpInner || req.headers['x-nivaro-app'] === 'mcp'
-  if (!viaMcp && req.authMethod !== 'oauth') return null
-  const name = (req.oauthClientName ?? req.apiKeyName ?? '').trim()
-  return (name || 'AI assistant').slice(0, 80)
+export function mcpAppLabel(req: FastifyRequest): { name: string; ref: string } | null {
+  if (req.authMethod === 'oauth' && req.oauthClientId)
+    return {
+      name: cleanAppName(req.oauthClientName, 'Connected app'),
+      ref: `oauth client ${req.oauthClientId}`
+    }
+  const keyId = req.apiKeyId ?? req.apiKeySimulatedId
+  if ((req.authMethod === 'api_key' || req.authMethod === 'key_sim') && keyId != null)
+    return { name: cleanAppName(req.apiKeyName, 'API key'), ref: `api key ${keyId}` }
+  return null
 }
