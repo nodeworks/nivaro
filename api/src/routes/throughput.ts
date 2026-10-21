@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
+import { buildFirstOpenReport, parseFirstOpenParams } from '../services/first-open.js'
 import { clientGoneSignal, gateServerTiming, sharedGatedRead } from '../services/read-gate.js'
 import { aggregateThroughput, parseThroughputParams } from '../services/throughput.js'
 
@@ -40,6 +41,25 @@ export async function throughputRoutes(app: FastifyInstance) {
         bucket: parsed.params.bucket,
         unattributed_transitions
       }
+    })
+  })
+
+  // GET /reports/first-open?collection=&from=&to= — #1078: how long a record
+  // waits after entering a state before any owner opens it (per state, per owner).
+  app.get('/first-open', async (req, reply) => {
+    const parsed = parseFirstOpenParams(req.query as Record<string, unknown>)
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
+    const { collection, from, to } = parsed
+    const out = await sharedGatedRead(
+      `first-open|${collection}|${from.toISOString()}|${to.toISOString()}`,
+      req.user?.id,
+      () => buildFirstOpenReport({ collection, from, to }),
+      { signal: clientGoneSignal(reply.raw), label: 'first-open' }
+    )
+    gateServerTiming(reply, out)
+    return reply.send({
+      data: out.value,
+      meta: { from: from.toISOString(), to: to.toISOString() }
     })
   })
 

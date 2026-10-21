@@ -20,6 +20,12 @@ interface Roll {
   read: number
   read_rate: number
   median_minutes_to_read: number | null
+  /** #1079 — notifications with a record target whose acted window has closed. */
+  acted_eligible?: number
+  acted?: number
+  acted_rate?: number | null
+  read_ignored?: number
+  read_ignored_rate?: number | null
 }
 interface Analytics {
   days: number
@@ -27,6 +33,14 @@ interface Analytics {
   read: number
   read_rate: number
   median_minutes_to_read: number | null
+  acted?: {
+    hours: number
+    acted_eligible: number
+    acted: number
+    acted_rate: number | null
+    read_ignored: number
+    read_ignored_rate: number | null
+  }
   truncated: boolean
   by_category: Roll[]
   by_kind: Roll[]
@@ -87,6 +101,18 @@ function RollTable({ title, rows, keyLabel }: { title: string; rows: Roll[]; key
               <th className='px-2 py-1.5 text-right font-semibold'>Sent</th>
               <th className='px-2 py-1.5 text-right font-semibold'>Read</th>
               <th className='px-2 py-1.5 text-right font-semibold'>Time to read</th>
+              <th
+                className='px-2 py-1.5 text-right font-semibold'
+                data-tip='Share of record notifications the recipient acted on (transition, comment or task) within the window'
+              >
+                Acted
+              </th>
+              <th
+                className='px-2 py-1.5 text-right font-semibold'
+                data-tip='Opened but never acted on within the window'
+              >
+                Read, ignored
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -121,6 +147,29 @@ function RollTable({ title, rows, keyLabel }: { title: string; rows: Roll[]; key
                 </td>
                 <td className='px-2 py-1.5 text-right text-slate-500'>
                   {mins(r.median_minutes_to_read)}
+                </td>
+                <td
+                  className='px-2 py-1.5 text-right text-slate-700 dark:text-foreground'
+                  data-tip={
+                    r.acted_eligible ? `${r.acted} of ${r.acted_eligible} record notifications` : ''
+                  }
+                >
+                  {r.acted_rate == null ? '—' : pct(r.acted_rate)}
+                </td>
+                <td className='px-2 py-1.5 text-right'>
+                  {r.read_ignored_rate == null ? (
+                    <span className='text-slate-400'>—</span>
+                  ) : (
+                    <span
+                      className={
+                        r.read_ignored_rate >= 0.5
+                          ? 'text-amber-700 dark:text-amber-400'
+                          : 'text-slate-500'
+                      }
+                    >
+                      {pct(r.read_ignored_rate)}
+                    </span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -163,11 +212,14 @@ function ChannelCard({ title, counts }: { title: string; counts: Record<string, 
 export function NotificationAnalyticsView({ className }: { className?: string }) {
   const client = useNivaroClient()
   const [days, setDays] = useState<7 | 30 | 90>(30)
+  const [actedHours, setActedHours] = useState<4 | 24 | 72>(24)
   const { data, isLoading } = useQuery({
-    queryKey: ['notification-analytics', days],
+    queryKey: ['notification-analytics', days, actedHours],
     queryFn: () =>
       client
-        .request<{ data: Analytics }>(get('/notifications/analytics', { days }))
+        .request<{ data: Analytics }>(
+          get('/notifications/analytics', { days, acted_hours: actedHours })
+        )
         .then((r) => r.data)
   })
   const series = data?.series ?? []
@@ -204,6 +256,26 @@ export function NotificationAnalyticsView({ className }: { className?: string })
               </button>
             ))}
           </div>
+          <div
+            className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'
+            data-tip='How long after a notification an action still counts as acted'
+          >
+            {([4, 24, 72] as const).map((h) => (
+              <button
+                key={h}
+                type='button'
+                onClick={() => setActedHours(h)}
+                className={cn(
+                  'rounded px-2.5 py-1 text-[12px] font-medium',
+                  actedHours === h
+                    ? 'bg-slate-900 text-white dark:bg-nvr-cyan dark:text-[#172940]'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
+                )}
+              >
+                act ≤{h}h
+              </button>
+            ))}
+          </div>
         </div>
       </header>
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
@@ -211,13 +283,22 @@ export function NotificationAnalyticsView({ className }: { className?: string })
           <p className='text-[13px] text-slate-400'>Loading…</p>
         ) : (
           <div className='space-y-5'>
-            <div className='grid grid-cols-2 gap-3 md:grid-cols-4'>
+            <div className='grid grid-cols-2 gap-3 md:grid-cols-5'>
               <Tile label='Sent' value={String(data.total)} hint={`last ${data.days} days`} />
               <Tile label='Read rate' value={pct(data.read_rate)} hint={`${data.read} read`} />
               <Tile
                 label='Median time to read'
                 value={mins(data.median_minutes_to_read)}
                 hint='rows read since read tracking began'
+              />
+              <Tile
+                label={`Acted within ${actedHours}h`}
+                value={data.acted?.acted_rate == null ? '—' : pct(data.acted.acted_rate)}
+                hint={
+                  data.acted
+                    ? `${data.acted.acted} of ${data.acted.acted_eligible} record notifications`
+                    : undefined
+                }
               />
               <Tile
                 label='Muted records'

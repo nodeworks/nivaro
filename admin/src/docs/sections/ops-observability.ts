@@ -612,6 +612,10 @@ DELETE /api/notification-templates/:key       # revert`
       type: 'p',
       text: 'Data Tools → Notification Analytics (admin). Over 7 / 30 / 90 days: notifications sent and read, the read rate and median time-to-read (read timestamps are stamped from this release on), a per-day series, and roll-ups by category, lane, kind, sender (people vs "System / automations") and collection — each with its own read rate and time-to-read — plus per-channel delivery outcomes (push sent vs no device, email sent / summary / off / failed) and the mute picture: how many people mute something, and which collections draw the most mutes against what they sent (the "stop telling me about this" rate).'
     },
+    {
+      type: 'p',
+      text: 'Did it lead to action? A notification that points at a record counts as acted when its recipient moved that record, commented on it or finished a task on it within a window after it was sent (4, 24 or 72 hours; `?acted_hours=`). The Acted column shows that share per category, kind, lane and sender, and Read, ignored shows how many were opened and still got no action, so a category people read but never act on stands out. Notifications younger than the window are left out, and ones that do not point at a record (chat, dashboards, alerts) are not counted.'
+    },
     { type: 'h2', id: 'broadcast-receipts', text: 'Broadcast receipts by audience' },
     {
       type: 'p',

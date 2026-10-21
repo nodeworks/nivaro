@@ -100,6 +100,8 @@ export {
   CustomStatusEditor,
   formatStatusExpiry
 } from './components/CustomStatusEditor'
+export type { CumulativeFlowData } from './components/charts/CumulativeFlowChart'
+export { CumulativeFlowChart } from './components/charts/CumulativeFlowChart'
 export { ChatAnalyticsView } from './components/chat/ChatAnalyticsView'
 export {
   ChatAppearAwayRow,

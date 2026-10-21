@@ -19,6 +19,19 @@ export const teamThroughputGuide: DocSection = {
         'Avg time to action — how long items sat in a state before this user moved them (wall-clock).'
       ]
     },
+    { type: 'h2', id: 'team-throughput-first-open', text: 'Time until an owner opens a record' },
+    {
+      type: 'p',
+      text: 'SLA measures how long a record sits in a state. This card measures how long it waits after entering a state before any of its owners opens it. It shows, per state and per owner, how many entries were opened, how many were never opened before the record moved on, how many are still waiting, and the median and 90th percentile wait (`GET /reports/first-open?collection=&from=&to=`).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Owners are the people the pipeline names for that state today. The person who moved the record in does not count as an owner for that entry.',
+        "An open comes from the record view history. Nivaro keeps only each person's last two views of a record, so the first open is the earliest of those inside the stay. A wait can read longer than it was, never shorter.",
+        'The card covers the newest 4,000 state entries in the range.'
+      ]
+    },
     {
       type: 'note',
       text: 'Computed live from `nivaro_workflow_history` — fully retroactive, including imported legacy history. Per-owner backlog trends (My Items sparklines) accumulate daily from the snapshot cron and are not retroactive.'

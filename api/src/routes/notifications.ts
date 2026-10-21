@@ -7,6 +7,16 @@ import { getFields, getRelations } from '../services/collections.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { sendRawMail } from '../services/mail.js'
 import { parseJsonSafe } from '../services/metric-alerts.js'
+import {
+  type ActedNotification,
+  type ActedTally,
+  actedFields,
+  clampActedHours,
+  emptyTally,
+  loadRecipientActions,
+  tallyInto,
+  verdictFor
+} from '../services/notification-acted.js'
 import { bundleNotifications } from '../services/notification-bundles.js'
 import {
   archiveReadOlderThan,
@@ -977,8 +987,9 @@ export async function notificationsRoutes(app: FastifyInstance) {
    * telling me about this" signal — per collection against what was sent.
    */
   app.get('/analytics', { preHandler: requireAdmin }, async (req, reply) => {
-    const q = req.query as { days?: string }
+    const q = req.query as { days?: string; acted_hours?: string }
     const days = Math.min(365, Math.max(1, Number(q.days) || 30))
+    const actedHours = clampActedHours(q.acted_hours)
     const since = new Date(Date.now() - days * 86_400_000)
     const rows = (await db('nivaro_notifications')
       .where('timestamp', '>=', since)
@@ -996,8 +1007,23 @@ export async function notificationsRoutes(app: FastifyInstance) {
         'kind',
         'category',
         'lane',
-        'delivery'
+        'delivery',
+        'item',
+        'target'
       )) as Array<Record<string, unknown>>
+
+    // #1079 — acted: the recipient transitioned / commented / completed a task
+    // on the notification's record within `actedHours` of the send.
+    const actedNotifs = rows as unknown as ActedNotification[]
+    const actions = await loadRecipientActions(actedNotifs, since).catch(
+      () => new Map<string, number[]>()
+    )
+    const actedNow = Date.now()
+    const actedCategory = new Map<string, ActedTally>()
+    const actedKind = new Map<string, ActedTally>()
+    const actedSender = new Map<string, ActedTally>()
+    const actedLane = new Map<string, ActedTally>()
+    const actedAll = emptyTally()
 
     const bump = <K extends string>(
       m: Map<K, { sent: number; read: number; ttr: number[] }>,
@@ -1045,6 +1071,19 @@ export async function notificationsRoutes(app: FastifyInstance) {
       bump(bySender, (r.sender as string | null) ?? '__system__', r)
       bump(byCollection, (r.collection as string | null) ?? '(none)', r)
       bump(byLane, (r.lane as string | null) ?? 'fyi', r)
+      {
+        const verdict = verdictFor(r as unknown as ActedNotification, actions, actedHours, actedNow)
+        const read = r.status !== 'inbox'
+        tallyInto(actedCategory, category, verdict, read)
+        tallyInto(actedKind, (r.kind as string | null) ?? 'record', verdict, read)
+        tallyInto(actedSender, (r.sender as string | null) ?? '__system__', verdict, read)
+        tallyInto(actedLane, (r.lane as string | null) ?? 'fyi', verdict, read)
+        if (verdict.eligible) {
+          actedAll.eligible++
+          if (verdict.acted) actedAll.acted++
+          else if (read) actedAll.read_ignored++
+        }
+      }
       const day = new Date(r.timestamp as string).toISOString().slice(0, 10)
       const d = byDay.get(day) ?? { sent: 0, read: 0 }
       d.sent++
@@ -1075,19 +1114,23 @@ export async function notificationsRoutes(app: FastifyInstance) {
       const s = [...xs].sort((a, b) => a - b)
       return s[Math.floor(s.length / 2)]
     }
-    const roll = (m: Map<string, { sent: number; read: number; ttr: number[] }>) =>
+    const roll = (
+      m: Map<string, { sent: number; read: number; ttr: number[] }>,
+      acted?: Map<string, ActedTally>
+    ) =>
       [...m.entries()]
         .map(([key, v]) => ({
           key,
           sent: v.sent,
           read: v.read,
           read_rate: v.sent ? v.read / v.sent : 0,
-          median_minutes_to_read: median(v.ttr)
+          median_minutes_to_read: median(v.ttr),
+          ...(acted ? actedFields(acted.get(key)) : {})
         }))
         .sort((a, b) => b.sent - a.sent)
 
     // Senders: resolve names for the top rows (null sender = the system).
-    const senders = roll(bySender).slice(0, 15)
+    const senders = roll(bySender, actedSender).slice(0, 15)
     const senderIds = senders.map((s) => s.key).filter((k) => k !== '__system__')
     const names = new Map<string, string>()
     if (senderIds.length > 0) {
@@ -1156,13 +1199,14 @@ export async function notificationsRoutes(app: FastifyInstance) {
         read: readTotal,
         read_rate: rows.length ? readTotal / rows.length : 0,
         median_minutes_to_read: median(allTtr),
+        acted: { hours: actedHours, ...actedFields(actedAll) },
         truncated: rows.length >= 20_000,
-        by_category: roll(byCategory).map((r) => ({
+        by_category: roll(byCategory, actedCategory).map((r) => ({
           ...r,
           label: NOTIFY_CATEGORY_LABELS[r.key as NotifyCategory] ?? r.key
         })),
-        by_kind: roll(byKind),
-        by_lane: roll(byLane),
+        by_kind: roll(byKind, actedKind),
+        by_lane: roll(byLane, actedLane),
         by_sender: senderRows,
         by_collection: roll(byCollection).slice(0, 20),
         series,

@@ -76,6 +76,19 @@ export const flowMapReplayDocs: DocSection = {
       type: 'p',
       text: 'GET /api/pipelines/:id/flow-map aggregates transition volumes between states. Forward flows render as ribbons sized by volume; send-backs (transitions against the state sort order) render red, so rework loops jump out. Hover a state to isolate its flows.'
     },
+    { type: 'h2', id: 'pipeline-cumulative-flow', text: 'Cumulative flow' },
+    {
+      type: 'p',
+      text: 'GET /api/pipelines/:id/cumulative-flow stacks the number of records in each state at the end of every day (30, 90 or 365 days), built from workflow history. A band that keeps widening is work piling up in that state. The summary under the chart shows records that arrived, records that finished, the average work in progress and the lead time, worked out as average work in progress divided by records finished per day.'
+    },
+    {
+      type: 'p',
+      text: "It counts only the records the viewer may read: read permission, the role's row filter and User Scopes all apply, so two people can see different numbers. Every night a job stores a year of daily counts per pipeline and collection; a viewer with no row filter and no scope restriction reads ranges over 90 days from that stored series, everyone else gets a live read."
+    },
+    {
+      type: 'p',
+      text: 'The same chart is a dashboard widget type, Cumulative flow: pick a collection and a pipeline, and it shows the last 60 days of the records you can see in that collection. Widget filters narrow the records.'
+    },
     { type: 'h2', id: 'pipeline-replay', text: 'Time-lapse replay' },
     {
       type: 'p',

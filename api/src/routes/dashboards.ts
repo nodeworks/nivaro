@@ -443,7 +443,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         'bar_chart',
         'line_chart',
         'report_preset',
-        'saved_view'
+        'saved_view',
+        'cumulative_flow'
       ]
       if (!VALID_TYPES.includes(type)) {
         return reply.code(400).send({ error: `type must be one of: ${VALID_TYPES.join(', ')}` })
@@ -538,7 +539,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
           'bar_chart',
           'line_chart',
           'report_preset',
-          'saved_view'
+          'saved_view',
+          'cumulative_flow'
         ]
         if (!VALID_TYPES.includes(type))
           return reply.code(400).send({ error: 'Invalid widget type' })
