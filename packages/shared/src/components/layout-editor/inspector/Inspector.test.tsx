@@ -14,6 +14,7 @@ import {
 import type { DesignTarget } from '../design-context'
 import { LayoutEditorHostContext } from '../host'
 import parityRows from '../parity-keys.json'
+import { layoutDraftKeys } from '../useLayoutDraft'
 import { Inspector } from './Inspector'
 import { CONDITION_OPS } from './kit'
 
@@ -717,6 +718,25 @@ describe('Inspector', () => {
 
     await click(host.querySelector('[data-edit-in-parent]'))
     expect(openLayout).toHaveBeenCalledWith(3)
+  })
+
+  it("Override here copies the parent as its own editor last saved it (the draft's bundle key)", async () => {
+    // The parent's editor saved a new width a moment ago: its draft wrote the
+    // bundle under the shared key. The inspector must read that, not a copy.
+    const saved: LayoutBundle = {
+      ...PARENT,
+      rev: 'p2',
+      placements: [place('region', 'shipping', { col_span: 3 })]
+    }
+    const { apply, calls } = await mount(field('region', 'shipping'), {
+      bundle: makeBundle({ parent_layout_id: 3 }),
+      inheritedFrom: 'Base order',
+      seed: (qc) => qc.setQueryData(layoutDraftKeys.bundle(3), saved)
+    })
+    await click(host.querySelector('[data-override-here]'))
+    const [ops] = apply.mock.calls[0]
+    expect(ops[1]).toMatchObject({ field: 'region', patch: { col_span: 3 } })
+    expect(calls.some((c) => c._path === '/collection-layouts/3/bundle')).toBe(false)
   })
 
   it('the header names the kind, the section, the field and its key', async () => {

@@ -90,14 +90,26 @@ export function useRoleNames(enabled: boolean) {
   })
 }
 
-/** Refresh everything a layout write can change for this collection. */
+/**
+ * Refresh everything a layout write can change for this collection. `lazy`
+ * only marks it stale: nothing refetches until someone shows it again. The
+ * editor saves lazily unless a batch changed what the overview says — the
+ * overview read scans several whole tables for references (~1 s).
+ */
 export function useInvalidateLayouts(collection: string) {
   const qc = useQueryClient()
-  return useCallback(() => {
-    void qc.invalidateQueries({ queryKey: overviewKeys.overview(collection) })
-    void qc.invalidateQueries({ queryKey: ['collection-layouts', collection] })
-    void qc.invalidateQueries({ queryKey: ['active-layout', collection] })
-  }, [qc, collection])
+  return useCallback(
+    (opts?: { lazy?: boolean }) => {
+      const refetchType = opts?.lazy ? 'none' : 'active'
+      for (const queryKey of [
+        overviewKeys.overview(collection),
+        ['collection-layouts', collection],
+        ['active-layout', collection]
+      ])
+        void qc.invalidateQueries({ queryKey, refetchType })
+    },
+    [qc, collection]
+  )
 }
 
 export interface ApiFailure {

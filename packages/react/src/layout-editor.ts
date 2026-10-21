@@ -7,6 +7,7 @@
 export type { LayoutEditorHost, LayoutEditorProps } from '@nivaro/shared'
 export {
   ExplainButton,
+  invalidateRecordLayoutQueries,
   LayoutEditor,
   LayoutEditorHostContext,
   useLayoutEditorHost

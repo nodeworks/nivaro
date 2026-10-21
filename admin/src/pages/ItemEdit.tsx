@@ -644,21 +644,8 @@ export function ItemEditPage() {
   // layout /active resolves for this record, and the editor must not jump.
   const [editingLayoutId, setEditingLayoutId] = useState<number | null>(null)
   const editableLayoutId = user?.is_admin && layoutMeta?.id != null ? Number(layoutMeta.id) : null
-  const closeLayoutEditor = () => {
-    setEditingLayoutId(null)
-    // The form re-reads what it renders from: layouts, read/file views, field settings.
-    for (const key of [
-      'active-layout',
-      'summary-layout',
-      'file-layouts',
-      'field-config',
-      'drilldown-layout',
-      'addendum-layout'
-    ])
-      void queryClient.invalidateQueries({ queryKey: [key, collection] })
-    // Keyed by layout id, not collection.
-    void queryClient.invalidateQueries({ queryKey: ['layout-meta'] })
-  }
+  // The editor re-reads the record's layout queries itself once its last save lands.
+  const closeLayoutEditor = () => setEditingLayoutId(null)
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
   const granted = layoutGrantedTools(layoutMeta, !!user?.is_admin)
   const canSchedule = granted.schedule

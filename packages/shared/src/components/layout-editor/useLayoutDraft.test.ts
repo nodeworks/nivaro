@@ -18,7 +18,13 @@ import {
   type PlacementRow,
   ungroupedGroup
 } from '../../lib/layout-ops'
-import { inverseOps, type LayoutDraft, useLayoutDraft } from './useLayoutDraft'
+import {
+  inverseOps,
+  type LayoutDraft,
+  type LayoutDraftOptions,
+  touchesOverview,
+  useLayoutDraft
+} from './useLayoutDraft'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -133,13 +139,18 @@ let host: HTMLDivElement
 let root: Root
 let draft: LayoutDraft
 let qc: QueryClient
+let probeId = 7
+let probeOnSaved: LayoutDraftOptions['onSaved']
+let rendered: (() => void) | null = null
 
 function Probe() {
-  draft = useLayoutDraft(7)
+  draft = useLayoutDraft(probeId, { onSaved: probeOnSaved })
   return null
 }
 
 beforeEach(() => {
+  probeId = 7
+  probeOnSaved = undefined
   h.toast.mockClear()
   host = document.createElement('div')
   document.body.appendChild(host)
@@ -153,7 +164,7 @@ afterEach(() => {
 
 async function mount(client: { request: unknown }, waitForBundle = true) {
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  await act(async () => {
+  rendered = () =>
     root.render(
       createElement(
         QueryClientProvider,
@@ -162,7 +173,7 @@ async function mount(client: { request: unknown }, waitForBundle = true) {
         createElement(NivaroProvider, { client } as never, createElement(Probe))
       )
     )
-  })
+  await act(async () => rendered?.())
   if (waitForBundle) await settle(() => draft.bundle !== null)
 }
 
@@ -544,6 +555,106 @@ describe('useLayoutDraft — failures, other writers, flushing', () => {
     expect(draft.bundle).toEqual(before)
     expect(server.posts).toHaveLength(1)
     expect(draft.canUndo).toBe(false)
+  })
+})
+
+describe('useLayoutDraft — leaving, refreshing, reopening', () => {
+  it('whenIdle sends typed text and resolves once the save has landed', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    const release = server.hold()
+    act(() =>
+      draft.apply([{ op: 'layout_update', patch: { name: 'Main form' } }], {
+        label: 'Rename form',
+        text: true
+      })
+    )
+    let idle = false
+    let done: Promise<void> = Promise.resolve()
+    act(() => {
+      done = draft.whenIdle().then(() => {
+        idle = true
+      })
+    })
+    await settle(() => server.posts.length === 1, 20)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(idle).toBe(false)
+    release()
+    await act(async () => {
+      await done
+    })
+    expect(idle).toBe(true)
+    expect(server.current.layout.name).toBe('Main form')
+  })
+
+  it('whenIdle resolves at once with nothing pending, and after a failure too', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    await act(async () => {
+      await draft.whenIdle()
+    })
+    server.failNext(400, { error: 'nope' })
+    act(() => draft.apply([{ op: 'layout_update', patch: { slug: 'x' } }], { label: 'Slug' }))
+    await act(async () => {
+      await draft.whenIdle()
+    })
+    expect(draft.status).toBe('error')
+  })
+
+  it('onSaved gets each confirmed bundle with the batch that made it', async () => {
+    const server = fakeServer()
+    const seen: Array<{ rev: string; ops: LayoutOp[] | null }> = []
+    probeOnSaved = (bundle, ops) => seen.push({ rev: bundle.rev, ops })
+    await mount(server.client)
+    const op: LayoutOp = { op: 'remove', at: { field: 'status', group_key: 'main' } }
+    act(() => draft.apply([op], { label: 'Remove Status' }))
+    await settle(() => draft.status === 'saved')
+    expect(seen).toEqual([{ rev: 'r2', ops: [op] }])
+  })
+
+  it('reopening a layout whose save is still in flight reuses that draft (no false conflict)', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    const release = server.hold()
+    act(() =>
+      draft.apply([{ op: 'remove', at: { field: 'status', group_key: 'main' } }], {
+        label: 'Remove Status'
+      })
+    )
+    await settle(() => server.posts.length === 1, 20)
+    // A → B → A while A's first save is still out.
+    probeId = 8
+    await act(async () => rendered?.())
+    probeId = 7
+    await act(async () => rendered?.())
+    act(() =>
+      draft.apply([{ op: 'remove', at: { field: 'notes', group_key: 'details' } }], {
+        label: 'Remove Notes'
+      })
+    )
+    release()
+    await settle(() => server.posts.length === 2 && draft.status === 'saved')
+    expect(server.posts.map((p) => p.base_rev)).toEqual(['r1', 'r2'])
+    expect(h.toast).not.toHaveBeenCalled()
+    expect(fieldsIn(server.current, 'main')).toEqual(['title'])
+    expect(fieldsIn(server.current, 'details')).toEqual([])
+  })
+})
+
+describe('touchesOverview', () => {
+  it('only layout settings the overview reads count; unknown batches count', () => {
+    expect(touchesOverview(null)).toBe(true)
+    expect(touchesOverview([{ op: 'layout_update', patch: { name: 'X' } }])).toBe(true)
+    expect(touchesOverview([{ op: 'layout_update', patch: { record_conditions: [] } }])).toBe(true)
+    expect(touchesOverview([{ op: 'layout_update', patch: { ai_enabled: true } }])).toBe(false)
+    expect(
+      touchesOverview([
+        { op: 'remove', at: { field: 'a', group_key: null } },
+        { op: 'group_update', key: 'main', patch: { label: 'General' } }
+      ])
+    ).toBe(false)
   })
 })
 

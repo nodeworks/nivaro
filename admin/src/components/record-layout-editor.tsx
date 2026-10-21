@@ -1,10 +1,13 @@
-import { LayoutEditor } from '@nivaro/shared'
+import { invalidateRecordLayoutQueries, LayoutEditor } from '@nivaro/shared'
+import { useQueryClient } from '@tanstack/react-query'
 import { AdminLayoutEditorHost } from '@/lib/layout-editor-host'
 
 /**
  * A record page's Edit layout mode (spec §7.4): the layout editor as an
  * overlay on the layout this record resolved to, previewing this record.
  * Loaded lazily by ItemEdit, and only for admins, so nobody else downloads it.
+ * Closing returns to the record at once; the record re-reads its layout once
+ * the editor's last save has landed.
  */
 export default function RecordLayoutEditor({
   collection,
@@ -17,6 +20,11 @@ export default function RecordLayoutEditor({
   recordId: string | null
   onClose: () => void
 }) {
+  const qc = useQueryClient()
+  const onBack = (saved: Promise<void>) => {
+    onClose()
+    void saved.then(() => invalidateRecordLayoutQueries(qc, collection))
+  }
   return (
     <AdminLayoutEditorHost collection={collection}>
       <LayoutEditor
@@ -24,7 +32,7 @@ export default function RecordLayoutEditor({
         layoutId={layoutId}
         mode='overlay'
         previewRecordId={recordId}
-        onBack={onClose}
+        onBack={onBack}
       />
     </AdminLayoutEditorHost>
   )

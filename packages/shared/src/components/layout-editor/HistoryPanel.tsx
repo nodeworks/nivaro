@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { layoutDraftKeys } from './useLayoutDraft'
 
 interface VersionRow {
   id: number
@@ -29,7 +30,6 @@ interface DiffDto {
   total: number
 }
 
-/** The versions list; the editor refreshes it after every save. */
 /**
  * A version is the state BEFORE the edit its note names ("Move field"), so
  * Restore on it undoes that edit. Server notes already say so ("before
@@ -39,8 +39,9 @@ export function versionNoteLabel(note: string): string {
   return /^before\b/i.test(note) ? note : `Before: ${note}`
 }
 
-export const versionsKey = (id: number) => ['layout-editor', 'versions', id] as const
-const bundleKey = (id: number) => ['layout-editor', 'bundle', id] as const
+/** The versions list; the editor refreshes it after every save. */
+const versionsKey = layoutDraftKeys.versions
+const bundleKey = layoutDraftKeys.bundle
 
 function fmt(v: unknown): string {
   if (v == null || v === '') return 'empty'

@@ -1,8 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
 import { MousePointerClick } from 'lucide-react'
 import { type ReactNode, useId, useMemo, useState } from 'react'
-import { useNivaroClient } from '../../../context'
-import { get } from '../../../lib/commands'
 import {
   CANVAS_SLOT_KEYS,
   type GroupRow,
@@ -18,7 +15,7 @@ import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context
 import { PanelBody, PanelHeader, PanelTabs, tabId, tabPanelId } from '../panel-frame'
 import { tintCard } from '../panel-style'
 import { slotName } from '../slot-names'
-import { type ApplyOptions, parseBundle } from '../useLayoutDraft'
+import { type ApplyOptions, useLayoutBundle } from '../useLayoutDraft'
 import { AdvancedTab } from './AdvancedTab'
 import {
   type CollectionMeta,
@@ -95,17 +92,6 @@ function placementOf(target: DesignTarget): { field: string; group_key: string |
   }
 }
 
-function useParentBundle(parentId: number | null, enabled: boolean) {
-  const client = useNivaroClient()
-  return useQuery({
-    queryKey: ['layout-editor', 'parent-bundle', parentId],
-    queryFn: () =>
-      client.request<unknown>(get(`/collection-layouts/${parentId}/bundle`)).then(parseBundle),
-    enabled: enabled && parentId != null,
-    staleTime: 30_000
-  })
-}
-
 export function Inspector(props: InspectorProps) {
   const { bundle, target, apply, collection } = props
   const design = useLayoutDesign()
@@ -131,10 +117,10 @@ export function Inspector(props: InspectorProps) {
       ? !group
       : !row && !isSlotField(at?.field ?? '') && at?.field !== SUBTITLE_FIELD)
   const parentId =
-    typeof bundle.layout.parent_layout_id === 'number' ? bundle.layout.parent_layout_id : null
+    bundle.layout.parent_layout_id != null ? Number(bundle.layout.parent_layout_id) : null
   const parentName =
     props.inheritedFrom ?? (target ? (design?.inheritedFrom(target) ?? null) : null)
-  const { data: parent } = useParentBundle(parentId, missing)
+  const { data: parent } = useLayoutBundle(parentId, missing)
   const parentRow = missing && parent && at ? findPlacement(parent, at.field, at.group_key) : null
   const parentGroup =
     missing && parent && target?.kind === 'group'
