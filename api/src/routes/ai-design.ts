@@ -65,6 +65,7 @@ import {
 import { clearMetadataCache } from '../services/collections.js'
 import { loadLayoutBundle } from '../services/layout-ops.js'
 import { meaningPass, registerLayoutAssistRoutes } from './ai-design-assist.js'
+import { aiDesignFormRoutes } from './ai-design-forms.js'
 import { aiDesignRuleRoutes } from './ai-design-rules.js'
 
 /**
@@ -97,6 +98,9 @@ export async function aiDesignRoutes(app: FastifyInstance) {
 
   // Layout editor AI assists (#2684 #2688 #2689): proposals only, see ai-design-assist.ts.
   registerLayoutAssistRoutes(app)
+
+  // AI form building (#2668-#2672): compose, slim version, sections by meaning.
+  await app.register(aiDesignFormRoutes)
 
   // ── Layout review (#1920) + apply (#1964) ──────────────────────────────────
 

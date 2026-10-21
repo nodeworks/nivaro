@@ -14,6 +14,7 @@ import {
 import { listLayoutSlots } from '../../lib/layout-slots'
 import { cn, titleCase } from '../../lib/utils'
 import { fieldSpot, placeOp, sectionOp, slotSpot } from './add-target'
+import { MeaningSuggestions } from './ai-forms/MeaningSuggestions'
 import type { DesignTarget } from './design-context'
 import type { AddSource } from './dnd/collision'
 import { useAddDragSource } from './dnd/node'
@@ -352,6 +353,9 @@ export function AddPanel({
         </>
       )}
 
+      {to === 'form' && !q.trim() && (
+        <MeaningSuggestions bundle={bundle} collection={collection} apply={apply} />
+      )}
       {to === 'form' && (
         <LibraryRows
           bundle={bundle}

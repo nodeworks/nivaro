@@ -384,6 +384,25 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "API (administrators): `GET /api/ai-design/layouts/:id/text/locales` and `POST /api/ai-design/layouts/:id/text/:tool` (tool = glossary, intros, placeholders, choices, reading or translate; translate takes `{ locale }`) answer proposals and never write. `POST /api/ai-design/layouts/:id/text/choices/field` with `{ field, choices: [{ value, text }] }` relabels the field's own choices and is logged with the old ones. Translations are stored on the placement as `overrides.i18n[locale] = { label, help, draft: true }`."
     },
+    { type: 'h3', id: 'layout-editor-ai-forms', text: 'Build a form with AI' },
+    {
+      type: 'p',
+      text: 'Admins, when AI is set up. New form → Start with AI makes a new form; the AI button in the editor rebuilds the open one. Every proposal is listed in plain sentences first. Nothing is written until Apply (or Create form), it lands as one undo step, and it still waits for Save.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Describe it: "a returns form with a manager approval step". The steps or sections are built from the fields this collection already has. Any name the AI makes up is left out and listed.',
+        'From a picture or PDF: a screenshot, scan, PDF or spreadsheet of an old form (up to 10 MB). Its labels are matched to fields, and its order and grouping are kept. Labels with no field are listed as candidate new fields. They are never created for you.',
+        'From a process document: one step per stage, with the passage each step came from. You also get suggested read-only fields per pipeline state (ticked) and required fields (unticked: Required counts for every state).',
+        'Lighter version for a role: pick a role. You see the fields its people changed in the last 180 days, and the fields it would hide. Create lighter version makes a new form that inherits from this one, is shown only to that role, and hides the unused fields.',
+        'Sections by meaning: at the top of the Add panel (and under AI). Each field not on the form gets a suggested section, based on what the field means. This helps on a new collection that has no usage history yet.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'The AI gets field names, labels, descriptions and the form layout. It never gets record values. An uploaded file is read once and never stored. The lighter version reads only which fields were changed, never the values. If the AI rebuild leaves a step or section still holding fields, it is kept and named.'
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
@@ -732,6 +751,16 @@ GET  /api/collection-layouts/schedules?collection=orders[&layout_id=5]
 POST /api/collection-layouts/:id/schedules  { ops, base_rev, run_at, note? }
 PATCH /api/collection-layouts/schedules/:sid  { run_at }   // pending only
 DELETE /api/collection-layouts/schedules/:sid              // cancel (or dismiss a failed one)
+
+POST /api/ai-design/layouts/compose  { collection, text }            // administrators; AI
+POST /api/ai-design/layouts/compose/file  multipart: collection, mode (picture | sop), note?, file
+     → { data: { form: { name, layout: 'steps' | 'sections', groups: [{ label, fields, source }],
+                         locks, requirements, candidates, dropped, explanation },
+                 read_as?, states? } }    // a proposal: the editor turns it into ops
+POST /api/ai-design/layouts/:id/slim  { role_id }
+     → { data: { role, parent, days, revisions, people, plan: { keep, drop, hide_groups } | null } }
+POST /api/ai-design/layouts/:id/sections-by-meaning  { groups: [{ key, label, fields }], fields }
+     → { data: { suggestions: [{ field, group_key, reason }], dropped } }
 
 GET  /api/widgets-internal/:id/placements
      → { data: [{ layout_id, name, collection }] }   // every layout placing the widget

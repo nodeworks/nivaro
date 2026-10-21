@@ -18,6 +18,7 @@ import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
 import { AiToolsButton } from './ai/AiToolsButton'
 import { type AiPin, mergeMarks, pinsToMarks } from './ai/ai-tools-api'
+import { AiFormsButton } from './ai-forms/AiFormsButton'
 import { AutoArrangeButton } from './AutoArrange'
 import { BulkChangesButton } from './bulk/BulkChangesButton'
 import { useMacroRecorder } from './bulk/useMacroRecorder'
@@ -1009,6 +1010,12 @@ export function LayoutEditor({
                 <RulesToggle on={rulesOn} onChange={setRulesOn} />
                 <AutoArrangeButton bundle={bundle} apply={draft.apply} />
                 <FindReplaceButton bundle={bundle} apply={draft.apply} collection={collection} />
+                <AiFormsButton
+                  collection={collection}
+                  layoutId={currentId}
+                  draft={draft}
+                  onOpenLayout={openLayout}
+                />
               </>
             )}
             {bundle && (
