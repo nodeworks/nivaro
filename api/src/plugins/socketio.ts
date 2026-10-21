@@ -13,6 +13,7 @@ import {
   olderReason
 } from '../services/client-version.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
+import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
@@ -1202,6 +1203,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       () => authenticatedUser,
       { scopedRoom, scopedRoomNow, tenantNow },
       fullHuddleDeps(app)
+    )
+    // #2854 #2855 — huddle notes and Follow me, beside the signalling.
+    registerHuddleCollab(
+      io,
+      socket,
+      () => authenticatedUser,
+      { scopedRoom, scopedRoomNow, tenantNow },
+      defaultHuddleCollabDeps(app)
     )
     // #1399 — watch a session replay together (admin-only replay:<key> rooms).
     registerReplayWatch(io, socket, () => authenticatedUser)

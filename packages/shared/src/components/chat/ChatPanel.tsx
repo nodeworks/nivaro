@@ -128,6 +128,7 @@ import { EmojiButton, EmojiGlyph, useCustomEmoji } from './chat-emoji'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
 import { offHoursNote } from './chat-local-time'
 import { useMessageWindow } from './chat-window'
+import { HuddleFollowHost } from './huddle/HuddleCollab'
 import { HuddleControls } from './huddle/HuddleControls'
 import { HuddleLiveBadge } from './huddle/HuddleLiveBadge'
 import { HuddleScheduleCard } from './huddle/HuddleScheduleCard'
@@ -4371,7 +4372,8 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
     setActiveRoom({ room: requestedRoom.room, label: requestedRoom.label ?? requestedRoom.room })
   }, [requestedRoom])
 
-  if (!open) return null
+  // #2855 — Follow me navigates and shows its chip with the panel closed too.
+  if (!open) return <HuddleFollowHost />
   return (
     <div
       className={
@@ -4386,6 +4388,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
       data-nvr-recording-hide
       data-chat-pinned={pinned ? '1' : undefined}
     >
+      <HuddleFollowHost />
       <aside
         className={cn(
           'pointer-events-auto absolute right-0 top-0 flex h-full w-full flex-col border-l',

@@ -3,6 +3,17 @@ import type { FastifyInstance } from 'fastify'
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
+import {
+  collabLeft,
+  finishHuddleEnd,
+  huddleEndLine,
+  huddleNotesMessage,
+  notePostReason,
+  readHuddleEnd,
+  recordAttendee,
+  settleCollabWrites,
+  touchCollab
+} from './huddle-collab.js'
 import { LIVE_ROOM, pokeHuddleLive, registerHuddleLive } from './huddle-live.js'
 import { markHuddling, unmarkHuddling } from './huddle-presence.js'
 import {
@@ -220,6 +231,7 @@ async function touch(
   await redis.expire(k.session, KEY_TTL_S)
   // #2852 — the person reads "In a huddle" wherever presence is shown.
   if (userId) await markHuddling(redis, tenant, userId, room).catch(() => undefined)
+  await touchCollab(redis, tenant, room, KEY_TTL_S)
 }
 
 /** The huddle's session id (#2859): random per huddle, names its LiveKit room; null = no huddle. */
@@ -250,8 +262,18 @@ export interface HuddleDeps {
     sfu?: boolean
     switch_at?: number
   }>
-  /** Post a platform line in the room (chat-send.ts). */
+  /** Post a platform line in the room (chat-send.ts). Fixed server text only. */
   postLine(room: string, text: string): Promise<void>
+  /**
+   * #2854 — may this writer of the notes post a top-level message in the room under the normal
+   * rules (active account, canSeeRoom, announce channels)? null = yes, else the plain reason.
+   */
+  noteWriterRefusal(room: string, writer: { id: string; name: string }): Promise<string | null>
+  /**
+   * #2854 — post the notes AS A PERSON (their last editor), through postChatMessage's normal
+   * visibility and posting rules. Resolves null when posted, or the plain reason it was not.
+   */
+  postNote(room: string, authorId: string, text: string): Promise<string | null>
   warn(obj: Record<string, unknown>, msg: string): void
   /** #2849 — per-session tallies written to the admin analytics when a huddle ends. */
   sessions?: HuddleSessionRecorder
@@ -304,6 +326,37 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
       const name = sfuRoomName(tenant, room, session)
       if (identity) await sfuRemoveParticipant(server, name, identity)
       else await sfuDeleteRoom(server, name)
+    },
+    async noteWriterRefusal(room, writer) {
+      const { getUser } = await import('./users.js')
+      const u = await getUser(writer.id).catch(() => undefined)
+      if (u?.status !== 'active') return `${writer.name} can no longer post here`
+      const { chatPostRefusal } = await import('./chat-send.js')
+      const { isAdminRole } = await import('./permissions.js')
+      const refused = await chatPostRefusal(u, room, await isAdminRole(u).catch(() => false))
+      if (!refused) return null
+      return refused.code === 'ANNOUNCE_ONLY'
+        ? `${writer.name} cannot post in this announcement channel`
+        : `${writer.name} cannot post in this room`
+    },
+    async postNote(room, authorId, text) {
+      const { getUser } = await import('./users.js')
+      const author = await getUser(authorId).catch(() => undefined)
+      if (author?.status !== 'active') return 'their writer can no longer post here'
+      try {
+        const { postChatMessage } = await import('./chat-send.js')
+        const { isAdminRole } = await import('./permissions.js')
+        await postChatMessage(
+          app,
+          { user: author, isAdmin: await isAdminRole(author).catch(() => false) },
+          { room, message: text }
+        )
+        return null
+      } catch (err) {
+        const status = (err as { statusCode?: number })?.statusCode
+        if (!status || status >= 500) app.log.warn({ err, room }, 'huddle notes post failed')
+        return notePostReason(err)
+      }
     }
   }
 }
@@ -393,21 +446,61 @@ export function registerHuddle(
   setHuddleStaleEvictor(staleEvictorFor(deps))
   const peersOf = (room: string) => huddlePeers(deps.redis, scope.tenantNow(), room)
 
-  /** Nobody left: close the SFU room, forget the keys, say how long it ran. */
+  /**
+   * Nobody left: close the SFU room, forget the keys, record the session, post the notes as a
+   * person (#2854) and say how long it ran. The start key is the claim: a second caller finds
+   * it gone and returns.
+   */
   async function endHuddle(room: string) {
     const tenant = scope.tenantNow()
     const k = keys(tenant, room)
     const start = await deps.redis.get(k.start)
     if (start == null) return
-    const [mode, session] = await Promise.all([
+    // #2854 — a last note edit on this socket lands before the notes are read.
+    await settleCollabWrites(socket)
+    const [mode, session, end] = await Promise.all([
       huddleMode(deps.redis, tenant, room),
-      huddleSession(deps.redis, tenant, room)
+      huddleSession(deps.redis, tenant, room),
+      readHuddleEnd(deps.redis, tenant, room)
     ])
     await deps.redis.del(k.start, k.meta, k.set, k.mode, k.session)
     if (mode === 'sfu') await evict(room, session, null)
     const ms = Date.now() - Number(start)
     await record(() => deps.sessions?.end(tenant, room), room)
-    await deps.postLine(room, `Huddle ended after ${formatHuddleDuration(ms)}`)
+    const duration = formatHuddleDuration(ms)
+    // The notes are people's words: they post as a person (never the system line), and
+    // only when EVERY writer may post here — nobody's words go out under another's rights.
+    // Refused = not posted, frozen for the attendees instead.
+    let unposted: string | null = null
+    const writers = end.writers.length
+      ? end.writers
+      : end.noteBy
+        ? [{ id: end.noteBy, name: 'Someone' }]
+        : []
+    if (end.note) {
+      if (!writers.length) unposted = 'nobody from the huddle could post them'
+      for (const w of writers) {
+        if (unposted) break
+        unposted = await deps.noteWriterRefusal(room, w)
+      }
+      const author = end.noteBy ?? writers.at(-1)?.id
+      if (!unposted && author) {
+        const names = writers.map((w) => w.name)
+        unposted = await deps.postNote(room, author, huddleNotesMessage(duration, names, end.note))
+      }
+    }
+    await finishHuddleEnd(
+      deps.redis,
+      tenant,
+      room,
+      unposted && end.note
+        ? { text: end.note, attendees: end.attendees, writers: writers.map((w) => w.id) }
+        : null,
+      KEY_TTL_S
+    )
+    const line = huddleEndLine(duration, end.names)
+    await deps.postLine(room, unposted ? `${line} · notes were not posted: ${unposted}` : line)
+    if (unposted) socket.emit('huddle:note:unposted', { room, reason: unposted })
   }
 
   async function broadcast(room: string) {
@@ -451,6 +544,7 @@ export function registerHuddle(
         JSON.stringify({ user: user.id, name: nameOf(user), muted: false, screen: false, since })
       )
       await touch(deps.redis, tenant, r, socket.id, user.id)
+      await recordAttendee(deps.redis, tenant, r, user.id, nameOf(user))
       setData({ room: r })
       const name = await scope.scopedRoom(`huddle:${r}`)
       if (name) socket.join(name)
@@ -529,6 +623,8 @@ export function registerHuddle(
       if (data()?.room === room) setData(undefined)
       const name = scope.scopedRoomNow(`huddle:${room}`)
       if (name) socket.leave(name)
+      // #2855 — the presenter leaving ends Follow me (before the roster read that may end it all).
+      await collabLeft(io, scope, deps.redis, tenant, room, socket.id)
       // The broadcast's roster read ends the huddle when nobody is left.
       await broadcast(room)
     } catch (err) {

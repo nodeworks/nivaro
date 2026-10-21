@@ -1266,6 +1266,7 @@ export function GroupSection({
   return (
     <div
       data-loads-on-open={deferred ? '' : undefined}
+      data-section-key={group.key}
       className={cn(
         'nvr-section-enter rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border',
         displayOnly && 'bg-slate-50/60 dark:bg-slate-900/20',

@@ -293,6 +293,44 @@ export async function withClientIdClaim<T>(
   }
 }
 
+/** Announcement channels: only the owner and admins start a top-level message. */
+async function announceRefusal(
+  room: string,
+  senderId: string | null,
+  isAdmin: boolean
+): Promise<ChatSendError | null> {
+  const parsedRoom = parseRoom(room)
+  if (parsedRoom.kind !== 'channel' && parsedRoom.kind !== 'global') return null
+  const ch = (
+    parsedRoom.kind === 'global'
+      ? await generalChannel()
+      : (await channels()).get(parsedRoom.channelKey ?? '')
+  ) as (Record<string, unknown> & { created_by?: string | null }) | undefined
+  if (!ch?.announce) return null
+  const owner = String(ch.created_by ?? '').toUpperCase() === String(senderId).toUpperCase()
+  if (owner || isAdmin) return null
+  return new ChatSendError(
+    403,
+    'Only the channel owner and admins post here. Reply in a thread instead.',
+    'ANNOUNCE_ONLY'
+  )
+}
+
+/**
+ * Would postChatMessage accept a top-level message from this person in this room? The same
+ * visibility and announce rules, without sending (huddle notes check every writer, #2854).
+ */
+export async function chatPostRefusal(
+  user: User,
+  room: string,
+  isAdmin: boolean
+): Promise<ChatSendError | null> {
+  if (!(await canSeeRoom(user, room))) {
+    return new ChatSendError(403, 'That conversation is not available to you')
+  }
+  return announceRefusal(room, user.id, isAdmin)
+}
+
 async function postInner(
   app: FastifyInstance,
   actor: PostChatActor,
@@ -375,22 +413,9 @@ async function postInner(
 
   // Announcement channels: members read, react and reply in threads.
   const parsedRoom = parseRoom(room)
-  if ((parsedRoom.kind === 'channel' || parsedRoom.kind === 'global') && !system && !parentId) {
-    const ch = (
-      parsedRoom.kind === 'global'
-        ? await generalChannel()
-        : (await channels()).get(parsedRoom.channelKey ?? '')
-    ) as (Record<string, unknown> & { created_by?: string | null }) | undefined
-    if (ch?.announce) {
-      const owner = String(ch.created_by ?? '').toUpperCase() === String(senderId).toUpperCase()
-      if (!owner && !actor.isAdmin) {
-        throw new ChatSendError(
-          403,
-          'Only the channel owner and admins post here. Reply in a thread instead.',
-          'ANNOUNCE_ONLY'
-        )
-      }
-    }
+  if (!system && !parentId) {
+    const refused = await announceRefusal(room, senderId, !!actor.isAdmin)
+    if (refused) throw refused
   }
 
   // Urgent: rate-limited per sender, and never from a platform line.

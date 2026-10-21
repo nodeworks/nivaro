@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { cn } from '../../../lib/utils'
 import { MutedTalkingHint, PoorConnectionBanner, QualityBars, SpeakingRing } from './HuddleAudioUi'
 import { HuddleVideoGrid } from './HuddleCamera'
+import { HuddleCollabActions, HuddleNotesPanel } from './HuddleCollab'
 import { HuddleDrawOverlay } from './HuddleDraw'
 import { HuddleInviteButton } from './HuddlePeoplePicker'
 import {
@@ -316,7 +317,10 @@ export function HuddleStage({
         {/* After the stage tools (which push right), so the row keeps one ml-auto. */}
         {!joining && <HuddleInviteButton room={room} renderAvatar={renderAvatar} />}
         <HeldChip />
+        {/* #2854 #2855 — shared notes and Follow me. */}
+        <HuddleCollabActions room={room} huddle={huddle} />
       </div>
+      <HuddleNotesPanel room={room} />
       {quality.poor && <PoorConnectionBanner sharing={state.sharing} />}
       <HuddleHands roster={huddle.roster} self={state.self} />
       <HuddlePipOffer pip={pip} />
