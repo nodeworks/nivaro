@@ -104,6 +104,53 @@ describe('DesignNode', () => {
     expect(d.onSelect).toHaveBeenCalledWith(target)
   })
 
+  it('Enter on a native button node (a canvas tab) keeps its native click: select + switch', () => {
+    const d = design()
+    const tabClick = vi.fn()
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target} asChild pass>
+            <button type='button' onClick={tabClick}>
+              tab
+            </button>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    const key = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    act(() => {
+      node.dispatchEvent(key)
+    })
+    // Not swallowed: the browser turns it into a click (jsdom does not, so click below).
+    expect(key.defaultPrevented).toBe(false)
+    expect(d.onSelect).not.toHaveBeenCalled()
+    act(() => node.click())
+    expect(d.onSelect).toHaveBeenCalledWith(target)
+    expect(tabClick).toHaveBeenCalled()
+  })
+
+  it('Enter on a non-button node is taken: it selects and nothing else acts', () => {
+    const d = design()
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target}>
+            <span>hi</span>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    const key = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    act(() => {
+      node.dispatchEvent(key)
+    })
+    expect(key.defaultPrevented).toBe(true)
+    expect(d.onSelect).toHaveBeenCalledWith(target)
+  })
+
   it('an inherited (locked) node still takes focus so the keyboard can select it', () => {
     const d = design({ inheritedFrom: () => 'Base form' })
     act(() =>
