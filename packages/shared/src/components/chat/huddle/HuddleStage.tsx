@@ -1,23 +1,26 @@
-import { BellOff, Headphones, Maximize2, MicOff, PhoneOutgoing, ScreenShare, X } from 'lucide-react'
+import {
+  BellOff,
+  CircleAlert,
+  Maximize2,
+  MicOff,
+  PhoneOutgoing,
+  ScreenShare,
+  X
+} from 'lucide-react'
 import type React from 'react'
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { cn } from '../../../lib/utils'
 import { MutedTalkingHint, PoorConnectionBanner, QualityBars, SpeakingRing } from './HuddleAudioUi'
+import { HuddleCallBar } from './HuddleCallBar'
 import { HuddleVideoGrid } from './HuddleCamera'
-import { HuddleCollabActions, HuddleNotesPanel } from './HuddleCollab'
+import { HuddleNotesPanel } from './HuddleCollab'
 import { HuddleDrawOverlay } from './HuddleDraw'
-import { HuddleInviteButton } from './HuddlePeoplePicker'
-import {
-  HuddleCameraNotice,
-  HuddleHands,
-  HuddleReactionLayer,
-  HuddleStageTools
-} from './HuddleStageTools'
+import { HuddleCameraNotice, HuddleHands, HuddleReactionLayer } from './HuddleStageTools'
 import type { PeerQuality } from './huddle-audio-logic'
 import { huddleCalls, type RingingPerson } from './huddle-calls'
 import { getHeldSnapshot, subscribeHeld } from './huddle-hold'
-import { HuddlePipOffer, HuddlePopOutButton, useHuddlePip } from './huddle-pip'
-import { formatElapsed, type LivePeer } from './huddle-store'
+import { HuddlePipOffer, useHuddlePip } from './huddle-pip'
+import type { LivePeer } from './huddle-store'
 import type { HuddleHandle } from './useHuddle'
 import { useHuddleQuality, useHuddleSpeaking } from './useHuddleAudio'
 
@@ -55,7 +58,7 @@ function Ringing({ p, onCancel }: { p: RingingPerson; onCancel: () => void }) {
         <button
           type='button'
           onClick={onCancel}
-          className='ml-0.5 grid h-4 w-4 place-items-center rounded-full text-slate-500 hover:bg-slate-200 hover:text-slate-800 dark:hover:bg-white/10 dark:hover:text-slate-100'
+          className='ml-0.5 grid h-4 w-4 place-items-center rounded-full text-slate-500 hover:bg-slate-200 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-white/10 dark:hover:text-slate-100'
           aria-label='Stop ringing'
           data-tip='Stop ringing'
         >
@@ -141,20 +144,6 @@ function ScreenView({
   )
 }
 
-function Elapsed({ since }: { since: number | null }) {
-  const [, tick] = useState(0)
-  useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 1000)
-    return () => clearInterval(t)
-  }, [])
-  if (!since) return null
-  return (
-    <span className='tabular-nums text-slate-500 dark:text-slate-400' data-huddle-elapsed>
-      {formatElapsed(Date.now() - since)}
-    </span>
-  )
-}
-
 function Person({
   id,
   name,
@@ -207,8 +196,8 @@ function Person({
 }
 
 /**
- * The strip under a room header while I am in its huddle (#2457): who is here,
- * how long, and whoever's screen is being shared. Also where a failed join
+ * The strip under a room header while I am in its huddle (#2457): the call bar
+ * (every control), who is here, and whoever's screen or camera is on. Also where a failed join
  * explains itself. Nothing renders in rooms I am not talking in — the header
  * pill already says who is.
  */
@@ -250,11 +239,12 @@ export function HuddleStage({
         role='alert'
         data-huddle-error
       >
+        <CircleAlert className='h-3.5 w-3.5 shrink-0' strokeWidth={2} aria-hidden />
         <span className='min-w-0 flex-1'>{state.error}</span>
         <button
           type='button'
           onClick={huddle.clearError}
-          className='flex h-5 w-5 items-center justify-center rounded hover:bg-red-100 dark:hover:bg-red-500/20'
+          className='flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-red-500/20'
           aria-label='Dismiss'
         >
           <X className='h-3 w-3' strokeWidth={2} />
@@ -271,13 +261,8 @@ export function HuddleStage({
       data-huddle-stage
       data-huddle-mode={state.mode}
     >
-      <div className='flex flex-wrap items-center gap-1.5 text-[11px]'>
-        <span className='inline-flex items-center gap-1 font-medium text-slate-700 dark:text-slate-200'>
-          <Headphones className='h-3.5 w-3.5 text-nvr-cyan' strokeWidth={2} />
-          {joining ? 'Connecting…' : 'Huddle'}
-        </span>
-        {!joining && <Elapsed since={state.startedAt} />}
-        <span className='mx-0.5 h-3 w-px bg-slate-200 dark:bg-border' aria-hidden />
+      <HuddleCallBar room={room} me={me} huddle={huddle} pip={pip} renderAvatar={renderAvatar} />
+      <div className='mt-1.5 flex flex-wrap items-center gap-1 text-[11px]' data-huddle-people>
         {me && (
           <Person
             id={me.id}
@@ -307,18 +292,11 @@ export function HuddleStage({
           <Ringing key={p.id} p={p} onCancel={() => huddleCalls.cancel(room)} />
         ))}
         {!joining && state.peers.length === 0 && ringing.length === 0 && (
-          <span className='text-slate-500 dark:text-slate-400'>
+          <span className='px-1 text-slate-500 dark:text-slate-400'>
             Only you so far — people in the room see a Join button.
           </span>
         )}
-        <HuddleStageTools me={me} handAt={state.handAt} disabled={joining}>
-          <HuddlePopOutButton pip={pip} />
-        </HuddleStageTools>
-        {/* After the stage tools (which push right), so the row keeps one ml-auto. */}
-        {!joining && <HuddleInviteButton room={room} renderAvatar={renderAvatar} />}
         <HeldChip />
-        {/* #2854 #2855 — shared notes and Follow me. */}
-        <HuddleCollabActions room={room} huddle={huddle} />
       </div>
       <HuddleNotesPanel room={room} />
       {quality.poor && <PoorConnectionBanner sharing={state.sharing} />}

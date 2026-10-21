@@ -840,7 +840,7 @@ export const collabChat: DocSection = {
     { type: 'h2', id: 'collab-chat-huddles', text: 'Huddles and screen clips' },
     {
       type: 'p',
-      text: 'A huddle is a voice call inside a channel, General or a record’s room, started from the headphones button in the room header. While one runs, the header shows who is in it with a Join button; a strip under the header shows the people, how long it has run and, when someone shares their screen, that screen. The room gets a line when a huddle starts and when it ends. You can open other rooms while you talk — the huddle keeps going and the header says so. Huddles are not recorded.'
+      text: 'A huddle is a voice call inside a channel, General or a record’s room, started from the headphones button in the room header. While one runs, the header shows who is in it with a Join button. Once you are in, a strip under the header holds the call: one row of controls (timer, microphone, camera, screen, reactions, hand, notes, add people, a ⋯ menu and Leave), then the people, and any shared screen or cameras. In a narrow chat panel or on a phone, Add people and Raise hand move into the ⋯ menu. The room gets a line when a huddle starts and when it ends. You can open other rooms while you talk — the huddle keeps going and the header says so. Huddles are not recorded.'
     },
     {
       type: 'h3',
@@ -888,7 +888,7 @@ export const collabChat: DocSection = {
       type: 'ul',
       items: [
         'Whoever is talking gets a green ring around their picture in the huddle strip, and the strip moves the most recent speaker to the front (at most every 2 seconds, so it does not jump around). With reduced motion turned on in your system, the ring stays still instead of pulsing. When you talk into a muted microphone, the strip says so.',
-        'The gear in the huddle controls picks your microphone and, in browsers that allow it (Chrome, Edge), your speaker. The bar under the microphone moves as you talk; **Test speaker** plays a short chime. Noise suppression, echo cancellation and automatic volume can be turned off there. Changes apply straight away without dropping the call, and your choices are remembered in this browser.',
+        'The small arrow beside the microphone button picks your microphone and, in browsers that allow it (Chrome, Edge), your speaker. The bar under the microphone moves as you talk; **Test speaker** plays a short chime. Noise suppression, echo cancellation and automatic volume can be turned off there. Changes apply straight away without dropping the call, and your choices are remembered in this browser.',
         'To check your microphone before joining, use the small arrow next to the huddle button: it shows the same choices and level bar with a **Join huddle** button. The huddle button itself still joins in one click.',
         'Plug in a headset during a huddle and the call moves onto it ("Switched to …"); unplug the microphone you are using and it falls back to the default one.',
         'Each person in the strip has four connection bars; hover them for the delay, packet loss, jitter, whether the connection is direct or goes through the relay, and the bitrate. When your own connection has been poor for 10 seconds (more than 5 % loss or over 400 ms delay to everyone), the strip says "Your connection is poor". While you share your screen, a poor link to someone gets a lighter version of your screen until it recovers, so your voice stays clear.'
@@ -921,13 +921,13 @@ export const collabChat: DocSection = {
         'Raise hand: the hand button puts you in the queue, which the strip shows in the order hands went up. Click it again (or the × on your name) to lower yours. Anyone in the huddle can use **Lower all** — there is no host.',
         'Camera: the camera button in the controls turns your camera on (it is off when you join). People with their camera on show as tiles in the strip — one, two side by side or a 2×2 grid, and a sideways strip on a narrow screen; your own tile is mirrored. Only the first four cameras turned on are sent: a fifth sees "Video paused to keep the call smooth" on their own tile, and their video starts by itself when someone turns theirs off.',
         'Point and draw: over a screen someone shares, the small tool strip lets you point, draw or drop an arrow; everyone in the huddle sees your marks in your own colour, and the person sharing sees them on their preview with "2 people are pointing". Marks fade after four seconds; the eraser clears every mark on that screen. Press Esc or click the tool again to stop. Marks go browser to browser and never through the server.',
-        'Mini-player: in Chrome and Edge the pop-out button in the strip opens a small window that stays on top of other windows and apps, with who is here (and who is speaking), the timer, mute, leave and a thumbnail of a shared screen. It keeps going when you close the chat panel or open another room; closing it changes nothing, and leaving the huddle closes it. The first time you switch away from the tab during a huddle, coming back offers it once — **Every time** makes the browser pop it out by itself whenever you leave the tab. Other browsers do not show the button.'
+        'Mini-player: in Chrome and Edge **Pop out a mini-player** in the strip’s ⋯ menu opens a small window that stays on top of other windows and apps, with who is here (and who is speaking), the timer, mute, leave and a thumbnail of a shared screen. It keeps going when you close the chat panel or open another room; closing it changes nothing, and leaving the huddle closes it. The first time you switch away from the tab during a huddle, coming back offers it once — **Every time** makes the browser pop it out by itself whenever you leave the tab. Other browsers do not show the menu item.'
       ]
     },
     { type: 'h3', id: 'collab-chat-huddle-notes', text: 'Huddle notes' },
     {
       type: 'p',
-      text: 'While you are in a huddle, **Notes** in the huddle strip opens one shared note for everyone in the call. Anyone in the huddle can type in it; changes reach the others about half a second after you stop typing, and if two people type at once the last change wins. **Preview** shows it with the same formatting as chat messages (bold, italic, lists, code). Notes are written by hand — nothing is transcribed.'
+      text: 'While you are in a huddle, the notes button in the huddle strip opens one shared note for everyone in the call. Anyone in the huddle can type in it; changes reach the others about half a second after you stop typing, and if two people type at once the last change wins. **Preview** shows it with the same formatting as chat messages (bold, italic, lists, code). Notes are written by hand — nothing is transcribed.'
     },
     {
       type: 'ul',
@@ -941,12 +941,12 @@ export const collabChat: DocSection = {
     { type: 'h3', id: 'collab-chat-huddle-follow', text: 'Follow me on a record' },
     {
       type: 'p',
-      text: 'In a huddle in a record’s room, **Follow me** makes everyone else’s page follow yours on that record: they are taken to the record, and when you change tab or scroll to another section their page does the same. A chip at the bottom of their screen says "Following Ana" with **Stop**; going to another page or picking another tab themselves also stops following, and **Follow** on the chip picks it up again.'
+      text: 'In a huddle in a record’s room, **Follow me** (in the strip’s ⋯ menu) makes everyone else’s page follow yours on that record: they are taken to the record, and when you change tab or scroll to another section their page does the same. A chip at the bottom of their screen says "Following Ana" with **Stop**; going to another page or picking another tab themselves also stops following, and **Follow** on the chip picks it up again.'
     },
     {
       type: 'ul',
       items: [
-        'Only one person presents at a time. While someone does, the button reads **Ask to present**: the presenter sees the request on their chip and can **Hand over** or **Keep presenting**. The presenter leaving the huddle ends it for everyone.',
+        'Only one person presents at a time. While someone does, the menu item reads **Ask to present**: the presenter sees the request on their chip and can **Hand over** or **Keep presenting**. The presenter leaving the huddle ends it for everyone.',
         'Following is only navigation. Each person sees the record with their own permissions — someone who cannot read it gets the usual not-found page — and only the record the room is about can be followed (the server names it, not the presenter’s browser).',
         'Follow me stays on the one record and its tabs; it does not follow into related records or other pages.'
       ]

@@ -1,7 +1,8 @@
-import { Hand, SmilePlus, X } from 'lucide-react'
+import { Hand, SmilePlus, VideoOff, X } from 'lucide-react'
 import type React from 'react'
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useMemo, useState, useSyncExternalStore } from 'react'
 import { cn } from '../../../lib/utils'
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { cameraStore } from './huddle-camera'
 import {
   type FloatingReaction,
@@ -17,83 +18,76 @@ import type { HuddlePeer } from './huddle-store'
 const tool =
   'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-40'
 const idle =
-  'text-slate-500 hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+  'text-slate-500 hover:bg-slate-200/70 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
 const pressed = 'bg-nvr-cyan/15 text-slate-900 dark:text-slate-100'
 
 /**
- * Reactions + raise hand in the stage row (#2857). The emoji open inline next
- * to their button (no popover to clip or portal), and stay open for a burst.
+ * Reactions + raise hand in the call bar (#2857). The emoji open in a small
+ * popover beside their button and stay open for a burst.
  */
 export function HuddleStageTools({
   me,
   handAt,
   disabled,
+  showHand = true,
   children
 }: {
   me: { id: string } | null
   handAt: number | null
   disabled?: boolean
-  /** Extra buttons at the end of the row (the pop-out). */
+  /** False when the call bar folded the hand into its ⋯ menu. */
+  showHand?: boolean
+  /** Extra buttons at the end of the group. */
   children?: React.ReactNode
 }) {
   const [picking, setPicking] = useState(false)
-  useEffect(() => {
-    if (!picking) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setPicking(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [picking])
   const raised = !!handAt
   return (
-    <div className='ml-auto flex items-center gap-0.5' data-huddle-stage-tools>
-      {picking && (
-        <fieldset
-          className='m-0 flex min-w-0 items-center gap-0.5 rounded-md border border-slate-200 bg-white px-0.5 dark:border-border dark:bg-card motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-right-1 motion-safe:duration-150'
-          data-huddle-reactions
+    <div className='flex items-center gap-0.5' data-huddle-stage-tools>
+      <Popover open={picking} onOpenChange={setPicking}>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            disabled={disabled}
+            className={cn(tool, picking ? pressed : idle)}
+            aria-label='React'
+            data-tip={picking ? undefined : 'React — everyone in the huddle sees it'}
+            data-huddle-react
+          >
+            <SmilePlus className='h-3.5 w-3.5' strokeWidth={2} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent side='bottom' align='center' className='w-auto p-1' data-huddle-reactions>
+          <fieldset className='m-0 flex min-w-0 items-center gap-0.5 border-0 p-0'>
+            <legend className='sr-only'>Send a reaction</legend>
+            {HUDDLE_REACTIONS.map((emoji) => (
+              <button
+                key={emoji}
+                type='button'
+                onClick={() => me && reactionFeed.send(emoji, me.id)}
+                className='flex h-8 w-8 items-center justify-center rounded-md text-[17px] leading-none transition-transform hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan active:scale-90'
+                aria-label={`React ${emoji}`}
+              >
+                {emoji}
+              </button>
+            ))}
+          </fieldset>
+        </PopoverContent>
+      </Popover>
+      {showHand && (
+        <button
+          type='button'
+          onClick={() => raiseHand(!raised)}
+          disabled={disabled}
+          className={cn(tool, raised ? pressed : idle)}
+          aria-pressed={raised}
+          aria-label={raised ? 'Lower your hand' : 'Raise your hand'}
+          data-tip={raised ? 'Lower hand' : 'Raise hand — you join the queue'}
+          data-huddle-hand={raised ? 'up' : 'down'}
         >
-          <legend className='sr-only'>Send a reaction</legend>
-          {HUDDLE_REACTIONS.map((emoji) => (
-            <button
-              key={emoji}
-              type='button'
-              onClick={() => me && reactionFeed.send(emoji, me.id)}
-              className='flex h-6 w-6 items-center justify-center rounded text-[14px] leading-none transition-transform hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan active:scale-90 dark:hover:bg-white/10'
-              aria-label={`React ${emoji}`}
-            >
-              {emoji}
-            </button>
-          ))}
-        </fieldset>
+          <Hand className='h-3.5 w-3.5' strokeWidth={2} />
+        </button>
       )}
-      <button
-        type='button'
-        onClick={() => setPicking((p) => !p)}
-        disabled={disabled}
-        className={cn(tool, picking ? pressed : idle)}
-        aria-expanded={picking}
-        aria-label={picking ? 'Close reactions' : 'React'}
-        data-tip={picking ? undefined : 'React — everyone in the huddle sees it'}
-      >
-        {picking ? (
-          <X className='h-3.5 w-3.5' strokeWidth={2} />
-        ) : (
-          <SmilePlus className='h-3.5 w-3.5' strokeWidth={2} />
-        )}
-      </button>
-      <button
-        type='button'
-        onClick={() => raiseHand(!raised)}
-        disabled={disabled}
-        className={cn(tool, raised ? pressed : idle)}
-        aria-pressed={raised}
-        aria-label={raised ? 'Lower your hand' : 'Raise your hand'}
-        data-tip={raised ? 'Lower hand' : 'Raise hand — you join the queue'}
-        data-huddle-hand={raised ? 'up' : 'down'}
-      >
-        <Hand className='h-3.5 w-3.5' strokeWidth={2} />
-      </button>
       {children}
     </div>
   )
@@ -227,14 +221,15 @@ export function HuddleCameraNotice() {
   if (!cam.error) return null
   return (
     <div
-      className='mt-1.5 flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11.5px] text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200'
+      className='mt-1.5 flex items-start gap-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11.5px] text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200'
       role='alert'
     >
+      <VideoOff className='mt-px h-3.5 w-3.5 shrink-0' strokeWidth={2} aria-hidden />
       <span className='min-w-0 flex-1'>{cam.error}</span>
       <button
         type='button'
         onClick={() => cameraStore.clearError()}
-        className='flex h-5 w-5 items-center justify-center rounded hover:bg-red-100 dark:hover:bg-red-500/20'
+        className='-my-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-red-500/20'
         aria-label='Dismiss'
       >
         <X className='h-3 w-3' strokeWidth={2} />

@@ -1,4 +1,4 @@
-import { Keyboard, MicOff, Settings2, Volume2, WifiOff } from 'lucide-react'
+import { ChevronDown, Keyboard, MicOff, Settings2, Volume2, WifiOff } from 'lucide-react'
 import type React from 'react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -409,8 +409,17 @@ export function DevicePanel({
   )
 }
 
-/** The controls' gear: microphone, speaker and processing while in a huddle. */
-export function DeviceSettingsButton({ muted }: { muted: boolean }) {
+/**
+ * Microphone, speaker and processing while in a huddle: the gear, or (in the
+ * call bar) a small chevron joined to the mute button.
+ */
+export function DeviceSettingsButton({
+  muted,
+  variant = 'gear'
+}: {
+  muted: boolean
+  variant?: 'gear' | 'chevron'
+}) {
   const [open, setOpen] = useState(false)
   const toShortcuts = useRef(false)
   return (
@@ -419,18 +428,23 @@ export function DeviceSettingsButton({ muted }: { muted: boolean }) {
         <button
           type='button'
           className={cn(
-            'flex h-6 w-6 items-center justify-center rounded text-slate-600 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-300 dark:hover:bg-white/10',
+            'flex h-6 items-center justify-center rounded text-slate-600 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-300 dark:hover:bg-white/10',
+            variant === 'chevron' ? 'w-4 text-slate-500 dark:text-slate-400' : 'w-6',
             open && 'bg-slate-100 dark:bg-white/10'
           )}
           aria-label='Microphone and speaker settings'
           data-tip='Microphone and speaker'
           data-huddle-device-button
         >
-          <Settings2 className='h-3.5 w-3.5' strokeWidth={2} />
+          {variant === 'chevron' ? (
+            <ChevronDown className='h-3 w-3' strokeWidth={2.25} />
+          ) : (
+            <Settings2 className='h-3.5 w-3.5' strokeWidth={2} />
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent
-        align='end'
+        align={variant === 'chevron' ? 'start' : 'end'}
         className='w-72 p-3'
         onCloseAutoFocus={(e) => {
           // Handing over to the cheat-sheet: focus going back to the gear would dismiss it.

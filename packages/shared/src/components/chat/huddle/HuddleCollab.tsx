@@ -1,4 +1,4 @@
-import { NotebookPen, Presentation, X } from 'lucide-react'
+import { NotebookPen, X } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
@@ -20,18 +20,18 @@ import { huddleStore } from './huddle-store'
 import type { HuddleHandle } from './useHuddle'
 
 /**
- * Working together in a huddle (#2854 #2855): the Notes and Follow me buttons
- * in the huddle strip, the shared note under it, and the floating chip that
+ * Working together in a huddle (#2854 #2855): the Notes button and the Follow
+ * me action of the call bar (HuddleCallBar), the shared note under it, and the floating chip that
  * tells a follower whom they follow (and a presenter that someone asks to
  * take over). The stores (huddle-collab-store.ts) hold all state; these are
  * views over them.
  */
 
-const stripButton =
-  'inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-40'
-const stripIdle =
-  'text-slate-600 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-slate-100'
-const stripOn = 'bg-nvr-cyan/15 text-slate-900 dark:text-slate-100'
+const toolButton =
+  'relative flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-40'
+const toolIdle =
+  'text-slate-500 hover:bg-slate-200/70 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+const toolOn = 'bg-nvr-cyan/15 text-slate-900 dark:text-slate-100'
 
 function useNotes() {
   return useSyncExternalStore(huddleNotes.subscribe, huddleNotes.getSnapshot)
@@ -51,8 +51,20 @@ function personName(name: string | null | undefined): string {
   return name?.trim() || 'Someone'
 }
 
-/** Notes + Follow me, at the end of the huddle strip's people row. */
-export function HuddleCollabActions({ room, huddle }: { room: string; huddle: HuddleHandle }) {
+/** One "Follow me" action for the call bar's ⋯ menu (#2855); null outside a record room. */
+export interface HuddleFollowAction {
+  label: string
+  tip: string
+  disabled: boolean
+  active: boolean
+  run: () => void
+}
+
+/**
+ * Notes + Follow me state for the call bar (#2854 #2855): whether the shared
+ * note is live in this room, and the one Follow me action this person has now.
+ */
+export function useHuddleCollab(room: string, huddle: HuddleHandle) {
   const realtime = useOptionalRealtime()
   useEffect(() => attachHuddleCollab(realtime), [realtime])
   const cfg = useChatConfig()
@@ -61,78 +73,60 @@ export function HuddleCollabActions({ room, huddle }: { room: string; huddle: Hu
   const recordRoom = isRecordRoom(room, cfg.globalRoom)
   const record = useRoomRecord(room, recordRoom && huddle.inThis)
   const live = huddle.state.status === 'live' && notes.room === room
-  if (!live) return null
 
-  const other = follow.presenter && !follow.presenting
-  return (
-    <span className='inline-flex items-center gap-0.5' data-huddle-collab>
-      <button
-        type='button'
-        onClick={() => huddleNotes.setOpen(!notes.open)}
-        className={cn(stripButton, notes.open ? stripOn : stripIdle, 'relative')}
-        aria-expanded={notes.open}
-        aria-controls='nvr-huddle-notes'
-        data-tip={
-          notes.open ? 'Hide the notes' : 'Shared notes — posted to the room when the huddle ends'
+  let followAction: HuddleFollowAction | null = null
+  if (live && recordRoom) {
+    const other = follow.presenter && !follow.presenting
+    followAction = follow.presenting
+      ? {
+          label: 'Stop presenting',
+          tip: 'Everyone keeps the page they are on',
+          disabled: false,
+          active: true,
+          run: () => huddleFollow.stopPresenting()
         }
-        data-huddle-notes-toggle
-      >
-        <NotebookPen className='h-3.5 w-3.5' strokeWidth={2} />
-        Notes
-        {notes.unseen && <span className='sr-only'>(changed)</span>}
-        {notes.unseen && (
-          <span
-            className='absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-nvr-cyan'
-            aria-hidden
-          />
-        )}
-      </button>
-      {recordRoom && (
-        <>
-          {follow.presenting ? (
-            <button
-              type='button'
-              onClick={() => huddleFollow.stopPresenting()}
-              className={cn(stripButton, stripOn)}
-              data-tip='Stop presenting — everyone keeps the page they are on'
-              data-huddle-follow='presenting'
-            >
-              <Presentation className='h-3.5 w-3.5' strokeWidth={2} />
-              Presenting
-              <X className='h-3 w-3 opacity-70' strokeWidth={2} aria-hidden />
-            </button>
-          ) : other ? (
-            <button
-              type='button'
-              onClick={() => huddleFollow.start(record)}
-              disabled={follow.asked === 'pending'}
-              className={cn(stripButton, stripIdle)}
-              data-tip={`${personName(follow.presenter?.name)} is presenting — ask to take over`}
-              data-huddle-follow='ask'
-            >
-              <Presentation className='h-3.5 w-3.5' strokeWidth={2} />
-              {follow.asked === 'pending' ? 'Asked…' : 'Ask to present'}
-            </button>
-          ) : (
-            <button
-              type='button'
-              onClick={() => huddleFollow.start(record)}
-              disabled={!record}
-              className={cn(stripButton, stripIdle)}
-              data-tip={
-                record
-                  ? 'Everyone in the huddle follows your tab and section on this record'
-                  : 'Opening the record…'
-              }
-              data-huddle-follow='start'
-            >
-              <Presentation className='h-3.5 w-3.5' strokeWidth={2} />
-              Follow me
-            </button>
-          )}
-        </>
+      : other
+        ? {
+            label: follow.asked === 'pending' ? 'Asked to present…' : 'Ask to present',
+            tip: `${personName(follow.presenter?.name)} is presenting — ask to take over`,
+            disabled: follow.asked === 'pending',
+            active: false,
+            run: () => huddleFollow.start(record)
+          }
+        : {
+            label: 'Follow me',
+            tip: record
+              ? 'Everyone in the huddle follows your tab and section on this record'
+              : 'Opening the record…',
+            disabled: !record,
+            active: false,
+            run: () => huddleFollow.start(record)
+          }
+  }
+  return { live, notes, followAction }
+}
+
+/** The Notes toggle in the call bar (#2854); a dot while someone else changed the note. */
+export function HuddleNotesButton({ open, unseen }: { open: boolean; unseen: boolean }) {
+  return (
+    <button
+      type='button'
+      onClick={() => huddleNotes.setOpen(!open)}
+      className={cn(toolButton, open ? toolOn : toolIdle)}
+      aria-expanded={open}
+      aria-controls='nvr-huddle-notes'
+      aria-label={unseen ? 'Shared notes (changed)' : 'Shared notes'}
+      data-tip={open ? 'Hide the notes' : 'Shared notes — posted to the room when the huddle ends'}
+      data-huddle-notes-toggle
+    >
+      <NotebookPen className='h-3.5 w-3.5' strokeWidth={2} />
+      {unseen && (
+        <span
+          className='absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-nvr-cyan ring-2 ring-slate-50 dark:ring-background'
+          aria-hidden
+        />
       )}
-    </span>
+    </button>
   )
 }
 
@@ -168,7 +162,7 @@ export function HuddleNotesPanel({ room }: { room: string }) {
     <section
       id='nvr-huddle-notes'
       aria-label='Huddle notes'
-      className='mt-1.5 rounded-md border border-slate-200 bg-white dark:border-border dark:bg-card motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150'
+      className='mt-1.5 rounded-md border border-slate-200 bg-white transition-colors focus-within:border-nvr-cyan dark:border-border dark:bg-card motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150'
       data-huddle-notes
     >
       <div className='flex items-center gap-1 border-b border-slate-200 px-1.5 py-1 dark:border-border'>
@@ -361,9 +355,7 @@ function FollowChip() {
     const req = follow.request
     body = (
       <>
-        <span className='min-w-0 truncate'>
-          <span className='font-medium'>{personName(req.name)}</span> asks to present
-        </span>
+        <NameLine name={personName(req.name)} rest='asks to present' />
         <ChipButton onClick={() => huddleFollow.handOver(req.socket)} primary data-huddle-handover>
           Hand over
         </ChipButton>
@@ -386,18 +378,11 @@ function FollowChip() {
     body = (
       <>
         <LiveDot />
-        <span className='min-w-0 truncate'>
-          {follow.asked === 'declined' ? (
-            <>
-              <span className='font-medium'>{personName(follow.presenter.name)}</span> is still
-              presenting
-            </>
-          ) : (
-            <>
-              Following <span className='font-medium'>{personName(follow.presenter.name)}</span>
-            </>
-          )}
-        </span>
+        {follow.asked === 'declined' ? (
+          <NameLine name={personName(follow.presenter.name)} rest='is still presenting' />
+        ) : (
+          <NameLine lead='Following' name={personName(follow.presenter.name)} />
+        )}
         <ChipButton onClick={() => huddleFollow.stopFollowing()} data-huddle-stop-following>
           Stop
         </ChipButton>
@@ -406,12 +391,7 @@ function FollowChip() {
   } else if (follow.presenter) {
     body = (
       <>
-        <span className='min-w-0 truncate text-slate-600 dark:text-slate-300'>
-          <span className='font-medium text-slate-800 dark:text-slate-100'>
-            {personName(follow.presenter.name)}
-          </span>{' '}
-          is presenting
-        </span>
+        <NameLine name={personName(follow.presenter.name)} rest='is presenting' />
         <ChipButton onClick={() => huddleFollow.resume()} data-huddle-resume>
           Follow
         </ChipButton>
@@ -426,12 +406,23 @@ function FollowChip() {
     <div
       role='status'
       onClick={(e) => e.stopPropagation()}
-      className='fixed bottom-5 left-1/2 z-50 flex h-9 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white pl-3 pr-1 text-[12px] text-slate-800 shadow-[0_4px_16px_rgba(0,0,0,0.10),0_1px_4px_rgba(0,0,0,0.06)] dark:border-border dark:bg-card dark:text-slate-100 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-200'
+      className='fixed bottom-5 left-1/2 z-50 flex min-h-9 w-max max-w-[calc(100vw-32px)] -translate-x-1/2 flex-wrap items-center justify-end gap-x-2 gap-y-1 rounded-[18px] border py-1 border-slate-200 bg-white pl-3 pr-1 text-[12px] text-slate-800 shadow-[0_4px_16px_rgba(0,0,0,0.10),0_1px_4px_rgba(0,0,0,0.06)] dark:border-border dark:bg-card dark:text-slate-100 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-200'
       data-huddle-follow-chip
       data-nvr-dock-aware
     >
       {body}
     </div>
+  )
+}
+
+/** "Amy Chen asks to present": the name truncates, the words after it never do. */
+function NameLine({ lead, name, rest }: { lead?: string; name: string; rest?: string }) {
+  return (
+    <span className='flex min-w-[120px] flex-1 items-baseline gap-1'>
+      {lead && <span className='shrink-0'>{lead}</span>}
+      <span className='min-w-0 truncate font-medium'>{name}</span>
+      {rest && <span className='shrink-0'>{rest}</span>}
+    </span>
   )
 }
 

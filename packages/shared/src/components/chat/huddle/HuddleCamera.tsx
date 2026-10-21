@@ -1,8 +1,9 @@
-import { MicOff, Video, VideoOff } from 'lucide-react'
+import { MicOff, Video } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { cn } from '../../../lib/utils'
 import { cameraStore, cameraSupported, pausedCameras, videoLayout } from './huddle-camera'
 import type { HuddlePeer, LivePeer } from './huddle-store'
+import { useHuddleSpeaking } from './useHuddleAudio'
 
 /** The camera toggle in the huddle controls (#2858); hidden where there is no camera API. */
 export function HuddleCameraButton({ disabled }: { disabled?: boolean }) {
@@ -19,18 +20,15 @@ export function HuddleCameraButton({ disabled }: { disabled?: boolean }) {
         'flex h-6 w-6 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-40',
         on
           ? 'bg-nvr-cyan/15 text-slate-900 dark:text-slate-100'
-          : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10'
+          : 'text-slate-500 hover:bg-slate-200/70 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
       )}
       aria-pressed={on}
       aria-label={on ? 'Turn your camera off' : 'Turn your camera on'}
       data-tip={on ? 'Camera off' : 'Camera on'}
       data-huddle-camera={on ? 'on' : 'off'}
     >
-      {on ? (
-        <VideoOff className='h-3.5 w-3.5' strokeWidth={2} />
-      ) : (
-        <Video className='h-3.5 w-3.5' strokeWidth={2} />
-      )}
+      {/* The pressed tint says it is on, like the share button beside it. */}
+      <Video className='h-3.5 w-3.5' strokeWidth={2} />
     </button>
   )
 }
@@ -64,7 +62,7 @@ function Tile({
     <div
       className={cn(
         'relative aspect-video overflow-hidden rounded-lg bg-[#0f172a] ring-2 transition-[box-shadow] duration-200',
-        speaking ? 'ring-nvr-cyan' : 'ring-transparent'
+        speaking ? 'ring-emerald-500 dark:ring-emerald-400' : 'ring-transparent'
       )}
       data-huddle-tile={mirror ? 'mine' : 'peer'}
     >
@@ -103,6 +101,8 @@ export function HuddleVideoGrid({
   muted: boolean
 }) {
   const cam = useSyncExternalStore(cameraStore.subscribe, cameraStore.getSnapshot)
+  // #2845 — the same speaking ring the people chips show.
+  const speaking = useHuddleSpeaking()
   const wrap = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
   useEffect(() => {
@@ -136,6 +136,7 @@ export function HuddleVideoGrid({
           name='You'
           muted={muted}
           mirror
+          speaking={speaking.selfSpeaking}
           note={cam.paused ? 'Video paused to keep the call smooth' : undefined}
         />
       )}
@@ -145,7 +146,7 @@ export function HuddleVideoGrid({
           stream={p.camera as MediaStream}
           name={p.name ?? 'Someone'}
           muted={p.muted}
-          speaking={!!(p as { speaking?: boolean }).speaking}
+          speaking={!!speaking.speaking[p.socket]}
         />
       ))}
     </div>
