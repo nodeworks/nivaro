@@ -16,6 +16,13 @@ export type ToolInputSchema = Record<string, unknown>
 
 /** What a tool handler is handed beside the caller and the input. */
 export interface ExtensionToolHelpers {
+  /**
+   * The collection scopes of the API key the caller is using (an MCP client
+   * on a scoped key), or null when nothing narrows them. `readItems` already
+   * honours them; a handler that reaches data any other way (an external
+   * API, a flow, raw SQL) must refuse what the scopes do not cover.
+   */
+  api_key_scopes: Array<{ collection: string; actions: string[] }> | null
   /** Read records AS the caller through the items service (permissions, row
    *  rules and user scopes apply). Resolves `{ data, total? }`. */
   readItems(

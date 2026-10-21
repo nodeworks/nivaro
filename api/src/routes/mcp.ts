@@ -109,11 +109,13 @@ export async function mcpRoutes(app: FastifyInstance) {
     // Loaded on first use: boot never depends on the MCP packages, and a process
     // nobody connects an assistant to never loads them.
     const { createNivaroMcpServer, StreamableHTTPServerTransport } = await loadMcp()
-    const adminTools = !!req.isAdmin && !req.user?.api_key_scopes
     // #2464 / #2465 — the instance's own tools (extensions, named queries and
-    // flows) are listed by name; calling one re-enters POST /api/mcp-tools/:name/call.
-    const { instanceToolCatalog } = await import('../services/mcp-tools.js')
-    const instanceTools = await instanceToolCatalog(adminTools).catch((err) => {
+    // flows) are listed by name; calling one re-enters POST /api/mcp-tools/:name/call,
+    // which judges the caller with the same mcpCallerAccess rule.
+    const { instanceToolCatalog, mcpCallerAccess } = await import('../services/mcp-tools.js')
+    const access = mcpCallerAccess(req)
+    const adminTools = access.isAdmin
+    const instanceTools = await instanceToolCatalog(access).catch((err) => {
       req.log.warn({ err }, 'mcp instance tool catalog failed')
       return []
     })

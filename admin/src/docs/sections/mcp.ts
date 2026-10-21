@@ -68,7 +68,7 @@ export const mcpDocs: DocSection = {
     { type: 'h2', id: 'mcp-instance-tools', text: 'This instance’s own tools' },
     {
       type: 'p',
-      text: 'Beyond the built-in set, an instance can offer tools of its own, managed on **Developer → Assistant Tools** (`/mcp-tools`). An administrator can expose a saved query or a flow as a named tool: the query’s parameters (or the inputs you list, for a flow) become the tool’s input, and it runs as the person calling — the query’s own access level and user scopes decide what comes back, and a flow runs with the caller as the person who triggered it. Choose who may call it (administrators, or everyone signed in) and whether it only reads. Extensions add tools with `ctx.mcp.registerTool`; they are listed on the same page.'
+      text: 'Beyond the built-in set, an instance can offer tools of its own, managed on **Developer → Assistant Tools** (`/mcp-tools`). An administrator can expose a saved query or a flow as a named tool: the query’s parameters (or the inputs you list, for a flow) become the tool’s input, and it runs as the person calling — the query’s own access level and user scopes decide what comes back, and a flow runs with the caller as the person who triggered it. Choose who may call it (administrators, or everyone signed in) and whether it only reads. An API key limited to named collections never gets flow tools (a flow runs as the person and would reach past the key’s collections), and an administrator on such a key is not treated as an administrator here. Extensions add tools with `ctx.mcp.registerTool`; they are listed on the same page.'
     },
     {
       type: 'p',

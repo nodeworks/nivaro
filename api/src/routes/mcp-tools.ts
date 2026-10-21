@@ -6,6 +6,7 @@ import { ExtensionToolError, extensionToolRoster } from '../services/extension-t
 import {
   callInstanceTool,
   instanceToolCatalog,
+  mcpCallerAccess,
   namedToolsReady,
   readNamedTools,
   validateNamedTools,
@@ -32,7 +33,7 @@ async function builtinNames(): Promise<Set<string>> {
 
 export async function mcpToolRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: authenticate }, async (req) => ({
-    data: await instanceToolCatalog(!!req.isAdmin && !req.user?.api_key_scopes)
+    data: await instanceToolCatalog(mcpCallerAccess(req))
   }))
 
   app.post<{ Params: { name: string }; Body: { input?: Record<string, unknown> } }>(

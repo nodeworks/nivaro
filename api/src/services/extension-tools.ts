@@ -285,6 +285,8 @@ function assertCollectionName(name: string): string {
 /** The helpers a handler gets — every one acts AS `user`. */
 export function toolHelpers(user: User): ExtensionToolHelpers {
   return {
+    // Set by authenticate only for a scoped key (an open '*' key leaves it unset).
+    api_key_scopes: user.api_key_scopes ?? null,
     readItems: async (collection, query = {}) => {
       const { readItems } = await import('./items.js')
       const res = (await readItems(user, assertCollectionName(collection), {

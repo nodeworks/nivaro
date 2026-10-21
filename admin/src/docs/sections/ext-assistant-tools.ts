@@ -46,6 +46,7 @@ ctx.mcp?.registerTool('ping_crm', { type: 'object', properties: {} }, async () =
         'A name a built-in tool already uses is never offered; two extensions cannot share a name.',
         '`tools.assertFieldsReadable(collection, fields)` refuses a field the caller cannot read (dotted paths are walked link by link). For Ask AI tools, `field_lists: [{ fields_key, collection_key }]` makes the core run that check on the input before your handler.',
         '`tools.linkLabels(refs)` labels linked records as the caller; a record they cannot read keeps no label.',
+        '`tools.api_key_scopes` holds the collection scopes of the API key the caller is using (null when nothing narrows them). `readItems` already honours them; a handler that reaches data any other way — an external API, a flow, raw SQL — must refuse what the scopes do not cover.',
         'An Ask AI answer that used an extension tool stays the asker’s, unless the tool is `read_only` and declared `replayable` — then a shared answer is re-run as each reader and shown only when their result matches.',
         'A call is cut off after 30 seconds. Calls and failures since start show on AI Quality → Extension tools and on Assistant Tools.'
       ]

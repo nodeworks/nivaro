@@ -24,6 +24,7 @@ const schema = {
   required: ['collection']
 }
 const helpers = () => ({
+  api_key_scopes: null,
   readItems: vi.fn(async () => ({ data: [] })),
   assertFieldsReadable: vi.fn(async () => {}),
   linkLabels: vi.fn(async () => ({}))
@@ -228,5 +229,14 @@ describe('withExtensionAiTools — what Ask AI is offered', () => {
     expect(out[1].description).toBe('Deals (from the crm extension)')
     enabled.delete('crm')
     expect((await withExtensionAiTools(base)).map((t) => t.name)).toEqual(['query_items'])
+  })
+})
+
+describe('toolHelpers — the caller’s key scopes reach the handler', () => {
+  it('passes a scoped key’s scopes, null otherwise', async () => {
+    const { toolHelpers } = await import('../../../services/extension-tools.js')
+    const scopes = [{ collection: 'deals', actions: ['read'] }]
+    expect(toolHelpers({ id: 'u', api_key_scopes: scopes } as never).api_key_scopes).toBe(scopes)
+    expect(toolHelpers({ id: 'u' } as never).api_key_scopes).toBeNull()
   })
 })

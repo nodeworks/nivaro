@@ -267,12 +267,33 @@ async function resolveRefs(tools: NamedToolConfig[]): Promise<{
   }
 }
 
+/**
+ * Who is calling, judged ONCE per request and used by the catalog and by the
+ * call alike. `isAdmin` follows the admin-tools rule of /api/mcp: an
+ * administrator on a collection-scoped API key is not an administrator here.
+ * `scoped` = the key carries collection scopes (authenticate leaves
+ * `api_key_scopes` unset for an open '*' key): flow tools are never offered to
+ * it, since a flow runs as the user and would escape the key's scopes.
+ */
+export interface McpCallerAccess {
+  isAdmin: boolean
+  scoped: boolean
+}
+export function mcpCallerAccess(req: Pick<FastifyRequest, 'isAdmin' | 'user'>): McpCallerAccess {
+  const scoped = !!req.user?.api_key_scopes
+  return { isAdmin: !!req.isAdmin && !scoped, scoped }
+}
+
+export const SCOPED_KEY_FLOW_MESSAGE =
+  'This API key is limited to named collections, so it cannot run flow tools'
+
 /** One named tool as the caller would see it, or null when they may not. */
 function describeNamed(
   t: NamedToolConfig,
   refs: Awaited<ReturnType<typeof resolveRefs>>,
-  isAdmin: boolean
+  access: McpCallerAccess
 ): InstanceTool | null {
+  const { isAdmin } = access
   if (t.kind === 'custom_query') {
     const q = refs.queries.get(t.ref)
     if (!q || !q.enabled || !namedToolVisible(t, isAdmin, q.access)) return null
@@ -285,6 +306,7 @@ function describeNamed(
       source: { kind: 'custom_query', slug: q.slug }
     }
   }
+  if (access.scoped) return null
   const f = refs.flows.get(t.ref.toLowerCase())
   if (!f || f.status !== 'active' || !namedToolVisible(t, isAdmin)) return null
   return {
@@ -298,7 +320,7 @@ function describeNamed(
 }
 
 /** Every instance tool this caller may use: extension tools, then named ones. */
-export async function instanceToolCatalog(isAdmin: boolean): Promise<InstanceTool[]> {
+export async function instanceToolCatalog(access: McpCallerAccess): Promise<InstanceTool[]> {
   const ext = (await liveExtensionTools('mcp').catch(() => [])).map(
     (t): InstanceTool => ({
       name: t.name,
@@ -316,7 +338,7 @@ export async function instanceToolCatalog(isAdmin: boolean): Promise<InstanceToo
   const refs = await resolveRefs(live)
   const out = [...ext]
   for (const t of live) {
-    const d = describeNamed(t, refs, isAdmin)
+    const d = describeNamed(t, refs, access)
     if (d) out.push(d)
   }
   return out
@@ -355,9 +377,17 @@ export async function callInstanceTool(
   input: Record<string, unknown>
 ): Promise<unknown> {
   const user = req.user as User
-  const isAdmin = !!req.isAdmin
-  const tool = (await instanceToolCatalog(isAdmin)).find((t) => t.name === name)
-  if (!tool) throw new ExtensionToolError('Unknown tool', 404)
+  const access = mcpCallerAccess(req)
+  const tool = (await instanceToolCatalog(access)).find((t) => t.name === name)
+  if (!tool) {
+    // Say why a scoped key cannot run a flow tool rather than pretend it is not there.
+    if (access.scoped) {
+      const named = (await readNamedTools().catch(() => [])).find((t) => t.name === name)
+      if (named?.kind === 'flow' && named.enabled)
+        throw new ExtensionToolError(SCOPED_KEY_FLOW_MESSAGE, 403)
+    }
+    throw new ExtensionToolError('Unknown tool', 404)
+  }
   const args = declaredInputs(tool.input_schema, input)
   const src = tool.source
   if (src.kind === 'extension') return runExtensionTool('mcp', user, name, input)
@@ -383,6 +413,7 @@ export async function callInstanceTool(
     }
   }
 
+  if (access.scoped) throw new ExtensionToolError(SCOPED_KEY_FLOW_MESSAGE, 403)
   const flow = (await db('nivaro_flows')
     .where({ id: src.flow_id })
     .first('id', 'name', 'status')) as FlowRow | undefined
