@@ -1525,7 +1525,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const [groups, assignments, fieldMeta] = await Promise.all([
       db('nivaro_field_groups')
         .where({ layout_id: Number(id) })
-        .select('id', 'key', 'label', 'sort')
+        .select('id', 'key', 'label', 'sort', 'swap_config')
         .orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
@@ -1656,7 +1656,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const [groups, assignments, fieldMeta, colMeta, settings, directRelations] = await Promise.all([
       db('nivaro_field_groups')
         .where({ layout_id: Number(id) })
-        .select('id', 'key', 'label', 'sort')
+        .select('id', 'key', 'label', 'sort', 'swap_config')
         .orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
@@ -1815,7 +1815,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const [groups, assignments, fieldMeta, colMeta, settings, directRelations] = await Promise.all([
       db('nivaro_field_groups')
         .where({ layout_id: Number(id) })
-        .select('id', 'key', 'label', 'sort')
+        .select('id', 'key', 'label', 'sort', 'swap_config')
         .orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })

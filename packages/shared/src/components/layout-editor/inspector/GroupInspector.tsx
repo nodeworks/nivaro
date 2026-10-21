@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { readGroupStructure } from '../../../lib/form-structure'
 import type { GroupPatch, GroupRow } from '../../../lib/layout-ops'
 import { lazySectionPatch, lazySectionsOf } from '../../../lib/layout-resolve'
 import { titleCase } from '../../../lib/utils'
@@ -8,6 +9,7 @@ import { O2MAggFieldCombobox } from '../editors/o2m-agg-field'
 import { SwapConfigEditor } from '../editors/swap-config'
 import { IconPicker } from '../pickers/icon-picker'
 import { SectionReuseActions } from '../reuse/SectionReuseActions'
+import { emptyTextOp, rowUpdatePlan, stickyPlan } from '../section-structure'
 import { useCollectionMeta } from './field-context'
 import {
   Choice,
@@ -82,6 +84,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
   // #2713: kept in the layout's conditions.lazy_sections, by section key.
   const lazy = lazySectionsOf(env.bundle.layout.conditions).includes(group.key)
   const accordion = !!env.bundle.layout.accordion_mode
+  const structure = readGroupStructure(group.swap_config)
 
   // Fields of the collection, by label (pickers + condition builder)
   const fieldOptions = globals
@@ -330,7 +333,92 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
               }
             />
           </Setting>
+          <Setting
+            k='group.empty_text'
+            label='When nothing is filled'
+            effect='Shown in the read view and the PDF instead of empty values, such as “No shipping details yet”. Empty: the values show as dashes.'
+          >
+            <TextInput
+              ariaLabel='When nothing is filled'
+              value={structure.emptyText ?? ''}
+              placeholder='No details yet'
+              onChange={(v) =>
+                env.apply([emptyTextOp(group, v)], {
+                  label: `Change the empty text of ${name}`,
+                  text: true
+                })
+              }
+            />
+          </Setting>
+          {type === 'section' && !group.parent_key && (
+            <Toggle
+              k='group.sticky'
+              label='Stick to the top'
+              effect='Stays at the top of the form while people scroll the rest, for totals or status. One section per form; not on phones.'
+              checked={structure.sticky}
+              onChange={(v) => {
+                const plan = stickyPlan(env.bundle, group.key, v)
+                if (plan.ok) env.apply(plan.ops, { label: plan.label })
+              }}
+            />
+          )}
         </>
+      )}
+
+      {(type === 'section' || type === 'tab') && (
+        <Section title='Side by side'>
+          <Setting
+            k='group.row_groups'
+            label='Rows of fields'
+            effect='Short fields that share one row under one label, like Street / City / Zip. To add one, select the fields on the form, right-click and pick Put side by side.'
+          >
+            {structure.rows.length === 0 ? (
+              <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                No rows yet.
+              </p>
+            ) : (
+              <div className='space-y-2'>
+                {structure.rows.map((r) => (
+                  <div key={r.key} className='space-y-1' data-row-group-setting={r.key}>
+                    <div className='flex items-center gap-1.5'>
+                      <div className='min-w-0 flex-1'>
+                        <TextInput
+                          ariaLabel={`Label of the row ${r.label}`}
+                          value={r.label}
+                          onChange={(v) => {
+                            const plan = rowUpdatePlan(env.bundle, group.key, r.key, { label: v })
+                            if (plan.ok) env.apply(plan.ops, { label: plan.label, text: true })
+                          }}
+                        />
+                      </div>
+                      <button
+                        type='button'
+                        onClick={() => {
+                          const plan = rowUpdatePlan(env.bundle, group.key, r.key, null)
+                          if (plan.ok) env.apply(plan.ops, { label: plan.label })
+                        }}
+                        className='shrink-0 rounded-md px-2 py-1 text-[12px] text-slate-600 hover:bg-muted hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
+                      >
+                        Take apart
+                      </button>
+                    </div>
+                    <p className='truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
+                      {r.fields
+                        .map((f) => {
+                          const placement =
+                            env.bundle.placements.find(
+                              (p) => p.field === f && p.group_key === group.key
+                            ) ?? null
+                          return describeField(f, globals, relations, placement).label
+                        })
+                        .join(' · ')}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Setting>
+        </Section>
       )}
 
       {type === 'tab' && (

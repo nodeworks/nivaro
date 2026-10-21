@@ -1,9 +1,16 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Pencil } from 'lucide-react'
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DrilldownContext, useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get } from '../lib/commands'
+import {
+  isEmptyValue as isBlank,
+  isFolded,
+  planFieldGrid,
+  readGroupStructure,
+  type RowGroup
+} from '../lib/form-structure'
 import { useLiveRecord } from '../lib/live'
 import { useRecordReader } from '../lib/record-loader'
 import { sanitizeHtml } from '../lib/sanitize-html'
@@ -41,6 +48,8 @@ interface LayoutGroup {
   visibility_mode?: string | null
   /** Migration 311 — read-board width: full | half | third | null (auto). */
   read_width?: string | null
+  /** Rows of fields and the empty-section text ride here (lib/form-structure.ts). */
+  swap_config?: string | null
 }
 interface LayoutAssignment {
   field: string
@@ -1514,8 +1523,11 @@ function RecordReadViewBody({
     // shape, not content that comes and goes: an "Additional" card with every
     // value blank still says what the record could hold, so it stays, dashes
     // and all.
+    const structure = readGroupStructure(g.swap_config)
+    // #2698: an empty field behind "Show more" is left out of the read view.
     const items = visible
       .filter((a) => a.group_key === g.key && !headerSet.has(a.field))
+      .filter((a) => showAll || !record || !isFolded(a.overrides) || !isBlank(record[a.field]))
       .sort((a, b) => a.sort - b.sort)
     const groupWidgets = widgetSlots.filter((w) => w.group_key === g.key)
     const groupLive = liveNodes(g.key)
@@ -1538,6 +1550,17 @@ function RecordReadViewBody({
     // still report.
     const sectionHidden =
       !groupEmpty && shownItems.length === 0 && groupLive.length === 0 && shownWidgets.length === 0
+    // #2700: nothing in the section filled — its own words instead of a wall of dashes.
+    const relCount = (a: LayoutAssignment) => gridCounts?.[a.field] ?? relCounts[a.field]
+    const nothingFilled =
+      !!structure.emptyText &&
+      !!record &&
+      !design &&
+      groupLive.length === 0 &&
+      shownWidgets.length === 0 &&
+      items.every((a) => (isGrid(a) || isM2M(a) ? relCount(a) === 0 : isBlank(record[a.field])))
+    // #2697: fields side by side under one label read as one fact.
+    const scalarUnits = planFieldGrid(scalars, { rows: structure.rows }).units
     // Board width is CONFIGURATION (group.read_width, Table Editor), never a
     // function of what loaded. Auto = half for a short fact list, full when
     // the section holds a grid, a widget, a live slot or many fields.
@@ -1552,6 +1575,109 @@ function RecordReadViewBody({
     // a style block of our own) — Tailwind responsive utilities lost to host
     // apps whose own sheet emits the same class names later (a host's
     // `.grid-cols-1` / `.lg:grid-cols-4` outranked ours at equal specificity).
+    const renderFact = (a: LayoutAssignment): ReactNode => {
+      if (relEmpty(a)) return null
+      const ov = parseOverrides(a.overrides)
+      const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
+      const long = isRich(a) || !!fieldByName.get(a.field)?.interface?.includes('rich-text')
+      // Free text that would truncate in one track (a description,
+      // a textarea) takes two tracks and wraps to a few lines —
+      // "SIT_beaverfalls.pa_KEY_Q2_…" is a value, not a summary.
+      const rawV = record?.[a.field]
+      const wide =
+        !long &&
+        !isM2M(a) &&
+        !m2oTarget(a.field) &&
+        (String(fieldByName.get(a.field)?.interface ?? '').includes('textarea') ||
+          (typeof rawV === 'string' && rawV.length > 36))
+      return (
+        <div
+          key={a.field}
+          // A file list, or a long list of links, is a row rather
+          // than a fact and takes the whole width; a two-value
+          // alias (Zone, Region) stays a fact in one track.
+          className={`min-w-0 ${
+            long ||
+            (isM2M(a) && (relTargets[a.field] === 'nivaro_files' || (relCounts[a.field] ?? 0) > 3))
+              ? 'col-span-full'
+              : emphasis || wide
+                ? 'col-span-2'
+                : ''
+          }`}
+        >
+          {shell(
+            fieldTarget(a),
+            <>
+              <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                {labelFor(a)}
+                <IntegrityMark field={a.field} />
+                {touchMark(a.field)}
+              </dt>
+              <dd
+                // Session replay masking hook (#1361) — the value, not its label.
+                data-replay-field={a.field}
+                data-field-collection={collection}
+                data-remote-changed={flashFields.has(a.field) || undefined}
+                className={`mt-1 min-w-0${flashClass(a.field)} ${
+                  emphasis
+                    ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
+                    : `${isM2M(a) || long ? '' : wide ? 'line-clamp-3 break-words ' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
+                }`}
+              >
+                {record ? (
+                  renderValue(a)
+                ) : (
+                  <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                )}
+              </dd>
+            </>,
+            isHiddenAssignment(a)
+          )}
+        </div>
+      )
+    }
+    const renderRowFact = (row: RowGroup, members: LayoutAssignment[]) => {
+      const shown = record && !design ? members.filter((m) => !isBlank(record[m.field])) : members
+      return (
+        <div
+          key={`row:${row.key}`}
+          data-read-row={row.key}
+          className={`min-w-0 ${members.length > 2 ? 'col-span-full' : 'col-span-2'}`}
+        >
+          <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+            {row.label.trim() || members.map(labelFor).join(' / ')}
+          </dt>
+          <dd className='mt-1 flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+            {!record ? (
+              <span className='inline-block h-3.5 w-28 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+            ) : shown.length === 0 ? (
+              <Empty />
+            ) : (
+              shown.map((m, i) => (
+                <Fragment key={m.field}>
+                  {i > 0 && (
+                    <span aria-hidden className='text-slate-300 dark:text-slate-600'>
+                      ·
+                    </span>
+                  )}
+                  {shell(
+                    fieldTarget(m),
+                    <span
+                      data-replay-field={m.field}
+                      data-field-collection={collection}
+                      className={`min-w-0 break-words${flashClass(m.field)}`}
+                    >
+                      {renderValue(m)}
+                    </span>,
+                    isHiddenAssignment(m)
+                  )}
+                </Fragment>
+              ))
+            )}
+          </dd>
+        </div>
+      )
+    }
     return (
       <section
         key={g.key}
@@ -1608,84 +1734,29 @@ function RecordReadViewBody({
             widget could never say it has content and hide_empty would drop
             it for good. */}
             <div className='px-5 pb-5 pt-4' hidden={!isOpen(g)}>
-              {scalars.length > 0 && (
+              {nothingFilled && (
+                <p
+                  data-read-empty={g.key}
+                  className='text-[13px] text-slate-500 dark:text-slate-400'
+                >
+                  {structure.emptyText}
+                </p>
+              )}
+              {scalars.length > 0 && !nothingFilled && (
                 // One column rhythm for the whole page: every section's facts sit
                 // on the same 2 / 3 / 4 / 6 tracks, so values line up card to
                 // card instead of each card auto-filling its own grid.
                 <dl className='grid gap-x-6 gap-y-5' data-read-dl={width}>
-                  {scalars.map((a) => {
-                    if (relEmpty(a)) return null
-                    const ov = parseOverrides(a.overrides)
-                    const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
-                    const long =
-                      isRich(a) || !!fieldByName.get(a.field)?.interface?.includes('rich-text')
-                    // Free text that would truncate in one track (a description,
-                    // a textarea) takes two tracks and wraps to a few lines —
-                    // "SIT_beaverfalls.pa_KEY_Q2_…" is a value, not a summary.
-                    const rawV = record?.[a.field]
-                    const wide =
-                      !long &&
-                      !isM2M(a) &&
-                      !m2oTarget(a.field) &&
-                      (String(fieldByName.get(a.field)?.interface ?? '').includes('textarea') ||
-                        (typeof rawV === 'string' && rawV.length > 36))
-                    return (
-                      <div
-                        key={a.field}
-                        // A file list, or a long list of links, is a row rather
-                        // than a fact and takes the whole width; a two-value
-                        // alias (Zone, Region) stays a fact in one track.
-                        className={`min-w-0 ${
-                          long ||
-                          (
-                            isM2M(a) &&
-                              (relTargets[a.field] === 'nivaro_files' ||
-                                (relCounts[a.field] ?? 0) > 3)
-                          )
-                            ? 'col-span-full'
-                            : emphasis || wide
-                              ? 'col-span-2'
-                              : ''
-                        }`}
-                      >
-                        {shell(
-                          fieldTarget(a),
-                          <>
-                            <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-                              {labelFor(a)}
-                              <IntegrityMark field={a.field} />
-                              {touchMark(a.field)}
-                            </dt>
-                            <dd
-                              // Session replay masking hook (#1361) — the value, not its label.
-                              data-replay-field={a.field}
-                              data-field-collection={collection}
-                              data-remote-changed={flashFields.has(a.field) || undefined}
-                              className={`mt-1 min-w-0${flashClass(a.field)} ${
-                                emphasis
-                                  ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
-                                  : `${isM2M(a) || long ? '' : wide ? 'line-clamp-3 break-words ' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
-                              }`}
-                            >
-                              {record ? (
-                                renderValue(a)
-                              ) : (
-                                <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
-                              )}
-                            </dd>
-                          </>,
-                          isHiddenAssignment(a)
-                        )}
-                      </div>
-                    )
-                  })}
+                  {scalarUnits.map((u) =>
+                    u.kind === 'row' ? renderRowFact(u.row, u.members) : renderFact(u.field)
+                  )}
                 </dl>
               )}
               {grids.map((a) => (
                 <div
                   key={a.field}
                   className={scalars.length > 0 ? 'mt-3' : ''}
-                  hidden={relEmpty(a)}
+                  hidden={relEmpty(a) || nothingFilled}
                 >
                   {shell(
                     fieldTarget(a),

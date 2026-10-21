@@ -1,4 +1,6 @@
+import { isFolded, readGroupStructure, rowOf } from '../../../lib/form-structure'
 import { InlineDisplaySection } from '../editors/inline-display'
+import { foldPlan, rowUpdatePlan } from '../section-structure'
 import { AiFillSetting } from './AiFillSetting'
 import { showsDateMode, showsInputMask, showsNumbers } from './applies'
 import { ColumnFit } from './ColumnFit'
@@ -165,6 +167,7 @@ export function LookTab() {
         </Setting>
       )}
       <ColumnFit />
+      {env.layoutType !== 'table' && row.group_key !== null && <FoldSettings />}
 
       {info.relKind === 'M2O' && info.relatedCollection && (
         <Section title='Show under the value'>
@@ -343,5 +346,57 @@ export function LookTab() {
       {isText && !info.isPath && !info.computedType && <AiFillSetting />}
       <FieldTranslations />
     </div>
+  )
+}
+
+/** #2697 #2698: the field behind "Show more", and the row it shares with others. */
+function FoldSettings() {
+  const { info, ov, env, row } = useFieldCtx()
+  const name = info.label
+  const group = env.bundle.groups.find((g) => g.key === row.group_key) ?? null
+  if (!group || !['section', 'tab'].includes(group.type)) return null
+  const inRow = rowOf(readGroupStructure(group.swap_config).rows, row.field)
+  const required = ov.required === true
+  const run = (plan: ReturnType<typeof foldPlan>) => {
+    if (plan.ok) env.apply(plan.ops, { label: plan.label })
+  }
+  return (
+    <>
+      <Toggle
+        k='field.fold'
+        label='Behind “Show more”'
+        effect={
+          inRow
+            ? 'Fields side by side in a row always show.'
+            : required
+              ? 'Required fields always show.'
+              : 'Tucked under “Show N more” at the end of the section while empty. It opens on its own once one of them has a value.'
+        }
+        checked={isFolded(row.overrides) && !inRow}
+        disabled={!!inRow || (required && !isFolded(row.overrides))}
+        onChange={(v) => run(foldPlan(env.bundle, [row], v))}
+      />
+      {inRow && (
+        <Setting
+          k='field.row_group'
+          label='Shares a row'
+          effect={`Side by side under “${inRow.label || 'one label'}”. Rename the row in the section's settings.`}
+        >
+          <button
+            type='button'
+            onClick={() =>
+              run(
+                rowUpdatePlan(env.bundle, group.key, inRow.key, {
+                  fields: inRow.fields.filter((f) => f !== row.field)
+                })
+              )
+            }
+            className='rounded-md border border-slate-200 px-2.5 py-1 text-[12px] font-medium text-slate-700 hover:bg-muted dark:border-border dark:text-foreground'
+          >
+            Take {name} out of the row
+          </button>
+        </Setting>
+      )}
+    </>
   )
 }

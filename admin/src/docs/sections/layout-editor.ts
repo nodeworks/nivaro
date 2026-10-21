@@ -182,7 +182,11 @@ export const layoutEditor: DocSection = {
         'Press ? (when not typing) or the keyboard button for every shortcut, grouped by area: undo and redo, duplicate, moving with Alt+arrows or Space, find, the command palette and save.'
       ]
     },
-    { type: 'h3', id: 'layout-editor-arrange', text: 'Arrange: duplicate, wrap, convert, pin' },
+    {
+      type: 'h3',
+      id: 'layout-editor-arrange',
+      text: 'Arrange: duplicate, wrap, split, join, convert, pin'
+    },
     {
       type: 'p',
       text: "Right-click anything on the canvas (or press the context-menu key on it), or press Arrange… in a section's inspector, to open the Arrange menu beside it. Every action in it is one Undo step."
@@ -195,7 +199,25 @@ export const layoutEditor: DocSection = {
         'Unwrap removes a section, tab or step and keeps its fields as ungrouped fields. When there are no ungrouped fields yet, they stay where the section was.',
         "Convert to… turns a section into a tab or step (it joins the holder just above it when that holder shows the same way, else a new holder takes its place), a tab or step into a section (an emptied holder goes), tabs into steps and back, or a holder's tabs into sections. Each choice lists what it would change before you press Convert. A holder shows all its tabs one way, so one tab becomes a step only with its siblings.",
         'Copy rules to other sections… copies Hidden for, Read-only for and (from a tab or step) Only when onto the sections you tick. Step conditions are skipped on plain sections, where they do nothing.',
-        'Pin in the editor marks a section so it cannot be dragged and takes no drops, with its fields and tabs, while you arrange the rest. Alt+arrow skips it too. The pin only affects the editor; the form people see is unchanged.'
+        'Pin in the editor marks a section so it cannot be dragged and takes no drops, with its fields and tabs, while you arrange the rest. Alt+arrow skips it too. The pin only affects the editor; the form people see is unchanged.',
+        'Split the section here (on a selected field) moves that field and everything after it to a new section right below, named “… (continued)”, in the same order. The first part keeps all its settings; the new part takes its look, rules and visibility, but not its intro, collapsed summary or field swap. A split cannot fall inside a row of fields side by side.',
+        'Join with … (on a section, tab or step) moves the fields of the section right below into this one, after its own, and removes the emptied section. This section keeps its settings; a field both hold shows once.',
+        'Put side by side under one label (with two to six fields of one section selected) puts them in one row, such as Street / City / Zip or Qty / Unit. The row shows one label and one required marker; each input is captioned with its own name. Rename or take a row apart in the section’s inspector under Side by side; take one field out from its own inspector.'
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'layout-editor-structure',
+      text: 'Show more, sticky sections and empty text'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Behind “Show more” (a field’s Look tab) tucks an optional field under a “Show 4 more” button at the end of its section. The fold opens on its own as soon as one of its fields has a value, so nothing filled is ever hidden. Required fields and fields in a row always show. The read view and the PDF leave out an empty folded field.',
+        'Stick to the top (a section’s inspector) keeps that section, such as totals or status, at the top of the form while people scroll the rest. A form has one sticky section: turning it on for one turns it off for the other. It does not stick on phone widths, nor on the canvas, where it is tagged “Sticks to the top”.',
+        'When nothing is filled (a section’s inspector) is the text the read view and the PDF show for a section none of whose fields has a value, such as “No shipping details yet”, instead of a list of dashes.',
+        'Rows of fields side by side print the same way everywhere: one label on the record page, and on the read view and the PDF their values on one line, joined by a dot.',
+        'Select a field to get a width handle on its right edge: drag it to make the field full, half, a third or a quarter wide (or focus it and press ← →). While you drag a field or a width, faint guides show the form’s 12 columns, so widths line up across sections.'
       ]
     },
     { type: 'h3', id: 'layout-editor-find-replace', text: 'Find and replace in labels' },
