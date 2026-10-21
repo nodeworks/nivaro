@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { bustFreshnessCache, embeddingFreshness } from '../services/embedding-freshness.js'
 import {
   embedText,
   getEmbeddableFields,
@@ -54,9 +55,19 @@ export async function semanticSearchRoutes(app: FastifyInstance) {
     return reply.send({ data })
   })
 
+  // GET /search/freshness — per collection: records changed since last embedded, the
+  // oldest unembedded change, and whether a provider switch still needs a reindex (#2482)
+  app.get<{ Querystring: { fresh?: string } }>(
+    '/freshness',
+    { preHandler: requireAdmin },
+    async (req) => ({ data: await embeddingFreshness({ fresh: req.query?.fresh === '1' }) })
+  )
+
   // POST /search/reindex/:collection — rebuild embeddings for all eligible text fields
   app.post('/reindex/:collection', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
+    // ?force=1 rebuilds every vector even when the text is unchanged (#2482).
+    const force = (req.query as { force?: string } | undefined)?.force === '1'
 
     if (/^nivaro_/i.test(collection) || isFilesCollection(collection)) {
       return reply.code(403).send({ error: 'System collections cannot be indexed' })
@@ -84,7 +95,9 @@ export async function semanticSearchRoutes(app: FastifyInstance) {
           const value = row[field]
           if (typeof value !== 'string' || value.trim() === '') continue
           try {
-            const written = await upsertItemEmbedding(collection, String(row.id), field, value)
+            const written = await upsertItemEmbedding(collection, String(row.id), field, value, {
+              force
+            })
             if (written) indexed++
           } catch (err) {
             req.log.error({ err, collection, item: row.id, field }, 'Reindex embedding failed')
@@ -96,6 +109,7 @@ export async function semanticSearchRoutes(app: FastifyInstance) {
       if (rows.length < BATCH) break
     }
 
+    bustFreshnessCache()
     await logActivity({
       action: 'semantic-reindex',
       user: req.user?.id,

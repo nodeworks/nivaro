@@ -204,6 +204,7 @@ import { reportStudioRoutes } from './report-studio.js'
 import { reportsRoutes } from './reports.js'
 import { retentionRoutes } from './retention.js'
 import { revisionsRoutes } from './revisions.js'
+import { roleChecklistRoutes } from './role-checklists.js'
 import { rolesRoutes } from './roles.js'
 import { rulesRoutes } from './rules.js'
 import { rumRoutes } from './rum.js'
@@ -410,6 +411,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // /delegation/:userId/remind, /access-requests/:id/vouch.
   await app.register(teamMiscRoutes)
   await app.register(myWorkRoutes)
+  await app.register(roleChecklistRoutes)
   await app.register(dashboardFeedRoutes, { prefix: '/dashboard' })
   await app.register(accessRequestRoutes)
   await app.register(lastTouchRoutes)

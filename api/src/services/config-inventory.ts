@@ -155,7 +155,8 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_settings_overrides',
   'nivaro_ai_playbooks',
   'nivaro_ai_glossary', // #1899 business terms (admin-curated)
-  'nivaro_ai_data_guides' // #1847 per-collection Ask AI hints
+  'nivaro_ai_data_guides', // #1847 per-collection Ask AI hints
+  'nivaro_role_checklists' // #2472 first-week checklists an admin published per role
 ]
 
 /** Derived from business data — differing between environments proves nothing. */
@@ -303,6 +304,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_ai_feedback',
   'nivaro_ai_knowledge_suggestions', // #1898/#1949 drafts awaiting an admin
   'nivaro_ai_docs_misses', // #1855 docs searches that found nothing
+  'nivaro_ai_knowledge_findings', // #2480 glossary / data-guide conflicts
   'nivaro_ops_incidents', // #2016 incident threads (state + summary)
   'nivaro_ai_autofill_events',
   'nivaro_ai_conversations', // #1833 per-person Ask AI history (migration 433)
