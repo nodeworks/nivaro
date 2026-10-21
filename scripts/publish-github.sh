@@ -11,6 +11,7 @@
 # Usage:
 #   scripts/publish-github.sh                 # build + verify mirror only
 #   scripts/publish-github.sh --push <git-url># build, verify, force-push
+#   MOVE_TAGS=1 … --push <git-url>         also re-point tags the mirror has under another sha
 #
 # Re-run after every batch of commits you want published — the mirror is
 # disposable and rebuilt from scratch each time.
@@ -171,6 +172,20 @@ if [ "${1:-}" = "--push" ]; then
     TO_PUSH="$(printf '%s\n' "$LOCAL_TAGS" | grep -vxF -f <(printf '%s\n' "$REMOTE_TAGS") | cut -f2 || true)"
   else
     TO_PUSH="$(printf '%s\n' "$LOCAL_TAGS" | cut -f2)"
+  fi
+  # A tag the mirror already has under another sha MOVED: the strip list or a
+  # leak rewrite changed history (2026-10-21: the efp-ops strip of 10-15 moved
+  # 115 old tags, and re-pushing them fired 80+ publish/image workflows that
+  # rebuilt old releases and starved the new one). Old releases are already
+  # built and published, so moved tags stay where they are unless --move-tags.
+  REMOTE_NAMES="$(printf '%s\n' "$REMOTE_TAGS" | cut -f2)"
+  if [ "${MOVE_TAGS:-0}" != 1 ] && [ -n "$REMOTE_TAGS" ]; then
+    MOVED="$(printf '%s\n' "$TO_PUSH" | grep -xF -f <(printf '%s\n' "$REMOTE_NAMES") || true)"
+    if [ -n "$MOVED" ]; then
+      echo "⚠ $(printf '%s\n' "$MOVED" | grep -c .) tag(s) moved (history rewritten) — NOT re-pushed, so no old release rebuilds: $(printf '%s\n' "$MOVED" | sed 's|refs/tags/||' | head -5 | xargs)…" >&2
+      echo "  (MOVE_TAGS=1 re-points them and fires a workflow for each)" >&2
+      TO_PUSH="$(printf '%s\n' "$TO_PUSH" | grep -vxF -f <(printf '%s\n' "$MOVED") || true)"
+    fi
   fi
   total=$(printf '%s\n' "$LOCAL_TAGS" | grep -c . || true)
   pushed=0
