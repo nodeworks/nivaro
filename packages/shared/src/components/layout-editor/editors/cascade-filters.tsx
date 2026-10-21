@@ -354,7 +354,7 @@ export function CascadeFiltersEditor({
                     onClick={() => openEdit(idx)}
                     aria-label='Edit filter'
                     data-tip='Edit filter'
-                    className='inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-foreground'
+                    className='inline-flex h-6 w-6 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200/60 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-foreground'
                   >
                     <Pencil className='h-3 w-3' />
                   </button>
@@ -363,7 +363,7 @@ export function CascadeFiltersEditor({
                     onClick={() => removeRule(idx)}
                     aria-label='Remove filter'
                     data-tip='Remove filter'
-                    className='inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/60 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
+                    className='inline-flex h-6 w-6 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200/60 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
                   >
                     <X className='h-3.5 w-3.5' />
                   </button>

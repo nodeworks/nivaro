@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, ChevronDown, ChevronUp } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '../../ui/command'
@@ -96,9 +96,11 @@ export function ColumnPresetRow({
         <button
           type='button'
           onClick={onRemove}
-          className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'
+          aria-label='Remove'
+          data-tip='Remove'
+          className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
         >
-          ✕
+          <X className='h-3.5 w-3.5' />
         </button>
       </div>
       <Popover open={colsOpen} onOpenChange={setColsOpen}>
@@ -175,7 +177,8 @@ export function ColumnPresetRow({
                 onClick={() =>
                   onChange({ ...preset, columns: preset.columns.filter((x) => x !== token) })
                 }
-                className='text-amber-500 hover:text-amber-800'
+                aria-label={`Remove ${token}`}
+                className='text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100'
               >
                 ✕
               </button>
@@ -270,9 +273,11 @@ export function DrawerRelationRow({
         <button
           type='button'
           onClick={onRemove}
-          className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'
+          aria-label='Remove'
+          data-tip='Remove'
+          className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
         >
-          ✕
+          <X className='h-3.5 w-3.5' />
         </button>
       </div>
       <div className='flex items-center gap-1.5' data-setting='field.drawer_relations.hint'>

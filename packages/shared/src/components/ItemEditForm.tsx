@@ -11592,7 +11592,7 @@ function ItemEditFormView({
                                               <ChevronRight className='h-3.5 w-3.5' />
                                             )}
                                             {summaryCollapsed && (
-                                              <span className='text-[11px] font-medium text-slate-500 [writing-mode:vertical-rl]'>
+                                              <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300 [writing-mode:vertical-rl]'>
                                                 Summary
                                               </span>
                                             )}

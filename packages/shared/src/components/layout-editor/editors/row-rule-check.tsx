@@ -226,6 +226,7 @@ export function RowRuleTester({
           value={recordId}
           onChange={(e) => setRecordId(e.target.value)}
           placeholder='Row id'
+          aria-label='Row id'
           className='h-7 min-w-0 flex-1 basis-28 text-[12px]'
           onKeyDown={(e) => {
             if (e.key === 'Enter') void run()
@@ -234,9 +235,10 @@ export function RowRuleTester({
         <Input
           value={changedField}
           onChange={(e) => setChangedField(e.target.value)}
-          placeholder='Changed field (optional)'
+          placeholder='Changed field'
+          aria-label='Changed field (optional)'
           className='h-7 min-w-0 flex-1 basis-36 text-[12px]'
-          title='Simulate a live edit of this field; blank = the create-time pass where every rule gets its chance'
+          data-tip='Optional. Simulates a live edit of this field; blank = the create-time pass where every rule gets its chance'
         />
         <Button
           size='sm'
@@ -278,9 +280,9 @@ export function RowRuleTester({
             )}
           </div>
           <div className='overflow-x-auto rounded border border-slate-200 bg-white dark:border-border dark:bg-card'>
-            <table className='w-full text-[11px]'>
+            <table className='w-full text-[12px]'>
               <thead>
-                <tr className='text-left text-[11px] text-slate-400'>
+                <tr className='text-left text-[12px] text-slate-500 dark:text-slate-400'>
                   <th className='px-2 py-1'>#</th>
                   <th className='px-2 py-1'>Target</th>
                   <th className='px-2 py-1'>Trigger → value</th>
@@ -292,10 +294,12 @@ export function RowRuleTester({
               <tbody>
                 {result.trace.map((t) => (
                   <tr key={t.index} className='border-t border-slate-100 dark:border-border'>
-                    <td className='px-2 py-1 text-slate-400'>{t.index + 1}</td>
+                    <td className='px-2 py-1 text-slate-500 dark:text-slate-400'>{t.index + 1}</td>
                     <td className='px-2 py-1 font-mono'>
                       {t.target_field}
-                      <span className='ml-1 text-slate-400'>{t.target_type}</span>
+                      <span className='ml-1 text-slate-500 dark:text-slate-400'>
+                        {t.target_type}
+                      </span>
                     </td>
                     <td className='px-2 py-1 font-mono text-slate-600 dark:text-slate-300'>
                       {t.trigger_field ?? '—'} → {fmt(t.trigger_value)}

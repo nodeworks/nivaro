@@ -196,6 +196,7 @@ export function ViaValuePicker({
                 <button
                   type='button'
                   onClick={() => toggle(id)}
+                  aria-label={`Remove ${item ? getLabel(item) : id}`}
                   className='hover:text-red-600 dark:hover:text-red-400 ml-0.5'
                 >
                   ✕
@@ -1536,9 +1537,11 @@ export function RowRuleRow({
                             trigger_fields: (rule.trigger_fields ?? []).filter((_, j) => j !== i)
                           })
                         }
-                        className='shrink-0 text-slate-500 hover:text-red-600 dark:hover:text-red-400 text-[12px] px-0.5'
+                        aria-label='Remove trigger field'
+                        data-tip='Remove trigger field'
+                        className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
                       >
-                        ✕
+                        <X className='h-3.5 w-3.5' />
                       </button>
                     </div>
                   ))}
