@@ -3,12 +3,14 @@ import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
 import {
+  clearHuddleEnd,
   collabLeft,
   huddleEndLine,
   huddleNotesMessage,
+  notePostReason,
+  readHuddleEnd,
   recordAttendee,
   settleCollabWrites,
-  takeHuddleEnd,
   touchCollab
 } from './huddle-collab.js'
 import { getHuddleSettings } from './huddle-settings.js'
@@ -134,8 +136,19 @@ export interface HuddleDeps {
   redis: HuddleRedis
   canSeeRoom(user: User, room: string): Promise<boolean>
   settings(): Promise<{ enabled: boolean; max_participants: number }>
-  /** Post a platform line in the room (chat-send.ts). */
+  /** Post a platform line in the room (chat-send.ts). Fixed server text only. */
   postLine(room: string, text: string): Promise<void>
+  /**
+   * #2854 — post the huddle's notes AS A PERSON (people wrote them): the note's last editor,
+   * else `fallback` (the last one to leave), through the normal visibility and posting rules.
+   * Resolves null when posted, or the plain reason it was not.
+   */
+  postNote(
+    room: string,
+    editorId: string | null,
+    fallback: User | null,
+    text: string
+  ): Promise<string | null>
   warn(obj: Record<string, unknown>, msg: string): void
 }
 
@@ -151,6 +164,26 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
         { user: null, senderId: null, senderName: 'Nivaro', system: true, skipVisibility: true },
         { room, message: text }
       )
+    },
+    async postNote(room, editorId, fallback, text) {
+      const { getUser } = await import('./users.js')
+      const editor = editorId ? await getUser(editorId).catch(() => undefined) : undefined
+      const author = editor && editor.status === 'active' ? editor : fallback
+      if (!author) return 'nobody from the huddle could post them'
+      try {
+        const { postChatMessage } = await import('./chat-send.js')
+        const { isAdminRole } = await import('./permissions.js')
+        await postChatMessage(
+          app,
+          { user: author, isAdmin: await isAdminRole(author).catch(() => false) },
+          { room, message: text }
+        )
+        return null
+      } catch (err) {
+        const status = (err as { statusCode?: number })?.statusCode
+        if (!status || status >= 500) app.log.warn({ err, room }, 'huddle notes post failed')
+        return notePostReason(err)
+      }
     },
     warn: (obj, msg) => app.log.warn(obj, msg)
   }
@@ -262,12 +295,24 @@ export function registerHuddle(
       if (left.length === 0) {
         await settleCollabWrites(socket)
         const start = await deps.redis.get(k.start)
-        const end = await takeHuddleEnd(deps.redis, tenant, room)
-        await deps.redis.del(k.start, k.meta, k.set)
+        const end = await readHuddleEnd(deps.redis, tenant, room)
         const ms = start ? Date.now() - Number(start) : 0
         const duration = formatHuddleDuration(ms)
-        await deps.postLine(room, huddleEndLine(duration, end.names))
-        if (end.note) await deps.postLine(room, huddleNotesMessage(duration, end.names, end.note))
+        // The notes are people's words: they post as a person (never the system line), and a
+        // person the room refuses means they are not posted — kept for the attendees instead.
+        const unposted = end.note
+          ? await deps.postNote(
+              room,
+              end.noteBy,
+              getUser(),
+              huddleNotesMessage(duration, end.names, end.note)
+            )
+          : null
+        await clearHuddleEnd(deps.redis, tenant, room, !!unposted, KEY_TTL_S)
+        await deps.redis.del(k.start, k.meta, k.set)
+        const line = huddleEndLine(duration, end.names)
+        await deps.postLine(room, unposted ? `${line} · notes were not posted: ${unposted}` : line)
+        if (unposted) socket.emit('huddle:note:unposted', { room, reason: unposted })
       }
     } catch (err) {
       deps.warn({ err, room }, 'huddle:leave failed')

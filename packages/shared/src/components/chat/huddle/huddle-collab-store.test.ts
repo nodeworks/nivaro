@@ -107,6 +107,47 @@ describe('HuddleNoteStore (#2854)', () => {
   })
 })
 
+describe('HuddleNoteStore — server-owned rev and unposted notes', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('a bad-rev refusal takes the server rev and resends my text on top of it', () => {
+    const t = fakeTransport()
+    const notes = new HuddleNoteStore(
+      () => t,
+      () => 'S1'
+    )
+    notes.reset('ch:ops')
+    notes.setText('mine')
+    vi.advanceTimersByTime(NOTE_DEBOUNCE_MS)
+    notes.onDenied({ room: 'ch:ops', reason: 'bad-rev', rev: 7 })
+    vi.advanceTimersByTime(NOTE_DEBOUNCE_MS)
+    expect(t.sent.at(-1)?.payload).toEqual({ room: 'ch:ops', text: 'mine', rev: 7 })
+  })
+
+  it('keeps the note of the huddle I left; an unposted end offers it, else fetches it', () => {
+    const t = fakeTransport()
+    const notes = new HuddleNoteStore(
+      () => t,
+      () => 'S1'
+    )
+    const told: string[] = []
+    notes.onUnpostedNote((p) => told.push(p.reason))
+    notes.reset('ch:news')
+    notes.setText('Draft')
+    notes.reset(null)
+    notes.onUnposted({ room: 'ch:news', reason: 'only admins post here' })
+    expect(told).toEqual(['only admins post here'])
+    expect(notes.endedNote('ch:news')).toBe('Draft')
+    expect(t.sent.some((s) => s.event === 'huddle:note:fetch')).toBe(false)
+
+    notes.onUnposted({ room: 'ch:other', reason: 'x' })
+    expect(t.sent.at(-1)).toEqual({ event: 'huddle:note:fetch', payload: { room: 'ch:other' } })
+    notes.onKept({ room: 'ch:other', text: 'From the server' })
+    expect(notes.endedNote('ch:other')).toBe('From the server')
+  })
+})
+
 describe('HuddleFollowStore (#2855)', () => {
   let path = '/chat'
   let navigated: string[] = []

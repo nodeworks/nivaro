@@ -92,21 +92,52 @@ export function parseNote(raw: string | null): StoredNote | null {
   }
 }
 
-/** Read and clear what the end of a huddle reports: who came and the note. */
-export async function takeHuddleEnd(
+/** What the end of a huddle reports: who came, the note and who wrote it last. */
+export async function readHuddleEnd(
   redis: HuddleRedis,
   tenant: string | null,
   room: string
-): Promise<{ names: string[]; note: string | null }> {
+): Promise<{ names: string[]; note: string | null; noteBy: string | null }> {
   const k = collabKeys(tenant, room)
   const [who, raw] = await Promise.all([
     redis.hgetall(k.who).catch(() => ({}) as Record<string, string>),
     redis.get(k.note).catch(() => null)
   ])
-  await redis.del(k.who, k.note, k.present)
   const names = [...new Set(Object.values(who ?? {}).filter(Boolean))]
-  const note = parseNote(raw)?.text.trim() || null
-  return { names, note }
+  const parsed = parseNote(raw)
+  return { names, note: parsed?.text.trim() || null, noteBy: parsed?.by ?? null }
+}
+
+/**
+ * Clear the huddle's collab keys. A note that could not be posted is kept (with the attendee
+ * list that gates huddle:note:fetch) until the TTL, so the people who wrote it can copy it.
+ */
+export async function clearHuddleEnd(
+  redis: HuddleRedis,
+  tenant: string | null,
+  room: string,
+  keepNote: boolean,
+  ttlS: number
+): Promise<void> {
+  const k = collabKeys(tenant, room)
+  if (!keepNote) {
+    await redis.del(k.who, k.note, k.present)
+    return
+  }
+  await redis.del(k.present)
+  await redis.expire(k.note, ttlS)
+  await redis.expire(k.who, ttlS)
+}
+
+/** The plain reason a refused note post shows in the end line. */
+export function notePostReason(err: unknown): string {
+  const e = err as { statusCode?: number; code?: string; message?: string }
+  if (e?.code === 'ANNOUNCE_ONLY') return 'only the channel owner and admins post here'
+  if (e?.statusCode === 403) return 'the person who wrote them cannot post in this room'
+  if (e?.statusCode && e.statusCode < 500 && e.message) {
+    return e.message.replace(/\.\s*$/, '').replace(/^./, (c) => c.toLowerCase())
+  }
+  return 'the message could not be sent'
 }
 
 /** "Ana, Ben and Chris" — every name, the end line is the record of who came. */
@@ -281,14 +312,22 @@ export function registerHuddleCollab(
   }
 
   // ── Huddle notes (#2854) ──────────────────────────────────────────────────
-  async function writeNote(user: User, room: string, text: string, rev: number) {
+  async function writeNote(user: User, room: string, text: string, rev: unknown) {
     const tenant = scope.tenantNow()
     const k = collabKeys(tenant, room)
     const prev = parseNote(await deps.redis.get(k.note))
-    // Last writer wins; the rev only ever rises, so every browser can drop older copies.
+    const stored = prev?.rev ?? 0
+    // The rev a browser sends is the copy it edited — never more than the server handed out. A
+    // rev it could not have seen (huge, fractional, negative) is refused, never trusted.
+    const base = typeof rev === 'number' ? rev : Number(rev)
+    if (!Number.isSafeInteger(base) || base < 0 || base > stored) {
+      socket.emit('huddle:note:denied', { room, reason: 'bad-rev', rev: stored })
+      return
+    }
+    // Last writer wins (an edit of an older copy too); only the server moves the rev.
     const next: StoredNote = {
       text,
-      rev: Math.max(prev?.rev ?? 0, Number.isFinite(rev) ? rev : 0) + 1,
+      rev: stored + 1,
       by: user.id,
       name: nameOf(user)
     }
@@ -322,7 +361,7 @@ export function registerHuddleCollab(
           socket.emit('huddle:note:denied', { room, reason: 'no-access' })
           return
         }
-        await writeNote(user, room, text, Number(payload.rev))
+        await writeNote(user, room, text, payload.rev)
       })().catch((err) => deps.warn({ err, room }, 'huddle:note failed'))
       sd().huddleCollabWrite = work
       await work
@@ -356,6 +395,26 @@ export function registerHuddleCollab(
         if (follow) socket.emit('huddle:follow', followPayload(room, 'state', follow))
       } catch (err) {
         deps.warn({ err, room }, 'huddle:collab:sync failed')
+      }
+    })
+  )
+
+  // A note the end could not post stays readable to the people who were in the huddle.
+  socket.on(
+    'huddle:note:fetch',
+    inSocketTenant(socket, async (payload: { room?: unknown }) => {
+      const room = payload?.room
+      const user = getUser()
+      if (!user || typeof room !== 'string' || !room) return
+      try {
+        if (!(await allowed(user, room))) return
+        const k = collabKeys(scope.tenantNow(), room)
+        const who = await deps.redis.hgetall(k.who)
+        if (!who || !(user.id in who)) return
+        const note = parseNote(await deps.redis.get(k.note))
+        if (note) socket.emit('huddle:note:kept', { room, text: note.text })
+      } catch (err) {
+        deps.warn({ err, room }, 'huddle:note:fetch failed')
       }
     })
   )

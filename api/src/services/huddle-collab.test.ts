@@ -122,10 +122,16 @@ const scope = {
   tenantNow: () => ''
 }
 
-function setup(over: { allowed?: () => boolean; record?: boolean } = {}) {
+function setup(over: { allowed?: () => boolean; record?: boolean; refuseNote?: string } = {}) {
   const redis = fakeRedis()
   const io = fakeIo()
   const lines: Array<{ room: string; text: string }> = []
+  const notes: Array<{
+    room: string
+    editor: string | null
+    fallback: string | null
+    text: string
+  }> = []
   const canSeeRoom = async () => (over.allowed ? over.allowed() : true)
   const hd: HuddleDeps = {
     redis,
@@ -133,6 +139,10 @@ function setup(over: { allowed?: () => boolean; record?: boolean } = {}) {
     settings: async () => ({ enabled: true, max_participants: 8 }),
     postLine: async (room, text) => {
       lines.push({ room, text })
+    },
+    postNote: async (room, editor, fallback, text) => {
+      notes.push({ room, editor, fallback: fallback?.id ?? null, text })
+      return over.refuseNote ?? null
     },
     warn: () => {}
   }
@@ -150,7 +160,7 @@ function setup(over: { allowed?: () => boolean; record?: boolean } = {}) {
     registerHuddleCollab(io as never, s.socket as never, () => user, scope, cd)
     return s
   }
-  return { redis, io, lines, connect }
+  return { redis, io, lines, notes, connect }
 }
 
 describe('huddle notes (#2854)', () => {
@@ -202,28 +212,96 @@ describe('huddle notes (#2854)', () => {
     expect(io.sent.filter((s) => s.event === 'huddle:note')).toEqual([])
   })
 
-  it('the end posts the duration + attendees, then the note as one message', async () => {
+  it('the end posts the note AS ITS LAST EDITOR, then the fixed end line', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-21T12:00:00Z'))
     try {
-      const { redis, lines, connect } = setup()
+      const { redis, lines, notes, connect } = setup()
       const a = connect('S1', rob)
       const b = connect('S2', amy)
       await a.fire('huddle:join', { room: 'ch:ops' })
       await b.fire('huddle:join', { room: 'ch:ops' })
+      await b.fire('huddle:note', { room: 'ch:ops', text: '  Ship Friday  ', rev: 0 })
       await b.fire('huddle:leave', { room: 'ch:ops' })
       vi.setSystemTime(new Date('2026-10-21T12:24:00Z'))
-      await a.fire('huddle:note', { room: 'ch:ops', text: '  Ship Friday  ', rev: 0 })
       await a.fire('huddle:leave', { room: 'ch:ops' })
+      // The note is people's words: it goes out as Amy (who wrote it last), Rob as fallback —
+      // never through the system line.
+      expect(notes).toEqual([
+        {
+          room: 'ch:ops',
+          editor: 'U-AMY',
+          fallback: 'U-ROB',
+          text: '**Huddle notes · 24 min · Rob Lee, Amy**\n\nShip Friday'
+        }
+      ])
       expect(lines.slice(1)).toEqual([
-        { room: 'ch:ops', text: 'Huddle ended after 24 min · Rob Lee and Amy' },
-        { room: 'ch:ops', text: '**Huddle notes · 24 min · Rob Lee, Amy**\n\nShip Friday' }
+        { room: 'ch:ops', text: 'Huddle ended after 24 min · Rob Lee and Amy' }
       ])
       expect(redis.store.has('nvr:huddle:-:ch:ops:note')).toBe(false)
       expect(redis.store.has('nvr:huddle:-:ch:ops:who')).toBe(false)
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('a room that refuses the writer keeps the note for the attendees and says why', async () => {
+    const { redis, io, lines, notes, connect } = setup({
+      refuseNote: 'only the channel owner and admins post here'
+    })
+    const a = connect('S1', rob)
+    await a.fire('huddle:join', { room: 'ch:news' })
+    await a.fire('huddle:note', { room: 'ch:news', text: 'Draft announcement', rev: 0 })
+    await a.fire('huddle:leave', { room: 'ch:news' })
+    expect(notes).toHaveLength(1)
+    expect(lines.at(-1)?.text).toBe(
+      'Huddle ended after under a minute · Rob Lee · notes were not posted: only the channel owner and admins post here'
+    )
+    expect(a.emitted.at(-1)).toEqual({
+      event: 'huddle:note:unposted',
+      payload: { room: 'ch:news', reason: 'only the channel owner and admins post here' }
+    })
+    expect(redis.store.has('nvr:huddle:-:ch:news:note')).toBe(true)
+    // Nothing of it reached the room's viewers.
+    expect(
+      io.sent.filter((s) => s.to === 'chat:ch:news' && s.event.startsWith('huddle:note'))
+    ).toEqual([])
+
+    // An attendee can fetch it back; someone who was not in the huddle cannot.
+    await a.fire('huddle:note:fetch', { room: 'ch:news' })
+    expect(a.emitted.at(-1)).toEqual({
+      event: 'huddle:note:kept',
+      payload: { room: 'ch:news', text: 'Draft announcement' }
+    })
+    const stranger = connect('S7', amy)
+    await stranger.fire('huddle:note:fetch', { room: 'ch:news' })
+    expect(stranger.emitted).toEqual([])
+  })
+
+  it('only the server moves the rev: huge, fractional and negative revs are refused', async () => {
+    const { io, connect } = setup()
+    const a = connect('S1', rob)
+    await a.fire('huddle:join', { room: 'ch:ops' })
+    for (const rev of [Number.MAX_SAFE_INTEGER, 1e300, 0.5, -1, 1]) {
+      await a.fire('huddle:note', { room: 'ch:ops', text: `rev ${rev}`, rev })
+      expect(a.emitted.at(-1)).toEqual({
+        event: 'huddle:note:denied',
+        payload: { room: 'ch:ops', reason: 'bad-rev', rev: 0 }
+      })
+    }
+    expect(io.sent.filter((s) => s.event === 'huddle:note')).toEqual([])
+    await new Promise((r) => setTimeout(r, 1010))
+
+    await a.fire('huddle:note', { room: 'ch:ops', text: 'one', rev: 0 })
+    await a.fire('huddle:note', { room: 'ch:ops', text: 'two', rev: 1 })
+    // A stale copy (rev 0 while the server is at 2) still wins — last writer — at rev 3.
+    await a.fire('huddle:note', { room: 'ch:ops', text: 'three', rev: 0 })
+    const sent = io.sent.filter((s) => s.event === 'huddle:note').map((s) => s.payload)
+    expect(sent.map((p) => [p.text, p.rev])).toEqual([
+      ['one', 1],
+      ['two', 2],
+      ['three', 3]
+    ])
   })
 
   it('an empty note posts nothing beyond the end line', async () => {

@@ -854,7 +854,8 @@ export const collabChat: DocSection = {
     {
       type: 'ul',
       items: [
-        'When the huddle ends, the room gets the end line with how long it ran and everyone who joined ("Huddle ended after 24 min · Ana, Ben and Chris"), and — if the note is not empty — the note itself as one message headed "Huddle notes · 24 min · Ana, Ben, Chris".',
+        'When the huddle ends, a note that is not empty is posted to the room as one message headed "Huddle notes · 24 min · Ana, Ben, Chris" — sent as the person who edited it last (or, if they are gone, the last person to leave), under the room’s normal posting rules. Then the room gets the end line with how long it ran and everyone who joined ("Huddle ended after 24 min · Ana, Ben and Chris").',
+        'If that person may not post in the room (an announcement channel, for example), the notes are not posted: the end line says why, and the last person to leave gets a **Copy notes** offer. The notes stay available to the people who were in the huddle for about two minutes.',
         'A note holds up to 20 KB. It lives only as long as the huddle; if every browser drops out without leaving, it is gone with the huddle.',
         'Only people in the huddle receive the note, and the server checks on every change that you can still see the room.'
       ]

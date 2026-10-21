@@ -111,7 +111,38 @@ export class HuddleNoteStore extends Emitter<NoteState> {
   reset(room: string | null) {
     if (this.state.room === room) return
     this.cancel()
+    // The huddle I just left: its note stays at hand in case the room refuses to post it.
+    if (this.state.room && this.state.text.trim()) {
+      this.ended = { room: this.state.room, text: this.state.text }
+    }
     this.set({ ...NOTE_IDLE, room })
+  }
+
+  /** The last note of a huddle I left (null when there was none). */
+  private ended: { room: string; text: string } | null = null
+  private unpostedListeners = new Set<(p: { room: string; reason: string }) => void>()
+
+  endedNote(room: string): string | null {
+    return this.ended?.room === room ? this.ended.text : null
+  }
+
+  /** The end could not post the notes (the room refused their writer): tell the UI. */
+  onUnpostedNote(cb: (p: { room: string; reason: string }) => void) {
+    this.unpostedListeners.add(cb)
+    return () => {
+      this.unpostedListeners.delete(cb)
+    }
+  }
+
+  onUnposted(p: { room: string; reason: string }) {
+    if (!p?.room) return
+    // No copy here (another tab wrote it): the server keeps it for the attendees a while.
+    if (!this.endedNote(p.room)) this.t()?.emit('huddle:note:fetch', { room: p.room })
+    for (const l of this.unpostedListeners) l(p)
+  }
+
+  onKept(p: { room: string; text: string }) {
+    if (p?.room && typeof p.text === 'string') this.ended = { room: p.room, text: p.text }
   }
 
   setOpen(open: boolean) {
@@ -165,9 +196,14 @@ export class HuddleNoteStore extends Emitter<NoteState> {
     })
   }
 
-  onDenied(p: { room: string; reason: string }) {
+  onDenied(p: { room: string; reason: string; rev?: number }) {
     if (!p || p.room !== this.state.room) return
-    if (p.reason === 'rate') {
+    if (p.reason === 'bad-rev') {
+      // The server's rev is the only one: take it and send my text again on top of it.
+      if (Number.isSafeInteger(p.rev)) this.set({ rev: p.rev as number, pending: true })
+      this.cancel()
+      this.timer = setTimeout(() => this.flush(), NOTE_DEBOUNCE_MS)
+    } else if (p.reason === 'rate') {
       // Too many edits at once: try again in a moment with whatever is newest.
       this.set({ pending: true })
       this.cancel()
@@ -600,7 +636,13 @@ export function attachHuddleCollab(t: HuddleTransport | null) {
   lastKey = null
   offs = [
     t.on('huddle:note', (p: NoteIn) => huddleNotes.onNote(p)),
-    t.on('huddle:note:denied', (p: { room: string; reason: string }) => huddleNotes.onDenied(p)),
+    t.on('huddle:note:denied', (p: { room: string; reason: string; rev?: number }) =>
+      huddleNotes.onDenied(p)
+    ),
+    t.on('huddle:note:unposted', (p: { room: string; reason: string }) =>
+      huddleNotes.onUnposted(p)
+    ),
+    t.on('huddle:note:kept', (p: { room: string; text: string }) => huddleNotes.onKept(p)),
     t.on('huddle:follow', (p: FollowIn) => huddleFollow.onFollow(p)),
     t.on('huddle:follow:denied', (p: { room: string; reason: string; presenter?: FollowPerson }) =>
       huddleFollow.onDenied(p)

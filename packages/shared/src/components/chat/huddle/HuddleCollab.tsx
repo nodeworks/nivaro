@@ -2,6 +2,7 @@ import { NotebookPen, Presentation, X } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
+import { toast } from 'sonner'
 import { defaultItemUrl, useNavigation } from '../../../context'
 import { useOptionalRealtime } from '../../../lib/realtime'
 import { cn } from '../../../lib/utils'
@@ -304,6 +305,27 @@ export function HuddleFollowHost() {
     return release
   }, [])
   useEffect(() => attachHuddleCollab(realtime), [realtime])
+  // #2854 — the room refused the notes' writer: offer a copy instead of losing them.
+  useEffect(() => {
+    if (!primary) return
+    return huddleNotes.onUnpostedNote(({ room, reason }) => {
+      toast.warning('Huddle notes were not posted', {
+        description: `${reason[0]?.toUpperCase() ?? ''}${reason.slice(1)}. Copy them before they expire.`,
+        duration: 30_000,
+        action: {
+          label: 'Copy notes',
+          onClick: () => {
+            const text = huddleNotes.endedNote(room)
+            if (!text) return void toast.error('The notes are no longer available.')
+            void navigator.clipboard
+              ?.writeText(text)
+              .then(() => toast.success('Notes copied'))
+              .catch(() => toast.error('Could not copy the notes.'))
+          }
+        }
+      })
+    })
+  }, [primary])
   // Latest navigation, read at the moment the store navigates.
   const navRef = useRef(nav)
   navRef.current = nav
