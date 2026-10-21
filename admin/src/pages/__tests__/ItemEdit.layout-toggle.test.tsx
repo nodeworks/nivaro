@@ -64,8 +64,11 @@ vi.mock('@nivaro/shared', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@nivaro/shared')>()
   return {
     ...actual,
-    ItemEditForm: (p: { layoutEditing?: boolean }) => (
-      <div data-testid='item-form' data-layout-editing={String(!!p.layoutEditing)} />
+    // The More menu's host rows (Edit layout) render as the form would put them.
+    ItemEditForm: (p: { layoutEditing?: boolean; moreMenuItems?: React.ReactNode }) => (
+      <div data-testid='item-form' data-layout-editing={String(!!p.layoutEditing)}>
+        <div data-testid='more-menu'>{p.moreMenuItems}</div>
+      </div>
     )
   }
 })
@@ -213,7 +216,7 @@ describe('record page Edit layout toggle', () => {
     state.user = { id: 'u1', is_admin: true }
     state.noLayout = true
     renderWith(<ItemEditPage />, HostProvider)
-    const link = await screen.findByRole('link', { name: /edit layout/i })
+    const link = await screen.findByRole('link', { name: /create the first form/i })
     expect(link.getAttribute('href')).toBe('/data-model/orders?tab=groups')
     expect(state.chunkLoads).toBe(0)
   })
@@ -229,13 +232,16 @@ describe('record page Edit layout toggle', () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50))
     })
-    expect(screen.queryByRole('link', { name: /edit layout/i })).toBeNull()
+    expect(screen.queryByRole('link', { name: /create the first form/i })).toBeNull()
   })
 
   it('shows Edit layout for admins', async () => {
     state.user = { id: 'u1', is_admin: true }
     renderWith(<ItemEditPage />, HostProvider)
     const toggle = await screen.findByRole('button', { name: /edit layout/i })
+    // A More-menu row, not a header button.
+    expect(toggle.closest('[data-testid="more-menu"]')).not.toBeNull()
+    expect(toggle.hasAttribute('data-nvr-menu-close')).toBe(true)
     expect(screen.queryByTestId('record-layout-editor')).toBeNull()
 
     fireEvent.click(toggle)

@@ -558,6 +558,9 @@ export interface ItemEditFormProps {
    *  admin's ItemEdit page renders its own copies in the page header;
    *  headless hosts opt in. */
   showGrantedTools?: boolean
+  /** Extra rows for the record's More menu, above Delete (e.g. a host's Edit layout).
+   *  Rows that open something outside the menu set `data-nvr-menu-close`. */
+  moreMenuItems?: ReactNode
   /** Scroll to + flash a field on load (deep links: ?focus=<field>). */
   focusField?: string | null
   /**
@@ -1265,6 +1268,7 @@ function ItemEditFormView({
   focusField,
   showItemActions = false,
   showGrantedTools = false,
+  moreMenuItems,
   onDirtyChange,
   documentTitle = true,
   registerSaveHandler,
@@ -10267,6 +10271,7 @@ function ItemEditFormView({
                                                 )}
                                               </>
                                             )}
+                                            {moreMenuItems}
                                             {canDelete && <div data-nvr-menu-divider />}
                                             {canDelete &&
                                               (confirmDelete ? (

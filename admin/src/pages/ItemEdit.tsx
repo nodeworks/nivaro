@@ -1068,45 +1068,6 @@ export function ItemEditPage() {
                         <History className='h-3.5 w-3.5' />
                       </Button>
                     )}
-                    {editableLayoutId != null && (
-                      <Button
-                        variant='outline'
-                        size='sm'
-                        onClick={() => setEditingLayoutId(editableLayoutId)}
-                        data-tip='Edit the layout this record opens with'
-                        className='rounded-none -ml-px first:ml-0'
-                      >
-                        <LayoutTemplate className='mr-1.5 h-3.5 w-3.5' />
-                        Edit layout
-                      </Button>
-                    )}
-                    {/* /active answers 404 both for a collection with no layout and for a
-                        ?layout= slug that names none: only the first is "create the first form". */}
-                    {user?.is_admin && activeLayoutData && !activeLayoutData.layout && (
-                      <Button
-                        asChild
-                        variant='outline'
-                        size='sm'
-                        className='rounded-none -ml-px first:ml-0'
-                      >
-                        <Link
-                          to={`/data-model/${collection}?tab=groups`}
-                          data-tip={
-                            layoutSlug
-                              ? "This link names a form that doesn't exist — see this collection's forms"
-                              : 'No layout yet — create the first form'
-                          }
-                          aria-label={
-                            layoutSlug
-                              ? "This link names a form that doesn't exist. See this collection's forms"
-                              : undefined
-                          }
-                        >
-                          <LayoutTemplate className='mr-1.5 h-3.5 w-3.5' />
-                          {layoutSlug ? 'Form not found' : 'Edit layout'}
-                        </Link>
-                      </Button>
-                    )}
                     {id && !isNew && collection && (
                       <ShareLinkPopover
                         collection={collection}
@@ -1188,6 +1149,39 @@ export function ItemEditPage() {
               <ItemEditForm
                 collection={collection!}
                 itemId={isNew ? undefined : id}
+                moreMenuItems={
+                  editableLayoutId != null ? (
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      className='gap-1.5'
+                      data-nvr-menu-close
+                      data-tip='Edit the layout this record opens with'
+                      onClick={() => setEditingLayoutId(editableLayoutId)}
+                    >
+                      <LayoutTemplate className='h-3.5 w-3.5' />
+                      Edit layout
+                    </Button>
+                  ) : user?.is_admin && activeLayoutData && !activeLayoutData.layout ? (
+                    // /active answers 404 both for a collection with no layout and for a
+                    // ?layout= slug that names none: only the first is "create the first form".
+                    <Button asChild variant='outline' size='sm' className='gap-1.5'>
+                      <Link
+                        to={`/data-model/${collection}?tab=groups`}
+                        data-nvr-menu-close
+                        data-tip={
+                          layoutSlug
+                            ? "This link names a form that doesn't exist — see this collection's forms"
+                            : 'No layout yet — create the first form'
+                        }
+                      >
+                        <LayoutTemplate className='h-3.5 w-3.5' />
+                        {layoutSlug ? 'Form not found' : 'Create the first form'}
+                      </Link>
+                    </Button>
+                  ) : null
+                }
                 layoutSlug={layoutSlug}
                 initialAddendumViewId={addendumParam}
                 autofillProposalId={isNew ? autofillParam : undefined}
