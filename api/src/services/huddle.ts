@@ -15,7 +15,7 @@ import {
   touchCollab
 } from './huddle-collab.js'
 import { LIVE_ROOM, pokeHuddleLive, registerHuddleLive } from './huddle-live.js'
-import { registerHuddleMarks } from './huddle-marks.js'
+import { invalidateHuddleMarks, registerHuddleMarks } from './huddle-marks.js'
 import { markHuddling, unmarkHuddling } from './huddle-presence.js'
 import {
   answerRing,
@@ -212,7 +212,10 @@ export async function huddlePeers(
       stale.push({ socket, user: '' })
     }
   }
-  if (stale.length) staleEvictor?.(tenant, room, stale)
+  if (stale.length) {
+    staleEvictor?.(tenant, room, stale)
+    invalidateHuddleMarks(tenant, room) // #2856 — pruned browsers stop getting marks now
+  }
   return out
 }
 
@@ -616,6 +619,8 @@ export function registerHuddle(
       }
       await deps.redis.zrem(k.set, socket.id)
       await deps.redis.hdel(k.meta, socket.id)
+      // #2856 — nobody's cached recipient list may name this socket any more.
+      invalidateHuddleMarks(tenant, room)
       if (user) {
         await unmarkHuddling(deps.redis, tenant, user.id, room).catch(() => undefined)
         // Leaving while people are still ringing hangs up on them.
@@ -835,6 +840,7 @@ export function registerHuddle(
   // #2856 — point and draw on the SFU, where there is no mesh data channel (huddle-marks.ts).
   registerHuddleMarks(io, socket, getUser, {
     room: () => data()?.room,
+    tenant: () => scope.tenantNow(),
     stillAllowed,
     peers: peersOf,
     warn: deps.warn

@@ -118,6 +118,20 @@ export function contentRect(
   return { x: (boxW - w) / 2, y: (boxH - h) / 2, w, h }
 }
 
+/** Points one socket message may carry (twin: api huddle-marks.ts MARK_MAX_POINTS). */
+export const SOCKET_MAX_POINTS = 64
+const SLOW_PAUSE_MS = 2000
+
+/** A stroke longer than one socket message allows → several, same stroke id, offset `k`. */
+export function splitForSocket(msg: DrawMsg): DrawMsg[] {
+  if (msg.t !== 'st' || msg.p.length <= SOCKET_MAX_POINTS * 2) return [msg]
+  const out: DrawMsg[] = []
+  for (let i = 0; i < msg.p.length; i += SOCKET_MAX_POINTS * 2) {
+    out.push({ ...msg, k: msg.k + i / 2, p: msg.p.slice(i, i + SOCKET_MAX_POINTS * 2) })
+  }
+  return out
+}
+
 type Listener = () => void
 
 export interface DrawSnapshot {
@@ -241,7 +255,10 @@ class DrawStore {
     this.apply(self, msg)
     // #2859: on the SFU the marks ride the socket; the server relays them to the roster.
     if (snap.mode === 'sfu') {
-      huddleStore.send('huddle:mark', { ...msg, c: chatAvatarColorIndex(this.myUser() || self) })
+      // The server told us to slow down: pointer moves are the ones to skip for a moment.
+      if (msg.t === 'pt' && Date.now() < this.slowUntil) return
+      const c = chatAvatarColorIndex(this.myUser() || self)
+      for (const part of splitForSocket(msg)) huddleStore.send('huddle:mark', { ...part, c })
       return
     }
     const wire = JSON.stringify(msg)
@@ -254,6 +271,9 @@ class DrawStore {
       }
     }
   }
+
+  /** After a `huddle:mark:slow` from the server, pointer moves pause until then. */
+  private slowUntil = 0
 
   nextStrokeId(): string {
     this.seq += 1
@@ -305,6 +325,9 @@ class DrawStore {
   readonly ext: HuddleExtension = {
     attach: (transport) => [
       transport.on('huddle:mark', (p) => this.onSocketMark(p)),
+      transport.on('huddle:mark:slow', (p: { room?: string } | null) => {
+        if (p?.room === huddleStore.getSnapshot().room) this.slowUntil = Date.now() + SLOW_PAUSE_MS
+      }),
       huddleStore.subscribeRosters(() => this.dropGone())
     ],
     link: (socket, pc) => {
