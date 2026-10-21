@@ -5,6 +5,9 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { channels, parseRoom } from '../services/chat.js'
 import { loadChatAnalytics } from '../services/chat-analytics.js'
+import { type HuddleRedis, huddlePeers } from '../services/huddle.js'
+import { loadHuddleAnalytics, type SessionRedis } from '../services/huddle-sessions.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { userTimeZone } from '../services/user-time.js'
 
 /**
@@ -80,6 +83,19 @@ export async function chatAdminRoutes(app: FastifyInstance) {
     const days = Math.min(Math.max(Number((req.query as { days?: string }).days) || 30, 1), 365)
     const tz = await userTimeZone(req.user ?? null)
     return { data: await loadChatAnalytics(days, tz) }
+  })
+
+  // #2849 — huddle sessions: counts and timings, never who talked to whom.
+  app.get('/huddles', async (req) => {
+    const days = Math.min(Math.max(Number((req.query as { days?: string }).days) || 30, 1), 365)
+    const tz = await userTimeZone(req.user ?? null)
+    const redis = app.redis as unknown as HuddleRedis & SessionRedis
+    const tenant = currentTenantKey() || null
+    return {
+      data: await loadHuddleAnalytics(redis, tenant, days, tz, (room) =>
+        huddlePeers(redis, tenant, room)
+      )
+    }
   })
 
   /** Room → kind + human label + participants, for a batch of rooms. */
@@ -411,7 +427,12 @@ export async function chatAdminRoutes(app: FastifyInstance) {
     }
     const actorIds = [
       ...new Set(
-        [...history.map((h) => h.user), ...versions.map((v) => v.changed_by), ...views.slice(-1).map((v) => v.user), msg.masquerade_admin]
+        [
+          ...history.map((h) => h.user),
+          ...versions.map((v) => v.changed_by),
+          ...views.slice(-1).map((v) => v.user),
+          msg.masquerade_admin
+        ]
           .filter(Boolean)
           .map((x) => String(x))
       )

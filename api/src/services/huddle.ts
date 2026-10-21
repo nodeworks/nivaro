@@ -2,6 +2,13 @@ import type { FastifyInstance } from 'fastify'
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
+import { LIVE_ROOM, pokeHuddleLive, registerHuddleLive } from './huddle-live.js'
+import {
+  clampQuality,
+  defaultSessionRecorder,
+  type HuddleSessionRecorder,
+  type SessionRedis
+} from './huddle-sessions.js'
 import { getHuddleSettings } from './huddle-settings.js'
 import { inSocketTenant } from './socket-tenant.js'
 
@@ -127,6 +134,10 @@ export interface HuddleDeps {
   /** Post a platform line in the room (chat-send.ts). */
   postLine(room: string, text: string): Promise<void>
   warn(obj: Record<string, unknown>, msg: string): void
+  /** #2849 — per-session tallies written to the admin analytics when a huddle ends. */
+  sessions?: HuddleSessionRecorder
+  /** #2851 — tell everyone watching for live huddles that the set of rooms or counts changed. */
+  livePoke?(io: Pick<Server, 'to'>, room: string): void
 }
 
 export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
@@ -142,7 +153,9 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
         { room, message: text }
       )
     },
-    warn: (obj, msg) => app.log.warn(obj, msg)
+    warn: (obj, msg) => app.log.warn(obj, msg),
+    sessions: defaultSessionRecorder(app.redis as unknown as SessionRedis),
+    livePoke: pokeHuddleLive
   }
 }
 
@@ -181,6 +194,18 @@ export function registerHuddle(
     socket.emit('huddle:denied', { room: typeof room === 'string' ? room : null, reason })
   }
 
+  /** The newest quality write, so a leave right behind it tallies the report first. */
+  let qualityWrite: Promise<unknown> = Promise.resolve()
+
+  /** Session tallies are best-effort: a Redis hiccup never breaks the call. */
+  async function record(fn: () => Promise<unknown> | undefined, room: string): Promise<void> {
+    try {
+      await fn()
+    } catch (err) {
+      deps.warn({ err, room }, 'huddle session tally failed')
+    }
+  }
+
   async function broadcast(room: string) {
     const tenant = scope.tenantNow()
     const peers = await huddlePeers(deps.redis, tenant, room)
@@ -190,6 +215,8 @@ export function registerHuddle(
     // People in the huddle with the room closed still need the list.
     const h = scope.scopedRoomNow(`huddle:${room}`)
     if (h) io.to(h).emit('huddle:peers', payload)
+    const watchers = scope.scopedRoomNow(LIVE_ROOM)
+    if (watchers) deps.livePoke?.(io, watchers)
     return peers
   }
 
@@ -229,6 +256,10 @@ export function registerHuddle(
         peers: peers.filter((p) => p.socket !== socket.id)
       })
       await broadcast(r)
+      await record(
+        () => deps.sessions?.joined(tenant, r, String(user.id), peers.length + (already ? 0 : 1)),
+        r
+      )
       if (first) await deps.postLine(r, `${nameOf(user) ?? 'Someone'} started a huddle`)
     } catch (err) {
       deps.warn({ err, room: r }, 'huddle:join failed')
@@ -237,6 +268,7 @@ export function registerHuddle(
   }
 
   async function leave(room: string) {
+    await qualityWrite
     const tenant = scope.tenantNow()
     const k = keys(tenant, room)
     try {
@@ -250,6 +282,7 @@ export function registerHuddle(
         const start = await deps.redis.get(k.start)
         await deps.redis.del(k.start, k.meta, k.set)
         const ms = start ? Date.now() - Number(start) : 0
+        await record(() => deps.sessions?.end(tenant, room), room)
         await deps.postLine(room, `Huddle ended after ${formatHuddleDuration(ms)}`)
       }
     } catch (err) {
@@ -330,6 +363,7 @@ export function registerHuddle(
           }
           await deps.redis.hset(k.meta, socket.id, JSON.stringify(next))
           await touch(deps.redis, tenant, room, socket.id)
+          if (next.screen) await record(() => deps.sessions?.screenShared(tenant, room), room)
           await broadcast(room)
         } catch (err) {
           deps.warn({ err, room }, 'huddle:state failed')
@@ -357,6 +391,37 @@ export function registerHuddle(
       }
     })
   )
+
+  // #2849 — a leaving browser reports how its calls went (clamped; counts only, no media).
+  // Acked so the client can send it just before huddle:leave and be sure it landed first.
+  socket.on(
+    'huddle:quality',
+    inSocketTenant(
+      socket,
+      async (payload: { room?: unknown } & Record<string, unknown>, ack?: (r: unknown) => void) => {
+        const done = (): void => {
+          if (typeof ack === 'function') ack({ ok: true })
+        }
+        const room = payload?.room
+        const q = clampQuality(payload)
+        if (typeof room !== 'string' || data()?.room !== room || !q || !getUser()) {
+          done()
+          return
+        }
+        qualityWrite = record(() => deps.sessions?.quality(scope.tenantNow(), room, q), room)
+        await qualityWrite
+        done()
+      }
+    )
+  )
+
+  // #2851 — live huddle badges (watch/poke/snapshot live in huddle-live.ts).
+  registerHuddleLive(socket, getUser, scope, {
+    peers: (room) => huddlePeers(deps.redis, scope.tenantNow(), room),
+    sessions: deps.sessions,
+    canSeeRoom: deps.canSeeRoom,
+    warn: deps.warn
+  })
 
   socket.on(
     'disconnect',

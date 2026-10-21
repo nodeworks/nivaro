@@ -16,6 +16,8 @@ import { get, post } from '../../lib/commands'
 import { userCardQuery } from '../../lib/user-cards'
 import { cn } from '../../lib/utils'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
+import { HuddlePresenceLine } from '../chat/huddle/HuddleLiveBadge'
+import { useHuddleLive } from '../chat/huddle/huddle-live'
 import { MailSuppressedPill } from '../profile/MailSuppressedPill'
 import { useCardPresence } from '../profile/usePersonPresence'
 import { UserAvatar } from '../UserAvatar'
@@ -371,6 +373,8 @@ function UserCardPopover({
   const { isAdmin } = useItemEditAuth()
   // #1982 — active, idle or away and the page they are on, under the Online list's rules.
   const live = useCardPresence(userId, open)
+  // #2851 — only when the viewer can see that room (the server filters the list).
+  const inHuddle = useHuddleLive().roomOf(userId)
   const managerName = user?.manager_name?.trim() || null
   // Local-time chip (#175): "6:12 PM for Jane" — only when their timezone pref
   // is set AND differs from the viewer's, so same-office teams see no noise.
@@ -465,6 +469,7 @@ function UserCardPopover({
               {live.page ? ` · on ${live.page}` : ''}
             </p>
           )}
+          <HuddlePresenceLine label={inHuddle?.label ?? null} className='mt-0.5' />
           {localTime && (
             <p className='mt-0.5 text-[11px] text-slate-500 dark:text-slate-400'>
               Local time: {localTime}

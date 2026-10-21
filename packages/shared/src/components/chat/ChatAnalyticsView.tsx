@@ -16,6 +16,7 @@ import { cn, formatDateTime, formatRelative } from '../../lib/utils'
 import { TipLayer } from '../TipLayer'
 import { ChannelsAdminTab } from './ChannelArchive'
 import { useUserSearch } from './chat-core'
+import { HuddleAnalyticsTab } from './HuddleAnalyticsTab'
 
 /**
  * Chat analytics (#955) for administrators, in two parts.
@@ -1257,7 +1258,7 @@ function MessageDetailPanel({
 }
 
 export function ChatAnalyticsView() {
-  const [tab, setTab] = useState<'overview' | 'messages' | 'channels'>('overview')
+  const [tab, setTab] = useState<'overview' | 'messages' | 'channels' | 'huddles'>('overview')
   const [room, setRoom] = useState<{ room: string; label: string } | null>(null)
   return (
     <div className='space-y-4' data-chat-analytics>
@@ -1267,7 +1268,8 @@ export function ChatAnalyticsView() {
           [
             ['overview', 'Overview'],
             ['messages', 'Messages'],
-            ['channels', 'Channels']
+            ['channels', 'Channels'],
+            ['huddles', 'Huddles']
           ] as const
         ).map(([k, l]) => (
           <button
@@ -1297,6 +1299,8 @@ export function ChatAnalyticsView() {
         />
       ) : tab === 'channels' ? (
         <ChannelsAdminTab />
+      ) : tab === 'huddles' ? (
+        <HuddleAnalyticsTab />
       ) : (
         <Messages room={room} onRoomChange={setRoom} />
       )}

@@ -5,6 +5,8 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { canOpenChatRoom, openChatRoom, useRecordRoomTypes } from '../chat/chat-core'
+import { HuddleLiveBadge } from '../chat/huddle/HuddleLiveBadge'
+import { useHuddleLive } from '../chat/huddle/huddle-live'
 import { SimpleSelect } from '../ui/SimpleSelect'
 
 /**
@@ -64,6 +66,10 @@ export function RecordChatActions({
     refetchInterval: 60_000
   })
   const unread = roomState?.unread ?? 0
+  const huddleLive = useHuddleLive()
+  const huddleCount =
+    huddleLive.countFor(roomState?.room) ||
+    huddleLive.countFor(type && token ? `${type.prefix}:${token}` : null)
 
   const { data: rooms } = useQuery({
     queryKey: ['nvr-chat-share-rooms'],
@@ -154,6 +160,11 @@ export function RecordChatActions({
         >
           <MessageSquare className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} strokeWidth={2} />
           {!compact && 'Chat'}
+          {/* #2851 — a huddle is running in this record's room. */}
+          <HuddleLiveBadge
+            count={huddleCount}
+            className={compact ? 'absolute -bottom-0.5 -right-0.5 bg-card px-1 py-0' : undefined}
+          />
           {unread > 0 &&
             (compact ? (
               <span className='absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold leading-none text-white'>

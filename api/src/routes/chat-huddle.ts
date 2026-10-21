@@ -3,6 +3,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { canSeeRoom } from '../services/chat.js'
 import { type HuddleRedis, huddlePeers, huddleRoomKind } from '../services/huddle.js'
+import { defaultSessionStore, type SessionRedis } from '../services/huddle-sessions.js'
 import {
   getHuddleSettings,
   iceServersFor,
@@ -10,6 +11,11 @@ import {
   maskHuddleSettings,
   saveHuddleSettings
 } from '../services/huddle-settings.js'
+import {
+  huddleProbeStatus,
+  type ProbeRedis,
+  runHuddleProbe
+} from '../services/huddle-turn-monitor.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 
 /**
@@ -18,6 +24,7 @@ import { currentTenantKey } from '../services/tenant-rooms.js'
  *                        for a huddle-capable room the person can see, and nothing while off
  *   GET  /presence?room= who is in the room's huddle (canSeeRoom-gated, like every room read)
  *   GET  /settings       admin: this instance's STUN/TURN settings, secrets masked
+ *   GET  /settings/turn-health, POST /settings/turn-health/run  admin: the TURN probe (#2850)
  *   PATCH /settings      admin: save; a masked secret re-submitted keeps the stored value
  *   GET  /settings/test-ice  admin: the SAVED servers with a two-minute TURN credential, for
  *                        the Settings → Huddles connection test (works while huddles are off)
@@ -49,6 +56,30 @@ export async function chatHuddleRoutes(app: FastifyInstance) {
     const saved = await getHuddleSettings()
     const iceServers = iceServersFrom({ ...saved, turn_ttl_s: 120 }, String(req.user!.id))
     return reply.send({ data: { iceServers } })
+  })
+
+  // #2850 — the TURN probe's health strip: last result, a day of history, credential facts.
+  app.get('/settings/turn-health', { preHandler: requireAdmin }, async (_req, reply) => {
+    const status = await huddleProbeStatus(app.redis as unknown as ProbeRedis)
+    let longest = 0
+    try {
+      const redis = app.redis as unknown as HuddleRedis & SessionRedis
+      const rows = await defaultSessionStore(redis).read(
+        currentTenantKey() || null,
+        new Date(Date.now() - 30 * 24 * 3600_000)
+      )
+      longest = Math.round(Math.max(0, ...rows.map((r) => r.duration_s)) / 60)
+    } catch {
+      /* no history yet */
+    }
+    return reply.send({ data: { ...status, longest_huddle_minutes: longest } })
+  })
+
+  app.post('/settings/turn-health/run', { preHandler: requireAdmin }, async (_req, reply) => {
+    const r = await runHuddleProbe({ redis: app.redis as unknown as ProbeRedis })
+    return reply.send({
+      data: r.skipped ? { skipped: true } : { skipped: false, sample: r.sample }
+    })
   })
 
   app.patch('/settings', { preHandler: requireAdmin }, async (req, reply) => {

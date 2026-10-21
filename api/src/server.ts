@@ -2133,6 +2133,12 @@ export async function buildServer() {
         registerAiQualityCrons(app)
       }
 
+      // Huddle TURN probe + session sweep/prune (#2849, #2850).
+      {
+        const { registerHuddleCrons } = await import('./services/huddle-crons.js')
+        registerHuddleCrons(app)
+      }
+
       // Tasks (#1007, #1016): due-tomorrow reminders + overdue escalation
       // once a day, the self-closing check every hour, and a daily-summary
       // section of what is due or overdue.
