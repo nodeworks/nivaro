@@ -73,7 +73,7 @@ the scraper adds `instance` or `job` labels.
 |---|---|---|
 | `NIVARO_HOST_NAME` | `hostname -s` | The `host` label. Use the name from `DOCKER_HOSTS`. |
 | `TEXTFILE_DIR` | `/var/lib/node_exporter/textfile` | Where `nivaro_host.prom` is written. |
-| `HOST_FACTS_STATE_DIR` | `/var/lib/nivaro-host-facts` | Cache for the slow probes. |
+| `HOST_FACTS_STATE_DIR` | `/var/lib/nivaro-host-facts` | Cache for the slow probes. Created with mode 0700; the script refuses to run when it is a symlink or owned by another user. |
 | `HOST_FACTS_HEAVY_SECONDS` | `1800` | How often the slow probes run (security updates, needs-restarting, volume scan). |
 | `DOCKER_ROOT` | `/var/lib/docker` | Docker data root. |
 

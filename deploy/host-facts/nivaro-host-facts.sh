@@ -41,6 +41,27 @@ if [ -z "$HOST" ]; then
   fi
 fi
 
+# The state dir holds root's cache: create it private, and refuse one that is a symlink or that
+# someone else owns (another user could otherwise point root's writes at any file). Nothing is
+# written to a shared temp folder; the few files written are mktemp'd in their final folder.
+TMP_FILES=""
+cleanup() {
+  # shellcheck disable=SC2086
+  [ -n "$TMP_FILES" ] && rm -f $TMP_FILES
+}
+trap cleanup EXIT
+if [ ! -e "$STATE_DIR" ] && [ ! -L "$STATE_DIR" ]; then
+  (umask 077 && mkdir -p "$STATE_DIR") || {
+    echo "nivaro-host-facts: cannot create $STATE_DIR" >&2
+    exit 1
+  }
+fi
+if [ -L "$STATE_DIR" ] || [ ! -d "$STATE_DIR" ] || [ ! -O "$STATE_DIR" ]; then
+  echo "nivaro-host-facts: refusing $STATE_DIR (a symlink, not a directory, or not owned by this user)" >&2
+  exit 1
+fi
+chmod 0700 "$STATE_DIR" 2>/dev/null
+
 # fx KEY [-t SECONDS] CMD ARGS... — run a command, or in fixture mode print cmd/KEY.
 # Returns 127 when the command (or fixture) is missing.
 fx() {
@@ -165,16 +186,16 @@ if [ -n "${dmesg_out:-}" ]; then
 else
   nfs_state=""
 fi
-printf '%s\n%s\n' "$nfs_servers" "$(printf '%s\n' "$nfs_state" | awk 'NF { print $1 }')" |
-  awk 'NF && !seen[$1]++' | sort >"${TMPDIR:-/tmp}/nhf.$$.servers"
 while read -r srv; do
   [ -n "$srv" ] || continue
   v=$(printf '%s\n' "$nfs_state" | awk -v s="$srv" '$1 == s { print $2 }')
   metric nivaro_host_nfs_not_responding gauge \
     'NFS server the kernel last reported as not responding (1) or answering (0).' \
     "$H,server=\"$(esc "$srv")\"" "${v:-0}"
-done <"${TMPDIR:-/tmp}/nhf.$$.servers"
-rm -f "${TMPDIR:-/tmp}/nhf.$$.servers"
+done < <(
+  printf '%s\n%s\n' "$nfs_servers" "$(printf '%s\n' "$nfs_state" | awk 'NF { print $1 }')" |
+    awk 'NF && !seen[$1]++' | sort
+)
 
 # ── Remote mounts in /etc/fstab: nofail, and whether docker waits for them ────
 remote_mounts=$(awk '
@@ -204,26 +225,19 @@ while read -r mp fstype nofail; do
       'docker.service waits for this mount at boot (RequiresMountsFor or remote-fs.target).' \
       "$H,mountpoint=\"$(esc "$mp")\"" "$waits"
   fi
-done <<EOF
-$remote_mounts
-EOF
+done < <(printf '%s\n' "$remote_mounts")
 
 # ── Containers: json-file log size ────────────────────────────────────────────
 if ids=$(fx docker_ps docker ps -aq 2>/dev/null) && [ -n "$ids" ]; then
   # shellcheck disable=SC2086
-  fx docker_inspect docker inspect -f '{{.Name}} {{.LogPath}}' $ids 2>/dev/null |
-    while read -r name path; do
-      [ -n "$name" ] && [ -n "$path" ] || continue
-      size=$(file_size "$ROOT$path")
-      [ -n "$size" ] || continue
-      printf '%s %s\n' "${name#/}" "$size"
-    done >"${TMPDIR:-/tmp}/nhf.$$.logs"
-  while read -r name size; do
+  while read -r name path; do
+    [ -n "$name" ] && [ -n "$path" ] || continue
+    size=$(file_size "$ROOT$path")
+    [ -n "$size" ] || continue
     metric nivaro_host_container_log_bytes gauge \
       'Size of the container log file Docker keeps on this host.' \
-      "$H,container=\"$(esc "$name")\"" "$size"
-  done <"${TMPDIR:-/tmp}/nhf.$$.logs"
-  rm -f "${TMPDIR:-/tmp}/nhf.$$.logs"
+      "$H,container=\"$(esc "${name#/}")\"" "$size"
+  done < <(fx docker_inspect docker inspect -f '{{.Name}} {{.LogPath}}' $ids 2>/dev/null)
 fi
 
 # ── Swarm node certificate ────────────────────────────────────────────────────
@@ -298,12 +312,12 @@ heavy() {
   printf '%s' "$out"
 }
 
-mkdir -p "$STATE_DIR" 2>/dev/null
 stamp=$(cat "$STATE_DIR/heavy.stamp" 2>/dev/null || echo 0)
 case "$stamp" in '' | *[!0-9]*) stamp=0 ;; esac
 if [ $((NOW - stamp)) -ge "$HEAVY_EVERY" ] || [ ! -f "$STATE_DIR/heavy.prom" ]; then
-  if heavy >"$STATE_DIR/heavy.prom.tmp" 2>/dev/null; then
-    mv -f "$STATE_DIR/heavy.prom.tmp" "$STATE_DIR/heavy.prom"
+  htmp=$(mktemp "$STATE_DIR/heavy.prom.XXXXXX") && TMP_FILES="$TMP_FILES $htmp"
+  if [ -n "${htmp:-}" ] && heavy >"$htmp" 2>/dev/null; then
+    mv -f "$htmp" "$STATE_DIR/heavy.prom"
     printf '%s\n' "$NOW" >"$STATE_DIR/heavy.stamp"
   fi
 fi
@@ -313,11 +327,11 @@ metric nivaro_host_facts_last_run_seconds gauge \
 
 # ── Write atomically ─────────────────────────────────────────────────────────
 mkdir -p "$TEXTFILE_DIR" || exit 1
-tmp="$TEXTFILE_DIR/.nivaro_host.prom.$$"
+# mktemp in the textfile dir itself: same filesystem, so the mv is atomic.
+out_tmp=$(mktemp "$TEXTFILE_DIR/.nivaro_host.prom.XXXXXX") || exit 1
+TMP_FILES="$TMP_FILES $out_tmp"
 {
   printf '%s' "$OUT"
   cat "$STATE_DIR/heavy.prom" 2>/dev/null
-} >"$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$TEXTFILE_DIR/nivaro_host.prom"
-status=$?
-rm -f "$tmp"
-exit "$status"
+} >"$out_tmp" && chmod 0644 "$out_tmp" && mv -f "$out_tmp" "$TEXTFILE_DIR/nivaro_host.prom"
+exit $?

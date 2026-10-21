@@ -1,5 +1,16 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -142,6 +153,40 @@ const one = (s: ReturnType<typeof samples>, name: string, where: Record<string, 
 describe('nivaro-host-facts.sh', () => {
   it('parses (bash -n)', () => {
     expect(() => execFileSync('bash', ['-n', SCRIPT])).not.toThrow()
+  })
+
+  it('never uses a predictable temp path (it runs as root)', () => {
+    const code = readFileSync(SCRIPT, 'utf8')
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('#'))
+      .join('\n')
+    expect(code).not.toMatch(/\/tmp\b/)
+    expect(code).not.toMatch(/TMPDIR/)
+    expect(code).not.toMatch(/\$\$/)
+    // Older bash writes heredocs to a file under TMPDIR.
+    expect(code).not.toMatch(/<<-?\s*['"]?[A-Z]/)
+    expect(code).toMatch(/mktemp "\$TEXTFILE_DIR\/\.nivaro_host\.prom\.XXXXXX"/)
+  })
+
+  it('keeps its state dir private and leaves no temp files behind', () => {
+    const f = fixture()
+    fullFixture(f.root)
+    run(f)
+    expect(statSync(f.state).mode & 0o777).toBe(0o700)
+    expect(readdirSync(f.out)).toEqual(['nivaro_host.prom'])
+    expect(readdirSync(f.state).sort()).toEqual(['heavy.prom', 'heavy.stamp'])
+    expect(statSync(join(f.out, 'nivaro_host.prom')).mode & 0o777).toBe(0o644)
+  })
+
+  it('refuses a state dir that is a symlink', () => {
+    const f = fixture()
+    const victim = join(dirname(f.state), 'victim')
+    mkdirSync(victim)
+    writeFileSync(join(victim, 'heavy.prom'), 'keep')
+    symlinkSync(victim, f.state)
+    expect(() => run(f)).toThrow()
+    expect(readFileSync(join(victim, 'heavy.prom'), 'utf8')).toBe('keep')
+    expect(existsSync(join(f.out, 'nivaro_host.prom'))).toBe(false)
   })
 
   it('writes every host fact in node_exporter text format', () => {
