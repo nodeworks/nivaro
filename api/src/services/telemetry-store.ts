@@ -339,6 +339,8 @@ export interface AccessLogInput {
   traced?: boolean
   /** Response body bytes when known (string/Buffer payloads); null for streams. */
   response_bytes?: number | null
+  /** #2469 — the MCP client slug on a call through /api/mcp (its caller is `m:<slug>`). */
+  mcp_client?: string | null
 }
 
 /**
@@ -380,7 +382,12 @@ export function accessLogLine(r: AccessLogInput): Record<string, string | number
     method: r.method,
     route: routeTemplate(r.method, r.path, r.graphql_operation ?? null),
     entity: c ? entityKey(c.lane, c.entity) : 'other/api',
-    caller: callerKeyFor({ authMethod: r.auth, apiKeyId: r.api_key_id, userId: r.user }),
+    caller: callerKeyFor({
+      authMethod: r.auth,
+      apiKeyId: r.api_key_id,
+      userId: r.user,
+      mcpClient: r.mcp_client
+    }),
     ck: callerKind({ authMethod: r.auth, apiKeyId: r.api_key_id, userId: r.user }),
     status: r.status,
     ms: r.latency_ms,

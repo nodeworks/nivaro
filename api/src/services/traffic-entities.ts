@@ -244,7 +244,10 @@ export function callerKeyFor(src: {
   authMethod?: string | null
   apiKeyId?: number | null
   userId?: string | null
+  /** #2469 — a call through /api/mcp is its client's caller (`m:<slug>`, services/mcp-calls.ts). */
+  mcpClient?: string | null
 }): CallerKey {
+  if (src.mcpClient && /^[A-Za-z0-9._-]{1,48}$/.test(src.mcpClient)) return `m:${src.mcpClient}`
   if (src.authMethod === 'api_key' && src.apiKeyId != null) return `k${src.apiKeyId}`
   if (src.userId) return `u${String(src.userId).toUpperCase()}`
   return 'anon'

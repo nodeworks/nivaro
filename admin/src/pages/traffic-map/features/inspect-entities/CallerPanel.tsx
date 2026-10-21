@@ -38,7 +38,7 @@ interface RouteRow {
 }
 interface CallerDetail {
   key: string
-  kind: 'key' | 'person' | 'machine' | 'source' | 'cron' | 'anon'
+  kind: 'key' | 'person' | 'machine' | 'source' | 'cron' | 'anon' | 'mcp'
   label: string
   note: string | null
   range: { from: number; to: number }
@@ -110,7 +110,8 @@ const KIND_TEXT: Record<CallerDetail['kind'], string> = {
   machine: 'Machine account',
   source: 'Background source',
   cron: 'Crons & flows (all)',
-  anon: 'No credential'
+  anon: 'No credential',
+  mcp: 'AI assistant (MCP)'
 }
 
 function scopeText(s: unknown): string {

@@ -1,0 +1,381 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, Check, Loader2, Plug } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { useNivaroClient } from '../context'
+import { del, get, patch } from '../lib/commands'
+import { cn, formatDate, formatNumber, formatRelative } from '../lib/utils'
+import {
+  CallFigures,
+  CallsSparkline,
+  KindPill,
+  type McpConnection,
+  type McpConnectionsAnswer,
+  mcpConnectionsKey
+} from './profile/AgentsPanel'
+import { ConfirmButton, Pill } from './profile/primitives'
+import { Skeleton } from './ui/skeleton'
+
+/**
+ * MCP connections across everyone (#2466 admin view, #2469 per-connection limit, #2497 idle
+ * review): every AI assistant connected to this instance, its last 14 days of tool calls, the
+ * idle review's state, a per-connection tool-call limit, and disconnect. Settings for the idle
+ * review and the default limit sit at the top. Reads /api/mcp-connections (administrators).
+ */
+
+export type McpAdminTab = 'all' | 'idle'
+
+interface IdleRow extends McpConnection {
+  next_step: 'none' | 'clear' | 'flag' | 'notice' | 'revoke'
+}
+
+const NEXT_STEP: Record<IdleRow['next_step'], string> = {
+  none: 'Waiting',
+  clear: 'In use again',
+  flag: 'Owner told next run',
+  notice: 'Notice next run',
+  revoke: 'Disconnects next run'
+}
+
+const inputCls =
+  'h-8 w-20 rounded-md border border-slate-200 bg-white px-2 text-[12.5px] tabular-nums text-slate-800 outline-none transition-colors focus:border-nvr-cyan focus-visible:ring-2 focus-visible:ring-nvr-cyan/25 dark:border-border dark:bg-background dark:text-slate-100'
+
+function SettingsStrip({
+  settings,
+  onSaved
+}: {
+  settings: McpConnectionsAnswer['settings']
+  onSaved: () => void
+}) {
+  const client = useNivaroClient()
+  const [d, setD] = useState({
+    idle_flag_days: String(settings.idle_flag_days),
+    idle_revoke_days: String(settings.idle_revoke_days),
+    rate_limit_per_minute: String(settings.rate_limit_per_minute)
+  })
+  useEffect(() => {
+    setD({
+      idle_flag_days: String(settings.idle_flag_days),
+      idle_revoke_days: String(settings.idle_revoke_days),
+      rate_limit_per_minute: String(settings.rate_limit_per_minute)
+    })
+  }, [settings.idle_flag_days, settings.idle_revoke_days, settings.rate_limit_per_minute])
+  const dirty =
+    Number(d.idle_flag_days) !== settings.idle_flag_days ||
+    Number(d.idle_revoke_days) !== settings.idle_revoke_days ||
+    Number(d.rate_limit_per_minute) !== settings.rate_limit_per_minute
+  const save = useMutation({
+    mutationFn: () =>
+      client.request(
+        patch('/mcp-connections/settings', {
+          idle_flag_days: Number(d.idle_flag_days),
+          idle_revoke_days: Number(d.idle_revoke_days),
+          rate_limit_per_minute: Number(d.rate_limit_per_minute)
+        })
+      ),
+    onSuccess: onSaved
+  })
+  const field = (key: keyof typeof d, label: string, unit: string) => (
+    <label className='flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
+      {label}
+      <input
+        inputMode='numeric'
+        value={d[key]}
+        onChange={(e) => setD({ ...d, [key]: e.target.value.replace(/[^0-9]/g, '') })}
+        className={inputCls}
+        aria-label={label}
+      />
+      <span className='text-slate-500 dark:text-slate-400'>{unit}</span>
+    </label>
+  )
+  return (
+    <section className='rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
+      <div className='flex flex-wrap items-center gap-x-6 gap-y-3'>
+        {field('idle_flag_days', 'Tell the owner after', 'days unused')}
+        {field('idle_revoke_days', 'Disconnect after', 'days unused')}
+        {field('rate_limit_per_minute', 'Tool calls per connection', 'a minute (0 = no limit)')}
+        <button
+          type='button'
+          disabled={!dirty || save.isPending}
+          onClick={() => save.mutate()}
+          className='ml-auto inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-medium text-white transition-colors hover:bg-nvr-cyan/90 disabled:opacity-40'
+        >
+          {save.isPending ? (
+            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+          ) : (
+            <Check className='h-3.5 w-3.5' />
+          )}
+          Save
+        </button>
+      </div>
+      <p className='mt-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
+        Signed-in (OAuth) connections only: the owner is told once, warned seven days before the
+        disconnect, then disconnected. API keys keep their own expiry.
+        {save.isError && (
+          <span className='ml-1 text-red-600 dark:text-red-400'>
+            {(save.error as Error)?.message || 'Could not save'}
+          </span>
+        )}
+      </p>
+    </section>
+  )
+}
+
+function LimitCell({ c, onSaved }: { c: McpConnection; onSaved: () => void }) {
+  const client = useNivaroClient()
+  const [v, setV] = useState(c.rate_limit_custom ? String(c.rate_limit_per_minute) : '')
+  const save = useMutation({
+    mutationFn: (value: number | null) =>
+      client.request(patch(`/mcp-connections/${c.conn}/limit`, { rate_limit_per_minute: value })),
+    onSuccess: onSaved
+  })
+  const commit = () => {
+    const next = v.trim() === '' ? null : Number(v)
+    const cur = c.rate_limit_custom ? c.rate_limit_per_minute : null
+    if (next !== cur) save.mutate(next)
+  }
+  return (
+    <span className='inline-flex items-center gap-1.5'>
+      <input
+        inputMode='numeric'
+        value={v}
+        placeholder={String(c.rate_limit_per_minute)}
+        onChange={(e) => setV(e.target.value.replace(/[^0-9]/g, ''))}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+        }}
+        aria-label={`Tool calls a minute for ${c.name}`}
+        data-tip='Blank = the default limit'
+        className={cn(inputCls, 'h-7 w-16')}
+      />
+      {save.isPending && <Loader2 className='h-3.5 w-3.5 animate-spin text-slate-400' />}
+    </span>
+  )
+}
+
+export function McpConnectionsAdminView({
+  tab,
+  onTabChange
+}: {
+  tab: McpAdminTab
+  onTabChange: (t: McpAdminTab) => void
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const all = useQuery({
+    queryKey: mcpConnectionsKey('all'),
+    queryFn: () =>
+      client.request(get<{ data: McpConnectionsAnswer }>('/mcp-connections')).then((r) => r.data)
+  })
+  const idle = useQuery({
+    queryKey: ['nvr-mcp-connections', 'idle'],
+    queryFn: () =>
+      client
+        .request(
+          get<{ data: { settings: McpConnectionsAnswer['settings']; connections: IdleRow[] } }>(
+            '/mcp-connections/idle'
+          )
+        )
+        .then((r) => r.data),
+    enabled: tab === 'idle'
+  })
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['nvr-mcp-connections'] })
+  const disconnect = useMutation({
+    mutationFn: (conn: string) => client.request(del(`/mcp-connections/${conn}`)),
+    onSuccess: refresh
+  })
+  const [q, setQ] = useState('')
+  const rows = useMemo(() => {
+    const src: McpConnection[] =
+      tab === 'idle' ? (idle.data?.connections ?? []) : (all.data?.connections ?? [])
+    const needle = q.trim().toLowerCase()
+    return needle
+      ? src.filter((c) => `${c.name} ${c.user_name ?? ''}`.toLowerCase().includes(needle))
+      : src
+  }, [tab, all.data, idle.data, q])
+  const totals = useMemo(() => {
+    const cs = all.data?.connections ?? []
+    return {
+      n: cs.length,
+      calls: cs.reduce((a, c) => a + (c.stats?.calls ?? 0), 0),
+      idle: cs.filter((c) => c.idle && c.idle.status !== 'active').length
+    }
+  }, [all.data])
+  const loading = tab === 'idle' ? idle.isLoading : all.isLoading
+  const failed = tab === 'idle' ? idle.isError : all.isError
+
+  return (
+    <div className='flex flex-col gap-4' data-nvr-mcp-admin>
+      {all.data?.settings && <SettingsStrip settings={all.data.settings} onSaved={refresh} />}
+      {all.data && !all.data.logged && (
+        <p className='flex items-center gap-1.5 text-[12.5px] text-amber-700 dark:text-amber-400'>
+          <AlertTriangle className='h-3.5 w-3.5' />
+          Tool calls are not recorded on this database yet (migration 480). Connections still show;
+          figures appear once it runs.
+        </p>
+      )}
+
+      <div className='flex flex-wrap items-center gap-3'>
+        <div role='tablist' className='flex gap-1 rounded-md bg-slate-100 p-0.5 dark:bg-muted'>
+          {(
+            [
+              ['all', `All connections${totals.n ? ` · ${totals.n}` : ''}`],
+              ['idle', `Idle${totals.idle ? ` · ${totals.idle}` : ''}`]
+            ] as Array<[McpAdminTab, string]>
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type='button'
+              role='tab'
+              aria-selected={tab === key}
+              onClick={() => onTabChange(key)}
+              className={cn(
+                'h-7 rounded px-3 text-[12.5px] font-medium transition-colors',
+                tab === key
+                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-white'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className='text-[12px] text-slate-500 dark:text-slate-400'>
+          {formatNumber(totals.calls)} tool calls in the last {all.data?.window_days ?? 14} days
+        </span>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder='Find an app or person'
+          aria-label='Find an app or person'
+          className='ml-auto h-8 w-56 rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] outline-none placeholder:text-slate-500 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100 dark:placeholder:text-slate-400'
+        />
+      </div>
+
+      <section className='overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+        {loading ? (
+          <div className='space-y-2 p-4'>
+            {Array.from({ length: 4 }, (_, i) => (
+              <Skeleton key={i} className='h-9' />
+            ))}
+          </div>
+        ) : failed ? (
+          <p className='p-4 text-[12.5px] text-slate-500 dark:text-slate-400'>
+            Connections could not be loaded. Try again in a moment.
+          </p>
+        ) : rows.length === 0 ? (
+          <div className='flex items-start gap-3 p-4'>
+            <Plug className='mt-0.5 h-5 w-5 text-slate-400' />
+            <p className='max-w-[70ch] text-[12.5px] text-slate-600 dark:text-slate-300'>
+              {tab === 'idle'
+                ? 'No connection has gone unused long enough to be flagged.'
+                : q
+                  ? 'Nothing matches that search.'
+                  : 'Nobody has connected an AI assistant yet. When someone adds Nivaro as a connector and signs in, it appears here.'}
+            </p>
+          </div>
+        ) : (
+          <table className='w-full min-w-[880px] text-left text-[12px]'>
+            <thead>
+              <tr className='border-b border-slate-200 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'>
+                <th className='px-4 py-2 font-medium'>App</th>
+                <th className='py-2 pr-3 font-medium'>Person</th>
+                <th className='py-2 pr-3 font-medium'>Last used</th>
+                <th className='py-2 pr-3 font-medium'>
+                  {tab === 'idle' ? 'Idle review' : 'Last 14 days'}
+                </th>
+                <th className='py-2 pr-3 font-medium'>Top tools</th>
+                <th className='py-2 pr-3 font-medium'>Calls a minute</th>
+                <th className='py-2 pr-4' />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((c) => {
+                const last = c.stats?.last_call_at ?? c.last_used_at
+                return (
+                  <tr
+                    key={c.conn}
+                    className='border-b border-slate-100 align-middle last:border-0 hover:bg-muted/50 dark:border-border/60'
+                  >
+                    <td className='px-4 py-2.5'>
+                      <div className='flex items-center gap-2'>
+                        <span className='font-medium text-slate-800 dark:text-slate-100'>
+                          {c.name}
+                        </span>
+                        <KindPill kind={c.kind} />
+                      </div>
+                    </td>
+                    <td className='py-2.5 pr-3 text-slate-700 dark:text-slate-200'>
+                      {c.user_name ?? '—'}
+                    </td>
+                    <td className='whitespace-nowrap py-2.5 pr-3 text-slate-600 dark:text-slate-300'>
+                      {last ? formatRelative(last) : 'Never'}
+                    </td>
+                    <td className='py-2.5 pr-3'>
+                      {tab === 'idle' && c.idle ? (
+                        <span className='flex flex-wrap items-center gap-1.5'>
+                          <Pill tone={c.idle.status === 'notice' ? 'red' : 'amber'}>
+                            {c.idle.idle_days} days unused
+                          </Pill>
+                          <span className='text-slate-600 dark:text-slate-300'>
+                            {NEXT_STEP[(c as IdleRow).next_step]} · disconnects{' '}
+                            {formatDate(`${c.idle.revoke_on}T12:00:00Z`, {
+                              month: 'short',
+                              day: 'numeric'
+                            })}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className='flex items-center gap-3'>
+                          {c.stats && <CallsSparkline days={c.stats.days} />}
+                          <CallFigures s={c.stats} />
+                        </span>
+                      )}
+                    </td>
+                    <td className='py-2.5 pr-3'>
+                      <span className='flex flex-wrap gap-1'>
+                        {(c.stats?.top_tools ?? []).slice(0, 3).map((t) => (
+                          <span
+                            key={t.tool}
+                            data-tip={`${formatNumber(t.calls)} calls`}
+                            className='rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-600 dark:bg-muted dark:text-slate-300'
+                          >
+                            {t.tool}
+                          </span>
+                        ))}
+                      </span>
+                    </td>
+                    <td className='py-2.5 pr-3'>
+                      <LimitCell c={c} onSaved={refresh} />
+                    </td>
+                    <td className='py-2.5 pr-4 text-right'>
+                      {c.kind !== 'token' && (c.kind !== 'oauth' || c.created_at) && (
+                        <ConfirmButton
+                          onConfirm={() => disconnect.mutate(c.conn)}
+                          disabled={disconnect.isPending}
+                          confirmLabel={c.kind === 'api_key' ? 'Switch key off?' : 'Disconnect?'}
+                          title={
+                            c.kind === 'api_key' ? `Switch off ${c.name}` : `Disconnect ${c.name}`
+                          }
+                          className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:border-red-300 hover:text-red-600 disabled:opacity-40 dark:border-border dark:text-slate-200 dark:hover:border-red-500/50 dark:hover:text-red-400'
+                          armedClassName='border-red-300 bg-red-50 text-red-700 dark:border-red-500/50 dark:bg-red-500/10 dark:text-red-400'
+                        >
+                          {c.kind === 'api_key' ? 'Switch off' : 'Disconnect'}
+                        </ConfirmButton>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
+      {disconnect.isError && (
+        <p className='text-[12px] text-red-600 dark:text-red-400'>
+          {(disconnect.error as Error)?.message || 'Could not disconnect'}
+        </p>
+      )}
+    </div>
+  )
+}

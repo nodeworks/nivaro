@@ -630,6 +630,13 @@ export const navCategories: NavCategory[] = [
     zone: 'platform',
     items: [
       { icon: KeyRound, label: 'API Keys', to: '/api-keys', section: 'APIs', keywords: 'token' },
+      {
+        icon: Plug,
+        label: 'MCP Connections',
+        to: '/mcp-connections',
+        section: 'APIs',
+        keywords: 'ai assistant agent claude chatgpt oauth connected apps'
+      },
       { icon: Braces, label: 'GraphQL', to: '/graphql', section: 'APIs', keywords: 'explorer' },
       { icon: Braces, label: 'Persisted Queries', to: '/persisted-queries', section: 'APIs' },
       {

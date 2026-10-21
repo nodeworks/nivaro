@@ -36,6 +36,7 @@ import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/t
 import { announceLocalPrefs } from '../lib/user-sync'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
+import { AgentsPanel } from './profile/AgentsPanel'
 import { AiHistoryCard, AiMemoryCard } from './profile/AiMemoryCard'
 import { BrowserPushCard } from './profile/BrowserPushCard'
 import { DelegationCard } from './profile/DelegationCard'
@@ -1622,6 +1623,9 @@ function OwnProfile({
     }
   })
 
+  // #2498 — Profile | What my agents did (?tab=agents deep-links, e.g. from the idle notice).
+  const [tab, setTab] = useState<OwnProfileTab>(readOwnProfileTab)
+
   const fileRef = useRef<HTMLInputElement | null>(null)
   const uploadAvatar = useMutation({
     mutationFn: async (file: File) => {
@@ -1811,7 +1815,10 @@ function OwnProfile({
         </div>
       </div>
 
-      {isOwn && me ? (
+      <OwnProfileTabs tab={tab} onChange={setTab} />
+      {tab === 'agents' ? (
+        <AgentsPanel />
+      ) : isOwn && me ? (
         // One list in reading order — you, then notifications, then access
         // and security — flowing into two balanced columns. Two fixed stacks
         // left thirteen cards on one side and four on the other, and the page
@@ -1921,6 +1928,69 @@ function OwnProfile({
           {extra}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+// ─── Own-profile tabs (#2498) ────────────────────────────────────────────────
+type OwnProfileTab = 'profile' | 'agents'
+
+function readOwnProfileTab(): OwnProfileTab {
+  try {
+    return new URLSearchParams(window.location.search).get('tab') === 'agents'
+      ? 'agents'
+      : 'profile'
+  } catch {
+    return 'profile'
+  }
+}
+
+function OwnProfileTabs({
+  tab,
+  onChange
+}: {
+  tab: OwnProfileTab
+  onChange: (t: OwnProfileTab) => void
+}) {
+  const pick = (t: OwnProfileTab) => {
+    onChange(t)
+    // Keep the address shareable without a router dependency in the shared package.
+    try {
+      const url = new URL(window.location.href)
+      if (t === 'agents') url.searchParams.set('tab', 'agents')
+      else url.searchParams.delete('tab')
+      window.history.replaceState(window.history.state, '', url)
+    } catch {
+      /* no history API */
+    }
+  }
+  const items: Array<[OwnProfileTab, string]> = [
+    ['profile', 'Profile'],
+    ['agents', 'What my agents did']
+  ]
+  return (
+    <div
+      role='tablist'
+      aria-label='Profile sections'
+      className='flex gap-1 border-b border-slate-200 dark:border-border'
+    >
+      {items.map(([key, label]) => (
+        <button
+          key={key}
+          type='button'
+          role='tab'
+          aria-selected={tab === key}
+          onClick={() => pick(key)}
+          className={cn(
+            '-mb-px border-b-2 px-3 py-2 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40',
+            tab === key
+              ? 'border-nvr-cyan text-slate-900 dark:text-white'
+              : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+          )}
+        >
+          {label}
+        </button>
+      ))}
     </div>
   )
 }

@@ -12,6 +12,8 @@ import { currentTenantKey } from './tenant-rooms.js'
  *   at:<hash>        an access token (1 hour) naming its grant
  *   rt:<hash>        a refresh token (30 days, rotated on every use) naming its grant
  *   user:<uid>       the person's grant ids (the "connected apps" list)
+ *   grant-idle:<id>  the idle review's stamps on a grant (#2497); its own key with its own TTL,
+ *                    so the review never rewrites (or resurrects) a grant; deleted on revoke/use
  *
  * Tokens and codes are stored by hash only. Every token is checked against its
  * grant, so revoking a connection ends its tokens at once. Cloud: every record
@@ -23,6 +25,9 @@ export const ACCESS_TTL_S = 3600
 export const REFRESH_TTL_S = 30 * 86_400
 const CODE_TTL_S = 120
 const CLIENT_TTL_S = 180 * 86_400
+/** Idle stamps outlive any review window (flag ≤ 365 days, disconnect ≤ 730) and then lapse. */
+const IDLE_TTL_S = 800 * 86_400
+const idleKey = (grantId: string) => `${P}grant-idle:${grantId}`
 
 export interface OAuthClient {
   client_id: string
@@ -41,6 +46,10 @@ export interface OAuthGrant {
   created_at: string
   last_used_at: string | null
   t: string
+  /** Idle review (#2497): when the owner was told the connection is unused… */
+  idle_flagged_at?: string | null
+  /** …and when they were told it will be disconnected. Both clear on the next use. */
+  idle_notice_at?: string | null
 }
 
 interface CodeRecord {
@@ -200,7 +209,8 @@ export async function grantScope(redis: Redis, grantId: string): Promise<string>
 
 /**
  * An access token's record while its grant stands, with the grant's CURRENT scope
- * and the app's name; touches the grant's last use (≤ once a minute).
+ * and the app's registered name; touches the grant's last use (≤ once a minute),
+ * which also clears any idle-review flag.
  */
 export async function resolveAccessToken(
   redis: Redis,
@@ -212,8 +222,15 @@ export async function resolveAccessToken(
   if (!grant) return null
   const last = grant.last_used_at ? Date.parse(grant.last_used_at) : 0
   if (Date.now() - last > 60_000) {
-    grant.last_used_at = new Date().toISOString()
-    await redis.set(`${P}grant:${grant.id}`, JSON.stringify(grant))
+    const { idle_flagged_at: _f, idle_notice_at: _n, ...stored } = grant
+    stored.last_used_at = new Date().toISOString()
+    // XX: never recreate a grant revoked since the read; KEEPTTL: never drop an expiry.
+    // Being used clears the idle review's stamps.
+    await redis
+      .multi()
+      .set(`${P}grant:${grant.id}`, JSON.stringify(stored), 'KEEPTTL', 'XX')
+      .del(idleKey(grant.id))
+      .exec()
   }
   return { ...rec, scope: grant.scope || OAUTH_SCOPE, client_name: grant.client_name }
 }
@@ -232,13 +249,101 @@ export async function listGrants(redis: Redis, userId: string): Promise<OAuthGra
     if (!g) await redis.srem(`${P}user:${userId}`, id)
     else if (sameTenant(g)) out.push(g)
   }
-  return out.sort((a, b) => b.created_at.localeCompare(a.created_at))
+  return (await withIdleStamps(redis, out)).sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
 /** End a connection: its tokens stop working at once (each checks its grant). */
 export async function revokeGrant(redis: Redis, userId: string, grantId: string): Promise<boolean> {
   const g = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
   if (!g || g.user_id !== userId || !sameTenant(g)) return false
-  await redis.multi().del(`${P}grant:${grantId}`).srem(`${P}user:${userId}`, grantId).exec()
+  await redis
+    .multi()
+    .del(`${P}grant:${grantId}`)
+    .del(idleKey(grantId))
+    .srem(`${P}user:${userId}`, grantId)
+    .exec()
   return true
+}
+
+/** One grant by id (this tenant's), or null. */
+export async function getGrant(redis: Redis, grantId: string): Promise<OAuthGrant | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(grantId)) return null
+  const g = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
+  if (!g || !sameTenant(g)) return null
+  return (await withIdleStamps(redis, [g]))[0]
+}
+
+type IdleStamps = Pick<OAuthGrant, 'idle_flagged_at' | 'idle_notice_at'>
+
+/** Grants with their idle-review stamps (one MGET). */
+async function withIdleStamps(redis: Redis, grants: OAuthGrant[]): Promise<OAuthGrant[]> {
+  if (grants.length === 0) return grants
+  const raws = await redis.mget(...grants.map((g) => idleKey(g.id)))
+  return grants.map((g, i) => {
+    const raw = raws[i]
+    if (!raw) return { ...g, idle_flagged_at: null, idle_notice_at: null }
+    try {
+      const st = JSON.parse(raw) as IdleStamps
+      return {
+        ...g,
+        idle_flagged_at: st.idle_flagged_at ?? null,
+        idle_notice_at: st.idle_notice_at ?? null
+      }
+    } catch {
+      return { ...g, idle_flagged_at: null, idle_notice_at: null }
+    }
+  })
+}
+
+/**
+ * Set (or with both null, clear) the idle-review stamps of a grant that still stands. They live
+ * in their own key: the grant itself is never rewritten here, so a revoke racing the review can
+ * never be undone by it. A stamp written just after a revoke is removed again (and would lapse).
+ */
+export async function setGrantIdleStamps(
+  redis: Redis,
+  grantId: string,
+  stamps: IdleStamps
+): Promise<void> {
+  if (!/^[0-9a-f-]{36}$/i.test(grantId)) return
+  if (!stamps.idle_flagged_at && !stamps.idle_notice_at) {
+    await redis.del(idleKey(grantId))
+    return
+  }
+  if (!(await getGrant(redis, grantId))) return
+  await redis.setex(
+    idleKey(grantId),
+    IDLE_TTL_S,
+    JSON.stringify({
+      idle_flagged_at: stamps.idle_flagged_at ?? null,
+      idle_notice_at: stamps.idle_notice_at ?? null
+    })
+  )
+  if (!(await redis.exists(`${P}grant:${grantId}`))) await redis.del(idleKey(grantId))
+}
+
+/** Every connection on this tenant, across people (admin view, idle review). SCAN, never KEYS. */
+export async function listAllGrants(redis: Redis, cap = 20_000): Promise<OAuthGrant[]> {
+  const out: OAuthGrant[] = []
+  let cursor = '0'
+  do {
+    const [next, keys] = await redis.scan(cursor, 'MATCH', `${P}grant:*`, 'COUNT', 500)
+    cursor = next
+    if (keys.length) {
+      const raws = await redis.mget(...keys)
+      for (const raw of raws) {
+        if (!raw) continue
+        try {
+          const g = JSON.parse(raw) as OAuthGrant
+          if (sameTenant(g)) out.push(g)
+        } catch {
+          // skip a damaged record
+        }
+      }
+    }
+  } while (cursor !== '0' && out.length < cap)
+  const stamped: OAuthGrant[] = []
+  for (let i = 0; i < out.length; i += 500)
+    stamped.push(...(await withIdleStamps(redis, out.slice(i, i + 500))))
+  return stamped.sort((a, b) => b.created_at.localeCompare(a.created_at))
 }

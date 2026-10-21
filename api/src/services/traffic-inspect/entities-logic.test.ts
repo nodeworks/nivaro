@@ -31,6 +31,12 @@ describe('parseCallerKey', () => {
       userId: UUID.toUpperCase()
     })
     expect(parseCallerKey('cron')).toEqual({ kind: 'cron', key: 'cron' })
+    // #2469 — an MCP client is its own caller, not a background source.
+    expect(parseCallerKey('m:Claude_Code')).toEqual({
+      kind: 'mcp',
+      key: 'm:Claude_Code',
+      client: 'Claude_Code'
+    })
     expect(parseCallerKey('anon')).toEqual({ kind: 'anon', key: 'anon' })
     expect(parseCallerKey('cron:ext:efp-ops:auto-create-mwf')).toEqual({
       kind: 'source',

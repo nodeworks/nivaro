@@ -62,6 +62,7 @@ function fakeRedis() {
   }
   const r = {
     get: async (k: string) => kv.get(k) ?? null,
+    mget: async (...ks: string[]) => ks.map((k) => kv.get(k) ?? null),
     set: put,
     setex: async (k: string, _t: number, v: string) => put(k, v),
     getdel: async (k: string) => {

@@ -1,5 +1,16 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { authenticate, requireAuth } from '../middleware/authenticate.js'
+import { authenticate, enforceRateLimit, requireAuth } from '../middleware/authenticate.js'
+import {
+  classifyToolAnswer,
+  clientSlug,
+  connectionLimit,
+  mcpClientNameOf,
+  mcpConnOf,
+  readMcpSettings,
+  rpcToolCallsOf,
+  toolAnswerMessage,
+  watchResponse
+} from '../services/mcp-calls.js'
 import {
   MCP_INNER_HEADER,
   type McpChatAccess,
@@ -36,6 +47,26 @@ import { mcpLiveRoutes, resolveLiveSession, subscriptionHost } from './mcp-live.
 const bearerOf = (req: FastifyRequest) => {
   const h = req.headers.authorization
   return h?.startsWith('Bearer ') ? h.slice(7).trim() : ''
+}
+
+/**
+ * A refused tool call over the rate limit (#2469): HTTP 429 with Retry-After and a JSON-RPC error
+ * whose message says why, so the agent can tell its person and wait rather than retry at once.
+ */
+function rateLimited(
+  reply: FastifyReply,
+  err: { message?: string; code?: string; retryAfter?: number },
+  id: string | number | null
+) {
+  return reply.code(429).send({
+    jsonrpc: '2.0',
+    error: {
+      code: -32029,
+      message: err.message ?? 'Too many requests',
+      data: { code: err.code ?? 'RATE_LIMITED', retry_after_s: err.retryAfter ?? null }
+    },
+    id
+  })
 }
 
 function unauthorized(reply: FastifyReply, message: string, invalid: boolean) {
@@ -131,12 +162,41 @@ export async function mcpRoutes(app: FastifyInstance) {
   app.post('/mcp', { compress: false }, async (req, reply) => {
     if (!mcpHttpEnabled())
       return reply.code(404).send({ error: 'The MCP endpoint is turned off (MCP_HTTP)' })
-    const token = await authenticateMcp(req, reply)
+    const rpc = rpcToolCallsOf(req.body)
+    const token = await authenticateMcp(req, reply, rpc.id)
     if (!token) return reply
 
     // Live mode (#2467): a session to remember subscriptions in, or null = stateless.
     const live = await resolveLiveSession(app, req)
     if (live === 'unknown') return sessionNotFound(reply)
+
+    // #2466 — a tool call is logged on this row: its connection, tool, outcome and bytes.
+    // #2469 — and counted against the connection's tool-call limit.
+    const conn = mcpConnOf(req)
+    // Every tools/call in the POST is counted (a batch spends one per call, an odd tool name
+    // counts too); over the limit the whole POST is refused.
+    if (rpc.calls > 0 && conn) {
+      const name = mcpClientNameOf(req)
+      req.mcpCall = { conn, client: clientSlug(name), tool: rpc.tool }
+      const limit = connectionLimit(await readMcpSettings(), conn)
+      if (limit > 0) {
+        try {
+          await enforceRateLimit(req, reply, {
+            bucket: `mcp:${conn}`,
+            limit,
+            cost: rpc.calls,
+            code: 'MCP_CONNECTION_RATE_LIMITED',
+            message: (wait) =>
+              `${name} may make ${limit} tool calls a minute on this connection, so one assistant cannot crowd out everyone else using Nivaro. Wait ${wait} seconds and carry on; an administrator can raise the limit for this connection.`
+          })
+        } catch (err) {
+          const e = err as { statusCode?: number; message?: string }
+          if (e.statusCode !== 429) throw err
+          req.mcpCall.outcome = 'refused'
+          return rateLimited(reply, e, rpc.id)
+        }
+      }
+    }
 
     // Loaded on first use: boot never depends on the MCP packages, and a process
     // nobody connects an assistant to never loads them.
@@ -156,6 +216,16 @@ export async function mcpRoutes(app: FastifyInstance) {
     if (live?.created) {
       reply.raw.setHeader('mcp-session-id', live.session.id)
       reply.raw.setHeader('access-control-expose-headers', 'Mcp-Session-Id')
+    }
+    const call = req.mcpCall
+    if (call) {
+      watchResponse(reply.raw, (head, tail, bytes) => {
+        call.outcome = classifyToolAnswer(head, tail)
+        call.bytes = bytes
+        // The refusal's own words on the row (the logger's error column), for the person's list.
+        const said = call.outcome === 'ok' ? null : toolAnswerMessage(head)
+        if (said) (req as unknown as { __nvrErr?: string }).__nvrErr = said
+      })
     }
     reply.raw.on('close', () => {
       void transport.close()
@@ -194,8 +264,15 @@ export async function mcpRoutes(app: FastifyInstance) {
   await mcpLiveRoutes(app, { authenticateMcp })
 }
 
-/** Bearer + authenticate, as POST does. Null when it already answered 401. */
-async function authenticateMcp(req: FastifyRequest, reply: FastifyReply): Promise<string | null> {
+/**
+ * Bearer + authenticate, as POST does. Null when it already answered (401, or 429 when the
+ * credential's own rate limit is spent; `rpcId` is the JSON-RPC id that answer carries).
+ */
+async function authenticateMcp(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  rpcId: string | number | null = null
+): Promise<string | null> {
   const token = bearerOf(req)
   if (!token) {
     unauthorized(reply, 'Sign in to connect to Nivaro', false)
@@ -207,6 +284,10 @@ async function authenticateMcp(req: FastifyRequest, reply: FastifyReply): Promis
     const e = err as { statusCode?: number; message?: string }
     if (e.statusCode === 401) {
       unauthorized(reply, e.message ?? 'Unauthorized', true)
+      return null
+    }
+    if (e.statusCode === 429) {
+      rateLimited(reply, e, rpcId)
       return null
     }
     throw err

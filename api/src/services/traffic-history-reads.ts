@@ -267,7 +267,7 @@ export interface SearchAnswer {
   source?: 'store'
 }
 
-export const CALLER_KEY = /^(u[0-9A-Fa-f-]{36}|k\d{1,12}|anon)$/
+export const CALLER_KEY = /^(u[0-9A-Fa-f-]{36}|k\d{1,12}|anon|m:[A-Za-z0-9._-]{1,48})$/
 export const ENTITY_KEY = /^[a-z]+\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}$/
 export const ROUTE_RE =
   /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \/[^\s?#]{0,200}( · [A-Za-z0-9_]{1,120})?$/
@@ -276,6 +276,9 @@ export const ROUTE_RE =
 function applyCaller(q: Knex.QueryBuilder, caller: string): void {
   if (caller === 'anon') {
     q.whereNull('user').where((w) => w.whereNull('api_key_id').orWhereNot('auth', 'api_key'))
+  } else if (caller.startsWith('m:')) {
+    // #2469 — an MCP client (migration 480; behind it the read fails and reads as unavailable).
+    q.where('mcp_client', caller.slice(2))
   } else if (caller.startsWith('k')) {
     q.where('api_key_id', Number(caller.slice(1))).where('auth', 'api_key')
   } else {

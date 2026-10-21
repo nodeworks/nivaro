@@ -19,6 +19,8 @@ export interface HistoryRow {
   created_at: Date | string
   /** The (masked) query string, when the log has the column (migration 357). */
   query?: string | null
+  /** #2469 — the MCP client slug, when the log has the column (migration 480). */
+  mcp_client?: string | null
 }
 export interface EntityHistoryBody {
   key: string
@@ -273,7 +275,12 @@ export function summarizeHistory(
     codes[String(r.status)] = (codes[String(r.status)] ?? 0) + 1
     const route = routeTemplate(r.method, r.path, r.graphql_operation)
     routes.set(route, (routes.get(route) ?? 0) + 1)
-    const ck = callerKeyFor({ authMethod: r.auth, apiKeyId: r.api_key_id, userId: r.user })
+    const ck = callerKeyFor({
+      authMethod: r.auth,
+      apiKeyId: r.api_key_id,
+      userId: r.user,
+      mcpClient: r.mcp_client
+    })
     callers.set(ck, (callers.get(ck) ?? 0) + 1)
     series[i].req++
     if (isErr) series[i].error++

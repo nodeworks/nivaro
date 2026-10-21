@@ -184,7 +184,7 @@ export interface TrafficCatalog {
   partners: Record<string, string>
   callers: Record<
     string,
-    { label: string; kind: 'key' | 'person' | 'machine' | 'cron' | 'anon' | 'source' }
+    { label: string; kind: 'key' | 'person' | 'machine' | 'cron' | 'anon' | 'source' | 'mcp' }
   >
   down: Record<string, string>
 }

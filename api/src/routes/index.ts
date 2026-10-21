@@ -152,6 +152,7 @@ import { mailSuppressionRoutes } from './mail-suppressions.js'
 import { mailTemplateRoutes } from './mail-templates.js'
 import { mailTypeRoutes } from './mail-types.js'
 import { mcpRoutes } from './mcp.js'
+import { mcpConnectionRoutes } from './mcp-connections.js'
 import { mcpConsoleRoutes } from './mcp-console.js'
 import { meNotificationRoutes } from './me-notifications.js'
 import { mergeRoutes } from './merge.js'
@@ -697,6 +698,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(mcpRoutes)
   await app.register(mcpConsoleRoutes, { prefix: '/mcp-console' })
   await app.register(oauthConnectionRoutes)
+  await app.register(mcpConnectionRoutes, { prefix: '/mcp-connections' })
   await app.register(widgetRoutes, { prefix: '/widget' })
   await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })
   // Root-level alias for clean external embeds: <script src="https://host/api/widget.js">

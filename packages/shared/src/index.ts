@@ -272,6 +272,10 @@ export { LiveRowMark } from './components/LiveRowMark'
 export * from './components/layout-editor'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
+export {
+  type McpAdminTab,
+  McpConnectionsAdminView
+} from './components/McpConnectionsAdminView'
 export { MyWorkView } from './components/MyWorkView'
 export {
   type ApiCaller,
@@ -390,6 +394,7 @@ export {
   tierOrder,
   useScopeDimensions
 } from './components/pipeline/teamScopes'
+export { AgentsPanel } from './components/profile/AgentsPanel'
 export { BrowserPushCard } from './components/profile/BrowserPushCard'
 export {
   MailSuppressedPill,

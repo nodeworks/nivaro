@@ -61,12 +61,12 @@ export async function markMcpInnerRequest(req: FastifyRequest): Promise<void> {
 /**
  * Routes an OAuth-connected app may never write to, whatever its user may do:
  * anything that signs in, mints or reveals a credential (API keys, run-as and
- * masquerade tokens, static tokens), manages OAuth connections, or writes a
+ * masquerade tokens, static tokens), manages OAuth or MCP connections, or writes a
  * system table through the items API. A connected app cannot leave behind a
  * credential that outlives its own disconnection.
  */
 const OAUTH_NO_WRITE =
-  /^\/api\/(auth|api-keys|oauth|graphql)(\/|$)|^\/api\/users\/[^/]+\/token(\/|$)|^\/api\/items\/(nivaro_|directus_)/i
+  /^\/api\/(auth|api-keys|oauth|graphql|mcp-connections)(\/|$)|^\/api\/users\/[^/]+\/token(\/|$)|^\/api\/items\/(nivaro_|directus_)/i
 
 /**
  * The path as the router will see it: percent-decoded (to a fixed point),

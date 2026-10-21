@@ -87,6 +87,8 @@ export interface TrafficRequestEvent {
   reply?: unknown
   /** Response body bytes (string/Buffer payloads); null for streams or when unknown. */
   responseBytes?: number | null
+  /** #2469 — the MCP client's caller key (`m:<slug>`) for a call through /api/mcp. */
+  mcpCaller?: string | null
 }
 export interface TrafficWriteEvent {
   collection: string
@@ -624,7 +626,8 @@ function recordRequest(ev: TrafficRequestEvent & { errorCode?: string | null }):
     const caller = callerKeyFor({
       authMethod: ev.authMethod,
       apiKeyId: ev.apiKeyId,
-      userId: ev.userId
+      userId: ev.userId,
+      mcpClient: ev.mcpCaller?.startsWith('m:') ? ev.mcpCaller.slice(2) : null
     })
     const route = routeTemplate(ev.method, ev.path, ev.graphqlOperation)
     const code = ev.status >= 400 ? errorCode(ev.errorCode) : null

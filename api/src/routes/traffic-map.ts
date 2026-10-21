@@ -5,6 +5,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { getRealtimeStats } from '../plugins/socketio.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { currentSeq } from '../services/event-journal.js'
+import { MCP_CALLER_RE, mcpCallerLabel } from '../services/mcp-calls.js'
 import { LANES, type TrafficLane } from '../services/traffic-entities.js'
 import {
   downNodeHistory,
@@ -48,7 +49,7 @@ interface Catalog {
   partners: Record<string, string>
   callers: Record<
     string,
-    { label: string; kind: 'key' | 'person' | 'machine' | 'cron' | 'anon' | 'source' }
+    { label: string; kind: 'key' | 'person' | 'machine' | 'cron' | 'anon' | 'source' | 'mcp' }
   >
   down: Record<string, string>
 }
@@ -165,9 +166,12 @@ async function buildCatalog(state: { failed: boolean }): Promise<Catalog> {
   for (const s of seenSources()) catalog.callers[s.id] = { label: s.label, kind: 'source' }
   for (const k of callerKeys) {
     if (!catalog.callers[k]) {
-      catalog.callers[k] = k.startsWith('k')
-        ? { label: `API key ${k.slice(1)}`, kind: 'key' }
-        : { label: 'Unknown user', kind: 'person' }
+      // #2469 — an AI assistant through /api/mcp, named by its client (`m:Claude_Code`).
+      catalog.callers[k] = MCP_CALLER_RE.test(k)
+        ? { label: mcpCallerLabel(k), kind: 'mcp' }
+        : k.startsWith('k')
+          ? { label: `API key ${k.slice(1)}`, kind: 'key' }
+          : { label: 'Unknown user', kind: 'person' }
     }
   }
   return catalog

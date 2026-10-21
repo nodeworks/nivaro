@@ -109,6 +109,21 @@ export const mcpDocs: DocSection = {
       type: 'p',
       text: 'Tools that change data start in **dry run**. A tool that can rehearse (create_item) rehearses: rules and validation run and nothing is stored. Any other tool runs but its changes are held: the console does not send them and lists each one under API calls. Turn dry run off and confirm to run it for real.'
     },
+    {
+      type: 'p',
+      text: 'Your profile has a **What my agents did** tab (`/profile?tab=agents`). It lists each connected app with its last 14 days of tool calls (calls a day, refused and failed calls, the tools it used most, how much it read back) and a Disconnect button, then every tool call newest first: the app, the tool, the record it touched and how it ended. Open a call to see the changes it made. Each change can be undone while nothing else has changed the record since: an edit puts back the values from before, a new record is deleted. Undo runs as you, so your permissions and the record’s rules apply, and it is logged (`mcp-undo`).'
+    },
+    { type: 'h2', id: 'mcp-admin', text: 'For administrators' },
+    {
+      type: 'ul',
+      items: [
+        '**MCP Connections** (`/mcp-connections`, under APIs) lists every assistant connected to this instance across people, with the same 14-day figures, and lets you disconnect a sign-in or switch off a key.',
+        'Each connection may make a set number of tool calls a minute (default 120; 0 means no limit), and you can give one connection its own limit. Over the limit the assistant gets HTTP 429 with Retry-After and a message saying why, so it can tell its person and wait.',
+        'Idle review: a signed-in connection unused for 60 days is pointed out to its owner, the owner is warned seven days before 90 days, and at 90 days it is disconnected (job `mcp-idle-review`, daily on deployed instances). Both day counts are settings at the top of the page; the Idle tab shows what the next run will do.',
+        'On the Traffic Map each app is its own caller, named `MCP: <app>` — the name the app registered with, or the API key’s name — grouped under AI assistants.',
+        'Every request made through `/api/mcp` is marked in the request log with its connection and tool, which is where all of these figures come from; the log keeps 14 days.'
+      ]
+    },
     { type: 'h2', id: 'mcp-settings', text: 'Settings and how it works' },
     {
       type: 'ul',
@@ -118,7 +133,7 @@ export const mcpDocs: DocSection = {
         '`MCP_PUBLIC_URL` names the address assistants reach this API on, when it is not the API’s own host — the sign-in must start and end there, and that address must be registered with your identity provider.',
         'Discovery: `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`. Clients register themselves (`/oauth/register`, public clients only), must use PKCE (S256), and may only return to https addresses or to `localhost` on your machine.',
         'The npm server asks `GET /api/mcp/capabilities` at startup which optional tools the key gets (`admin_tools`, `chat`: none, read or post).',
-        'Each `/api/mcp` request is answered on its own (a live session only remembers its subscriptions, in Redis), so any API replica can serve it, and every tool call inside it is an ordinary API request — rate limits, the maintenance freeze and the request log apply to each call. Traffic Map counts connected assistants with people.'
+        'Each `/api/mcp` request is answered on its own (a live session only remembers its subscriptions, in Redis), so any API replica can serve it, and every tool call inside it is an ordinary API request — rate limits, the maintenance freeze and the request log apply to each call.'
       ]
     }
   ]
