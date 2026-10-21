@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { ExplainDiffButton } from './assist/ExplainDiff'
 import { layoutDraftKeys } from './useLayoutDraft'
 
 interface VersionRow {
@@ -199,6 +200,15 @@ export function HistoryPanel({
           </div>
           {diffLoading && <p className='mt-1 text-slate-500'>Comparing…</p>}
           {diff && <DiffBody diff={diff} />}
+          {/* Why it differs, in words (#2693): the same diff plus the History notes between. */}
+          {diff && diff.total > 0 && diffId != null && (
+            <ExplainDiffButton
+              key={String(diffId)}
+              className='mt-2'
+              a={{ layout_id: layoutId, version: diffId }}
+              b={{ layout_id: layoutId, version: 'current' }}
+            />
+          )}
         </div>
       )}
       {restore.isError && (

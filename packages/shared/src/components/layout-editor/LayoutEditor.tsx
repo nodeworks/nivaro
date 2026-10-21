@@ -16,6 +16,11 @@ import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
 import { AutoArrangeButton } from './AutoArrange'
+import { AskButton, AskPanel } from './assist/AskPanel'
+import { type AskCite, useAskThread } from './assist/assist-api'
+import { jumpToSetting } from './assist/jump'
+import { ProposalsButton } from './assist/ProposalsButton'
+import type { SettingEntry } from './assist/settings-index'
 import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
 import {
   type DesignMark,
@@ -51,6 +56,7 @@ import { PlacementsTable } from './PlacementsTable'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
 import { useRolePreview } from './settings/settings-api'
+import { layoutKindOf } from './settings/settings-registry'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import { UsagePanel } from './usage/UsagePanel'
 import {
@@ -381,7 +387,18 @@ function Canvas({
       overlay,
       fillRate
     }),
-    [selected, selection, onSelect, showHidden, canvas.inherited, dnd, roleMark, marks, overlay, fillRate]
+    [
+      selected,
+      selection,
+      onSelect,
+      showHidden,
+      canvas.inherited,
+      dnd,
+      roleMark,
+      marks,
+      overlay,
+      fillRate
+    ]
   )
   return (
     <EditorCanvas
@@ -515,7 +532,10 @@ export function LayoutEditor({
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add' | 'usage'>('layouts')
-  const [panel, setPanel] = useState<'inspector' | 'settings' | 'checks'>('inspector')
+  const [panel, setPanel] = useState<'inspector' | 'settings' | 'checks' | 'ask'>('inspector')
+  // Ask about this form (#2695 #2676): the thread outlives a jump to another panel.
+  const [askThread, setAskThread] = useAskThread()
+  const [askPending, setAskPending] = useState<string | null>(null)
   // Several fields can be selected (Shift / ⌘-click); the last one is `selected`.
   const [selection, setSelection] = useState<DesignTarget[]>([])
   const selected = selection.length > 0 ? selection[selection.length - 1] : null
@@ -649,6 +669,46 @@ export function LayoutEditor({
     )
   }
 
+  // Find a setting (#2676): open its panel, select what it applies to, flash it.
+  const jumpSetting = useCallback(
+    (entry: SettingEntry) =>
+      bundle
+        ? jumpToSetting(entry, {
+            bundle,
+            selection,
+            select: (t) => {
+              setSelection([t])
+              setPanel('inspector')
+            },
+            openSettings: () => setPanel('settings'),
+            openAddPanel: () => setLeft('add'),
+            root: bodyRef.current
+          })
+        : Promise.resolve({ ok: false as const, message: 'The layout is still loading' }),
+    [bundle, selection]
+  )
+  const openLayoutRef = useRef(openLayout)
+  openLayoutRef.current = openLayout
+  const onAskCite = useCallback(
+    (c: AskCite) => {
+      if (c.kind === 'record')
+        setPreview((p) => ({ ...p, record: { id: c.id, label: `#${c.id}` } }))
+      else if (c.kind === 'layout') openLayoutRef.current(c.id)
+      else {
+        const p = bundle?.placements.find((x) => x.field === c.field)
+        if (!p) return toast.info(`${c.label} is not on this form`)
+        const t: DesignTarget = { kind: 'field', field: p.field, group_key: p.group_key }
+        onSelect(t)
+        requestAnimationFrame(() =>
+          bodyRef.current
+            ?.querySelector<HTMLElement>(`[data-design-target="${CSS.escape(targetKey(t))}"]`)
+            ?.scrollIntoView?.({ block: 'center' })
+        )
+      }
+    },
+    [bundle, onSelect]
+  )
+
   const layoutName = String(bundle?.layout.name ?? row?.name ?? '')
   const layoutType = String(bundle?.layout.layout_type ?? row?.layout_type ?? 'grouped')
   // Forms and read views lay fields out on the 12-column grid: the placements
@@ -712,11 +772,20 @@ export function LayoutEditor({
         }
         checks={
           bundle && (
-            <LintButton
-              findings={lint.findings}
-              active={panel === 'checks'}
-              onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
-            />
+            <>
+              <LintButton
+                findings={lint.findings}
+                active={panel === 'checks'}
+                onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
+              />
+              {host.isAdmin && (
+                <AskButton
+                  active={panel === 'ask'}
+                  onClick={() => setPanel((p) => (p === 'ask' ? 'inspector' : 'ask'))}
+                />
+              )}
+              <ProposalsButton layoutId={currentId} draft={draft} />
+            </>
           )
         }
       />
@@ -891,7 +960,21 @@ export function LayoutEditor({
             className='flex w-[344px] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white dark:border-border dark:bg-card'
           >
             {bundle &&
-              (panel === 'checks' ? (
+              (panel === 'ask' ? (
+                <AskPanel
+                  layoutId={currentId}
+                  layoutName={layoutName}
+                  kind={layoutKindOf(bundle.layout)}
+                  bundle={bundle}
+                  thread={askThread}
+                  setThread={setAskThread}
+                  pending={askPending}
+                  onPendingTaken={() => setAskPending(null)}
+                  jump={jumpSetting}
+                  onCite={onAskCite}
+                  recordId={preview.record?.id ?? null}
+                />
+              ) : panel === 'checks' ? (
                 <LintPanel
                   findings={lint.findings}
                   health={lint.health}
@@ -908,6 +991,14 @@ export function LayoutEditor({
                   collection={collection}
                   previewRoleId={preview.roleId}
                   onPreviewRoleChange={onPreviewRoleChange}
+                  onAskWhere={
+                    host.isAdmin
+                      ? (q) => {
+                          setAskPending(q)
+                          setPanel('ask')
+                        }
+                      : undefined
+                  }
                 />
               ) : selection.length > 1 ? (
                 <BulkInspector

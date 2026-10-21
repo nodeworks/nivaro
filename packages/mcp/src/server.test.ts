@@ -1,7 +1,13 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { Command } from '@nivaro/sdk'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ADMIN_TOOL_NAMES, createNivaroMcpServer, keyIsAdmin, TOOL_NAMES } from './index.js'
+import {
+  ADMIN_TOOL_NAMES,
+  createNivaroMcpServer,
+  keyIsAdmin,
+  LAYOUT_TOOL_NAMES,
+  TOOL_NAMES
+} from './index.js'
 import { apiError, connect, type Handler, mockClient, textOf } from './test-utils.js'
 
 const COLLECTION = {
@@ -75,7 +81,7 @@ describe('createNivaroMcpServer', () => {
     const { mcp } = await connect(client)
     const tools = await mcp.listTools()
     expect(tools.tools.map((t) => t.name).sort()).toEqual([...TOOL_NAMES].sort())
-    for (const name of ADMIN_TOOL_NAMES) {
+    for (const name of [...ADMIN_TOOL_NAMES, ...LAYOUT_TOOL_NAMES]) {
       expect(tools.tools.map((t) => t.name)).not.toContain(name)
     }
     const resources = await mcp.listResources()
@@ -92,7 +98,7 @@ describe('createNivaroMcpServer', () => {
     const { mcp } = await connect(client, { adminTools: true })
     const tools = await mcp.listTools()
     expect(tools.tools.map((t) => t.name).sort()).toEqual(
-      [...TOOL_NAMES, ...ADMIN_TOOL_NAMES].sort()
+      [...TOOL_NAMES, ...ADMIN_TOOL_NAMES, ...LAYOUT_TOOL_NAMES].sort()
     )
     await mcp.close()
   })
@@ -112,7 +118,9 @@ describe('createNivaroMcpServer', () => {
       'add_comment',
       'cpu_profile',
       // a saved query may call a procedure that writes
-      'run_custom_query'
+      'run_custom_query',
+      // stores a proposal (never the layout itself)
+      'propose_layout_ops'
     ])
     for (const tool of tools) {
       const a = tool.annotations

@@ -1,3 +1,11 @@
+export {
+  type DiffSide,
+  ExplainDiffButton,
+  ExplainDiffView,
+  type LayoutDiffExplanation,
+  type LayoutProposal,
+  useExplainLayoutDiff
+} from './assist'
 export { bundleToActiveLayout, type CanvasLayout, previewForRole } from './bundle-to-active'
 export { PdfCanvas, type PdfCanvasProps } from './canvases/PdfCanvas'
 export { DesignDropZone, DesignNode, designWrap, useDesignWrap } from './DesignNode'

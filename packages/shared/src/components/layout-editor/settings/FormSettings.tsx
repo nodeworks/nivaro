@@ -1,7 +1,8 @@
-import { Search, X } from 'lucide-react'
+import { MessageCircleQuestion, Search, X } from 'lucide-react'
 import { type ComponentType, type UIEvent, useCallback, useMemo, useState } from 'react'
 import type { LayoutBundle, LayoutOp, LayoutPatch } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
+import { isWhereQuestion } from '../assist/settings-index'
 import { PanelHeader } from '../panel-frame'
 import { groupTitle } from '../panel-style'
 import type { ApplyOptions } from '../useLayoutDraft'
@@ -47,6 +48,13 @@ export interface FormSettingsProps {
    */
   previewRoleId?: string | null
   onPreviewRoleChange?: (roleId: string | null) => void
+  /**
+   * Find a setting by asking (#2676): a search typed as a question, or one
+   * nothing here matches, can be handed to the editor's Ask panel, which
+   * looks in the inspector too (and asks the AI when the words do not place
+   * it). Omitted = the plain search only.
+   */
+  onAskWhere?: (question: string) => void
 }
 
 /**
@@ -62,7 +70,8 @@ export function FormSettings({
   collection,
   onPreviewRole,
   previewRoleId,
-  onPreviewRoleChange
+  onPreviewRoleChange,
+  onAskWhere
 }: FormSettingsProps) {
   const [query, setQuery] = useState('')
   const kind = layoutKindOf(bundle.layout)
@@ -137,6 +146,17 @@ export function FormSettings({
         onScroll={markStuck}
         className='min-h-0 flex-1 overflow-y-auto px-4 pb-8'
       >
+        {onAskWhere && query.trim() && (sections.length === 0 || isWhereQuestion(query)) && (
+          <button
+            type='button'
+            data-settings-ask=''
+            onClick={() => onAskWhere(query.trim())}
+            className='mt-3 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
+          >
+            <MessageCircleQuestion className='h-3.5 w-3.5 text-nvr-cyan' />
+            Look everywhere for “{query.trim()}”
+          </button>
+        )}
         {sections.length === 0 ? (
           <p className={cn('py-8 text-center', quietText)}>No setting matches “{query.trim()}”.</p>
         ) : (

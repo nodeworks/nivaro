@@ -232,10 +232,29 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Required is set per form, not per role: "make Zone required for Finance" makes it required on this form and says so when the form is not limited to Finance (give Finance its own form to require it only there). Text the palette cannot read can go to the AI (admins, when AI is set up): it answers in the same commands, shown in the same preview before anything changes. Without AI the typed commands still work.'
     },
+    { type: 'h3', id: 'layout-editor-ask', text: 'Ask about this form' },
+    {
+      type: 'p',
+      text: 'Ask in the top bar opens a panel on the right for questions such as "Why can\'t Finance see Zone on record 284212?" or "Which form does record 284212 get?". The AI answers with the same engines the editor shows: which form a record gets for a role (Test a record), the role\'s field permissions, where the field sits, the section rules (hidden or read-only for roles, shows when) and the checks. It reads your unsaved draft, changes nothing, and never sees record values: a section rule comes back as matched or not. Each answer lists the fields, records and forms it looked at; click one to select the field, preview the record or open the form. Administrators only; it needs AI to be set up.'
+    },
+    { type: 'h3', id: 'layout-editor-find-setting', text: 'Find a setting by asking' },
+    {
+      type: 'p',
+      text: 'Ask "Where do I turn off comments?" in the Ask panel and it lists the matching controls, each with where it lives (Form settings section or inspector tab) and a Show me button. Show me opens that panel, selects a field or section the control applies to when it is an inspector control, switches to its tab and highlights the control. The words of the question are matched first; only when they do not place it does the AI pick from the same list. Without AI the closest word matches are shown. In Form settings, a search typed as a question, or one nothing matches, offers Look everywhere, which asks the same way.'
+    },
+    { type: 'h3', id: 'layout-editor-proposals', text: 'Proposals from assistants' },
+    {
+      type: 'p',
+      text: 'A connected assistant (Claude or ChatGPT over the MCP connector, or Claude Code) can propose changes to a form with the propose_layout_ops tool. A proposal never changes the form: Proposals in the top bar shows how many wait, who proposed each one and through which app, the note, and every change in plain words. Try on canvas applies it to your draft as one undo step (nothing is saved until Save, unless Autosave is on); Keep marks it applied, Take back undoes it, and Reject closes it. A proposal that no longer fits the form says why and cannot be tried.'
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
       text: 'History lists the saved versions of the layout — one per editing burst, sections included — with who saved and the change\'s name. "What the last save changed" shows the newest difference first; any version can be compared with the layout now. Restore replaces the layout with that version exactly (sections added since are removed) after keeping the current one as a version first. Versions survive a layout delete.'
+    },
+    {
+      type: 'p',
+      text: 'Explain in words, under a comparison, says what the differences mean for the people filling the form, using the History notes of the saves in between (administrators, with AI set up). The exact differences and the notes stay one click away, and without AI they are what you get. Compare two forms and Merge two forms use the same explanation for two different layouts.'
     },
     { type: 'h3', text: 'Inherited layouts' },
     {
@@ -343,7 +362,22 @@ GET  /api/collection-layouts/field-access?collection=orders      // administrato
                            hidden_fields, readonly_fields }] } }   // every role's field permissions
 
 GET  /api/widgets-internal/:id/placements
-     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`
+     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget
+
+// Layout AI helpers (administrators; nothing here writes a layout)
+GET  /api/ai-design/layouts/:id/describe              // the form in plain terms
+GET  /api/ai-design/layouts/which-form?collection=orders&item=284212&role=Finance
+GET  /api/ai-design/layouts/explain-field?collection=orders&field=zone&role=Finance&item=284212
+     → { data: { verdict: 'shown' | 'shown read-only' | 'hidden' | 'not on the form' | 'cannot open the record',
+                 reasons: [...], layout: { id, name } } }
+POST /api/ai-design/layouts/:id/proposals { ops, note }   // store a proposal (201), never applied
+     400 { error, dropped, op_index }                     // unknown names are dropped and listed
+GET  /api/ai-design/layouts/:id/proposals[?status=all]
+POST /api/ai-design/layouts/:id/proposals/:pid/resolve { outcome: 'applied' | 'rejected' }
+POST /api/ai-design/layouts/:id/ask { question, history?, draft? }  → { data: { answer, cites } }
+POST /api/ai-design/layouts/find-setting { question, candidates: [{ key, label, where }] }
+POST /api/ai-design/layouts/explain-diff { a: { layout_id, version? }, b: { layout_id, version? }, ai? }
+     → { data: { sentences, notes, summary, points } }   // version: id | 'newest'; none = now`
     },
     {
       type: 'table',

@@ -162,9 +162,20 @@ When the key's user is an administrator, the `nivaro-mcp` command also registers
 
 None of them restarts, kills, pauses, busts a cache, writes configuration or takes a heap snapshot.
 
+### Layout tools
+
+Registered with the admin tools. Three reads explain how a collection's forms are built, and one tool proposes changes without making them.
+
+| Tool | What it does |
+| --- | --- |
+| `describe_layout` | One form by `layout_id`: who gets it, its record rule, settings that are on, sections and their fields (width, required, read-only, hidden). With only `collection`: every layout of the collection to pick from. |
+| `which_form` | Which form a record opens with for a role, and why, with every candidate the resolver checked. |
+| `explain_field` | Why a field is shown, hidden or read-only for a role on a record: permissions, the form, where the field sits, section rules. Record values are never returned. |
+| `propose_layout_ops` | Stores layout ops as a proposal. Nothing changes: an administrator reviews it in the layout editor (Proposals) and applies it to their draft or rejects it. Unknown fields and settings are dropped and listed. |
+
 ### Tool annotations
 
-Every tool carries MCP annotations so a client can decide when to ask the person first: reads are `readOnlyHint: true`; writes (`create_item`, `update_item`, `transition`, `create_task`, `complete_task`, `add_comment`, `mark_notifications_read`, and `cpu_profile`, which runs work on the server) are `readOnlyHint: false`; only `delete_item` is `destructiveHint: true`. All are `openWorldHint: false` — they talk only to the configured instance.
+Every tool carries MCP annotations so a client can decide when to ask the person first: reads are `readOnlyHint: true`; writes (`create_item`, `update_item`, `transition`, `create_task`, `complete_task`, `add_comment`, `mark_notifications_read`, `propose_layout_ops`, which stores a proposal, and `cpu_profile`, which runs work on the server) are `readOnlyHint: false`; only `delete_item` is `destructiveHint: true`. All are `openWorldHint: false` — they talk only to the configured instance.
 
 ## Resources
 
@@ -183,7 +194,7 @@ const { server } = createNivaroMcpServer({ url: process.env.NIVARO_URL!, token: 
 await server.connect(new StdioServerTransport())
 ```
 
-`createNivaroMcpServer` also accepts a prebuilt `@nivaro/sdk` client (`client`), a custom `fetch`, and `adminTools: true` to register the admin tools (`ADMIN_TOOL_NAMES`; `TOOL_NAMES` lists the rest). `keyIsAdmin(client)` answers whether a key's user is an administrator, and `createNivaroMcpClient({ url, token })` builds the client the server uses. The package's own tests drive every tool through a real in-process MCP client against a mocked API.
+`createNivaroMcpServer` also accepts a prebuilt `@nivaro/sdk` client (`client`), a custom `fetch`, and `adminTools: true` to register the admin and layout tools (`ADMIN_TOOL_NAMES`, `LAYOUT_TOOL_NAMES`; `TOOL_NAMES` lists the rest). `keyIsAdmin(client)` answers whether a key's user is an administrator, and `createNivaroMcpClient({ url, token })` builds the client the server uses. The package's own tests drive every tool through a real in-process MCP client against a mocked API.
 
 ## Follow-ups
 
