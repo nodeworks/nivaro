@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  approveLayoutText,
   formLocale,
   layoutText,
   readLayoutI18n,
@@ -17,8 +18,8 @@ describe('layout i18n', () => {
   it('sets and clears one text, dropping empty locales', () => {
     const a = withLayoutText({}, 'es', 'label', 'Nombre')
     expect(a).toEqual({ es: { label: 'Nombre' } })
-    const b = withLayoutText(a ?? {}, 'es', 'note', 'Ayuda')
-    expect(b).toEqual({ es: { label: 'Nombre', note: 'Ayuda' } })
+    const b = withLayoutText(a ?? {}, 'es', 'help', 'Ayuda')
+    expect(b).toEqual({ es: { label: 'Nombre', help: 'Ayuda' } })
     expect(withLayoutText({ es: { label: 'Nombre' } }, 'es', 'label', '  ')).toBeUndefined()
   })
 
@@ -44,6 +45,24 @@ describe('layout i18n', () => {
       'Básico'
     )
     expect(translateGroup({ label: 'Basics' }, 'es').label).toBe('Basics')
+  })
+
+  it('keeps a suggested translation off records until it is approved', () => {
+    const row = {
+      label: 'Name',
+      note: 'Your name',
+      _overrides: { i18n: { es: { label: 'Nombre', help: 'Su nombre', draft: true } } }
+    }
+    expect(translateFieldRow(row, 'es')).toBe(row)
+    // Editing keeps it a suggestion; approving makes it live.
+    const edited = withLayoutText(readLayoutI18n(row._overrides.i18n), 'es', 'label', 'Nombre!')
+    expect(edited?.es.draft).toBe(true)
+    const approved = approveLayoutText(edited ?? {}, 'es')
+    expect(approved.es).toEqual({ label: 'Nombre!', help: 'Su nombre' })
+    expect(translateFieldRow({ ...row, _overrides: { i18n: approved } }, 'es')).toMatchObject({
+      label: 'Nombre!',
+      note: 'Su nombre'
+    })
   })
 
   it('reads the chosen admin language first', () => {

@@ -64,6 +64,8 @@ export interface GroupPatch {
   hidden_for_roles?: string | null
   locked_for_roles?: string | null
   read_width?: string | null
+  /** Label translations per locale, JSON `{ "es": { "label": "…" } }` (#2665). */
+  i18n?: string | null
 }
 
 export interface GroupRow {
@@ -88,6 +90,8 @@ export interface GroupRow {
   hidden_for_roles: string | null
   locked_for_roles: string | null
   read_width: string | null
+  /** Label translations per locale (#2665); absent before migration 465. */
+  i18n?: string | null
 }
 
 /** The layout settings PATCH /collection-layouts/:id accepts. */

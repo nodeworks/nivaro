@@ -1,4 +1,9 @@
-import { readLayoutI18n, withLayoutText } from '../../../lib/layout-i18n'
+import {
+  approveLayoutText,
+  type LayoutI18n,
+  readLayoutI18n,
+  withLayoutText
+} from '../../../lib/layout-i18n'
 import type { GroupRow } from '../../../lib/layout-ops'
 import { titleCase } from '../../../lib/utils'
 import { useTranslationSummary } from '../inspect/inspect-api'
@@ -10,6 +15,8 @@ import { Section, Setting, TextInput, useInspectorEnv } from './kit'
 // a field's label and help text (placement overrides.i18n) and a section's
 // label (the group's i18n). The first language there is the one the form is
 // written in; the record form shows a reader's language when it has it.
+// A suggested translation (`draft: true`, e.g. from AI) shows here marked as a
+// suggestion and stays off records until it is approved.
 
 const upper = (l: string) => l.toUpperCase()
 
@@ -23,15 +30,18 @@ export function FieldTranslations() {
   const baseLabel = typeof ov.label === 'string' && ov.label ? ov.label : info.label
   const baseNote = (typeof ov.note === 'string' && ov.note) || info.global?.note || ''
   const missing = locales.reduce(
-    (n, l) => n + (map[l]?.label ? 0 : 1) + (baseNote && !map[l]?.note ? 1 : 0),
+    (n, l) =>
+      n +
+      (map[l]?.label && !map[l]?.draft ? 0 : 1) +
+      (baseNote && !(map[l]?.help && !map[l]?.draft) ? 1 : 0),
     0
   )
-  const set = (locale: string, key: 'label' | 'note', value: string) =>
-    ctx.setOverride(
-      'i18n',
+  const write = (next: LayoutI18n | undefined, label: string) =>
+    ctx.setOverride('i18n', next, label, true)
+  const set = (locale: string, key: 'label' | 'help', value: string) =>
+    write(
       withLayoutText(readLayoutI18n(ov.i18n), locale, key, value),
-      `Translate the ${key === 'label' ? 'label' : 'help text'} of ${info.label} (${upper(locale)})`,
-      true
+      `Translate the ${key === 'label' ? 'label' : 'help text'} of ${info.label} (${upper(locale)})`
     )
   return (
     <Section
@@ -45,6 +55,18 @@ export function FieldTranslations() {
       </p>
       {locales.map((l) => (
         <div key={l} data-translation-locale={l} className='space-y-3'>
+          {map[l]?.draft && (
+            <DraftNote
+              locale={l}
+              onApprove={() =>
+                ctx.setOverride(
+                  'i18n',
+                  approveLayoutText(readLayoutI18n(ov.i18n), l),
+                  `Approve the ${upper(l)} translation of ${info.label}`
+                )
+              }
+            />
+          )}
           <Setting
             k='field.i18n.label'
             label={`Label (${upper(l)})`}
@@ -58,7 +80,7 @@ export function FieldTranslations() {
             />
           </Setting>
           <Setting
-            k='field.i18n.note'
+            k='field.i18n.help'
             label={`Help text (${upper(l)})`}
             effect={
               baseNote ? 'The line of help under the field.' : 'Shown only once the field has help.'
@@ -66,9 +88,9 @@ export function FieldTranslations() {
           >
             <TextInput
               ariaLabel={`Help text in ${upper(l)}`}
-              value={map[l]?.note ?? ''}
+              value={map[l]?.help ?? ''}
               placeholder={baseNote}
-              onChange={(v) => set(l, 'note', v)}
+              onChange={(v) => set(l, 'help', v)}
             />
           </Setting>
         </div>
@@ -90,8 +112,7 @@ export function GroupTranslations({ group }: { group: GroupRow }) {
       </p>
     )
   const map = readLayoutI18n(group.i18n)
-  const set = (locale: string, value: string) => {
-    const next = withLayoutText(readLayoutI18n(group.i18n), locale, 'label', value)
+  const save = (next: LayoutI18n | undefined, locale: string, approve = false) =>
     env.apply(
       [
         {
@@ -100,26 +121,53 @@ export function GroupTranslations({ group }: { group: GroupRow }) {
           patch: { i18n: next ? JSON.stringify(next) : null }
         }
       ],
-      { label: `Translate the name of ${name} (${upper(locale)})`, text: true }
+      approve
+        ? { label: `Approve the ${upper(locale)} name of ${name}` }
+        : { label: `Translate the name of ${name} (${upper(locale)})`, text: true }
     )
-  }
+  const set = (locale: string, value: string) =>
+    save(withLayoutText(readLayoutI18n(group.i18n), locale, 'label', value), locale)
   return (
     <Section title='Translations' collapsible defaultOpen={false}>
       {locales.map((l) => (
-        <Setting
-          key={l}
-          k='group.i18n.label'
-          label={`Name (${upper(l)})`}
-          effect={`The heading people reading in ${upper(l)} see. Empty uses the name above.`}
-        >
-          <TextInput
-            ariaLabel={`Name in ${upper(l)}`}
-            value={map[l]?.label ?? ''}
-            placeholder={name}
-            onChange={(v) => set(l, v)}
-          />
-        </Setting>
+        <div key={l} className='space-y-2'>
+          {map[l]?.draft && (
+            <DraftNote locale={l} onApprove={() => save(approveLayoutText(map, l), l, true)} />
+          )}
+          <Setting
+            k='group.i18n.label'
+            label={`Name (${upper(l)})`}
+            effect={`The heading people reading in ${upper(l)} see. Empty uses the name above.`}
+          >
+            <TextInput
+              ariaLabel={`Name in ${upper(l)}`}
+              value={map[l]?.label ?? ''}
+              placeholder={name}
+              onChange={(v) => set(l, v)}
+            />
+          </Setting>
+        </div>
       ))}
     </Section>
+  )
+}
+
+/** A suggested translation: not on records until approved. */
+function DraftNote({ locale, onApprove }: { locale: string; onApprove(): void }) {
+  return (
+    <p
+      data-translation-draft={locale}
+      className='flex flex-wrap items-center gap-x-2 text-[12px] leading-snug text-amber-700 dark:text-amber-300'
+    >
+      Suggested {upper(locale)} text, not shown on records yet.
+      <button
+        type='button'
+        data-approve-translation={locale}
+        onClick={onApprove}
+        className='font-medium underline'
+      >
+        Approve
+      </button>
+    </p>
   )
 }

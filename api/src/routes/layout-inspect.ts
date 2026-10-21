@@ -138,7 +138,7 @@ export async function layoutInspectRoutes(app: FastifyInstance): Promise<void> {
         const ov = readI18nOverrides(a.overrides)
         if (ov.label === '') continue // label hidden on this form
         const note = typeof ov.note === 'string' ? ov.note : noteOf.get(a.field)
-        texts.push({ keys: note ? ['label', 'note'] : ['label'], i18n: readI18n(ov.i18n) })
+        texts.push({ keys: note ? ['label', 'help'] : ['label'], i18n: readI18n(ov.i18n) })
       }
       if (groupsSupported)
         for (const g of groups)

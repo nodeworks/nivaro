@@ -1,10 +1,19 @@
 // Layout text per language (#2665): a form's field labels and help text live
 // in the placement's `overrides.i18n`, a section's label in the group's
-// `i18n` (migration 465), both as `{ "<locale>": { "label": "…", "note": "…" } }`.
+// `i18n` (migration 465), both as `{ "<locale>": { label?, help?, draft? } }` —
+// the shape AI translation drafts write too. `draft: true` = suggested, not yet
+// approved: the record form ignores it and the overview counts it as missing.
 // The record form shows the reader's language when the form has it, else the
 // text as written. nivaro_field_translations is for record VALUES, not this.
 
-export type LayoutI18n = Record<string, Record<string, string>>
+export interface LayoutI18nEntry {
+  label?: string
+  help?: string
+  /** Suggested (AI), not yet approved. */
+  draft?: true
+}
+
+export type LayoutI18n = Record<string, LayoutI18nEntry>
 
 /** A stored i18n map (object or JSON text); anything malformed reads as none. */
 export function readLayoutI18n(v: unknown): LayoutI18n {
@@ -20,26 +29,40 @@ export function readLayoutI18n(v: unknown): LayoutI18n {
   const out: LayoutI18n = {}
   for (const [loc, texts] of Object.entries(raw as Record<string, unknown>)) {
     if (!texts || typeof texts !== 'object' || Array.isArray(texts)) continue
-    const t: Record<string, string> = {}
-    for (const [k, s] of Object.entries(texts as Record<string, unknown>))
-      if (typeof s === 'string' && s.trim()) t[k] = s
-    if (Object.keys(t).length) out[loc] = t
+    const src = texts as Record<string, unknown>
+    const e: LayoutI18nEntry = {}
+    for (const k of ['label', 'help'] as const) {
+      const t = src[k]
+      if (typeof t === 'string' && t.trim()) e[k] = t
+    }
+    if (!e.label && !e.help) continue
+    if (src.draft === true) e.draft = true
+    out[loc] = e
   }
   return out
 }
 
-/** The map with one text set (empty clears it); undefined when nothing is left. */
+/** The map with one text set (empty clears it); undefined when nothing is left.
+ *  A draft stays a draft until it is approved. */
 export function withLayoutText(
   map: LayoutI18n,
   locale: string,
-  key: string,
+  key: 'label' | 'help',
   value: string
 ): LayoutI18n | undefined {
-  const next: LayoutI18n = { ...map, [locale]: { ...(map[locale] ?? {}) } }
-  if (value.trim()) next[locale][key] = value
-  else delete next[locale][key]
-  if (!Object.keys(next[locale]).length) delete next[locale]
+  const entry: LayoutI18nEntry = { ...(map[locale] ?? {}) }
+  if (value.trim()) entry[key] = value
+  else delete entry[key]
+  const next: LayoutI18n = { ...map }
+  if (entry.label || entry.help) next[locale] = entry
+  else delete next[locale]
   return Object.keys(next).length ? next : undefined
+}
+
+/** The map with `locale`'s draft approved (shown from now on). */
+export function approveLayoutText(map: LayoutI18n, locale: string): LayoutI18n {
+  const { draft: _draft, ...rest } = map[locale] ?? {}
+  return { ...map, [locale]: rest }
 }
 
 /** The language the record form reads in: the person's chosen admin language,
@@ -57,10 +80,11 @@ export function formLocale(): string {
 }
 
 /** The translated text, matching `pt-br` then `pt`; null when the form has none. */
-export function layoutText(map: LayoutI18n, locale: string, key: string): string | null {
-  const exact = Object.keys(map).find((k) => k.toLowerCase() === locale)
+export function layoutText(map: LayoutI18n, locale: string, key: 'label' | 'help'): string | null {
+  const live = Object.keys(map).filter((k) => !map[k].draft)
+  const exact = live.find((k) => k.toLowerCase() === locale)
   const base = locale.split(/[-_]/)[0]
-  const loose = exact ?? Object.keys(map).find((k) => k.toLowerCase().split(/[-_]/)[0] === base)
+  const loose = exact ?? live.find((k) => k.toLowerCase().split(/[-_]/)[0] === base)
   return (loose && map[loose]?.[key]) || null
 }
 
@@ -74,7 +98,7 @@ export function translateFieldRow<
   if (!raw) return row
   const map = readLayoutI18n(raw)
   const label = row.label === '' ? null : layoutText(map, locale, 'label')
-  const note = layoutText(map, locale, 'note')
+  const note = layoutText(map, locale, 'help')
   if (!label && !note) return row
   return { ...row, ...(label ? { label } : {}), ...(note ? { note } : {}) }
 }

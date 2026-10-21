@@ -152,7 +152,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-translations', text: 'Translations' },
     {
       type: 'p',
-      text: "When Settings → Localization lists more than one language, the first is the one the form is written in and the others get a Translations section: a field's label and help text (Look tab) and a section's, tab's or step's name (its inspector). Translations save with the layout and version with it. The record form shows them to people reading in that language — their chosen admin language, else the page's, else the browser's — and the text as written where a translation is missing. The overview counts the missing translations per form. Section names need migration 465; field labels and help text work without it. Record values are translated separately (field translations)."
+      text: "When Settings → Localization lists more than one language, the first is the one the form is written in and the others get a Translations section: a field's label and help text (Look tab) and a section's, tab's or step's name (its inspector). Translations save with the layout and version with it. The record form shows them to people reading in that language — their chosen admin language, else the page's, else the browser's — and the text as written where a translation is missing. A suggested translation (for example one drafted by AI) shows marked as a suggestion and stays off records until Approve; the overview counts it as missing until then. The overview counts the missing translations per form. Section names need migration 465; field labels and help text work without it. Record values are translated separately (field translations)."
     },
     { type: 'h3', text: 'Drag and drop' },
     {

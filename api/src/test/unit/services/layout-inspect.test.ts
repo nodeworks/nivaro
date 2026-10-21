@@ -126,8 +126,11 @@ describe('orphanReason', () => {
 
 describe('translations', () => {
   it('reads only well-formed locale maps', () => {
-    expect(readI18n('{"es":{"label":"Título","note":""},"x":3}')).toEqual({
-      es: { label: 'Título' }
+    expect(
+      readI18n('{"es":{"label":"Título","help":""},"fr":{"label":"Titre","draft":true},"x":3}')
+    ).toEqual({
+      es: { label: 'Título' },
+      fr: { label: 'Titre', draft: true }
     })
     expect(readI18n('not json')).toEqual({})
     expect(readI18n(null)).toEqual({})
@@ -136,9 +139,10 @@ describe('translations', () => {
 
   it('counts one missing per text, key and locale', () => {
     const texts: TranslatableText[] = [
-      { keys: ['label', 'note'], i18n: { es: { label: 'Título' } } },
-      { keys: ['label'], i18n: {} }
+      { keys: ['label', 'help'], i18n: { es: { label: 'Título' } } },
+      { keys: ['label'], i18n: { es: { label: 'Nombre', draft: true } } }
     ]
+    // A suggested (draft) translation still counts as missing.
     expect(countMissing(texts, ['es', 'fr'])).toEqual({ missing: 5, total: 6 })
     expect(countMissing(texts, [])).toEqual({ missing: 0, total: 0 })
   })

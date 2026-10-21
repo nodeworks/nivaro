@@ -467,9 +467,17 @@ export async function groupI18nSupported(): Promise<boolean> {
   return ok
 }
 
-export type I18nMap = Record<string, Record<string, string>>
+/** One locale's layout text: `{ label?, help?, draft? }` — the shape the AI
+ *  translation drafts write too. `draft: true` = suggested, not yet approved. */
+export interface I18nEntry {
+  label?: string
+  help?: string
+  draft?: true
+}
 
-/** `{ es: { label: 'Nombre', note: '…' } }` from a placement's overrides or a
+export type I18nMap = Record<string, I18nEntry>
+
+/** `{ es: { label: 'Nombre', help: '…' } }` from a placement's overrides or a
  *  group's i18n text; anything malformed reads as no translations. */
 export function readI18n(v: unknown): I18nMap {
   let raw = v
@@ -484,21 +492,27 @@ export function readI18n(v: unknown): I18nMap {
   const out: I18nMap = {}
   for (const [loc, texts] of Object.entries(raw as Record<string, unknown>)) {
     if (!texts || typeof texts !== 'object' || Array.isArray(texts)) continue
-    const t: Record<string, string> = {}
-    for (const [k, s] of Object.entries(texts as Record<string, unknown>))
-      if (typeof s === 'string' && s.trim()) t[k] = s
-    if (Object.keys(t).length) out[loc] = t
+    const src = texts as Record<string, unknown>
+    const e: I18nEntry = {}
+    for (const k of ['label', 'help'] as const) {
+      const t = src[k]
+      if (typeof t === 'string' && t.trim()) e[k] = t
+    }
+    if (!e.label && !e.help) continue
+    if (src.draft === true) e.draft = true
+    out[loc] = e
   }
   return out
 }
 
 export interface TranslatableText {
-  /** The texts a translation is expected for: label, and note when the base has help. */
-  keys: string[]
+  /** The texts a translation is expected for: label, and help when the base has help. */
+  keys: Array<'label' | 'help'>
   i18n: I18nMap
 }
 
-/** Missing translations: one per (text, key, locale) with no translated string. */
+/** Missing translations: one per (text, key, locale) with no approved string —
+ *  a suggested (draft) translation still counts as missing. */
 export function countMissing(
   texts: TranslatableText[],
   locales: string[]
@@ -509,7 +523,8 @@ export function countMissing(
     for (const k of t.keys)
       for (const loc of locales) {
         total++
-        if (!t.i18n[loc]?.[k]) missing++
+        const e = t.i18n[loc]
+        if (!e?.[k] || e.draft) missing++
       }
   return { missing, total }
 }
