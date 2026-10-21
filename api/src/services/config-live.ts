@@ -7,8 +7,12 @@ import { currentTenantKey } from './tenant-rooms.js'
  *
  * A layout, field, field rule or pipeline edit tells every open page of the tenant that its
  * form definition moved: `config:update { surface, collection?, at }` — names only. An open
- * record form on that collection (or on any, when the edit names none) says "This form was
- * changed, reload to see the new version"; what the person typed is kept by the draft store.
+ * record form on the named collection re-reads its definition and says "This form was changed,
+ * reload to see the new version" (what the person typed is kept by the draft store); an edit
+ * that names no collection makes every open form re-read in place, quietly, with no notice
+ * (configUpdateReaction in packages/shared). So a write route that changes one collection's
+ * form must name it: the request's `collection`, a path collectionHint reads, or
+ * nameConfigCollection for writes keyed by id.
  *
  * Two senders, one notice: the write route (names the collection when the request does) and the
  * config epoch's stamp (a raw write or a script — it knows only the tables). The stamp stays
@@ -102,8 +106,9 @@ export function nameConfigCollection(req: object, collection: unknown): void {
 
 /**
  * The collection a config write names: the one the route set with nameConfigCollection, the
- * body or query's `collection`, or the path segment after `/fields/` or `/collections/` (never
- * a numeric id). null = "any form may be affected".
+ * body or query's `collection`, or the path segment after `/fields/`, `/collections/`,
+ * `/field-config/` or `/data-model/tables/` (a data-model table is its collection's name; never
+ * a numeric id). null = no collection named: open forms re-read quietly, no notice.
  */
 export function collectionHint(req: {
   url: string
@@ -117,7 +122,11 @@ export function collectionHint(req: {
   const query = req.query as { collection?: unknown } | null | undefined
   const direct = pick(req.nvrConfigCollection) ?? pick(body?.collection) ?? pick(query?.collection)
   if (direct) return direct
-  const m = req.url.split('?')[0].match(/^\/api\/(?:data-model\/)?(?:fields|collections)\/([^/]+)/)
+  const m = req.url
+    .split('?')[0]
+    .match(
+      /^\/api\/(?:field-config|data-model\/tables|(?:data-model\/)?(?:fields|collections))\/([^/]+)/
+    )
   return m ? pick(m[1]) : null
 }
 

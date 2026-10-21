@@ -37,6 +37,27 @@ describe('collectionHint', () => {
   })
 })
 
+describe('collectionHint — field settings and data-model tables name their collection', () => {
+  it('a Data Model field-settings PATCH names the collection, so its open forms get the notice', () => {
+    expect(collectionHint({ url: '/api/field-config/orders/amount', body: { label: 'X' } })).toBe(
+      'orders'
+    )
+  })
+
+  it('a data-model table write names the table it changes', () => {
+    expect(collectionHint({ url: '/api/data-model/tables/orders/columns' })).toBe('orders')
+    expect(collectionHint({ url: '/api/data-model/tables/orders/fields/amount' })).toBe('orders')
+    expect(collectionHint({ url: '/api/data-model/tables/orders/register?x=1' })).toBe('orders')
+    expect(collectionHint({ url: '/api/data-model/tables/orders' })).toBe('orders')
+  })
+
+  it('creating a table names none (no open form shows it yet), and ids never pass', () => {
+    expect(collectionHint({ url: '/api/data-model/tables' })).toBeNull()
+    expect(collectionHint({ url: '/api/field-config/12/amount' })).toBeNull()
+    expect(collectionHint({ url: '/api/data-model/tables/12/columns' })).toBeNull()
+  })
+})
+
 describe('collectionHint — writes keyed by id', () => {
   it('a layout or group write names the collection its row belongs to', () => {
     const req = { url: '/api/collection-layouts/12/ops', body: { ops: [], base_rev: 'r' } }
