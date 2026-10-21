@@ -47,6 +47,7 @@ import {
 } from '@/components/ui/select'
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { WidgetFigure, type WidgetFigureData } from '@/components/widget-figure'
 import { api, type Collection, type Dashboard, type DashboardWidget } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
 import { cn, formatNumber } from '@/lib/utils'
@@ -167,7 +168,8 @@ const TYPE_CONFIG: Record<WidgetType, { label: string; color: string }> = {
   bar_chart: { label: 'Bar Chart', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   line_chart: { label: 'Line Chart', color: 'bg-pink-50 text-pink-700 border-pink-200' },
   report_preset: { label: 'Prebuilt', color: 'bg-amber-50 text-amber-700 border-amber-200' },
-  saved_view: { label: 'Saved view', color: 'bg-sky-50 text-sky-700 border-sky-200' }
+  saved_view: { label: 'Saved view', color: 'bg-sky-50 text-sky-700 border-sky-200' },
+  ai_query: { label: 'Ask AI', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' }
 }
 
 /** #53 — per-widget refresh choices (seconds). '' = page default (60s). */
@@ -235,6 +237,11 @@ function WidgetCard({
   })
 
   const cfg = TYPE_CONFIG[widget.type]
+  // #2738 — a pinned Ask AI chart shows the question it came from on hover.
+  const aiQuestion =
+    widget.type === 'ai_query'
+      ? String((widget.filters as { question?: unknown } | null)?.question ?? '') || null
+      : null
 
   return (
     <div
@@ -247,7 +254,10 @@ function WidgetCard({
       {/* Header */}
       <div className='mb-3 flex items-start justify-between gap-2'>
         <div className='min-w-0'>
-          <p className='truncate text-[13px] font-semibold text-slate-700 dark:text-slate-200'>
+          <p
+            className='truncate text-[13px] font-semibold text-slate-700 dark:text-slate-200'
+            data-tip={aiQuestion ? `Asked: ${aiQuestion}` : undefined}
+          >
             {widget.title}
           </p>
           {widget.collection && (
@@ -273,6 +283,14 @@ function WidgetCard({
       {widget.type === 'report_preset' ? (
         <div className='min-h-0 flex-1'>
           <PresetWidgetBody presetId={widget.field} />
+        </div>
+      ) : widget.type === 'ai_query' ? (
+        <div className='flex min-h-0 flex-1 items-center justify-center'>
+          {isLoading ? (
+            <Loader2 className='h-5 w-5 animate-spin text-slate-300' />
+          ) : (
+            <WidgetFigure type='ai_query' data={(data ?? null) as WidgetFigureData | null} />
+          )}
         </div>
       ) : (
         <div className='flex flex-1 items-center justify-center'>

@@ -77,7 +77,12 @@ export const aiConversationsDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Answers do not stream token by token to other participants: until the answer is checked against their access, nobody else sees its text. They see the question arrive and the answer appear once it is finished and checked.'
+      text: 'Live sessions: while one person’s answer streams, everyone else with the thread open follows it — each finished step, then the answer text — but only once every step so far has been re-run with their own access and returned exactly what the model saw, and every earlier answer is readable by them. Text written before any data call, a step that is not a plain read, or a result that differs for them stops the stream for that person: they see that someone is asking, then the answer when it is stored, under the rule above.'
+    },
+    { type: 'h2', id: 'ai-conversations-background', text: 'Ask in the background' },
+    {
+      type: 'p',
+      text: 'The clock button next to Send asks the question in the background: a longer run with a bigger budget of data calls, shown in the Jobs tray while it works. It reads with your access, and it can only read — it cannot draft changes or plans (ask on the page for those). The answer is saved to the conversation in your Ask history and you get an inbox notification; Cancel in the tray or under the question stops it and keeps whatever had arrived. It needs your Ask history on, and at most two run at once.'
     },
     { type: 'h2', id: 'ai-conversations-branch', text: 'Branching' },
     {
@@ -94,7 +99,9 @@ export const aiConversationsDocs: DocSection = {
       type: 'ul',
       items: [
         'An answer built from a query offers CSV and Excel. The download re-runs the query with your access today — it never copies the answer’s text — and is named after the question and the time.',
-        'A table, chart or “label: value” list in an answer has a Table · Chart · List switch. The other formats are drawn from the same rows, with no new question and no model call. A chart needs a column of numbers.'
+        'A table, chart or “label: value” list in an answer has a Table · Chart · List switch. The other formats are drawn from the same rows, with no new question and no model call. A chart needs a column of numbers.',
+        'Add to dashboard (under a chart answer) keeps the chart on one of your dashboards, or a new one. The widget stores the query behind the chart — the grouped count or total, or the saved query — not the answer, and re-runs it with the access of whoever views the dashboard. Hover its title to see the question it came from.',
+        'Copy as code (administrators, and people with an API token or key) turns the reads an answer made into an SDK call, a REST request and a curl command. Anything naming data you cannot see — a filter on a hidden field, a grouping, a saved query you may not run — is left out and counted.'
       ]
     },
     { type: 'h2', id: 'ai-conversations-api', text: 'API' },
@@ -156,12 +163,24 @@ export const aiConversationsDocs: DocSection = {
         [
           'DELETE /api/ai/conversations/:id/messages/:mid',
           'Remove one message (owner, or your own).'
+        ],
+        [
+          'POST /api/ai/research { question, conversation_id? }',
+          'Ask in the background (202 `{run_id, conversation_id, question_message_id}`); 409 with history off, 429 past two running.'
+        ],
+        [
+          'POST /api/ai/research/:run/cancel',
+          'Stop a background question (its asker, or an admin).'
+        ],
+        [
+          'GET /api/ai/answer-code?conversation_id=&message_id=',
+          'An answer’s reads as `{snippets: [{title, sdk, rest, curl, omitted}], skipped}` for the caller; `GET /api/ai/answer-code/access` says whether they may.'
         ]
       ]
     },
     {
       type: 'p',
-      text: 'Live updates: participants receive `ai:conversation` `{conversation_id, by, message_id, state: asking|answered|failed}` on their user room — ids only; the client refetches and the server filters the answer per reader.'
+      text: 'Live updates: participants receive `ai:conversation` `{conversation_id, by, message_id, state: asking|answered|failed}` on their user room — ids only; the client refetches and the server filters the answer per reader. A live answer arrives as `ai:live` `{conversation_id, message_id, by: {id, name}, kind: working|step|delta|end, tool?, summary?, text?, round?}` — steps and text only for readers the checks above admit.'
     }
   ]
 }

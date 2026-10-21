@@ -135,7 +135,8 @@ export function ShareMenu({
           </div>
         )}
         <p className='border-t border-slate-200 px-3 py-2 text-[11px] text-muted-foreground dark:border-border'>
-          Each person sees an answer only when it holds nothing outside their own access.
+          They can follow answers live and ask the next question. Each person sees an answer only
+          when it holds nothing outside their own access.
         </p>
       </PopoverContent>
     </Popover>

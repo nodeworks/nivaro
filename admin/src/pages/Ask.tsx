@@ -25,6 +25,7 @@ import {
 } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Clock,
   Download,
   GitBranch,
   History,
@@ -51,6 +52,15 @@ import { ASK_HANDOFF_KEY } from '@/lib/ask-handoff'
 import { useAuth } from '@/lib/auth'
 import { getSocket } from '@/lib/socket'
 import { cn, formatRelative } from '@/lib/utils'
+import {
+  AddToDashboard,
+  answerChart,
+  CopyAsCode,
+  LiveFromOthers,
+  pinSourceFor,
+  useAnswerCodeAccess,
+  useLiveFromOthers
+} from './ask/AskExtras'
 import { ASK_LIST_KEY, AskHistory } from './ask/AskHistory'
 import {
   type AskChoice,
@@ -106,6 +116,8 @@ interface ChatTurn {
   choices?: AskChoice[]
   /** Suggested next questions (#1834). */
   followups?: string[]
+  /** Answered in the background (#2456). */
+  research?: boolean
 }
 
 interface ChatBody {
@@ -217,7 +229,8 @@ function toTurn(m: ServerMessage): ChatTurn {
     cachedAt: typeof m.meta.cached_at === 'string' ? m.meta.cached_at : null,
     stopped: m.meta.stopped === true,
     author: m.author,
-    visible: m.visible
+    visible: m.visible,
+    research: m.meta.research === true
   }
 }
 
@@ -735,6 +748,62 @@ function AskPageInner() {
     void qc.invalidateQueries({ queryKey: ASK_LIST_KEY })
   }
 
+  // #2456 — a question running in the background from this page (cleared when its answer lands).
+  const [research, setResearch] = useState<{ conversationId: string; runId: number | null } | null>(
+    null
+  )
+  async function askInBackground() {
+    const question = input.trim()
+    if (!question || send.active || historyOff || parseSlash(question)) return
+    try {
+      const r = await api.post<{
+        data: { run_id: number | null; conversation_id: string }
+      }>('/ai/research', {
+        question,
+        ...(conversationId ? { conversation_id: conversationId } : {})
+      })
+      const { run_id, conversation_id } = r.data.data
+      setInput('')
+      setResearch({ conversationId: conversation_id, runId: run_id })
+      toast.success('Asked in the background — the answer lands here and in your inbox')
+      if (conversation_id !== conversationIdRef.current) openConversation(conversation_id)
+      else void qc.invalidateQueries({ queryKey: detailKey(conversation_id) })
+      void qc.invalidateQueries({ queryKey: ASK_LIST_KEY })
+    } catch (err) {
+      toast.error(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'Could not ask in the background'
+      )
+    }
+  }
+  async function cancelResearch() {
+    if (!research?.runId) return
+    try {
+      await api.post(`/ai/research/${research.runId}/cancel`)
+      toast.message('Cancelling — whatever had arrived is kept')
+    } catch {
+      toast.error('Could not cancel')
+    }
+  }
+  const lastTurn = turns[turns.length - 1]
+  const researchWaiting =
+    !!research &&
+    research.conversationId === conversationId &&
+    !send.active &&
+    lastTurn?.role === 'user'
+  // The answer landed (or the question was withdrawn): stop showing the waiting line.
+  useEffect(() => {
+    if (research && research.conversationId === conversationId && lastTurn?.role === 'assistant')
+      setResearch(null)
+  }, [research, conversationId, lastTurn?.role])
+
+  // #2739 — someone else in this shared thread is getting an answer: follow it live.
+  const liveOther = useLiveFromOthers(conversationId, () => {
+    if (conversationIdRef.current)
+      void qc.invalidateQueries({ queryKey: detailKey(conversationIdRef.current) })
+  })
+  const codeAccess = useAnswerCodeAccess()
+
   // Someone else asked or was answered in an open shared thread (#1809): the
   // event carries ids only — refetch, and the server filters each answer for us.
   useEffect(() => {
@@ -1060,6 +1129,14 @@ function AskPageInner() {
                                     )}
                                   </div>
                                 )}
+                                {t.research && (
+                                  <div
+                                    className='mb-1.5 flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400'
+                                    data-ask-research
+                                  >
+                                    <Clock className='h-3 w-3' /> Researched in the background
+                                  </div>
+                                )}
                                 {t.stopped && (
                                   <div
                                     className='mb-1.5 text-[11px] text-amber-700 dark:text-amber-400'
@@ -1129,6 +1206,33 @@ function AskPageInner() {
                                 <div className='mt-1.5 flex items-center justify-between gap-2'>
                                   <AiFeedbackButtons requestId={t.requestId} />
                                   <span className='flex items-center gap-2'>
+                                    {(() => {
+                                      const spec = answerChart(t.content)
+                                      const source = spec
+                                        ? pinSourceFor(t.trace, spec.data.length)
+                                        : null
+                                      return spec && source ? (
+                                        <AddToDashboard
+                                          source={source}
+                                          chartType={spec.type}
+                                          title={(
+                                            spec.title ||
+                                            prevQuestion ||
+                                            'Ask AI chart'
+                                          ).slice(0, 100)}
+                                          question={prevQuestion ?? spec.title ?? ''}
+                                        />
+                                      ) : null
+                                    })()}
+                                    {codeAccess &&
+                                      conversationId &&
+                                      t.id &&
+                                      (t.trace ?? []).length > 0 && (
+                                        <CopyAsCode
+                                          conversationId={conversationId}
+                                          messageId={t.id}
+                                        />
+                                      )}
                                     {exportable && conversationId && t.id && (
                                       <ExportButtons
                                         conversationId={conversationId}
@@ -1172,6 +1276,30 @@ function AskPageInner() {
                   </div>
                 )
               })}
+
+              {liveOther && !send.active && <LiveFromOthers live={liveOther} />}
+
+              {researchWaiting && !liveOther && (
+                <div
+                  className='flex items-center gap-2 text-[12px] text-slate-500 dark:text-slate-400'
+                  data-ask-research-waiting
+                >
+                  <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                  <span>
+                    Working on it in the background — it answers here and in your inbox, and you can
+                    leave this page.
+                  </span>
+                  {research?.runId != null && (
+                    <button
+                      type='button'
+                      onClick={() => void cancelResearch()}
+                      className='font-medium text-slate-700 underline decoration-dotted underline-offset-2 hover:text-rose-600 dark:text-slate-200 dark:hover:text-rose-300'
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              )}
 
               {send.active && (
                 <div className='flex justify-start' data-ask-streaming>
@@ -1295,6 +1423,28 @@ function AskPageInner() {
                 ) : (
                   <VolumeX className='h-3.5 w-3.5' />
                 )}
+              </Button>
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={() => void askInBackground()}
+                disabled={
+                  !input.trim() ||
+                  send.active ||
+                  notFound ||
+                  historyOff ||
+                  !!parseSlash(input) ||
+                  researchWaiting
+                }
+                data-tip={
+                  historyOff
+                    ? 'Needs your Ask AI history on — the answer is kept there'
+                    : 'Ask in the background: a longer, read-only run. The answer lands here and in your inbox.'
+                }
+                aria-label='Ask in the background'
+                data-ask-background
+              >
+                <Clock className='h-3.5 w-3.5' />
               </Button>
               {send.active && send.streamId ? (
                 <Button

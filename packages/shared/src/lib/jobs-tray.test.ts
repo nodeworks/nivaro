@@ -62,4 +62,18 @@ describe('jobs tray model', () => {
     applyJobUpdate({ key: 'import:9', kind: 'import', label: 'po', status: 'queued', position: 2 })
     expect(__trayJobs()[0]).toMatchObject({ status: 'queued', position: 2 })
   })
+
+  it('keeps a running job cancellable across progress ticks and drops Cancel once it ends (#2456)', () => {
+    applyJobUpdate({
+      key: 'job:7',
+      kind: 'ai',
+      label: 'Ask AI: aging',
+      status: 'running',
+      cancel_path: '/ai/research/7/cancel'
+    })
+    applyJobUpdate({ key: 'job:7', status: 'running', progress: { phase: 'Reading…', done: 1 } })
+    expect(__trayJobs()[0].cancel_path).toBe('/ai/research/7/cancel')
+    applyJobUpdate({ key: 'job:7', status: 'canceled', outcome: 'Cancelled' })
+    expect(__trayJobs()[0]).toMatchObject({ status: 'canceled', cancel_path: null })
+  })
 })

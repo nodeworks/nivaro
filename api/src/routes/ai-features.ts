@@ -11,6 +11,7 @@ import type { User } from '../types.js'
  *   POST /ai/dashboard-drafts                 #2736 {description} → a dashboard draft (an AI plan)
  *   GET  /ai/dashboard-drafts/:plan/preview   #2736 the draft's widgets, computed as the requester
  *   GET  /ai/answer-code?conversation_id=&message_id=   #2766 an answer's reads as SDK / REST code
+ *   GET  /ai/answer-code/access               #2766 whether the caller may copy code
  * The services hold the rules (ai-research.ts, ai-dashboard-draft.ts, ai-answer-code.ts).
  */
 
@@ -164,6 +165,11 @@ export async function aiFeatureRoutes(app: FastifyInstance) {
   )
 
   // ── #2766 Copy an answer's query as code ──────────────────────────────────
+  /** Whether to offer "Copy as code" at all (admins and people with API access). */
+  app.get('/answer-code/access', { preHandler: authenticate }, async (req) => ({
+    data: { allowed: await hasApiAccess(req.user!, !!req.isAdmin) }
+  }))
+
   app.get<{ Querystring: { conversation_id?: string; message_id?: string } }>(
     '/answer-code',
     { preHandler: authenticate },

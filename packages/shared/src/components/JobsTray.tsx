@@ -12,7 +12,7 @@ import {
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigation, useOptionalNivaroClient } from '../context'
-import { get } from '../lib/commands'
+import { get, post } from '../lib/commands'
 import {
   applyJobUpdate,
   dismissFinishedJobs,
@@ -111,7 +111,16 @@ export function JobsTray() {
       {open && (
         <ul className='max-h-[40vh] divide-y divide-slate-100 overflow-y-auto border-t border-slate-100 dark:divide-[#334155] dark:border-[#334155]'>
           {jobs.map((j) => (
-            <JobRow key={j.key} job={j} onOpen={openHref} />
+            <JobRow
+              key={j.key}
+              job={j}
+              onOpen={openHref}
+              onCancel={
+                client && j.cancel_path
+                  ? (path) => client.request(post(path)).then(() => undefined)
+                  : undefined
+              }
+            />
           ))}
         </ul>
       )}
@@ -120,7 +129,17 @@ export function JobsTray() {
   )
 }
 
-function JobRow({ job, onOpen }: { job: TrayJob; onOpen: (href: string) => void }) {
+function JobRow({
+  job,
+  onOpen,
+  onCancel
+}: {
+  job: TrayJob
+  onOpen: (href: string) => void
+  /** #2456 — the job can be stopped while it runs. */
+  onCancel?: (path: string) => Promise<void>
+}) {
+  const [cancel, setCancel] = useState<'idle' | 'asking' | 'failed'>('idle')
   const done = job.status === 'completed'
   const failed = job.status === 'error'
   const waiting = job.status === 'queued'
@@ -200,6 +219,37 @@ function JobRow({ job, onOpen }: { job: TrayJob; onOpen: (href: string) => void 
               >
                 Details
               </button>
+            )}
+          </div>
+        )}
+        {job.status === 'running' && job.cancel_path && onCancel && (
+          <div className='mt-1 flex items-center gap-2'>
+            {job.href && (
+              <button
+                type='button'
+                onClick={() => onOpen(job.href as string)}
+                className='text-[11px] text-slate-500 underline-offset-2 hover:underline dark:text-slate-400'
+              >
+                Open
+              </button>
+            )}
+            <button
+              type='button'
+              data-job-cancel
+              disabled={cancel === 'asking'}
+              onClick={() => {
+                setCancel('asking')
+                onCancel(job.cancel_path as string).then(
+                  () => setCancel('idle'),
+                  () => setCancel('failed')
+                )
+              }}
+              className='text-[11px] text-slate-500 underline-offset-2 hover:text-rose-600 hover:underline disabled:opacity-50 dark:text-slate-400 dark:hover:text-rose-300'
+            >
+              {cancel === 'asking' ? 'Cancelling…' : 'Cancel'}
+            </button>
+            {cancel === 'failed' && (
+              <span className='text-[11px] text-rose-600 dark:text-rose-300'>Could not cancel</span>
             )}
           </div>
         )}

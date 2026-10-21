@@ -6,8 +6,8 @@ import { hashToolResult } from '../../../services/ai-result-hash.js'
 // steps and answer text only as far as their own access confirms it.
 
 const asker = { id: 'AAAA0000-0000-0000-0000-000000000001', name: 'Ann' }
-const bob = { id: 'bbbb0000-0000-0000-0000-000000000002', status: 'active' } as never
-const cara = { id: 'cccc0000-0000-0000-0000-000000000003', status: 'active' } as never
+const bob = { id: 'bbbb0000-0000-0000-0000-000000000002', status: 'active' }
+const cara = { id: 'cccc0000-0000-0000-0000-000000000003', status: 'active' }
 
 const rows = { total: 2, rows: [{ id: 1 }, { id: 2 }] }
 const entry = (tool = 'query_items', result: unknown = rows) => ({

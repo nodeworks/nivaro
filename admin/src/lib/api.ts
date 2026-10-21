@@ -708,6 +708,8 @@ export interface DashboardWidget {
     | 'line_chart'
     | 'report_preset'
     | 'saved_view'
+    /** #2738 — an Ask AI chart: `filters` holds {source: {tool, input}, chart, question}. */
+    | 'ai_query'
   title: string
   collection: string | null
   field: string | null

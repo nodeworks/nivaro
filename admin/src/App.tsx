@@ -226,6 +226,9 @@ const RuleEditPage = lazy(() =>
 const DashboardsPage = lazy(() =>
   import('@/pages/Dashboards').then((m) => ({ default: m.DashboardsPage }))
 )
+const DashboardDraftPage = lazy(() =>
+  import('@/pages/DashboardDraft').then((m) => ({ default: m.DashboardDraftPage }))
+)
 const DashboardEditPage = lazy(() =>
   import('@/pages/DashboardEdit').then((m) => ({ default: m.DashboardEditPage }))
 )
@@ -637,6 +640,7 @@ export default function App() {
                   <Route path='dashboards' element={<DashboardsPage />} />
                   <Route path='ask' element={<AskPage />} />
                   <Route path='chat' element={<ChatPage />} />
+                  <Route path='dashboards/draft' element={<DashboardDraftPage />} />
                   <Route path='dashboards/:id' element={<DashboardEditPage />} />
                   <Route path='reports' element={<ReportsPage />} />
                   <Route path='profile' element={<ProfilePage />} />
