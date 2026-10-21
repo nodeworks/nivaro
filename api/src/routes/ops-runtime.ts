@@ -8,8 +8,10 @@ import { logActivity } from '../services/activity.js'
 import { bustEverywhere, listCaches } from '../services/cache-registry.js'
 import { registerConfigStamps } from '../services/config-stamps.js'
 import { registerDeployReadinessChecks } from '../services/deploy-readiness.js'
+import { clusterInflight } from '../services/inflight-cluster.js'
 import { listInstances } from '../services/instance-roster.js'
 import { probeSmtp } from '../services/mail.js'
+import { currentTraceMeta } from '../services/request-trace.js'
 import { runtimeStats } from '../services/runtime-monitor.js'
 import { poolStats } from './ops-db.js'
 
@@ -26,6 +28,11 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   registerDeployReadinessChecks()
   // #1053 — each configuration change this process makes lands on the incident timeline.
   registerConfigStamps()
+
+  // #2761 — every request running on every replica (route, age, person, phase, SQL + wait type).
+  app.get('/inflight', async () => {
+    return { data: await clusterInflight(currentTraceMeta()?.id ?? null) }
+  })
 
   // #234 — this process, right now.
   app.get('/runtime', async (_req, reply) => {

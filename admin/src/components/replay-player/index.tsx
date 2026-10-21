@@ -44,7 +44,7 @@ const SIDE_PANEL_PX = 320 + 12
 /** Below this viewport width a 'side' panel stacks under the controls instead. */
 const SIDE_MIN_VIEWPORT = 1100
 
-const NO_CONTEXT: ReplayContext = { routes: [], console: [], network: [] }
+const NO_CONTEXT: ReplayContext = { routes: [], console: [], network: [], socket: [] }
 const NO_NOTES: never[] = []
 
 function useWideViewport(): boolean {
@@ -151,12 +151,20 @@ export function ReplayPlayer({
             offset: c.offset,
             color: c.level === 'error' ? '#ef4444' : '#f59e0b',
             tip: `${c.level}: ${c.text.slice(0, 120)}`
+          })),
+        // Connection changes only: events are many, they list in the Live tab.
+        ...ctx.socket
+          .filter((s) => s.kind !== 'event')
+          .map((s) => ({
+            offset: s.offset,
+            color: '#a78bfa',
+            tip: `socket: ${s.name}${s.detail ? ` (${s.detail})` : ''}`
           }))
       ].sort((a, b) => a.offset - b.offset),
     [ctx]
   )
   const wide = useWideViewport()
-  const hasPanel = ctx.console.length > 0 || ctx.network.length > 0
+  const hasPanel = ctx.console.length > 0 || ctx.network.length > 0 || ctx.socket.length > 0
   const sideBySide = panel === 'side' && wide
   // Read by rescale() inside the load effect: the frame's width budget.
   const sideReserveRef = useRef(0)
@@ -473,6 +481,7 @@ export function ReplayPlayer({
   // The panel re-renders when the highlighted row changes, not every frame.
   const activeConsole = activeIndex(ctx.console, time)
   const activeNetwork = activeIndex(ctx.network, time)
+  const activeSocket = activeIndex(ctx.socket, time)
   // The panel stays up while following live — it follows the stream too.
   const showPanel = ready && hasPanel && panel !== 'none'
   const side = showPanel && sideBySide
@@ -505,6 +514,8 @@ export function ReplayPlayer({
     <ReplaySidePanel
       consoleEntries={ctx.console}
       networkEntries={ctx.network}
+      socketEntries={ctx.socket}
+      activeSocket={activeSocket}
       activeConsole={activeConsole}
       activeNetwork={activeNetwork}
       onSeek={stableSeek}

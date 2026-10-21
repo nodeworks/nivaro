@@ -156,10 +156,23 @@ export interface NetworkEntry {
   duration_ms: number | null
 }
 
+/** A socket event the page received or a connection change (#2476). */
+export interface SocketEntry {
+  offset: number
+  kind: 'event' | 'connection' | 'truncated'
+  name: string
+  room?: string
+  ids?: string[]
+  n?: number
+  fields?: string[]
+  detail?: string
+}
+
 export interface ReplayContext {
   routes: RouteEntry[]
   console: ConsoleEntry[]
   network: NetworkEntry[]
+  socket: SocketEntry[]
 }
 
 type CustomEventLike = {
@@ -173,7 +186,7 @@ type CustomEventLike = {
  * `route`, `console` and `request` tags, each as an offset from `first`.
  */
 export function parseReplayContext(events: unknown[], first: number): ReplayContext {
-  const ctx: ReplayContext = { routes: [], console: [], network: [] }
+  const ctx: ReplayContext = { routes: [], console: [], network: [], socket: [] }
   for (const e of events as CustomEventLike[]) {
     if (e?.type !== 5 || !e.data?.tag || typeof e.timestamp !== 'number') continue
     const offset = Math.max(0, e.timestamp - first)
@@ -191,12 +204,27 @@ export function parseReplayContext(events: unknown[], first: number): ReplayCont
         status: Number(p.status) || 0,
         duration_ms: p.duration_ms != null && Number.isFinite(d) ? d : null
       })
+    } else if (e.data.tag === 'socket') {
+      const strs = (v: unknown) =>
+        Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined
+      const kind = p.kind === 'connection' || p.kind === 'truncated' ? p.kind : 'event'
+      ctx.socket.push({
+        offset,
+        kind,
+        name: String(p.name ?? ''),
+        room: typeof p.room === 'string' ? p.room : undefined,
+        ids: strs(p.ids),
+        n: typeof p.n === 'number' ? p.n : undefined,
+        fields: strs(p.fields),
+        detail: typeof p.detail === 'string' ? p.detail : undefined
+      })
     }
   }
   const byOffset = (a: { offset: number }, b: { offset: number }) => a.offset - b.offset
   ctx.routes.sort(byOffset)
   ctx.console.sort(byOffset)
   ctx.network.sort(byOffset)
+  ctx.socket.sort(byOffset)
   return ctx
 }
 
@@ -205,13 +233,15 @@ export function parseReplayContext(events: unknown[], first: number): ReplayCont
  * `ctx` itself when nothing is new, so a quiet poll does not re-render the panel.
  */
 export function appendReplayContext(ctx: ReplayContext, more: ReplayContext): ReplayContext {
-  if (!more.routes.length && !more.console.length && !more.network.length) return ctx
+  if (!more.routes.length && !more.console.length && !more.network.length && !more.socket.length)
+    return ctx
   const merge = <T extends { offset: number }>(a: T[], b: T[]) =>
     b.length ? [...a, ...b].sort((x, y) => x.offset - y.offset) : a
   return {
     routes: merge(ctx.routes, more.routes),
     console: merge(ctx.console, more.console),
-    network: merge(ctx.network, more.network)
+    network: merge(ctx.network, more.network),
+    socket: merge(ctx.socket, more.socket)
   }
 }
 

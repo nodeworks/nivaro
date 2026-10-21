@@ -183,6 +183,10 @@ export interface InflightRow {
   rows: number
   /** Statements sent and not answered yet, oldest first. */
   running: Array<{ sql: string; age_ms: number }>
+  /** The signed-in person (#2761); null for anonymous / key callers. Names resolve at read. */
+  user_id: string | null
+  /** auth = not signed in yet · sql = a statement is out · handler = running app code. */
+  phase: 'auth' | 'sql' | 'handler'
 }
 
 function callerOf(req: unknown): string {
@@ -192,6 +196,11 @@ function callerOf(req: unknown): string {
     apiKeyId: r?.apiKeyId ?? null,
     userId: r?.user?.id ?? null
   })
+}
+
+function userIdOf(req: unknown): string | null {
+  const id = (req as { user?: { id?: unknown } })?.user?.id
+  return typeof id === 'string' && id ? id : null
 }
 
 /** Unfinished requests, oldest first; `exclude` = the asking request's own trace id. */
@@ -224,7 +233,13 @@ export function listInflight(opts: { exclude?: string | null; limit?: number } =
       queries: e.n,
       sql_ms: Math.round(e.ms + running.reduce((a, s) => a + s.age_ms, 0)),
       rows: e.rows,
-      running
+      running,
+      user_id: userIdOf(e.req),
+      phase: running.length
+        ? 'sql'
+        : userIdOf(e.req) || callerOf(e.req) !== 'anon'
+          ? 'handler'
+          : 'auth'
     })
   }
   rows.sort((a, b) => b.age_ms - a.age_ms)

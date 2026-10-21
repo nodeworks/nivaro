@@ -8,9 +8,17 @@
  * highlighted row changes rather than every animation frame.
  */
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { type ConsoleEntry, fmtClock, type NetworkEntry, statusClass } from './logic'
+import {
+  type ConsoleEntry,
+  fmtClock,
+  type NetworkEntry,
+  type SocketEntry,
+  statusClass
+} from './logic'
 
-type Tab = 'console' | 'network'
+type Tab = 'console' | 'network' | 'live'
+
+const NO_SOCKET: SocketEntry[] = []
 
 const LEVEL_CLASS: Record<string, string> = {
   error: 'text-red-500',
@@ -24,13 +32,18 @@ const AHEAD = 'opacity-60'
 export const ReplaySidePanel = memo(function ReplaySidePanel({
   consoleEntries,
   networkEntries,
+  socketEntries = NO_SOCKET,
   activeConsole,
   activeNetwork,
+  activeSocket = -1,
   onSeek,
   layout
 }: {
   consoleEntries: ConsoleEntry[]
   networkEntries: NetworkEntry[]
+  /** Realtime events the page received and connection changes (#2476). */
+  socketEntries?: SocketEntry[]
+  activeSocket?: number
   /** Index into consoleEntries of the line at / before the playhead (−1: none yet). */
   activeConsole: number
   activeNetwork: number
@@ -39,7 +52,11 @@ export const ReplaySidePanel = memo(function ReplaySidePanel({
   layout: 'side' | 'stacked'
 }) {
   const [tab, setTab] = useState<Tab>(() =>
-    consoleEntries.length > 0 || networkEntries.length === 0 ? 'console' : 'network'
+    consoleEntries.length > 0 || networkEntries.length === 0
+      ? socketEntries.length > 0 && consoleEntries.length === 0
+        ? 'live'
+        : 'console'
+      : 'network'
   )
   const [level, setLevel] = useState<string>('all')
   const listRef = useRef<HTMLDivElement>(null)
@@ -70,7 +87,9 @@ export const ReplaySidePanel = memo(function ReplaySidePanel({
           for (let k = 0; k < consoleRows.length && consoleRows[k].i <= activeConsole; k++) best = k
           return best
         })()
-      : activeNetwork
+      : tab === 'live'
+        ? activeSocket
+        : activeNetwork
 
   // Reading the list pauses the follow: pointer over it, or a scroll in the last 4 s.
   useEffect(() => {
@@ -133,6 +152,7 @@ export const ReplaySidePanel = memo(function ReplaySidePanel({
         <div className='flex flex-wrap items-center gap-1 border-b border-slate-100 px-2 py-1.5 dark:border-border/60'>
           {tabBtn('console', 'Console', consoleEntries.length)}
           {tabBtn('network', 'Network', networkEntries.length)}
+          {tabBtn('live', 'Live', socketEntries.length)}
           <span className='ml-auto text-[10.5px] text-slate-400'>click to seek</span>
           {tab === 'console' && levels.length > 1 && (
             <div className='flex w-full gap-1 pt-1'>
@@ -214,6 +234,49 @@ export const ReplaySidePanel = memo(function ReplaySidePanel({
                   </span>
                 </button>
               ))
+            ))}
+          {tab === 'live' &&
+            (socketEntries.length === 0 ? (
+              <Empty>
+                No realtime events in this recording (it was made before the recorder kept them, or
+                the page received none).
+              </Empty>
+            ) : (
+              socketEntries.map((e, k) => {
+                const what =
+                  e.kind === 'connection'
+                    ? `${e.name}${e.detail ? `: ${e.detail}` : ''}`
+                    : e.kind === 'truncated'
+                      ? 'Event log full; later events are not listed'
+                      : [
+                          e.name,
+                          e.room,
+                          e.ids?.length
+                            ? `${e.ids.join(', ')}${e.n ? ` +${e.n - e.ids.length}` : ''}`
+                            : null,
+                          e.fields?.length ? `fields ${e.fields.join(', ')}` : null
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')
+                return (
+                  <button
+                    key={k}
+                    type='button'
+                    data-row={`${tab}:${k}`}
+                    onClick={() => onSeek(Math.max(0, e.offset - 500))}
+                    className={`flex w-full items-start gap-2 rounded px-1.5 py-0.5 text-left hover:bg-muted ${k === activeRow ? 'bg-accent/70 dark:bg-accent/40' : ''} ${k > activeRow ? AHEAD : ''}`}
+                  >
+                    <span className='shrink-0 tabular-nums text-slate-400'>
+                      {fmtClock(e.offset)}
+                    </span>
+                    <span
+                      className={`min-w-0 break-all ${e.kind === 'event' ? 'text-slate-600 dark:text-slate-300' : 'text-violet-600 dark:text-violet-300'}`}
+                    >
+                      {what}
+                    </span>
+                  </button>
+                )
+              })
             ))}
         </div>
       </div>

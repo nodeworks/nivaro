@@ -15,6 +15,8 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { logActivity } from '../../services/activity.js'
+import { clusterInflight } from '../../services/inflight-cluster.js'
+import { INSTANCE_ID } from '../../services/instance-roster.js'
 import { currentTraceMeta } from '../../services/request-trace.js'
 import {
   activeBreakers,
@@ -115,8 +117,9 @@ export async function trafficOpsRoutes(app: FastifyInstance): Promise<void> {
 
   // ── #1147 in flight ──────────────────────────────────────────────────────
   app.get('/inflight', async () => {
-    const { rows, total } = listInflight({ exclude: currentTraceMeta()?.id ?? null })
-    return { data: { rows, total, at: new Date().toISOString() } }
+    // #2761: every replica's list, merged through Redis; rows carry `node`, `person`, `wait`.
+    const { rows, total, nodes, at } = await clusterInflight(currentTraceMeta()?.id ?? null)
+    return { data: { rows, total, nodes, self: INSTANCE_ID, at } }
   })
 
   // ── #1156 kill the SQL session of an in-flight request ──────────────────

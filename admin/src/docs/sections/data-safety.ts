@@ -191,6 +191,11 @@ export const sessionReplayDocs: DocSection = {
       type: 'p',
       text: 'A chunk that cannot be sent — the browser is offline, the request fails or the server answers 5xx — waits in the browser (IndexedDB, at most about 20MB per tab, oldest dropped first) and is retried with backoff from 2 seconds up to a minute, and as soon as the browser comes back online. Reloading the tab within 10 minutes continues the same recording instead of starting a new one, and whatever the previous page had not sent goes first. When a page is closed or reloaded, the last few seconds are sent with the request that outlives the page (fetch keepalive); anything that does not fit goes on the next load. A recording that is closed or has reached its size cap still stops for good, and the next page load starts a new one. The headless hook in @nivaro/react does the same.'
     },
+    { type: 'h2', id: 'session-replay-socket', text: 'Realtime events in a replay' },
+    {
+      type: 'p',
+      text: 'A recording also notes the realtime events the page received: the event name, the room, up to ten record ids and up to twenty field names, never a value. Reconnects, missed-event catch-up and full reloads after a long gap show too. In the player they are the Live tab beside Console and Network, and a connection change is a violet tick on the scrubber, so a screen that changed by itself points at the event that did it. The track has its own limit of 800 entries per page load, after which one note says the log is full. Only the first tab of a browser (the one holding the live connection) records these.'
+    },
     { type: 'h2', id: 'session-replay-masking', text: 'Masking rules' },
     {
       type: 'p',

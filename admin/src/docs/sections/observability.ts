@@ -901,7 +901,7 @@ export const obsTrafficMapAct: DocSection = {
     { type: 'h2', id: 'traffic-map-inflight', text: 'In-flight requests' },
     {
       type: 'p',
-      text: 'The In flight panel lists requests this process has not finished, oldest first, with their age, route, caller and the SQL they are running. Cancel kills the database session running that statement: give a reason, then confirm. Use it for a runaway read, not for a write you want to finish.'
+      text: 'The In flight panel lists requests no server has finished, oldest first, from every API process (they share the list through Redis while a page is looking at it), with their age, route, who asked, the SQL they are running and what that SQL is waiting on (a lock, a disk read). The same list is on Ops Console as Requests in flight. A request that runs on another process cannot be cancelled from here; the row names that process. Cancel kills the database session running that statement: give a reason, then confirm. Use it for a runaway read, not for a write you want to finish.'
     },
     { type: 'h2', id: 'traffic-map-stack-actions', text: 'Acting from a drill-down' },
     {

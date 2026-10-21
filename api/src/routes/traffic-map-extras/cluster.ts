@@ -1,6 +1,7 @@
 // api/src/routes/traffic-map-extras/cluster.ts
 import type { FastifyInstance } from 'fastify'
 import { getRealtimeStats } from '../../plugins/socketio.js'
+import { startInflightCluster } from '../../services/inflight-cluster.js'
 import { INSTANCE_ID, listInstances } from '../../services/instance-roster.js'
 import { getIo } from '../../services/io-holder.js'
 import { startTrafficCluster, trafficClusterRelay } from '../../services/traffic-cluster.js'
@@ -33,6 +34,9 @@ export function localSnapshot(window: number): TrafficSnapshot {
 export async function clusterRoutes(app: FastifyInstance): Promise<void> {
   const redis = (app as unknown as { redis?: import('ioredis').Redis }).redis
   if (redis && process.env.NODE_ENV !== 'test') {
+    // #2761 — publishes this node's in-flight list while somebody watches it.
+    const stopInflight = startInflightCluster(redis)
+    app.addHook('onClose', async () => stopInflight())
     try {
       const stop = await startTrafficCluster(redis, {
         node: INSTANCE_ID,

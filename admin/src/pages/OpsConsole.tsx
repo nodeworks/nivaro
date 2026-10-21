@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { ChatHealthCard } from '@/components/chat-health-card'
+import { InflightRequestsCard } from '@/components/inflight-requests-card'
 import {
   AskTheLogsPanel,
   IncidentModeCard,
@@ -910,6 +911,7 @@ export function OpsConsolePage() {
               </div>
             ) : null}
           </Card>
+          <InflightRequestsCard />
           <ChatHealthCard />
           <Card
             title='Environment knobs'

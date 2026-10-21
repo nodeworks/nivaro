@@ -7,7 +7,8 @@ import {
   type RealtimeAdapter,
   type RealtimeStatus,
   relayLiveEvent,
-  setServerClockOffset
+  setServerClockOffset,
+  tapReplaySocket
 } from '@nivaro/shared'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
@@ -237,6 +238,8 @@ export function getSocket(): Socket {
     reconnectionDelayMax: 15_000,
     randomizationFactor: 0.6
   })
+  // #2476 — the session recorder lists the events this socket receives (names, rooms, ids).
+  tapReplaySocket(socket)
   socket.on('connect', () => {
     leaveSseMode()
     reconnects += 1
