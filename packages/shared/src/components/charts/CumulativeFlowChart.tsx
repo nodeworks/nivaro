@@ -92,7 +92,10 @@ export function CumulativeFlowChart({
   const rows = useMemo(() => flow.days.map((d) => ({ day: d.day, ...d.counts })), [flow.days])
   if (flow.days.length === 0 || flow.days.every((d) => d.total === 0))
     return (
-      <p className='py-6 text-center text-[12px] text-slate-400' style={{ minHeight: height / 2 }}>
+      <p
+        className='py-6 text-center text-[12px] text-slate-500 dark:text-muted-foreground'
+        style={{ minHeight: height / 2 }}
+      >
         No records moved through this pipeline in the range.
       </p>
     )
@@ -116,7 +119,12 @@ export function CumulativeFlowChart({
                   minTickGap={28}
                   stroke={axis}
                 />
-                <r.YAxis tick={{ fontSize: 10, fill: axis }} width={36} stroke={axis} />
+                <r.YAxis
+                  tick={{ fontSize: 10, fill: axis }}
+                  tickFormatter={(v: number) => COMPACT.format(v)}
+                  width={40}
+                  stroke={axis}
+                />
                 <r.Tooltip
                   contentStyle={{
                     fontSize: 11,
@@ -170,6 +178,7 @@ export function CumulativeFlowChart({
 }
 
 const RANGES = [30, 90, 365] as const
+const COMPACT = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 
 /** Pipeline page section: the chart with a range switch and the lead-time figures. */
 export function PipelineCumulativeFlowCard({ templateId }: { templateId: string }) {
@@ -205,6 +214,8 @@ export function PipelineCumulativeFlowCard({ templateId }: { templateId: string 
               key={d}
               type='button'
               onClick={() => setDays(d)}
+              aria-pressed={days === d}
+              aria-label={`Last ${d} days`}
               className={cn(
                 'h-6 rounded-md px-2 text-[11px] font-medium',
                 days === d
@@ -244,7 +255,9 @@ export function PipelineCumulativeFlowCard({ templateId }: { templateId: string 
         </dl>
       )}
       {data?.source === 'rollup' && (
-        <p className='mt-2 text-[11px] text-slate-400'>Long range read from last night's rollup.</p>
+        <p className='mt-2 text-[11px] text-slate-500 dark:text-muted-foreground'>
+          Long range read from last night's rollup.
+        </p>
       )}
     </div>
   )

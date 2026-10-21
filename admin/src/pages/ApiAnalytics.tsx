@@ -13,6 +13,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { ExplainButton } from '@/components/explain-button'
 import { SlowTracesPanel } from '@/components/slow-traces'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -864,21 +865,24 @@ function DeadClickPanel() {
           <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
             Dead and rage clicks
           </p>
-          <p className='mt-0.5 text-[11.5px] text-slate-500'>
+          <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
             Buttons and links people click repeatedly with nothing happening, worst first per page.
           </p>
         </div>
-        <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+        <span className='flex shrink-0 rounded-md border border-slate-200 p-0.5 dark:border-border'>
           {[1, 7, 14].map((d) => (
             <button
               key={d}
               type='button'
               onClick={() => setDays(d)}
-              className={
+              aria-pressed={days === d}
+              aria-label={`Last ${d} ${d === 1 ? 'day' : 'days'}`}
+              className={cn(
+                'rounded px-2 py-0.5 text-[11.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
                 days === d
-                  ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
-                  : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-500'
-              }
+                  ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                  : 'text-slate-500 hover:bg-muted dark:text-muted-foreground'
+              )}
             >
               {d}d
             </button>
@@ -886,61 +890,88 @@ function DeadClickPanel() {
         </span>
       </div>
       {isLoading ? (
-        <p className='mt-3 text-[12px] text-slate-400'>Loading…</p>
+        <div className='mt-3 space-y-1.5'>
+          <Skeleton className='h-5 w-1/3' />
+          <Skeleton className='h-6 w-full' />
+          <Skeleton className='h-6 w-full' />
+        </div>
       ) : routes.length === 0 ? (
-        <p className='mt-3 text-[12px] text-slate-400'>
+        <p className='mt-3 text-[12px] text-slate-500 dark:text-muted-foreground'>
           No dead or rage clicks in this window. They are reported when someone clicks the same
           control three times in a few seconds without any response.
         </p>
       ) : (
-        <div className='mt-3 space-y-3' data-dead-clicks>
-          {routes.map((r) => (
-            <div key={r.route}>
-              <p className='flex items-baseline justify-between gap-3 text-[12px]'>
-                <span className='truncate font-mono text-[11.5px] font-medium text-slate-800 dark:text-foreground'>
-                  {r.route}
-                </span>
-                <span className='shrink-0 tabular-nums text-slate-500'>{r.total} bursts</span>
-              </p>
-              <table className='mt-1 w-full text-[12px] tabular-nums'>
-                <tbody>
-                  {r.elements.map((e) => (
-                    <tr key={e.element} className='border-t border-slate-100 dark:border-border'>
-                      <td className='max-w-[360px] truncate py-1 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-slate-200'>
-                        {e.element}
-                      </td>
-                      <td className='py-1 pr-3 text-right text-slate-600 dark:text-slate-300'>
-                        {e.dead} dead
-                      </td>
-                      <td className='py-1 pr-3 text-right text-slate-600 dark:text-slate-300'>
-                        {e.rage} rage
-                      </td>
-                      <td className='py-1 pr-3 text-right text-slate-500'>
-                        {e.people} {e.people === 1 ? 'person' : 'people'}
-                      </td>
-                      <td className='py-1 text-right'>
-                        {e.replay ? (
-                          <Link
-                            to={`/session-replays?recording=${e.replay.recording}&t=${e.replay.t}`}
-                            className='text-[11.5px] font-medium text-nvr-cyan hover:underline'
-                          >
-                            Watch
-                          </Link>
-                        ) : (
-                          <span
-                            className='text-[11px] text-slate-400'
-                            data-tip='No recording covers the latest click'
-                          >
-                            No replay
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))}
+        <div className='mt-3 overflow-x-auto' data-dead-clicks>
+          {/* One table so the columns line up across pages. */}
+          <table className='w-full min-w-[560px] table-fixed text-[12px] tabular-nums'>
+            <colgroup>
+              <col />
+              <col className='w-20' />
+              <col className='w-20' />
+              <col className='w-24' />
+              <col className='w-20' />
+            </colgroup>
+            <thead>
+              <tr className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+                <th className='py-1 pr-3 text-left font-medium'>Page · element</th>
+                <th className='py-1 pr-3 text-right font-medium'>Dead</th>
+                <th className='py-1 pr-3 text-right font-medium'>Rage</th>
+                <th className='py-1 pr-3 text-right font-medium'>People</th>
+                <th className='py-1 text-right font-medium'>
+                  <span className='sr-only'>Replay</span>
+                </th>
+              </tr>
+            </thead>
+            {routes.map((r) => (
+              <tbody key={r.route}>
+                <tr className='border-t border-slate-200 dark:border-border'>
+                  <th
+                    colSpan={4}
+                    scope='rowgroup'
+                    className='truncate pb-1 pr-3 pt-2.5 text-left font-mono text-[11.5px] font-medium text-slate-800 dark:text-foreground'
+                  >
+                    {r.route}
+                  </th>
+                  <td className='pb-1 pt-2.5 text-right text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                    {r.total} {r.total === 1 ? 'burst' : 'bursts'}
+                  </td>
+                </tr>
+                {r.elements.map((e) => (
+                  <tr key={e.element} className='border-t border-slate-100 dark:border-border/60'>
+                    <td className='truncate py-1 pl-3 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-slate-200'>
+                      {e.element}
+                    </td>
+                    <td className='py-1 pr-3 text-right text-slate-600 dark:text-slate-300'>
+                      {e.dead}
+                    </td>
+                    <td className='py-1 pr-3 text-right text-slate-600 dark:text-slate-300'>
+                      {e.rage}
+                    </td>
+                    <td className='py-1 pr-3 text-right text-slate-600 dark:text-slate-300'>
+                      {e.people}
+                    </td>
+                    <td className='py-1 text-right'>
+                      {e.replay ? (
+                        <Link
+                          to={`/session-replays?recording=${e.replay.recording}&t=${e.replay.t}`}
+                          className='text-[11.5px] font-medium text-cyan-700 hover:underline dark:text-nvr-cyan'
+                        >
+                          Watch
+                        </Link>
+                      ) : (
+                        <span
+                          className='text-[11px] text-slate-500 dark:text-muted-foreground'
+                          data-tip='No recording covers the latest click'
+                        >
+                          No replay
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            ))}
+          </table>
         </div>
       )}
     </div>

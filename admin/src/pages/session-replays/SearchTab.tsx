@@ -15,8 +15,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { SimpleSelect } from '@/components/ui/simple-select'
+import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { formatDate, formatFileSize } from '@/lib/utils'
+import { SuggestInput } from './SuggestInput'
 import {
   collectionsFromRecordKeys,
   matchLabel,
@@ -73,6 +75,10 @@ export function ReplaySearchTab() {
     [recordKeys]
   )
   const { data: fieldKeys = [] } = useKeys('field', draft.field)
+  const fieldSuggestions = useMemo(
+    () => fieldKeys.filter((k) => !k.key.includes('.')).map((k) => k.key),
+    [fieldKeys]
+  )
 
   function submit(e: FormEvent) {
     e.preventDefault()
@@ -100,23 +106,24 @@ export function ReplaySearchTab() {
   return (
     <div className='flex-1 overflow-y-auto bg-slate-50 px-6 py-5 dark:bg-background'>
       <form onSubmit={submit} className='flex flex-wrap items-end gap-2'>
-        <label htmlFor='replay-search-collection' className='text-[11.5px] text-slate-500'>
+        <label
+          htmlFor='replay-search-collection'
+          className='text-[11.5px] text-slate-500 dark:text-muted-foreground'
+        >
           Collection
-          <Input
+          <SuggestInput
             id='replay-search-collection'
             value={draft.collection}
-            onChange={set('collection')}
-            list='replay-search-collections'
+            onChange={(v) => setDraft((d) => ({ ...d, collection: v }))}
+            suggestions={collections}
             placeholder='orders'
             className='mt-1 h-8 w-44 text-[12.5px]'
           />
         </label>
-        <datalist id='replay-search-collections'>
-          {collections.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
-        <label htmlFor='replay-search-item' className='text-[11.5px] text-slate-500'>
+        <label
+          htmlFor='replay-search-item'
+          className='text-[11.5px] text-slate-500 dark:text-muted-foreground'
+        >
           Record id
           <Input
             id='replay-search-item'
@@ -126,25 +133,24 @@ export function ReplaySearchTab() {
             className='mt-1 h-8 w-40 text-[12.5px]'
           />
         </label>
-        <label htmlFor='replay-search-field' className='text-[11.5px] text-slate-500'>
+        <label
+          htmlFor='replay-search-field'
+          className='text-[11.5px] text-slate-500 dark:text-muted-foreground'
+        >
           Field name
-          <Input
+          <SuggestInput
             id='replay-search-field'
             value={draft.field}
-            onChange={set('field')}
-            list='replay-search-fields'
+            onChange={(v) => setDraft((d) => ({ ...d, field: v }))}
+            suggestions={fieldSuggestions}
             placeholder='due_date'
             className='mt-1 h-8 w-44 text-[12.5px]'
           />
         </label>
-        <datalist id='replay-search-fields'>
-          {fieldKeys
-            .filter((k) => !k.key.includes('.'))
-            .map((k) => (
-              <option key={k.key} value={k.key} />
-            ))}
-        </datalist>
-        <label htmlFor='replay-search-selector' className='text-[11.5px] text-slate-500'>
+        <label
+          htmlFor='replay-search-selector'
+          className='text-[11.5px] text-slate-500 dark:text-muted-foreground'
+        >
           Selector
           <Input
             id='replay-search-selector'
@@ -154,7 +160,10 @@ export function ReplaySearchTab() {
             className='mt-1 h-8 w-64 font-mono text-[12px]'
           />
         </label>
-        <label htmlFor='replay-search-route' className='text-[11.5px] text-slate-500'>
+        <label
+          htmlFor='replay-search-route'
+          className='text-[11.5px] text-slate-500 dark:text-muted-foreground'
+        >
           Page
           <Input
             id='replay-search-route'
@@ -164,7 +173,7 @@ export function ReplaySearchTab() {
             className='mt-1 h-8 w-56 font-mono text-[12px]'
           />
         </label>
-        <div className='text-[11.5px] text-slate-500'>
+        <div className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
           <span id='replay-search-outcome-label'>What went wrong</span>
           <SimpleSelect
             value={draft.outcome}
@@ -175,7 +184,7 @@ export function ReplaySearchTab() {
           />
         </div>
         {draft.outcome && (
-          <div className='text-[11.5px] text-slate-500'>
+          <div className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
             <span>Within</span>
             <SimpleSelect
               value={draft.days || '7'}
@@ -190,7 +199,7 @@ export function ReplaySearchTab() {
           <Search className='h-3.5 w-3.5' /> Search
         </Button>
       </form>
-      <p className='mt-2 text-[11.5px] text-slate-400'>
+      <p className='mt-2 max-w-[110ch] text-[11.5px] text-slate-500 dark:text-muted-foreground'>
         Recordings are indexed as they upload: pages visited, records opened, the <em>names</em> of
         fields typed into (never what was typed) and the elements clicked. “What went wrong” finds
         recordings that were running when a request failed or the browser reported an error, and
@@ -200,7 +209,7 @@ export function ReplaySearchTab() {
 
       <div className='mt-5'>
         {!qs ? (
-          <div className='py-10 text-center text-slate-400'>
+          <div className='py-10 text-center text-slate-500 dark:text-muted-foreground'>
             <Search className='mx-auto h-6 w-6 opacity-40' />
             <p className='mt-2 text-[12.5px]'>
               Search by collection and record id, by field name, by selector, by page or by what
@@ -208,18 +217,22 @@ export function ReplaySearchTab() {
             </p>
           </div>
         ) : isError ? (
-          <p className='text-[12.5px] text-red-500'>The search failed.</p>
+          <p className='text-[12.5px] text-red-600 dark:text-red-400'>The search failed.</p>
         ) : isFetching && hits.length === 0 ? (
-          <p className='text-[12.5px] text-slate-400'>Searching…</p>
+          <div className='space-y-1.5' role='status' aria-label='Searching'>
+            <Skeleton className='h-9 w-full' />
+            <Skeleton className='h-9 w-full' />
+            <Skeleton className='h-9 w-4/5' />
+          </div>
         ) : hits.length === 0 ? (
-          <p className='text-[12.5px] text-slate-400'>
+          <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
             No recordings match. Only recordings uploaded since the index was added are searchable,
             and recordings expire with retention.
           </p>
         ) : (
           <>
             <div className='mb-2 flex items-center gap-3'>
-              <h3 className='text-[11px] font-semibold uppercase tracking-wider text-slate-400'>
+              <h3 className='text-[12px] font-medium text-slate-600 dark:text-muted-foreground'>
                 {hits.length} recording{hits.length === 1 ? '' : 's'}
               </h3>
               {/* #1398 — one record followed across every recording that opened it. */}
@@ -246,10 +259,10 @@ export function ReplaySearchTab() {
                   <span className='w-40 shrink-0 truncate text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
                     {hit.user_name || hit.user?.slice(0, 8) || 'Unknown'}
                   </span>
-                  <span className='w-28 shrink-0 text-[11.5px] tabular-nums text-slate-500'>
+                  <span className='w-28 shrink-0 text-[11.5px] tabular-nums text-slate-500 dark:text-muted-foreground'>
                     {formatDate(new Date(hit.first_ms))} · {spanLabel(hit.first_ms, hit.last_ms)}
                   </span>
-                  <span className='shrink-0 rounded border border-slate-200 px-1.5 py-px text-[10.5px] text-slate-500 dark:border-border'>
+                  <span className='shrink-0 rounded border border-slate-200 px-1.5 py-px text-[10.5px] text-slate-500 dark:border-border dark:text-muted-foreground'>
                     {hit.app ?? 'admin'}
                   </span>
                   <span className='flex min-w-0 flex-1 flex-wrap gap-1'>
@@ -257,18 +270,18 @@ export function ReplaySearchTab() {
                       <span
                         key={`${m.kind}:${m.key}`}
                         className='max-w-[280px] truncate rounded bg-accent px-1.5 py-px font-mono text-[10.5px] text-nvr-navy dark:text-nvr-cyan'
-                        title={matchLabel(m)}
+                        data-tip={matchLabel(m)}
                       >
                         {matchLabel(m)}
                       </span>
                     ))}
                     {hit.matches.length > 3 && (
-                      <span className='text-[10.5px] text-slate-400'>
+                      <span className='text-[10.5px] text-slate-500 dark:text-muted-foreground'>
                         +{hit.matches.length - 3}
                       </span>
                     )}
                   </span>
-                  <span className='shrink-0 text-[11px] text-slate-400'>
+                  <span className='shrink-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
                     {formatFileSize(hit.byte_size)}
                   </span>
                   <Button

@@ -51,7 +51,7 @@ export function formatHours(h: number | null): string {
 const pct = (v: number | null) => (v == null ? '—' : `${Math.round(v * 100)}%`)
 
 function Bars({ rows, empty }: { rows: Array<{ label: string; n: number }>; empty: string }) {
-  if (!rows.length) return <p className='text-[12px] text-slate-400'>{empty}</p>
+  if (!rows.length) return <p className='text-[12px] text-muted-foreground'>{empty}</p>
   const max = Math.max(...rows.map((r) => r.n), 1)
   return (
     <ul className='space-y-1.5'>
@@ -69,7 +69,7 @@ function Bars({ rows, empty }: { rows: Array<{ label: string; n: number }>; empt
               style={{ width: `${Math.max(3, (r.n / max) * 100)}%` }}
             />
           </span>
-          <span className='w-10 shrink-0 text-right tabular-nums text-slate-500'>
+          <span className='w-10 shrink-0 text-right tabular-nums text-slate-500 dark:text-muted-foreground'>
             {formatNumber(r.n)}
           </span>
         </li>
@@ -92,15 +92,22 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 function TimingCell({ label, p, hint }: { label: string; p: Pctl; hint: string }) {
   return (
     <div className='bg-white px-4 py-3 dark:bg-card'>
-      <p className='text-[11.5px] text-slate-500'>{label}</p>
+      <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>{label}</p>
       <p className='mt-1 text-[18px] font-semibold tabular-nums text-slate-900 dark:text-foreground'>
         {formatHours(p.p50_hours)}
-        <span className='ml-1.5 text-[11.5px] font-normal text-slate-500'>median</span>
+        {p.samples > 0 && (
+          <span className='ml-1.5 text-[11.5px] font-normal text-slate-500 dark:text-muted-foreground'>
+            median
+          </span>
+        )}
       </p>
-      <p className='mt-0.5 text-[12px] tabular-nums text-slate-600 dark:text-slate-300'>
-        p75 {formatHours(p.p75_hours)} · {pct(p.within_target)} within {formatHours(p.target_hours)}
-      </p>
-      <p className='mt-0.5 text-[11px] text-slate-400'>
+      {p.samples > 0 && (
+        <p className='mt-0.5 text-[12px] tabular-nums text-slate-600 dark:text-slate-300'>
+          p75 {formatHours(p.p75_hours)} · {pct(p.within_target)} within{' '}
+          {formatHours(p.target_hours)}
+        </p>
+      )}
+      <p className='mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
         {p.samples === 0
           ? `No ${hint} yet`
           : `${formatNumber(p.samples)} ticket${p.samples === 1 ? '' : 's'}`}
@@ -121,20 +128,23 @@ export function SupportAnalytics({ className }: { className?: string }) {
   return (
     <div className={cn('mt-4 space-y-4', className)} data-support-analytics>
       <div className='flex items-center justify-between gap-3'>
-        <p className='text-[12px] text-slate-500'>
+        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
           Tickets raised in the window. Counts and timings only — no ticket text.
         </p>
-        <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+        <span className='flex shrink-0 rounded-md border border-slate-200 p-0.5 dark:border-border'>
           {WINDOWS.map((d) => (
             <button
               key={d}
               type='button'
               onClick={() => setDays(d)}
-              className={
+              aria-pressed={days === d}
+              aria-label={`Last ${d} days`}
+              className={cn(
+                'rounded px-2.5 py-1 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
                 days === d
-                  ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
-                  : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-500'
-              }
+                  ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                  : 'text-slate-500 hover:bg-muted dark:text-muted-foreground'
+              )}
             >
               {d}d
             </button>
@@ -148,16 +158,18 @@ export function SupportAnalytics({ className }: { className?: string }) {
           <Skeleton className='h-40 w-full' />
         </div>
       ) : isError || !data ? (
-        <p className='text-[12.5px] text-red-500'>Analytics could not be loaded.</p>
+        <p className='text-[12.5px] text-red-600 dark:text-red-400'>
+          Analytics could not be loaded.
+        </p>
       ) : data.totals.tickets === 0 ? (
-        <p className='py-10 text-center text-[12.5px] text-slate-400'>
+        <p className='py-10 text-center text-[12.5px] text-muted-foreground'>
           No tickets were raised in the last {days} days.
         </p>
       ) : (
         <>
           <div className='grid gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-2 lg:grid-cols-4 dark:border-border dark:bg-border'>
             <div className='bg-white px-4 py-3 dark:bg-card'>
-              <p className='text-[11.5px] text-slate-500'>Tickets</p>
+              <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>Tickets</p>
               <p className='mt-1 text-[18px] font-semibold tabular-nums text-slate-900 dark:text-foreground'>
                 {formatNumber(data.totals.tickets)}
               </p>
@@ -169,7 +181,7 @@ export function SupportAnalytics({ className }: { className?: string }) {
             <TimingCell label='First response' p={data.first_response} hint='replies' />
             <TimingCell label='Resolution' p={data.resolution} hint='resolved tickets' />
             <div className='bg-white px-4 py-3 dark:bg-card'>
-              <p className='text-[11.5px] text-slate-500'>Reopened</p>
+              <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>Reopened</p>
               <p className='mt-1 text-[18px] font-semibold tabular-nums text-slate-900 dark:text-foreground'>
                 {pct(data.reopen.rate)}
               </p>
@@ -217,7 +229,7 @@ export function SupportAnalytics({ className }: { className?: string }) {
             </p>
           </Block>
           {data.window.truncated && (
-            <p className='text-[11.5px] text-slate-400'>
+            <p className='text-[11.5px] text-muted-foreground'>
               The window holds more tickets than are counted; narrow it for exact figures.
             </p>
           )}

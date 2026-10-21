@@ -75,11 +75,11 @@ const mins = (m: number | null) =>
 function Tile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className='rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
-      <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>{label}</p>
+      <p className='text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>{label}</p>
       <p className='mt-1 text-[22px] font-semibold tabular-nums text-slate-900 dark:text-foreground'>
         {value}
       </p>
-      {hint && <p className='text-[11px] text-slate-400'>{hint}</p>}
+      {hint && <p className='text-[11px] text-slate-500 dark:text-muted-foreground'>{hint}</p>}
     </div>
   )
 }
@@ -92,11 +92,13 @@ function RollTable({ title, rows, keyLabel }: { title: string; rows: Roll[]; key
         <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>{title}</h3>
       </header>
       {rows.length === 0 ? (
-        <p className='px-4 py-4 text-[12px] text-slate-400'>Nothing in this window.</p>
+        <p className='px-4 py-4 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          Nothing in this window.
+        </p>
       ) : (
         <table className='w-full text-[12px] tabular-nums'>
           <thead>
-            <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+            <tr className='text-left text-[11px] text-slate-500 dark:text-muted-foreground'>
               <th className='px-4 py-1.5 font-semibold'>{keyLabel}</th>
               <th className='px-2 py-1.5 text-right font-semibold'>Sent</th>
               <th className='px-2 py-1.5 text-right font-semibold'>Read</th>
@@ -111,7 +113,7 @@ function RollTable({ title, rows, keyLabel }: { title: string; rows: Roll[]; key
                 className='px-2 py-1.5 text-right font-semibold'
                 data-tip='Opened but never acted on within the window'
               >
-                Read, ignored
+                Read, no action
               </th>
             </tr>
           </thead>
@@ -185,9 +187,11 @@ function ChannelCard({ title, counts }: { title: string; counts: Record<string, 
   const total = entries.reduce((s, [, v]) => s + v, 0)
   return (
     <div className='rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
-      <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>{title}</p>
+      <p className='text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>{title}</p>
       {total === 0 ? (
-        <p className='mt-1 text-[12px] text-slate-400'>No tracked deliveries yet.</p>
+        <p className='mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          No tracked deliveries yet.
+        </p>
       ) : (
         <ul className='mt-1 space-y-0.5 text-[12px]'>
           {entries
@@ -199,7 +203,9 @@ function ChannelCard({ title, counts }: { title: string; counts: Record<string, 
                 </span>
                 <span className='tabular-nums text-slate-800 dark:text-foreground'>
                   {v}
-                  <span className='ml-1 text-[10.5px] text-slate-400'>{pct(v / total)}</span>
+                  <span className='ml-1 text-[10.5px] text-slate-500 dark:text-muted-foreground'>
+                    {pct(v / total)}
+                  </span>
                 </span>
               </li>
             ))}
@@ -245,6 +251,7 @@ export function NotificationAnalyticsView({ className }: { className?: string })
                 key={d}
                 type='button'
                 onClick={() => setDays(d)}
+                aria-pressed={days === d}
                 className={cn(
                   'rounded px-2.5 py-1 text-[12px] font-medium',
                   days === d
@@ -257,14 +264,19 @@ export function NotificationAnalyticsView({ className }: { className?: string })
             ))}
           </div>
           <div
-            className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'
+            className='inline-flex items-center rounded-md border border-slate-200 p-0.5 dark:border-border'
             data-tip='How long after a notification an action still counts as acted'
           >
+            <span className='px-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
+              Acted within
+            </span>
             {([4, 24, 72] as const).map((h) => (
               <button
                 key={h}
                 type='button'
                 onClick={() => setActedHours(h)}
+                aria-pressed={actedHours === h}
+                aria-label={`Acted within ${h} hours`}
                 className={cn(
                   'rounded px-2.5 py-1 text-[12px] font-medium',
                   actedHours === h
@@ -272,7 +284,7 @@ export function NotificationAnalyticsView({ className }: { className?: string })
                     : 'text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
                 )}
               >
-                act ≤{h}h
+                {h}h
               </button>
             ))}
           </div>
@@ -280,7 +292,7 @@ export function NotificationAnalyticsView({ className }: { className?: string })
       </header>
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
         {isLoading || !data ? (
-          <p className='text-[13px] text-slate-400'>Loading…</p>
+          <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>Loading…</p>
         ) : (
           <div className='space-y-5'>
             <div className='grid grid-cols-2 gap-3 md:grid-cols-5'>
@@ -312,7 +324,7 @@ export function NotificationAnalyticsView({ className }: { className?: string })
               </p>
             )}
             <div className='rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
-              <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+              <p className='text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
                 Per day · sent (bar) and read (filled)
               </p>
               <div className='mt-2 flex h-24 items-end gap-px'>
@@ -334,7 +346,9 @@ export function NotificationAnalyticsView({ className }: { className?: string })
                   </div>
                 ))}
                 {series.length === 0 && (
-                  <p className='text-[12px] text-slate-400'>No notifications in this window.</p>
+                  <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+                    No notifications in this window.
+                  </p>
                 )}
               </div>
             </div>
@@ -349,16 +363,18 @@ export function NotificationAnalyticsView({ className }: { className?: string })
                   <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
                     Most muted sources
                   </h3>
-                  <p className='text-[11px] text-slate-400'>
+                  <p className='text-[11px] text-slate-500 dark:text-muted-foreground'>
                     Records people asked to stop hearing about, against what that collection sent.
                   </p>
                 </header>
                 {data.mutes.top.length === 0 ? (
-                  <p className='px-4 py-4 text-[12px] text-slate-400'>Nobody has muted a record.</p>
+                  <p className='px-4 py-4 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                    Nobody has muted a record.
+                  </p>
                 ) : (
                   <table className='w-full text-[12px] tabular-nums'>
                     <thead>
-                      <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+                      <tr className='text-left text-[11px] text-slate-500 dark:text-muted-foreground'>
                         <th className='px-4 py-1.5 font-semibold'>Collection</th>
                         <th className='px-2 py-1.5 text-right font-semibold'>Mutes</th>
                         <th className='px-2 py-1.5 text-right font-semibold'>Sent</th>

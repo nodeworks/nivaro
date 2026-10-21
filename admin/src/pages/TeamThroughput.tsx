@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { enumerateBuckets } from '@/lib/buckets'
@@ -228,7 +229,7 @@ export function TeamThroughputPage() {
               ] as const
             ).map(([label, n]) => (
               <div key={label} className='bg-white p-4 dark:bg-card'>
-                <p className='text-[11px] uppercase tracking-wide text-muted-foreground'>{label}</p>
+                <p className='text-[12px] text-muted-foreground'>{label}</p>
                 <p className='text-xl font-semibold'>{formatNumber(n)}</p>
               </div>
             ))}
@@ -236,7 +237,7 @@ export function TeamThroughputPage() {
           <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
             <table className='w-full text-[12px]'>
               <thead>
-                <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-muted-foreground dark:border-border'>
+                <tr className='border-b border-slate-200 text-left text-[11.5px] text-muted-foreground dark:border-border'>
                   <th className='px-3 py-2'>Person</th>
                   {(
                     [
@@ -250,8 +251,9 @@ export function TeamThroughputPage() {
                       <button
                         type='button'
                         onClick={() => setSortKey(key)}
+                        aria-pressed={sortKey === key}
                         className={cn(
-                          'uppercase',
+                          'font-medium hover:text-foreground',
                           sortKey === key && 'text-nvr-navy dark:text-nvr-cyan'
                         )}
                       >
@@ -319,11 +321,12 @@ export function TeamThroughputPage() {
               attributable user (deleted legacy accounts) and are excluded above.
             </p>
           )}
+          {/* The cards stack under the table, inside the scrolling column. */}
+          <FirstOpenCard collection={collection} from={from} to={to} />
+          <StateFlowCard collection={collection || 'workflows'} />
+          <SendbackThemesCard collection={collection || 'workflows'} />
+          <OwnerLoadCard collection={collection} />
         </div>
-        <FirstOpenCard collection={collection} from={from} to={to} />
-        <StateFlowCard collection={collection || 'workflows'} />
-        <SendbackThemesCard collection={collection || 'workflows'} />
-        <OwnerLoadCard collection={collection} />
       </div>
     </div>
   )
@@ -396,7 +399,7 @@ function OwnerLoadCard({ collection }: { collection: string }) {
       ) : (
         <table className='w-full text-[12px]'>
           <thead>
-            <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+            <tr className='text-left text-[11px] text-slate-500 dark:text-muted-foreground'>
               <th className='py-1 font-semibold'>Owner</th>
               <th className='py-1 text-right font-semibold'>Open</th>
               <th className='py-1 pl-3 font-semibold'>Load</th>
@@ -731,7 +734,7 @@ function FirstOpenCard({ collection, from, to }: { collection: string; from: str
           <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
             Time until an owner opens a record
           </p>
-          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          <p className='mt-0.5 max-w-[80ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
             After a record enters a state, how long before any of its owners opens it. Owners are
             resolved as the pipeline names them today; an open is the earliest recorded view while
             the record sat in the state.
@@ -743,10 +746,11 @@ function FirstOpenCard({ collection, from, to }: { collection: string; from: str
               key={v}
               type='button'
               onClick={() => setView(v)}
+              aria-pressed={view === v}
               className={cn(
                 'rounded px-2.5 py-1 text-[12px] font-medium',
                 view === v
-                  ? 'bg-slate-900 text-white dark:bg-nvr-cyan dark:text-[#172940]'
+                  ? 'bg-nvr-cyan/10 text-slate-900 dark:text-foreground'
                   : 'text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
               )}
             >
@@ -756,14 +760,20 @@ function FirstOpenCard({ collection, from, to }: { collection: string; from: str
         </div>
       </div>
       <div className='border-t border-slate-100 dark:border-border'>
-        {isLoading && <p className='px-4 py-3 text-[12px] text-slate-400'>Reading history…</p>}
+        {isLoading && (
+          <div className='space-y-1.5 px-4 py-3' role='status' aria-label='Reading history'>
+            <Skeleton className='h-6 w-full' />
+            <Skeleton className='h-6 w-full' />
+            <Skeleton className='h-6 w-3/4' />
+          </div>
+        )}
         {isError && (
           <p className='px-4 py-3 text-[12px] text-amber-700 dark:text-amber-400'>
             Could not load this report.
           </p>
         )}
         {data && rows.length === 0 && (
-          <p className='px-4 py-3 text-[12px] text-slate-400'>
+          <p className='px-4 py-3 text-[12px] text-slate-500 dark:text-muted-foreground'>
             No state entries with owners in this range.
           </p>
         )}
@@ -771,7 +781,7 @@ function FirstOpenCard({ collection, from, to }: { collection: string; from: str
           <div className='max-h-[360px] overflow-auto'>
             <table className='w-full text-[12px] tabular-nums'>
               <thead>
-                <tr className='text-left text-slate-500'>
+                <tr className='text-left text-slate-500 dark:text-muted-foreground'>
                   <th className='px-4 py-1.5 font-medium'>
                     {view === 'state' ? 'State' : 'Owner'}
                   </th>
@@ -796,7 +806,7 @@ function FirstOpenCard({ collection, from, to }: { collection: string; from: str
                     <td className='px-2 py-1.5 text-right font-medium'>
                       {waitText(r.median_minutes)}
                     </td>
-                    <td className='px-4 py-1.5 text-right text-slate-500'>
+                    <td className='px-4 py-1.5 text-right text-slate-500 dark:text-muted-foreground'>
                       {waitText(r.p90_minutes)}
                     </td>
                   </tr>
@@ -806,7 +816,7 @@ function FirstOpenCard({ collection, from, to }: { collection: string; from: str
           </div>
         )}
         {data && (data.no_owner > 0 || data.truncated) && (
-          <p className='border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400 dark:border-border'>
+          <p className='border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
             {data.no_owner > 0 &&
               `${formatNumber(data.no_owner)} entries had no owner to wait on. `}
             {data.truncated && 'Covers the newest 4,000 state entries in the range.'}
