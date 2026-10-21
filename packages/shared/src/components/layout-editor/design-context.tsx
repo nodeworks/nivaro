@@ -1,4 +1,5 @@
 import { type CSSProperties, createContext, useContext } from 'react'
+import { isCanvasSlot } from '../../lib/layout-ops'
 import type { ActiveLayoutData } from '../item-edit/types'
 import type { RefusedWrite } from './design-canvas'
 
@@ -8,9 +9,16 @@ export type DesignTarget =
   | { kind: 'slot'; field: string; group_key: string | null }
   | { kind: 'header'; field: string }
 
+export interface SelectOptions {
+  /** Shift / ⌘ / Ctrl-click: add the target to the selection, or take it out. */
+  additive?: boolean
+}
+
 export interface LayoutDesign {
   selected: DesignTarget | null
-  onSelect(t: DesignTarget): void
+  onSelect(t: DesignTarget, opts?: SelectOptions): void
+  /** Everything selected (several fields after Shift-click); absent = just `selected`. */
+  selection?: DesignTarget[]
   showHidden: boolean
   /** Parent layout name when the node comes from an inherited layout, else null. */
   inheritedFrom(t: DesignTarget): string | null
@@ -73,4 +81,35 @@ export function targetKey(t: DesignTarget): string {
     case 'header':
       return `header:${t.field}`
   }
+}
+
+/** Fields and in-section panels can be selected together; sections, header
+ *  tiles and page cards (pipeline, comments, …) are selected one at a time. */
+export function isMultiSelectable(t: DesignTarget): boolean {
+  if (t.kind === 'field') return true
+  return t.kind === 'slot' && !isCanvasSlot(t)
+}
+
+/**
+ * The selection after a click on `t`. A plain click selects `t` alone. An
+ * additive click adds `t`, or takes it out when it is already selected, as
+ * long as everything involved can be selected together; otherwise it acts
+ * as a plain click. The last entry is the one the inspector would show alone.
+ */
+export function nextSelection(
+  current: DesignTarget[],
+  t: DesignTarget,
+  opts?: SelectOptions
+): DesignTarget[] {
+  if (!opts?.additive || !isMultiSelectable(t) || !current.every(isMultiSelectable)) return [t]
+  const key = targetKey(t)
+  if (current.some((c) => targetKey(c) === key)) return current.filter((c) => targetKey(c) !== key)
+  return [...current, t]
+}
+
+/** Is `t` part of the design's selection (several, or the one selected)? */
+export function isSelectedIn(design: LayoutDesign, t: DesignTarget): boolean {
+  const key = targetKey(t)
+  if (design.selection) return design.selection.some((s) => targetKey(s) === key)
+  return design.selected != null && targetKey(design.selected) === key
 }

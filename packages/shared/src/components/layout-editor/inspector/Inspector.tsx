@@ -11,7 +11,9 @@ import {
 } from '../../../lib/layout-ops'
 import { cn, titleCase } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
+import { AutoArrangeButton } from '../AutoArrange'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
+import { FIELD_HOLDERS } from '../field-zones'
 import { PanelBody, PanelHeader, PanelTabs, tabId, tabPanelId } from '../panel-frame'
 import { tintCard } from '../panel-style'
 import { slotName } from '../slot-names'
@@ -343,6 +345,16 @@ function GroupPanel({
         ) : (
           <>
             <ScopeLegend />
+            {FIELD_HOLDERS.has(group.type) &&
+              env.layoutType !== 'table' &&
+              env.layoutType !== 'file' && (
+                <AutoArrangeButton
+                  bundle={env.bundle}
+                  apply={env.apply}
+                  zone={group.key}
+                  zoneLabel={group.label || titleCase(group.key)}
+                />
+              )}
             {body}
           </>
         )}
