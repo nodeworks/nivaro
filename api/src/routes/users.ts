@@ -1073,6 +1073,16 @@ export async function usersRoutes(app: FastifyInstance) {
         patch.dnd = { until }
       }
     }
+    if ('huddle_hold_notifications' in body) {
+      // #2852 — hold notification toasts and sounds while in a huddle (default on;
+      // false = they arrive as usual). The inbox fills either way.
+      const v = body.huddle_hold_notifications
+      if (v !== null && typeof v !== 'boolean')
+        return reply
+          .code(400)
+          .send({ error: 'huddle_hold_notifications must be true, false or null' })
+      patch.huddle_hold_notifications = v
+    }
     if ('chat_sidebar_sort' in body) {
       const v = body.chat_sidebar_sort
       if (v !== null && v !== 'recent' && v !== 'unread' && v !== 'alpha') {

@@ -147,11 +147,11 @@ const scope = {
 }
 
 describe('huddleRoomKind', () => {
-  it('allows channels, General and record rooms; refuses DMs and junk', () => {
+  it('allows channels, General, record rooms and DMs (#2843); refuses junk', () => {
     expect(huddleRoomKind('ch:ops')).toBe('ok')
     expect(huddleRoomKind('global')).toBe('ok')
     expect(huddleRoomKind('ord:ORD-1')).toBe('ok')
-    expect(huddleRoomKind('dm:A:B')).toBe('dm')
+    expect(huddleRoomKind('dm:A:B')).toBe('ok')
     expect(huddleRoomKind('')).toBe('bad')
     expect(huddleRoomKind('x'.repeat(201))).toBe('bad')
   })
@@ -199,7 +199,7 @@ describe('registerHuddle', () => {
     expect(lines).toHaveLength(1)
   })
 
-  it('refuses DMs, a disabled instance, a full huddle and a room the person cannot see', async () => {
+  it('refuses junk rooms, a disabled instance, a full huddle and a room the person cannot see', async () => {
     const io = fakeIo()
     const a = fakeSocket('S1')
     const { d } = deps(redis, {
@@ -207,10 +207,10 @@ describe('registerHuddle', () => {
       canSeeRoom: async (_u, room) => room !== 'ch:secret'
     })
     registerHuddle(io as never, a.socket as never, () => rob, scope, d)
-    await a.fire('huddle:join', { room: 'dm:A:B' })
+    await a.fire('huddle:join', { room: 'nonsense' })
     expect(a.emitted.at(-1)).toEqual({
       event: 'huddle:denied',
-      payload: { room: 'dm:A:B', reason: 'no-dm' }
+      payload: { room: 'nonsense', reason: 'bad-room' }
     })
     await a.fire('huddle:join', { room: 'ch:secret' })
     expect((a.emitted.at(-1)?.payload as { reason: string }).reason).toBe('no-access')

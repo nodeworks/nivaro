@@ -1,10 +1,11 @@
-import { Headphones, Maximize2, MicOff, ScreenShare, X } from 'lucide-react'
+import { BellOff, Headphones, Maximize2, MicOff, PhoneOutgoing, ScreenShare, X } from 'lucide-react'
 import type React from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { cn } from '../../../lib/utils'
 import { MutedTalkingHint, PoorConnectionBanner, QualityBars, SpeakingRing } from './HuddleAudioUi'
 import { HuddleVideoGrid } from './HuddleCamera'
 import { HuddleDrawOverlay } from './HuddleDraw'
+import { HuddleInviteButton } from './HuddlePeoplePicker'
 import {
   HuddleCameraNotice,
   HuddleHands,
@@ -12,10 +13,73 @@ import {
   HuddleStageTools
 } from './HuddleStageTools'
 import type { PeerQuality } from './huddle-audio-logic'
+import { huddleCalls, type RingingPerson } from './huddle-calls'
+import { getHeldSnapshot, subscribeHeld } from './huddle-hold'
 import { HuddlePipOffer, HuddlePopOutButton, useHuddlePip } from './huddle-pip'
 import { formatElapsed, type LivePeer } from './huddle-store'
 import type { HuddleHandle } from './useHuddle'
 import { useHuddleQuality, useHuddleSpeaking } from './useHuddleAudio'
+
+const NO_RINGING: RingingPerson[] = []
+
+/** Someone I rang (#2843/#2844): ringing, or how they answered (fades after a moment). */
+function Ringing({ p, onCancel }: { p: RingingPerson; onCancel: () => void }) {
+  const text =
+    p.state === 'ringing'
+      ? `Ringing ${p.name ?? 'someone'}…`
+      : p.state === 'accepted'
+        ? `${p.name ?? 'Someone'} is joining`
+        : p.state === 'declined'
+          ? `${p.name ?? 'Someone'} declined`
+          : `No answer from ${p.name ?? 'someone'}`
+  return (
+    <span
+      className={cn(
+        'inline-flex h-6 items-center gap-1 rounded-full border border-dashed px-2 text-[11px]',
+        p.state === 'ringing'
+          ? 'border-nvr-cyan/60 text-slate-700 dark:text-slate-200'
+          : 'border-slate-300 text-slate-500 dark:border-border dark:text-slate-400'
+      )}
+      data-huddle-ringing={p.id}
+      data-state={p.state}
+    >
+      {p.state === 'ringing' && (
+        <PhoneOutgoing
+          className='h-3 w-3 text-nvr-cyan motion-safe:animate-pulse'
+          strokeWidth={2}
+        />
+      )}
+      {text}
+      {p.state === 'ringing' && (
+        <button
+          type='button'
+          onClick={onCancel}
+          className='ml-0.5 grid h-4 w-4 place-items-center rounded-full text-slate-500 hover:bg-slate-200 hover:text-slate-800 dark:hover:bg-white/10 dark:hover:text-slate-100'
+          aria-label='Stop ringing'
+          data-tip='Stop ringing'
+        >
+          <X className='h-3 w-3' strokeWidth={2} />
+        </button>
+      )}
+    </span>
+  )
+}
+
+/** #2852 — notifications held while I talk; released as one summary when I leave. */
+function HeldChip() {
+  const n = useSyncExternalStore(subscribeHeld, getHeldSnapshot, () => 0)
+  if (!n) return null
+  return (
+    <span
+      className='inline-flex h-6 items-center gap-1 rounded-full bg-slate-200/70 px-2 text-[11px] text-slate-600 dark:bg-white/10 dark:text-slate-300'
+      data-tip={`${n} held until you leave — the inbox already has ${n === 1 ? 'it' : 'them'}`}
+      data-huddle-held={n}
+    >
+      <BellOff className='h-3 w-3' strokeWidth={2} />
+      {n} held
+    </span>
+  )
+}
 
 /** A live MediaStream in a <video>; muted because audio plays through the store's own elements. */
 function ScreenView({
@@ -172,6 +236,12 @@ export function HuddleStage({
   }, [state.peers, speaking.order])
   // #2853 — the mini-player and its one-time offer.
   const pip = useHuddlePip(inThis, me)
+  const calls = useSyncExternalStore(huddleCalls.subscribe, huddleCalls.getSnapshot)
+  const ringing = calls.outgoing[room] ?? NO_RINGING
+  // Leaving the room's huddle forgets who I was ringing (the server hung up for me).
+  useEffect(() => {
+    if (!inThis) huddleCalls.clearOutgoing(room)
+  }, [inThis, room])
   if (state.status === 'error' && (state.room === room || !state.room)) {
     return (
       <div
@@ -232,7 +302,10 @@ export function HuddleStage({
             renderAvatar={renderAvatar}
           />
         ))}
-        {!joining && state.peers.length === 0 && (
+        {ringing.map((p) => (
+          <Ringing key={p.id} p={p} onCancel={() => huddleCalls.cancel(room)} />
+        ))}
+        {!joining && state.peers.length === 0 && ringing.length === 0 && (
           <span className='text-slate-500 dark:text-slate-400'>
             Only you so far — people in the room see a Join button.
           </span>
@@ -240,6 +313,9 @@ export function HuddleStage({
         <HuddleStageTools me={me} handAt={state.handAt} disabled={joining}>
           <HuddlePopOutButton pip={pip} />
         </HuddleStageTools>
+        {/* After the stage tools (which push right), so the row keeps one ml-auto. */}
+        {!joining && <HuddleInviteButton room={room} renderAvatar={renderAvatar} />}
+        <HeldChip />
       </div>
       {quality.poor && <PoorConnectionBanner sharing={state.sharing} />}
       <HuddleHands roster={huddle.roster} self={state.self} />

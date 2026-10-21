@@ -16,6 +16,7 @@ import {
   ClipboardPlus,
   FilePlus2,
   Hash,
+  Headphones,
   Info,
   Lock,
   LogOut,
@@ -129,8 +130,11 @@ import { offHoursNote } from './chat-local-time'
 import { useMessageWindow } from './chat-window'
 import { HuddleControls } from './huddle/HuddleControls'
 import { HuddleLiveBadge } from './huddle/HuddleLiveBadge'
+import { HuddleScheduleCard } from './huddle/HuddleScheduleCard'
+import { HuddleScheduleForm } from './huddle/HuddleScheduleForm'
 import { HuddleStage } from './huddle/HuddleStage'
 import { useHuddleLive } from './huddle/huddle-live'
+import { huddleRefOf, stripHuddleRef } from './huddle/huddle-schedule'
 import { useHuddle } from './huddle/useHuddle'
 import { actionsForMessage, MessageActionsMenu, useMessageActions } from './MessageActions'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
@@ -1738,11 +1742,12 @@ export function ChatRoomView({
                 </button>
               )}
               {m.message &&
+                stripHuddleRef(m.message) &&
                 (renderMessageBody ? (
                   renderMessageBody(m, { mine })
                 ) : (
                   <FormattedMessage
-                    text={m.message}
+                    text={stripHuddleRef(m.message)}
                     mine={mine}
                     renderToken={mine ? renderTokenMine : renderToken}
                     entityPattern={cfg.entityPattern}
@@ -1750,6 +1755,16 @@ export function ChatRoomView({
                     navigate={cfg.navigate}
                   />
                 ))}
+              {/* #2860 — a scheduled huddle's card, read live from its row. */}
+              {huddleRefOf(m.message) != null && (
+                <HuddleScheduleCard
+                  id={huddleRefOf(m.message) as number}
+                  mine={mine}
+                  renderAvatar={(id, name) => (
+                    <Avatar id={id} name={name} size={18} presence={false} />
+                  )}
+                />
+              )}
               {m.poll && <PollCard poll={m.poll} room={m.room} mine={mine} />}
               {(m.attachments ?? []).length > 0 && (
                 <div className={cn('flex flex-wrap gap-1.5', m.message && 'mt-1.5')}>
@@ -2053,6 +2068,21 @@ export function ChatRoomView({
         </button>
         <RoomHeaderMenu
           th={th}
+          huddleSchedule={
+            huddle.enabled
+              ? (close) => (
+                  <HuddleScheduleForm
+                    room={room}
+                    me={me?.id ?? null}
+                    theme={{ input: th.input }}
+                    renderAvatar={(id, name) => (
+                      <Avatar id={id} name={name} size={18} presence={false} />
+                    )}
+                    onDone={close}
+                  />
+                )
+              : undefined
+          }
           starred={roomInfo ? !!roomInfo.starred : undefined}
           onStar={
             roomInfo ? () => setStarred.mutate({ room, starred: !roomInfo.starred }) : undefined
@@ -3834,6 +3864,8 @@ interface PresenceExtra {
   state?: 'active' | 'idle' | 'stuck'
   stuck?: StuckState | null
   custom_status?: { text: string; emoji: string | null } | null
+  /** #2852 — in a huddle right now (transient; never replaces custom_status). */
+  in_huddle?: boolean
   /** An admin is masquerading as this person right now. */
   masquerade?: { admin_id: string | null; admin_name: string } | null
   /** The person chose "appear away" — reads as away whatever they are doing. */
@@ -4583,17 +4615,30 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                             })()}
                           </span>
                           {(() => {
-                            const cs = presenceExtras.byUser.get(
-                              String(u.user_id).toUpperCase()
-                            )?.custom_status
-                            if (!cs) return null
+                            const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                            const cs = x?.custom_status
+                            if (!cs && !x?.in_huddle) return null
                             return (
                               <span
-                                className='block truncate text-[11px] italic text-slate-500 dark:text-slate-400'
+                                className='flex items-center gap-1 truncate text-[11px] text-slate-500 dark:text-slate-400'
                                 data-chat-status
                               >
-                                {cs.emoji ? `${cs.emoji} ` : ''}
-                                {cs.text}
+                                {x?.in_huddle && (
+                                  <span
+                                    className='inline-flex shrink-0 items-center gap-0.5 text-nvr-navy dark:text-nvr-cyan'
+                                    data-chat-in-huddle
+                                    data-tip='In a huddle right now'
+                                  >
+                                    <Headphones className='h-3 w-3' strokeWidth={2} />
+                                    {!cs && 'In a huddle'}
+                                  </span>
+                                )}
+                                {cs && (
+                                  <span className='truncate italic'>
+                                    {cs.emoji ? `${cs.emoji} ` : ''}
+                                    {cs.text}
+                                  </span>
+                                )}
                               </span>
                             )
                           })()}

@@ -4,6 +4,15 @@ import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
 import { LIVE_ROOM, pokeHuddleLive, registerHuddleLive } from './huddle-live.js'
+import { markHuddling, unmarkHuddling } from './huddle-presence.js'
+import {
+  answerRing,
+  cancelRing,
+  defaultRingDeps,
+  type RingDeps,
+  ringTargets,
+  ringUsers
+} from './huddle-ring.js'
 import {
   clampQuality,
   defaultSessionRecorder,
@@ -79,6 +88,8 @@ export interface HuddleRedis {
   set(key: string, value: string, mode: 'EX', ttl: number): Promise<unknown>
   get(key: string): Promise<string | null>
   del(...keys: string[]): Promise<unknown>
+  /** Optional: one round trip for the "in a huddle" presence marks (#2852). */
+  mget?(...keys: string[]): Promise<Array<string | null>>
 }
 
 function keys(tenant: string | null, room: string) {
@@ -92,11 +103,10 @@ function keys(tenant: string | null, room: string) {
   }
 }
 
-/** Rooms a huddle may run in: channels, General and record rooms (DMs are not in v1). */
+/** Rooms a huddle may run in: channels, General, record rooms and, since #2843, direct messages. */
 export function huddleRoomKind(room: string): 'ok' | 'dm' | 'bad' {
   if (typeof room !== 'string' || !room || room.length > ROOM_MAX) return 'bad'
   const kind = parseRoom(room).kind
-  if (kind === 'dm') return 'dm'
   return kind === 'unknown' ? 'bad' : 'ok'
 }
 
@@ -194,7 +204,13 @@ export async function huddlePeers(
   return out
 }
 
-async function touch(redis: HuddleRedis, tenant: string | null, room: string, socketId: string) {
+async function touch(
+  redis: HuddleRedis,
+  tenant: string | null,
+  room: string,
+  socketId: string,
+  userId?: string
+) {
   const k = keys(tenant, room)
   await redis.zadd(k.set, Date.now(), socketId)
   await redis.expire(k.set, KEY_TTL_S)
@@ -202,6 +218,8 @@ async function touch(redis: HuddleRedis, tenant: string | null, room: string, so
   await redis.expire(k.start, KEY_TTL_S)
   await redis.expire(k.mode, KEY_TTL_S)
   await redis.expire(k.session, KEY_TTL_S)
+  // #2852 — the person reads "In a huddle" wherever presence is shown.
+  if (userId) await markHuddling(redis, tenant, userId, room).catch(() => undefined)
 }
 
 /** The huddle's session id (#2859): random per huddle, names its LiveKit room; null = no huddle. */
@@ -247,6 +265,13 @@ export interface HuddleDeps {
     session: string
     identity: string | null
   }): Promise<void>
+  /**
+   * #2843 — the other members of a direct conversation (a `dm:` room or a
+   * group DM channel), rung when its huddle starts; null for any other room.
+   */
+  directMembers?(room: string): Promise<string[] | null>
+  /** #2843/#2844 — ringing; absent = huddles never ring (tests, hosts without io). */
+  ring?: RingDeps
 }
 
 export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
@@ -280,6 +305,29 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
       if (identity) await sfuRemoveParticipant(server, name, identity)
       else await sfuDeleteRoom(server, name)
     }
+  }
+}
+
+/** The members of a direct conversation, or null when the room is not one. */
+export async function directMembersOf(room: string): Promise<string[] | null> {
+  const parsed = parseRoom(room)
+  if (parsed.kind === 'dm') return parsed.participants ?? []
+  if (parsed.kind !== 'channel') return null
+  const { channels } = await import('./chat.js')
+  const ch = (await channels()).get(parsed.channelKey ?? '')
+  if (!ch?.is_direct) return null
+  const { db } = await import('../db/index.js')
+  const ids = (await db('nivaro_chat_memberships').where({ room }).pluck('user')) as string[]
+  return ids.map((u) => String(u).toUpperCase())
+}
+
+/** The deps with ringing wired in (socketio.ts); defaultHuddleDeps alone never rings. */
+export function fullHuddleDeps(app: FastifyInstance): HuddleDeps {
+  const base = defaultHuddleDeps(app)
+  return {
+    ...base,
+    directMembers: directMembersOf,
+    ring: defaultRingDeps(app, base)
   }
 }
 
@@ -383,7 +431,7 @@ export function registerHuddle(
     const user = getUser()
     if (!user) return deny(room, 'not-signed-in')
     const kind = huddleRoomKind(room as string)
-    if (kind !== 'ok') return deny(room, kind === 'dm' ? 'no-dm' : 'bad-room')
+    if (kind !== 'ok') return deny(room, 'bad-room')
     const r = room as string
     try {
       const settings = await deps.settings()
@@ -402,7 +450,7 @@ export function registerHuddle(
         socket.id,
         JSON.stringify({ user: user.id, name: nameOf(user), muted: false, screen: false, since })
       )
-      await touch(deps.redis, tenant, r, socket.id)
+      await touch(deps.redis, tenant, r, socket.id, user.id)
       setData({ room: r })
       const name = await scope.scopedRoom(`huddle:${r}`)
       if (name) socket.join(name)
@@ -442,6 +490,13 @@ export function registerHuddle(
         r
       )
       if (first) await deps.postLine(r, `${nameOf(user) ?? 'Someone'} started a huddle`)
+      // #2843 — the first person in a direct conversation's huddle calls the others.
+      if (first && deps.ring && deps.directMembers) {
+        const members = await deps.directMembers(r).catch(() => null)
+        if (members?.length) {
+          await ringUsers(deps.ring, { tenant, room: r, from: user, users: members })
+        }
+      }
     } catch (err) {
       deps.warn({ err, room: r }, 'huddle:join failed')
       deny(r, 'unavailable')
@@ -466,6 +521,11 @@ export function registerHuddle(
       }
       await deps.redis.zrem(k.set, socket.id)
       await deps.redis.hdel(k.meta, socket.id)
+      if (user) {
+        await unmarkHuddling(deps.redis, tenant, user.id, room).catch(() => undefined)
+        // Leaving while people are still ringing hangs up on them.
+        if (deps.ring) await cancelRing(deps.ring, { tenant, room, by: user }).catch(() => false)
+      }
       if (data()?.room === room) setData(undefined)
       const name = scope.scopedRoomNow(`huddle:${room}`)
       if (name) socket.leave(name)
@@ -555,7 +615,7 @@ export function registerHuddle(
             ...stagePatch(payload, prev)
           }
           await deps.redis.hset(k.meta, socket.id, JSON.stringify(next))
-          await touch(deps.redis, tenant, room, socket.id)
+          await touch(deps.redis, tenant, room, socket.id, user.id)
           if (next.screen) await record(() => deps.sessions?.screenShared(tenant, room), room)
           await broadcast(room)
         } catch (err) {
@@ -578,7 +638,7 @@ export function registerHuddle(
       try {
         // A ping is what keeps a member listed: no access, no heartbeat.
         if (!(await stillAllowed(user, room))) return
-        await touch(deps.redis, scope.tenantNow(), room, socket.id)
+        await touch(deps.redis, scope.tenantNow(), room, socket.id, user.id)
       } catch {
         /* the next ping tries again */
       }
@@ -615,6 +675,57 @@ export function registerHuddle(
     canSeeRoom: deps.canSeeRoom,
     warn: deps.warn
   })
+
+  // ── Calls (#2843 invite #2844) — the ring state machine lives in huddle-ring.ts ──
+  socket.on(
+    'huddle:invite',
+    inSocketTenant(socket, async (payload: { room?: unknown; users?: unknown }) => {
+      const room = payload?.room
+      const user = getUser()
+      if (!user || !deps.ring || typeof room !== 'string' || data()?.room !== room) return
+      const users = ringTargets(user.id, payload?.users)
+      if (!users.length) return
+      try {
+        if (!(await stillAllowed(user, room))) return
+        await ringUsers(deps.ring, { tenant: scope.tenantNow(), room, from: user, users })
+      } catch (err) {
+        deps.warn({ err, room }, 'huddle:invite failed')
+      }
+    })
+  )
+
+  socket.on(
+    'huddle:ring-answer',
+    inSocketTenant(socket, async (payload: { room?: unknown; accept?: unknown }) => {
+      const room = payload?.room
+      const user = getUser()
+      if (!user || !deps.ring || typeof room !== 'string' || huddleRoomKind(room) !== 'ok') return
+      try {
+        await answerRing(deps.ring, {
+          tenant: scope.tenantNow(),
+          room,
+          user,
+          accept: payload?.accept === true
+        })
+      } catch (err) {
+        deps.warn({ err, room }, 'huddle:ring-answer failed')
+      }
+    })
+  )
+
+  socket.on(
+    'huddle:ring-cancel',
+    inSocketTenant(socket, async (payload: { room?: unknown }) => {
+      const room = payload?.room
+      const user = getUser()
+      if (!user || !deps.ring || typeof room !== 'string') return
+      try {
+        await cancelRing(deps.ring, { tenant: scope.tenantNow(), room, by: user })
+      } catch (err) {
+        deps.warn({ err, room }, 'huddle:ring-cancel failed')
+      }
+    })
+  )
 
   socket.on(
     'disconnect',

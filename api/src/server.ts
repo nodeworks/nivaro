@@ -1643,6 +1643,16 @@ export async function buildServer() {
         },
         { quiet: true }
       )
+      // Scheduled huddles (#2860): reminders five minutes before, rings at the start.
+      app.cron.schedule(
+        'huddle-schedules',
+        '* * * * *',
+        async () => {
+          const { runDueHuddleSchedules } = await import('./services/huddle-schedule.js')
+          await runDueHuddleSchedules(app)
+        },
+        { quiet: true }
+      )
       // Idle channels get an archive suggestion to their owner (#2485); stale composer drafts go (#2474).
       app.cron.schedule('chat-archive-suggestions', '10 4 * * *', async () => {
         const { suggestIdleChannels } = await import('./services/chat-archive.js')
@@ -2568,6 +2578,7 @@ export async function buildServer() {
         'broadcast-ack-chasers',
         'chat-reminders',
         'chat-scheduled-send',
+        'huddle-schedules',
         'chat-dm-email-fallback'
       ]) {
         app.cron.annotate(id, { idempotent: 'unsafe' })

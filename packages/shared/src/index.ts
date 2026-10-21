@@ -119,6 +119,12 @@ export {
 } from './components/chat/ChatPanel'
 export * from './components/chat/chat-core'
 export { canOpenChatRoom, openChatRoom, registerRoomOpener } from './components/chat/chat-core'
+export { HuddleCallLayer, huddleCallLayerMounted } from './components/chat/huddle/HuddleCallLayer'
+export {
+  holdNotification,
+  huddleHolds,
+  releaseHeld
+} from './components/chat/huddle/huddle-hold'
 export { CommandCenterView } from './components/command-center/CommandCenterView'
 export * from './components/DataTable'
 export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDisturb'
