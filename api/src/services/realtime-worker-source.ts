@@ -54,6 +54,10 @@ var hello = null
 var tokenReq = { id: 0, port: null, timer: null }
 var connectFailures = 0
 var everConnected = false
+/* Watchdog state: when the socket went down, and when a connect attempt last started or ended. */
+var downSince = 0
+var lastAttemptAt = 0
+var STALL_MS = 25000
 
 /* Room-shaped emits: event -> [leave event, key of payload]. The worker keeps the server
    membership as the union of every tab's. */
@@ -262,6 +266,8 @@ function ensureSocket() {
     transports: ['websocket', 'polling'],
     tryAllTransports: true,
     withCredentials: true,
+    /* An attempt routed to a stopped server hangs until this fires (socket.io's default is 20 s). */
+    timeout: 10000,
     reconnection: true,
     reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
     reconnectionDelayMax: 15000,
@@ -270,6 +276,7 @@ function ensureSocket() {
   socket.on('connect', function () {
     everConnected = true
     connectFailures = 0
+    downSince = 0
     reconnects += 1
     authed = false
     deliver('connect', [])
@@ -278,6 +285,7 @@ function ensureSocket() {
   })
   socket.on('connect_error', function (err) {
     connectFailures += 1
+    lastAttemptAt = Date.now()
     deliver('connect_error', [{ message: err && err.message ? String(err.message) : 'connect_error' }])
     broadcast(status())
     /* The API answers HTTP but no socket transport gets through (a proxy without the upgrade
@@ -290,6 +298,7 @@ function ensureSocket() {
   })
   socket.on('disconnect', function (reason) {
     authed = false
+    downSince = Date.now()
     deliver('disconnect', [reason])
     broadcast(status())
   })
@@ -321,7 +330,7 @@ function ensureSocket() {
     authed = false
     deliver('session:ended', [p])
   })
-  socket.io.on('reconnect_attempt', function () { broadcast(status()) })
+  socket.io.on('reconnect_attempt', function () { lastAttemptAt = Date.now(); broadcast(status()) })
   socket.io.engine && socket.io.engine.on && socket.io.engine.on('upgrade', function () { broadcast(status()) })
   socket.onAny(function (event) {
     var args = Array.prototype.slice.call(arguments, 1)
@@ -456,6 +465,18 @@ self.onconnect = function (e) {
   port.start && port.start()
   post(port, { t: 'ready', proto: PROTO })
 }
+
+/* Watchdog: after a server roll behind a polling proxy (traefik's swarm provider) the socket
+   was seen sitting disconnected with no further attempts while plain tabs recovered. A socket
+   down with no attempt starting or ending for STALL_MS gets a fresh connect. */
+setInterval(function () {
+  if (!socket || socket.connected || !downSince || !ports.size) return
+  var now = Date.now()
+  if (now - Math.max(downSince, lastAttemptAt) < STALL_MS) return
+  lastAttemptAt = now
+  try { if (socket.io.engine) socket.io.engine.close() } catch (e) { /* already closed */ }
+  socket.connect()
+}, 5000)
 
 /* Tabs that vanished without a bye (a crashed tab, a killed process) stop answering pings. */
 setInterval(function () {
