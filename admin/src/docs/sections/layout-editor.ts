@@ -307,6 +307,23 @@ export const layoutEditor: DocSection = {
         "Personal and financial fields: fields that look personal or financial and are seen on this form by a broad role (one holding a fifth of active people, or roles that together hold half). The suggestion hides the field's section from those roles, leaving out roles that edit the field or need it for a workflow move, and says which other fields go with it. This is advice, not a security control: the API still returns a field to every role whose permissions read it."
       ]
     },
+    { type: 'h3', id: 'layout-editor-ai-tools', text: 'AI tools' },
+    {
+      type: 'p',
+      text: 'The AI button in the top bar (administrators) holds three reviews. None of them changes the form by itself: every fix is shown in sentences first, and one Apply is one undo step that waits for Save like any other change. Findings appear as tags on the canvas; click one in the list to select that field or section, and Clear marks removes the tags.'
+    },
+    {
+      type: 'ul',
+      items: [
+        "Persona test: pick a role (and, if you like, what that person is trying to do). The AI plays someone in that role filling in a new record, step by step, and says where they would hesitate — a confusing step, label or field — with a suggestion; a clearer label can be applied with one click. Built-in checks run even without AI: a required field the role cannot see or change (the record could not be saved), a step with nothing for them to fill in, a label that reads like a database name, two fields with the same label. Only labels, help text, choices and the form's structure are sent, never stored data. Nothing is saved.",
+        "Visual critique: the AI reviews how the form looks — density, the order and nesting of sections, alignment of widths — and pins each comment to its section. It gets a picture of the canvas (typed values hidden) when the AI provider can read pictures; with a preview record on the canvas, or with a provider that cannot read pictures, it gets the sections' structure and measured sizes instead, and says so. Built-in checks flag long full-width stacks, ragged rows and one-field sections.",
+        'After autofill: for collections that use "Fill from document", the fields people most often change after the AI proposed a value (last 90 days, counts only). Fields changed in at least a quarter of their proposals start ticked. "Highlight after autofill" rings those fields with a Check this tag only when the form was filled from a document; "Add Check these section" moves them into a section at the top of the form (on a steps or tabs form, a first step).'
+      ]
+    },
+    {
+      type: 'p',
+      text: "AI fill per field: in the inspector's Look tab, a text field can get its own AI fill button with a prompt. Write {{field_name}} in the prompt (or pick from Insert a field) to use another field's current value; nothing else from the record is sent. A field's own setting wins over the form-wide \"AI generate buttons\" switch (turned off, it hides the button on that field). Anyone who may change the field on that record can use the button — not only administrators — and fields they cannot read stay empty in the prompt. The value goes into the form like typing; it is saved with the record."
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
@@ -657,7 +674,19 @@ PATCH /api/collection-layouts/schedules/:sid  { run_at }   // pending only
 DELETE /api/collection-layouts/schedules/:sid              // cancel (or dismiss a failed one)
 
 GET  /api/widgets-internal/:id/placements
-     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`
+     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget
+
+POST /api/ai-design/layouts/:id/persona-test  { role_id, goal? }            // administrators
+     → { data: { role, walkthrough, summary, steps, findings, dropped, ai_configured } }
+POST /api/ai-design/layouts/:id/visual-critique  { sections, canvas, image? }  // administrators
+     → { data: { summary, comments, dropped, used_image, image_skipped, ai_configured } }
+GET  /api/ai-design/layouts/:id/autofill-corrections?days=90                 // administrators
+     → { data: { days, documents, fields: [{ field, proposed, corrected, kept, share, suggest }] } }
+
+POST /api/ai/field-fill  { collection, layout_id, field, item_id?, values? }   // record editors
+     → { data: { value, missing } }   // the prompt is read from the layout, never sent
+     403 when the field has no AI fill on that form, the role may not open the form,
+         or the person may not change the record / field; 429 past 30 fills in 5 minutes`
     },
     {
       type: 'table',

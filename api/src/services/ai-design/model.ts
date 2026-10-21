@@ -15,7 +15,15 @@ export type AiComplete = (req: {
   system: string
   user: string
   maxTokens?: number
+  /** A picture sent before the text (visual critique); only to providers that read images. */
+  image?: AiImage
 }) => Promise<string>
+
+export interface AiImage {
+  media_type: 'image/jpeg' | 'image/png'
+  /** base64, no data: prefix */
+  data: string
+}
 
 export class AiUnavailableError extends Error {
   constructor() {
@@ -24,17 +32,43 @@ export class AiUnavailableError extends Error {
   }
 }
 
-/** The configured provider, or null when none is set up. */
-export async function defaultComplete(): Promise<AiComplete | null> {
-  const client = await getAiClient()
+/**
+ * The configured provider, or null when none is set up. `feature` picks the
+ * per-feature model: 'chat' for reasoning (persona test, visual critique),
+ * 'generate' for writing a value; the default model otherwise.
+ */
+export async function defaultComplete(
+  feature: 'default' | 'chat' | 'generate' = 'default'
+): Promise<AiComplete | null> {
+  // Optional chaining: test doubles may answer nothing here.
+  const settings = await getAiModelSettings()
+  const model =
+    feature === 'chat'
+      ? settings?.chatModel
+      : feature === 'generate'
+        ? settings?.generateModel
+        : settings?.model
+  const client = await getAiClient(feature === 'default' ? undefined : { model })
   if (!client) return null
-  const { model } = await getAiModelSettings()
-  return async ({ system, user, maxTokens }) => {
+  return async ({ system, user, maxTokens, image }) => {
     const msg = await client.messages.create({
       model,
       max_tokens: maxTokens ?? 2000,
       system,
-      messages: [{ role: 'user', content: user }]
+      messages: [
+        {
+          role: 'user',
+          content: image
+            ? [
+                {
+                  type: 'image',
+                  source: { type: 'base64', media_type: image.media_type, data: image.data }
+                },
+                { type: 'text', text: user }
+              ]
+            : user
+        }
+      ]
     })
     return msg.content
       .filter((c) => c.type === 'text')

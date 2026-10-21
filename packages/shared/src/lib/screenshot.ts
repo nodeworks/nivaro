@@ -92,3 +92,37 @@ export async function captureMaskedScreenshot(
     return null
   }
 }
+
+/**
+ * A downscaled JPEG data URI of one element (the layout editor's canvas for
+ * the AI visual critique, #2690), typed values masked like the page capture;
+ * null when html2canvas is missing or the capture fails. `ignoreSelector`
+ * leaves elements out (editor badges, drop lines).
+ */
+export async function captureElementImage(
+  el: HTMLElement,
+  opts: { maxWidth?: number; ignoreSelector?: string; maxChars?: number } = {}
+): Promise<string | null> {
+  if (typeof document === 'undefined') return null
+  const html2canvas = await loadHtml2Canvas()
+  if (!html2canvas) return null
+  const width = Math.max(1, el.scrollWidth || el.clientWidth)
+  try {
+    const canvas = await html2canvas(el, {
+      logging: false,
+      backgroundColor: null,
+      scale: Math.min(1, (opts.maxWidth ?? 1200) / width),
+      ignoreElements: (node: Element) =>
+        !!opts.ignoreSelector && node.matches?.(opts.ignoreSelector),
+      onclone: (doc: Document) => maskInputsIn(doc)
+    })
+    const cap = opts.maxChars ?? 1_900_000
+    for (const q of [0.7, 0.5, 0.35]) {
+      const uri = canvas.toDataURL('image/jpeg', q)
+      if (uri.length <= cap) return uri
+    }
+    return null
+  } catch {
+    return null
+  }
+}

@@ -15,6 +15,7 @@ import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient, useParentDraft } from '../../context'
+import { AUTOFILL_CHECK_KEY, promptTokens, readAiFill, showsAiButton } from '../../lib/ai-fill'
 import { del, get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { GlossaryLabel } from '../ai/GlossaryText'
@@ -622,7 +623,15 @@ export function FieldRow({
   const lockReason = affordances?.lockReasons[field.field]
   const applyToLines = affordances?.applyToLines[field.field]
 
+  // AI button: the field's own setting (#2692), else the form-wide switch.
+  const aiButton = showsAiButton(field._overrides, layoutAiEnabled, isAiEligible(field))
+  const autofillCheck =
+    !!affordances?.fromAutofill &&
+    !!field._overrides &&
+    (field._overrides as Record<string, unknown>)[AUTOFILL_CHECK_KEY] === true
+
   async function handleGenerate() {
+    if (aiButton.perField) return handleFieldFill()
     setIsGenerating(true)
     try {
       const res = await client.request<{ data: { value: string } }>(
@@ -635,6 +644,35 @@ export function FieldRow({
       if (res.data?.value != null) onChange(field.field, res.data.value)
     } catch {
       /* silently ignore — API returns 503 when no key configured */
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  // The layout's prompt runs on the server; only the values its {{tokens}} name go along.
+  async function handleFieldFill() {
+    const prompt = readAiFill(field._overrides)?.prompt ?? ''
+    const values: Record<string, unknown> = {}
+    for (const t of promptTokens(prompt)) if (t in draft) values[t] = draft[t]
+    setIsGenerating(true)
+    try {
+      const res = await client.request<{ data: { value: string; missing?: string[] } }>(
+        post('/ai/field-fill', {
+          collection,
+          layout_id: affordances?.layoutId ?? null,
+          field: field.field,
+          item_id: itemId && itemId !== 'new' ? itemId : null,
+          values
+        })
+      )
+      const v = res.data?.value
+      if (typeof v === 'string' && v !== '') onChange(field.field, v)
+      else toast.info('The AI had nothing to write here')
+      if (res.data?.missing?.length)
+        toast.info(`Filled without ${res.data.missing.join(', ')} (empty or not visible to you)`)
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(e?.response?.data?.error ?? e?.message ?? 'AI fill failed')
     } finally {
       setIsGenerating(false)
     }
@@ -854,7 +892,12 @@ export function FieldRow({
       // and what kind of value it holds — see lib/replay-masking.ts.
       data-field-collection={collection}
       data-field-interface={field.interface ?? undefined}
-      className='group/fieldrow space-y-1.5'
+      data-autofill-check={autofillCheck ? '' : undefined}
+      className={cn(
+        'group/fieldrow space-y-1.5',
+        autofillCheck &&
+          'rounded-md bg-amber-50/60 p-1.5 ring-1 ring-amber-300 dark:bg-amber-500/10 dark:ring-amber-500/40'
+      )}
       onContextMenu={onFieldContextMenu}
       onKeyDown={onFieldMenuKeyDown}
       onFocusCapture={softLock.onFocusCapture}
@@ -904,11 +947,12 @@ export function FieldRow({
           {itemId && itemId !== 'new' && isActuallyComputed && (
             <FieldLineageButton collection={collection} itemId={itemId} field={field.field} />
           )}
-          {isAiEligible(field) && layoutAiEnabled && (
+          {aiButton.show && !(aiButton.perField && (locked || field.readonly)) && (
             <button
               type='button'
               onClick={handleGenerate}
               disabled={isGenerating}
+              data-ai-fill={aiButton.perField ? field.field : undefined}
               className='inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 disabled:opacity-50 transition-colors'
               title='Generate with AI'
             >
@@ -919,6 +963,14 @@ export function FieldRow({
               )}
               AI
             </button>
+          )}
+          {autofillCheck && (
+            <span
+              data-tip='People often change what the AI read from the document here — check it'
+              className='inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-medium text-amber-800 bg-amber-100 dark:bg-amber-500/15 dark:text-amber-200'
+            >
+              Check this
+            </span>
           )}
           {swapButton}
           {applyToLines && !locked && !field.readonly && (

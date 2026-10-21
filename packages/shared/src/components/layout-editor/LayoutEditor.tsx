@@ -16,6 +16,8 @@ import { cn } from '../../lib/utils'
 import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
+import { AiToolsButton } from './ai/AiToolsButton'
+import { type AiPin, mergeMarks, pinsToMarks } from './ai/ai-tools-api'
 import { AutoArrangeButton } from './AutoArrange'
 import { BulkChangesButton } from './bulk/BulkChangesButton'
 import { useMacroRecorder } from './bulk/useMacroRecorder'
@@ -653,6 +655,21 @@ export function LayoutEditor({
   const { data: savedBundle } = useLayoutBundle(currentId)
   const compareState = useCanvasCompare(bundle, savedBundle ?? null, draft.unsavedCount, currentId)
   const { data: lastChanges } = useSectionChanges(currentId, bundle != null)
+  // AI tools' findings pinned on the canvas (#2685 #2690).
+  const [aiPins, setAiPins] = useState<AiPin[]>([])
+  // One merged function per pane marks function, so the canvas memo holds.
+  const withAiMarks = useMemo(() => {
+    const ai = pinsToMarks(aiPins)
+    const cache = new WeakMap<object, ReturnType<typeof mergeMarks>>()
+    return (m: Parameters<typeof mergeMarks>[0]) => {
+      if (!m || !ai) return mergeMarks(m, ai)
+      const hit = cache.get(m)
+      if (hit) return hit
+      const merged = mergeMarks(m, ai)
+      cache.set(m, merged)
+      return merged
+    }
+  }, [aiPins])
 
   // Required change note (#2654): the server's copy decides (turning it off asks too).
   const { data: serverBundle } = useLayoutBundle(currentId)
@@ -953,11 +970,22 @@ export function LayoutEditor({
         }
         checks={
           bundle && (
-            <LintButton
-              findings={lint.findings}
-              active={panel === 'checks'}
-              onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
-            />
+            <>
+              <LintButton
+                findings={lint.findings}
+                active={panel === 'checks'}
+                onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
+              />
+              <AiToolsButton
+                collection={collection}
+                layoutId={currentId}
+                bundle={bundle}
+                apply={draft.apply}
+                previewRecordShown={preview.record != null}
+                onPins={setAiPins}
+                onSelect={onSelect}
+              />
+            </>
           )
         }
         more={
@@ -1165,7 +1193,7 @@ export function LayoutEditor({
                       parent={parent}
                       roleId={pane.roleId}
                       stateKey={pane.stateKey}
-                      marks={pane.marks}
+                      marks={withAiMarks(pane.marks)}
                       overlay={pane.overlay}
                       noDnd={pane.noDnd}
                       record={pane.record}
