@@ -24,6 +24,7 @@ import {
 import { type InputBinding, WidgetSlot } from '../WidgetSlot'
 import { FieldRow } from './FieldRow'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
+import { SectionIntro } from './LayoutContentBlock'
 import type {
   CMSField,
   CMSRelation,
@@ -1280,6 +1281,7 @@ export function GroupSection({
       )}
       {!collapsed && (
         <div className='nvr-expand-in border-t border-slate-100 px-5 py-4'>
+          {!displayOnly && <SectionIntro group={group} className='mb-3' />}
           {(() => {
             // Merge fields + optional inline owners/pdf/widgets into a sorted render list
             type RenderItem = { _k: string; sort: number } & (

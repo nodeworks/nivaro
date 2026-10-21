@@ -250,7 +250,7 @@ async function option(label: string): Promise<HTMLElement> {
 
 describe('FormSettings', () => {
   // Rows whose control comes from the host app; with no host slot they say so.
-  const HOST_SLOT_ROWS = ['tool.describe', 'tool.ai_review']
+  const HOST_SLOT_ROWS = ['tool.describe', 'tool.ai_review', 'tool.ai_text']
   const CONTROL = 'input, button, textarea, a, [role="switch"]'
 
   it.each(

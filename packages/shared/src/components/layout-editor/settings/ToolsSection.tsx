@@ -5,6 +5,7 @@ import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { applyLayoutOps, type LayoutBundle } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
+import { AiTextTools } from '../ai-text/AiTextTools'
 import { HistoryPanel } from '../HistoryPanel'
 import { type LayoutReviewContext, useLayoutEditorHost } from '../host'
 import { useRoleNames } from '../overview/overview-api'
@@ -32,6 +33,7 @@ export function ToolsSection(props: ToolsSectionProps) {
       <PreviewRoleSetting {...props} />
       <SlotSetting k='tool.describe' layoutId={id} />
       <SlotSetting k='tool.ai_review' layoutId={id} bundle={props.bundle} apply={props.apply} />
+      <AiTextSetting {...props} />
       <HistorySetting layoutId={id} />
       <DriftSetting layoutId={id} />
     </>
@@ -194,6 +196,25 @@ function SlotSetting({
           label: 'Describe this layout'
         })
   return <Setting k={k}>{node ?? <p className={quietText}>Not offered in this app.</p>}</Setting>
+}
+
+/** AI wording tools (#2677–#2683): admins only, applied through the draft. */
+function AiTextSetting({ layout, bundle, collection, apply }: SectionProps) {
+  const host = useLayoutEditorHost()
+  return (
+    <Setting k='tool.ai_text'>
+      {host.isAdmin && apply ? (
+        <AiTextTools
+          layoutId={Number(layout.id)}
+          bundle={bundle}
+          collection={collection}
+          apply={apply}
+        />
+      ) : (
+        <p className={quietText}>Not offered here: administrators only.</p>
+      )}
+    </Setting>
+  )
 }
 
 /** Version history, what changed and restore live in one panel; any of the three keys shows it. */

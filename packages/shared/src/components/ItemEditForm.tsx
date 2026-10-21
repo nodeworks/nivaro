@@ -160,7 +160,7 @@ import {
   useContainerWidth
 } from './item-edit/helpers'
 import { evalClientFormula } from './item-edit/InlineTableField'
-import { LayoutContentBlock } from './item-edit/LayoutContentBlock'
+import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import {
   computeLiveRollup,
   isDerivedForRecord,
@@ -8286,6 +8286,7 @@ function ItemEditFormView({
           </div>
         )}
         <div className='px-5 py-5'>
+          {activeChild && <SectionIntro group={activeChild} className='mb-4' />}
           {designOn && activeChild && <DesignDropBody groupKey={activeChild.key} />}
           <GridContainer>
             {(cw) =>

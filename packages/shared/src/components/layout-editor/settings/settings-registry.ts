@@ -452,6 +452,15 @@ export const SETTINGS: SettingDef[] = [
     types: ALL
   },
   {
+    key: 'tool.ai_text',
+    section: 'tools',
+    label: 'AI wording',
+    effect:
+      'AI checks labels, help and choices against the glossary and plain language, and drafts section intros, placeholders and translations; you pick what to apply.',
+    types: ON_SCREEN,
+    keywords: 'glossary intro placeholder choices reading level plain language translation'
+  },
+  {
     key: 'tool.version_history',
     section: 'tools',
     label: 'Version history',
