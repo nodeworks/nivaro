@@ -26,8 +26,10 @@
  * and a burst in one box stays one step until blur. Unsaved steps undo by
  * popping (no request); undoing a saved step adds its inverse as an unsaved
  * step. A 409 on Save rebases: the unsaved steps are folded onto the fresh
- * bundle and kept for another Save; when one no longer fits, the draft stays
- * as it is in 'conflict' until the admin saves again or discards.
+ * bundle and kept for another Save; a step that no longer fits is dropped and
+ * listed (`dropped`) for the admin to redo by hand (#2652). Autosave rebases
+ * its queue the same way. Undo keeps every kept step, and a saved setting
+ * change whose value nobody else touched since.
  */
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -62,6 +64,18 @@ export interface ApplyOptions {
   undoable?: boolean
 }
 
+/** What a Save carries besides its ops when the layout asks for a change note (#2654). */
+export interface SaveMeta {
+  reason: string
+  ticket?: string | null
+}
+
+/** One unsaved change: its label and ops (the unsaved list, crash recovery). */
+export interface UnsavedStep {
+  label: string
+  ops: LayoutOp[]
+}
+
 export interface LayoutDraft {
   bundle: LayoutBundle | null
   /** Every change saves as it is made. Off (the default each time the editor opens): Save. */
@@ -72,8 +86,17 @@ export interface LayoutDraft {
   unsavedCount: number
   /** The unsaved changes as one ops list, in order (what Save would send). */
   unsavedOps(): LayoutOp[]
+  /** The unsaved changes as steps, oldest first (#2629). */
+  unsavedSteps: UnsavedStep[]
+  /** The rev of the layout the unsaved steps sit on (the server's last confirmed bundle). */
+  baseRev: string | null
+  /** Labels of changes dropped when someone else saved first and they no longer fit (#2652). */
+  dropped: string[]
+  clearDropped(): void
+  /** Re-apply steps (a recovered draft) as unsaved changes; the ones that no longer fit join `dropped`. */
+  restore(steps: UnsavedStep[]): number
   /** Send every unsaved change as one batch; resolves once it landed or failed. */
-  save(): Promise<void>
+  save(meta?: SaveMeta): Promise<void>
   /** Drop the unsaved changes: back to the last bundle the server confirmed. */
   discard(): void
   /** unsavedCount > 0 */
@@ -140,6 +163,10 @@ export const rebasedMessage = (n: number) =>
   `Someone else saved — your ${n} ${n === 1 ? 'change was' : 'changes were'} kept on top; Save again`
 export const REBASE_FAILED_MESSAGE =
   'Someone else saved this layout and some of your changes no longer fit'
+export const replayedMessage = (n: number) =>
+  `Someone else saved — your ${n === 1 ? 'change was' : `${n} changes were`} replayed on top of theirs`
+export const partlyRebasedMessage = (kept: number, dropped: number) =>
+  `Someone else saved — ${kept} of your changes kept, ${dropped} no longer ${dropped === 1 ? 'fits' : 'fit'}: redo ${dropped === 1 ? 'it' : 'them'} by hand`
 const NOTE_MAX = 250
 
 /** The ops note of one Save: the step's label, or "3 changes: a, b, c" (truncated). */
@@ -346,6 +373,32 @@ function inverseOne(b: LayoutBundle, op: LayoutOp): LayoutOp[] {
   }
 }
 
+const sameValue = (a: unknown, b: unknown) =>
+  JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+const holds = (row: object, patch: object | undefined) =>
+  Object.entries(patch ?? {}).every(([k, v]) => sameValue((row as Record<string, unknown>)[k], v))
+
+/**
+ * Does `b` still carry exactly what these setting changes set? Then their
+ * undo (the previous values, keyed by target) is still exact after someone
+ * else saved. Anything index-based (moves, places, removals) never is.
+ */
+export function stillMine(b: LayoutBundle, forward: LayoutOp[]): boolean {
+  if (forward.length === 0) return false
+  return forward.every((op) => {
+    if (op.op === 'update_placement') {
+      const row = findRow(b, op.at)
+      return !!row && holds(row, op.patch)
+    }
+    if (op.op === 'group_update') {
+      const g = b.groups.find((x) => x.key === op.key)
+      return !!g && holds(g, op.patch)
+    }
+    if (op.op === 'layout_update') return holds(b.layout, op.patch)
+    return false
+  })
+}
+
 /** Ops that turn applyLayoutOps(bundle, ops) back into bundle (row ids aside). */
 export function inverseOps(bundle: LayoutBundle, ops: LayoutOp[]): LayoutOp[] {
   let b = normalize(bundle)
@@ -370,6 +423,8 @@ interface Batch {
   parts?: Batch[]
   /** Manual-mode text step: the (target, setting) keys it edits, while its burst is open. */
   textKey?: string
+  /** A Save's change note (#2654). */
+  meta?: SaveMeta
 }
 interface Step {
   label: string
@@ -385,7 +440,7 @@ interface TextEdit {
 }
 
 export interface DraftTransport {
-  send(ops: LayoutOp[], baseRev: string, note: string): Promise<LayoutBundle>
+  send(ops: LayoutOp[], baseRev: string, note: string, meta?: SaveMeta): Promise<LayoutBundle>
   /** A bundle the server confirmed — mirror it into the query cache. `ops` is the
    *  batch that produced it; null when it is the server's copy after a conflict. */
   saved(bundle: LayoutBundle, ops: LayoutOp[] | null): void
@@ -406,6 +461,8 @@ type View = Omit<
   | 'unsavedOps'
   | 'save'
   | 'discard'
+  | 'clearDropped'
+  | 'restore'
 >
 
 /** Split a text apply into single-setting update ops keyed by (target, setting). */
@@ -446,10 +503,10 @@ export class LayoutDraftEngine {
   private redoStack: Step[] = []
   private outcome: 'idle' | 'saved' | 'error' | 'conflict' = 'idle'
   private error: string | null = null
-  /** A Save refused as stale whose steps no longer fit: the server's layout now. */
-  private conflictBundle: LayoutBundle | null = null
   /** Undo / redo as they were when the first unsaved step was made: Discard puts them back. */
   private checkpoint: { undo: Step[]; redo: Step[] } | null = null
+  /** Labels of steps a rebase could not replay (#2652). */
+  private dropped: string[] = []
   private autosave: boolean
   private nextId = 1
   private listeners = new Set<() => void>()
@@ -593,7 +650,7 @@ export class LayoutDraftEngine {
    * nothing is in flight (saved, failed or rebased alike) — `unsavedOps()` is
    * empty afterwards only when it landed.
    */
-  save(): Promise<void> {
+  save(meta?: SaveMeta): Promise<void> {
     this.flushText()
     if (this.unsaved.length > 0) {
       const parts = this.unsaved
@@ -609,15 +666,16 @@ export class LayoutDraftEngine {
         waiting.parts = all
         waiting.ops = all.flatMap((b) => b.ops)
         waiting.note = saveNote(all.map((b) => b.note))
+        if (meta) waiting.meta = meta
       } else
         this.queue.push({
           id: this.nextId++,
           kind: 'save',
           ops: parts.flatMap((b) => b.ops),
           note: saveNote(parts.map((b) => b.note)),
-          parts
+          parts,
+          meta
         })
-      this.conflictBundle = null
       this.clearOutcome()
       this.refresh()
     }
@@ -627,24 +685,45 @@ export class LayoutDraftEngine {
   /** Drop the unsaved steps: the draft, Undo and Redo go back to the last save. */
   discard() {
     this.closeText()
-    if (this.unsaved.length === 0 && !this.conflictBundle) return
+    if (this.unsaved.length === 0 && this.dropped.length === 0) return
     if (this.checkpoint) {
       this.undoStack = this.checkpoint.undo
       this.redoStack = this.checkpoint.redo
       this.checkpoint = null
     } else for (const batch of [...this.unsaved].reverse()) this.rollback(batch)
     this.unsaved = []
-    if (this.conflictBundle) {
-      // "Reload": the server's layout as it is now; the old history no longer fits it.
-      this.server = this.conflictBundle
-      this.conflictBundle = null
-      this.undoStack = []
-      this.redoStack = []
-      this.transport.saved(this.server, null)
-    }
+    this.dropped = []
     this.outcome = 'idle'
     this.error = null
     this.refresh()
+  }
+
+  clearDropped() {
+    if (this.dropped.length === 0) return
+    this.dropped = []
+    this.emit()
+  }
+
+  /**
+   * Steps from a recovered draft (#2653), applied as new changes in order. A
+   * step that no longer fits the layout is skipped and listed in `dropped`.
+   * Returns how many were applied.
+   */
+  restore(steps: UnsavedStep[]): number {
+    let applied = 0
+    for (const s of steps) {
+      if (!this.draft) break
+      try {
+        applyLayoutOps(this.draft, s.ops)
+      } catch {
+        this.dropped = [...this.dropped, s.label]
+        continue
+      }
+      this.apply(s.ops, { label: s.label })
+      applied += 1
+    }
+    this.emit()
+    return applied
   }
 
   whenIdle(timeoutMs = 15_000): Promise<void> {
@@ -805,27 +884,79 @@ export class LayoutDraftEngine {
     }
   }
 
-  private conflict(bundle: LayoutBundle | null) {
-    for (const t of this.text.values()) clearTimeout(t.timer)
-    this.text.clear()
-    this.queue = []
-    this.undoStack = []
+  /**
+   * Fold `batches` onto `fresh` one by one: the ones that still fit (with
+   * their inverses relative to it) and the ones that no longer do.
+   */
+  private refold(fresh: LayoutBundle, batches: Batch[]) {
+    const kept: Batch[] = []
+    const dropped: Batch[] = []
+    const inverses = new Map<number, LayoutOp[]>()
+    let b = fresh
+    for (const s of batches) {
+      try {
+        const inverse = inverseOps(b, s.ops)
+        b = applyLayoutOps(b, s.ops)
+        inverses.set(s.id, inverse)
+        kept.push(s)
+      } catch {
+        dropped.push(s)
+      }
+    }
+    return { kept, dropped, inverses }
+  }
+
+  /**
+   * After a rebase onto `fresh`: kept steps undo with their new inverses; a
+   * step saved before keeps its undo only while every value it set still
+   * stands (stillMine). Redo goes — it was relative to the old layout.
+   */
+  private rebaseUndo(fresh: LayoutBundle, inverses: Map<number, LayoutOp[]>, gone: Set<number>) {
+    this.undoStack = this.undoStack.filter(
+      (s) => inverses.has(s.batchId) || (!gone.has(s.batchId) && stillMine(fresh, s.forward))
+    )
+    for (const s of this.undoStack) s.inverse = inverses.get(s.batchId) ?? s.inverse
     this.redoStack = []
-    if (bundle) {
-      this.server = bundle
-      this.transport.saved(bundle, null)
-    } else this.transport.reload()
-    this.outcome = 'conflict'
+  }
+
+  /**
+   * Autosave: a batch refused as stale. Every queued batch (the refused one
+   * first) is replayed on the server's layout and sent again; one that no
+   * longer fits is dropped and listed. Without the server's layout: reload.
+   */
+  private conflict(bundle: LayoutBundle | null) {
+    if (!bundle) {
+      for (const t of this.text.values()) clearTimeout(t.timer)
+      this.text.clear()
+      this.queue = []
+      this.undoStack = []
+      this.redoStack = []
+      this.transport.reload()
+      this.outcome = 'conflict'
+      this.error = null
+      this.transport.notify(CONFLICT_MESSAGE)
+      return
+    }
+    const r = this.refold(bundle, this.queue)
+    this.queue = r.kept
+    this.server = bundle
+    this.transport.saved(bundle, null)
+    this.rebaseUndo(bundle, r.inverses, new Set(r.dropped.map((d) => d.id)))
+    this.dropped = [...this.dropped, ...r.dropped.map((d) => d.note)]
+    this.outcome = 'idle'
     this.error = null
-    this.transport.notify(CONFLICT_MESSAGE)
+    this.transport.notify(
+      r.dropped.length === 0
+        ? replayedMessage(r.kept.length)
+        : partlyRebasedMessage(r.kept.length, r.dropped.length)
+    )
   }
 
   /**
    * A Save refused as stale: fold every step it (and anything queued after it)
-   * carried onto the server's layout. All fit → they stay unsaved on top of it,
-   * with fresh inverses; undo of already-saved steps goes (it was relative to
-   * the old state). One does not fit → the draft stays as it was, in
-   * 'conflict', until Save again or Discard (which takes the server's layout).
+   * carried onto the server's layout, one by one. The ones that fit stay
+   * unsaved on top of it, with fresh inverses, for another Save; the ones
+   * that no longer fit are dropped and listed for the admin to redo by hand.
    */
   private rebase(fresh: LayoutBundle | null) {
     const steps = [
@@ -842,28 +973,19 @@ export class LayoutDraftEngine {
       this.error = REBASE_FAILED_MESSAGE
       return
     }
-    const inverses = new Map<number, LayoutOp[]>()
-    let b = fresh
-    try {
-      for (const s of steps) {
-        inverses.set(s.id, inverseOps(b, s.ops))
-        b = applyLayoutOps(b, s.ops)
-      }
-    } catch (e) {
-      this.conflictBundle = fresh
-      this.outcome = 'conflict'
-      this.error = `${REBASE_FAILED_MESSAGE} (${humanizeOpError(messageOf(e))})`
-      return
-    }
+    const r = this.refold(fresh, steps)
+    this.unsaved = r.kept
     this.server = fresh
-    this.conflictBundle = null
     this.transport.saved(fresh, null)
-    this.undoStack = this.undoStack.filter((s) => inverses.has(s.batchId))
-    for (const s of this.undoStack) s.inverse = inverses.get(s.batchId) ?? s.inverse
-    this.redoStack = []
+    this.rebaseUndo(fresh, r.inverses, new Set(r.dropped.map((d) => d.id)))
+    this.dropped = [...this.dropped, ...r.dropped.map((d) => d.note)]
     this.outcome = 'idle'
     this.error = null
-    this.transport.notify(rebasedMessage(steps.length))
+    this.transport.notify(
+      r.dropped.length === 0
+        ? rebasedMessage(r.kept.length)
+        : partlyRebasedMessage(r.kept.length, r.dropped.length)
+    )
   }
 
   /** Draft = server bundle + queued batches + unsaved steps + typed text; then send the next batch. */
@@ -917,7 +1039,7 @@ export class LayoutDraftEngine {
     const batch = this.queue[0]
     this.inFlight = true
     this.transport
-      .send(batch.ops, this.server.rev, batch.note)
+      .send(batch.ops, this.server.rev, batch.note, batch.meta)
       .then((bundle) => {
         this.server = bundle
         this.queue.shift()
@@ -954,6 +1076,9 @@ export class LayoutDraftEngine {
       bundle: this.draft,
       autosave: this.autosave,
       unsavedCount: this.unsaved.length,
+      unsavedSteps: this.unsaved.map((b) => ({ label: b.note, ops: b.ops })),
+      baseRev: this.server?.rev ?? null,
+      dropped: this.dropped,
       dirty: this.unsaved.length > 0,
       canUndo: this.undoStack.length > 0 || this.text.size > 0,
       canRedo: this.redoStack.length > 0,
@@ -1019,9 +1144,14 @@ function engineFor(layoutId: number, current: Live, autosave: boolean) {
   const live = { current }
   const engine = new LayoutDraftEngine(
     {
-      send: async (ops, baseRev, note) => {
+      send: async (ops, baseRev, note, meta) => {
         const res = await live.current.client.request<unknown>(
-          post(`/collection-layouts/${layoutId}/ops`, { ops, base_rev: baseRev, note })
+          post(`/collection-layouts/${layoutId}/ops`, {
+            ops,
+            base_rev: baseRev,
+            note,
+            ...(meta ? { reason: meta.reason, ticket: meta.ticket ?? null } : {})
+          })
         )
         const bundle = parseBundle(res)
         if (!bundle) throw new Error('The server answered without the saved layout')
@@ -1121,8 +1251,10 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
     [engine]
   )
   const unsavedOps = useCallback(() => engine.unsavedOps(), [engine])
-  const save = useCallback(() => engine.save(), [engine])
+  const save = useCallback((meta?: SaveMeta) => engine.save(meta), [engine])
   const discard = useCallback(() => engine.discard(), [engine])
+  const clearDropped = useCallback(() => engine.clearDropped(), [engine])
+  const restore = useCallback((steps: UnsavedStep[]) => engine.restore(steps), [engine])
 
   // A bundle that never loaded is an error, not an empty idle editor.
   const loadFailed = !view.bundle && query.error != null
@@ -1141,6 +1273,8 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
     unsavedOps,
     save,
     discard,
+    clearDropped,
+    restore,
     isLoading: query.isLoading
   }
 }

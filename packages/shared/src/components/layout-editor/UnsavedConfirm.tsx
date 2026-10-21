@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 
 /** Something wants to leave the layout while it has unsaved changes. */
@@ -23,7 +23,9 @@ export function UnsavedConfirm({
   count,
   onSave,
   onDiscard,
-  onKeep
+  onKeep,
+  note,
+  canSave = true
 }: {
   request: LeaveRequest | null
   count: number
@@ -31,6 +33,10 @@ export function UnsavedConfirm({
   onSave: () => Promise<boolean>
   onDiscard: () => void
   onKeep: () => void
+  /** A layout that asks for a change note (#2654): its boxes, above the buttons. */
+  note?: ReactNode
+  /** False while the change note is not filled in. */
+  canSave?: boolean
 }) {
   const [saving, setSaving] = useState(false)
   const anchorRef = useMemo(
@@ -61,9 +67,12 @@ export function UnsavedConfirm({
         data-unsaved-confirm=''
         onOpenAutoFocus={(e) => {
           e.preventDefault()
-          ;(e.currentTarget as HTMLElement | null)
-            ?.querySelector<HTMLElement>('[data-unsaved-action="save"]')
-            ?.focus()
+          const el = e.currentTarget as HTMLElement | null
+          // With a change note to write, its reason box first.
+          ;(
+            el?.querySelector<HTMLElement>('[data-change-note-reason]') ??
+            el?.querySelector<HTMLElement>('[data-unsaved-action="save"]')
+          )?.focus()
         }}
       >
         <p className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
@@ -72,6 +81,7 @@ export function UnsavedConfirm({
         <p className='mt-1 text-[12px] leading-snug text-slate-600 dark:text-muted-foreground'>
           Save them before you {request.what}? Discarded changes cannot be brought back.
         </p>
+        {note && <div className='mt-2'>{note}</div>}
         <div className='mt-3 flex items-center justify-end gap-1.5'>
           <button
             type='button'
@@ -98,7 +108,7 @@ export function UnsavedConfirm({
             type='button'
             data-unsaved-action='save'
             onClick={() => void save()}
-            disabled={saving}
+            disabled={saving || !canSave}
             className='inline-flex h-7 items-center rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-60'
           >
             {saving ? 'Saving…' : 'Save'}

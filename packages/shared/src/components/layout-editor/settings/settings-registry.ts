@@ -473,6 +473,15 @@ export const SETTINGS: SettingDef[] = [
     types: ALL
   },
   {
+    key: 'layout.change_note',
+    section: 'tools',
+    label: 'Ask why on every save',
+    effect:
+      'Save asks for a short reason, and a ticket link if you choose, and keeps it with the version in History.',
+    types: ALL,
+    keywords: 'change note reason ticket audit required'
+  },
+  {
     key: 'tool.layout_drift',
     section: 'tools',
     label: 'Layout drift',

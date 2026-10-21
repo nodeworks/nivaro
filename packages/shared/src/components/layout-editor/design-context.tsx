@@ -41,6 +41,10 @@ export interface LayoutDesign {
   fold?: FoldSignal | null
   /** Find / outline / breadcrumb (#2620): open the step, tab or section holding this. */
   reveal?: RevealSignal | null
+  /** An unsaved change touched this node (#2629): a dot until it is saved. */
+  unsaved?(t: DesignTarget): boolean
+  /** Other people in the editor who have this node selected (#2651). */
+  peers?(t: DesignTarget): DesignPeer[]
 }
 
 /** A press of Expand all or Collapse all; `seq` changes on every press. */
@@ -60,6 +64,15 @@ export function revealGroupKey(t: DesignTarget): string | null {
   if (t.kind === 'group') return t.key
   if (t.kind === 'header') return null
   return t.group_key
+}
+
+export interface DesignPeer {
+  id: string
+  name: string
+  /** Outline classes for the node they selected (light and dark). */
+  outline: string
+  /** Name tag classes. */
+  chip: string
 }
 
 export interface DesignMark {

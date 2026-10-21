@@ -232,7 +232,25 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'Changes go to the server as small operations against the revision the editor last saw. If another admin (or you in another tab) saved in between: with Save, your changes are laid on top of theirs and kept for you to Save again; if one no longer fits (they removed what it changed), a banner offers Reload, which discards your changes and shows their version. With Autosave, the editor reloads the layout, clears Undo and the chip reads "Reloaded — someone else saved". Nothing is silently overwritten. A refused Save keeps your changes and says why. Restoring a version from History drops unsaved changes.'
+      text: 'Changes go to the server as small operations against the revision the editor last saw. If another admin (or you in another tab) saved in between, your changes are replayed on top of theirs instead of thrown away: with Save they stay unsaved for you to Save again; with Autosave they are sent again at once. A change that no longer fits (they removed what it changed) is dropped and listed in a banner above the form for you to redo by hand; the rest are kept. Undo keeps every change that was kept, and a saved setting change as long as nobody changed that setting since. Nothing is silently overwritten. A refused Save keeps your changes and says why. Restoring a version from History drops unsaved changes.'
+    },
+    {
+      type: 'p',
+      text: 'Every field or section an unsaved change touched shows a small amber dot until you save. Click the unsaved count in the top bar to list the changes; click one to select what it changed and scroll to it (a form-settings change opens Form settings).'
+    },
+    {
+      type: 'p',
+      text: 'Unsaved changes are also kept in this browser. If the tab crashed or was closed, opening the layout again offers Recover, which brings them back as unsaved changes. If the layout was saved by anyone since, they cannot be laid on it safely: the editor says so and drops them.'
+    },
+    { type: 'h3', id: 'layout-editor-presence', text: 'Who else is here' },
+    {
+      type: 'p',
+      text: "The other admins who have the same layout open show as avatars beside the layout's name. What each has selected gets an outline in their colour with their first name; click an avatar to jump to it. Only names and what is selected are shared, never unsaved changes."
+    },
+    { type: 'h3', id: 'layout-editor-change-note', text: 'Ask why on every save' },
+    {
+      type: 'p',
+      text: "Form settings → AI review, previews, version history → Ask why on every save makes Save ask for a short reason, or a reason and a ticket link. The reason and ticket lead the version's note in History. Autosave stays off for that layout, and the server refuses a save without them (turning the setting off needs a reason too)."
     },
     { type: 'h3', id: 'layout-editor-checks', text: 'Checks' },
     {
@@ -503,10 +521,15 @@ POST   /api/collection-layouts/:id/copy-section  { source_layout_id, group_key, 
 GET  /api/collection-layouts/:id/bundle
      → { layout, groups, placements, rev }
 
-POST /api/collection-layouts/:id/ops  { ops: LayoutOp[], base_rev, note? }
-     → the new bundle (applied all or nothing, at most 500 ops)
+POST /api/collection-layouts/:id/ops  { ops: LayoutOp[], base_rev, note?, reason?, ticket? }
+     → the new bundle (applied all or nothing, at most 5000 ops)
      409 { error: 'stale', bundle }       // someone saved since base_rev
      400 { error, op_index }              // an op was refused (also a rename onto a taken name)
+     400 { error, code: 'CHANGE_NOTE_REQUIRED' }   // the layout's change_note asks for a reason (+ ticket)
+
+Socket (live operations topic, administrators): ops:join { topic: 'layout:<id>' }
+     ops:signal { topic, kind: 'select', state: 'start' | 'stop', target: '<design target key>' }
+     ← ops:changed { topic, viewers: [{ id, name, selected? }] }   // who has the layout open
 
 POST /api/field-config/:collection/project  { assignments: [...] }   // administrators
      // the field rows GET /field-config would return if these placements were saved

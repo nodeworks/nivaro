@@ -3,6 +3,12 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { activateLayout, lockLayout } from './layout-activation.js'
 import {
+  CHANGE_NOTE_REQUIRED,
+  changeNotePolicy,
+  changeNoteVersionNote,
+  missingChangeNote
+} from './layout-change-note.js'
+import {
   applyLayoutOps,
   type GroupRow,
   LAYOUT_PATCH_KEYS,
@@ -392,10 +398,19 @@ async function snapshottedRecently(
   return new Date(newest.created_at).getTime() >= Date.now() - SNAPSHOT_COALESCE_MS
 }
 
+export interface LayoutOpsInput {
+  ops: LayoutOp[]
+  base_rev: string
+  note?: string | null
+  /** The admin's reason and ticket link, for layouts that ask for a change note (#2654). */
+  reason?: string | null
+  ticket?: string | null
+}
+
 export type LayoutOpsResult =
   | { status: 200; bundle: LayoutBundle; changed: boolean }
   | { status: 409; bundle: LayoutBundle }
-  | { status: 400; error: string; op_index?: number }
+  | { status: 400; error: string; op_index?: number; code?: string }
   | { status: 404 }
 
 /**
@@ -404,7 +419,7 @@ export type LayoutOpsResult =
  */
 export async function runLayoutOps(
   layoutId: number,
-  input: { ops: LayoutOp[]; base_rev: string; note?: string | null },
+  input: LayoutOpsInput,
   userId?: string | null
 ): Promise<LayoutOpsResult> {
   try {
@@ -430,7 +445,7 @@ export async function runLayoutOps(
 
 function applyInTransaction(
   layoutId: number,
-  input: { ops: LayoutOp[]; base_rev: string; note?: string | null },
+  input: LayoutOpsInput,
   userId?: string | null
 ): Promise<LayoutOpsResult> {
   return db.transaction(async (trx: Knex.Transaction): Promise<LayoutOpsResult> => {
@@ -468,10 +483,16 @@ function applyInTransaction(
       same(before.placements, after.placements)
     if (unchanged) return { status: 200, bundle: before, changed: false }
 
-    if (!(await snapshottedRecently(trx, layoutId, userId)))
+    // A layout that asks for a change note (#2654): no reason, no save; every
+    // reasoned save gets its own version, so each reason stays in History.
+    const policy = changeNotePolicy(before.layout)
+    const missing = missingChangeNote(policy, input.reason, input.ticket)
+    if (missing) return { status: 400, error: missing, code: CHANGE_NOTE_REQUIRED }
+    const reasoned = changeNoteVersionNote(input.reason, input.ticket, input.note)
+    if (policy || !(await snapshottedRecently(trx, layoutId, userId)))
       await snapshotLayoutVersion(
         layoutId,
-        input.note?.trim() || 'before layout edit',
+        reasoned || input.note?.trim() || 'before layout edit',
         userId ?? null,
         trx
       )

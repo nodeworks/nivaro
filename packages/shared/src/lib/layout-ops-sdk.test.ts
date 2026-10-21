@@ -11,8 +11,10 @@ const sdkSrc = readFileSync(here('../../../sdk/src/commands/layout-editor.ts'), 
 
 function sharedBlock(): string {
   const start = sharedSrc.indexOf('export type PlacementKey')
-  const endMarker = "  'hide_empty'\n] as const\n"
-  const end = sharedSrc.indexOf(endMarker, start) + endMarker.length
+  // Through the end of LAYOUT_PATCH_KEYS, whichever key is last.
+  const keys = sharedSrc.indexOf('export const LAYOUT_PATCH_KEYS', start)
+  const endMarker = '\n] as const\n'
+  const end = sharedSrc.indexOf(endMarker, keys) + endMarker.length
   return sharedSrc.slice(start, end)
 }
 

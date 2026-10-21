@@ -44,9 +44,12 @@ const inputCls =
 const labelCls = 'mb-1 block text-[11.5px] font-semibold text-slate-600 dark:text-muted-foreground'
 
 function StatusChip({
-  draft
+  draft,
+  onOpen
 }: {
   draft: Pick<LayoutDraft, 'status' | 'error'> & Partial<Pick<LayoutDraft, 'unsavedCount'>>
+  /** The unsaved count opens the list of unsaved changes (#2629). */
+  onOpen?: (anchor: HTMLElement) => void
 }) {
   const { status, error } = draft
   const unsaved = draft.unsavedCount ?? 0
@@ -63,7 +66,7 @@ function StatusChip({
           : pendingOnly
             ? unsavedText(unsaved)
             : 'Saved'
-  return (
+  const chip = (
     <span
       role='status'
       data-save-status={status}
@@ -90,6 +93,18 @@ function StatusChip({
     >
       {text}
     </span>
+  )
+  if (!pendingOnly || !onOpen) return chip
+  return (
+    <button
+      type='button'
+      data-unsaved-list-open=''
+      aria-label={`${unsavedText(unsaved)} — list them`}
+      onClick={(e) => onOpen(e.currentTarget)}
+      className='inline-flex rounded-full transition-opacity hover:opacity-80'
+    >
+      {chip}
+    </button>
   )
 }
 
@@ -283,7 +298,9 @@ export function EditorTopBar({
   previewExtra,
   checks,
   more,
-  formMap
+  formMap,
+  presence,
+  onOpenUnsaved
 }: {
   collection: string
   layoutId: number
@@ -328,6 +345,10 @@ export function EditorTopBar({
   more?: ReactNode
   /** The printable form map button, before History. */
   formMap?: ReactNode
+  /** Who else has this layout open (#2651), after the layout's name. */
+  presence?: ReactNode
+  /** Opens the unsaved-changes list from the unsaved count (#2629). */
+  onOpenUnsaved?: (anchor: HTMLElement) => void
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const unsaved = draft.unsavedCount ?? 0
@@ -364,6 +385,7 @@ export function EditorTopBar({
           </span>
         )}
       </div>
+      {presence}
       <CommandPalette collection={collection} layoutId={layoutId} draft={draft} />
       <div className='flex items-center gap-0.5'>
         <button
@@ -438,7 +460,7 @@ export function EditorTopBar({
           data={{ 'data-autosave-switch': '' }}
         />
       )}
-      <StatusChip draft={draft} />
+      <StatusChip draft={draft} onOpen={onOpenUnsaved} />
       <AiChangeCheck layoutId={layoutId} draft={draft} />
       {draft.save && !draft.autosave && (
         <button

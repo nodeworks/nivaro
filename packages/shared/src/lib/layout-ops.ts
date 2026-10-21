@@ -152,6 +152,8 @@ export type LayoutPatch = Partial<{
   sheet_width: number | null
   header_fields: string[] | null
   hide_empty: boolean
+  /** Required change note (#2654): null = off, 'note' = a reason, 'note_ticket' = reason + ticket. */
+  change_note: 'note' | 'note_ticket' | null
 }>
 
 export type LayoutRow = Record<string, unknown> & { id: number; collection: string }
@@ -268,7 +270,8 @@ export const LAYOUT_PATCH_KEYS = [
   'quick_picker',
   'sheet_width',
   'header_fields',
-  'hide_empty'
+  'hide_empty',
+  'change_note'
 ] as const
 
 export const GROUP_TYPES = ['section', 'tab', 'metadata', 'container', 'content'] as const

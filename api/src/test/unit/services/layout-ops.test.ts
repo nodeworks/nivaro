@@ -437,3 +437,54 @@ describe('POST /collection-layouts/:id/ops', () => {
     expect(vi.mocked(snapshotLayoutVersion)).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /collection-layouts/:id/ops — required change note (#2654)', () => {
+  const move = {
+    op: 'move',
+    from: { field: 'b', group_key: 'main' },
+    to_group_key: 'main',
+    index: 0
+  }
+  const send = async (extra: Record<string, unknown>) => {
+    const rev = (await bundle()).rev
+    vi.mocked(snapshotLayoutVersion).mockClear()
+    return call('POST', '/collection-layouts/1/ops', {
+      ops: [move],
+      base_rev: rev,
+      note: 'Move b',
+      ...extra
+    })
+  }
+
+  it('refuses a save without a reason, and without a ticket when the layout asks for one', async () => {
+    fake.tables.nivaro_collection_layouts[0].change_note = 'note_ticket'
+    const before = JSON.stringify(fake.tables)
+    let res = await send({})
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'CHANGE_NOTE_REQUIRED' })
+    res = await send({ reason: 'Triage wants status first' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/ticket/)
+    expect(JSON.stringify(fake.tables)).toBe(before)
+  })
+
+  it('saves with a reason; the reason and ticket lead the version note, every time', async () => {
+    fake.tables.nivaro_collection_layouts[0].change_note = 'note_ticket'
+    fake.tables.nivaro_layout_versions = [
+      { id: 9, version: 1, layout_id: 1, created_by: 'test-admin', created_at: new Date() }
+    ]
+    const res = await send({ reason: 'Triage wants status first', ticket: 'OPS-12' })
+    expect(res.statusCode).toBe(200)
+    expect(find('b', 'main')?.sort).toBe(0)
+    // A fresh version even though this admin's last one is seconds old.
+    expect(vi.mocked(snapshotLayoutVersion)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(snapshotLayoutVersion).mock.calls[0][1]).toBe(
+      'Triage wants status first · OPS-12 — Move b'
+    )
+  })
+
+  it('asks nothing of a layout without the setting', async () => {
+    const res = await send({})
+    expect(res.statusCode).toBe(200)
+  })
+})

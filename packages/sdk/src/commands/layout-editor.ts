@@ -144,6 +144,8 @@ export type LayoutPatch = Partial<{
   sheet_width: number | null
   header_fields: string[] | null
   hide_empty: boolean
+  /** Required change note (#2654): null = off, 'note' = a reason, 'note_ticket' = reason + ticket. */
+  change_note: 'note' | 'note_ticket' | null
 }>
 
 export type LayoutRow = Record<string, unknown> & { id: number; collection: string }
@@ -260,7 +262,8 @@ export const LAYOUT_PATCH_KEYS = [
   'quick_picker',
   'sheet_width',
   'header_fields',
-  'hide_empty'
+  'hide_empty',
+  'change_note'
 ] as const
 
 // END layout-ops mirror
@@ -338,11 +341,18 @@ export function readLayoutBundle(layoutId: number): Command<LayoutBundle> {
  * Rejections arrive as thrown errors carrying `status` and `response`:
  * 409 `{ error: 'stale', bundle }` when the layout changed since `base_rev`
  * (re-apply on `response.bundle`), 400 `{ error, op_index }` when an op is
- * refused. Admin only.
+ * refused, 400 `{ error, code: 'CHANGE_NOTE_REQUIRED' }` when the layout's
+ * `change_note` asks for a `reason` (and `ticket`) the batch lacks. Admin only.
  */
 export function submitLayoutOps(
   layoutId: number,
-  body: { ops: LayoutOp[]; base_rev: string; note?: string | null }
+  body: {
+    ops: LayoutOp[]
+    base_rev: string
+    note?: string | null
+    reason?: string | null
+    ticket?: string | null
+  }
 ): Command<LayoutBundle> {
   return cmd('POST', `/collection-layouts/${layoutId}/ops`, undefined, body)
 }
