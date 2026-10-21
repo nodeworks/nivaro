@@ -1,8 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bookmark } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { layoutDraftKeys } from './useLayoutDraft'
+import type { LayoutBundle } from '../../lib/layout-ops'
+import { fetchVersionBundle, useVersionNaming } from './history-api'
+import { SessionHistory } from './SessionHistory'
+import { layoutDraftKeys, parseSaveFailure, type SessionSteps } from './useLayoutDraft'
 
 interface VersionRow {
   id: number
@@ -10,6 +15,8 @@ interface VersionRow {
   note: string | null
   created_at: string
   created_by_name: string | null
+  /** Named versions (#2610) are kept beyond the rolling 30. */
+  name?: string | null
 }
 interface DiffChange {
   field: string
@@ -123,13 +130,21 @@ export function HistoryPanel({
   layoutId,
   onRestored,
   unsavedCount = 0,
-  onDiscardUnsaved
+  onDiscardUnsaved,
+  session,
+  onJump,
+  onShowOnCanvas
 }: {
   layoutId: number
   onRestored?: () => void
   /** Unsaved editor changes: a restore drops them (they were made on the old layout). */
   unsavedCount?: number
   onDiscardUnsaved?: () => void
+  /** This editing session's undo steps (#2618) and the jump between them. */
+  session?: SessionSteps
+  onJump?: (delta: number) => void
+  /** Draw the difference between a version and the editor's layout on the canvas (#2591). */
+  onShowOnCanvas?: (base: LayoutBundle, label: string) => void
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -174,11 +189,63 @@ export function HistoryPanel({
   })
 
   const diffVersion = versions.find((v) => v.id === diffFor)
+  const { nameVersion, nameCurrent } = useVersionNaming(layoutId)
+  const [naming, setNaming] = useState<number | 'current' | null>(null)
+  const [nameText, setNameText] = useState('')
+  const [canvasFor, setCanvasFor] = useState<number | null>(null)
+  const startNaming = (target: number | 'current', current = '') => {
+    setNaming(target)
+    setNameText(current)
+  }
+  const commitName = () => {
+    const target = naming
+    const name = nameText.trim()
+    setNaming(null)
+    if (target == null) return
+    const done = { onError: (e: unknown) => toast.error(parseSaveFailure(e, 'Not named').message) }
+    if (target === 'current') {
+      if (name) nameCurrent.mutate(name, done)
+    } else nameVersion.mutate({ versionId: target, name: name || null }, done)
+  }
+  // "Show on canvas": the version's layout against the editor's (unsaved changes included).
+  const showOnCanvas = async (v: VersionRow) => {
+    if (!onShowOnCanvas) return
+    setCanvasFor(v.id)
+    try {
+      const base = await fetchVersionBundle(client, layoutId, v.id)
+      onShowOnCanvas(base, v.name ? `“${v.name}” (v${v.version})` : `version ${v.version}`)
+    } catch (e) {
+      toast.error(parseSaveFailure(e, 'That version could not be read').message)
+    } finally {
+      setCanvasFor(null)
+    }
+  }
+  const nameInput = (
+    <input
+      // biome-ignore lint/a11y/noAutofocus: naming starts typing at once
+      autoFocus
+      aria-label='Version name'
+      value={nameText}
+      maxLength={120}
+      placeholder='e.g. Go-live baseline'
+      onChange={(e) => setNameText(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commitName()
+        if (e.key === 'Escape') {
+          e.stopPropagation()
+          setNaming(null)
+        }
+      }}
+      onBlur={commitName}
+      className='h-6 w-full min-w-0 rounded border border-nvr-cyan bg-white px-1.5 text-[12px] outline-none dark:bg-background dark:text-foreground'
+    />
+  )
   const btn =
     'rounded border border-slate-200 px-1.5 py-0.5 text-[11px] hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
 
   return (
     <div className='flex flex-col gap-2 text-[12px]' data-layout-history>
+      {session && onJump && <SessionHistory session={session} onJump={onJump} />}
       {versions.length > 0 && (
         <div className='rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-border dark:bg-muted/40'>
           <div className='flex items-center justify-between gap-2'>
@@ -187,15 +254,32 @@ export function HistoryPanel({
                 ? 'What the last save changed'
                 : `Version ${diffVersion?.version ?? '?'} compared with now`}
             </p>
-            {diffFor != null && (
-              <button
-                type='button'
-                onClick={() => setDiffFor(null)}
-                className='text-[11px] text-slate-500 underline dark:text-slate-400'
-              >
-                Show last save
-              </button>
-            )}
+            <span className='flex items-center gap-2'>
+              {onShowOnCanvas && diff && diff.total > 0 && (
+                <button
+                  type='button'
+                  data-show-on-canvas=''
+                  disabled={canvasFor != null}
+                  onClick={() => {
+                    const v = diffVersion ?? versions[0]
+                    if (v) void showOnCanvas(v)
+                  }}
+                  data-tip='Mark what differs on the form itself: added, moved, changed, removed'
+                  className='text-[11px] text-slate-600 underline dark:text-slate-300'
+                >
+                  Show on canvas
+                </button>
+              )}
+              {diffFor != null && (
+                <button
+                  type='button'
+                  onClick={() => setDiffFor(null)}
+                  className='text-[11px] text-slate-500 underline dark:text-slate-400'
+                >
+                  Show last save
+                </button>
+              )}
+            </span>
           </div>
           {diffLoading && <p className='mt-1 text-slate-500'>Comparing…</p>}
           {diff && <DiffBody diff={diff} />}
@@ -206,6 +290,21 @@ export function HistoryPanel({
           Restore failed. Nothing was changed.
         </p>
       )}
+      <div className='flex items-center gap-2' data-name-current=''>
+        {naming === 'current' ? (
+          nameInput
+        ) : (
+          <button
+            type='button'
+            onClick={() => startNaming('current')}
+            data-tip='Keep the layout as it is saved now, under a name, beyond the rolling 30 versions'
+            className={`${btn} inline-flex items-center gap-1`}
+          >
+            <Bookmark className='h-3 w-3' />
+            Name the saved layout…
+          </button>
+        )}
+      </div>
       {isLoading ? (
         <p className='text-slate-500'>Loading history…</p>
       ) : versions.length === 0 ? (
@@ -213,13 +312,25 @@ export function HistoryPanel({
           No versions yet. One is saved before every change.
         </p>
       ) : (
-        <ul className='max-h-48 space-y-1 overflow-y-auto'>
+        <ul className='max-h-64 space-y-1 overflow-y-auto'>
           {versions.map((v) => (
             <li
               key={v.id}
               className='flex items-center justify-between gap-2 rounded border border-slate-100 px-2 py-1 dark:border-border/60'
             >
-              <span className='min-w-0'>
+              <span className='min-w-0 flex-1'>
+                {naming === v.id
+                  ? nameInput
+                  : v.name && (
+                      <span
+                        data-version-name={v.name}
+                        data-tip='Named: kept beyond the rolling 30 versions'
+                        className='mr-1 inline-flex max-w-full items-center gap-0.5 rounded bg-slate-100 px-1 text-[11px] font-medium text-slate-700 dark:bg-muted dark:text-slate-200'
+                      >
+                        <Bookmark className='h-3 w-3 shrink-0' />
+                        <span className='truncate'>{v.name}</span>
+                      </span>
+                    )}
                 <span className='font-medium'>v{v.version}</span>{' '}
                 <span className='text-slate-500 dark:text-slate-400'>
                   {v.note ? `${versionNoteLabel(v.note)} · ` : ''}
@@ -230,6 +341,19 @@ export function HistoryPanel({
               <span className='flex shrink-0 items-center gap-1'>
                 <button
                   type='button'
+                  data-version-name-edit={v.version}
+                  onClick={() => startNaming(v.id, v.name ?? '')}
+                  data-tip={
+                    v.name
+                      ? 'Rename, or clear the name to let it be pruned again'
+                      : 'Name this version so it is kept beyond the rolling 30'
+                  }
+                  className={btn}
+                >
+                  {v.name ? 'Rename' : 'Name'}
+                </button>
+                <button
+                  type='button'
                   data-tip='See what differs from the layout now'
                   data-version-diff={v.version}
                   data-setting='tool.version_diff'
@@ -238,6 +362,18 @@ export function HistoryPanel({
                 >
                   Compare
                 </button>
+                {onShowOnCanvas && (
+                  <button
+                    type='button'
+                    data-version-canvas={v.version}
+                    disabled={canvasFor != null}
+                    onClick={() => void showOnCanvas(v)}
+                    data-tip='Mark on the form what differs from this version'
+                    className={btn}
+                  >
+                    {canvasFor === v.id ? '…' : 'Canvas'}
+                  </button>
+                )}
                 {confirming === v.id ? (
                   <>
                     <button

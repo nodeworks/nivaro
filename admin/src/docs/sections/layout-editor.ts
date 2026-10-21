@@ -312,6 +312,31 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'History lists the saved versions of the layout — one per editing burst, sections included — with who saved and the change\'s name. "What the last save changed" shows the newest difference first; any version can be compared with the layout now. Restore replaces the layout with that version exactly (sections added since are removed) after keeping the current one as a version first. Versions survive a layout delete.'
     },
+    {
+      type: 'p',
+      text: 'This session (at the top of History) lists every Undo step since you opened the layout, oldest first, each marked saved or unsaved, and what Redo would bring back. Click a step to go back (or forward) to the layout right after it: that is the same as pressing Undo or Redo that many times, so it saves, or waits for Save, the same way.'
+    },
+    {
+      type: 'p',
+      text: 'Name a version to keep it: older unnamed versions are pruned (the newest 30 are kept), named ones never are. "Name the saved layout…" keeps the layout as it is saved now ("Go-live baseline"); Name / Rename on a version names that one, and clearing the name lets it be pruned again. Compare any later state against a named version like any other.'
+    },
+    {
+      type: 'p',
+      text: 'Show on canvas (from the comparison, or Canvas on a version) marks the difference on the form itself: added fields and sections are outlined green, moved ones amber with the section they came from, changed ones violet with the settings that differ, and removed ones come back faintly in their old place, tagged Removed (they cannot be selected or dragged). With unsaved changes, Review changes beside Save does the same for what you are about to save. Close the comparison from the bar above the canvas.'
+    },
+    {
+      type: 'p',
+      text: 'Each section shows, faintly on its frame, who last changed it and when. It is worked out from the versions the layout keeps, so a change older than the kept versions is not named.'
+    },
+    { type: 'h3', id: 'layout-editor-schedule', text: 'Scheduled changes' },
+    {
+      type: 'p',
+      text: 'With unsaved changes, Schedule… beside Save applies them at a time you pick instead of now (for example the morning of a release). They leave the editor at once and nobody sees them until then. At that time the server applies them like a Save, as a version named "Scheduled change by <you>". If someone changed the layout meanwhile, your changes still apply when every one of them fits; if one no longer fits, nothing is applied and you get a notification saying why.'
+    },
+    {
+      type: 'p',
+      text: "The overview shows each form's scheduled changes (when, who, how many) under its name; any administrator can cancel one. A change that could not be applied stays there with the reason until dismissed (or for a week)."
+    },
     { type: 'h3', id: 'layout-editor-every-form', text: 'Every form at once' },
     {
       type: 'p',
@@ -618,6 +643,18 @@ GET      /api/layout-collab/:id/preview-comments          // administrators
 DELETE   /api/layout-collab/:id/preview-comments/:commentId
 GET  /api/form-preview/:token                      // public page (expiring token)
 POST /api/form-preview/:token/comments  { field, name, text }   // public; 20 per 10 minutes per address
+
+GET  /api/collection-layouts/:id/versions/:versionId/bundle   → { data: { bundle, version } }
+PATCH /api/collection-layouts/:id/versions/:versionId  { name | null }   // name: kept beyond the 30
+POST /api/collection-layouts/:id/versions/name  { name }   // name the layout as saved now
+GET  /api/collection-layouts/:id/section-changes
+     → { data: { [section key]: { by, by_id, at } } }   // who last changed each section
+
+GET  /api/collection-layouts/schedules?collection=orders[&layout_id=5]
+     → { data: [{ id, layout_id, run_at, status, op_count, created_by_name, note, error }] }
+POST /api/collection-layouts/:id/schedules  { ops, base_rev, run_at, note? }
+PATCH /api/collection-layouts/schedules/:sid  { run_at }   // pending only
+DELETE /api/collection-layouts/schedules/:sid              // cancel (or dismiss a failed one)
 
 GET  /api/widgets-internal/:id/placements
      → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`

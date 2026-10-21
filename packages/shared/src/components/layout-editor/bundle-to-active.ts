@@ -46,7 +46,7 @@ function toAssignment(p: PlacementRow): SlotAssignment {
   }
 }
 
-function placementTarget(p: PlacementRow): DesignTarget {
+export function placementTarget(p: PlacementRow): DesignTarget {
   if (p.group_key === '__header__') return { kind: 'header', field: p.field }
   return {
     kind: p.field.startsWith('__') ? 'slot' : 'field',

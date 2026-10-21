@@ -132,15 +132,15 @@ export async function loadLayoutBundle(
   const asgRows = (await q('nivaro_layout_field_assignments')
     .where({ layout_id: layoutId })
     .orderBy([{ column: 'sort' }, { column: 'id' }])) as Array<Record<string, unknown>>
-
   const rev = (await layoutStateHash(layoutId, q)) ?? ''
   return bundleFromRows(raw, groupRows, asgRows, rev)
 }
 
 /**
  * The editor's bundle from stored rows (a layout row, its nivaro_field_groups
- * and nivaro_layout_field_assignments rows) — the database read above, and a
- * config snapshot's rows when one layout is compared with another environment.
+ * and nivaro_layout_field_assignments rows) — the database read above, a
+ * version snapshot, or a config snapshot's rows when one layout is compared
+ * with another environment. Rows must come in (sort, id) order.
  */
 export function bundleFromRows(
   raw: Record<string, unknown>,
@@ -214,6 +214,22 @@ export function bundleFromRows(
   )
 
   return { layout, ...sortBundleRows({ groups, placements }), rev }
+}
+
+/** A version snapshot as a bundle (History's "Show on canvas"); its rev names the version. */
+export function snapshotToBundle(
+  snap: {
+    layout: Record<string, unknown>
+    groups: Array<Record<string, unknown>>
+    assignments: Array<Record<string, unknown>>
+  },
+  rev: string
+): LayoutBundle {
+  const order = (rows: Array<Record<string, unknown>>) =>
+    [...rows].sort(
+      (a, b) => Number(a.sort ?? 0) - Number(b.sort ?? 0) || Number(a.id ?? 0) - Number(b.id ?? 0)
+    )
+  return bundleFromRows(snap.layout, order(snap.groups ?? []), order(snap.assignments ?? []), rev)
 }
 
 /** Thrown when the merged settings fail validation at write time (rolls the batch back). */

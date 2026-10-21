@@ -43,6 +43,7 @@ import {
   type LayoutThumbData,
   useCrossform
 } from '../crossform'
+import { type ScheduleRow, useLayoutSchedules } from '../history-api'
 import { DependencyDiagram } from '../ops/DependencyDiagram'
 import { downloadLayout, requestsByLayout, useChangeRequests } from '../ops/ops-api'
 import { PromotePanel } from '../ops/PromotePanel'
@@ -78,6 +79,7 @@ import {
   useRuleChoiceLabels
 } from './overview-api'
 import { Pill, Sentence, shapeLine, TYPE_USE } from './purpose'
+import { ScheduledChanges } from './ScheduledChanges'
 import type {
   LayoutType,
   OverviewReason,
@@ -447,6 +449,9 @@ interface RowProps {
   thumb?: LayoutThumbData
   onOpen: (id: number) => void
   onChanged: () => void
+  /** This form's scheduled layout changes (#2590). */
+  scheduled?: ScheduleRow[]
+  collection?: string
   drag?: {
     setNodeRef: (el: HTMLElement | null) => void
     style: CSSProperties
@@ -465,6 +470,8 @@ function RowView({
   thumb,
   onOpen,
   onChanged,
+  scheduled,
+  collection,
   drag
 }: RowProps) {
   const client = useNivaroClient()
@@ -592,6 +599,7 @@ function RowView({
             </div>
           ))}
           <CoverageNote row={row} />
+          {scheduled && collection && <ScheduledChanges rows={scheduled} collection={collection} />}
         </td>
         <td className={cn(cell, 'w-[22%] text-[12.5px] text-slate-500 dark:text-muted-foreground')}>
           {row.section === 'unused' ? (
@@ -956,6 +964,13 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
     }
   }
 
+  const { data: schedules } = useLayoutSchedules(collection)
+  const schedulesByLayout = useMemo(() => {
+    const m = new Map<number, ScheduleRow[]>()
+    for (const s of schedules ?? []) m.set(s.layout_id, [...(m.get(s.layout_id) ?? []), s])
+    return m
+  }, [schedules])
+
   if (compare)
     return (
       <CompareForms
@@ -979,7 +994,9 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
       requests: requestCounts.get(row.layout_id) ?? 0,
       thumb: crossform.data?.thumbs[String(row.layout_id)],
       onOpen,
-      onChanged: invalidate
+      onChanged: invalidate,
+      scheduled: schedulesByLayout.get(row.layout_id),
+      collection
     }
     return draggable === undefined ? (
       <RowView key={row.layout_id} {...common} />

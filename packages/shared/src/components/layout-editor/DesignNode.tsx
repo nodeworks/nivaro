@@ -9,8 +9,8 @@ import {
   type ReactNode,
   type Ref
 } from 'react'
-import { cn } from '../../lib/utils'
-import type { DesignMark, DesignTarget, LayoutDesign } from './design-context'
+import { cn, formatRelative } from '../../lib/utils'
+import type { DesignMark, DesignTarget, DiffMark, LayoutDesign } from './design-context'
 import { isSelectedIn, targetKey, useLayoutDesign } from './design-context'
 import { NO_DND, useDesignDndNode, useDesignDropBody } from './dnd/node'
 import { NoteMarker } from './NoteMarker'
@@ -107,7 +107,10 @@ export function DesignNode({
   // drop target.
   const copy = rest['data-design-copy'] !== undefined
   const folded = rest['data-header-folded'] !== undefined
-  const locked = !design || !!parent || copy
+  // A removed node shown by a comparison is a ghost: it is not on the layout.
+  const diff = design?.diffMark?.(target) ?? null
+  const ghost = diff?.kind === 'removed'
+  const locked = !design || !!parent || copy || ghost
   // Always called, design or not: the hooks never change between renders.
   const nd = useDesignDndNode(design?.dnd ?? NO_DND, target, { disabled: locked, noDrop: folded })
   if (!design) return <>{children}</>
@@ -146,7 +149,9 @@ export function DesignNode({
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan',
     dragging && 'opacity-40',
     // Hidden for the previewed role: faint, its tags not.
-    mark?.kind === 'hidden' && '[&>:not([data-design-badges])]:opacity-40'
+    mark?.kind === 'hidden' && '[&>:not([data-design-badges])]:opacity-40',
+    diff && DIFF_RING[diff.kind],
+    ghost && 'cursor-default [&>:not([data-design-badges])]:opacity-40'
   )
 
   // Capture phase, so nothing inside (inputs, buttons, links) acts on the
@@ -156,6 +161,11 @@ export function DesignNode({
   const onClickCapture = (e: MouseEvent<HTMLElement>) => {
     const t = e.target as Element
     if (t.closest('[data-design-target]') !== e.currentTarget) return
+    if (ghost) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     // Shift / ⌘ / Ctrl-click adds to the selection (several fields at once).
     if (e.shiftKey || e.metaKey || e.ctrlKey) design.onSelect(target, { additive: true })
     else design.onSelect(target)
@@ -169,7 +179,7 @@ export function DesignNode({
   // native button (a tab or step, asChild) keeps Enter's native click: the
   // click path above selects it and, through data-design-pass, switches to it.
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
-    if (e.key !== 'Enter' || e.target !== e.currentTarget) return
+    if (e.key !== 'Enter' || e.target !== e.currentTarget || ghost) return
     if (e.currentTarget.tagName === 'BUTTON') return
     e.preventDefault()
     if (e.shiftKey) design.onSelect(target, { additive: true })
@@ -186,6 +196,7 @@ export function DesignNode({
     'data-drop-slot': slot ?? undefined,
     'data-role-mark': mark?.kind,
     'data-unsaved': unsaved ? '' : undefined,
+    'data-diff': diff?.kind,
     // Locked nodes get no dnd attributes; they still take focus to be selected.
     // So do nodes drag and drop leaves out (a pinned section, #2628).
     ...(locked || !('tabIndex' in dragProps) ? { role: 'button', tabIndex: 0 } : {}),
@@ -200,8 +211,19 @@ export function DesignNode({
     target.kind === 'field' || target.kind === 'header'
       ? (design.fillRate?.(target.field) ?? null)
       : null
+  // Who last changed a section: subtle, on the section's own frame (not on tabs or steps).
+  const last = target.kind === 'group' && !tabLike ? (design.lastChange?.(target) ?? null) : null
+  const lastText = last
+    ? [last.by ? `by ${last.by}` : null, last.at ? formatRelative(last.at) : null]
+        .filter(Boolean)
+        .join(' · ') || null
+    : null
   const badge =
-    tabLike && parent && !mark && !tags ? (
+    tabLike && diff ? (
+      <span data-design-badges='' className='pointer-events-none absolute -top-2 right-0 z-10'>
+        <DiffTag diff={diff} />
+      </span>
+    ) : tabLike && parent && !mark && !tags ? (
       // Steps and tabs: a dot above the label, the parent's name in the tip.
       <span
         data-design-badges=''
@@ -209,12 +231,21 @@ export function DesignNode({
       >
         <span className='sr-only'>from {parent}</span>
       </span>
-    ) : parent || mark || tags || fill != null ? (
+    ) : parent || mark || tags || fill != null || diff || lastText ? (
       <span
         data-design-badges=''
         className='pointer-events-none absolute -top-2 right-1 z-10 flex items-center gap-1'
       >
         {fill != null && <FillChip pct={fill} />}
+        {lastText && !diff && (
+          <span
+            data-design-last-change=''
+            className='rounded bg-white px-1 text-[10.5px] text-slate-400 dark:bg-card dark:text-slate-500'
+          >
+            Changed {lastText}
+          </span>
+        )}
+        {diff && <DiffTag diff={diff} />}
         {mark && (
           <span
             data-design-role-tag={mark.kind}
@@ -368,5 +399,48 @@ export function DesignDropZone() {
     >
       Drop fields here
     </div>
+  )
+}
+
+// The comparison's rings sit outside the node (box-shadow): selection keeps its outline.
+const DIFF_RING: Record<DiffMark['kind'], string> = {
+  added: 'ring-2 ring-emerald-500/70 dark:ring-emerald-400/60',
+  moved: 'ring-2 ring-amber-500/70 dark:ring-amber-400/60',
+  changed: 'ring-1 ring-violet-500/60 dark:ring-violet-400/50',
+  removed: 'ring-1 ring-rose-400/70 dark:ring-rose-400/50'
+}
+
+const DIFF_TAG: Record<DiffMark['kind'], { text: string; cls: string }> = {
+  added: {
+    text: 'Added',
+    cls: 'bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-200 dark:ring-emerald-500/30'
+  },
+  moved: {
+    text: 'Moved',
+    cls: 'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-500/30'
+  },
+  changed: {
+    text: 'Changed',
+    cls: 'bg-violet-50 text-violet-800 ring-violet-200 dark:bg-violet-500/15 dark:text-violet-200 dark:ring-violet-500/30'
+  },
+  removed: {
+    text: 'Removed',
+    cls: 'bg-rose-50 text-rose-800 ring-rose-200 line-through dark:bg-rose-500/15 dark:text-rose-200 dark:ring-rose-500/30'
+  }
+}
+
+/** A comparison's tag on a node: Added, Moved from Basics, Changed (what, in the tip), Removed. */
+function DiffTag({ diff }: { diff: DiffMark }) {
+  const t = DIFF_TAG[diff.kind]
+  return (
+    <span
+      data-design-diff-tag={diff.kind}
+      className={cn('inline-flex items-center rounded px-1 text-[11px] ring-1', t.cls)}
+    >
+      {diff.kind === 'moved' && diff.detail ? `Moved ${diff.detail}` : t.text}
+      {diff.kind === 'changed' && diff.detail && (
+        <span className='ml-1 max-w-[160px] truncate opacity-80'>{diff.detail}</span>
+      )}
+    </span>
   )
 }

@@ -1,8 +1,19 @@
-import { ChevronLeft, Eye, History, Redo2, Save, Undo2, UserRound, X } from 'lucide-react'
+import {
+  ChevronLeft,
+  Eye,
+  GitCompare,
+  History,
+  Redo2,
+  Save,
+  Undo2,
+  UserRound,
+  X
+} from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { useRelationOptions } from '../../hooks/useRelationOptions'
+import type { LayoutBundle } from '../../lib/layout-ops'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -15,6 +26,7 @@ import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overvie
 import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import type { PreviewDevice } from './preview/preview-model'
+import { ScheduleChange } from './ScheduleChange'
 import { unsavedText } from './UnsavedConfirm'
 import type { LayoutDraft } from './useLayoutDraft'
 
@@ -302,7 +314,10 @@ export function EditorTopBar({
   formMap,
   presence,
   onOpenUnsaved,
-  onSelectField
+  onSelectField,
+  onShowOnCanvas,
+  onReviewChanges,
+  reviewing = false
 }: {
   collection: string
   layoutId: number
@@ -326,7 +341,14 @@ export function EditorTopBar({
     Partial<
       Pick<
         LayoutDraft,
-        'autosave' | 'setAutosave' | 'unsavedCount' | 'save' | 'discard' | 'unsavedOps'
+        | 'autosave'
+        | 'setAutosave'
+        | 'unsavedCount'
+        | 'save'
+        | 'discard'
+        | 'unsavedOps'
+        | 'session'
+        | 'jump'
       >
     >
   preview: PreviewAs
@@ -353,6 +375,11 @@ export function EditorTopBar({
   onOpenUnsaved?: (anchor: HTMLElement) => void
   /** Select a field on the canvas (a preview comment's "Select this field"). */
   onSelectField?: (field: string) => void
+  /** History's "Show on canvas" (#2591): compare a version with the editor's layout. */
+  onShowOnCanvas?: (base: LayoutBundle, label: string) => void
+  /** "Review changes" beside Save: the unsaved changes on the canvas (#2591). */
+  onReviewChanges?: () => void
+  reviewing?: boolean
 }) {
   // A save notice links here with ?history=1 (#2655): History opens on arrival.
   const [historyOpen, setHistoryOpen] = useState(
@@ -438,14 +465,14 @@ export function EditorTopBar({
       <ShareButton layoutId={layoutId} fields={fields} onSelectField={onSelectField} />
       <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
         <PopoverTrigger asChild>
-          <button type='button' className={btn} aria-label='History'>
+          <button type='button' className={btn} aria-label='History' data-editor-history=''>
             <History className='h-3.5 w-3.5' />
             History
           </button>
         </PopoverTrigger>
         <PopoverContent
           align='end'
-          className='max-h-[min(70vh,560px)] w-[400px] overflow-y-auto overscroll-contain p-0'
+          className='max-h-[min(75vh,640px)] w-[460px] overflow-y-auto overscroll-contain p-3'
         >
           {historyOpen && (
             <HistoryPanel
@@ -453,6 +480,16 @@ export function EditorTopBar({
               onRestored={() => setHistoryOpen(false)}
               unsavedCount={unsaved}
               onDiscardUnsaved={draft.discard}
+              session={draft.session}
+              onJump={draft.jump}
+              onShowOnCanvas={
+                onShowOnCanvas
+                  ? (base, label) => {
+                      setHistoryOpen(false)
+                      onShowOnCanvas(base, label)
+                    }
+                  : undefined
+              }
             />
           )}
         </PopoverContent>
@@ -473,6 +510,30 @@ export function EditorTopBar({
       )}
       <StatusChip draft={draft} onOpen={onOpenUnsaved} />
       <AiChangeCheck layoutId={layoutId} draft={draft} />
+      {onReviewChanges && !draft.autosave && unsaved > 0 && (
+        <button
+          type='button'
+          data-editor-review=''
+          aria-pressed={reviewing}
+          onClick={onReviewChanges}
+          data-tip={
+            reviewing
+              ? 'Stop marking the unsaved changes on the canvas'
+              : 'Mark the unsaved changes on the canvas before you save'
+          }
+          className={cn(btn, reviewing && 'border-nvr-cyan bg-nvr-cyan/10')}
+        >
+          <GitCompare className='h-3.5 w-3.5' />
+          Review changes
+        </button>
+      )}
+      {draft.unsavedOps && draft.discard && !draft.autosave && unsaved > 0 && (
+        <ScheduleChange
+          collection={collection}
+          layoutId={layoutId}
+          draft={{ unsavedOps: draft.unsavedOps, discard: draft.discard, unsavedCount: unsaved }}
+        />
+      )}
       {draft.save && !draft.autosave && (
         <button
           type='button'

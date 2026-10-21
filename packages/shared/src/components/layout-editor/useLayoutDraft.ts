@@ -120,7 +120,25 @@ export interface LayoutDraft {
   /** Label of the step undo / redo would reverse ("Move Status"), for the buttons' tips. */
   undoLabel: string | null
   redoLabel: string | null
+  /**
+   * This editing session's steps (#2618): `done` oldest first (what Undo walks back
+   * through), `undone` nearest first (what Redo brings back). Lost on a conflict
+   * or when someone else saves, like Undo itself.
+   */
+  session: SessionSteps
+  /** Walk the session: -n = Undo n times, +n = Redo n times. */
+  jump(delta: number): void
   isLoading: boolean
+}
+
+export interface SessionStep {
+  label: string
+  /** unsaved = waits for Save; saving = on its way; saved = on the server. */
+  state: 'unsaved' | 'saving' | 'saved'
+}
+export interface SessionSteps {
+  done: SessionStep[]
+  undone: Array<{ label: string }>
 }
 
 export const layoutDraftKeys = {
@@ -463,6 +481,7 @@ type View = Omit<
   | 'discard'
   | 'clearDropped'
   | 'restore'
+  | 'jump'
 >
 
 /** Split a text apply into single-setting update ops keyed by (target, setting). */
@@ -619,6 +638,16 @@ export class LayoutDraftEngine {
     step.batchId = this.add('redo', step.forward, `Redo ${step.label}`).id
     this.undoStack.push(step)
     this.refresh()
+  }
+
+  /** -n undoes n steps, +n redoes n; stops early when a step no longer applies. */
+  jump(delta: number) {
+    for (let i = 0; i < Math.abs(delta); i++) {
+      if ((delta < 0 ? this.undoStack : this.redoStack).length === 0) return
+      if (delta < 0) this.undo()
+      else this.redo()
+      if (this.outcome === 'error') return
+    }
   }
 
   /** Send every pending text edit now (blur, unmount, before another op). Manual
@@ -1069,6 +1098,22 @@ export class LayoutDraftEngine {
       })
   }
 
+  private sessionSteps(): SessionSteps {
+    const unsaved = new Set(this.unsaved.map((b) => b.id))
+    const sending = new Set<number>()
+    for (const b of this.queue) {
+      sending.add(b.id)
+      for (const p of b.parts ?? []) sending.add(p.id)
+    }
+    return {
+      done: this.undoStack.map((s) => ({
+        label: s.label,
+        state: unsaved.has(s.batchId) ? 'unsaved' : sending.has(s.batchId) ? 'saving' : 'saved'
+      })),
+      undone: [...this.redoStack].reverse().map((s) => ({ label: s.label }))
+    }
+  }
+
   private buildView(): View {
     const top = this.undoStack[this.undoStack.length - 1]
     const lastText = [...this.text.values()].pop()
@@ -1084,6 +1129,7 @@ export class LayoutDraftEngine {
       canRedo: this.redoStack.length > 0,
       undoLabel: lastText?.label ?? top?.label ?? null,
       redoLabel: this.redoStack[this.redoStack.length - 1]?.label ?? null,
+      session: this.sessionSteps(),
       status: this.pending() ? 'saving' : this.outcome,
       error: this.error
     }
@@ -1255,6 +1301,7 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
   const discard = useCallback(() => engine.discard(), [engine])
   const clearDropped = useCallback(() => engine.clearDropped(), [engine])
   const restore = useCallback((steps: UnsavedStep[]) => engine.restore(steps), [engine])
+  const jump = useCallback((delta: number) => engine.jump(delta), [engine])
 
   // A bundle that never loaded is an error, not an empty idle editor.
   const loadFailed = !view.bundle && query.error != null
@@ -1275,6 +1322,7 @@ export function useLayoutDraft(layoutId: number, opts: LayoutDraftOptions = {}):
     discard,
     clearDropped,
     restore,
+    jump,
     isLoading: query.isLoading
   }
 }
