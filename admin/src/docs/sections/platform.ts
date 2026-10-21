@@ -478,6 +478,15 @@ MIGRATION_LOCK_TIMEOUT_MS=60000   # how long a starting instance waits for the l
     {
       type: 'note',
       text: 'With MIGRATION_SAFE_MODE unset, startup behaves as before (migrate then listen) — appropriate for single-instance deployments.'
+    },
+    { type: 'h3', text: 'Waiting for the database and Redis' },
+    {
+      type: 'p',
+      text: 'After a host reboot the database and Redis may come back after the API. Before migrating, startup probes both (`select 1` and a Redis PING) with backoff — 1 s, 2 s, 4 s … up to 15 s between tries — and logs what it is waiting for. If either is still unreachable when the budget runs out, the process exits non-zero so the orchestrator restarts it. Pair it with a restart policy that never gives up (`restart: unless-stopped` in Compose, `restart_policy: condition: any` with no `max_attempts` in Swarm).'
+    },
+    {
+      type: 'pre',
+      code: `BOOT_DEPS_WAIT_MS=120000   # how long startup waits for the database and Redis (0 = no wait)`
     }
   ]
 }
