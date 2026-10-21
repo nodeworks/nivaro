@@ -8,6 +8,8 @@ import { post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
+import { AiStartComposer, AiStartOptions } from '../ai-forms/AiStart'
+import type { ComposeMode } from '../ai-forms/ai-forms-api'
 import { apiFailure, fetchExplain, useDisplayTemplate, useRoleNames } from './overview-api'
 import type { ExplainResponse, LayoutType } from './types'
 
@@ -62,6 +64,8 @@ export function NewFormButton({
   const [name, setName] = useState(DEFAULT_NAMES.grouped)
   const [nameTouched, setNameTouched] = useState(false)
   const [busy, setBusy] = useState(false)
+  // "Start with AI" (#2668-#2670): the composer replaces the kind list.
+  const [aiMode, setAiMode] = useState<ComposeMode | null>(null)
 
   const pick = (t: LayoutType) => {
     setType(t)
@@ -88,65 +92,95 @@ export function NewFormButton({
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(v) => {
+        setOpen(v)
+        if (!v) setAiMode(null)
+      }}
+    >
       <PopoverTrigger asChild>
         <button type='button' className={btnPrimary}>
           <Plus className='h-3.5 w-3.5' />
           New form
         </button>
       </PopoverTrigger>
-      <PopoverContent align='end' className='w-[320px] p-3'>
-        <p className={labelCls}>What kind?</p>
-        <div role='radiogroup' aria-label='Layout kind' className='flex flex-col gap-0.5'>
-          {LAYOUT_TYPES.map((t) => (
-            // biome-ignore lint/a11y/useSemanticElements: two-line option cards; a native radio cannot hold the description
-            <button
-              key={t.type}
-              type='button'
-              role='radio'
-              aria-checked={type === t.type}
-              onClick={() => pick(t.type)}
-              className={cn(
-                'flex flex-col items-start rounded-md px-2 py-1.5 text-left transition-colors',
-                type === t.type ? 'bg-accent' : 'hover:bg-muted'
-              )}
-            >
-              <span className='text-[12.5px] font-semibold text-slate-800 dark:text-foreground'>
-                {t.label}
-              </span>
-              <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-                {t.detail}
-              </span>
-            </button>
-          ))}
-        </div>
-        <label className='mt-3 block'>
-          <span className={labelCls}>Name</span>
-          <input
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value)
-              setNameTouched(true)
+      <PopoverContent
+        align='end'
+        className={cn(
+          'p-3',
+          aiMode && 'max-h-[min(72vh,560px)] w-[460px] overflow-y-auto overscroll-contain',
+          !aiMode && 'w-[320px]'
+        )}
+      >
+        {aiMode ? (
+          <AiStartComposer
+            collection={collection}
+            mode={aiMode}
+            name={nameTouched ? name : null}
+            onBack={() => setAiMode(null)}
+            onCreated={(id) => {
+              setOpen(false)
+              setAiMode(null)
+              onCreated('grouped', id)
             }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void create()
-            }}
-            className={inputCls}
           />
-        </label>
-        <div className='mt-3 flex justify-end gap-2'>
-          <button type='button' className={btnOutline} onClick={() => setOpen(false)}>
-            Cancel
-          </button>
-          <button
-            type='button'
-            className={btnPrimary}
-            disabled={!name.trim() || busy}
-            onClick={() => void create()}
-          >
-            {busy ? 'Creating…' : 'Create'}
-          </button>
-        </div>
+        ) : (
+          <>
+            <p className={labelCls}>What kind?</p>
+            <div role='radiogroup' aria-label='Layout kind' className='flex flex-col gap-0.5'>
+              {LAYOUT_TYPES.map((t) => (
+                // biome-ignore lint/a11y/useSemanticElements: two-line option cards; a native radio cannot hold the description
+                <button
+                  key={t.type}
+                  type='button'
+                  role='radio'
+                  aria-checked={type === t.type}
+                  onClick={() => pick(t.type)}
+                  className={cn(
+                    'flex flex-col items-start rounded-md px-2 py-1.5 text-left transition-colors',
+                    type === t.type ? 'bg-accent' : 'hover:bg-muted'
+                  )}
+                >
+                  <span className='text-[12.5px] font-semibold text-slate-800 dark:text-foreground'>
+                    {t.label}
+                  </span>
+                  <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                    {t.detail}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <label className='mt-3 block'>
+              <span className={labelCls}>Name</span>
+              <input
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value)
+                  setNameTouched(true)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void create()
+                }}
+                className={inputCls}
+              />
+            </label>
+            <div className='mt-3 flex justify-end gap-2'>
+              <button type='button' className={btnOutline} onClick={() => setOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type='button'
+                className={btnPrimary}
+                disabled={!name.trim() || busy}
+                onClick={() => void create()}
+              >
+                {busy ? 'Creating…' : 'Create'}
+              </button>
+            </div>
+            {type === 'grouped' && <AiStartOptions onPick={setAiMode} />}
+          </>
+        )}
       </PopoverContent>
     </Popover>
   )

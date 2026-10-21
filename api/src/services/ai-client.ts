@@ -426,7 +426,11 @@ function textOf(content: string | Block[] | undefined | null): string {
     .join('\n')
 }
 
-function toOpenAi(params: MessageParams, model: string, stream = false): Record<string, unknown> {
+export function toOpenAi(
+  params: MessageParams,
+  model: string,
+  stream = false
+): Record<string, unknown> {
   const messages: Array<Record<string, unknown>> = []
   const system =
     typeof params.system === 'string'
@@ -460,6 +464,7 @@ function toOpenAi(params: MessageParams, model: string, stream = false): Record<
     const texts: string[] = []
     const toolCalls: Array<Record<string, unknown>> = []
     const toolResults: Array<Record<string, unknown>> = []
+    const images: Array<Record<string, unknown>> = []
     for (const b of m.content as Block[]) {
       if (b.type === 'text') texts.push(b.text)
       else if (b.type === 'tool_use')
@@ -475,7 +480,16 @@ function toOpenAi(params: MessageParams, model: string, stream = false): Record<
           content:
             typeof b.content === 'string' ? b.content : textOf(b.content as Block[] | undefined)
         })
-      else if (b.type === 'image') texts.push('[image omitted]')
+      else if (b.type === 'image') {
+        // A base64 picture rides as an image_url part (data URL) on a user turn
+        // (AI form from a picture, #2669); anything else is still left out.
+        if (m.role === 'user' && b.source.type === 'base64')
+          images.push({
+            type: 'image_url',
+            image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` }
+          })
+        else texts.push('[image omitted]')
+      }
     }
     if (m.role === 'assistant') {
       messages.push({
@@ -486,7 +500,12 @@ function toOpenAi(params: MessageParams, model: string, stream = false): Record<
     } else {
       // tool results must directly follow the assistant turn that called them
       for (const tr of toolResults) messages.push(tr)
-      if (texts.length) messages.push({ role: 'user', content: texts.join('\n') })
+      if (images.length)
+        messages.push({
+          role: 'user',
+          content: [...(texts.length ? [{ type: 'text', text: texts.join('\n') }] : []), ...images]
+        })
+      else if (texts.length) messages.push({ role: 'user', content: texts.join('\n') })
     }
   }
   const tools = (params.tools ?? [])

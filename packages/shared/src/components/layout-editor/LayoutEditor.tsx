@@ -16,6 +16,7 @@ import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
 import { AutoArrangeButton } from './AutoArrange'
+import { AiFormsButton } from './ai-forms/AiFormsButton'
 import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
 import {
   type DesignMark,
@@ -698,6 +699,12 @@ export function LayoutEditor({
             <>
               <ViewToggle view={view} onView={setView} />
               <AutoArrangeButton bundle={bundle} apply={draft.apply} />
+              <AiFormsButton
+                collection={collection}
+                layoutId={currentId}
+                draft={draft}
+                onOpenLayout={openLayout}
+              />
             </>
           ) : null
         }
