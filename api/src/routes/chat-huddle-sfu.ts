@@ -1,22 +1,31 @@
 import type { FastifyInstance } from 'fastify'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { canSeeRoom } from '../services/chat.js'
-import { type HuddleRedis, huddlePeers, huddleRoomKind } from '../services/huddle.js'
+import {
+  type HuddleRedis,
+  huddleMode,
+  huddlePeers,
+  huddleRoomKind,
+  huddleSession
+} from '../services/huddle.js'
 import { getHuddleSettings, sfuConfigured } from '../services/huddle-settings.js'
-import { mintJoinToken, probeLiveKit } from '../services/huddle-sfu.js'
+import { mintJoinToken, probeLiveKit, sfuTokenDecision } from '../services/huddle-sfu.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 
 /**
  * Large huddles (#2859) over REST — registered under /chat/huddle next to the
  * mesh routes:
- *   GET /sfu-token?room=&socket=  a LiveKit access token for the room's SFU room. Gated like
- *                                 every huddle read (canSeeRoom) AND by presence: the socket
- *                                 must already be in the room's huddle as this person, so a
- *                                 token only ever goes to someone the server listed there.
+ *   GET /sfu-token?room=&socket=  a LiveKit access token for the huddle's SFU room. Gated like
+ *                                 every huddle read (canSeeRoom), then by the huddle being ON
+ *                                 the SFU right now, and by presence: the socket must already
+ *                                 be in the room's huddle as this person (sfuTokenDecision).
+ *                                 The room name is bound to the huddle session, so a token from
+ *                                 an earlier huddle in the same room opens nothing.
  *   GET /settings/test-sfu        admin: is the SAVED media server reachable with the saved
  *                                 key/secret (lists rooms through its API; nothing is created)
  * The API secret is read from the settings row and only ever used to sign; it is never in a
- * response or a log line.
+ * response or a log line. Leaving, going stale or losing room access also removes the person
+ * from the LiveKit room server-side (services/huddle.ts), since a connection outlives its token.
  */
 export async function chatHuddleSfuRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
@@ -31,21 +40,32 @@ export async function chatHuddleSfuRoutes(app: FastifyInstance) {
     const user = req.user!
     if (!(await canSeeRoom(user, room))) return reply.code(404).send({ error: 'Not found' })
     const s = await getHuddleSettings()
-    if (!s.enabled || !sfuConfigured(s)) {
-      return reply.code(404).send({ error: 'Large huddles are not configured on this instance' })
-    }
     const tenant = currentTenantKey() || null
-    const peers = await huddlePeers(app.redis as unknown as HuddleRedis, tenant, room)
-    const me = peers.find((p) => p.socket === socket && p.user === String(user.id))
-    if (!me) return reply.code(409).send({ error: 'Join the huddle first' })
+    const redis = app.redis as unknown as HuddleRedis
+    const [mode, session, peers] = await Promise.all([
+      huddleMode(redis, tenant, room),
+      huddleSession(redis, tenant, room),
+      huddlePeers(redis, tenant, room)
+    ])
+    const d = sfuTokenDecision({
+      enabled: s.enabled,
+      sfu: sfuConfigured(s),
+      mode,
+      session,
+      peers,
+      userId: String(user.id),
+      socket
+    })
+    if (!d.ok) return reply.code(d.status).send({ error: d.error })
     const minted = mintJoinToken({
       apiKey: s.livekit_api_key as string,
       apiSecret: s.livekit_api_secret as string,
       tenant,
       room,
+      session: d.session,
       userId: String(user.id),
       socket,
-      name: me.name
+      name: d.me.name
     })
     return reply.send({ data: { url: s.livekit_url, ...minted } })
   })

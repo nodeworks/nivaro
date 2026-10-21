@@ -1,9 +1,17 @@
+import { randomBytes } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
 import { getHuddleSettings, sfuConfigured } from './huddle-settings.js'
-import { decideHuddleMode, type HuddleMode } from './huddle-sfu.js'
+import {
+  decideHuddleMode,
+  type HuddleMode,
+  sfuDeleteRoom,
+  sfuIdentity,
+  sfuRemoveParticipant,
+  sfuRoomName
+} from './huddle-sfu.js'
 import { inSocketTenant } from './socket-tenant.js'
 
 /**
@@ -62,7 +70,13 @@ export interface HuddleRedis {
 
 function keys(tenant: string | null, room: string) {
   const base = `nvr:huddle:${tenant || '-'}:${room}`
-  return { set: base, meta: `${base}:m`, start: `${base}:start`, mode: `${base}:mode` }
+  return {
+    set: base,
+    meta: `${base}:m`,
+    start: `${base}:start`,
+    mode: `${base}:mode`,
+    session: `${base}:s`
+  }
 }
 
 /** Rooms a huddle may run in: channels, General and record rooms (DMs are not in v1). */
@@ -77,12 +91,14 @@ function nameOf(u: User): string | null {
   return [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || u.email || null
 }
 
-/** Everyone in the room's huddle right now (stale entries pruned as a side effect). */
+/** Everyone in the room's huddle right now (stale entries pruned as a side effect;
+ *  `onStale` hears who fell out, so the SFU can be told too). */
 export async function huddlePeers(
   redis: HuddleRedis,
   tenant: string | null,
   room: string,
-  now = Date.now()
+  now = Date.now(),
+  onStale?: (stale: Array<{ socket: string; user: string }>) => void
 ): Promise<HuddlePeer[]> {
   const k = keys(tenant, room)
   await redis.zremrangebyscore(k.set, '-inf', now - STALE_MS)
@@ -108,9 +124,20 @@ export async function huddlePeers(
     }
   }
   // Drop meta rows whose set member expired.
+  const stale: Array<{ socket: string; user: string }> = []
   for (const socket of Object.keys(meta)) {
-    if (!ids.includes(socket)) void redis.hdel(k.meta, socket)
+    if (ids.includes(socket)) continue
+    void redis.hdel(k.meta, socket)
+    try {
+      stale.push({
+        socket,
+        user: String((JSON.parse(meta[socket]) as { user?: unknown }).user ?? '')
+      })
+    } catch {
+      stale.push({ socket, user: '' })
+    }
   }
+  if (stale.length && onStale) onStale(stale)
   return out
 }
 
@@ -121,6 +148,16 @@ async function touch(redis: HuddleRedis, tenant: string | null, room: string, so
   await redis.expire(k.meta, KEY_TTL_S)
   await redis.expire(k.start, KEY_TTL_S)
   await redis.expire(k.mode, KEY_TTL_S)
+  await redis.expire(k.session, KEY_TTL_S)
+}
+
+/** The huddle's session id (#2859): random per huddle, names its LiveKit room; null = no huddle. */
+export async function huddleSession(
+  redis: HuddleRedis,
+  tenant: string | null,
+  room: string
+): Promise<string | null> {
+  return redis.get(keys(tenant, room).session)
 }
 
 /** How the room's huddle carries media right now (#2859); mesh until it outgrew it. */
@@ -145,6 +182,14 @@ export interface HuddleDeps {
   /** Post a platform line in the room (chat-send.ts). */
   postLine(room: string, text: string): Promise<void>
   warn(obj: Record<string, unknown>, msg: string): void
+  /** #2859: tell the SFU to drop one participant (`identity`) or, with null, close the whole
+   *  LiveKit room of that huddle session. Rejections are the caller's to log, never to rethrow. */
+  sfuEvict?(args: {
+    tenant: string | null
+    room: string
+    session: string
+    identity: string | null
+  }): Promise<void>
 }
 
 export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
@@ -163,7 +208,19 @@ export function defaultHuddleDeps(app: FastifyInstance): HuddleDeps {
         { room, message: text }
       )
     },
-    warn: (obj, msg) => app.log.warn(obj, msg)
+    warn: (obj, msg) => app.log.warn(obj, msg),
+    async sfuEvict({ tenant, room, session, identity }) {
+      const s = await getHuddleSettings()
+      if (!sfuConfigured(s)) return
+      const server = {
+        livekit_url: s.livekit_url as string,
+        livekit_api_key: s.livekit_api_key as string,
+        livekit_api_secret: s.livekit_api_secret as string
+      }
+      const name = sfuRoomName(tenant, room, session)
+      if (identity) await sfuRemoveParticipant(server, name, identity)
+      else await sfuDeleteRoom(server, name)
+    }
   }
 }
 
@@ -202,9 +259,49 @@ export function registerHuddle(
     socket.emit('huddle:denied', { room: typeof room === 'string' ? room : null, reason })
   }
 
+  /** Drop people from the SFU: one identity, or (identity null) the session's whole room. */
+  async function evict(room: string, session: string | null, identity: string | null) {
+    if (!session || !deps.sfuEvict) return
+    const tenant = scope.tenantNow()
+    try {
+      await deps.sfuEvict({ tenant, room, session, identity })
+    } catch (err) {
+      deps.warn({ err, room, identity }, 'huddle: SFU eviction failed')
+    }
+  }
+
+  /** The roster, with every stale browser also evicted from the SFU (#2859). */
+  async function peersOf(room: string) {
+    const tenant = scope.tenantNow()
+    return huddlePeers(deps.redis, tenant, room, Date.now(), (stale) => {
+      void (async () => {
+        if ((await huddleMode(deps.redis, tenant, room)) !== 'sfu') return
+        const session = await huddleSession(deps.redis, tenant, room)
+        for (const s of stale) await evict(room, session, sfuIdentity(s.user, s.socket))
+      })()
+    })
+  }
+
+  /** Nobody left: close the SFU room, forget the keys, say how long it ran. */
+  async function endHuddle(room: string) {
+    const tenant = scope.tenantNow()
+    const k = keys(tenant, room)
+    const start = await deps.redis.get(k.start)
+    if (start == null) return
+    const [mode, session] = await Promise.all([
+      huddleMode(deps.redis, tenant, room),
+      huddleSession(deps.redis, tenant, room)
+    ])
+    await deps.redis.del(k.start, k.meta, k.set, k.mode, k.session)
+    if (mode === 'sfu') await evict(room, session, null)
+    const ms = Date.now() - Number(start)
+    await deps.postLine(room, `Huddle ended after ${formatHuddleDuration(ms)}`)
+  }
+
   async function broadcast(room: string) {
     const tenant = scope.tenantNow()
-    const peers = await huddlePeers(deps.redis, tenant, room)
+    const peers = await peersOf(room)
+    if (peers.length === 0) await endHuddle(room)
     const mode = peers.length ? await huddleMode(deps.redis, tenant, room) : 'mesh'
     const payload = { room, peers, mode }
     const chat = scope.scopedRoomNow(`chat:${room}`)
@@ -227,7 +324,7 @@ export function registerHuddle(
       if (!settings.enabled) return deny(r, 'off')
       if (!(await deps.canSeeRoom(user, r))) return deny(r, 'no-access')
       const tenant = scope.tenantNow()
-      const peers = await huddlePeers(deps.redis, tenant, r)
+      const peers = await peersOf(r)
       const already = peers.some((p) => p.socket === socket.id)
       if (!already && peers.length >= settings.max_participants) return deny(r, 'full')
       const prev = data()
@@ -244,7 +341,17 @@ export function registerHuddle(
       const name = await scope.scopedRoom(`huddle:${r}`)
       if (name) socket.join(name)
       const first = peers.length === 0
-      if (first) await deps.redis.set(k.start, String(since), 'EX', KEY_TTL_S)
+      if (first) {
+        // A fresh session: a new id (so a new LiveKit room), no leftover mode. Whatever the
+        // previous session's SFU room still holds is closed first.
+        const stale = await huddleSession(deps.redis, tenant, r)
+        if (stale && (await huddleMode(deps.redis, tenant, r)) === 'sfu') {
+          await evict(r, stale, null)
+        }
+        await deps.redis.del(k.mode)
+        await deps.redis.set(k.session, randomBytes(12).toString('base64url'), 'EX', KEY_TTL_S)
+        await deps.redis.set(k.start, String(since), 'EX', KEY_TTL_S)
+      }
       // #2859: one more person than the mesh comfortably carries → everyone moves to the SFU.
       const before = first ? 'mesh' : await huddleMode(deps.redis, tenant, r)
       const count = peers.length + (already ? 0 : 1)
@@ -275,18 +382,24 @@ export function registerHuddle(
     const tenant = scope.tenantNow()
     const k = keys(tenant, room)
     try {
+      // #2859: on the SFU, the server drops the connection too — a token outlives nothing.
+      const user = getUser()
+      if ((await huddleMode(deps.redis, tenant, room)) === 'sfu') {
+        const raw = await deps.redis.hget(k.meta, socket.id)
+        const owner = raw ? String((JSON.parse(raw) as { user?: unknown }).user ?? '') : ''
+        const id = owner || (user ? String(user.id) : '')
+        if (id) {
+          const session = await huddleSession(deps.redis, tenant, room)
+          await evict(room, session, sfuIdentity(id, socket.id))
+        }
+      }
       await deps.redis.zrem(k.set, socket.id)
       await deps.redis.hdel(k.meta, socket.id)
       if (data()?.room === room) setData(undefined)
       const name = scope.scopedRoomNow(`huddle:${room}`)
       if (name) socket.leave(name)
-      const left = await broadcast(room)
-      if (left.length === 0) {
-        const start = await deps.redis.get(k.start)
-        await deps.redis.del(k.start, k.meta, k.set, k.mode)
-        const ms = start ? Date.now() - Number(start) : 0
-        await deps.postLine(room, `Huddle ended after ${formatHuddleDuration(ms)}`)
-      }
+      // The broadcast's roster read ends the huddle when nobody is left.
+      await broadcast(room)
     } catch (err) {
       deps.warn({ err, room }, 'huddle:leave failed')
     }
@@ -327,7 +440,7 @@ export function registerHuddle(
           await leave(room)
           return
         }
-        const peers = await huddlePeers(deps.redis, scope.tenantNow(), room)
+        const peers = await peersOf(room)
         if (!peers.some((p) => p.socket === to)) return
         io.to(to).emit('huddle:signal', {
           room,

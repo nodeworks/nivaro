@@ -24,6 +24,7 @@ import {
   huddleMode,
   huddlePeers,
   huddleRoomKind,
+  huddleSession,
   registerHuddle,
   STALE_MS
 } from './huddle.js'
@@ -387,6 +388,89 @@ describe('large huddles (#2859): the mode switch', () => {
     await socks[0].fire('huddle:leave', { room: 'ch:ops' })
     expect(redis.store.has('nvr:huddle:-:ch:ops:mode')).toBe(false)
     expect(await huddleMode(redis, null, 'ch:ops')).toBe('mesh')
+  })
+
+  it('a session id names each huddle; evictions reach the SFU on leave, access loss, stale prune and end', async () => {
+    const redis = fakeRedis()
+    const io = fakeIo()
+    let allowed = true
+    const evicted: Array<{ session: string; identity: string | null }> = []
+    const { d } = deps(redis, {
+      settings: async () => ({ enabled: true, max_participants: 25, sfu: true, switch_at: 1 }),
+      canSeeRoom: async () => allowed,
+      sfuEvict: async ({ session, identity }) => {
+        evicted.push({ session, identity })
+      }
+    })
+    const a = fakeSocket('S1')
+    const b = fakeSocket('S2')
+    registerHuddle(io as never, a.socket as never, () => rob, scope, d)
+    registerHuddle(io as never, b.socket as never, () => amy, scope, d)
+
+    await a.fire('huddle:join', { room: 'ch:ops' })
+    const session1 = await huddleSession(redis, null, 'ch:ops')
+    expect(session1).toMatch(/^[A-Za-z0-9_-]{16}$/)
+    await b.fire('huddle:join', { room: 'ch:ops' })
+    expect(await huddleMode(redis, null, 'ch:ops')).toBe('sfu')
+    expect(await huddleSession(redis, null, 'ch:ops')).toBe(session1)
+
+    // A third browser whose heartbeat stopped: pruned from the roster AND dropped from LiveKit.
+    await redis.zadd('nvr:huddle:-:ch:ops', Date.now() - STALE_MS - 1, 'S3')
+    await redis.hset('nvr:huddle:-:ch:ops:m', 'S3', JSON.stringify({ user: 'U-GONE', name: 'x' }))
+    await b.fire('huddle:ping', { room: 'ch:ops' })
+    await b.fire('huddle:state', { room: 'ch:ops', muted: true })
+    await new Promise((r) => setImmediate(r))
+    expect(evicted).toContainEqual({ session: session1, identity: 'U-GONE#S3' })
+
+    // Membership revoked mid-call → the mesh denial AND the SFU eviction.
+    allowed = false
+    await b.fire('huddle:ping', { room: 'ch:ops' })
+    expect(b.emitted.at(-1)?.event).toBe('huddle:denied')
+    expect(evicted).toContainEqual({ session: session1, identity: 'U-AMY#S2' })
+    allowed = true
+
+    // The last leave closes the LiveKit room and forgets the session.
+    await a.fire('huddle:leave', { room: 'ch:ops' })
+    expect(evicted.at(-2)).toEqual({ session: session1, identity: 'U-ROB#S1' })
+    expect(evicted.at(-1)).toEqual({ session: session1, identity: null })
+    expect(await huddleSession(redis, null, 'ch:ops')).toBeNull()
+    expect(redis.store.has('nvr:huddle:-:ch:ops:mode')).toBe(false)
+
+    // The next huddle in the same room is a new session (a new LiveKit room).
+    await a.fire('huddle:join', { room: 'ch:ops' })
+    const session2 = await huddleSession(redis, null, 'ch:ops')
+    expect(session2).not.toBe(session1)
+    expect(await huddleMode(redis, null, 'ch:ops')).toBe('mesh')
+    // Leaving a mesh huddle talks to no SFU.
+    const before = evicted.length
+    await a.fire('huddle:leave', { room: 'ch:ops' })
+    expect(evicted.length).toBe(before)
+  })
+
+  it('an eviction that fails is logged, never thrown into the socket handler', async () => {
+    const redis = fakeRedis()
+    const io = fakeIo()
+    const warned: string[] = []
+    const { d, lines } = deps(redis, {
+      settings: async () => ({ enabled: true, max_participants: 25, sfu: true, switch_at: 1 }),
+      sfuEvict: async () => {
+        throw new Error('ECONNREFUSED')
+      },
+      warn: (_o, msg) => {
+        warned.push(msg)
+      }
+    })
+    const a = fakeSocket('S1')
+    const b = fakeSocket('S2')
+    registerHuddle(io as never, a.socket as never, () => rob, scope, d)
+    registerHuddle(io as never, b.socket as never, () => amy, scope, d)
+    await a.fire('huddle:join', { room: 'ch:ops' })
+    await b.fire('huddle:join', { room: 'ch:ops' })
+    await b.fire('huddle:leave', { room: 'ch:ops' })
+    await a.fire('huddle:leave', { room: 'ch:ops' })
+    expect(warned).toContain('huddle: SFU eviction failed')
+    expect(lines.at(-1)?.text).toMatch(/^Huddle ended/)
+    expect((await huddlePeers(redis, null, 'ch:ops')).length).toBe(0)
   })
 
   it('without an SFU the mesh carries on past switch_at', async () => {

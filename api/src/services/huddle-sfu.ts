@@ -16,7 +16,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 export type HuddleMode = 'mesh' | 'sfu'
 
 /** Lifetime of a minted token: long enough to connect, short enough to be useless later. */
-export const SFU_TOKEN_TTL_S = 600
+export const SFU_TOKEN_TTL_S = 300
 
 /**
  * Which way media travels once `count` people are in the huddle. A huddle that
@@ -34,13 +34,15 @@ export function decideHuddleMode(
 }
 
 /**
- * The room name LiveKit sees: a hash of tenant + room key, so the SFU (and
- * anyone reading its logs or API) never learns the raw key — which names a
- * channel or a record. Deterministic, so every browser lands in the same room.
+ * The room name LiveKit sees: a hash of tenant + room key + the huddle SESSION
+ * (a random id minted when the huddle starts, gone when it ends), so the SFU
+ * (and anyone reading its logs or API) never learns the raw key — which names
+ * a channel or a record — and a later huddle in the same room is a different
+ * LiveKit room: a token or connection from the last one opens nothing.
  */
-export function sfuRoomName(tenant: string | null, room: string): string {
+export function sfuRoomName(tenant: string | null, room: string, session: string): string {
   const digest = createHash('sha256')
-    .update(`${tenant || '-'}\u0000${room}`)
+    .update(`${tenant || '-'}\u0000${room}\u0000${session}`)
     .digest('hex')
   return `nvr-${digest.slice(0, 32)}`
 }
@@ -55,7 +57,11 @@ export interface LiveKitGrant {
   roomJoin: boolean
   canPublish: boolean
   canSubscribe: boolean
+  /** Data channel messages: never — chat stays in Nivaro where it is gated and logged. */
+  canPublishData?: boolean
   roomList?: boolean
+  /** Server-side only (evictions, room teardown); never in a browser's token. */
+  roomAdmin?: boolean
 }
 
 export interface LiveKitClaims {
@@ -126,28 +132,61 @@ export function verifyLiveKitToken(
   }
 }
 
-/** The token a person gets to join one huddle's LiveKit room: publish + subscribe, 10 minutes. */
+/** The token a person gets to join one huddle's LiveKit room: publish + subscribe, 5 minutes. */
 export function mintJoinToken(opts: {
   apiKey: string
   apiSecret: string
   tenant: string | null
   room: string
+  session: string
   userId: string
   socket: string
   name: string | null
   now?: number
 }): { token: string; room: string; identity: string; ttl_s: number } {
-  const room = sfuRoomName(opts.tenant, opts.room)
+  const room = sfuRoomName(opts.tenant, opts.room, opts.session)
   const identity = sfuIdentity(opts.userId, opts.socket)
   const token = mintLiveKitToken({
     apiKey: opts.apiKey,
     apiSecret: opts.apiSecret,
     identity,
     name: opts.name,
-    grant: { room, roomJoin: true, canPublish: true, canSubscribe: true },
+    grant: { room, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: false },
     now: opts.now
   })
   return { token, room, identity, ttl_s: SFU_TOKEN_TTL_S }
+}
+
+export interface SfuTokenInput {
+  enabled: boolean
+  sfu: boolean
+  mode: HuddleMode
+  session: string | null
+  peers: Array<{ socket: string; user: string; name: string | null }>
+  userId: string
+  socket: string
+}
+
+export type SfuTokenDecision =
+  | { ok: true; me: { socket: string; user: string; name: string | null }; session: string }
+  | { ok: false; status: 404 | 409; error: string }
+
+/**
+ * Whether a person may have a token right now (pure; the route adds canSeeRoom
+ * before it). Only a huddle that IS on the SFU hands out tokens — a mesh huddle
+ * has no LiveKit room, and minting ahead would let a token outlive the switch —
+ * and only to a socket the server lists in that huddle as this person.
+ */
+export function sfuTokenDecision(i: SfuTokenInput): SfuTokenDecision {
+  if (!i.enabled || !i.sfu) {
+    return { ok: false, status: 404, error: 'Large huddles are not configured on this instance' }
+  }
+  if (i.mode !== 'sfu' || !i.session) {
+    return { ok: false, status: 409, error: 'This huddle is not on the media server' }
+  }
+  const me = i.peers.find((p) => p.socket === i.socket && p.user === i.userId)
+  if (!me) return { ok: false, status: 409, error: 'Join the huddle first' }
+  return { ok: true, me, session: i.session }
 }
 
 /** `wss://host[:port]` → `https://host[:port]` for LiveKit's HTTP (twirp) API. */
@@ -165,6 +204,75 @@ export function livekitHttpBase(url: string): string | null {
   }
 }
 
+export interface SfuServer {
+  livekit_url: string
+  livekit_api_key: string
+  livekit_api_secret: string
+}
+
+/** One RoomService call with a server-side (roomAdmin) token; resolves to the HTTP status. */
+async function twirp(
+  s: SfuServer,
+  method: string,
+  body: Record<string, unknown>,
+  grant: LiveKitGrant,
+  fetchImpl: typeof fetch,
+  timeoutMs: number
+): Promise<Response> {
+  const base = livekitHttpBase(s.livekit_url)
+  if (!base) throw new Error('bad livekit url')
+  const token = mintLiveKitToken({
+    apiKey: s.livekit_api_key,
+    apiSecret: s.livekit_api_secret,
+    identity: 'nivaro-api',
+    grant,
+    ttlS: 60
+  })
+  return fetchImpl(`${base}/twirp/livekit.RoomService/${method}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs)
+  })
+}
+
+const ADMIN = { roomJoin: false, canPublish: false, canSubscribe: false, roomAdmin: true }
+
+/**
+ * Drop one participant from a LiveKit room — the server-side half of every gate
+ * the mesh already has: a leave, a stale presence, a membership revoked. A
+ * LiveKit connection outlives its token, so the SFU must be told. Throws on a
+ * failure (the caller logs; a participant LiveKit no longer knows is a success).
+ */
+export async function sfuRemoveParticipant(
+  s: SfuServer,
+  room: string,
+  identity: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 5000
+): Promise<void> {
+  const res = await twirp(
+    s,
+    'RemoveParticipant',
+    { room, identity },
+    { ...ADMIN, room },
+    fetchImpl,
+    timeoutMs
+  )
+  if (!res.ok && res.status !== 404) throw new Error(`RemoveParticipant: HTTP ${res.status}`)
+}
+
+/** Close a huddle's LiveKit room (everyone still connected is disconnected). */
+export async function sfuDeleteRoom(
+  s: SfuServer,
+  room: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 5000
+): Promise<void> {
+  const res = await twirp(s, 'DeleteRoom', { room }, { ...ADMIN, room }, fetchImpl, timeoutMs)
+  if (!res.ok && res.status !== 404) throw new Error(`DeleteRoom: HTTP ${res.status}`)
+}
+
 export type SfuProbe =
   | { ok: true; ms: number; rooms: number }
   | { ok: false; reason: 'bad-url' | 'unreachable' | 'unauthorized' | 'error'; detail?: string }
@@ -176,7 +284,7 @@ export type SfuProbe =
  * is created and nobody is called.
  */
 export async function probeLiveKit(
-  s: { livekit_url: string; livekit_api_key: string; livekit_api_secret: string },
+  s: SfuServer,
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 5000
 ): Promise<SfuProbe> {

@@ -375,7 +375,7 @@ export function HuddleSettingsSection() {
                 </Field>
                 <Field
                   label='API secret'
-                  hint='Signs each person’s ten-minute join token here. It never reaches a browser.'
+                  hint='Signs each person’s five-minute join token here, and the server-side calls that drop someone who left. It never reaches a browser.'
                 >
                   {(id) => (
                     <Input
