@@ -202,6 +202,7 @@ export function describeReason(
     case 'fallback':
       return [{ text: 'anything else', strong: true }]
     case 'type_use':
+    case 'ab':
       return reason.type_use ? [{ text: reason.type_use }] : []
     default:
       return []

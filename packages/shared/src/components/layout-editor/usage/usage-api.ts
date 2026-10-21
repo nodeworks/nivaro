@@ -92,6 +92,8 @@ export interface LayoutFriction {
   saves: number
   abandons: number
   steps: FrictionStep[]
+  /** Sessions each section was shown in and opened in (#2730); absent on older APIs. */
+  sections?: Array<{ key: string; shown: number; opened: number }>
   changed_after_save: {
     scope: 'layout' | 'collection'
     revisions: number

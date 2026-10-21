@@ -11,6 +11,7 @@ import type { DescribeField } from '../overview/describe-conditions'
 import { apiFailure } from '../overview/overview-api'
 import { ToolButton } from '../toolbar-kit'
 import {
+  type LayoutReview,
   type PersonRef,
   type PreviewCommentRow,
   previewUrl,
@@ -158,6 +159,72 @@ function OwnerPicker({ layoutId, owner }: { layoutId: number; owner: PersonRef |
       <button type='button' className={cn(smallBtn, 'mt-1')} onClick={() => setPicking(false)}>
         Cancel
       </button>
+    </div>
+  )
+}
+
+const DEFAULT_REVIEW = 'default'
+
+/** #2718: how long the form may stay unchanged before its owner is asked to review it. */
+function ReviewReminder({
+  layoutId,
+  review,
+  hasOwner
+}: {
+  layoutId: number
+  review: LayoutReview
+  hasOwner: boolean
+}) {
+  const actions = useCollabActions(layoutId)
+  const [busy, setBusy] = useState(false)
+  const months = (n: number) => (n === 1 ? '1 month' : `${n} months`)
+  const value = review.months == null ? DEFAULT_REVIEW : String(review.months)
+  const options = [
+    {
+      value: DEFAULT_REVIEW,
+      label:
+        review.default_months > 0
+          ? `After ${months(review.default_months)} (default)`
+          : 'Never (default)'
+    },
+    ...[3, 6, 12]
+      .filter((n) => n !== review.default_months)
+      .map((n) => ({ value: String(n), label: `After ${months(n)}` })),
+    ...(review.default_months > 0 ? [{ value: '0', label: 'Never' }] : [])
+  ]
+  const next = review.next_at ? new Date(review.next_at) : null
+  const fmt = (d: Date) =>
+    d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  return (
+    <div className='space-y-1.5'>
+      <SimpleSelect
+        value={value}
+        disabled={busy}
+        onChange={async (v) => {
+          setBusy(true)
+          try {
+            await actions.setReviewMonths(v === DEFAULT_REVIEW ? null : Number(v))
+          } catch (err) {
+            fail(err, 'Could not change the reminder')
+          } finally {
+            setBusy(false)
+          }
+        }}
+        ariaLabel='Remind the owner to review this form'
+        className='h-8 w-full text-[12.5px]'
+        triggerProps={{ 'data-form-review': '' }}
+        options={options}
+      />
+      <p className={hint}>
+        {!hasOwner
+          ? 'Name an owner first: the reminder goes to them, with the form’s health score and how much it was used.'
+          : review.effective_months === 0
+            ? 'The owner is never reminded.'
+            : next && next > new Date()
+              ? `If it stays unchanged, the owner is reminded on ${fmt(next)} with its health score and how much it was used.`
+              : `It has been unchanged that long: the owner is reminded on a weekday morning, then every ${months(review.effective_months)} while it stays unchanged.`}
+        {review.last_changed_at ? ` Last changed ${fmt(new Date(review.last_changed_at))}.` : ''}
+      </p>
     </div>
   )
 }
@@ -379,6 +446,12 @@ export function ShareButton({
             The business owner hears first about change requests and every saved change.
           </p>
         </section>
+        {collab?.review && (
+          <section className='space-y-1.5' data-form-review-section=''>
+            <h3 className={heading}>Review reminder</h3>
+            <ReviewReminder layoutId={layoutId} review={collab.review} hasOwner={!!collab.owner} />
+          </section>
+        )}
         <section className='space-y-1'>
           <h3 className={heading}>Watching</h3>
           <p className={hint}>

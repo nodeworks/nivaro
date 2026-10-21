@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { StepClock, sessionEvent } from './form-usage-beacon'
+import {
+  onSectionUse,
+  reportSectionUse,
+  SectionTally,
+  StepClock,
+  sessionEvent
+} from './form-usage-beacon'
 
 const base = {
   layoutId: 3,
@@ -58,5 +64,60 @@ describe('sessionEvent', () => {
   it('a later chunk does not count the open again, and an empty one is not sent', () => {
     expect(sessionEvent({ ...base, openSent: true, total: 2000, elapsed: 9000 })?.open).toBe(false)
     expect(sessionEvent({ ...base, openSent: true, total: 0, elapsed: 9000 })).toBeNull()
+  })
+})
+
+describe('section use and time to save (#2730 #2614)', () => {
+  it('peeks at the running time without starting afresh', () => {
+    const c = new StepClock('a', 0)
+    c.step('b', 1000)
+    expect(c.peek(1500)).toBe(1500)
+    expect(c.take(2000).total).toBe(2000)
+  })
+
+  it('sends each section once per session, shown before opened', () => {
+    const t = new SectionTally()
+    t.note('shown', 'a')
+    t.note('opened', 'b')
+    const p1 = t.pending()
+    expect(p1).toEqual({ shown: ['a', 'b'], opened: ['b'] })
+    t.markSent(p1)
+    t.note('shown', 'a')
+    t.note('opened', 'a')
+    expect(t.pending()).toEqual({ shown: [], opened: ['a'] })
+  })
+
+  it('carries sections and the save time on the event', () => {
+    const ev = sessionEvent({
+      ...base,
+      saved: true,
+      elapsed: 5000,
+      total: 5000,
+      sections: { shown: ['a'], opened: [] },
+      saveMs: 4200.4
+    })
+    expect(ev?.sections).toEqual({ shown: ['a'], opened: [] })
+    expect(ev?.save_ms).toBe(4200)
+    const quiet = sessionEvent({
+      ...base,
+      elapsed: 5000,
+      total: 5000,
+      sections: { shown: [], opened: [] }
+    })
+    expect(quiet && 'sections' in quiet).toBe(false)
+    expect(quiet?.save_ms).toBeUndefined()
+  })
+
+  it('replays recent shown sections to a form that subscribes after they mounted', () => {
+    reportSectionUse({ layoutId: 99, collection: 'c', kind: 'shown', key: 'early' })
+    reportSectionUse({ layoutId: 99, collection: 'c', kind: 'opened', key: 'early' })
+    const seen: string[] = []
+    const off = onSectionUse((u) => {
+      if (u.layoutId === 99) seen.push(`${u.kind}:${u.key}`)
+    })
+    reportSectionUse({ layoutId: 99, collection: 'c', kind: 'opened', key: 'late' })
+    off()
+    reportSectionUse({ layoutId: 99, collection: 'c', kind: 'opened', key: 'gone' })
+    expect(seen).toEqual(['shown:early', 'opened:late'])
   })
 })

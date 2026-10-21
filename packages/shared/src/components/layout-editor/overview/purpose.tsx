@@ -76,6 +76,7 @@ export function rowPill(row: OverviewRow): { tone: PillTone; text: string } | nu
     if (row.is_default) return { tone: 'default', text: 'default' }
     if (row.reason.kind === 'record_rule') return { tone: 'rule', text: 'rule' }
     if (row.reason.kind === 'role') return { tone: 'role', text: 'role' }
+    if (row.reason.kind === 'ab') return { tone: 'role', text: 'A/B' }
     return null
   }
   if (row.section === 'link_only') return { tone: 'link', text: 'link only' }

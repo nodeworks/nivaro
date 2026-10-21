@@ -1,10 +1,12 @@
-import { Rows3 } from 'lucide-react'
+import { ChevronsDownUp, Rows3 } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { type LayoutBundle, type LayoutOp, UNGROUPED_KEY } from '../../../lib/layout-ops'
 import { titleCase } from '../../../lib/utils'
 import { Skeleton } from '../../ui/skeleton'
 import type { DescribeField } from '../overview/describe-conditions'
 import { Toggle } from '../settings/controls'
+import { AbTestSection } from './AbTestSection'
+import { rateText, suggestCollapse } from './suggest-collapse'
 import { suggestSections } from './suggest-sections'
 import { formatDuration, useCoChanges, useLayoutFriction, useLayoutUsageToday } from './usage-api'
 
@@ -44,7 +46,8 @@ export function UsagePanel({
   fields,
   apply,
   showFill,
-  onShowFill
+  onShowFill,
+  onOpenLayout
 }: {
   bundle: LayoutBundle
   collection: string
@@ -52,12 +55,15 @@ export function UsagePanel({
   apply(ops: LayoutOp[], opts?: { label: string }): void
   showFill: boolean
   onShowFill(on: boolean): void
+  /** Open another layout in the editor (the A/B test's other version). */
+  onOpenLayout?: (id: number) => void
 }) {
   const layoutId = Number(bundle.layout.id)
   const { data: today, isLoading: todayLoading } = useLayoutUsageToday(layoutId)
   const { data: friction, isLoading: frictionLoading } = useLayoutFriction(layoutId)
   const { data: co, isLoading: coLoading } = useCoChanges(collection)
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set())
+  const [collapseDismissed, setCollapseDismissed] = useState(false)
 
   const fieldLabel = useMemo(() => {
     const m = new Map(fields.map((f) => [f.field, f.label || titleCase(f.field)]))
@@ -74,6 +80,12 @@ export function UsagePanel({
   const suggestions = useMemo(
     () => suggestSections(bundle, co?.pairs ?? []).filter((s) => !dismissed.has(s.id)),
     [bundle, co, dismissed]
+  )
+
+  // #2730: sections people rarely open, to start collapsed.
+  const collapse = useMemo(
+    () => suggestCollapse(bundle, friction?.sections ?? []),
+    [bundle, friction?.sections]
   )
 
   const steps = friction?.steps ?? []
@@ -192,6 +204,72 @@ export function UsagePanel({
         </>
       )}
 
+      <p className={head}>Rarely opened sections</p>
+      {frictionLoading ? (
+        <p className={quiet}>Loading…</p>
+      ) : collapse.candidates.length === 0 || collapseDismissed ? (
+        <p className={quiet}>
+          {friction?.sections?.length
+            ? 'No suggestion. People open every section that starts open often enough.'
+            : 'No section visits recorded yet.'}
+        </p>
+      ) : (
+        <div
+          data-usage-collapse=''
+          className='mx-3 flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-2.5 dark:border-border dark:bg-card'
+        >
+          <p className='m-0 text-[12px] leading-snug text-slate-700 dark:text-foreground'>
+            <ChevronsDownUp className='mr-1 inline h-3.5 w-3.5 align-[-2px] text-slate-400' />
+            People rarely open{' '}
+            {collapse.candidates.length === 1 ? 'this section' : 'these sections'}. Starting{' '}
+            {collapse.candidates.length === 1 ? 'it' : 'them'} collapsed keeps the form shorter.
+          </p>
+          <ul className='m-0 flex list-none flex-col p-0'>
+            {collapse.candidates.map((c) => (
+              <li
+                key={c.key}
+                data-usage-collapse-section={c.key}
+                className='flex flex-col border-b border-slate-100 py-1 text-[12px] last:border-0 dark:border-border'
+              >
+                <span className='truncate text-slate-800 dark:text-foreground'>{c.label}</span>
+                <span className='tabular-nums text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                  opened in {rateText(c.rate)} of {c.shown.toLocaleString()} visits
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className='flex items-center gap-1.5'>
+            <button
+              type='button'
+              onClick={() =>
+                apply(collapse.ops, {
+                  label:
+                    collapse.candidates.length === 1
+                      ? `Collapse ${collapse.candidates[0].label}`
+                      : `Collapse ${collapse.candidates.length} rarely opened sections`
+                })
+              }
+              className='inline-flex h-7 items-center rounded-md bg-nvr-cyan px-2.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90'
+            >
+              {collapse.candidates.length === 1
+                ? 'Start it collapsed'
+                : `Start all ${collapse.candidates.length} collapsed`}
+            </button>
+            <button
+              type='button'
+              onClick={() => setCollapseDismissed(true)}
+              className='inline-flex h-7 items-center rounded-md px-2 text-[12px] text-slate-500 transition-colors hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
+      <p className={`${quiet} pt-1`}>
+        A section counts as opened when someone expands it, clicks in it or types in it. Last{' '}
+        {friction?.days ?? 30} days.
+      </p>
+
       <p className={head}>Suggested sections</p>
       {coLoading ? (
         <p className={quiet}>Loading…</p>
@@ -242,6 +320,8 @@ export function UsagePanel({
           })}
         </ul>
       )}
+
+      <AbTestSection bundle={bundle} collection={collection} onOpenLayout={onOpenLayout} />
     </div>
   )
 }

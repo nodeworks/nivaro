@@ -16,6 +16,8 @@ export type OverviewReasonKind =
   | 'fallback'
   | 'slug'
   | 'type_use'
+  /** #2614: an A/B test version, standing in for its original for half of one role. */
+  | 'ab'
 
 export interface OverviewReason {
   kind: OverviewReasonKind

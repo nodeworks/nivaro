@@ -10,10 +10,22 @@ export interface PersonRef {
   name: string
 }
 
+/** Review reminder (#2718): months unchanged before the owner is reminded. */
+export interface LayoutReview {
+  /** This form's own months; null = the default applies (0 = never). */
+  months: number | null
+  default_months: number
+  effective_months: number
+  last_changed_at: string | null
+  next_at: string | null
+}
+
 export interface LayoutCollab {
   owner: PersonRef | null
   watching: boolean
   watchers: PersonRef[]
+  /** Absent on older APIs. */
+  review?: LayoutReview
 }
 
 export interface PreviewLinkRow {
@@ -104,6 +116,10 @@ export function useCollabActions(layoutId: number) {
     },
     setOwner: async (userId: string | null) => {
       await client.request(put(`/layout-collab/${layoutId}/owner`, { user_id: userId }))
+      await refresh()
+    },
+    setReviewMonths: async (months: number | null) => {
+      await client.request(put(`/layout-collab/${layoutId}/review`, { months }))
       await refresh()
     },
     createLink: async (days: number): Promise<PreviewLinkRow> => {
