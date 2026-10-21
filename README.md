@@ -162,6 +162,9 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Import Templates** — file-to-form import with declarative mapping
 - **Full SDK Coverage** — ~175 typed SDK commands spanning every feature area, explorable in the in-browser SDK playground
 - **Team Chat: huddles & clips** — start a huddle from any room, record screen clips to share in a thread, custom emoji, drafts that follow you across devices, an outbox that retries unsent messages, and long rooms that load by window
+- **Huddles: calls, scheduling and large huddles** — ring people from a direct message, schedule a huddle with reminders and a calendar file, hold notifications while you talk, and move big huddles onto a self-hosted media server
+- **Infrastructure insight** — an admin page over your Docker hosts: stacks and rolling updates, health flaps, swarm, secrets, volumes, images, proxy routes, resources, GitLab, host patches, reboot survivability and log growth, read-only, plus Ask AI and MCP tools
+- **Let AI do it** — on a task or support ticket, AI proposes the work as a plan you approve before anything changes
 - **MCP live & console** — assistants subscribe to live record updates, call this instance's own named tools, and an MCP console shows connections and agent activity
 - **Ask AI research & drafts** — long questions run in the background and notify when ready, sessions can be shared, answers can start a dashboard draft, and cheaper models handle routine questions (cost routing)
 - **AI spend & model watch** — spend, forecast and the bill by feature, prompt cost per question, tool reliability, and a model catalogue that flags retired or changed models
