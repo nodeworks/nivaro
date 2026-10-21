@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   cloneElement,
   isValidElement,
+  type KeyboardEvent,
   type MouseEvent,
   type ReactElement,
   type ReactNode,
@@ -136,18 +137,41 @@ export function DesignNode({
     e.preventDefault()
     e.stopPropagation()
   }
+  // Enter selects from the keyboard too (Space is dnd-kit's pick-up key);
+  // only on the node itself, never on a control inside it.
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    if (e.key !== 'Enter' || e.target !== e.currentTarget) return
+    e.preventDefault()
+    design.onSelect(target)
+  }
+  // A step or tab button: a chip above it would sit on the step labels.
+  const tabLike =
+    rest['data-design-tab'] !== undefined ||
+    (child?.props as Props | undefined)?.['data-design-tab'] !== undefined
   const own: Props = {
     'data-design-target': key,
     'data-selected': selected ? 'true' : undefined,
     'data-design-pass': pass ? '' : undefined,
     'data-drop-slot': slot ?? undefined,
     'data-role-mark': mark?.kind,
+    // Locked nodes get no dnd attributes; they still take focus to be selected.
+    ...(locked ? { role: 'button', tabIndex: 0 } : {}),
+    ...(tabLike && parent ? { 'data-tip': `From ${parent}` } : {}),
     className: cls,
-    onClickCapture
+    onClickCapture,
+    onKeyDown
   }
   const MarkIcon = mark?.kind === 'hidden' ? EyeOff : Lock
   const badge =
-    parent || mark ? (
+    tabLike && parent && !mark ? (
+      // Steps and tabs: a dot above the label, the parent's name in the tip.
+      <span
+        data-design-badges=''
+        className='pointer-events-none absolute left-1/2 top-1 z-10 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-slate-500 dark:bg-slate-400'
+      >
+        <span className='sr-only'>from {parent}</span>
+      </span>
+    ) : parent || mark ? (
       <span
         data-design-badges=''
         className='pointer-events-none absolute -top-2 right-1 z-10 flex items-center gap-1'
