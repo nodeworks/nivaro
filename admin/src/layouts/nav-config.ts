@@ -639,6 +639,13 @@ export const navCategories: NavCategory[] = [
         section: 'APIs',
         keywords: 'sdk repl'
       },
+      {
+        icon: Plug,
+        label: 'MCP Console',
+        to: '/mcp-console',
+        section: 'APIs',
+        keywords: 'mcp tools ai assistant agent connector'
+      },
       { icon: Code2, label: 'Custom Queries', to: '/custom-queries', section: 'Queries' },
       { icon: BookOpen, label: 'Query Catalog', to: '/query-catalog', section: 'Queries' },
       {

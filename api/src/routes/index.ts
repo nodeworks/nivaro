@@ -148,6 +148,7 @@ import { mailSuppressionRoutes } from './mail-suppressions.js'
 import { mailTemplateRoutes } from './mail-templates.js'
 import { mailTypeRoutes } from './mail-types.js'
 import { mcpRoutes } from './mcp.js'
+import { mcpConsoleRoutes } from './mcp-console.js'
 import { meNotificationRoutes } from './me-notifications.js'
 import { mergeRoutes } from './merge.js'
 import { messageActionsRoutes } from './message-actions.js'
@@ -684,6 +685,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(zapierRoutes, { prefix: '/zapier' })
   // Hosted MCP server (Streamable HTTP) + the person's connected AI apps (OAuth grants).
   await app.register(mcpRoutes)
+  await app.register(mcpConsoleRoutes, { prefix: '/mcp-console' })
   await app.register(oauthConnectionRoutes)
   await app.register(widgetRoutes, { prefix: '/widget' })
   await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })

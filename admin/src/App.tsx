@@ -292,6 +292,9 @@ const SyncJobsPage = lazy(() =>
 const PdfTemplatesPage = lazy(() =>
   import('@/pages/PdfTemplates').then((m) => ({ default: m.PdfTemplatesPage }))
 )
+const McpConsolePage = lazy(() =>
+  import('@/pages/McpConsole').then((m) => ({ default: m.McpConsolePage }))
+)
 const PlaygroundPage = lazy(() =>
   import('@/pages/Playground').then((m) => ({ default: m.PlaygroundPage }))
 )
@@ -674,6 +677,7 @@ export default function App() {
                   <Route path='sync-jobs' element={<SyncJobsPage />} />
                   <Route path='pdf-templates' element={<PdfTemplatesPage />} />
                   <Route path='playground' element={<PlaygroundPage />} />
+                  <Route path='mcp-console' element={<McpConsolePage />} />
                   <Route path='dead-letters' element={<DeadLetterQueuePage />} />
                   <Route path='pages-admin' element={<PagesAdminPage />} />
                   <Route path='pages-admin/:id/edit' element={<PageEditPage />} />

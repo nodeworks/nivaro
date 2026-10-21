@@ -15,6 +15,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createNivaro, type NivaroClient, readMe } from '@nivaro/sdk'
 import { identifyingFetch, tagToolCalls } from './identify.js'
+import { registerRecordResource, type SubscriptionHost } from './record-resource.js'
 import { registerResources } from './resources.js'
 import { registerAccessTools } from './tools/access.js'
 import { registerAccountTools } from './tools/account.js'
@@ -48,6 +49,11 @@ export interface NivaroMcpOptions {
    * true only for an administrator's key — the API refuses them to anyone else anyway.
    */
   adminTools?: boolean
+  /**
+   * Make record resources subscribable (#2467). Only a host that can deliver
+   * notifications/resources/updated later passes one (the hosted endpoint's live mode).
+   */
+  subscriptions?: SubscriptionHost
 }
 
 export interface NivaroMcp {
@@ -185,6 +191,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
     registerLayoutTools(server, client)
   }
   registerResources(server, client)
+  registerRecordResource(server, client, options.subscriptions)
 
   return { server, client }
 }
@@ -197,6 +204,8 @@ export async function serveStdio(options: NivaroMcpOptions): Promise<NivaroMcp> 
 }
 
 export { DESTRUCTIVE, READ, WRITE, WRITE_IDEMPOTENT } from './annotations.js'
+export type { SubscriptionHost, SubscriptionRefusal } from './record-resource.js'
+export { parseRecordUri, RECORD_URI_TEMPLATE, recordUri } from './record-resource.js'
 export { describeFailure, maskToken } from './result.js'
 export { registerAdminTools, summarizeTraffic } from './tools/admin.js'
 export type { CollectionSchema, CollectionSummary, FieldSummary } from './tools/collections.js'
