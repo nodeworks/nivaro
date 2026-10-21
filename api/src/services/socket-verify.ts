@@ -11,7 +11,7 @@
  */
 import type { Socket } from 'socket.io'
 import type { User } from '../types.js'
-import { acceptAck, forgetAckSocket } from './realtime-delivery-slo.js'
+import { acceptAck } from './realtime-delivery-slo.js'
 import { sampleLeakAudit } from './realtime-leak-audit.js'
 import type { SocketAccessHooks } from './socket-access.js'
 import { ensureChaosListener, noteChaosInbound, wrapChaosWrite } from './socket-chaos.js'
@@ -38,8 +38,10 @@ export function attachSocketVerification(
     if (typeof packet?.[0] === 'string') noteChaosInbound(socket, packet[0], userId())
     next()
   })
+  // #2477 — only a signed-in socket's ack counts (realtime-delivery-slo.ts checks the rest).
   socket.on('rt:ack', (payload: unknown) => {
-    acceptAck(socket.id, payload, deps.rtt())
+    const u = userId()
+    if (u) void acceptAck(u, payload, deps.rtt()).catch(() => {})
   })
   let replayRooms = 0
   socket.on(
@@ -59,7 +61,6 @@ export function attachSocketVerification(
       socket.join(replay.mirrorRoom(String(payload.run), room))
     })
   )
-  socket.once('disconnect', () => forgetAckSocket(socket.id))
 
   const chaosWrite = wrapChaosWrite(socket, write, userId)
   const audited = inSocketTenant(socket, async (fn: () => Promise<void>) => fn())

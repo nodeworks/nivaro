@@ -24,7 +24,7 @@
 import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { getApp } from './io-holder.js'
-import { ackEvery, ackSampled } from './realtime-ack-sample.js'
+import { ackEvery, ackSampled, ackStampKey } from './realtime-ack-sample.js'
 import { percentileFromHistogram } from './slo.js'
 
 export type DeliverySource = 'probe' | 'client'
@@ -105,6 +105,8 @@ export async function noteDeliverySample(
   ms: number | null,
   opts: { node?: string; at?: number; redis?: Redis | null } = {}
 ): Promise<void> {
+  // Cloud: one process serves many tenants and these histograms are not kept per tenant.
+  if (process.env.CLOUD_META_DB_URL) return
   const redis = redisOf(opts.redis)
   if (!redis) return
   if (ms != null && (!Number.isFinite(ms) || ms < 0 || ms > MAX_DELAY_MS)) return
@@ -127,32 +129,75 @@ export async function noteDeliverySample(
 
 // ─── Acknowledgements ──────────────────────────────────────────────────────────
 
-const lastAckAt = new Map<string, number>()
-/** One acknowledgement per socket per this many ms (a client cannot flood the histograms). */
-const ACK_MIN_GAP_MS = 5000
+/**
+ * Acks are telemetry a client sends, so nothing in one is taken on trust: only a signed-in
+ * socket's ack counts, each person has a small token bucket (2, refilled one per 10 s — a
+ * client cannot flood the histograms however many tabs or sockets it opens), and the `st` it
+ * echoes must equal the stamp the server kept for that sequence (ackStampKey, written by the
+ * journal when it stamped the event). A forged or replayed-late ack is dropped.
+ */
+const ACK_BUCKET = 2
+const ACK_REFILL_MS = 10_000
+const ACK_BUCKETS_MAX = 5000
+const buckets = new Map<string, { tokens: number; at: number }>()
 
-/** The `rt:ack` handler body for one socket. Returns the delay it recorded (or null). */
-export function acceptAck(
-  socketId: string,
+/** Take one token from a person's bucket (pure-ish: the map is the only state). */
+export function takeAckToken(userId: string, now: number = Date.now()): boolean {
+  const b = buckets.get(userId) ?? { tokens: ACK_BUCKET, at: now }
+  const tokens = Math.min(ACK_BUCKET, b.tokens + (now - b.at) / ACK_REFILL_MS)
+  // Re-insert so the map's order is least-recently-used first.
+  buckets.delete(userId)
+  if (tokens < 1) {
+    buckets.set(userId, { tokens, at: now })
+    return false
+  }
+  buckets.set(userId, { tokens: tokens - 1, at: now })
+  // Bounded: drop the least recently used people, never everyone at once.
+  while (buckets.size > ACK_BUCKETS_MAX) {
+    const oldest = buckets.keys().next().value
+    if (oldest === undefined) break
+    buckets.delete(oldest)
+  }
+  return true
+}
+
+async function storedStamp(seq: number): Promise<number | null> {
+  const redis = redisOf()
+  if (!redis) return null
+  try {
+    const v = await redis.get(ackStampKey(seq))
+    return v == null ? null : Number(v)
+  } catch {
+    return null
+  }
+}
+
+/** The `rt:ack` handler body. Resolves the delay it recorded, or null when the ack was dropped. */
+export async function acceptAck(
+  userId: string | null,
   payload: unknown,
   rttMs: number | null,
-  now: number = Date.now()
-): number | null {
-  if (ackEvery() === 0) return null
+  opts: { now?: number; lookupStamp?: (seq: number) => Promise<number | null> } = {}
+): Promise<number | null> {
+  if (!userId || ackEvery() === 0) return null
   const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>
-  if (!ackSampled(Number(p.seq))) return null
-  const last = lastAckAt.get(socketId) ?? 0
-  if (now - last < ACK_MIN_GAP_MS) return null
-  const ms = ackDelayMs({ st: p.st, rx: p.rx, ackAt: now, rttMs })
+  const seq = Number(p.seq)
+  if (!Number.isSafeInteger(seq) || !ackSampled(seq)) return null
+  const st = Number(p.st)
+  if (!Number.isFinite(st)) return null
+  const now = opts.now ?? Date.now()
+  if (!takeAckToken(userId, now)) return null
+  const kept = await (opts.lookupStamp ?? storedStamp)(seq)
+  if (kept == null || kept !== st) return null
+  const ms = ackDelayMs({ st, rx: p.rx, ackAt: now, rttMs })
   if (ms == null) return null
-  lastAckAt.set(socketId, now)
-  if (lastAckAt.size > 20_000) lastAckAt.clear()
-  void noteDeliverySample('client', ms, { at: now })
+  await noteDeliverySample('client', ms, { at: now })
   return ms
 }
 
-export function forgetAckSocket(socketId: string): void {
-  lastAckAt.delete(socketId)
+/** Tests only. */
+export function _resetAckBucketsForTests(): void {
+  buckets.clear()
 }
 
 // ─── Report ────────────────────────────────────────────────────────────────────
@@ -245,6 +290,7 @@ export async function computeDeliverySlo(
   targets: DeliveryTargets,
   opts: { redis?: Redis | null; now?: number } = {}
 ): Promise<DeliverySlo | null> {
+  if (process.env.CLOUD_META_DB_URL) return null
   const redis = redisOf(opts.redis)
   if (!redis) return null
   const now = opts.now ?? Date.now()

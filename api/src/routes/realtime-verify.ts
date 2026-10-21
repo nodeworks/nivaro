@@ -106,7 +106,14 @@ export async function realtimeVerifyRoutes(app: FastifyInstance): Promise<void> 
   })
 
   // ── #2760 leak auditor ─────────────────────────────────────────────────────
-  app.get('/leak-audit', async () => {
+  // Findings and the timed switch are instance-wide, so the auditor never runs in cloud mode.
+  const leakRefused = (reply: FastifyReply) =>
+    process.env.CLOUD_META_DB_URL
+      ? reply.code(403).send({ error: 'The leak audit never runs in cloud mode' })
+      : null
+  app.get('/leak-audit', async (_req, reply) => {
+    const refused = leakRefused(reply)
+    if (refused) return refused
     const { envAuditRate, leakAuditStats, recentLeakFindings } = await import(
       '../services/realtime-leak-audit.js'
     )
@@ -140,6 +147,8 @@ export async function realtimeVerifyRoutes(app: FastifyInstance): Promise<void> 
   })
 
   app.post<{ Body: { rate?: number; minutes?: number } }>('/leak-audit', async (req, reply) => {
+    const refused = leakRefused(reply)
+    if (refused) return refused
     const rate = Number(req.body?.rate)
     const minutes = Number(req.body?.minutes ?? 60)
     if (!Number.isFinite(rate) || rate < 0 || rate > 1)

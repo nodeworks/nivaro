@@ -123,7 +123,8 @@ export function shouldDeliver(d: DecodedStreamEntry, node: string = NODE): boole
  */
 export async function publishToStream(
   entry: JournalEntry,
-  opts: { self?: boolean } = {}
+  /** `at`: the write time to record (a sampled event's `_st`, #2477); default now. */
+  opts: { self?: boolean; at?: number } = {}
 ): Promise<boolean> {
   if (!streamActive() || !pub) return false
   try {

@@ -15,3 +15,11 @@ export function ackEvery(env: NodeJS.ProcessEnv = process.env): number {
 export function ackSampled(seq: number | null | undefined, every: number = ackEvery()): boolean {
   return every > 0 && typeof seq === 'number' && seq > 0 && seq % every === 0
 }
+
+/** Seconds the server keeps the `_st` it stamped on a sampled event (acks after that are ignored). */
+export const ACK_STAMP_TTL_S = 300
+
+/** Redis key holding the `_st` stamped on sampled event `seq` — an ack must echo it exactly. */
+export function ackStampKey(seq: number): string {
+  return `nvr:rt:ack:st:${seq}`
+}

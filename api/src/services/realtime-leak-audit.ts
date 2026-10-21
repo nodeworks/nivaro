@@ -54,6 +54,8 @@ const COLLECTION_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 
 /** The sampling share from env (pure). */
 export function envAuditRate(env: NodeJS.ProcessEnv = process.env): number {
+  // Never in cloud mode: findings and the timed-audit switch are not kept per tenant.
+  if (env.CLOUD_META_DB_URL) return 0
   const n = Number(env.REALTIME_LEAK_AUDIT_RATE)
   return Number.isFinite(n) && n > 0 ? Math.min(1, n) : 0
 }
@@ -184,6 +186,7 @@ function redis(): Redis | null {
 
 /** The share of packets sampled right now: a timed audit wins over the env default. */
 export function currentAuditRate(now = Date.now()): number {
+  if (process.env.CLOUD_META_DB_URL) return 0
   if (now - stateReadAt > 30_000) {
     stateReadAt = now
     const r = redis()

@@ -129,5 +129,7 @@ describe('realtime leak auditor (#2760)', () => {
     expect(envAuditRate({ REALTIME_LEAK_AUDIT_RATE: '0.05' })).toBe(0.05)
     expect(envAuditRate({ REALTIME_LEAK_AUDIT_RATE: '7' })).toBe(1)
     expect(envAuditRate({ REALTIME_LEAK_AUDIT_RATE: 'abc' })).toBe(0)
+    // Never in cloud mode (findings are not kept per tenant).
+    expect(envAuditRate({ REALTIME_LEAK_AUDIT_RATE: '0.5', CLOUD_META_DB_URL: 'x' })).toBe(0)
   })
 })

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  _resetAckBucketsForTests,
   acceptAck,
   ackDelayMs,
   ackEvery,
@@ -10,7 +11,8 @@ import {
   deliveryBucket,
   figuresOf,
   noteDeliverySample,
-  setDeliveryRedis
+  setDeliveryRedis,
+  takeAckToken
 } from '../../../services/realtime-delivery-slo.js'
 
 /** Just enough of ioredis for hash histograms: multi().hincrby/expire, pipeline().hgetall. */
@@ -148,15 +150,60 @@ describe('realtime delivery SLO (#2477)', () => {
     expect(slo!.days).toHaveLength(1)
   })
 
-  it('accepts a sampled ack once per socket per few seconds, never an unsampled one', async () => {
+  it('takes an ack only from a signed-in person, with the stamp the server kept, rate-limited', async () => {
+    _resetAckBucketsForTests()
     const redis = fakeRedis()
     setDeliveryRedis(redis)
     const now = 10_000_000
-    expect(acceptAck('s1', { seq: 51, st: now - 100, rx: now - 50 }, 20, now)).toBeNull()
-    expect(acceptAck('s1', { seq: 50, st: now - 100, rx: now - 50 }, 20, now)).toBe(50)
-    expect(acceptAck('s1', { seq: 100, st: now - 100, rx: now - 50 }, 20, now + 1000)).toBeNull()
-    expect(acceptAck('s1', { seq: 100, st: now, rx: now + 30 }, 20, now + 6000)).toBe(30)
+    const kept = new Map([
+      [50, now - 100],
+      [100, now - 200],
+      [150, now - 300],
+      [200, now - 50]
+    ])
+    const lookupStamp = async (seq: number) => kept.get(seq) ?? null
+    const ack = (user: string | null, p: Record<string, unknown>, at = now) =>
+      acceptAck(user, p, 20, { now: at, lookupStamp })
+    // Unauthenticated socket: dropped.
+    expect(await ack(null, { seq: 50, st: now - 100, rx: now - 50 })).toBeNull()
+    // Unsampled sequence: dropped.
+    expect(await ack('u1', { seq: 51, st: now - 100, rx: now - 50 })).toBeNull()
+    // A forged stamp (claims a slow delivery that never happened): dropped.
+    expect(await ack('u1', { seq: 50, st: now - 90_000, rx: now - 50 })).toBeNull()
+    // A sequence the server never stamped (or whose stamp expired): dropped.
+    expect(await ack('u2', { seq: 250, st: now - 100, rx: now - 50 })).toBeNull()
+    // The real stamp: recorded.
+    expect(await ack('u3', { seq: 100, st: now - 200, rx: now - 150 })).toBe(50)
+    // Per person, not per socket: two tokens, then refused until refilled.
+    expect(await ack('u4', { seq: 50, st: now - 100, rx: now - 50 })).toBe(50)
+    expect(await ack('u4', { seq: 150, st: now - 300, rx: now - 250 })).toBe(50)
+    expect(await ack('u4', { seq: 200, st: now - 50, rx: now - 20 })).toBeNull()
+    expect(await ack('u4', { seq: 200, st: now - 50, rx: now - 20 }, now + 10_000)).toBe(30)
     process.env.REALTIME_ACK_EVERY = '0'
-    expect(acceptAck('s2', { seq: 50, st: now - 100, rx: now - 50 }, 20, now)).toBeNull()
+    expect(await ack('u5', { seq: 50, st: now - 100, rx: now - 50 })).toBeNull()
+  })
+
+  it('a full bucket map drops the least recently used people, not everyone', () => {
+    _resetAckBucketsForTests()
+    expect(takeAckToken('first', 0)).toBe(true)
+    expect(takeAckToken('first', 0)).toBe(true)
+    expect(takeAckToken('first', 0)).toBe(false)
+    for (let i = 0; i < 5000; i++) takeAckToken(`u${i}`, 1)
+    // 'first' was the oldest and is gone (a fresh bucket); the newest keep theirs.
+    expect(takeAckToken('first', 2)).toBe(true)
+    expect(takeAckToken('u4999', 2)).toBe(true)
+    expect(takeAckToken('u4999', 2)).toBe(false)
+  })
+
+  it('keeps no figures in cloud mode', async () => {
+    const redis = fakeRedis()
+    process.env.CLOUD_META_DB_URL = 'x'
+    try {
+      await noteDeliverySample('probe', 100, { redis, node: 'n' })
+      expect(redis.hashes.size).toBe(0)
+      expect(await computeDeliverySlo(targets, { redis })).toBeNull()
+    } finally {
+      delete process.env.CLOUD_META_DB_URL
+    }
   })
 })
