@@ -8,6 +8,7 @@ import type { User } from '../types.js'
 import { getFields, getRelations } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { readItems } from './items.js'
+import { todayInInstance } from './layout-resolve-rules.js'
 import { getAllowedFields } from './permissions.js'
 
 /**
@@ -193,12 +194,19 @@ export function usesStateLocks(shape: FormShape, fields?: Set<string>): boolean 
 
 // ─── DB side ─────────────────────────────────────────────────────────────────
 
-/** Each record's form (the /active resolution), keyed by lower-cased id. */
+const callerId = (user: User): string | null => (user.id ? String(user.id) : null)
+
+/**
+ * Each record's form (the /active resolution), keyed by lower-cased id. As the
+ * caller: their half of an A/B test (#2614) and today's active dates (#2714)
+ * decide, on the desktop form (a bulk edit never runs on a phone).
+ */
 export async function resolveFormsForRecords(
   collection: string,
   ids: Array<string | number>,
   roleId: string | null,
-  isAdmin: boolean
+  isAdmin: boolean,
+  userId: string | null = null
 ): Promise<Map<string, Record<string, unknown> | null>> {
   const out = new Map<string, Record<string, unknown> | null>()
   if (ids.length === 0) return out
@@ -222,9 +230,10 @@ export async function resolveFormsForRecords(
     for (const r of found) rows.set(idKey(r.id), r)
   }
   const userRoleId = isAdmin ? null : roleId
+  const ctx = { userId, today: todayInInstance(), viewport: null }
   for (const id of ids) {
     const record = rows.get(idKey(id)) ?? (columns.length > 1 ? null : { id })
-    out.set(idKey(id), pickBestLayoutTraced(layouts, userRoleId, record, isAdmin).row)
+    out.set(idKey(id), pickBestLayoutTraced(layouts, userRoleId, record, isAdmin, ctx).row)
   }
   return out
 }
@@ -383,7 +392,7 @@ export async function bulkFieldsReport(opts: {
   )) as { data?: Array<Record<string, unknown>> }
   const readableIds = (res.data ?? []).map((r) => String(r.id))
   const [forms, updatable, meta] = await Promise.all([
-    resolveFormsForRecords(collection, readableIds, user.role ?? null, isAdmin),
+    resolveFormsForRecords(collection, readableIds, user.role ?? null, isAdmin, callerId(user)),
     isAdmin ? Promise.resolve(null) : getAllowedFields(user, 'update', collection),
     settableFields(collection)
   ])
@@ -485,7 +494,7 @@ export async function bulkFormRefusals(opts: {
   if (ids.length === 0) return out
   const want = new Set(opts.fields)
   const [forms, meta] = await Promise.all([
-    resolveFormsForRecords(collection, ids, user.role ?? null, isAdmin),
+    resolveFormsForRecords(collection, ids, user.role ?? null, isAdmin, callerId(user)),
     settableFields(collection).catch(() => null)
   ])
   const readonly = new Set([...(meta?.readonly ?? [])].filter((f) => want.has(f)))

@@ -27,13 +27,22 @@ function builder(table: string) {
 vi.mock('../db/index.js', () => ({ db: (t: string) => builder(t) }))
 
 const layouts: Array<Record<string, unknown>> = []
+// The resolve context each pick was asked with (the caller, the day, the screen).
+const pickCtx: unknown[] = []
 vi.mock('../routes/collection-layouts.js', () => ({
   fetchLayoutsForCollection: async () => layouts,
   collectRecordConditionFields: () => ['kind'],
   // Records of kind 'b' open form 2, everything else form 1.
-  pickBestLayoutTraced: (_l: unknown, _r: unknown, record: Record<string, unknown> | null) => ({
-    row: layouts.find((l) => l.id === (record?.kind === 'b' ? 2 : 1)) ?? null
-  })
+  pickBestLayoutTraced: (
+    _l: unknown,
+    _r: unknown,
+    record: Record<string, unknown> | null,
+    _a: unknown,
+    ctx: unknown
+  ) => {
+    pickCtx.push(ctx)
+    return { row: layouts.find((l) => l.id === (record?.kind === 'b' ? 2 : 1)) ?? null }
+  }
 }))
 vi.mock('./collections.js', () => ({
   getFields: async () => [
@@ -203,6 +212,25 @@ describe('bulkFormRefusals', () => {
       byForm: false
     })
     expect([...out.entries()]).toEqual([['3', 'amount: Locked while the record is in Approved']])
+  })
+
+  it('resolves each record’s form as the caller: their A/B half and today, on the desktop form', async () => {
+    pickCtx.length = 0
+    await bulkFormRefusals({
+      user,
+      isAdmin: false,
+      collection: 'orders',
+      ids: [1, 2],
+      fields: ['amount'],
+      byForm: false
+    })
+    expect(pickCtx).toHaveLength(2)
+    for (const ctx of pickCtx)
+      expect(ctx).toEqual({
+        userId: 'u1',
+        today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        viewport: null
+      })
   })
 
   it('with byForm, refuses a field that is not on the record’s form', async () => {
