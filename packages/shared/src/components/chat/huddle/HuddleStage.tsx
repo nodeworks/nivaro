@@ -2,6 +2,7 @@ import { Headphones, Maximize2, MicOff, ScreenShare, X } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '../../../lib/utils'
+import { HuddleCollabActions, HuddleNotesPanel } from './HuddleCollab'
 import { formatElapsed, type LivePeer } from './huddle-store'
 import type { HuddleHandle } from './useHuddle'
 
@@ -186,7 +187,10 @@ export function HuddleStage({
             Only you so far — people in the room see a Join button.
           </span>
         )}
+        {/* #2854 #2855 — shared notes and Follow me. */}
+        <HuddleCollabActions room={room} huddle={huddle} />
       </div>
+      <HuddleNotesPanel room={room} />
       {sharedByPeer?.video && (
         <div className='mt-1.5'>
           <ScreenView

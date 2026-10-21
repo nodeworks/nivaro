@@ -338,7 +338,10 @@ describe('registerHuddle', () => {
       await a.fire('huddle:leave', { room: 'ch:ops' })
       expect(lines).toHaveLength(1)
       await b.fire('disconnect')
-      expect(lines[1]).toEqual({ room: 'ch:ops', text: 'Huddle ended after 13 min' })
+      expect(lines[1]).toEqual({
+        room: 'ch:ops',
+        text: 'Huddle ended after 13 min · Rob Lee and Amy'
+      })
       expect(redis.store.has('nvr:huddle:-:ch:ops:start')).toBe(false)
     } finally {
       vi.useRealTimers()

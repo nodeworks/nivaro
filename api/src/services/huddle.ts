@@ -2,6 +2,15 @@ import type { FastifyInstance } from 'fastify'
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
+import {
+  collabLeft,
+  huddleEndLine,
+  huddleNotesMessage,
+  recordAttendee,
+  settleCollabWrites,
+  takeHuddleEnd,
+  touchCollab
+} from './huddle-collab.js'
 import { getHuddleSettings } from './huddle-settings.js'
 import { inSocketTenant } from './socket-tenant.js'
 
@@ -118,6 +127,7 @@ async function touch(redis: HuddleRedis, tenant: string | null, room: string, so
   await redis.expire(k.set, KEY_TTL_S)
   await redis.expire(k.meta, KEY_TTL_S)
   await redis.expire(k.start, KEY_TTL_S)
+  await touchCollab(redis, tenant, room, KEY_TTL_S)
 }
 
 export interface HuddleDeps {
@@ -218,6 +228,7 @@ export function registerHuddle(
         JSON.stringify({ user: user.id, name: nameOf(user), muted: false, screen: false, since })
       )
       await touch(deps.redis, tenant, r, socket.id)
+      await recordAttendee(deps.redis, tenant, r, user.id, nameOf(user))
       setData({ room: r })
       const name = await scope.scopedRoom(`huddle:${r}`)
       if (name) socket.join(name)
@@ -246,11 +257,17 @@ export function registerHuddle(
       const name = scope.scopedRoomNow(`huddle:${room}`)
       if (name) socket.leave(name)
       const left = await broadcast(room)
+      // #2855 — the presenter leaving ends Follow me; #2854 — a last note edit lands first.
+      await collabLeft(io, scope, deps.redis, tenant, room, socket.id)
       if (left.length === 0) {
+        await settleCollabWrites(socket)
         const start = await deps.redis.get(k.start)
+        const end = await takeHuddleEnd(deps.redis, tenant, room)
         await deps.redis.del(k.start, k.meta, k.set)
         const ms = start ? Date.now() - Number(start) : 0
-        await deps.postLine(room, `Huddle ended after ${formatHuddleDuration(ms)}`)
+        const duration = formatHuddleDuration(ms)
+        await deps.postLine(room, huddleEndLine(duration, end.names))
+        if (end.note) await deps.postLine(room, huddleNotesMessage(duration, end.names, end.note))
       }
     } catch (err) {
       deps.warn({ err, room }, 'huddle:leave failed')

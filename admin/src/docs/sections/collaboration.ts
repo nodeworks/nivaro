@@ -846,6 +846,32 @@ export const collabChat: DocSection = {
         'Hosts that mount no realtime adapter, or browsers without WebRTC, simply never show the button.'
       ]
     },
+    { type: 'h3', id: 'collab-chat-huddle-notes', text: 'Huddle notes' },
+    {
+      type: 'p',
+      text: 'While you are in a huddle, **Notes** in the huddle strip opens one shared note for everyone in the call. Anyone in the huddle can type in it; changes reach the others about half a second after you stop typing, and if two people type at once the last change wins. **Preview** shows it with the same formatting as chat messages (bold, italic, lists, code). Notes are written by hand — nothing is transcribed.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'When the huddle ends, the room gets the end line with how long it ran and everyone who joined ("Huddle ended after 24 min · Ana, Ben and Chris"), and — if the note is not empty — the note itself as one message headed "Huddle notes · 24 min · Ana, Ben, Chris".',
+        'A note holds up to 20 KB. It lives only as long as the huddle; if every browser drops out without leaving, it is gone with the huddle.',
+        'Only people in the huddle receive the note, and the server checks on every change that you can still see the room.'
+      ]
+    },
+    { type: 'h3', id: 'collab-chat-huddle-follow', text: 'Follow me on a record' },
+    {
+      type: 'p',
+      text: 'In a huddle in a record’s room, **Follow me** makes everyone else’s page follow yours on that record: they are taken to the record, and when you change tab or scroll to another section their page does the same. A chip at the bottom of their screen says "Following Ana" with **Stop**; going to another page or picking another tab themselves also stops following, and **Follow** on the chip picks it up again.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Only one person presents at a time. While someone does, the button reads **Ask to present**: the presenter sees the request on their chip and can **Hand over** or **Keep presenting**. The presenter leaving the huddle ends it for everyone.',
+        'Following is only navigation. Each person sees the record with their own permissions — someone who cannot read it gets the usual not-found page — and only the record the room is about can be followed (the server names it, not the presenter’s browser).',
+        'Follow me stays on the one record and its tabs; it does not follow into related records or other pages.'
+      ]
+    },
     {
       type: 'p',
       text: 'A screen clip is a short recording — up to 60 seconds of your screen and microphone — made from the clapperboard button in the composer and sent like any other attachment. The button becomes the clock while it records; Stop, the 60 s mark or the browser’s "Stop sharing" ends it. The clip arrives with a poster frame and plays inline in the message. It is an ordinary file in the file manager (tagged `chat-clip`), not a help video.'
