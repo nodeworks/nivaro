@@ -250,7 +250,7 @@ export async function aiConversationRoutes(app: FastifyInstance) {
       for (const uid of added) {
         void notifyUser(app, uid, {
           subject: `${who} shared an Ask AI conversation with you`,
-          message: `“${found.conv.title}” — answers you open are checked against your own access.`,
+          message: `“${found.conv.title}” — open it to follow answers live and ask the next question. Answers are checked against your own access.`,
           category: 'system',
           target: { kind: 'external', url: conversationLink(found.conv.id) },
           why: `${who} shared it with you.`

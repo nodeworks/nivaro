@@ -61,6 +61,9 @@ export async function myJobsRoutes(app: FastifyInstance): Promise<void> {
       const outcome = short(r.outcome)
       // An export/PDF outcome names its file ("name.xlsx → file <id>") — give the tray the chip.
       const fileId = outcome?.match(/→ file ([0-9a-fA-F-]{8,})\s*$/)?.[1] ?? null
+      // A background Ask AI question (#2456) links to its conversation and can be cancelled.
+      const research = r.kind === 'ai' && r.job_id === 'ask-research'
+      const conversation = research ? parseProgress(r.progress)?.conversation_id : null
       out.push({
         key: `job:${r.id}`,
         kind: String(r.kind),
@@ -74,6 +77,12 @@ export async function myJobsRoutes(app: FastifyInstance): Promise<void> {
         outcome,
         error: short(r.error),
         ...(fileId ? { file_id: fileId } : {}),
+        ...(typeof conversation === 'string'
+          ? { href: `/ask?conversation=${encodeURIComponent(conversation)}` }
+          : {}),
+        ...(research && r.status === 'running'
+          ? { cancel_path: `/ai/research/${r.id}/cancel` }
+          : {}),
         at: new Date(String(r.finished_at ?? r.started_at ?? Date.now())).toISOString()
       })
     }

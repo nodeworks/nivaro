@@ -709,6 +709,8 @@ export interface DashboardWidget {
     | 'report_preset'
     | 'saved_view'
     | 'cumulative_flow'
+    /** #2738 — an Ask AI chart: `filters` holds {source: {tool, input}, chart, question}. */
+    | 'ai_query'
   title: string
   collection: string | null
   field: string | null

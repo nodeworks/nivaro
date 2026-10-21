@@ -51,6 +51,8 @@ export interface ChatLoopCallbacks {
   onStatus?: (status: ChatStepStatus) => void
   /** Polled between deltas — true stops the loop at once. */
   shouldStop?: () => boolean
+  /** Each finished tool call as it lands in the trace (#2739 live mirror). */
+  onTrace?: (entry: ChatTraceEntry) => void
 }
 
 export interface ChatStepStatus {
@@ -103,8 +105,11 @@ export interface ChatLoopOptions extends ChatLoopCallbacks {
   /** The conversation; the loop APPENDS to it. */
   convo: Anthropic.MessageParam[]
   maxTokens?: number
-  /** Replay runs (#1916): only REPLAYABLE_TOOLS run, so a re-run never writes or logs. */
+  /** Replay runs (#1916) and background research (#2456): only REPLAYABLE_TOOLS are
+   *  offered and run, so the run never writes or logs. */
   readOnly?: boolean
+  /** Tool rounds before the wrap-up (default MAX_ROUNDS) — background research gets more. */
+  maxRounds?: number
   warn?: (err: unknown, msg: string) => void
   /** #1845 — offer the suggest_memory tool; `existing` = the asker's notes.
    *  Only the asker's own Ask AI opts in (never the chat-room bot). */
@@ -189,14 +194,17 @@ function textOf(message: Anthropic.Message): string {
 }
 
 export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult> {
-  const { client, model, system, user, convo, onDelta, onStatus, shouldStop } = opts
+  const { client, model, system, user, convo, onDelta, onStatus, shouldStop, onTrace } = opts
   const maxTokens = opts.maxTokens ?? 1500
+  const maxRounds = Math.max(1, opts.maxRounds ?? MAX_ROUNDS)
   let trace: ChatTraceEntry[] = []
   let proposals: Array<Record<string, unknown>> = []
   let plans: Array<Record<string, unknown>> = []
   let choices: Array<Record<string, unknown>> = []
   let memorySuggestions: AiMemorySuggestion[] = []
-  const tools = opts.memorySuggestions ? [...CHAT_TOOLS, SUGGEST_MEMORY_TOOL] : CHAT_TOOLS
+  // A read-only run is never even offered a tool that could change data.
+  const offered = opts.readOnly ? CHAT_TOOLS.filter((t) => readOnlyAllows(t.name)) : CHAT_TOOLS
+  const tools = opts.memorySuggestions ? [...offered, SUGGEST_MEMORY_TOOL] : offered
 
   // #2471 — which model the next call goes to. Without routing: the main one.
   const routing = opts.routing ?? null
@@ -315,7 +323,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   const startLen = convo.length
   let roundBase = 0
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
+  for (let round = 0; round < maxRounds; round++) {
     const shown = roundBase + round
     if (shouldStop?.())
       return done({
@@ -418,13 +426,15 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         const kept = opts.reuse ? await opts.reuse.get(block.name, input).catch(() => null) : null
         const { result, summary } = kept ?? (await executeChatTool(user, block.name, input))
         if (!kept) opts.reuse?.put(block.name, input, { result, summary }, startedAt)
-        trace.push({
+        const entry = {
           tool: block.name,
           input,
           summary,
           result_hash: hashToolResult(result),
           ...(kept ? { reused: true as const } : {})
-        })
+        }
+        trace.push(entry)
+        onTrace?.(entry)
         const said = describeToolResult(block.name, summary)
         onStatus?.({
           round: shown,
@@ -455,7 +465,9 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Tool failed'
         toolFailed = true
-        trace.push({ tool: block.name, input, summary: `error: ${msg}` })
+        const entry = { tool: block.name, input, summary: `error: ${msg}` }
+        trace.push(entry)
+        onTrace?.(entry)
         onStatus?.({ round: shown, tool: block.name, text, step, done: true, failed: true })
         results.push({
           type: 'tool_result',
@@ -503,7 +515,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // instead of the user getting a dead end.
   let text = ''
   let stopped = false
-  const last = roundBase + MAX_ROUNDS
+  const last = roundBase + maxRounds
   try {
     onStatus?.({ round: last, tool: '', text: 'Wrapping up…' })
     const final = await call(

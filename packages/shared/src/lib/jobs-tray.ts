@@ -21,6 +21,8 @@ export interface TrayJob {
   error?: string | null
   href?: string | null
   file_id?: string | null
+  /** API path the tray POSTs to cancel the job while it runs (#2456). */
+  cancel_path?: string | null
   position?: number | null
   eta_seconds?: number | null
   /** ms epoch of the last update — orders the list and ages finished entries out. */
@@ -37,6 +39,7 @@ export interface JobProgressPayload {
   error?: string | null
   href?: string | null
   file_id?: string | null
+  cancel_path?: string | null
   position?: number | null
   eta_seconds?: number | null
 }
@@ -131,6 +134,11 @@ export function applyJobUpdate(p: JobProgressPayload, now = Date.now()): void {
     error: p.error ?? null,
     href: p.href ?? prev?.href ?? null,
     file_id: p.file_id ?? prev?.file_id ?? null,
+    // Only a running job can be cancelled; a progress tick without it keeps the earlier one.
+    cancel_path:
+      p.status === 'running' || p.status === 'queued'
+        ? (p.cancel_path ?? prev?.cancel_path ?? null)
+        : null,
     position: p.position ?? null,
     eta_seconds: p.eta_seconds ?? null,
     at: now

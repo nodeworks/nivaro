@@ -102,6 +102,18 @@ export async function widgetSourceRefusal(
 ): Promise<string | null> {
   const { can } = await import('./permissions.js')
   let collection = widget.collection
+  if (widget.type === 'ai_query') {
+    // The author must be able to run the query now; viewers are checked on every read.
+    const { computeAiQueryWidget, normalizeAiQuerySpec } = await import('./ai-query-widget.js')
+    const spec = normalizeAiQuerySpec(widget.filters)
+    if (!spec) return 'This widget needs a query (source.tool + source.input)'
+    try {
+      await computeAiQueryWidget(spec, user)
+      return null
+    } catch (err) {
+      return err instanceof Error && err.message ? err.message.slice(0, 200) : 'Query failed'
+    }
+  }
   if (widget.type === 'saved_view') {
     if (!widget.field) return null
     const view = (await db('nivaro_saved_views')
@@ -232,6 +244,21 @@ export async function computeWidgetData(
         error: status === 403 ? 'Forbidden' : 'Failed to read the view',
         status: status ?? 500
       }
+    }
+  }
+  // #2738 — an Ask AI query (aggregate / saved query): the read tool re-runs AS THE VIEWER.
+  if (widget.type === 'ai_query') {
+    if (!ctx.user) return { error: 'Forbidden', status: 403 }
+    const { computeAiQueryWidget, normalizeAiQuerySpec } = await import('./ai-query-widget.js')
+    const spec = normalizeAiQuerySpec(widget.filters)
+    if (!spec) return { error: 'This widget has no query', status: 400 }
+    try {
+      return { data: await computeAiQueryWidget(spec, ctx.user) }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : ''
+      return /access|forbidden|administrators/i.test(msg)
+        ? { error: 'Forbidden', status: 403 }
+        : { error: 'Failed to compute widget data', status: 500 }
     }
   }
   if (!widget.collection) return { data: null }

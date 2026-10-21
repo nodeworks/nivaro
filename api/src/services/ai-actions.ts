@@ -31,6 +31,8 @@ export interface ProposalPreview {
 }
 
 const WIDGET_TYPES = new Set(['count', 'sum', 'avg', 'latest', 'bar_chart', 'line_chart'])
+/** #2738 — an Ask AI query widget (services/ai-query-widget.ts). */
+const AI_QUERY_TYPE = 'ai_query'
 
 function parseJson<T>(v: unknown): T | null {
   if (v == null) return null
@@ -54,13 +56,7 @@ export interface ProposeActionInput {
   data?: Record<string, unknown>
   dashboard?: {
     name?: string
-    widgets?: Array<{
-      type?: string
-      title?: string
-      collection?: string
-      field?: string
-      filters?: unknown
-    }>
+    widgets?: DashboardDraftWidget[]
   }
   task?: TaskProposalInput
 }
@@ -296,35 +292,86 @@ async function buildTask(user: User, t: TaskProposalInput): Promise<BuiltAction>
   }
 }
 
+export interface DashboardDraftWidget {
+  type?: string
+  title?: string
+  collection?: string
+  field?: string
+  filters?: unknown
+  /** #2736 — an ai_query widget's query: {tool: aggregate | run_custom_query, input}. */
+  query?: unknown
+  chart?: string
+  col?: number
+  row?: number
+  width?: number
+  height?: number
+}
+
+/** A built widget: validated as the person, sized and placed on the 4-column grid. */
+export interface BuiltDashboardWidget {
+  type: string
+  title: string
+  collection: string | null
+  field: string | null
+  filters: string | null
+  col: number
+  row: number
+  width: number
+  height: number
+}
+
 async function buildDashboard(
   user: User,
-  dashboard: {
-    name?: string
-    widgets?: Array<{
-      type?: string
-      title?: string
-      collection?: string
-      field?: string
-      filters?: unknown
-    }>
-  }
+  dashboard: { name?: string; widgets?: DashboardDraftWidget[] }
 ): Promise<BuiltAction> {
   const name = String(dashboard.name ?? '').trim()
   if (!name) throw new Error('dashboard.name is required')
   const rawWidgets = Array.isArray(dashboard.widgets) ? dashboard.widgets.slice(0, 12) : []
   if (rawWidgets.length === 0) throw new Error('dashboard.widgets must have at least one widget')
 
-  const widgets: Array<{
-    type: string
-    title: string
-    collection: string
-    field: string | null
-    filters: string | null
-  }> = []
+  const { widgetSourceRefusal } = await import('./dashboard-widgets.js')
+  const { defaultWidgetSize, packDashboardGrid } = await import('./dashboard-grid-pack.js')
+  const built: Array<Omit<BuiltDashboardWidget, 'col' | 'row'>> = []
   for (const w of rawWidgets) {
     const type = String(w.type ?? '')
+    const title = String(w.title ?? '').trim()
+    if (type === AI_QUERY_TYPE) {
+      // #2736 / #2738 — a grouped aggregate or a saved query, stored as the query.
+      const { aiQueryCollection, normalizeAiQuerySpec } = await import('./ai-query-widget.js')
+      const spec = normalizeAiQuerySpec({
+        source: w.query,
+        chart: w.chart,
+        question: title || undefined
+      })
+      if (!spec) {
+        throw new Error(
+          `Widget '${title || type}' needs query {tool: aggregate | run_custom_query, input}`
+        )
+      }
+      const refusal = await widgetSourceRefusal(user, {
+        type,
+        collection: aiQueryCollection(spec),
+        field: null,
+        filters: spec
+      })
+      if (refusal) throw new Error(`Widget '${title || type}': ${refusal}`)
+      const grouped = spec.source.tool !== 'aggregate' || !!spec.source.input.group_by
+      const size = defaultWidgetSize(type, grouped)
+      built.push({
+        type,
+        title: (title || 'Ask AI chart').slice(0, 100),
+        collection: aiQueryCollection(spec),
+        field: null,
+        filters: JSON.stringify(spec),
+        width: w.width ?? size.width,
+        height: w.height ?? size.height
+      })
+      continue
+    }
     if (!WIDGET_TYPES.has(type)) {
-      throw new Error(`Invalid widget type '${type}' — use one of: ${[...WIDGET_TYPES].join(', ')}`)
+      throw new Error(
+        `Invalid widget type '${type}' — use one of: ${[...WIDGET_TYPES, AI_QUERY_TYPE].join(', ')}`
+      )
     }
     const collection = String(w.collection ?? '')
     if (!/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_')) {
@@ -344,14 +391,23 @@ async function buildDashboard(
     if (type !== 'count' && type !== 'latest' && !field) {
       throw new Error(`Widget '${String(w.title ?? type)}' needs a valid field for ${type}`)
     }
-    widgets.push({
+    const filters = w.filters ? JSON.stringify(w.filters) : null
+    // The field and filter fields must be ones the person can read (#2736).
+    const refusal = await widgetSourceRefusal(user, { type, collection, field, filters })
+    if (refusal) throw new Error(`Widget '${title || type}': ${refusal}`)
+    const size = defaultWidgetSize(type)
+    built.push({
       type,
-      title: String(w.title ?? `${type} of ${collection}`).slice(0, 100),
+      title: (title || `${type} of ${collection}`).slice(0, 100),
       collection,
       field,
-      filters: w.filters ? JSON.stringify(w.filters) : null
+      filters,
+      width: w.width ?? size.width,
+      height: w.height ?? size.height
     })
   }
+  const placed = packDashboardGrid(built)
+  const widgets: BuiltDashboardWidget[] = built.map((w, i) => ({ ...w, ...placed[i] }))
 
   return {
     action_type: 'create_dashboard',
@@ -366,7 +422,7 @@ async function buildDashboard(
       widgets: widgets.map((w) => ({
         type: w.type,
         title: w.title,
-        collection: w.collection,
+        collection: w.collection ?? '',
         field: w.field
       }))
     },
@@ -449,32 +505,31 @@ export async function runAction(
       created_at: new Date(),
       updated_at: new Date()
     })
-    // KPIs 1x1, charts 2x2 — packed left-to-right on a 4-unit grid
-    let col = 0
-    let rowPos = 0
-    for (const w of widgets) {
-      const isChart = w.type === 'bar_chart' || w.type === 'line_chart'
-      const width = isChart ? 2 : 1
-      const height = isChart ? 2 : 1
-      if (col + width > 4) {
-        col = 0
-        rowPos += 1
-      }
+    // Placed when the draft was built (#2736); an older stored proposal has no
+    // positions and is packed here the same way.
+    const { defaultWidgetSize, packDashboardGrid } = await import('./dashboard-grid-pack.js')
+    const placedAll = widgets.every((w) =>
+      ['col', 'row', 'width', 'height'].every((k) => Number.isInteger(w[k]))
+    )
+    const packed = placedAll
+      ? null
+      : packDashboardGrid(widgets.map((w) => defaultWidgetSize(String(w.type))))
+    for (const [i, w] of widgets.entries()) {
+      const at = packed ? packed[i] : w
       await db('nivaro_dashboard_widgets').insert({
         id: randomUUID(),
         dashboard: dashId,
         type: w.type,
         title: w.title,
-        collection: w.collection,
+        collection: w.collection ?? null,
         field: w.field ?? null,
         filters: w.filters ?? null,
-        col,
-        row: rowPos,
-        width,
-        height,
+        col: at.col,
+        row: at.row,
+        width: at.width,
+        height: at.height,
         created_at: new Date()
       })
-      col += width
     }
     result = { dashboard_id: dashId, widgets: widgets.length }
   } else if (actionType === 'create_record') {

@@ -65,6 +65,27 @@ interface AiFilter {
   value?: unknown
 }
 
+/** #2739 — the live mirror for a turn in a shared conversation (null when nobody else is in it). */
+async function openTurnMirror(
+  turn: import('../services/ai-conversation-turn.js').ConversationTurn,
+  asker: User,
+  hasPageContext: boolean
+) {
+  if (turn.participants.length < 2) return null
+  const [{ openLiveMirror }, { emitToUser }] = await Promise.all([
+    import('../services/ai-live-session.js'),
+    import('../services/live-progress.js')
+  ])
+  return openLiveMirror({
+    conversationId: turn.conversation.id,
+    questionMessageId: turn.questionMessageId,
+    asker,
+    participantIds: turn.participants,
+    hasPageContext,
+    emit: (uid, payload) => emitToUser(uid, 'ai:live', payload)
+  }).catch(() => null)
+}
+
 const ALLOWED_OPS = new Set([
   'eq',
   'neq',
@@ -1963,6 +1984,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         return cachedBody
       }
       const stopper = delivery ? registerStream(app, delivery.id, userId) : null
+      // #2739 — the other people in a shared thread follow the answer live,
+      // each only as far as their own access confirms it.
+      const live = turn ? await openTurnMirror(turn, user, !!pageContext.trace) : null
       try {
         const result = await runChatLoop({
           client,
@@ -1970,9 +1994,14 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           system,
           user,
           convo: history,
-          onDelta: delivery
-            ? (text, round) => delivery.emit('ai:delta', { text, round })
-            : undefined,
+          onDelta:
+            delivery || live
+              ? (text, round) => {
+                  delivery?.emit('ai:delta', { text, round })
+                  live?.delta(text, round)
+                }
+              : undefined,
+          onTrace: live ? (entry) => live.trace(entry) : undefined,
           onStatus: delivery
             ? (st) =>
                 delivery.emit('ai:status', {
@@ -1992,6 +2021,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           routing,
           reuse
         })
+        live?.end(result.stopped ? 'stopped' : 'answered')
         const { proposals, plans, choices } = result
         // The context rides the trace: it names what the answer read, and a
         // tool outside REPLAYABLE_TOOLS keeps the answer its author's (#1809).
@@ -2106,6 +2136,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           }
         }
         return Object.assign(payload, offers)
+      } catch (err) {
+        live?.end('failed')
+        throw err
       } finally {
         stopper?.dispose()
       }

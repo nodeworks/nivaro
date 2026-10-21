@@ -416,18 +416,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         return reply.code(403).send({ error: 'Forbidden' })
       }
 
-      const {
-        type,
-        title,
-        collection,
-        field,
-        filters,
-        col = 0,
-        row = 0,
-        width = 1,
-        height = 1,
-        refresh_seconds
-      } = req.body
+      const { type, title, field, refresh_seconds } = req.body
+      let { collection, filters, col = 0, row = 0, width = 1, height = 1 } = req.body
 
       if (!type || !title?.trim()) {
         return reply.code(400).send({ error: 'type and title are required' })
@@ -444,10 +434,31 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         'line_chart',
         'report_preset',
         'saved_view',
-        'cumulative_flow'
+        'cumulative_flow',
+        'ai_query'
       ]
       if (!VALID_TYPES.includes(type)) {
         return reply.code(400).send({ error: `type must be one of: ${VALID_TYPES.join(', ')}` })
+      }
+      if (type === 'ai_query') {
+        // #2738 — an Ask AI chart: the stored query decides the collection, and a
+        // widget added without a position goes below the others.
+        const { aiQueryCollection, normalizeAiQuerySpec } = await import(
+          '../services/ai-query-widget.js'
+        )
+        const spec = normalizeAiQuerySpec(filters)
+        if (!spec) return reply.code(400).send({ error: 'ai_query needs source {tool, input}' })
+        filters = spec
+        collection = aiQueryCollection(spec)
+        if (req.body.row == null) {
+          const placed = (await db('nivaro_dashboard_widgets')
+            .where('dashboard', dashboard.id)
+            .select('row', 'height')) as Array<{ row: number; height: number }>
+          row = placed.reduce((m, w) => Math.max(m, Number(w.row) + Number(w.height)), 0)
+          col = 0
+        }
+        if (req.body.width == null) width = 2
+        if (req.body.height == null) height = 2
       }
 
       // Validate collection exists if provided
@@ -540,7 +551,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
           'line_chart',
           'report_preset',
           'saved_view',
-          'cumulative_flow'
+          'cumulative_flow',
+          'ai_query'
         ]
         if (!VALID_TYPES.includes(type))
           return reply.code(400).send({ error: 'Invalid widget type' })
@@ -570,17 +582,31 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
           }
         }
         if (field !== undefined) updates.field = field ?? null
+        let effFilters = filters !== undefined ? filters : widget.filters
+        if (effType === 'ai_query' && filters !== undefined) {
+          const { aiQueryCollection, normalizeAiQuerySpec } = await import(
+            '../services/ai-query-widget.js'
+          )
+          const spec = normalizeAiQuerySpec(filters)
+          if (!spec) return reply.code(400).send({ error: 'ai_query needs source {tool, input}' })
+          effFilters = spec
+          updates.collection = aiQueryCollection(spec)
+        }
+        // Moving or resizing an Ask AI chart re-runs nothing; viewers are checked on every read.
+        const layoutOnly = effType === 'ai_query' && type === undefined && filters === undefined
         // The widget as it will be after this update: its author must be able to read it.
-        const refusal = await widgetSourceRefusal(req.user!, {
-          type: effType,
-          collection: collForField ?? null,
-          field: effField ?? null,
-          filters: filters !== undefined ? filters : widget.filters
-        })
+        const refusal = layoutOnly
+          ? null
+          : await widgetSourceRefusal(req.user!, {
+              type: effType,
+              collection: collForField ?? null,
+              field: effField ?? null,
+              filters: effFilters
+            })
         if (refusal)
           return reply.code(refusal === 'Unknown collection' ? 400 : 403).send({ error: refusal })
+        if (filters !== undefined) updates.filters = toJsonStr(effFilters)
       }
-      if (filters !== undefined) updates.filters = toJsonStr(filters)
       if (col !== undefined) updates.col = col
       if (row !== undefined) updates.row = row
       if (width !== undefined) updates.width = width

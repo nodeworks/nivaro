@@ -666,13 +666,22 @@ export const userDashboardsGuide: DocSection = {
         ['avg', 'Average of a numeric field.'],
         ['latest', 'Table of the 10 most recently created records.'],
         ['bar_chart', 'Bar chart of record creation counts over the last 30 days.'],
-        ['line_chart', 'Line chart of creation counts over the last 30 days.']
+        ['line_chart', 'Line chart of creation counts over the last 30 days.'],
+        [
+          'ai_query',
+          'A breakdown chart (or one figure) kept from Ask AI or a drafted dashboard. It stores the query — a grouped count or total, or a saved query — and re-runs it with the viewer’s access. Hover the title to see the question it came from.'
+        ]
       ]
     },
     { type: 'h3', text: 'Creating a dashboard' },
     {
       type: 'p',
       text: 'Click + New Dashboard, give it a name, and optionally check Shared. Add widgets using + Add Widget in the toolbar.'
+    },
+    { type: 'h3', text: 'Draft a dashboard with AI' },
+    {
+      type: 'p',
+      text: 'Draft with AI (Dashboards page) turns a description — “for invoice reviewers: what’s waiting, how old, by vendor” — into a proposed dashboard: counts, totals, newest records and breakdowns over collections and saved queries you can read, laid out on the grid and previewed with your access. A widget that would need data you cannot read is left out with its reason. Nothing is saved until you choose Create dashboard; Discard throws the draft away. Each draft is an AI plan, so it shows in AI plan history and expires after an hour.'
     },
     { type: 'h3', text: 'Shared dashboards' },
     {

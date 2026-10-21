@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LayoutGrid, Plus, Trash2, Users } from 'lucide-react'
+import { LayoutGrid, Plus, Sparkles, Trash2, Users } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -14,6 +14,7 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -21,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
-import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Dashboard } from '@/lib/api'
 import { cn, formatDate } from '@/lib/utils'
@@ -67,7 +67,11 @@ function CreateDashboardDialog({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!name.trim()) return
-    create.mutate({ name: name.trim(), is_shared: isShared, role_id: isShared && roleId ? roleId : null })
+    create.mutate({
+      name: name.trim(),
+      is_shared: isShared,
+      role_id: isShared && roleId ? roleId : null
+    })
   }
 
   return (
@@ -108,7 +112,10 @@ function CreateDashboardDialog({
                 <div className='space-y-1.5'>
                   {/* Role scoping (#454) — same model as queues/views/reports. */}
                   <Label>Limit to a role (optional)</Label>
-                  <Select value={roleId || '__all__'} onValueChange={(v) => setRoleId(v === '__all__' ? '' : v)}>
+                  <Select
+                    value={roleId || '__all__'}
+                    onValueChange={(v) => setRoleId(v === '__all__' ? '' : v)}
+                  >
                     <SelectTrigger className='h-8 text-[13px]'>
                       <SelectValue placeholder='Everyone' />
                     </SelectTrigger>
@@ -179,10 +186,21 @@ export function DashboardsPage() {
               </span>
             )}
           </div>
-          <Button size='sm' onClick={() => setShowCreate(true)}>
-            <Plus className='mr-1.5 h-3.5 w-3.5' />
-            New Dashboard
-          </Button>
+          <div className='flex items-center gap-2'>
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => navigate('/dashboards/draft')}
+              data-tip='Describe it and get a preview built from data you can read'
+            >
+              <Sparkles className='mr-1.5 h-3.5 w-3.5' />
+              Draft with AI
+            </Button>
+            <Button size='sm' onClick={() => setShowCreate(true)}>
+              <Plus className='mr-1.5 h-3.5 w-3.5' />
+              New Dashboard
+            </Button>
+          </div>
         </div>
       </div>
 
