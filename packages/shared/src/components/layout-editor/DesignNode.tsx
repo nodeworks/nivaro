@@ -10,7 +10,7 @@ import {
   type Ref
 } from 'react'
 import { cn } from '../../lib/utils'
-import type { DesignTarget, LayoutDesign } from './design-context'
+import type { DesignMark, DesignTarget, LayoutDesign } from './design-context'
 import { isSelectedIn, targetKey, useLayoutDesign } from './design-context'
 import { NO_DND, useDesignDndNode, useDesignDropBody } from './dnd/node'
 
@@ -55,6 +55,17 @@ function mergeProps(...sets: Props[]): Props {
     }
   }
   return out
+}
+
+const MARK_TONE: Record<DesignMark['tone'], string> = {
+  violet:
+    'bg-violet-50 text-violet-800 ring-violet-200 dark:bg-violet-500/15 dark:text-violet-200 dark:ring-violet-500/30',
+  emerald:
+    'bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-200 dark:ring-emerald-500/30',
+  amber:
+    'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-500/30',
+  slate:
+    'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700'
 }
 
 // Without a provider-measured spot: a full-width line just above / below.
@@ -102,6 +113,9 @@ export function DesignNode({
   const key = targetKey(target)
   const selected = isSelectedIn(design, target)
   const mark = design.roleMark?.(target) ?? null
+  const extra = design.marks?.(target) ?? []
+  const overlay = design.overlay?.(target) ?? null
+  const highlight = extra.some((m) => m.highlight)
   const dragProps = (locked ? {} : nd.props) as Props
   const dragging = nd.dragging
   const slot = locked ? null : nd.slot
@@ -117,7 +131,10 @@ export function DesignNode({
     !child && (inline ? 'inline-block' : 'block'),
     selected
       ? 'outline outline-2 outline-nvr-cyan'
-      : 'hover:outline hover:outline-1 hover:outline-slate-300 dark:hover:outline-slate-600',
+      : highlight
+        ? 'outline-dashed outline-2 outline-violet-400 dark:outline-violet-400/70'
+        : 'hover:outline hover:outline-1 hover:outline-slate-300 dark:hover:outline-slate-600',
+    overlay?.className,
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan',
     dragging && 'opacity-40',
     // Hidden for the previewed role: faint, its tags not.
@@ -168,8 +185,9 @@ export function DesignNode({
     onKeyDown
   }
   const MarkIcon = mark?.kind === 'hidden' ? EyeOff : Lock
+  const tags = extra.length > 0 || overlay != null
   const badge =
-    tabLike && parent && !mark ? (
+    tabLike && parent && !mark && !tags ? (
       // Steps and tabs: a dot above the label, the parent's name in the tip.
       <span
         data-design-badges=''
@@ -177,7 +195,7 @@ export function DesignNode({
       >
         <span className='sr-only'>from {parent}</span>
       </span>
-    ) : parent || mark ? (
+    ) : parent || mark || tags ? (
       <span
         data-design-badges=''
         className='pointer-events-none absolute -top-2 right-1 z-10 flex items-center gap-1'
@@ -191,9 +209,28 @@ export function DesignNode({
             {mark.kind === 'hidden' ? 'Hidden' : 'Read-only'} for {mark.role}
           </span>
         )}
+        {extra.map((m) => (
+          <span
+            key={m.text}
+            data-design-mark=''
+            data-tip={m.tip}
+            className={cn(
+              'inline-flex items-center rounded px-1 text-[11px] ring-1',
+              m.tip && 'pointer-events-auto',
+              MARK_TONE[m.tone]
+            )}
+          >
+            {m.text}
+          </span>
+        ))}
         {parent && (
           <span className='rounded bg-slate-100 px-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300'>
             from {parent}
+          </span>
+        )}
+        {overlay && (
+          <span data-design-pass='' className='pointer-events-auto'>
+            {overlay.chip}
           </span>
         )}
       </span>

@@ -12,6 +12,7 @@ import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overvie
 import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { unsavedText } from './UnsavedConfirm'
+import type { PreviewDevice } from './preview/preview-model'
 import type { LayoutDraft } from './useLayoutDraft'
 
 // The editor's top bar: which layout this is and when it is used, Preview as,
@@ -20,6 +21,16 @@ import type { LayoutDraft } from './useLayoutDraft'
 export interface PreviewAs {
   record: { id: string; label: string } | null
   roleId: string | null
+  /** Second role shown beside the first on a split canvas (#2579). */
+  compareRoleId?: string | null
+  /** Preview as if the record were in this pipeline state (#2599). */
+  state?: { pipelineId: string; id: string; key: string; label: string } | null
+  /** Canvas width (#2600). */
+  device?: PreviewDevice
+  /** What-if values laid over the record (#2601). */
+  values?: Record<string, unknown> | null
+  /** Tint fields by how many roles see them (#2580). */
+  who?: boolean
 }
 
 const iconBtn =
@@ -129,11 +140,14 @@ function BarSwitch({
 function PreviewAsButton({
   collection,
   value,
-  onChange
+  onChange,
+  extra
 }: {
   collection: string
   value: PreviewAs
   onChange: (v: PreviewAs) => void
+  /** More preview modes, below the record and role (LayoutEditor's PreviewModes). */
+  extra?: ReactNode
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -148,7 +162,22 @@ function PreviewAsButton({
     enabled: open && template !== undefined
   })
   const roleName = roles.find((r) => r.id === value.roleId)?.name ?? null
-  const summary = [value.record?.label, roleName].filter(Boolean).join(' · ') || 'No record'
+  const compareName = roles.find((r) => r.id === value.compareRoleId)?.name ?? null
+  const summary =
+    [
+      value.record?.label,
+      compareName && roleName ? `${roleName} | ${compareName}` : roleName,
+      value.state?.label,
+      value.values && Object.keys(value.values).length > 0 ? 'What if' : null,
+      value.device && value.device !== 'desktop'
+        ? value.device === 'phone'
+          ? 'Phone'
+          : 'Tablet'
+        : null,
+      value.who ? 'Who sees' : null
+    ]
+      .filter(Boolean)
+      .join(' · ') || 'No record'
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -166,7 +195,10 @@ function PreviewAsButton({
           <span className='truncate'>{summary}</span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align='end' className='w-[320px] p-3'>
+      <PopoverContent
+        align='end'
+        className='max-h-[min(80vh,640px)] w-[320px] overflow-y-auto overscroll-contain p-3'
+      >
         <p className={labelCls}>Record</p>
         {value.record ? (
           <span className='inline-flex max-w-full items-center gap-1.5 rounded-full bg-nvr-cyan/10 px-2.5 py-1 text-[12px] font-medium text-slate-800 dark:text-foreground'>
@@ -225,6 +257,7 @@ function PreviewAsButton({
           The form shows this record’s values, steps and rules. Nothing you do here changes the
           record.
         </p>
+        {extra}
       </PopoverContent>
     </Popover>
   )
@@ -244,7 +277,8 @@ export function EditorTopBar({
   onShowHidden,
   onBack,
   backLabel = 'Layouts',
-  tools
+  tools,
+  previewExtra
 }: {
   collection: string
   layoutId: number
@@ -267,6 +301,8 @@ export function EditorTopBar({
   backLabel?: string
   /** Editing tools the host adds after Undo / Redo (view toggle, auto-arrange). */
   tools?: ReactNode
+  /** More preview modes inside the Preview as popover. */
+  previewExtra?: ReactNode
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const unsaved = draft.unsavedCount ?? 0
@@ -326,7 +362,12 @@ export function EditorTopBar({
         </button>
       </div>
       {tools}
-      <PreviewAsButton collection={collection} value={preview} onChange={onPreview} />
+      <PreviewAsButton
+        collection={collection}
+        value={preview}
+        onChange={onPreview}
+        extra={previewExtra}
+      />
       <BarSwitch
         icon={<Eye className='h-3.5 w-3.5' />}
         label='Show hidden'

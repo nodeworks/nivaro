@@ -44,6 +44,7 @@ export function EditorCanvas({
   bundle,
   layout,
   record,
+  stateKey = null,
   design,
   apply,
   whenIdle
@@ -52,6 +53,8 @@ export function EditorCanvas({
   bundle: LayoutBundle
   layout: ActiveLayoutData
   record: Record<string, unknown> | null
+  /** Preview as if the record were in this pipeline state (form only). */
+  stateKey?: string | null
   design: LayoutDesign
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
   /** The draft's whenIdle: the PDF preview waits for the last save. */
@@ -64,7 +67,7 @@ export function EditorCanvas({
       <ItemEditForm
         collection={collection}
         documentTitle={false}
-        design={{ layout, record, context: design }}
+        design={{ layout, record, context: design, stateKey }}
       />
     )
   else if (renderer === 'read-view')
