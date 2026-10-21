@@ -156,7 +156,7 @@ export async function computeWidgetData(
   widget: WidgetSpec,
   extraFilters: WidgetFilter[] = [],
   /** `public`: a public dashboard link — `latest` shows only an explicit column list there. */
-  ctx: { user?: User | null; public?: boolean } = {}
+  ctx: { user?: User | null; public?: boolean; redis?: import('ioredis').Redis | null } = {}
 ): Promise<{ data: unknown } | { error: string; status: number }> {
   // #52 — a widget over a SAVED BROWSER VIEW: `field` holds the view id, the
   // view's own filters compile exactly as the browser compiles them, and the
@@ -300,6 +300,26 @@ export async function computeWidgetData(
         limit: 10
       })
       return { data: { rows: res.data ?? [] } }
+    }
+
+    if (widget.type === 'cumulative_flow') {
+      // #2758 — `field` holds the pipeline template id; the same viewer-gated
+      // computation as the pipeline page tab. Widget filters narrow the records.
+      if (!widget.field) return { data: { flow: null } }
+      const { getCumulativeFlow } = await import('./cumulative-flow.js')
+      const out = await getCumulativeFlow(
+        user,
+        {
+          template: String(widget.field),
+          collection: col,
+          from: new Date(Date.now() - 60 * 86_400_000),
+          to: new Date(),
+          conditions: conds.map((f) => ({ field: f.field, op: f.op, value: f.value }))
+        },
+        ctx.redis ?? null
+      )
+      if ('error' in out) return { error: out.error, status: out.status }
+      return { data: { flow: out.data } }
     }
 
     if (widget.type === 'bar_chart' || widget.type === 'line_chart') {

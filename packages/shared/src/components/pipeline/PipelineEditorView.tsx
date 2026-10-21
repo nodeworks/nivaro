@@ -46,9 +46,10 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
-import { ExplainCard } from '../ai/ExplainButton'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
+import { ExplainCard } from '../ai/ExplainButton'
+import { PipelineCumulativeFlowCard } from '../charts/CumulativeFlowChart'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -2759,6 +2760,7 @@ export type PipelineEditorSection =
   | 'canvas'
   | 'flow-map'
   | 'replay'
+  | 'cumulative-flow'
   | 'migration'
   | 'coverage'
   | 'lint'
@@ -4118,6 +4120,11 @@ export function PipelineEditorView({
 
         {/* Flow map */}
         {!hiddenSet.has('flow-map') && <PipelineFlowMapCard templateId={templateId} />}
+
+        {/* Cumulative flow (#2758) */}
+        {!hiddenSet.has('cumulative-flow') && (
+          <PipelineCumulativeFlowCard templateId={templateId} />
+        )}
 
         {/* Time-lapse replay */}
         {!hiddenSet.has('replay') && <PipelineReplayCard templateId={templateId} />}

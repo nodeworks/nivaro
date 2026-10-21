@@ -1,5 +1,7 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
+  CumulativeFlowChart,
+  type CumulativeFlowData,
   liveQueryMeta,
   liveWidgetInterval,
   NivaroProvider,
@@ -56,6 +58,7 @@ import { cn, formatNumber } from '@/lib/utils'
 type WidgetType = DashboardWidget['type'] | 'report_preset'
 
 interface WidgetData {
+  flow?: CumulativeFlowData | null
   value?: number | null
   rows?: Array<Record<string, unknown>>
 }
@@ -106,6 +109,52 @@ interface AddWidgetForm {
 
 /** #52 — pick one of the collection's saved browser views; the widget then
  *  counts (or sums a field over) exactly the rows that view shows. */
+function PipelineTemplatePicker({
+  value,
+  onPick
+}: {
+  value: string
+  onPick: (id: string, name: string) => void
+}) {
+  const { data: templates = [] } = useQuery({
+    queryKey: ['dashboard-widget-pipelines'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: string; name: string }> }>('/pipelines')
+        .then((r) => r.data.data ?? []),
+    retry: false
+  })
+  return (
+    <div className='space-y-1.5'>
+      <Label htmlFor='w-pipeline'>
+        Pipeline <span className='text-red-500'>*</span>
+      </Label>
+      <Select
+        value={value || '__none__'}
+        onValueChange={(v) => {
+          const t = templates.find((x) => x.id === v)
+          if (t) onPick(t.id, t.name)
+        }}
+      >
+        <SelectTrigger id='w-pipeline'>
+          <SelectValue placeholder='Pick a pipeline…' />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value='__none__'>— Pick a pipeline —</SelectItem>
+          {templates.map((t) => (
+            <SelectItem key={t.id} value={t.id}>
+              {t.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className='text-[11px] text-slate-400'>
+        Counts the records in the collection above that you can see, per state, for 60 days.
+      </p>
+    </div>
+  )
+}
+
 function SavedViewPicker({
   collection,
   value,
@@ -167,7 +216,11 @@ const TYPE_CONFIG: Record<WidgetType, { label: string; color: string }> = {
   bar_chart: { label: 'Bar Chart', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   line_chart: { label: 'Line Chart', color: 'bg-pink-50 text-pink-700 border-pink-200' },
   report_preset: { label: 'Prebuilt', color: 'bg-amber-50 text-amber-700 border-amber-200' },
-  saved_view: { label: 'Saved view', color: 'bg-sky-50 text-sky-700 border-sky-200' }
+  saved_view: { label: 'Saved view', color: 'bg-sky-50 text-sky-700 border-sky-200' },
+  cumulative_flow: {
+    label: 'Cumulative flow',
+    color: 'bg-violet-50 text-violet-700 border-violet-200'
+  }
 }
 
 /** #53 — per-widget refresh choices (seconds). '' = page default (60s). */
@@ -315,6 +368,14 @@ function WidgetCard({
               type='line'
               onPointClick={(date) => onDrill({ field: 'date', value: date })}
             />
+          ) : widget.type === 'cumulative_flow' ? (
+            data.flow ? (
+              <div className='w-full'>
+                <CumulativeFlowChart flow={data.flow} height={150} compact />
+              </div>
+            ) : (
+              <p className='text-[12px] text-slate-400'>Pick a pipeline for this widget.</p>
+            )
           ) : null}
         </div>
       )}
@@ -666,6 +727,9 @@ function AddWidgetSheet({
                 <SelectItem value='line_chart'>Line Chart — last 30 days</SelectItem>
                 <SelectItem value='report_preset'>Prebuilt — widget catalog</SelectItem>
                 <SelectItem value='saved_view'>Saved view — count or sum over a view</SelectItem>
+                <SelectItem value='cumulative_flow'>
+                  Cumulative flow — records per pipeline state, 60 days
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -741,6 +805,16 @@ function AddWidgetSheet({
                 />
               </div>
             </>
+          )}
+
+          {/* Cumulative flow (#2758): field carries the pipeline template id */}
+          {form.type === 'cumulative_flow' && (
+            <PipelineTemplatePicker
+              value={form.field}
+              onPick={(id, name) =>
+                setForm((p) => ({ ...p, field: id, title: p.title || name, width: 2, height: 2 }))
+              }
+            />
           )}
 
           {/* Display columns (latest) — only these columns are read; a public link needs them */}

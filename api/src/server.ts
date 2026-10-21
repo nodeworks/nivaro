@@ -841,6 +841,21 @@ export async function buildServer() {
         await runSlaEscalations(app)
       })
 
+      // Cumulative flow (#2758): a year of daily state counts per pipeline
+      // template + collection, so long ranges read a stored series.
+      app.cron.schedule(
+        'cumulative-flow-rollup',
+        '50 3 * * *',
+        async () => {
+          const { runCfdRollup } = await import('./services/cumulative-flow.js')
+          await runCfdRollup(app.redis)
+        },
+        {
+          description:
+            'Stores a year of daily records-per-state counts for the cumulative flow diagram.'
+        }
+      )
+
       // Help videos: pick up queued renders after a restart and re-queue any
       // that died mid-render. Request-driven kicks handle the normal case.
       app.cron.schedule('help-video-render-sweep', '*/5 * * * *', async () => {

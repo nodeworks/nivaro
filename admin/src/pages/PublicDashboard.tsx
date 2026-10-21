@@ -1,3 +1,4 @@
+import { CumulativeFlowChart, type CumulativeFlowData } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router'
 import { api } from '@/lib/api'
@@ -16,7 +17,11 @@ interface PublicWidget {
   row: number
   width: number
   height: number
-  data: { value?: number | null; rows?: Array<Record<string, unknown>> } | null
+  data: {
+    value?: number | null
+    rows?: Array<Record<string, unknown>>
+    flow?: CumulativeFlowData | null
+  } | null
 }
 
 function KpiTile({ w }: { w: PublicWidget }) {
@@ -65,6 +70,21 @@ function ChartTile({ w }: { w: PublicWidget }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function FlowTile({ w }: { w: PublicWidget }) {
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900'>
+      <p className='text-[12px] font-medium text-slate-400'>{w.title ?? w.type}</p>
+      <div className='mt-3'>
+        {w.data?.flow ? (
+          <CumulativeFlowChart flow={w.data.flow} height={150} compact />
+        ) : (
+          <p className='py-6 text-center text-[12px] text-slate-300'>No data</p>
+        )}
+      </div>
     </div>
   )
 }
@@ -136,6 +156,8 @@ export function PublicDashboardPage() {
             <div key={w.id} style={{ gridColumn: `span ${Math.min(4, Math.max(1, w.width))}` }}>
               {w.type === 'bar_chart' || w.type === 'line_chart' ? (
                 <ChartTile w={w} />
+              ) : w.type === 'cumulative_flow' ? (
+                <FlowTile w={w} />
               ) : w.type === 'latest' ? (
                 <LatestTile w={w} />
               ) : (

@@ -18,6 +18,7 @@ import {
 import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
+import { getCumulativeFlow, parseCfdParams } from '../services/cumulative-flow.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
@@ -1936,6 +1937,23 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         days
       }
     })
+  })
+
+  // Cumulative flow (#2758) — records in each state per day, stacked. Computed
+  // AS THE VIEWER; long ranges for an unrestricted viewer come from the nightly rollup.
+  app.get('/:id/cumulative-flow', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const q = req.query as Record<string, unknown>
+    const days = q.days ? Math.min(730, Math.max(7, Number(q.days) || 90)) : null
+    const parsed = parseCfdParams({
+      ...q,
+      template: id,
+      ...(days && !q.from ? { from: new Date(Date.now() - days * 86_400_000).toISOString() } : {})
+    })
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
+    const out = await getCumulativeFlow(req.user!, parsed.params, app.redis)
+    if ('error' in out) return reply.code(out.status).send({ error: out.error })
+    return reply.send({ data: out.data })
   })
 
   // Replay — daily state distribution reconstruction for the time-lapse.

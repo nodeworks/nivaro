@@ -320,6 +320,7 @@ export function TeamThroughputPage() {
             </p>
           )}
         </div>
+        <FirstOpenCard collection={collection} from={from} to={to} />
         <StateFlowCard collection={collection || 'workflows'} />
         <SendbackThemesCard collection={collection || 'workflows'} />
         <OwnerLoadCard collection={collection} />
@@ -674,6 +675,144 @@ function SendbackThemesCard({ collection }: { collection: string }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+interface FirstOpenGroup {
+  key: string
+  label: string
+  entries: number
+  opened: number
+  never_opened: number
+  still_waiting: number
+  opened_rate: number | null
+  median_minutes: number | null
+  p90_minutes: number | null
+}
+interface FirstOpenReport {
+  by_state: FirstOpenGroup[]
+  by_owner: FirstOpenGroup[]
+  overall: Omit<FirstOpenGroup, 'key' | 'label'>
+  entries_evaluated: number
+  no_owner: number
+  truncated: boolean
+}
+
+const waitText = (m: number | null) =>
+  m == null
+    ? '—'
+    : m < 60
+      ? `${Math.round(m)}m`
+      : m < 1440
+        ? `${(m / 60).toFixed(1)}h`
+        : `${(m / 1440).toFixed(1)}d`
+
+/** #1078 — how long a record waits after entering a state before any owner
+ *  opens it. SLA measures time in a state; this measures time unseen. */
+function FirstOpenCard({ collection, from, to }: { collection: string; from: string; to: string }) {
+  const [view, setView] = useState<'state' | 'owner'>('state')
+  const { data, isLoading, isError } = useQuery<FirstOpenReport>({
+    queryKey: ['first-open', collection, from, to],
+    queryFn: () =>
+      api
+        .get<{ data: FirstOpenReport }>('/reports/first-open', {
+          params: { collection, from, to }
+        })
+        .then((r) => r.data.data),
+    enabled: !!collection,
+    staleTime: 5 * 60_000
+  })
+  const rows = (view === 'state' ? data?.by_state : data?.by_owner) ?? []
+  return (
+    <div className='mt-4 rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+      <div className='flex items-center justify-between gap-3 px-4 py-3'>
+        <div>
+          <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+            Time until an owner opens a record
+          </p>
+          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            After a record enters a state, how long before any of its owners opens it. Owners are
+            resolved as the pipeline names them today; an open is the earliest recorded view while
+            the record sat in the state.
+          </p>
+        </div>
+        <div className='inline-flex shrink-0 rounded-md border border-slate-200 p-0.5 dark:border-border'>
+          {(['state', 'owner'] as const).map((v) => (
+            <button
+              key={v}
+              type='button'
+              onClick={() => setView(v)}
+              className={cn(
+                'rounded px-2.5 py-1 text-[12px] font-medium',
+                view === v
+                  ? 'bg-slate-900 text-white dark:bg-nvr-cyan dark:text-[#172940]'
+                  : 'text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
+              )}
+            >
+              By {v}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className='border-t border-slate-100 dark:border-border'>
+        {isLoading && <p className='px-4 py-3 text-[12px] text-slate-400'>Reading history…</p>}
+        {isError && (
+          <p className='px-4 py-3 text-[12px] text-amber-700 dark:text-amber-400'>
+            Could not load this report.
+          </p>
+        )}
+        {data && rows.length === 0 && (
+          <p className='px-4 py-3 text-[12px] text-slate-400'>
+            No state entries with owners in this range.
+          </p>
+        )}
+        {data && rows.length > 0 && (
+          <div className='max-h-[360px] overflow-auto'>
+            <table className='w-full text-[12px] tabular-nums'>
+              <thead>
+                <tr className='text-left text-slate-500'>
+                  <th className='px-4 py-1.5 font-medium'>
+                    {view === 'state' ? 'State' : 'Owner'}
+                  </th>
+                  <th className='px-2 py-1.5 text-right font-medium'>Entries</th>
+                  <th className='px-2 py-1.5 text-right font-medium'>Opened</th>
+                  <th className='px-2 py-1.5 text-right font-medium'>Never opened</th>
+                  <th className='px-2 py-1.5 text-right font-medium'>Waiting now</th>
+                  <th className='px-2 py-1.5 text-right font-medium'>Median wait</th>
+                  <th className='px-4 py-1.5 text-right font-medium'>90th pct</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.key} className='border-t border-slate-100 dark:border-border'>
+                    <td className='px-4 py-1.5 text-slate-700 dark:text-foreground'>{r.label}</td>
+                    <td className='px-2 py-1.5 text-right'>{formatNumber(r.entries)}</td>
+                    <td className='px-2 py-1.5 text-right'>
+                      {r.opened_rate == null ? '—' : `${Math.round(r.opened_rate * 100)}%`}
+                    </td>
+                    <td className='px-2 py-1.5 text-right'>{formatNumber(r.never_opened)}</td>
+                    <td className='px-2 py-1.5 text-right'>{formatNumber(r.still_waiting)}</td>
+                    <td className='px-2 py-1.5 text-right font-medium'>
+                      {waitText(r.median_minutes)}
+                    </td>
+                    <td className='px-4 py-1.5 text-right text-slate-500'>
+                      {waitText(r.p90_minutes)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {data && (data.no_owner > 0 || data.truncated) && (
+          <p className='border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400 dark:border-border'>
+            {data.no_owner > 0 &&
+              `${formatNumber(data.no_owner)} entries had no owner to wait on. `}
+            {data.truncated && 'Covers the newest 4,000 state entries in the range.'}
+          </p>
+        )}
+      </div>
     </div>
   )
 }

@@ -708,6 +708,7 @@ export interface DashboardWidget {
     | 'line_chart'
     | 'report_preset'
     | 'saved_view'
+    | 'cumulative_flow'
   title: string
   collection: string | null
   field: string | null
