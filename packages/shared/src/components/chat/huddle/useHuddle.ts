@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { useOptionalRealtime } from '../../../lib/realtime'
+import { installHuddleCamera } from './huddle-camera'
+import { installHuddleDraw } from './huddle-draw'
+import { installHuddleReactions } from './huddle-reactions'
 import {
   type HuddlePeer,
   type HuddleState,
@@ -44,7 +47,12 @@ export function useHuddle(room: string | null) {
   const enabled = usable && ice?.enabled !== false
 
   useEffect(() => {
-    if (realtime && support.audio) huddleStore.attach(realtime, fetchIce)
+    if (!realtime || !support.audio) return
+    // #2856/#2857/#2858 — stage features plug into the store (idempotent).
+    installHuddleReactions()
+    installHuddleCamera()
+    installHuddleDraw()
+    huddleStore.attach(realtime, fetchIce)
   }, [realtime, support.audio, fetchIce])
 
   const state: HuddleState = useSyncExternalStore(huddleStore.subscribe, huddleStore.getSnapshot)

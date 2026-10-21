@@ -3,6 +3,12 @@ import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { canSeeRoom as canSeeRoomReal, parseRoom } from './chat.js'
 import { getHuddleSettings } from './huddle-settings.js'
+import {
+  registerHuddleStage,
+  type StageFields,
+  stageFieldsFrom,
+  stagePatch
+} from './huddle-stage.js'
 import { inSocketTenant } from './socket-tenant.js'
 
 /**
@@ -32,7 +38,7 @@ const KEY_TTL_S = 120
 const MAX_SIGNAL_BYTES = 64 * 1024
 const ROOM_MAX = 200
 
-export interface HuddlePeer {
+export interface HuddlePeer extends StageFields {
   socket: string
   user: string
   name: string | null
@@ -99,7 +105,9 @@ export async function huddlePeers(
         name: m.name ?? null,
         muted: !!m.muted,
         screen: !!m.screen,
-        since: Number(m.since) || now
+        since: Number(m.since) || now,
+        // #2857/#2858 — raised hand + camera (huddle-stage.ts).
+        ...stageFieldsFrom(m)
       })
     } catch {
       /* a torn meta row: skip it, the next ping rewrites it */
@@ -310,7 +318,13 @@ export function registerHuddle(
     'huddle:state',
     inSocketTenant(
       socket,
-      async (payload: { room?: unknown; muted?: unknown; screen?: unknown }) => {
+      async (payload: {
+        room?: unknown
+        muted?: unknown
+        screen?: unknown
+        hand?: unknown
+        camera?: unknown
+      }) => {
         const room = payload?.room
         if (typeof room !== 'string' || data()?.room !== room) return
         const user = getUser()
@@ -326,7 +340,8 @@ export function registerHuddle(
             name: prev.name ?? nameOf(user),
             since: prev.since ?? Date.now(),
             muted: typeof payload.muted === 'boolean' ? payload.muted : !!prev.muted,
-            screen: typeof payload.screen === 'boolean' ? payload.screen : !!prev.screen
+            screen: typeof payload.screen === 'boolean' ? payload.screen : !!prev.screen,
+            ...stagePatch(payload, prev)
           }
           await deps.redis.hset(k.meta, socket.id, JSON.stringify(next))
           await touch(deps.redis, tenant, room, socket.id)
@@ -365,4 +380,15 @@ export function registerHuddle(
       if (d) await leave(d.room)
     })
   )
+
+  // #2857 — reactions + lower all hands (huddle-stage.ts).
+  registerHuddleStage(io, socket, getUser, {
+    room: () => data()?.room,
+    stillAllowed,
+    broadcast,
+    scopedRoomNow: (r) => scope.scopedRoomNow(r),
+    metaKey: (r) => keys(scope.tenantNow(), r).meta,
+    redis: deps.redis,
+    warn: deps.warn
+  })
 }

@@ -1,0 +1,292 @@
+import { chatAvatarColor } from '../chat-core'
+import { type HuddleExtension, huddleStore } from './huddle-store'
+
+/**
+ * Point and draw on a shared screen (#2856). Viewers pick a pointer, pen or
+ * arrow and mark up the screen someone shares; the marks show for everyone in
+ * the huddle — the presenter on their own preview — and fade after four
+ * seconds.
+ *
+ * Marks never reach the server: each peer connection carries one negotiated
+ * RTCDataChannel (same id on both sides, created before the first offer), and
+ * every message names the screen it belongs to by its owner's socket id, with
+ * coordinates normalised to 0–1 over the shared picture so any size of view
+ * lines up. Who drew is the channel's peer — never a field in the message.
+ */
+
+export const DRAW_CHANNEL_ID = 23
+export const DRAW_CHANNEL_LABEL = 'nvr-huddle-draw'
+/** A mark is gone this long after its last change; the last second fades it out. */
+export const MARK_LIFE_MS = 4000
+export const MARK_FADE_MS = 1000
+const MAX_POINTS = 600
+const MAX_MESSAGE = 16_000
+
+export type DrawTool = 'pointer' | 'pen' | 'arrow'
+
+export type DrawMsg =
+  | { t: 'pt'; s: string; x: number; y: number }
+  | { t: 'st'; s: string; id: string; tool: 'pen' | 'arrow'; k: number; p: number[] }
+  | { t: 'clr'; s: string }
+
+export interface Mark {
+  /** `${from}:${id}` */
+  key: string
+  from: string
+  tool: 'pen' | 'arrow'
+  pts: Array<[number, number]>
+  at: number
+  color: string
+  name: string
+}
+
+export interface Pointer {
+  from: string
+  x: number
+  y: number
+  at: number
+  color: string
+  name: string
+}
+
+const ID = /^[A-Za-z0-9_-]{1,64}$/
+
+const clamp01 = (n: number) => (n < 0 ? 0 : n > 1 ? 1 : n)
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/** Validate one channel message; anything off-shape is dropped (it came from another browser). */
+export function parseDrawMsg(raw: unknown): DrawMsg | null {
+  if (typeof raw !== 'string' || raw.length > MAX_MESSAGE) return null
+  let m: Record<string, unknown>
+  try {
+    m = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return null
+  }
+  if (!m || typeof m !== 'object' || typeof m.s !== 'string' || !ID.test(m.s)) return null
+  if (m.t === 'clr') return { t: 'clr', s: m.s }
+  if (m.t === 'pt') {
+    if (!finite(m.x) || !finite(m.y)) return null
+    return { t: 'pt', s: m.s, x: clamp01(m.x), y: clamp01(m.y) }
+  }
+  if (m.t === 'st') {
+    if (typeof m.id !== 'string' || !ID.test(m.id)) return null
+    if (m.tool !== 'pen' && m.tool !== 'arrow') return null
+    if (!finite(m.k) || m.k < 0 || m.k >= MAX_POINTS || !Number.isInteger(m.k)) return null
+    if (!Array.isArray(m.p) || m.p.length % 2 || m.p.length > MAX_POINTS * 2) return null
+    if (!m.p.every(finite)) return null
+    return { t: 'st', s: m.s, id: m.id, tool: m.tool, k: m.k, p: (m.p as number[]).map(clamp01) }
+  }
+  return null
+}
+
+/** The marker colour for a person: the same hue as their chat avatar. */
+export function drawColor(userId: string): string {
+  return chatAvatarColor(userId)
+}
+
+/** Opacity of a mark `age` ms after its last change (1 → 0 over the last second). */
+export function markOpacity(age: number): number {
+  if (age <= MARK_LIFE_MS - MARK_FADE_MS) return 1
+  if (age >= MARK_LIFE_MS) return 0
+  return (MARK_LIFE_MS - age) / MARK_FADE_MS
+}
+
+/** Where the picture sits inside a <video> box (object-fit: contain letterboxes it). */
+export function contentRect(
+  boxW: number,
+  boxH: number,
+  videoW: number,
+  videoH: number
+): { x: number; y: number; w: number; h: number } {
+  if (!videoW || !videoH || !boxW || !boxH) return { x: 0, y: 0, w: boxW, h: boxH }
+  const scale = Math.min(boxW / videoW, boxH / videoH)
+  const w = videoW * scale
+  const h = videoH * scale
+  return { x: (boxW - w) / 2, y: (boxH - h) / 2, w, h }
+}
+
+type Listener = () => void
+
+export interface DrawSnapshot {
+  version: number
+  /** Marks on each screen, by the screen owner's socket id. */
+  marks: Map<string, Mark[]>
+  pointers: Map<string, Map<string, Pointer>>
+}
+
+class DrawStore {
+  private marks = new Map<string, Mark[]>()
+  private pointers = new Map<string, Map<string, Pointer>>()
+  private channels = new Map<string, RTCDataChannel>()
+  private listeners = new Set<Listener>()
+  private snap: DrawSnapshot = { version: 0, marks: this.marks, pointers: this.pointers }
+  private seq = 0
+  subscribe = (l: Listener) => {
+    this.listeners.add(l)
+    return () => {
+      this.listeners.delete(l)
+    }
+  }
+  getSnapshot = () => this.snap
+  private changed() {
+    this.snap = { version: this.snap.version + 1, marks: this.marks, pointers: this.pointers }
+    for (const l of this.listeners) l()
+  }
+
+  private who(from: string): { name: string; color: string } {
+    const s = huddleStore.getSnapshot()
+    if (from === s.self) return { name: 'You', color: drawColor(this.selfUser || from) }
+    const p = s.peers.find((x) => x.socket === from)
+    return { name: p?.name || 'Someone', color: drawColor(p?.user || from) }
+  }
+  /** My user id, for my own colour (the store only knows my socket). */
+  selfUser = ''
+
+  /** Apply one message from `from` (a peer's socket, or mine). */
+  apply(from: string, msg: DrawMsg, now = Date.now()) {
+    if (msg.t === 'clr') {
+      if (!this.marks.has(msg.s) && !this.pointers.has(msg.s)) return
+      this.marks.delete(msg.s)
+      this.pointers.delete(msg.s)
+      return this.changed()
+    }
+    const { name, color } = this.who(from)
+    if (msg.t === 'pt') {
+      let on = this.pointers.get(msg.s)
+      if (!on) {
+        on = new Map()
+        this.pointers.set(msg.s, on)
+      }
+      on.set(from, { from, x: msg.x, y: msg.y, at: now, color, name })
+      return this.changed()
+    }
+    const key = `${from}:${msg.id}`
+    const list = this.marks.get(msg.s) ?? []
+    let mark = list.find((m) => m.key === key)
+    if (!mark) {
+      mark = { key, from, tool: msg.tool, pts: [], at: now, color, name }
+      list.push(mark)
+      this.marks.set(msg.s, list)
+    }
+    for (let i = 0; i < msg.p.length; i += 2) {
+      const at = msg.k + i / 2
+      if (at < MAX_POINTS) mark.pts[at] = [msg.p[i], msg.p[i + 1]]
+    }
+    // A dropped message leaves a hole; close it with the last known point.
+    for (let i = 0; i < mark.pts.length; i++)
+      if (!mark.pts[i]) mark.pts[i] = mark.pts[i - 1] ?? [0, 0]
+    mark.at = now
+    this.changed()
+  }
+
+  /** Forget everything older than MARK_LIFE_MS; true when anything is still showing. */
+  prune(now = Date.now()): boolean {
+    let dropped = false
+    for (const [screen, list] of this.marks) {
+      const keep = list.filter((m) => now - m.at < MARK_LIFE_MS)
+      if (keep.length !== list.length) dropped = true
+      if (keep.length) this.marks.set(screen, keep)
+      else this.marks.delete(screen)
+    }
+    for (const [screen, on] of this.pointers) {
+      for (const [from, p] of on) {
+        if (now - p.at >= MARK_LIFE_MS) {
+          on.delete(from)
+          dropped = true
+        }
+      }
+      if (!on.size) this.pointers.delete(screen)
+    }
+    if (dropped) this.changed()
+    return this.marks.size > 0 || this.pointers.size > 0
+  }
+
+  /** People (not me) with a live mark or pointer on `screen`. */
+  pointing(screen: string, now = Date.now()): number {
+    const self = huddleStore.getSnapshot().self
+    const who = new Set<string>()
+    for (const m of this.marks.get(screen) ?? []) if (now - m.at < MARK_LIFE_MS) who.add(m.from)
+    for (const p of this.pointers.get(screen)?.values() ?? []) {
+      if (now - p.at < MARK_LIFE_MS) who.add(p.from)
+    }
+    if (self) who.delete(self)
+    return who.size
+  }
+
+  /** Send to every peer and show it here at once. */
+  send(msg: DrawMsg) {
+    const self = huddleStore.getSnapshot().self
+    if (!self) return
+    this.apply(self, msg)
+    const wire = JSON.stringify(msg)
+    for (const ch of this.channels.values()) {
+      if (ch.readyState !== 'open') continue
+      try {
+        ch.send(wire)
+      } catch {
+        /* a closing channel: the next message goes to the rest */
+      }
+    }
+  }
+
+  nextStrokeId(): string {
+    this.seq += 1
+    return `${Date.now().toString(36)}${this.seq}`
+  }
+
+  private dropFrom(from: string) {
+    let changed = false
+    for (const [screen, list] of this.marks) {
+      const keep = list.filter((m) => m.from !== from)
+      if (keep.length !== list.length) changed = true
+      if (keep.length) this.marks.set(screen, keep)
+      else this.marks.delete(screen)
+    }
+    // Their own screen's marks go with them.
+    if (this.marks.delete(from) || this.pointers.delete(from)) changed = true
+    for (const on of this.pointers.values()) if (on.delete(from)) changed = true
+    if (changed) this.changed()
+  }
+
+  readonly ext: HuddleExtension = {
+    link: (socket, pc) => {
+      if (typeof pc.createDataChannel !== 'function') return
+      let ch: RTCDataChannel
+      try {
+        ch = pc.createDataChannel(DRAW_CHANNEL_LABEL, {
+          negotiated: true,
+          id: DRAW_CHANNEL_ID,
+          ordered: true,
+          maxRetransmits: 2
+        })
+      } catch {
+        return
+      }
+      this.channels.set(socket, ch)
+      ch.onmessage = (e) => {
+        const msg = parseDrawMsg(e.data)
+        if (msg) this.apply(socket, msg)
+      }
+      ch.onclose = () => {
+        if (this.channels.get(socket) === ch) this.channels.delete(socket)
+      }
+    },
+    unlink: (socket) => {
+      this.channels.delete(socket)
+      this.dropFrom(socket)
+    },
+    teardown: () => {
+      this.channels.clear()
+      this.marks.clear()
+      this.pointers.clear()
+      this.changed()
+    }
+  }
+}
+
+export const drawStore = new DrawStore()
+
+export function installHuddleDraw() {
+  huddleStore.use(drawStore.ext)
+}

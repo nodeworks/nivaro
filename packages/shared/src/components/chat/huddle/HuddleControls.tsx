@@ -2,6 +2,7 @@ import { Headphones, Mic, MicOff, PhoneOff, ScreenShare, ScreenShareOff } from '
 import type React from 'react'
 import { cn } from '../../../lib/utils'
 import { canOpenChatRoom, openChatRoom } from '../chat-core'
+import { HuddleCameraButton } from './HuddleCamera'
 import { peerSummary } from './huddle-store'
 import type { HuddleHandle } from './useHuddle'
 
@@ -100,6 +101,8 @@ export function HuddleControls({
             )}
           </button>
         )}
+        {/* #2858 — optional camera, off by default. */}
+        <HuddleCameraButton disabled={joining} />
         <button
           type='button'
           onClick={huddle.leave}
