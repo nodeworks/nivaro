@@ -179,9 +179,9 @@ describe('store extensions', () => {
     const attach = vi.fn(() => [() => offs.push('ext')])
     const unplug = huddleStore.use({ attach })
     expect(attach).toHaveBeenCalledWith(transport)
-    // Not in a huddle: nothing is sent.
+    // Not in a huddle: nothing is sent (attach itself may subscribe to live badges, #2851).
     expect(huddleStore.send('huddle:react', { emoji: '👍' })).toBe(false)
-    expect(transport.emit).not.toHaveBeenCalled()
+    expect(transport.emit).not.toHaveBeenCalledWith('huddle:react', expect.anything())
     unplug()
     expect(offs).toContain('ext')
   })
