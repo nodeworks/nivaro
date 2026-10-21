@@ -45,7 +45,13 @@ vi.mock('./collections.js', () => ({
   ],
   getRelations: async () => []
 }))
-vi.mock('./items.js', () => ({ readItems: vi.fn() }))
+// The caller reads every record except the ids listed in `unreadable`.
+const unreadable = new Set<string>()
+vi.mock('./items.js', () => ({
+  readItems: vi.fn(async (_u: unknown, _c: string, q: { filter: { id: { _in: unknown[] } } }) => ({
+    data: q.filter.id._in.filter((id) => !unreadable.has(String(id))).map((id) => ({ id }))
+  }))
+}))
 vi.mock('./permissions.js', () => ({ getAllowedFields: vi.fn(async () => null) }))
 vi.mock('./record-state.js', () => ({
   attachRecordState: async (_c: string, rows: Array<Record<string, unknown>>) => {
@@ -157,6 +163,7 @@ describe('formLockedFields', () => {
 
 describe('bulkFormRefusals', () => {
   beforeEach(() => {
+    unreadable.clear()
     layouts.length = 0
     layouts.push({ id: 1, name: 'Main' }, { id: 2, name: 'Other' })
     tables.nivaro_collections = [{ collection: 'orders' }]
@@ -230,5 +237,27 @@ describe('bulkFormRefusals', () => {
       byForm: false
     })
     expect(none.get('1')).toBe('code: this field is read-only')
+  })
+  it('never judges a record the caller cannot read (no form or lock leaks)', async () => {
+    unreadable.add('3')
+    const out = await bulkFormRefusals({
+      user,
+      isAdmin: false,
+      collection: 'orders',
+      ids: [1, 2, 3],
+      fields: ['amount'],
+      byForm: false
+    })
+    expect(out.size).toBe(0)
+    unreadable.add('2')
+    const off = await bulkFormRefusals({
+      user,
+      isAdmin: false,
+      collection: 'orders',
+      ids: [2],
+      fields: ['title'],
+      byForm: true
+    })
+    expect(off.size).toBe(0)
   })
 })

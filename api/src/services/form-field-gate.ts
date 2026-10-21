@@ -472,13 +472,20 @@ export async function bulkFormRefusals(opts: {
   ids: Array<string | number>
   fields: string[]
   byForm: boolean
+  workspaceId?: string
 }): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   const { user, isAdmin, collection } = opts
   if (opts.fields.length === 0 || opts.ids.length === 0) return out
+  // Only records the caller can read are judged: a refusal names the record's
+  // form and its lock, which must never leak for a record they cannot see (or
+  // confirm that it exists). The rest fail the usual way, as unreadable.
+  const readable = await readableIds(user, collection, opts.ids, opts.workspaceId)
+  const ids = opts.ids.filter((id) => readable.has(idKey(id)))
+  if (ids.length === 0) return out
   const want = new Set(opts.fields)
   const [forms, meta] = await Promise.all([
-    resolveFormsForRecords(collection, opts.ids, user.role ?? null, isAdmin),
+    resolveFormsForRecords(collection, ids, user.role ?? null, isAdmin),
     settableFields(collection).catch(() => null)
   ])
   const readonly = new Set([...(meta?.readonly ?? [])].filter((f) => want.has(f)))
@@ -487,7 +494,7 @@ export async function bulkFormRefusals(opts: {
     if (!row || shapes.has(Number(row.id))) continue
     shapes.set(Number(row.id), visibleShape(await loadFormShape(row), user.role ?? null, isAdmin))
   }
-  const stateIds = opts.ids
+  const stateIds = ids
     .map((id) => String(id))
     .filter((id) => {
       const row = forms.get(idKey(id))
@@ -497,7 +504,7 @@ export async function bulkFormRefusals(opts: {
     recordStates(collection, stateIds),
     stateLabelsFor([...shapes.values()])
   ])
-  for (const id of opts.ids) {
+  for (const id of ids) {
     const row = forms.get(idKey(id))
     const label = (f: string) => meta?.labels.get(f) ?? f
     if (!row) {
@@ -530,6 +537,30 @@ export async function bulkFormRefusals(opts: {
     }
   }
   return out
+}
+
+/** Lower-cased ids of `ids` the caller can read (RLS, scopes, workspace); none on a refusal. */
+async function readableIds(
+  user: User,
+  collection: string,
+  ids: Array<string | number>,
+  workspaceId?: string
+): Promise<Set<string>> {
+  try {
+    const rows = await selectInChunks(ids, 1000, async (chunk) => {
+      const res = (await readItems(
+        user,
+        collection,
+        { fields: ['id'], filter: { id: { _in: chunk } }, limit: chunk.length, count: false },
+        undefined,
+        workspaceId
+      )) as { data?: Array<Record<string, unknown>> }
+      return res.data ?? []
+    })
+    return new Set(rows.map((r) => idKey(r.id)))
+  } catch {
+    return new Set()
+  }
 }
 
 export const bulkRefusalKey = idKey

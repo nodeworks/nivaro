@@ -462,7 +462,8 @@ export async function itemsRoutes(app: FastifyInstance) {
           collection,
           ids,
           fields,
-          byForm: by_form === true
+          byForm: by_form === true,
+          workspaceId: req.workspaceId ?? undefined
         })
       )
       .catch((err) => {
