@@ -245,7 +245,7 @@ export function isPoor(q: { rtt: number | null; loss: number | null }): boolean 
   return (q.loss ?? 0) > POOR_LOSS || (q.rtt ?? 0) > POOR_RTT
 }
 
-type Report = Record<string, any>
+export type Report = Record<string, any>
 
 /** One poll of `pc.getStats()` (as an array of reports) → this link's quality. */
 export function summarizeStats(

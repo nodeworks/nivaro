@@ -15,6 +15,7 @@ import {
   touchCollab
 } from './huddle-collab.js'
 import { LIVE_ROOM, pokeHuddleLive, registerHuddleLive } from './huddle-live.js'
+import { registerHuddleMarks } from './huddle-marks.js'
 import { markHuddling, unmarkHuddling } from './huddle-presence.js'
 import {
   answerRing,
@@ -830,6 +831,14 @@ export function registerHuddle(
       if (d) await leave(d.room)
     })
   )
+
+  // #2856 — point and draw on the SFU, where there is no mesh data channel (huddle-marks.ts).
+  registerHuddleMarks(io, socket, getUser, {
+    room: () => data()?.room,
+    stillAllowed,
+    peers: peersOf,
+    warn: deps.warn
+  })
 
   // #2857 — reactions + lower all hands (huddle-stage.ts).
   registerHuddleStage(io, socket, getUser, {

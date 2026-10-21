@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { formatElapsed, type LivePeer, mergeRoster, peerSummary, politeFor } from './huddle-store'
+import {
+  formatElapsed,
+  huddleStore,
+  type LivePeer,
+  mergeRoster,
+  peerSummary,
+  politeFor
+} from './huddle-store'
 
 const peer = (socket: string, over: Partial<LivePeer> = {}): LivePeer => ({
   socket,
@@ -54,5 +61,46 @@ describe('peerSummary + formatElapsed', () => {
     expect(formatElapsed(0)).toBe('0:00')
     expect(formatElapsed(65_000)).toBe('1:05')
     expect(formatElapsed(3_723_000)).toBe('1:02:03')
+  })
+})
+
+describe('SFU source routing in the store (#2858)', () => {
+  const store = huddleStore as any
+  const stream = (id: string) => ({ id }) as unknown as MediaStream
+
+  it('files a camera under the camera tile and a screen under the screen slot, per socket', () => {
+    store.set({
+      room: 'ch:1',
+      status: 'live',
+      self: 'ME',
+      mode: 'sfu',
+      peers: [peer('A'), peer('B')]
+    })
+    try {
+      store.onSfuTrack('A', 'camera', stream('cam-a'))
+      store.onSfuTrack('B', 'screen', stream('scr-b'))
+      let s = huddleStore.getSnapshot()
+      expect(s.peers.find((p) => p.socket === 'A')).toMatchObject({
+        camera: { id: 'cam-a' },
+        video: null
+      })
+      expect(s.peers.find((p) => p.socket === 'B')).toMatchObject({ video: { id: 'scr-b' } })
+      expect(s.peers.find((p) => p.socket === 'B')?.camera ?? null).toBeNull()
+
+      // A paused (muted) camera leaves its tile; the screen of someone else stays.
+      store.onSfuTrackEnd('A', 'camera')
+      s = huddleStore.getSnapshot()
+      expect(s.peers.find((p) => p.socket === 'A')?.camera).toBeNull()
+      expect(s.peers.find((p) => p.socket === 'B')?.video).toMatchObject({ id: 'scr-b' })
+
+      // Closing the mesh after the switch keeps what the SFU delivers, drops mesh-only frames.
+      store.updatePeer('A', { video: stream('mesh-frozen') })
+      store.closeMeshLinks()
+      s = huddleStore.getSnapshot()
+      expect(s.peers.find((p) => p.socket === 'A')?.video).toBeNull()
+      expect(s.peers.find((p) => p.socket === 'B')?.video).toMatchObject({ id: 'scr-b' })
+    } finally {
+      store.teardown()
+    }
   })
 })
