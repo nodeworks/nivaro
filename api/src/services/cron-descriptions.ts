@@ -54,6 +54,10 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Hourly — for every manager who set team alert lines on their dashboard: past-SLA per person, out with nobody covering, stuck records, quiet reports. One notice per report and rule per day.',
   'task-done-when-sweep':
     'Closes open tasks whose “done when” condition the record now meets (catches writes the after-save check never sees).',
+  'ai-spend-rollup':
+    'Nightly — rolls the AI call log up per day, model, feature and person (the log itself is pruned after 30 days) so month-on-month spend survives, then tells admins once a month when the projection passes a budget or last month by the set percentage.',
+  'ai-model-catalogue':
+    'Nightly — asks the AI provider or gateway which models it answers for. New and retired ids land on AI quality; a new one runs a Compare and a small replay of saved questions; a retired id still in the settings warns admins. Never switches a model.',
   'ai-watch-checks':
     'Hourly — re-reads each number someone is watching from Ask AI (as that person), alerts on a crossed threshold or an unusual move, and keeps the series the daily summary reports.',
   'line-sla-sweep':

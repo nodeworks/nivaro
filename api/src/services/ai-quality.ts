@@ -1,6 +1,6 @@
 import { db } from '../db/index.js'
 import type { AiSettingsRow } from './ai-client.js'
-import { costOf, featureFromRoute } from './ai-log.js'
+import { costOf, featureFromRoute, setPriceOverrides } from './ai-log.js'
 import { getIo } from './io-holder.js'
 import { currentTraceMeta } from './request-trace.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
@@ -39,15 +39,81 @@ export interface BudgetCap {
   cheaper_model: string | null
 }
 
+/** USD per million tokens — an admin's price for one model id (#2764). */
+export interface ModelPrice {
+  input: number
+  cached: number
+  output: number
+}
+
 export interface QualityConfig {
   budgets: { enabled: boolean; caps: BudgetCap[] }
   /** Second model on the SAME configured provider, tried when a call fails. */
   fallback_model: string | null
+  /** Prices per model that beat the built-in list, so the logged estimate matches the bill. */
+  prices: Record<string, ModelPrice>
+  /** Provider/gateway bill per month (`YYYY-MM`) and model; `*` = a month total with no split. */
+  bills: Record<string, Record<string, number>>
+  /** Tell admins when the month-end projection passes last month by this many percent (null = off). */
+  forecast_alert_pct: number | null
+  /** The nightly model catalogue check (#2732). */
+  catalogue: { enabled: boolean; auto_trial: boolean; auto_trial_max_usd: number }
 }
+
+export const DEFAULT_CATALOGUE = { enabled: true, auto_trial: true, auto_trial_max_usd: 1 }
 
 export const DEFAULT_QUALITY: QualityConfig = {
   budgets: { enabled: false, caps: [] },
-  fallback_model: null
+  fallback_model: null,
+  prices: {},
+  bills: {},
+  forecast_alert_pct: null,
+  catalogue: { ...DEFAULT_CATALOGUE }
+}
+
+const num = (v: unknown, max = 1_000_000): number | null => {
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 && n <= max ? Math.round(n * 1_000_000) / 1_000_000 : null
+}
+
+export function normalizePrices(raw: unknown): Record<string, ModelPrice> {
+  const out: Record<string, ModelPrice> = {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const [model, v] of Object.entries(raw as Record<string, unknown>)) {
+    const id = model.trim().slice(0, 100)
+    if (!id || !v || typeof v !== 'object') continue
+    const o = v as Record<string, unknown>
+    const input = num(o.input, 10_000)
+    const output = num(o.output, 10_000)
+    if (input == null || output == null) continue
+    out[id] = { input, output, cached: num(o.cached, 10_000) ?? input }
+  }
+  return out
+}
+
+export function normalizeBills(raw: unknown): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const [month, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !v || typeof v !== 'object') continue
+    const row: Record<string, number> = {}
+    for (const [model, amount] of Object.entries(v as Record<string, unknown>)) {
+      const id = model.trim().slice(0, 100)
+      const usd = num(amount, 100_000_000)
+      if (id && usd != null) row[id] = usd
+    }
+    if (Object.keys(row).length) out[month] = row
+  }
+  return out
+}
+
+export function normalizeCatalogue(raw: unknown): QualityConfig['catalogue'] {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  return {
+    enabled: o.enabled === undefined ? DEFAULT_CATALOGUE.enabled : o.enabled === true,
+    auto_trial: o.auto_trial === undefined ? DEFAULT_CATALOGUE.auto_trial : o.auto_trial === true,
+    auto_trial_max_usd: num(o.auto_trial_max_usd, 1000) ?? DEFAULT_CATALOGUE.auto_trial_max_usd
+  }
 }
 
 const str = (v: unknown, max = 120): string | null =>
@@ -80,7 +146,11 @@ export function parseQualityConfig(raw: unknown): QualityConfig {
   }
   return {
     budgets: { enabled: b.enabled === true, caps },
-    fallback_model: str(qq.fallback_model, 100)
+    fallback_model: str(qq.fallback_model, 100),
+    prices: normalizePrices(qq.prices),
+    bills: normalizeBills(qq.bills),
+    forecast_alert_pct: qq.forecast_alert_pct == null ? null : num(qq.forecast_alert_pct, 10_000),
+    catalogue: normalizeCatalogue(qq.catalogue)
   }
 }
 
@@ -322,7 +392,10 @@ export async function applyBudget(
 }
 
 export function qualityFromSettings(s: AiSettingsRow | null | undefined): QualityConfig {
-  return parseQualityConfig(s?.ai_models)
+  const cfg = parseQualityConfig(s?.ai_models)
+  // #2764 — the prices an admin set price every call logged from here on
+  setPriceOverrides(cfg.prices)
+  return cfg
 }
 
 // ─── provider failure + fallback ─────────────────────────────────────────────

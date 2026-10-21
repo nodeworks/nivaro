@@ -2075,6 +2075,13 @@ export async function buildServer() {
         )
       }
 
+      // AI spend roll-up + forecast alerts (#2473, #2764) and the model
+      // catalogue watch (#2732).
+      {
+        const { registerAiQualityCrons } = await import('./services/ai-quality-crons.js')
+        registerAiQualityCrons(app)
+      }
+
       // Tasks (#1007, #1016): due-tomorrow reminders + overdue escalation
       // once a day, the self-closing check every hour, and a daily-summary
       // section of what is due or overdue.

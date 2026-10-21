@@ -3,8 +3,6 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { buildChatSystemPrompt } from '../services/ai-chat.js'
-import { runChatLoop } from '../services/ai-chat-loop.js'
 import {
   describeAiProvider,
   getAiClient,
@@ -30,15 +28,19 @@ import {
   estimateRun,
   estimateTokens,
   evidenceFromCalls,
-  extractQuestion,
   mergeQualityIntoModels,
   normalizeCap,
   parseQualityConfig,
   type QualityConfig
 } from '../services/ai-quality.js'
-import { currentTraceMeta, runInTrace } from '../services/request-trace.js'
+import {
+  executeReplay,
+  loadReplayCandidates,
+  type ReplayRun,
+  replayRuns
+} from '../services/ai-replay.js'
 import { currentStoreId } from '../services/traffic-taps.js'
-import type { User } from '../types.js'
+import { aiQualityInsightRoutes } from './ai-quality-insights.js'
 
 /**
  * AI quality and cost tooling around the call log: budgets (#1817, #1893),
@@ -70,44 +72,6 @@ async function allowedModels(): Promise<string[]> {
   for (const c of q.budgets.caps) if (c.cheaper_model) out.add(c.cheaper_model)
   return [...out]
 }
-
-// ─── replay runs (in-process, one at a time) ────────────────────────────────
-
-interface ReplayItem {
-  request_id: string
-  question: string
-  asker: string
-  original: {
-    answer: string
-    tools: string[]
-    rounds: number
-    cost_usd: number | null
-    latency_ms: number
-  }
-  replay?: {
-    answer: string
-    tools: string[]
-    rounds: number
-    cost_usd: number | null
-    latency_ms: number
-    error?: string
-  }
-}
-interface ReplayRun {
-  id: string
-  user: string
-  /** Tenant store id (cloud); '' self-hosted. */
-  store: string
-  model: string
-  status: 'running' | 'done' | 'error'
-  started_at: string
-  finished_at?: string
-  total: number
-  done: number
-  items: ReplayItem[]
-  error?: string
-}
-const replayRuns = new Map<string, ReplayRun>()
 
 /** #1898 — thumbs-down answers with their triaged cause, for the guide drafter. */
 async function thumbsDownSignals(since: Date) {
@@ -180,11 +144,14 @@ export async function aiQualityRoutes(app: FastifyInstance) {
       typeof body.fallback_model === 'string' && body.fallback_model.trim()
         ? body.fallback_model.trim().slice(0, 100)
         : null
+    const { raw, id, cfg: current } = await readQuality()
+    // prices, bills, the forecast alert and the catalogue watch have their own
+    // endpoints (ai-quality-insights.ts): this save keeps them as they are
     const next: QualityConfig = {
+      ...current,
       budgets: { enabled: body.budgets?.enabled === true, caps },
       fallback_model: fallback
     }
-    const { raw, id } = await readQuality()
     if (id == null) return reply.code(500).send({ error: 'No settings row' })
     await db('nivaro_settings')
       .where({ id })
@@ -583,80 +550,6 @@ export async function aiQualityRoutes(app: FastifyInstance) {
   })
 
   // ─── replay recent questions (#1916) ──────────────────────────────────────
-  /** The newest standalone Ask AI questions from the log, with what the current model did. */
-  async function loadReplayCandidates(count: number) {
-    const firsts = (await db('nivaro_ai_calls')
-      .where({ feature: 'chat', status: 'ok', rounds: 1 })
-      .whereNotNull('user')
-      .whereNotNull('request_id')
-      .orderBy('id', 'desc')
-      .limit(count * 3)
-      .select('request_id', 'user', 'request')) as Array<{
-      request_id: string
-      user: string
-      request: string | null
-    }>
-    const picked: Array<{ request_id: string; user: string; question: string }> = []
-    const seen = new Set<string>()
-    for (const f of firsts) {
-      if (seen.has(f.request_id)) continue
-      const q = extractQuestion(f.request)
-      if (!q) continue
-      seen.add(f.request_id)
-      picked.push({ request_id: f.request_id, user: String(f.user), question: q })
-      if (picked.length >= count) break
-    }
-    if (picked.length === 0) return []
-    const all = (await db('nivaro_ai_calls')
-      .whereIn(
-        'request_id',
-        picked.map((p) => p.request_id)
-      )
-      .orderBy('id', 'asc')
-      .select(
-        'request_id',
-        'request',
-        'response',
-        'input_tokens',
-        'output_tokens',
-        'cost_usd',
-        'latency_ms',
-        'rounds'
-      )) as Array<{
-      request_id: string
-      request: string | null
-      response: string | null
-      input_tokens: number | null
-      output_tokens: number | null
-      cost_usd: number | null
-      latency_ms: number | null
-    }>
-    const grouped = new Map<string, typeof all>()
-    for (const c of all) {
-      const a = grouped.get(c.request_id) ?? []
-      a.push(c)
-      grouped.set(c.request_id, a)
-    }
-    return picked.map((p) => {
-      const calls = grouped.get(p.request_id) ?? []
-      const ev = evidenceFromCalls(calls)
-      return {
-        ...p,
-        input_tokens: calls.reduce((n, c) => n + (Number(c.input_tokens) || 0), 0),
-        output_tokens: calls.reduce((n, c) => n + (Number(c.output_tokens) || 0), 0),
-        original: {
-          answer: ev.answer,
-          tools: ev.tools,
-          rounds: calls.length,
-          cost_usd: calls.some((c) => c.cost_usd != null)
-            ? calls.reduce((n, c) => n + (Number(c.cost_usd) || 0), 0)
-            : null,
-          latency_ms: calls.reduce((n, c) => n + (Number(c.latency_ms) || 0), 0)
-        }
-      }
-    })
-  }
-
   const parseReplay = async (body: Record<string, unknown>) => {
     const model = typeof body.model === 'string' ? body.model.trim() : ''
     const count = Math.min(50, Math.max(1, Number(body.count) || 50))
@@ -726,95 +619,7 @@ export async function aiQualityRoutes(app: FastifyInstance) {
       comment: `${p.cands.length} question(s) on ${p.model} · estimate $${(total ?? 0).toFixed(4)}`,
       req
     })
-    // Detached: each question runs as the person who asked it, so the tools
-    // read only what that person can. Proposals are refused (readOnly).
-    void (async () => {
-      try {
-        for (const c of p.cands) {
-          const asker = (await db('nivaro_users')
-            .where({ id: c.user, status: 'active' })
-            .first()
-            .catch(() => null)) as User | null
-          const item: ReplayItem = {
-            request_id: c.request_id,
-            question: c.question,
-            asker: asker
-              ? `${asker.first_name ?? ''} ${asker.last_name ?? ''}`.trim() || asker.email
-              : '(inactive)',
-            original: c.original
-          }
-          if (!asker) {
-            item.replay = {
-              answer: '',
-              tools: [],
-              rounds: 0,
-              cost_usd: null,
-              latency_ms: 0,
-              error: 'The person who asked is no longer active'
-            }
-          } else {
-            const t0 = Date.now()
-            let traceId: string | null = null
-            try {
-              // billed to the admin who started the run, so it counts against their budget
-              const out = await runInTrace('/api/ai/replay/run', String(admin.id), async () => {
-                traceId = currentTraceMeta()?.id ?? null
-                const client = await getAiClient({ model: p.model, fallback: false })
-                if (!client) throw new Error('AI is not configured')
-                const system = await buildChatSystemPrompt(asker)
-                return runChatLoop({
-                  client,
-                  model: p.model,
-                  system,
-                  user: asker,
-                  convo: [{ role: 'user', content: c.question }],
-                  readOnly: true
-                })
-              })
-              let cost: number | null = null
-              if (traceId) {
-                const r = (await db('nivaro_ai_calls')
-                  .where({ request_id: traceId })
-                  .sum({ total: 'cost_usd' })
-                  .first()
-                  .catch(() => null)) as { total?: unknown } | null
-                cost = r?.total == null ? null : Number(r.total)
-              }
-              item.replay = {
-                answer: out.text,
-                tools: out.trace.map((t) => t.tool),
-                rounds: out.rounds,
-                cost_usd: cost,
-                latency_ms: Date.now() - t0
-              }
-            } catch (err) {
-              item.replay = {
-                answer: '',
-                tools: [],
-                rounds: 0,
-                cost_usd: null,
-                latency_ms: Date.now() - t0,
-                error: String((err as Error)?.message ?? err).slice(0, 300)
-              }
-              // a spent budget or a down provider will not recover mid-run
-              if ((err as { code?: string }).code === 'AI_BUDGET_EXCEEDED') {
-                run.items.push(item)
-                run.done++
-                throw err
-              }
-            }
-          }
-          run.items.push(item)
-          run.done++
-        }
-        run.status = 'done'
-      } catch (err) {
-        run.status = 'error'
-        run.error = String((err as Error)?.message ?? err).slice(0, 300)
-      } finally {
-        run.finished_at = new Date().toISOString()
-      }
-    })()
+    void executeReplay(run, p.cands, p.model, String(admin.id))
     return reply.code(202).send({ data: { run_id: run.id } })
   })
 
@@ -846,4 +651,7 @@ export async function aiQualityRoutes(app: FastifyInstance) {
       }
     }
   })
+
+  // spend forecast, prompt cost, model catalogue, tool reliability (#2473 …)
+  await app.register(aiQualityInsightRoutes)
 }
