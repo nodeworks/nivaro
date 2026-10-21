@@ -7,6 +7,7 @@ import { del, get, patch as patch2, post } from '../../lib/commands'
 import { isDndActive } from '../../lib/dnd'
 import { playNotificationSound } from '../../lib/notification-sound'
 import { announceLocalPrefs } from '../../lib/user-sync'
+import { bindChatOutbox, enqueueChatOutbox } from './chat-outbox'
 
 /**
  * Nivaro chat — data layer.
@@ -246,7 +247,7 @@ function useRealtimeInvalidate(collection: string, keys: string[][]) {
   }, [cfg.realtime, collection, qc])
 }
 
-interface MessagesPage {
+export interface MessagesPage {
   data: ChatMessage[]
   meta?: { has_older: boolean; has_newer: boolean; anchor: number | null }
 }
@@ -365,11 +366,11 @@ export function useSendChatMessage(room: string) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const cfg = useChatConfig()
-  bindOutbox(client, qc, cfg.me?.id ?? null)
+  bindChatOutbox(client, qc, cfg.me?.id ?? null)
   const send = useCallback(
     (input: string | SendInput) => {
       const i: SendInput = typeof input === 'string' ? { text: input } : input
-      enqueueOutbox({
+      enqueueChatOutbox({
         client_id: newClientId(),
         room,
         text: i.text,
@@ -378,8 +379,6 @@ export function useSendChatMessage(room: string) {
         parent_id: i.parentId ?? null,
         quote_id: i.quoteId ?? null,
         urgent: !!i.urgent,
-        status: 'sending',
-        error: null,
         created_at: new Date().toISOString(),
         sender: cfg.me?.id ?? '',
         sender_name: cfg.me?.name ?? null
@@ -390,189 +389,21 @@ export function useSendChatMessage(room: string) {
   return { mutate: send, isPending: false }
 }
 
-// ── Outbox ───────────────────────────────────────────────────────────────────
+// ── Outbox (#983, #984, #2782) — chat-outbox.ts ─────────────────────────────
 
-export interface OutboxItem {
-  client_id: string
-  room: string
-  text: string
-  mentions: string[]
-  attachments: string[]
-  parent_id: number | null
-  quote_id: number | null
-  urgent: boolean
-  status: 'sending' | 'queued' | 'failed'
-  error: string | null
-  created_at: string
-  sender: string
-  sender_name: string | null
-}
-
-const OUTBOX_KEY = 'nvr-chat-outbox'
-let outbox: OutboxItem[] = []
-const outboxListeners = new Set<() => void>()
-let outboxClient: ReturnType<typeof useNivaroClient> | null = null
-let outboxQc: ReturnType<typeof useQueryClient> | null = null
-let outboxUser: string | null = null
-let flushing = false
-let retryTimer: ReturnType<typeof setTimeout> | null = null
+export {
+  discardOutbox,
+  editOutbox,
+  holdOutbox,
+  nudgeChatOutbox,
+  type OutboxItem,
+  retryOutbox,
+  useOutbox
+} from './chat-outbox'
 
 function newClientId(): string {
   const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
   return c?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-}
-
-function saveOutbox() {
-  try {
-    if (typeof localStorage === 'undefined' || !outboxUser) return
-    const keep = outbox.filter((o) => o.sender === outboxUser)
-    localStorage.setItem(`${OUTBOX_KEY}:${outboxUser}`, JSON.stringify(keep))
-  } catch {
-    /* storage is a convenience */
-  }
-}
-
-function emitOutbox() {
-  saveOutbox()
-  for (const l of outboxListeners) l()
-}
-
-function bindOutbox(
-  client: ReturnType<typeof useNivaroClient>,
-  qc: ReturnType<typeof useQueryClient>,
-  userId: string | null
-) {
-  outboxClient = client
-  outboxQc = qc
-  if (userId && userId !== outboxUser) {
-    outboxUser = userId
-    try {
-      const raw = localStorage.getItem(`${OUTBOX_KEY}:${userId}`)
-      const saved = raw ? (JSON.parse(raw) as OutboxItem[]) : []
-      // Anything left from an earlier visit waits for a connection again.
-      const known = new Set(outbox.map((o) => o.client_id))
-      for (const o of saved)
-        if (!known.has(o.client_id))
-          outbox.push({ ...o, status: o.status === 'failed' ? 'failed' : 'queued' })
-      if (saved.length) {
-        emitOutbox()
-        scheduleRetry(1000)
-      }
-    } catch {
-      /* storage is a convenience */
-    }
-    if (typeof window !== 'undefined') {
-      window.addEventListener('online', () => scheduleRetry(0))
-    }
-  }
-}
-
-function enqueueOutbox(item: OutboxItem) {
-  outbox.push(item)
-  emitOutbox()
-  void flushOutbox()
-}
-
-function scheduleRetry(ms: number) {
-  if (retryTimer) clearTimeout(retryTimer)
-  retryTimer = setTimeout(() => {
-    retryTimer = null
-    for (const o of outbox) if (o.status === 'queued') o.status = 'sending'
-    emitOutbox()
-    void flushOutbox()
-  }, ms)
-}
-
-function isNetworkError(err: unknown): boolean {
-  const status = (err as { status?: number })?.status
-  if (status == null) return true // fetch threw: no response at all
-  return status === 0 || status === 502 || status === 503 || status === 504
-}
-
-/** Sends in order: one message at a time, and a queued earlier message holds
- *  the later ones in the same room back so they never arrive out of order. */
-async function flushOutbox() {
-  if (flushing || !outboxClient) return
-  flushing = true
-  try {
-    const blocked = new Set<string>()
-    for (const o of [...outbox]) {
-      if (o.status === 'failed') continue
-      if (blocked.has(o.room)) continue
-      if (o.status === 'queued') {
-        blocked.add(o.room)
-        continue
-      }
-      try {
-        const res = (await outboxClient.request(
-          post('/chat/messages', {
-            room: o.room,
-            message: o.text,
-            mentions: o.mentions,
-            attachments: o.attachments,
-            parent_id: o.parent_id,
-            quote_id: o.quote_id,
-            urgent: o.urgent,
-            client_id: o.client_id
-          })
-        )) as { data?: ChatMessage }
-        outbox = outbox.filter((x) => x.client_id !== o.client_id)
-        const row = res?.data
-        if (row && !o.parent_id) {
-          outboxQc?.setQueryData<MessagesPage>(['nvr-chat', o.room, 'latest'], (prev) =>
-            prev && !prev.data.some((m) => m.id === row.id)
-              ? { ...prev, data: [...prev.data, row] }
-              : prev
-          )
-        }
-        void outboxQc?.invalidateQueries({ queryKey: ['nvr-chat', o.room] })
-        void outboxQc?.invalidateQueries({ queryKey: ['nvr-chat-thread', o.room] })
-        void outboxQc?.invalidateQueries({ queryKey: ['nvr-chat-rooms'] })
-        emitOutbox()
-      } catch (err) {
-        if (isNetworkError(err)) {
-          o.status = 'queued'
-          o.error = 'Waiting for a connection'
-          blocked.add(o.room)
-          scheduleRetry(8000)
-        } else {
-          o.status = 'failed'
-          const body = (err as { response?: { error?: string } })?.response
-          o.error = body?.error ?? (err instanceof Error ? err.message : 'Could not send')
-        }
-        emitOutbox()
-      }
-    }
-  } finally {
-    flushing = false
-  }
-}
-
-export function retryOutbox(clientId: string) {
-  const o = outbox.find((x) => x.client_id === clientId)
-  if (!o) return
-  o.status = 'sending'
-  o.error = null
-  emitOutbox()
-  void flushOutbox()
-}
-
-export function discardOutbox(clientId: string) {
-  outbox = outbox.filter((x) => x.client_id !== clientId)
-  emitOutbox()
-}
-
-/** Messages still on their way out for one room (or thread). */
-export function useOutbox(room: string, parentId: number | null = null): OutboxItem[] {
-  const [, force] = useState(0)
-  useEffect(() => {
-    const l = () => force((n) => n + 1)
-    outboxListeners.add(l)
-    return () => {
-      outboxListeners.delete(l)
-    }
-  }, [])
-  return outbox.filter((o) => o.room === room && (o.parent_id ?? null) === parentId)
 }
 
 // ── Rooms + unread ───────────────────────────────────────────────────────────

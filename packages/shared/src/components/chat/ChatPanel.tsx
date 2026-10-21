@@ -128,6 +128,7 @@ import { useDraftRooms } from './chat-drafts'
 import { EmojiButton, EmojiGlyph, useCustomEmoji } from './chat-emoji'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
 import { offHoursNote } from './chat-local-time'
+import { useMessageWindow } from './chat-window'
 import { HuddleControls } from './huddle/HuddleControls'
 import { HuddleStage } from './huddle/HuddleStage'
 import { useHuddle } from './huddle/useHuddle'
@@ -1204,7 +1205,14 @@ export function ChatRoomView({
   }
   const scrollToMessage = (id: number): boolean => {
     const el = scrollerRef.current?.querySelector<HTMLElement>(`[data-chat-msg="${id}"]`)
-    if (!el) return false
+    if (!el) {
+      // A long room mounts only the rows near the screen (#2783): a loaded
+      // message outside that window is brought in, then centered.
+      if (!win.reveal(id)) return false
+      pinnedRef.current = false
+      setFlashId(id)
+      return true
+    }
     el.scrollIntoView({ block: 'center' })
     pinnedRef.current = false
     setFlashId(id)
@@ -1252,9 +1260,9 @@ export function ChatRoomView({
       }
       return
     }
-    // Older history loaded above: keep the reader where they were.
+    // Older history loaded above: the message window keeps the reader where
+    // they were (it anchors on the first message on screen, #2783).
     if (first !== prevFirstRef.current && prevFirstRef.current != null && el) {
-      el.scrollTop += el.scrollHeight - prevHeightRef.current
       prevFirstRef.current = first
       prevCountRef.current = messages.length
       return
@@ -1390,6 +1398,16 @@ export function ChatRoomView({
   }, [visibleMessages, myId, searching])
   const readTime = peerReadAt ? new Date(peerReadAt).getTime() : 0
   const density = useMyPreferences().chat_density === 'compact' ? 'compact' : 'comfortable'
+  const rowsRef = useRef<HTMLDivElement>(null)
+  const visibleIds = useMemo(() => visibleMessages.map((m) => m.id), [visibleMessages])
+  const win = useMessageWindow({
+    scrollerRef,
+    listRef: rowsRef,
+    ids: visibleIds,
+    estimate: density === 'compact' ? 40 : 72,
+    resetKey: `${room}|${JSON.stringify(anchor)}|${searching ? 'search' : ''}`,
+    pinnedRef
+  })
   const channel = roomInfo?.channel ?? null
   const ownsChannel =
     !!channel && !!me && String(channel.created_by ?? '').toUpperCase() === me.id.toUpperCase()
@@ -2351,8 +2369,18 @@ export function ChatRoomView({
           pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
           prevHeightRef.current = el.scrollHeight
           if (pinnedRef.current && unseen) setUnseen(null)
+          win.onScroll()
+          // Long rooms load their history as the reader scrolls up (#2783).
+          if (
+            el.scrollTop < 200 &&
+            hasOlder &&
+            !loadingOlder &&
+            !searching &&
+            firstScrollRef.current
+          )
+            void loadOlder()
         }}
-        className='relative min-h-0 flex-1 overflow-y-auto px-3 py-3'
+        className='relative min-h-0 flex-1 overflow-y-auto px-3 py-3 [overflow-anchor:none]'
         data-chat-messages
       >
         <div ref={contentRef} className={density === 'compact' ? 'space-y-1' : 'space-y-2.5'}>
@@ -2391,75 +2419,89 @@ export function ChatRoomView({
               )}
             </div>
           ) : (
-            visibleMessages.map((m, idx) => {
-              const prev = visibleMessages[idx - 1]
-              const newDay =
-                idx === 0 ||
-                (prev &&
-                  new Date(prev.date_created).toDateString() !==
-                    new Date(m.date_created).toDateString())
-              // "New messages" — anchored to the unread count frozen at open.
-              const showUnreadDivider =
-                !searching &&
-                !anchor &&
-                initialUnreadRef.current > 0 &&
-                idx === Math.max(0, visibleMessages.length - initialUnreadRef.current)
-              // Compact: consecutive messages from one person within 5 minutes
-              // drop the repeated name.
-              const grouped =
-                density === 'compact' &&
-                !newDay &&
-                !!prev &&
-                prev.sender === m.sender &&
-                !prev.is_system &&
-                new Date(m.date_created).getTime() - new Date(prev.date_created).getTime() <
-                  5 * 60_000
-              return (
-                <div key={m.id}>
-                  {newDay && (
-                    <div className='my-2 flex items-center gap-2'>
-                      <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
-                      <span className='text-[10px] font-medium text-slate-500 dark:text-slate-400'>
-                        {dateDivider(m.date_created)}
-                      </span>
-                      <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
-                    </div>
-                  )}
-                  {showUnreadDivider && (
-                    <div
-                      ref={dividerRef}
-                      className='my-2 flex items-center gap-2'
-                      data-chat-unread-divider
-                    >
-                      <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
-                      <span className='text-[10px] font-semibold uppercase tracking-wide text-red-500'>
-                        New messages
-                      </span>
-                      {initialUnreadRef.current > 20 && (
-                        <button
-                          type='button'
-                          disabled={catchupMut.isPending}
-                          onClick={() => catchupMut.mutate()}
-                          className='rounded-full border border-red-200 px-1.5 py-px text-[9.5px] font-medium text-red-500 hover:text-red-600 disabled:opacity-50 dark:border-red-500/40'
-                        >
-                          {catchupMut.isPending ? 'Summarizing…' : '✨ What did I miss?'}
-                        </button>
-                      )}
-                      <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
-                    </div>
-                  )}
-                  {showUnreadDivider && catchup && (
-                    <div className='my-1 rounded-md border border-nvr-cyan/25 bg-nvr-cyan/5 px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
-                      {catchup}
-                    </div>
-                  )}
-                  {renderRow(m, {
-                    isLastMine: m.sender?.toLowerCase() === myId && idx === lastMineIndex,
-                    showSender: !grouped
-                  })}
-                </div>
-              )
-            })
+            <div
+              ref={rowsRef}
+              style={
+                win.windowed ? { paddingTop: win.padTop, paddingBottom: win.padBottom } : undefined
+              }
+              data-chat-rows={win.windowed ? 'windowed' : 'all'}
+            >
+              {visibleMessages.slice(win.start, win.end).map((m, j) => {
+                const idx = win.start + j
+                const prev = visibleMessages[idx - 1]
+                const newDay =
+                  idx === 0 ||
+                  (prev &&
+                    new Date(prev.date_created).toDateString() !==
+                      new Date(m.date_created).toDateString())
+                // "New messages" — anchored to the unread count frozen at open.
+                const showUnreadDivider =
+                  !searching &&
+                  !anchor &&
+                  initialUnreadRef.current > 0 &&
+                  idx === Math.max(0, visibleMessages.length - initialUnreadRef.current)
+                // Compact: consecutive messages from one person within 5 minutes
+                // drop the repeated name.
+                const grouped =
+                  density === 'compact' &&
+                  !newDay &&
+                  !!prev &&
+                  prev.sender === m.sender &&
+                  !prev.is_system &&
+                  new Date(m.date_created).getTime() - new Date(prev.date_created).getTime() <
+                    5 * 60_000
+                return (
+                  <div
+                    key={m.id}
+                    ref={win.rowRef(m.id)}
+                    data-chat-row={m.id}
+                    className={idx > 0 ? (density === 'compact' ? 'pt-1' : 'pt-2.5') : undefined}
+                  >
+                    {newDay && (
+                      <div className='my-2 flex items-center gap-2'>
+                        <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
+                        <span className='text-[10px] font-medium text-slate-500 dark:text-slate-400'>
+                          {dateDivider(m.date_created)}
+                        </span>
+                        <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
+                      </div>
+                    )}
+                    {showUnreadDivider && (
+                      <div
+                        ref={dividerRef}
+                        className='my-2 flex items-center gap-2'
+                        data-chat-unread-divider
+                      >
+                        <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
+                        <span className='text-[10px] font-semibold uppercase tracking-wide text-red-500'>
+                          New messages
+                        </span>
+                        {initialUnreadRef.current > 20 && (
+                          <button
+                            type='button'
+                            disabled={catchupMut.isPending}
+                            onClick={() => catchupMut.mutate()}
+                            className='rounded-full border border-red-200 px-1.5 py-px text-[9.5px] font-medium text-red-500 hover:text-red-600 disabled:opacity-50 dark:border-red-500/40'
+                          >
+                            {catchupMut.isPending ? 'Summarizing…' : '✨ What did I miss?'}
+                          </button>
+                        )}
+                        <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
+                      </div>
+                    )}
+                    {showUnreadDivider && catchup && (
+                      <div className='my-1 rounded-md border border-nvr-cyan/25 bg-nvr-cyan/5 px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
+                        {catchup}
+                      </div>
+                    )}
+                    {renderRow(m, {
+                      isLastMine: m.sender?.toLowerCase() === myId && idx === lastMineIndex,
+                      showSender: !grouped
+                    })}
+                  </div>
+                )
+              })}
+            </div>
           )}
           {!searching && !hasNewer && <OutboxBubbles items={outbox} th={th} />}
           {!searching && !hasNewer && botStream.live && botName && (

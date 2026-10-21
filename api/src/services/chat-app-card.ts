@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import type { RequestCard } from './chat-request-card.js'
 import type { OpsProposalCard } from './ops-proposals.js'
 
 /**
@@ -17,10 +18,32 @@ export type AppCard =
       label: string
       state: { label: string; color: string | null } | null
     }
-  | { kind: 'queue'; id: string; name: string; total: number | null; breached: number | null }
-  | { kind: 'report'; id: string; name: string; widgets: number }
-  | { kind: 'dashboard'; id: string; name: string; widgets: number }
-  | { kind: 'view'; id: string; name: string; collection: string; total: number | null }
+  | {
+      kind: 'queue'
+      id: string
+      name: string
+      sources: number | null
+      description: string | null
+    }
+  | { kind: 'report'; id: string; name: string; widgets: number; description: string | null }
+  | { kind: 'dashboard'; id: string; name: string; widgets: number; description: string | null }
+  | {
+      kind: 'view'
+      id: string
+      name: string
+      collection: string
+      collection_label: string
+      description: string | null
+    }
+  | {
+      kind: 'custom-query'
+      id: string
+      name: string
+      slug: string | null
+      params: number
+      description: string | null
+    }
+  | RequestCard
   | OpsProposalCard
   | {
       kind: 'ask'
@@ -35,6 +58,12 @@ export type AppCard =
 
 function titleCase(s: string): string {
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+/** A page's own description, one line, trimmed — never its data. */
+function describe(v: unknown): string | null {
+  const s = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : ''
+  return s ? s.slice(0, 160) : null
 }
 
 function sharedToMe(row: Record<string, unknown>, user: User, ownerCol: string, isAdmin: boolean) {
@@ -112,6 +141,10 @@ export async function appCardFor(
     }
   }
 
+  // #2785 — page cards say WHAT the page is (title, kind, description), never
+  // its data: the reader opens the page to see that. Each kind is gated by the
+  // page's own access rule, so someone who cannot open it gets the plain link.
+
   // /collections/:c?view=<id>  — a saved view
   if (parts[0] === 'collections' && parts.length === 2 && url.searchParams.get('view')) {
     const viewId = url.searchParams.get('view') as string
@@ -120,29 +153,22 @@ export async function appCardFor(
       .first()
       .catch(() => undefined)) as Record<string, unknown> | undefined
     if (!v || !sharedToMe(v, user, 'user', isAdmin)) return null
-    let total: number | null = null
-    try {
-      const { compileViewConditions } = await import('./view-subscriptions.js')
-      const { readItems } = await import('./items.js')
-      let filters: unknown = v.filters
-      if (typeof filters === 'string') filters = JSON.parse(filters)
-      const conds = compileViewConditions(Array.isArray(filters) ? (filters as never[]) : [])
-      const res = await readItems(
-        user,
-        String(v.collection),
-        { fields: ['id'], limit: 1 },
-        conds.length ? ({ query: { conditions: JSON.stringify(conds) } } as never) : undefined
-      )
-      total = res.total ?? null
-    } catch {
-      total = null
+    const collection = String(v.collection)
+    if (!isAdmin) {
+      const { can } = await import('./permissions.js')
+      if (!(await can(user, 'read', collection).catch(() => false))) return null
     }
+    const col = (await db('nivaro_collections')
+      .where({ collection })
+      .first('display_name')
+      .catch(() => undefined)) as { display_name?: string } | undefined
     return {
       kind: 'view',
       id: String(v.id),
       name: String(v.name ?? 'Saved view'),
-      collection: String(v.collection),
-      total
+      collection,
+      collection_label: col?.display_name || titleCase(collection),
+      description: describe(v.description)
     }
   }
 
@@ -151,18 +177,24 @@ export async function appCardFor(
       .where({ id: parts[1] })
       .first()
       .catch(() => undefined)) as Record<string, unknown> | undefined
-    if (!q || !sharedToMe(q, user, 'owner', isAdmin)) return null
-    let total: number | null = null
-    let breached: number | null = null
-    try {
-      const { fetchQueueItems } = await import('./queues.js')
-      const r = await fetchQueueItems(String(q.id), user, 'all', { page: 1, limit: 1 })
-      total = r.stats.total
-      breached = r.stats.sla_breached
-    } catch {
-      /* counts are decoration */
+    const { canUserReadQueue } = await import('./queue-access.js')
+    if (!q || !canUserReadQueue(q as never, user, isAdmin)) return null
+    const sources = Number(
+      (
+        (await db('nivaro_queue_sources')
+          .where({ queue_id: q.id })
+          .count({ n: 'id' })
+          .first()
+          .catch(() => undefined)) as { n?: number } | undefined
+      )?.n ?? 0
+    )
+    return {
+      kind: 'queue',
+      id: String(q.id),
+      name: String(q.name ?? 'Queue'),
+      sources: sources || null,
+      description: describe(q.description)
     }
-    return { kind: 'queue', id: String(q.id), name: String(q.name ?? 'Queue'), total, breached }
   }
 
   if ((parts[0] === 'reports' || parts[0] === 'report-studio') && parts[1]) {
@@ -178,7 +210,13 @@ export async function appCardFor(
           | undefined
       )?.n ?? 0
     )
-    return { kind: 'report', id: String(r.id), name: String(r.name ?? 'Report'), widgets: n }
+    return {
+      kind: 'report',
+      id: String(r.id),
+      name: String(r.name ?? 'Report'),
+      widgets: n,
+      description: describe(r.description)
+    }
   }
 
   if (parts[0] === 'dashboards' && parts[1]) {
@@ -196,7 +234,48 @@ export async function appCardFor(
           .catch(() => undefined)) as { n?: number } | undefined
       )?.n ?? 0
     )
-    return { kind: 'dashboard', id: String(d.id), name: String(d.name ?? 'Dashboard'), widgets: n }
+    return {
+      kind: 'dashboard',
+      id: String(d.id),
+      name: String(d.name ?? 'Dashboard'),
+      widgets: n,
+      description: describe(d.description)
+    }
+  }
+
+  // /custom-queries/:id — the SQL editor, an administrator page: a card for
+  // administrators, the plain link for everyone else.
+  if (parts[0] === 'custom-queries' && parts[1] && /^\d+$/.test(parts[1])) {
+    if (!isAdmin) return null
+    const q = (await db('nivaro_custom_queries')
+      .where({ id: Number(parts[1]) })
+      .first()
+      .catch(() => undefined)) as Record<string, unknown> | undefined
+    if (!q) return null
+    let params = 0
+    try {
+      const raw = typeof q.params === 'string' ? JSON.parse(q.params) : q.params
+      params = Array.isArray(raw) ? raw.length : 0
+    } catch {
+      params = 0
+    }
+    return {
+      kind: 'custom-query',
+      id: String(q.id),
+      name: String(q.name ?? 'Custom query'),
+      slug: q.slug ? String(q.slug) : null,
+      params,
+      description: describe(q.description)
+    }
+  }
+
+  // #2762 — a Traffic Map link to one request: its request card, for the
+  // administrators who can open the map; the plain link for everyone else.
+  if (parts[0] === 'traffic-map') {
+    const m = /^(?:request|trace):([0-9a-f-]{32,36})$/i.exec(url.searchParams.get('inspect') ?? '')
+    if (!m || !isAdmin) return null
+    const { requestCardFor } = await import('./chat-request-card.js')
+    return requestCardFor(user, isAdmin, m[1])
   }
   return null
 }

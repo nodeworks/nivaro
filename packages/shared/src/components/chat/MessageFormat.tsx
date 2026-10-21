@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import {
+  Database,
   ExternalLink,
   Gauge,
   LayoutDashboard,
@@ -18,7 +19,14 @@ import { parseMomentUrl } from '../help-videos/viewer/moments'
 import { type MessageToken, splitMessageTokens } from './chat-core'
 import { useEmojiUrls, withCustomEmoji } from './chat-emoji'
 import { useLinkPreview } from './chat-hooks'
+import { useNearViewport } from './chat-window'
 import { OpsProposalCard, type OpsProposalCardData } from './OpsProposalCard'
+import {
+  extractRequestIds,
+  type RequestCardData,
+  RequestCardView,
+  RequestIdCard
+} from './RequestIdCard'
 
 /**
  * Chat message formatting (#929, #930, #941, #962).
@@ -506,16 +514,28 @@ export function tsvToTable(text: string): string | null {
 // ── Link previews (#930, #947) ───────────────────────────────────────────────
 
 interface AppCardData {
-  kind: 'record' | 'queue' | 'report' | 'dashboard' | 'view' | 'ask' | 'ops-proposal'
+  kind:
+    | 'record'
+    | 'queue'
+    | 'report'
+    | 'dashboard'
+    | 'view'
+    | 'custom-query'
+    | 'request'
+    | 'ask'
+    | 'ops-proposal'
   id: string
   name?: string
   label?: string
   collection?: string
   collection_label?: string
   state?: { label: string; color: string | null } | null
-  total?: number | null
-  breached?: number | null
+  /** #2785 — what the page is, never its data. */
+  description?: string | null
   widgets?: number
+  sources?: number | null
+  slug?: string | null
+  params?: number
   /** kind 'ask' (#1851): an Ask AI conversation posted to the room. */
   question?: string
   answer?: string | null
@@ -582,6 +602,9 @@ function AppLinkCard({ path, navigate }: { path: string; navigate?: (u: string) 
     return <OpsProposalCard path={path} card={data as unknown as OpsProposalCardData} />
   if (data.kind === 'ask')
     return <AskConversationCard data={data} path={path} navigate={navigate} />
+  // #2762 — a Traffic Map link to one request (administrators only).
+  if (data.kind === 'request')
+    return <RequestCardView card={data as unknown as RequestCardData} navigate={navigate} />
   const Icon =
     data.kind === 'queue'
       ? ListChecks
@@ -589,20 +612,29 @@ function AppLinkCard({ path, navigate }: { path: string; navigate?: (u: string) 
         ? LayoutDashboard
         : data.kind === 'report'
           ? Gauge
-          : Table2
+          : data.kind === 'custom-query'
+            ? Database
+            : Table2
   const title = data.kind === 'record' ? (data.label ?? data.id) : (data.name ?? data.id)
   const kindLabel =
     data.kind === 'record'
       ? (data.collection_label ?? 'Record')
       : data.kind === 'view'
-        ? 'Saved view'
-        : data.kind.charAt(0).toUpperCase() + data.kind.slice(1)
+        ? `Saved view${data.collection_label ? ` of ${data.collection_label}` : ''}`
+        : data.kind === 'custom-query'
+          ? 'Custom query'
+          : data.kind.charAt(0).toUpperCase() + data.kind.slice(1)
+  // What the page is made of — never the data it shows (#2785).
   const facts: string[] = []
-  if (data.total != null)
-    facts.push(`${data.total.toLocaleString()} ${data.total === 1 ? 'item' : 'items'}`)
-  if (data.breached) facts.push(`${data.breached} past SLA`)
   if (data.widgets != null)
     facts.push(`${data.widgets} ${data.widgets === 1 ? 'widget' : 'widgets'}`)
+  if (data.sources) facts.push(`${data.sources} ${data.sources === 1 ? 'source' : 'sources'}`)
+  if (data.kind === 'custom-query' && data.params != null)
+    facts.push(
+      data.params === 0
+        ? 'No parameters'
+        : `${data.params} ${data.params === 1 ? 'parameter' : 'parameters'}`
+    )
   return (
     <button
       type='button'
@@ -612,13 +644,17 @@ function AppLinkCard({ path, navigate }: { path: string; navigate?: (u: string) 
     >
       <Icon className='h-4 w-4 shrink-0 text-slate-400' />
       <span className='min-w-0 flex-1'>
-        <span className='block text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+        <span className='block truncate text-[11px] text-slate-500 dark:text-slate-400'>
           {kindLabel}
+          {facts.length > 0 && ` · ${facts.join(' · ')}`}
         </span>
         <span className='block truncate text-[12px] font-medium'>{title}</span>
-        {facts.length > 0 && (
-          <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
-            {facts.join(' · ')}
+        {data.description && (
+          <span
+            className='line-clamp-2 text-[11px] text-slate-600 dark:text-slate-300'
+            data-chat-app-card-description
+          >
+            {data.description}
           </span>
         )}
       </span>
@@ -757,9 +793,17 @@ export function LinkPreviews({
   onDismiss?: () => void
 }) {
   const urls = useMemo(() => extractUrls(text).slice(0, 3), [text])
-  if (urls.length === 0) return null
+  const requestIds = useMemo(() => extractRequestIds(text), [text])
+  // Cards mount only once the message nears the screen (#2783): a long room
+  // does not ask for every preview it has ever held.
+  const [nearRef, near] = useNearViewport<HTMLDivElement>()
+  if (urls.length === 0 && requestIds.length === 0) return null
+  if (!near) return <div ref={nearRef} data-chat-previews-pending />
   return (
     <div className='group/prev relative mt-1 space-y-1' data-chat-previews>
+      {requestIds.map((id) => (
+        <RequestIdCard key={id} id={id} navigate={navigate} />
+      ))}
       {urls.map((u) => {
         const inApp = appPath(u)
         // A help-video moment link from ANY app (the videos page path differs
