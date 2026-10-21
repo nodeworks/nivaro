@@ -177,7 +177,7 @@
     "tab_or_section": "Who gets this form",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+    "layout_types": ["grouped"]
   },
   {
     "key": "layout.create_hidden",
@@ -186,7 +186,7 @@
     "tab_or_section": "Who gets this form",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+    "layout_types": ["grouped"]
   },
   {
     "key": "layout.layout_type",
@@ -375,7 +375,7 @@
     "tab_or_section": "Read view & summary",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "file", "detail", "summary"]
+    "layout_types": ["grouped", "detail", "summary"]
   },
   {
     "key": "layout.summary_hide_empty",
@@ -384,7 +384,7 @@
     "tab_or_section": "Read view & summary",
     "scope": "form",
     "status": "fix",
-    "layout_types": ["grouped", "file", "detail", "summary"]
+    "layout_types": ["grouped", "detail", "summary"]
   },
   {
     "key": "layout.sheet_width",
