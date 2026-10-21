@@ -927,7 +927,11 @@ export function FieldRow({
                   <Info className='h-3.5 w-3.5 shrink-0 cursor-help text-slate-400 hover:text-slate-600' />
                 </TooltipTrigger>
                 <TooltipContent side='top' className='max-w-[240px] text-[12px]'>
-                  {field.note}
+                  {affordances?.glossaryHelp === false ? (
+                    field.note
+                  ) : (
+                    <GlossaryLabel text={field.note} collection={collection} />
+                  )}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

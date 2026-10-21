@@ -1,0 +1,27 @@
+[
+  { "name": "null is none", "in": null, "out": null },
+  { "name": "garbage text is none", "in": "{nope", "out": null },
+  { "name": "array is none", "in": [1], "out": null },
+  { "name": "flags", "in": { "focus_first": true, "enter_next": true, "adaptive": false, "x": 1 }, "out": { "focus_first": true, "enter_next": true } },
+  { "name": "json text parses", "in": "{\"focus_first\":true}", "out": { "focus_first": true } },
+  { "name": "threshold clamps and the default drops", "in": { "adaptive": true, "adaptive_threshold": 3 }, "out": { "adaptive": true } },
+  { "name": "threshold high", "in": { "adaptive_threshold": 900.4 }, "out": { "adaptive_threshold": 50 } },
+  { "name": "threshold low", "in": { "adaptive_threshold": -4 }, "out": { "adaptive_threshold": 1 } },
+  { "name": "tab order dedupes and drops bad keys", "in": { "tab_order": ["a", "b", "a", "9x", 4, "c.d"] }, "out": { "tab_order": ["a", "b", "c.d"] } },
+  { "name": "badge trims, colour defaults to slate", "in": { "badge": { "tag": "  Sparing   form and more words ", "color": "pink" } }, "out": { "badge": { "tag": "Sparing form and", "color": "slate" } } },
+  { "name": "badge needs a tag", "in": { "badge": { "tag": " ", "color": "blue" } }, "out": null },
+  { "name": "glossary off is kept, on is the default", "in": { "glossary": false }, "out": { "glossary": false } },
+  { "name": "glossary on drops", "in": { "glossary": true }, "out": null },
+  {
+    "name": "presets",
+    "in": {
+      "presets": [
+        { "id": "p1", "name": " Narrow  required ", "parts": ["width", "required", "bogus", "width"], "col_span": 99, "overrides": { "required": true } },
+        { "id": "p1", "name": "dupe", "parts": [] },
+        { "id": "", "name": "no id", "parts": [] },
+        { "id": "p2", "name": "", "parts": [] }
+      ]
+    },
+    "out": { "presets": [{ "id": "p1", "name": "Narrow required", "parts": ["width", "required"], "col_span": 12, "overrides": { "required": true } }] }
+  }
+]

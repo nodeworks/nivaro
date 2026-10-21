@@ -60,6 +60,7 @@ import {
   type StoredDraft,
   saveDraft
 } from '../lib/draft-store'
+import { entryConfigOf } from '../lib/entry-config'
 import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import {
@@ -210,6 +211,9 @@ import { SupportRequestDialog } from './support/SupportRequestDialog'
 
 let formulaCtxHydrated = false
 
+import { EntryStrip } from './item-edit/entry/EntryStrip'
+import { useEntryKeyboard } from './item-edit/entry/useEntryKeyboard'
+import { useEntryMode } from './item-edit/entry/useEntryMode'
 import { type FindableField, FindInRecordButton } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
@@ -4843,7 +4847,23 @@ function ItemEditFormView({
   const hasTabs = tabGroups.length > 0
   const layoutMeta = activeLayoutData?.layout
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
-  const isStepsMode = hasTabs && layoutMeta?.tab_mode === 'steps'
+  // Entry ergonomics (#2702-#2728): the layout's entry config, and the beginner / expert
+  // mode of an adaptive form (guided steps for a person's first records, tabs after).
+  const entryCfg = useMemo(() => entryConfigOf(layoutMeta), [layoutMeta])
+  const entryMode = useEntryMode({
+    collection,
+    layoutId: layoutMeta?.id ?? null,
+    userId: authUserId,
+    config: entryCfg,
+    hasTabs: hasTabs || hasContainers,
+    enabled: !designOn
+  })
+  const containerIsSteps = (c: { tab_mode?: string | null }) =>
+    entryMode.mode && (c.tab_mode === 'steps' || c.tab_mode === 'tabs')
+      ? entryMode.mode === 'beginner'
+      : c.tab_mode === 'steps'
+  const isStepsMode =
+    hasTabs && (entryMode.mode ? entryMode.mode === 'beginner' : layoutMeta?.tab_mode === 'steps')
   const validateBeforeNext = !!layoutMeta?.validate_before_next
   const summaryEnabled = !!layoutMeta?.summary_enabled
   const hideEmptySummary = !!layoutMeta?.summary_hide_empty
@@ -5594,7 +5614,7 @@ function ItemEditFormView({
     }
     // Container steps (the attached-track wizard, e.g. IR layouts): seed each
     // steps container's tab past its skip-satisfied leading steps.
-    for (const c of groups.filter((g) => g.type === 'container' && g.tab_mode === 'steps')) {
+    for (const c of groups.filter((g) => g.type === 'container' && containerIsSteps(g))) {
       const children = groups
         .filter((g) => g.type === 'tab' && g.container_id === c.id)
         .sort((a, b) => a.sort - b.sort)
@@ -6544,6 +6564,34 @@ function ItemEditFormView({
   const handleSaveRef = useRef<() => void>(() => {})
   // Function declarations hoist — safe to capture here, fresh every render.
   handleSaveRef.current = () => handleSave()
+  // Keyboard-first entry (#2707) and the layout's tab order (#2708).
+  const entryRequired = useMemo(
+    () =>
+      new Set(
+        allFields
+          .filter(
+            (f) =>
+              f.required &&
+              !f.hidden &&
+              !f.readonly &&
+              !SYSTEM_FIELDS.has(f.field) &&
+              !isSentinelKey(f.field) &&
+              (f as { layout_assigned?: boolean }).layout_assigned !== false
+          )
+          .map((f) => f.field)
+      ),
+    [allFields]
+  )
+  useEntryKeyboard({
+    collection,
+    config: entryCfg,
+    enabled: !designOn && !readMode && !recordGone,
+    ready: isNew || !!itemData,
+    recordKey: `${collection}:${itemId ?? 'new'}`,
+    required: entryRequired,
+    draft: draft as Record<string, unknown>,
+    save: () => handleSaveRef.current()
+  })
   useEffect(() => {
     if (!registerSaveHandler) return
     registerSaveHandler(() => handleSaveRef.current())
@@ -7970,7 +8018,8 @@ function ItemEditFormView({
     applyToLines,
     openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id }),
     layoutId: layoutMeta?.id ?? null,
-    fromAutofill
+    fromAutofill,
+    glossaryHelp: entryCfg.glossary !== false
   }
 
   // ── Design mode shells ─────────────────────────────────────────────────────
@@ -8289,7 +8338,7 @@ function ItemEditFormView({
           ))}
         </div>
       )
-    const isSteps = c.tab_mode === 'steps'
+    const isSteps = containerIsSteps(c)
     const activeKey = onlyKey ?? getContainerTab(c, children)
     const activeChild = children.find((g) => g.key === activeKey) ?? children[0]
     const activeSwapCfg = (() => {
@@ -8627,7 +8676,7 @@ function ItemEditFormView({
               </div>,
               { asChild: true }
             )}
-          {c.tab_mode === 'steps' &&
+          {containerIsSteps(c) &&
             children.length > 1 &&
             (() => {
               const idx = children.findIndex((ch) => ch.key === activeKey)
@@ -10944,6 +10993,14 @@ function ItemEditFormView({
                                   />
                                 )}
 
+                                {(entryCfg.badge || (!designOn && entryMode.switchable)) && (
+                                  <EntryStrip
+                                    badge={entryCfg.badge}
+                                    mode={!designOn && entryMode.switchable ? entryMode.mode : null}
+                                    auto={entryMode.auto}
+                                    onMode={entryMode.set}
+                                  />
+                                )}
                                 {showHeader &&
                                   (headerWidgets.length > 0 || headerFields.length > 0) && (
                                     // Condensing HIDES rather than unmounts: a

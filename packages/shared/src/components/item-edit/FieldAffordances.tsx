@@ -55,6 +55,8 @@ export interface FieldAffordances {
   /** The form was filled from a document proposal: fields the layout marks
    *  `autofill_check` get a "check this" ring (#2691). */
   fromAutofill?: boolean
+  /** Glossary terms in help text get a dotted underline (#2711); false = the form turned it off. */
+  glossaryHelp?: boolean
 }
 
 export const FieldAffordancesContext = createContext<FieldAffordances | null>(null)

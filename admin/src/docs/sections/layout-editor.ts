@@ -116,7 +116,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-form-settings', text: 'Form settings' },
     {
       type: 'p',
-      text: "Layout-wide settings in short named sections, each control with a one-line effect, searchable from the box at the top: Who gets this form (kind, record rules, roles by name, link name, New-menu label and hiding) · How it's laid out (tabs or steps, check each step before Next, one section open at a time) · Buttons & panels (hide comments, tasks, revisions, clone, delete, banners; Schedule and Hide-from-pickers buttons for everyone) · Read view & summary · PDF (file layouts only) · Addendum · Defaults for new records · Inheritance · AI review, previews, version history. Only the settings that apply to the layout's kind are shown — addendum layouts get every setting that applies to them. This page calls that last section Form settings → Tools."
+      text: "Layout-wide settings in short named sections, each control with a one-line effect, searchable from the box at the top: Who gets this form (kind, record rules, roles by name, link name, New-menu label and hiding) · How it's laid out (tabs or steps, check each step before Next, one section open at a time) · Buttons & panels (hide comments, tasks, revisions, clone, delete, banners; Schedule and Hide-from-pickers buttons for everyone) · Read view & summary · PDF (file layouts only) · Addendum · Defaults for new records · Entering data (keyboard, tab order, guided steps, badge, presets) · Inheritance · AI review, previews, version history. Only the settings that apply to the layout's kind are shown — addendum layouts get every setting that applies to them. This page calls that last section Form settings → Tools."
     },
     {
       type: 'p',
@@ -130,6 +130,39 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: "On other forms lists, above the fields, the fields this collection's other forms of the same kind place and this one does not, most-carried first, with how many forms carry each and their names."
+    },
+    {
+      type: 'h3',
+      id: 'layout-editor-entry',
+      text: 'Entering data: keyboard, steps, badge, presets'
+    },
+    {
+      type: 'p',
+      text: 'Form settings → Entering data holds what changes how people fill the form. Start on the first empty required field puts the cursor there when the form opens. Enter moves to the next field turns Enter into "next" (Ctrl or ⌘ + Enter saves; Enter still means a new line in long text and picks the highlighted item in an open list). Glossary tooltips in help text gives glossary terms in a field\'s help text a dotted underline with their definition from AI knowledge → Glossary (labels always have it).'
+    },
+    {
+      type: 'p',
+      text: 'Tab order: Tools → Set the tab order (or the button in Form settings) numbers the fields as you click them on the canvas. Click a number again to take that field out. Done stores the order as one undoable step; fields you skipped follow in page order. Tab and Shift+Tab then follow the order on the record form, while a field with two controls keeps its own order inside.'
+    },
+    {
+      type: 'p',
+      text: 'Guided steps for new people: the form shows as steps while a person has made fewer records of the collection than the number in Records before tabs (3 unless you change it), and as tabs after that. People can switch with the Guided steps / Tabs switch above the header; their choice is remembered in their browser. It needs a form with tabs or steps.'
+    },
+    {
+      type: 'p',
+      text: 'Form badge: a short tag (16 characters at most) in one of eight colours, shown above the record header, so people can tell which form they are in.'
+    },
+    {
+      type: 'p',
+      text: "Presets: select a field, open Presets in its inspector, tick what to keep (width, required, help text, placeholder, input and format, lock rule), name it and save. Select one or several fields and pick a preset to apply it; that is one undo step. Presets belong to the form and are deleted under Form settings → Entering data. They never change a field's label."
+    },
+    {
+      type: 'p',
+      text: "Theme preview: Tools → Preview in dark shows the canvas in the dark theme without changing the app's theme. When the app is already dark the tool is off, because a dark app cannot show a light canvas."
+    },
+    {
+      type: 'note',
+      text: 'These settings live in one JSON column, `nivaro_collection_layouts.entry_config` (migration 491): `{ focus_first, enter_next, tab_order, adaptive, adaptive_threshold, badge: { tag, color }, glossary, presets }`. It is a layout setting like the others (`layout_update` ops, `PATCH /collection-layouts/:id`) and is returned by `GET /collection-layouts/active`.'
     },
     { type: 'h3', id: 'layout-editor-drag', text: 'Drag and drop' },
     {

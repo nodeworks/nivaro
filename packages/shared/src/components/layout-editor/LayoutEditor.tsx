@@ -4,6 +4,7 @@ import {
   BarChart3,
   Grid3x3,
   LayoutGrid,
+  ListOrdered,
   Percent,
   Plus,
   Table2,
@@ -67,6 +68,9 @@ import { useDraftRecovery } from './draft-recovery'
 import { canvasRenderer, EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { noteKey, notesOf } from './editor-notes'
+import { EntryEditorContext } from './entry/entry-editor-context'
+import { TabOrderBar, useTabOrderEditor } from './entry/tab-order'
+import { previewThemeClass, ThemePreviewTool, useAppIsDark } from './entry/theme-preview'
 import { explainMarks, RuleLoopsBanner, RulesToggle, useRulesView } from './explain/CanvasRules'
 import { useDriverHover } from './explain/driver-hover'
 import type { OpenSource } from './explain/field-sources'
@@ -827,6 +831,22 @@ export function LayoutEditor({
   }, [])
   const onMoved = useCallback((t: DesignTarget) => setSelection([t]), [])
 
+  // Entry tools: the tab order overlay (#2708) and the canvas theme preview (#2727).
+  const tabOrder = useTabOrderEditor(bundle, draft.apply)
+  const canvasSelect = useMemo(() => tabOrder.intercept(onSelect), [tabOrder.intercept, onSelect])
+  const [previewDark, setPreviewDark] = useState(false)
+  const appDark = useAppIsDark()
+  const entryApi = useMemo(
+    () => ({
+      tabOrderActive: tabOrder.active,
+      startTabOrder: () => {
+        setView('canvas')
+        tabOrder.start()
+      }
+    }),
+    [tabOrder.active, tabOrder.start]
+  )
+
   // A rule tag clicked: open what causes it (#2632) — the field's inspector
   // tab, the section, or the pipeline / field rules page (asks first when
   // there are unsaved changes).
@@ -1113,6 +1133,24 @@ export function LayoutEditor({
                 data={{ 'data-editor-fill-toggle': '' }}
               />
             )}
+            {bundle && arrangeable && (
+              <ToolButton
+                label='Set the tab order'
+                icon={<ListOrdered className='h-3.5 w-3.5' />}
+                hint='Click fields in the order Tab should visit them'
+                checked={tabOrder.active}
+                onClick={() => (tabOrder.active ? tabOrder.cancel() : entryApi.startTabOrder())}
+                data={{ 'data-editor-tab-order-toggle': '' }}
+              />
+            )}
+            {bundle && arrangeable && (
+              <ThemePreviewTool
+                on={previewDark}
+                onChange={setPreviewDark}
+                appDark={appDark}
+                disabled={view !== 'canvas'}
+              />
+            )}
             <MenuSeparator />
             <BulkChangesButton
               collection={collection}
@@ -1370,6 +1408,7 @@ export function LayoutEditor({
             </aside>
           )}
           <main className='min-w-0 flex-1 overflow-y-auto'>
+            {view === 'canvas' && <TabOrderBar editor={tabOrder} />}
             {compareState.compare && (view === 'canvas' || !arrangeable) && (
               <CompareBanner compare={compareState.compare} onClose={compareState.close} />
             )}
@@ -1403,7 +1442,11 @@ export function LayoutEditor({
                 data-canvas-density={nav.compact && arrangeable ? 'compact' : 'normal'}
                 // Compact (#2627): editor-only zoom; the record page is unchanged.
                 style={nav.compact && arrangeable ? { zoom: COMPACT_ZOOM } : undefined}
-                className='min-h-full'
+                className={cn(
+                  'min-h-full',
+                  previewThemeClass(previewDark, appDark),
+                  previewDark && !appDark && 'bg-background text-foreground'
+                )}
               >
                 <PreviewPanes
                   collection={collection}
@@ -1421,7 +1464,7 @@ export function LayoutEditor({
                       roleId={pane.roleId}
                       stateKey={pane.stateKey}
                       marks={withAiMarks(pane.marks)}
-                      overlay={pane.overlay}
+                      overlay={tabOrder.overlay(pane.overlay)}
                       ruleMarks={ruleMarks}
                       ghost={ghost}
                       deps={explain.deps}
@@ -1429,7 +1472,7 @@ export function LayoutEditor({
                       record={pane.record}
                       selected={selected}
                       selection={selection}
-                      onSelect={onSelect}
+                      onSelect={canvasSelect}
                       showHidden={showHidden}
                       fold={nav.fold}
                       reveal={nav.reveal}
@@ -1572,7 +1615,8 @@ export function LayoutEditor({
     </div>
   )
 
-  if (!overlay) return body
+  if (!overlay)
+    return <EntryEditorContext.Provider value={entryApi}>{body}</EntryEditorContext.Provider>
   // Fixed under the page outlet would be offset by its transform: portal out —
   // into the hosting modal when there is one (a body portal would sit under
   // its pointer/scroll lock), else body.
@@ -1580,7 +1624,9 @@ export function LayoutEditor({
   return (
     <>
       <span ref={setMarker} hidden data-layout-editor-marker='' />
-      {container && createPortal(body, container)}
+      <EntryEditorContext.Provider value={entryApi}>
+        {container && createPortal(body, container)}
+      </EntryEditorContext.Provider>
     </>
   )
 }

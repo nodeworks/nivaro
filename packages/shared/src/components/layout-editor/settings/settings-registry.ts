@@ -19,6 +19,7 @@ export type SectionId =
   | 'pdf'
   | 'addendum'
   | 'defaults'
+  | 'entry'
   | 'inheritance'
   | 'tools'
 
@@ -47,6 +48,7 @@ export const SECTIONS: SectionDef[] = [
   { id: 'pdf', title: 'PDF' },
   { id: 'addendum', title: 'Addendum' },
   { id: 'defaults', title: 'Defaults for new records' },
+  { id: 'entry', title: 'Entering data' },
   { id: 'inheritance', title: 'Inheritance' },
   { id: 'tools', title: 'AI review, previews, version history' }
 ]
@@ -409,6 +411,76 @@ export const SETTINGS: SettingDef[] = [
     label: 'Fill steps from cascade rules',
     effect: 'Replaces the steps with the cascade chain of this collection, parents first.',
     types: ON_SCREEN
+  },
+
+  // ── Entering data ─────────────────────────────────────────────────────────
+  {
+    key: 'layout.focus_first',
+    section: 'entry',
+    label: 'Start on the first empty required field',
+    effect: 'When the form opens, the cursor is already in the first required field with no value.',
+    types: NEW_MENU,
+    keywords: 'keyboard focus autofocus cursor'
+  },
+  {
+    key: 'layout.enter_next',
+    section: 'entry',
+    label: 'Enter moves to the next field',
+    effect:
+      'Pressing Enter in a field goes to the next one instead of saving; Ctrl or ⌘ + Enter still saves.',
+    types: NEW_MENU,
+    keywords: 'keyboard submit return'
+  },
+  {
+    key: 'layout.tab_order',
+    section: 'entry',
+    label: 'Tab order',
+    effect:
+      'The order the Tab key visits fields in. Set it by clicking fields in order on the canvas.',
+    types: NEW_MENU,
+    keywords: 'keyboard accessibility sequence'
+  },
+  {
+    key: 'layout.adaptive_mode',
+    section: 'entry',
+    label: 'Guided steps for new people',
+    effect:
+      'A person making their first records sees this form as steps; after that it shows as tabs. Each person can switch.',
+    types: NEW_MENU,
+    keywords: 'beginner expert onboarding steps tabs'
+  },
+  {
+    key: 'layout.adaptive_threshold',
+    section: 'entry',
+    label: 'Records before tabs',
+    effect: 'How many records of their own a person makes before the form switches to tabs.',
+    types: NEW_MENU
+  },
+  {
+    key: 'layout.badge',
+    section: 'entry',
+    label: 'Form badge',
+    effect:
+      'A colour and short tag on the record header, so people can tell which form they are in.',
+    types: NEW_MENU,
+    keywords: 'identity chip tag colour label'
+  },
+  {
+    key: 'layout.glossary',
+    section: 'entry',
+    label: 'Glossary tooltips in help text',
+    effect: 'Glossary terms in help text get a dotted underline that shows their definition.',
+    types: NEW_MENU,
+    keywords: 'definition term hover'
+  },
+  {
+    key: 'layout.presets',
+    section: 'entry',
+    label: 'Placement presets',
+    effect:
+      'Named bundles of field settings (width, required, help text) that apply to other fields in one click.',
+    types: NEW_MENU,
+    keywords: 'template reuse bundle'
   },
 
   // ── Inheritance ───────────────────────────────────────────────────────────

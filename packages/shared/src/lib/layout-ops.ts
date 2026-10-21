@@ -158,6 +158,8 @@ export type LayoutPatch = Partial<{
   hide_empty: boolean
   /** Required change note (#2654): null = off, 'note' = a reason, 'note_ticket' = reason + ticket. */
   change_note: 'note' | 'note_ticket' | null
+  /** How people enter data on the form (#2702 #2707 #2708 #2710 #2728): presets, keyboard, tab order, mode, badge. */
+  entry_config: Record<string, unknown> | null
 }>
 
 export type LayoutRow = Record<string, unknown> & { id: number; collection: string }
@@ -276,7 +278,8 @@ export const LAYOUT_PATCH_KEYS = [
   'sheet_width',
   'header_fields',
   'hide_empty',
-  'change_note'
+  'change_note',
+  'entry_config'
 ] as const
 
 export const GROUP_TYPES = ['section', 'tab', 'metadata', 'container', 'content'] as const

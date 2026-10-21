@@ -14,6 +14,7 @@ import { TipLayer } from '../../TipLayer'
 import { ArrangeButton } from '../ArrangeButton'
 import { AutoArrangeButton } from '../AutoArrange'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
+import { PlacementPresets } from '../entry/PlacementPresets'
 import { FIELD_HOLDERS } from '../field-zones'
 import { PanelBody, PanelHeader, PanelTabs, tabId, tabPanelId } from '../panel-frame'
 import { tintCard } from '../panel-style'
@@ -642,6 +643,7 @@ function FieldInspector({
             </div>
           ) : (
             <>
+              <PlacementPresets bundle={env.bundle} rows={[row]} apply={env.apply} />
               <ScopeLegend field />
               {tabBody}
             </>

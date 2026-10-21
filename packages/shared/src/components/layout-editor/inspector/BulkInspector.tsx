@@ -4,6 +4,7 @@ import { type LayoutBundle, type LayoutOp, UNGROUPED_KEY } from '../../../lib/la
 import { TipLayer } from '../../TipLayer'
 import { ArrangeButton } from '../ArrangeButton'
 import { type DesignTarget, targetKey } from '../design-context'
+import { PlacementPresets } from '../entry/PlacementPresets'
 import {
   type FlagKey,
   fieldZones,
@@ -134,7 +135,10 @@ export function BulkInspector({
             </li>
           ))}
         </ul>
-        <ArrangeButton targets={selection} />
+        <div className='flex flex-wrap items-center gap-2'>
+          <ArrangeButton targets={selection} />
+          {fields.length > 0 && <PlacementPresets bundle={bundle} rows={fields} apply={apply} />}
+        </div>
         {outside > 0 && (
           <p className={effectText}>
             {plural(outside, 'item')} from the parent form {outside === 1 ? 'is' : 'are'} left out:
