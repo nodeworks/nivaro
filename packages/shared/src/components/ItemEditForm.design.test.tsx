@@ -444,6 +444,30 @@ describe('ItemEditForm design mode', () => {
     }
   })
 
+  it('a widget placed in two tabs is two targets, one per tab', async () => {
+    const base = tabsLayout('tabs')
+    const layout: ActiveLayoutData = {
+      ...base,
+      // Legacy twins: the same widget in Empty (listed first) and in Details.
+      assignments: [
+        { field: '__widget_5__', sort: 0, group_key: 't3', is_visible: true, widget_id: 5 },
+        ...base.assignments,
+        { field: '__widget_5__', sort: 5, group_key: 't1', is_visible: true, widget_id: 5 }
+      ]
+    }
+    localStorage.setItem('nvr_tab_orders', 't1')
+    try {
+      await mount(
+        { design: { layout, record: { ...RECORD }, context: makeDesign() } },
+        () => !!host.querySelector('[data-field="title"]')
+      )
+      expect(host.querySelector('[data-design-target="slot:__widget_5__:t1"]')).not.toBeNull()
+      expect(host.querySelector('[data-design-target="slot:__widget_5__:t3"]')).toBeNull()
+    } finally {
+      localStorage.removeItem('nvr_tab_orders')
+    }
+  })
+
   it(`tabs: without showHidden the rule-hidden tab and hidden field stay out`, async () => {
     await mount(
       { design: { layout: tabsLayout('tabs'), record: { ...RECORD }, context: makeDesign() } },

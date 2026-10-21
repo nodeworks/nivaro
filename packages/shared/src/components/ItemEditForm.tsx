@@ -7894,10 +7894,15 @@ function ItemEditFormView({
   ) => designWrap(designCtx, t, node, opts)
   const dwrapEl = (t: DesignTarget, el: ReactElement, opts?: { asChild?: boolean }) =>
     dwrap(t, el, opts) as ReactElement
-  const slotTarget = (field: string): DesignTarget => ({
+  // A slot placed in two groups (legacy widget twins) is two targets: pass the
+  // placement's group when it is known, else its first placement's.
+  const slotTarget = (field: string, groupKey?: string | null): DesignTarget => ({
     kind: 'slot',
     field,
-    group_key: assignments.find((a) => a.field === field)?.group_key ?? null
+    group_key:
+      groupKey !== undefined
+        ? groupKey
+        : (assignments.find((a) => a.field === field)?.group_key ?? null)
   })
   const designHidden = (f: CMSField, ruleVisible = true) =>
     showHiddenDesign && (f.hidden || !ruleVisible)
@@ -8452,7 +8457,7 @@ function ItemEditFormView({
                 /* noop */
               }
               return dwrap(
-                slotTarget(ws.field),
+                slotTarget(ws.field, ws.group_key ?? null),
                 <div key={ws.field} className='mt-4'>
                   <WidgetSlot
                     widgetId={ws.widget_id as number}
@@ -8807,7 +8812,7 @@ function ItemEditFormView({
               if (item._t === 'owners') {
                 const span = item.slot.col_span ?? 12
                 return dwrap(
-                  slotTarget('__owners__'),
+                  slotTarget('__owners__', item.slot.group_key ?? null),
                   <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
                     <OwnersInline
                       collection={collection}
@@ -8824,7 +8829,7 @@ function ItemEditFormView({
                 const label = item.slot.label_override?.trim() || 'Generate PDF'
                 const notConfigured = !pdfAttachField
                 return dwrap(
-                  slotTarget('__pdf__'),
+                  slotTarget('__pdf__', item.slot.group_key ?? null),
                   <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
                     <button
                       type='button'
@@ -8858,7 +8863,7 @@ function ItemEditFormView({
                 if (!item.slot.widget_id) return null
                 const span = item.slot.col_span ?? 12
                 return dwrap(
-                  slotTarget(item.slot.field),
+                  slotTarget(item.slot.field, item.slot.group_key ?? null),
                   <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
                     <WidgetSlot
                       widgetId={item.slot.widget_id}
