@@ -157,14 +157,20 @@ async function app() {
   return a
 }
 
+// Fixtures sit at T0; API log retention (14 days) is measured from now, so
+// the clock is pinned just after T0.
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'], now: T0 + 60 * 60_000 })
   queries.length = 0
   answer = () => []
   resetInspectCapture()
   resetStatementShapes()
   clearTraces()
 })
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+})
 
 describe('request source', () => {
   it('finds the row by request id, with its neighbours, and peeks with an epoch-ms time', async () => {

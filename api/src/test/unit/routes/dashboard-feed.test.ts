@@ -127,6 +127,8 @@ function installDb() {
   ;(fn as unknown as { raw: unknown }).raw = vi.fn((sql: string) => sql)
   vi.mocked(db).mockImplementation(fn as unknown as typeof db)
   ;(db as unknown as { raw: unknown }).raw = vi.fn((sql: string) => sql)
+  // readHeadlineHistory probes for the newer remaining columns.
+  ;(db as unknown as { schema: unknown }).schema = { hasColumn: vi.fn(async () => false) }
 }
 
 async function inject(method: 'GET' | 'POST', url: string, payload?: unknown) {

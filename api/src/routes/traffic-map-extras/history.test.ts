@@ -93,8 +93,11 @@ describe('history routes', () => {
     const a = await app()
     const res = await a.inject({ url: '/history/search?kind=busiest_hour&partner=ext:12&days=31' })
     expect(res.statusCode).toBe(200)
+    // The route also passes the request time and a client-gone signal.
     expect(searchHistory).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'busiest_hour', partner: 'ext:12', days: 31 })
+      expect.objectContaining({ kind: 'busiest_hour', partner: 'ext:12', days: 31 }),
+      expect.any(Number),
+      expect.any(AbortSignal)
     )
   })
 

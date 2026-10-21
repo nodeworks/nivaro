@@ -30,7 +30,10 @@ vi.mock('../../../services/help-video-house-style.js', () => ({
   isDefaultHouseStyle: vi.fn(),
   saveHouseStyle: vi.fn()
 }))
-vi.mock('../../../services/help-videos.js', () => ({ isAuthor: vi.fn(async () => true) }))
+vi.mock('../../../services/help-videos.js', () => ({
+  isAuthor: vi.fn(async () => true),
+  actAsMasqueradeAuthor: vi.fn(async () => undefined)
+}))
 vi.mock('../../../services/job-runs.js', () => ({
   withJobRun: vi.fn(async (_k: string, _j: string, _o: unknown, fn: () => Promise<unknown>) => fn())
 }))
