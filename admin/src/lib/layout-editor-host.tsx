@@ -7,6 +7,7 @@ import {
 import { skipToken, useQuery } from '@tanstack/react-query'
 import { type ReactNode, useMemo } from 'react'
 import { useNavigate } from 'react-router'
+import { LayoutAssistSection } from '@/components/ai-layout-assist'
 import { LayoutReviewSection } from '@/components/ai-layout-review'
 import { ExplainButton } from '@/components/explain-button'
 import { useAuth } from '@/lib/auth'
@@ -54,7 +55,12 @@ export function AdminLayoutEditorHost({
       isAdmin,
       navigate: (to) => navigate(to),
       aiReviewSlot: isAdmin
-        ? (layoutId, ctx) => <LayoutReviewSection layoutId={layoutId} ctx={ctx} />
+        ? (layoutId, ctx) => (
+            <>
+              <LayoutReviewSection layoutId={layoutId} ctx={ctx} />
+              <LayoutAssistSection layoutId={layoutId} ctx={ctx} />
+            </>
+          )
         : undefined,
       explainSlot: isAdmin ? explain : undefined,
       warning,

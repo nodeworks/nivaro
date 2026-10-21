@@ -40,6 +40,7 @@ import {
 import { DEFAULT_DAYS, suggestRoleViews } from '../services/ai-design/role-views.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { loadLayoutBundle } from '../services/layout-ops.js'
+import { meaningPass, registerLayoutAssistRoutes } from './ai-design-assist.js'
 
 /**
  * AI design helpers (#1920 #1964 #1912 #2010 #1965) — admin only.
@@ -67,6 +68,9 @@ export async function aiDesignRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
   app.addHook('preHandler', resolveWorkspace)
 
+  // Layout editor AI assists (#2684 #2688 #2689): proposals only, see ai-design-assist.ts.
+  registerLayoutAssistRoutes(app)
+
   // ── Layout review (#1920) + apply (#1964) ──────────────────────────────────
 
   app.post<{ Params: { id: string }; Body: { ai?: boolean } }>(
@@ -80,20 +84,26 @@ export async function aiDesignRoutes(app: FastifyInstance) {
       // Crowded steps / sections also get a split change set (#2587), built on the
       // bundle the editor edits; the model, when asked, names and groups the parts.
       const bundle = await loadLayoutBundle(db, id)
-      const { splits, ...result } = await reviewLayout(
-        model,
-        req.body?.ai === false ? null : complete,
-        (findings) => splitCandidates(findings, bundle)
-      )
+      // Help text vs behaviour + same-meaning fields (#2686 #2687) ride beside it.
+      const [{ splits, ...result }, meaning] = await Promise.all([
+        reviewLayout(model, req.body?.ai === false ? null : complete, (findings) =>
+          splitCandidates(findings, bundle)
+        ),
+        meaningPass(bundle, !!complete && req.body?.ai !== false)
+      ])
       const labels = new Map(model.fields.map((f) => [f.field, f.label]))
-      const findings = attachSplitChangeSets(
-        result.findings,
-        bundle,
-        (f) => labels.get(f) ?? f,
-        splits
-      )
+      const findings = [
+        ...attachSplitChangeSets(result.findings, bundle, (f) => labels.get(f) ?? f, splits),
+        ...meaning.findings
+      ]
       return reply.send({
-        data: { layout: model.layout, ...result, findings, ai_configured: !!complete }
+        data: {
+          layout: model.layout,
+          ...result,
+          ai_error: result.ai_error ?? meaning.error,
+          findings,
+          ai_configured: !!complete
+        }
       })
     }
   )
