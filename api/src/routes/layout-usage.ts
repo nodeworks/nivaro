@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { readItems, readOne } from '../services/items.js'
+import { abArmOf, abTestsForCollection } from '../services/layout-ab.js'
 import { roleAllows } from '../services/layout-patch.js'
 import {
   collectionCoChanges,
@@ -113,7 +114,14 @@ export async function layoutUsageRoutes(app: FastifyInstance) {
       for (const ev of accepted) {
         if (ev.item != null && !readable.has(`${ev.collection}\u0000${ev.item}`)) continue
         try {
-          await recordUsage(ev, user.id ?? null)
+          // A session in an A/B test (#2614) also counts for that test's half.
+          const arm = abArmOf(
+            await abTestsForCollection(ev.collection),
+            ev.layout_id,
+            user,
+            !!req.isAdmin
+          )
+          await recordUsage(ev, user.id ?? null, arm)
         } catch (err) {
           req.log.warn({ err, layout_id: ev.layout_id }, 'layout usage beacon not stored')
         }

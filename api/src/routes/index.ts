@@ -132,6 +132,7 @@ import { itemsRoutes } from './items.js'
 import { jobRunRoutes } from './job-runs.js'
 import { journeyRoutes } from './journeys.js'
 import { lastTouchRoutes } from './last-touch.js'
+import { layoutAbRoutes } from './layout-ab.js'
 import { layoutChangeRequestRoutes } from './layout-change-requests.js'
 import { formPreviewPublicRoutes, layoutCollabRoutes } from './layout-collab.js'
 import { layoutDependencyRoutes } from './layout-dependencies.js'
@@ -612,6 +613,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(formPreviewPublicRoutes, { prefix: '/form-preview' })
   await app.register(layoutInspectRoutes, { prefix: '/layout-inspect' })
   await app.register(layoutTestingRoutes, { prefix: '/collection-layouts' })
+  // #2614: A/B layouts.
+  await app.register(layoutAbRoutes, { prefix: '/collection-layouts' })
   await app.register(virtualCollectionsRoutes, { prefix: '/virtual-collections' })
   await app.register(recordTemplatesRoutes, { prefix: '/record-templates' })
   await app.register(collectionPresetsRoutes, { prefix: '/collection-presets' })

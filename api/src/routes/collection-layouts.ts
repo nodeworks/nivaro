@@ -8,6 +8,7 @@ import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
+import { type AbApplied, abFor, liveVariants } from '../services/layout-ab.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
 import { stripEditorNotes } from '../services/layout-editor-notes.js'
 import { afterLayoutSaved } from '../services/layout-notify.js'
@@ -31,6 +32,7 @@ import {
   slugify
 } from '../services/layout-patch.js'
 import { findLayoutReferences } from '../services/layout-references.js'
+import { registerTestRecordsReadiness } from '../services/layout-test-readiness.js'
 import { shownConditions } from '../services/layout-testing.js'
 import {
   diffLayoutVersions,
@@ -187,26 +189,31 @@ function collectRecordConditionFields(layouts: Record<string, unknown>[]): strin
 // or null when no layout exists.
 /** Why a layout won resolution — the overview's reason vocabulary. */
 export type PickReason = {
-  kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use'
+  kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use' | 'ab'
   rules?: RecordConditionRule[]
   role_ids?: string[]
   role_names?: string[]
   type_use?: string
+  /** kind 'ab' (#2614): the person's half of an A/B test chose this version. */
+  ab?: AbApplied
 }
 export type PickCheck = { layout_id: number; matched: boolean; why: string }
 export type PickResult = {
   row: Record<string, unknown> | null
   reason: PickReason | null
   checked: PickCheck[]
+  /** The A/B test (#2614) on the form resolution picked for this role, when there is one. */
+  ab?: AbApplied | null
 }
 
 export function pickBestLayout(
   allCandidates: Record<string, unknown>[],
   userRoleId: string | null | undefined,
   record: Record<string, unknown> | null,
-  isAdmin = false
+  isAdmin = false,
+  userId: string | null = null
 ) {
-  return pickBestLayoutTraced(allCandidates, userRoleId, record, isAdmin).row
+  return pickBestLayoutTraced(allCandidates, userRoleId, record, isAdmin, userId).row
 }
 
 /**
@@ -218,11 +225,17 @@ export function pickBestLayoutTraced(
   allCandidates: Record<string, unknown>[],
   userRoleId: string | null | undefined,
   record: Record<string, unknown> | null,
-  isAdmin = false
+  isAdmin = false,
+  userId: string | null = null
 ): PickResult {
-  // Role-restricted layouts leave the candidate set entirely for non-listed
-  // roles — before record conditions, before the default fallback.
-  const layouts = allCandidates.filter((row) => roleAllows(row, userRoleId, isAdmin))
+  // A/B test versions (#2614) never win on their own: they only stand in for
+  // their control, below. Role-restricted layouts leave the candidate set
+  // entirely for non-listed roles — before record conditions, before the
+  // default fallback.
+  const variants = liveVariants(allCandidates)
+  const layouts = allCandidates.filter(
+    (row) => !variants.has(row) && roleAllows(row, userRoleId, isAdmin)
+  )
 
   const fallbackPool: typeof layouts = []
   const recordMatched = new Set<Record<string, unknown>>()
@@ -275,9 +288,53 @@ export function pickBestLayoutTraced(
     if (picked) reason = { kind: picked.is_active ? 'default' : 'fallback' }
   }
 
+  // A/B test (#2614): the person's half of the role decides between the
+  // control resolution picked and its test version. Deterministic: the same
+  // person always lands in the same half of the same test.
+  const control = picked
+  const test = abFor(picked, variants, userRoleId, isAdmin, userId)
+  const ab = test && roleAllows(test.variant, userRoleId, isAdmin) ? test.applied : null
+  if (ab?.half === 'b' && test) {
+    picked = test.variant
+    reason = { kind: 'ab', role_ids: [ab.role_id], ab }
+  }
+  const controlName = control ? `“${String(control.name ?? control.id)}”` : ''
+
   const winnerName = picked ? `“${String(picked.name ?? picked.id)}”` : ''
   const checked = allCandidates.map((row): PickCheck => {
     const layout_id = Number(row.id)
+    if (variants.has(row)) {
+      if (ab && test?.variant === row) {
+        if (ab.half === 'b')
+          return {
+            layout_id,
+            matched: true,
+            why: `A/B test: this person is in the half of the role that gets it instead of ${controlName}`
+          }
+        if (ab.half === 'a')
+          return {
+            layout_id,
+            matched: false,
+            why: `A/B test: this person is in the half of the role that keeps ${controlName}`
+          }
+        return {
+          layout_id,
+          matched: true,
+          why: `A/B test: half of this role (chosen per person) get it instead of ${controlName}`
+        }
+      }
+      return {
+        layout_id,
+        matched: false,
+        why: 'A/B test version: only shown in place of its original form, to half of one role'
+      }
+    }
+    if (ab?.half === 'b' && row === control)
+      return {
+        layout_id,
+        matched: true,
+        why: `Picked, but this person is in the A/B test half that gets ${winnerName}`
+      }
     if (row === picked) {
       const why =
         reason?.kind === 'record_rule'
@@ -307,7 +364,7 @@ export function pickBestLayoutTraced(
     return { layout_id, matched: false, why: `Not the default; ${winnerName} is used` }
   })
 
-  return { row: picked, reason, checked }
+  return { row: picked, reason, checked, ab }
 }
 
 /**
@@ -321,6 +378,8 @@ export async function resolveLayout(opts: {
   item?: string | null
   role: string | null
   isAdmin: boolean
+  /** The person asking: decides their half of an A/B test (#2614). */
+  userId?: string | null
 }): Promise<PickResult> {
   const { collection, slug, item, role, isAdmin } = opts
   // Explicit slug pins a specific layout (any type — detail layouts use this
@@ -372,7 +431,7 @@ export async function resolveLayout(opts: {
           .catch(() => null)) ?? null
     }
   }
-  const res = pickBestLayoutTraced(layouts, userRoleId, record, isAdmin)
+  const res = pickBestLayoutTraced(layouts, userRoleId, record, isAdmin, opts.userId ?? null)
   return { ...res, checked: [...slugChecks, ...res.checked] }
 }
 
@@ -500,6 +559,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       }
     })
   }
+  // Pinned test records (#2646) as a readiness check after each deploy (#2720).
+  registerTestRecordsReadiness({
+    pick: (candidates, role, record, isAdmin) =>
+      pickBestLayoutTraced(candidates, role, record, isAdmin).row,
+    candidates: (collection) =>
+      fetchLayoutsForCollection(collection) as Promise<Record<string, unknown>[]>
+  })
   // Preview-as-role (#86): which layout a member of a role would resolve, and
   // which fields their permissions hide — answered with the SAME pickBestLayout
   // + getAllowedFields the live path uses (a parallel evaluator would drift).
@@ -646,23 +712,36 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // Which layout a saved record opens with, and why — the /active resolution
   // itself (resolveLayout), with each candidate's check. role_id tests as that
   // role (an admin role gets no role preference, as live); none = as an admin.
+  // user_id tests as that person (their role, unless role_id names another, and
+  // their half of an A/B test, #2614); without one an A/B test is described.
   app.get('/explain', { preHandler: requireAdmin }, async (req, reply) => {
-    const { collection, item, role_id, slug } = req.query as {
+    const { collection, item, role_id, slug, user_id } = req.query as {
       collection?: string
       item?: string
       role_id?: string
       slug?: string
+      user_id?: string
     }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
     let role: string | null = req.user?.role ?? null
     let isAdmin = true
-    if (role_id) {
-      const r = await db('nivaro_roles').where({ id: role_id }).first('id', 'admin_access')
+    let userId: string | null = null
+    let roleId = role_id
+    if (user_id) {
+      const u = (await db('nivaro_users').where({ id: user_id }).first('id', 'role')) as
+        | { id: string; role: string | null }
+        | undefined
+      if (!u) return reply.code(404).send({ error: 'Person not found' })
+      userId = String(u.id)
+      if (!roleId && u.role) roleId = String(u.role)
+    }
+    if (roleId) {
+      const r = await db('nivaro_roles').where({ id: roleId }).first('id', 'admin_access')
       if (!r) return reply.code(404).send({ error: 'Role not found' })
       role = String(r.id)
       isAdmin = !!r.admin_access
     }
-    const res = await resolveLayout({ collection, slug, item, role, isAdmin })
+    const res = await resolveLayout({ collection, slug, item, role, isAdmin, userId })
     let reason = res.reason
     if (reason?.role_ids?.length) {
       const names = new Map(
@@ -682,7 +761,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       data: {
         layout_id: res.row ? Number(res.row.id) : null,
         reason,
-        checked: res.checked
+        checked: res.checked,
+        ab: res.ab ?? null
       }
     })
   })
@@ -709,7 +789,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       slug,
       item,
       role: req.user?.role ?? null,
-      isAdmin: !!req.isAdmin
+      isAdmin: !!req.isAdmin,
+      userId: req.user?.id ? String(req.user.id) : null
     })
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
 

@@ -1,6 +1,7 @@
 // Type-only from the route: the route imports this module, so a value import back would be a
 // cycle (TDZ at boot). The parsers live in services/layout-patch.
 import type { PickReason } from '../routes/collection-layouts.js'
+import { liveVariants } from './layout-ab.js'
 import { parseConditions, parseRecordConditions, type RecordConditionRule } from './layout-patch.js'
 
 /**
@@ -185,7 +186,11 @@ export function buildLayoutOverview(
       Number(a.id) - Number(b.id)
   )
   const isGrouped = (l: OverviewLayoutInput) => !l.layout_type || l.layout_type === 'grouped'
-  const grouped = ordered.filter(isGrouped)
+  // A/B test versions (#2614) never win resolution: listed after their original.
+  const variants = liveVariants(
+    ordered.filter(isGrouped) as unknown as Record<string, unknown>[]
+  ) as unknown as Map<OverviewLayoutInput, { control_id: number; role_id: string }>
+  const grouped = ordered.filter((l) => isGrouped(l) && !variants.has(l))
 
   const rulesOf = new Map<number, RecordConditionRule[]>()
   for (const l of grouped) {
@@ -317,6 +322,26 @@ export function buildLayoutOverview(
         section: 'unused',
         reason: { kind: 'type_use', type_use: 'Nothing opens it' }
       })
+  }
+
+  // 4b. A/B test versions, each right after the form it stands in for.
+  for (const [l, t] of variants) {
+    const control = ordered.find((c) => Number(c.id) === t.control_id)
+    const row: OverviewRow = {
+      ...base(l),
+      section: 'forms',
+      reason: {
+        kind: 'ab',
+        role_ids: [t.role_id],
+        role_names: roleNames([t.role_id]),
+        type_use: `A/B test: half of ${roleNames([t.role_id])[0]} get it instead of ${
+          control ? `“${control.name}”` : 'its original'
+        }`
+      }
+    }
+    const at = rows.findIndex((r) => r.layout_id === t.control_id)
+    if (at >= 0) rows.splice(at + 1, 0, row)
+    else rows.push(row)
   }
 
   // 5. Other layout types, then 6. unused.
