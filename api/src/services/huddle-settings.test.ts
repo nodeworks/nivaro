@@ -52,7 +52,6 @@ describe('mask + merge', () => {
     expect(m.turn_credential).toBe(HUDDLE_MASK)
     expect(m.turn_secret).toBe(HUDDLE_MASK)
     expect(m.turn_username).toBe('u')
-    expect(m.stun_default[0]).toMatch(/^stun:/)
   })
 
   it('a masked secret re-submitted keeps the stored value; blank clears it', () => {
@@ -75,10 +74,10 @@ describe('mask + merge', () => {
 })
 
 describe('ICE servers', () => {
-  it('falls back to the public STUN when none is set and adds no TURN without urls', () => {
-    const ice = iceServersFrom(HUDDLE_DEFAULTS, 'U1')
-    expect(ice).toHaveLength(1)
-    expect(ice[0].urls[0]).toMatch(/^stun:/)
+  it('names no server at all when none is configured (never a third party by default)', () => {
+    expect(iceServersFrom(HUDDLE_DEFAULTS, 'U1')).toEqual([])
+    const stun = normalizeHuddleSettings({ stun_urls: ['stun:s.example:3478'] })
+    expect(iceServersFrom(stun, 'U1')).toEqual([{ urls: ['stun:s.example:3478'] }])
   })
 
   it('mints a coturn REST credential per person; the secret never appears', () => {
@@ -89,7 +88,7 @@ describe('ICE servers', () => {
     })
     const now = 1_700_000_000_000
     const ice = iceServersFrom(s, 'USER-1', now)
-    const turn = ice[1]
+    const turn = ice[0]
     expect(turn.username).toBe(`${1_700_000_000 + 600}:USER-1`)
     expect(turn.credential).toBe(
       createHmac('sha1', 'shh')
@@ -109,7 +108,7 @@ describe('ICE servers', () => {
       turn_username: 'u',
       turn_credential: 'p'
     })
-    expect(iceServersFrom(s, 'X')[1]).toEqual({
+    expect(iceServersFrom(s, 'X')[0]).toEqual({
       urls: ['turn:t:3478'],
       username: 'u',
       credential: 'p'

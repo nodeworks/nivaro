@@ -20,14 +20,14 @@ import { instanceKey } from './instance-key.js'
 
 export const HUDDLE_OVERRIDE_KEY = 'huddle'
 export const HUDDLE_MASK = '••••••'
-const DEFAULT_STUN = ['stun:stun.l.google.com:19302']
 const MAX_PARTICIPANTS_CAP = 16
 const DEFAULT_TTL_S = 3600
 
 export interface HuddleSettings {
   /** Huddles may be started on this instance (default on). */
   enabled: boolean
-  /** STUN urls; empty = the public default. */
+  /** STUN urls; empty = none (host candidates only — one network). Never a third party by default:
+   *  browsers on an internal network must not contact anyone nobody opted in to. */
   stun_urls: string[]
   /** TURN(S) urls; empty = no relay (same network / direct only). */
   turn_urls: string[]
@@ -98,12 +98,11 @@ export function normalizeHuddleSettings(raw: unknown): HuddleSettings {
 }
 
 /** What the Settings page sees: secrets replaced by the mask. */
-export function maskHuddleSettings(s: HuddleSettings): HuddleSettings & { stun_default: string[] } {
+export function maskHuddleSettings(s: HuddleSettings): HuddleSettings {
   return {
     ...s,
     turn_credential: s.turn_credential ? HUDDLE_MASK : null,
-    turn_secret: s.turn_secret ? HUDDLE_MASK : null,
-    stun_default: DEFAULT_STUN
+    turn_secret: s.turn_secret ? HUDDLE_MASK : null
   }
 }
 
@@ -197,9 +196,11 @@ export function turnRestCredential(
   return { username, credential }
 }
 
-/** The ICE servers a signed-in person's browser gets (pure given the settings). */
+/** The ICE servers a signed-in person's browser gets (pure given the settings). Nothing
+ *  configured = an empty list: host candidates reach people on the same network. */
 export function iceServersFrom(s: HuddleSettings, userId: string, now = Date.now()): IceServer[] {
-  const out: IceServer[] = [{ urls: s.stun_urls.length ? s.stun_urls : DEFAULT_STUN }]
+  const out: IceServer[] = []
+  if (s.stun_urls.length) out.push({ urls: s.stun_urls })
   if (s.turn_urls.length) {
     if (s.turn_secret) {
       out.push({

@@ -26,7 +26,6 @@ interface HuddleSettingsDto {
   turn_secret: string | null
   turn_ttl_s: number
   max_participants: number
-  stun_default: string[]
 }
 
 function Field({
@@ -110,10 +109,11 @@ export function HuddleSettingsSection() {
         </h2>
         <p className='mb-6 mt-1 text-[12px] text-muted-foreground'>
           Voice huddles with an optional screen share, started from a channel or a record's room.
-          Audio goes browser to browser; this instance only relays the handshake. On one office
-          network a STUN server is enough. People on different networks or behind strict firewalls
-          need a TURN relay, such as a self-hosted coturn — give its address here and either its
-          shared secret or a username and password.
+          Audio goes browser to browser; this instance only relays the handshake. With nothing set
+          here, people on the same network reach each other directly and no outside server is
+          contacted. Add a STUN/TURN server for people on different networks — behind strict
+          firewalls that means a TURN relay, such as a self-hosted coturn, with either its shared
+          secret or a username and password.
         </p>
         {isLoading || !form ? (
           <div className='space-y-3'>
@@ -145,7 +145,7 @@ export function HuddleSettingsSection() {
 
             <Field
               label='STUN servers'
-              hint={`One per line. Empty uses ${data?.stun_default.join(', ') ?? 'the public default'}.`}
+              hint='One per line. Empty = none: add a STUN/TURN server for people on different networks.'
             >
               <Textarea
                 value={form.stun}
