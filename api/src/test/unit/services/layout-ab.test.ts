@@ -114,7 +114,9 @@ describe('pickBestLayoutTraced with an A/B test', () => {
   })
 
   it('role ids compare without case; admins and other roles keep the control', () => {
-    expect(pickBestLayoutTraced([a, b], ROLE.toLowerCase(), null, false, { userId: userIn('b') }).row).toBe(b)
+    expect(
+      pickBestLayoutTraced([a, b], ROLE.toLowerCase(), null, false, { userId: userIn('b') }).row
+    ).toBe(b)
     expect(pickBestLayoutTraced([a, b], null, null, true, { userId: userIn('b') }).row).toBe(a)
     expect(pickBestLayoutTraced([a, b], 'OTHER', null, false, { userId: userIn('b') }).row).toBe(a)
   })
@@ -137,7 +139,30 @@ describe('pickBestLayoutTraced with an A/B test', () => {
 
   it('keeps the control when the variant is closed to the role', () => {
     const closed = row(2, { conditions: { ...ab(1), role_ids: ['SOMEONE-ELSE'] } })
-    expect(pickBestLayoutTraced([a, closed], ROLE, null, false, { userId: userIn('b') }).row).toBe(a)
+    expect(pickBestLayoutTraced([a, closed], ROLE, null, false, { userId: userIn('b') }).row).toBe(
+      a
+    )
+  })
+
+  it('opens the variant’s phone version on a phone, and never offers a variant outside its dates', () => {
+    const phone = row(4, { conditions: { phone_of: 2 } })
+    const res = pickBestLayoutTraced([a, b, phone], ROLE, null, false, {
+      userId: userIn('b'),
+      viewport: 'phone'
+    })
+    expect(res.row).toBe(phone)
+    expect(res.reason).toMatchObject({ kind: 'phone', phone_of: 2, desktop_kind: 'ab' })
+    expect(res.checked.find((c) => c.layout_id === 2)?.why).toMatch(/A\/B test.*phone version/)
+    const ended = row(2, {
+      conditions: { ...ab(1), active_window: { from: '2026-01-01', until: '2026-02-01' } }
+    })
+    const late = pickBestLayoutTraced([a, ended], ROLE, null, false, {
+      userId: userIn('b'),
+      today: '2026-10-21'
+    })
+    expect(late.row).toBe(a)
+    expect(late.ab).toBeNull()
+    expect(late.checked.find((c) => c.layout_id === 2)?.why).toMatch(/Outside its active dates/)
   })
 })
 
