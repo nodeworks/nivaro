@@ -6,13 +6,14 @@ import { useRelationOptions } from '../../hooks/useRelationOptions'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { ShareButton, WatchButton } from './collab/FormFollowShare'
 import { HistoryPanel } from './HistoryPanel'
 import type { DescribeField } from './overview/describe-conditions'
 import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overview/overview-api'
 import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
-import { unsavedText } from './UnsavedConfirm'
 import type { PreviewDevice } from './preview/preview-model'
+import { unsavedText } from './UnsavedConfirm'
 import type { LayoutDraft } from './useLayoutDraft'
 
 // The editor's top bar: which layout this is and when it is used, Preview as,
@@ -278,7 +279,8 @@ export function EditorTopBar({
   onBack,
   backLabel = 'Layouts',
   tools,
-  previewExtra
+  previewExtra,
+  onSelectField
 }: {
   collection: string
   layoutId: number
@@ -303,8 +305,15 @@ export function EditorTopBar({
   tools?: ReactNode
   /** More preview modes inside the Preview as popover. */
   previewExtra?: ReactNode
+  /** Select a field on the canvas (a preview comment's "Select this field"). */
+  onSelectField?: (field: string) => void
 }) {
-  const [historyOpen, setHistoryOpen] = useState(false)
+  // A save notice links here with ?history=1 (#2655): History opens on arrival.
+  const [historyOpen, setHistoryOpen] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('history') === '1'
+  )
   const unsaved = draft.unsavedCount ?? 0
   const pill = row ? rowPill(row) : null
   const rowList = useMemo(() => (row ? [row] : []), [row])
@@ -375,6 +384,8 @@ export function EditorTopBar({
         on={showHidden}
         onChange={onShowHidden}
       />
+      <WatchButton layoutId={layoutId} />
+      <ShareButton layoutId={layoutId} fields={fields} onSelectField={onSelectField} />
       <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
         <PopoverTrigger asChild>
           <button type='button' className={btn} aria-label='History'>

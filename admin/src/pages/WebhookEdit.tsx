@@ -133,18 +133,18 @@ export function WebhookEditPage() {
     queryKey: ['collections', 'tables_only'],
     queryFn: () => api.get('/collections?tables_only=true').then((r) => r.data.data as Collection[])
   })
-  // Task events (#1008) are offered as their own source: a webhook left on
-  // "All collections" never receives them — it has to name Tasks.
+  // Task events (#1008) and saved form layout changes (#2667, event 'update' with
+  // data.event 'layout.updated') are offered as their own sources: a webhook left on
+  // "All collections" never receives them — it has to name them.
+  const platformSources = [
+    { collection: 'nivaro_tasks', display_name: 'Tasks (created, reassigned, completed)' },
+    { collection: 'nivaro_collection_layouts', display_name: 'Form layouts (saved changes)' }
+  ]
   const allCollections = [
     ...(collectionsData ?? []),
-    ...((collectionsData ?? []).some((c) => c.collection === 'nivaro_tasks')
-      ? []
-      : [
-          {
-            collection: 'nivaro_tasks',
-            display_name: 'Tasks (created, reassigned, completed)'
-          } as Collection
-        ])
+    ...platformSources
+      .filter((p) => !(collectionsData ?? []).some((c) => c.collection === p.collection))
+      .map((p) => p as Collection)
   ]
 
   const { data, isLoading } = useQuery({

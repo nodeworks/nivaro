@@ -664,6 +664,13 @@ export function LayoutEditor({
         onShowHidden={setShowHidden}
         onBack={leave}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
+        onSelectField={(field) =>
+          onSelect({
+            kind: 'field',
+            field,
+            group_key: bundle?.placements.find((p) => p.field === field)?.group_key ?? null
+          })
+        }
         tools={
           bundle && arrangeable ? (
             <>

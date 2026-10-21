@@ -31,6 +31,7 @@ import { del, patch, post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
+import { OwnerLine } from '../collab/OwnerLine'
 import {
   type ChoiceLabels,
   type DescribeField,
@@ -482,6 +483,7 @@ function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }
           <div className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
             {row.section === 'unused' ? `${shapeLine(row)}, used by nothing` : shapeLine(row)}
           </div>
+          <OwnerLine layoutId={row.layout_id} />
           {row.warnings.map((w) => (
             <div
               key={w}

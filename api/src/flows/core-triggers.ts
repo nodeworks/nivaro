@@ -46,6 +46,17 @@ export function registerCoreTriggers(): void {
       'Filter with a Condition operation (e.g. room eq ch:ops, text contains "outage").',
     fields: []
   })
+  registerTrigger({
+    type: 'layout.updated',
+    label: 'Form Layout Changed',
+    description:
+      'Fires when someone saves a change to a form layout in the layout editor, or restores ' +
+      'one of its versions. Payload: layout_id, layout_name, collection, op_summary (e.g. ' +
+      '"2 fields moved, 1 section added"), op_count, note (the version note, or null), ' +
+      'user_id + user_name (who saved) and history_url (the editor with History open). ' +
+      'Filter with a Condition operation (e.g. collection eq orders).',
+    fields: []
+  })
   const taskPayload =
     'Payload: task_id, title, description, status, priority, due_date (YYYY-MM-DD), collection, item, ' +
     'friendly_id, team_id, assignee + assignee_name + assignee_email, created_by + creator_name + ' +
