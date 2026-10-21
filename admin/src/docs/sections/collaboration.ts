@@ -813,6 +813,24 @@ export const collabChat: DocSection = {
     {
       type: 'note',
       text: 'To keep answers in the room, ask about the record or name the fields you need. A read of a few fields that every role can see passes the check. A read of every field usually does not.'
+    },
+    { type: 'h2', id: 'collab-chat-huddles', text: 'Huddles and screen clips' },
+    {
+      type: 'p',
+      text: 'A huddle is a voice call inside a channel, General or a record’s room, started from the headphones button in the room header. While one runs, the header shows who is in it with a Join button; a strip under the header shows the people, how long it has run and, when someone shares their screen, that screen. The room gets a line when a huddle starts and when it ends. You can open other rooms while you talk — the huddle keeps going and the header says so. Huddles are not recorded, and they do not run in direct messages.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Audio goes browser to browser (WebRTC). The server only relays the handshake over the chat socket, and checks that you can still see the room on every message of it — lose access mid-call and you drop out.',
+        'Share your screen with the screen button in the controls; only one share shows at a time (the first). The browser’s own "Stop sharing" ends it. Browsers without screen capture do not show the button.',
+        'Administrators set the STUN/TURN servers under Settings → Huddles, per instance. Nothing configured means no outside server is contacted and people on the same network reach each other directly; add a STUN/TURN server for people on different networks — behind strict firewalls that means a TURN relay (a self-hosted coturn with `use-auth-secret` is the recommended setup — each person then gets a short-lived credential and the secret never leaves the server). The same page turns huddles off and caps how many people one can hold (default 8). TURN credentials are handed out only for a room the person can see and only while huddles are on; on the coturn side, set `denied-peer-ip` for your private ranges (and `no-multicast-peers`) so the relay can never be used to reach internal hosts.',
+        'Hosts that mount no realtime adapter, or browsers without WebRTC, simply never show the button.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'A screen clip is a short recording — up to 60 seconds of your screen and microphone — made from the clapperboard button in the composer and sent like any other attachment. The button becomes the clock while it records; Stop, the 60 s mark or the browser’s "Stop sharing" ends it. The clip arrives with a poster frame and plays inline in the message. It is an ordinary file in the file manager (tagged `chat-clip`), not a help video.'
     }
   ]
 }

@@ -3,7 +3,7 @@ import { AlarmClock, AlertTriangle, Hash, Paperclip, Quote, Send, Type, X } from
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../context'
-import { get, post } from '../../lib/commands'
+import { get, patch, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
@@ -23,6 +23,7 @@ import { useDraftSync } from './chat-drafts'
 import { EmojiButton } from './chat-emoji'
 import { useRoomInfo, useScheduledMessages } from './chat-hooks'
 import { tsvToTable } from './MessageFormat'
+import { CLIP_POSTER_TAG, clipTags, type RecordedClip, ScreenClipButton } from './ScreenClip'
 import {
   type BuiltinSlash,
   filterSlash,
@@ -318,7 +319,9 @@ export const ChatComposer = forwardRef<
   }
 
   // ── Attachments with progress (#964) ──────────────────────────────────────
-  const startUploads = (list: File[]) => {
+  // `after` runs once a file row exists and before the chip turns green (a
+  // screen clip tags itself with its poster, #2458).
+  const startUploads = (list: File[], after?: (id: string) => Promise<void>) => {
     for (const f of list.slice(0, 10)) {
       const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
       const xhr = new XMLHttpRequest()
@@ -341,7 +344,13 @@ export const ChatComposer = forwardRef<
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const id = (JSON.parse(xhr.responseText) as { data: { id: string } }).data.id
-            update({ id, progress: 1, xhr: null })
+            if (after) {
+              after(id)
+                .catch(() => null)
+                .then(() => update({ id, progress: 1, xhr: null }))
+            } else {
+              update({ id, progress: 1, xhr: null })
+            }
           } catch {
             update({ error: 'Upload failed', xhr: null })
           }
@@ -363,6 +372,39 @@ export const ChatComposer = forwardRef<
       fd.append('file', f)
       xhr.send(fd)
     }
+  }
+  // A screen clip (#2458): the poster goes up first as its own file, then the
+  // clip, whose tags name the poster and the length — plain files, no table.
+  const addClip = async (clip: RecordedClip) => {
+    let posterId: string | null = null
+    if (clip.poster) {
+      try {
+        const fd = new FormData()
+        fd.append(
+          'file',
+          new File([clip.poster], clip.file.name.replace(/\.webm$/, '.png'), { type: 'image/png' })
+        )
+        const res = await fetch(`${fetchCfg.apiBase}/files/upload`, {
+          method: 'POST',
+          headers: fetchCfg.authHeaders,
+          credentials: fetchCfg.credentials,
+          body: fd
+        })
+        if (res.ok) {
+          posterId = ((await res.json()) as { data: { id: string } }).data.id
+          void client
+            .request(patch(`/files/${posterId}`, { tags: [CLIP_POSTER_TAG], title: 'Clip poster' }))
+            .catch(() => null)
+        }
+      } catch {
+        /* no poster: the player shows the first frame instead */
+      }
+    }
+    startUploads([clip.file], (id) =>
+      client
+        .request(patch(`/files/${id}`, { tags: clipTags(posterId, clip.durationMs) }))
+        .then(() => undefined)
+    )
   }
   const cancelFile = (key: string) =>
     setFiles((prev) => {
@@ -820,6 +862,7 @@ export const ChatComposer = forwardRef<
             >
               <Paperclip className='h-4 w-4' strokeWidth={2} />
             </button>
+            <ScreenClipButton onClip={(c) => void addClip(c)} disabled={!!disabledReason} />
             <button
               type='button'
               onClick={() => setUrgent((u) => !u)}

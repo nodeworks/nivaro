@@ -129,7 +129,11 @@ import { EmojiButton, EmojiGlyph, useCustomEmoji } from './chat-emoji'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
 import { offHoursNote } from './chat-local-time'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
+import { HuddleControls } from './huddle/HuddleControls'
+import { HuddleStage } from './huddle/HuddleStage'
+import { useHuddle } from './huddle/useHuddle'
 import { PollCard } from './PollCard'
+import { ClipPlayer, clipInfo } from './ScreenClip'
 import {
   ChannelIntro,
   JumpToDate,
@@ -991,6 +995,8 @@ export function ChatRoomView({
   const th = useTheme()
   const client = useNivaroClient()
   const me = cfg.me
+  // #2457 — the room's huddle (header pill + stage); silent without WebRTC or a socket.
+  const huddle = useHuddle(room)
   // A DM opened from a link before it holds a message is not in the room
   // list, so the host only has the room key to call it. Name it after the
   // other person instead (same query key as the user card, so it is shared).
@@ -1329,11 +1335,12 @@ export function ChatRoomView({
             title: string | null
             type: string | null
             filesize: number | null
+            tags?: string[] | null
           }>
         }>('/files', {
           filter: JSON.stringify({ id: { _in: attachmentIds } }),
           limit: String(attachmentIds.length),
-          fields: 'id,filename_download,title,type,filesize'
+          fields: 'id,filename_download,title,type,filesize,tags'
         })
       )) as {
         data: Array<{
@@ -1342,6 +1349,7 @@ export function ChatRoomView({
           title: string | null
           type: string | null
           filesize: number | null
+          tags?: string[] | null
         }>
       }
       return new Map((res.data ?? []).map((f) => [f.id, f]))
@@ -1743,6 +1751,7 @@ export function ChatRoomView({
                     const name = meta?.title || meta?.filename_download || 'Attachment'
                     const url = client.fileUrl(aid)
                     const isImg = (meta?.type ?? '').startsWith('image/')
+                    const clip = clipInfo(meta?.tags, meta?.type)
                     const openPreview = () =>
                       setPreview({
                         id: aid,
@@ -1761,7 +1770,16 @@ export function ChatRoomView({
                           }
                         />
                       ) : null
-                    return isImg ? (
+                    return clip ? (
+                      <ClipPlayer
+                        key={aid}
+                        url={url}
+                        poster={clip.poster ? client.fileUrl(clip.poster) : null}
+                        name={name}
+                        durationMs={clip.durationMs}
+                        action={attach}
+                      />
+                    ) : isImg ? (
                       <span key={aid} className='relative inline-block'>
                         <button
                           type='button'
@@ -1989,6 +2007,12 @@ export function ChatRoomView({
             />
           ) : null}
         </div>
+        <HuddleControls
+          room={room}
+          roomLabel={label}
+          huddle={huddle}
+          renderAvatar={(id, name) => <Avatar id={id} name={name} size={18} presence={false} />}
+        />
         {recordLink && (
           <button
             type='button'
@@ -2262,6 +2286,12 @@ export function ChatRoomView({
           </button>
         )}
       </div>
+      <HuddleStage
+        room={room}
+        me={me}
+        huddle={huddle}
+        renderAvatar={(id, name) => <Avatar id={id} name={name} size={18} presence={false} />}
+      />
       {searchOpen && (
         <div className={cn('shrink-0 border-b px-3 py-1.5', th.divider)}>
           <input
