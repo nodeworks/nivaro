@@ -283,6 +283,9 @@ const ScheduledChangesPage = lazy(() => import('@/pages/ScheduledChanges'))
 const CollectionPresetsPage = lazy(() => import('@/pages/CollectionPresets'))
 const VirtualCollectionsPage = lazy(() => import('@/pages/VirtualCollections'))
 const ApiKeysPage = lazy(() => import('@/pages/ApiKeys').then((m) => ({ default: m.ApiKeysPage })))
+const McpToolsPage = lazy(() =>
+  import('@/pages/McpTools').then((m) => ({ default: m.McpToolsPage }))
+)
 const NotificationsCenterPage = lazy(() =>
   import('@/pages/NotificationsCenter').then((m) => ({ default: m.NotificationsCenterPage }))
 )
@@ -667,6 +670,7 @@ export default function App() {
                   <Route path='collection-presets' element={<CollectionPresetsPage />} />
                   <Route path='virtual-collections' element={<VirtualCollectionsPage />} />
                   <Route path='api-keys' element={<ApiKeysPage />} />
+                  <Route path='mcp-tools' element={<McpToolsPage />} />
                   <Route path='notifications' element={<NotificationsCenterPage />} />
                   <Route path='sync-jobs' element={<SyncJobsPage />} />
                   <Route path='pdf-templates' element={<PdfTemplatesPage />} />

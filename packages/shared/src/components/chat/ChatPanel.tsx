@@ -121,6 +121,7 @@ import {
   useUserSearch
 } from './chat-core'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
+import { actionsForMessage, MessageActionsMenu, useMessageActions } from './MessageActions'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
 import { PollCard } from './PollCard'
 import {
@@ -1142,6 +1143,9 @@ export function ChatRoomView({
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  // #2763 — extension message actions; the toolbar stays up while its menu is open.
+  const msgActions = useMessageActions(room)
+  const [actionsOpenId, setActionsOpenId] = useState<number | null>(null)
   const [preview, setPreview] = useState<PreviewFile | null>(null)
   const [notifyMenuOpen, setNotifyMenuOpen] = useState(false)
   const [threadRoot, setThreadRoot] = useState<number | null>(null)
@@ -1495,6 +1499,7 @@ export function ChatRoomView({
             <div
               className={cn(
                 'absolute -top-3 z-10 hidden items-center gap-0.5 rounded-full border px-1 py-0.5 shadow-sm group-hover/msg:flex',
+                actionsOpenId === m.id && 'flex',
                 th.surface,
                 'border-slate-200 dark:border-border',
                 mine ? 'right-0' : 'left-0'
@@ -1623,6 +1628,12 @@ export function ChatRoomView({
                     <Trash2 className='h-3 w-3' />
                   </button>
                 ))}
+              <MessageActionsMenu
+                messageId={m.id}
+                actions={actionsForMessage(msgActions, m, myId)}
+                navigate={cfg.navigate}
+                onOpenChange={(o) => setActionsOpenId(o ? m.id : null)}
+              />
             </div>
           )}
           {m.urgent && !deleted && (

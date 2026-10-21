@@ -782,6 +782,10 @@ export const collabChat: DocSection = {
     },
     {
       type: 'p',
+      text: 'Extensions can also add items to a message’s ⋯ menu (for example “Log to record”) with `ctx.chat.registerMessageAction`. The menu appears on hover only when an action fits the room and the message; it runs as the person clicking, and anything it posts goes into the room as them.'
+    },
+    {
+      type: 'p',
       text: 'Chat search also finds messages by meaning, listed after the exact matches and limited to rooms you can see. The room info drawer’s Files and Links tabs are searchable and each link has a Show jump. The @mention picker lists people who are online first.'
     },
     { type: 'h2', id: 'collab-chat-assistant', text: 'The assistant in rooms' },

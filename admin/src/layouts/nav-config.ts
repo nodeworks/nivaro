@@ -34,6 +34,7 @@ import {
   GitCompare,
   Globe,
   Grid3x3,
+  Hammer,
   HeartPulse,
   House,
   Inbox,
@@ -622,6 +623,13 @@ export const navCategories: NavCategory[] = [
     zone: 'platform',
     items: [
       { icon: KeyRound, label: 'API Keys', to: '/api-keys', section: 'APIs', keywords: 'token' },
+      {
+        icon: Hammer,
+        label: 'Assistant Tools',
+        to: '/mcp-tools',
+        section: 'APIs',
+        keywords: 'mcp claude chatgpt codex tools'
+      },
       { icon: Braces, label: 'GraphQL', to: '/graphql', section: 'APIs', keywords: 'explorer' },
       { icon: Braces, label: 'Persisted Queries', to: '/persisted-queries', section: 'APIs' },
       {

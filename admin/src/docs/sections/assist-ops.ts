@@ -91,7 +91,7 @@ POST /api/ai/plans/:id/cancel     discard, or stop a running plan before its nex
       items: [
         '/ai-plans (Home → AI Plans) lists plans with who approved them and when, their steps, impact and outcome. Everyone sees their own; administrators see every plan.',
         "Undo (administrators): a step that wrote records can be reverted record by record, but only where nothing has changed the record since — its newest revision is still the plan's write and every field still holds the value the plan wrote. Records changed since are named and left alone. Messages, chat posts, flows and tasks cannot be undone.",
-        'Make a draft flow (administrators, plans that ran to the end): the steps become flow operations, chained in order, with the records as the same ids, the original filter, or whichever record fired an update event. The flow is created switched off and opens in the tester. Record updates and creates use the new Write Records flow operation, which runs as whoever triggered the flow through the normal record rules. When nobody triggers it (a webhook, a schedule, a system event) it runs only as a \'Run as\' person named on the operation — never as the flow\'s author — and refuses without one; that person must be active, and the collection must be named, not templated.',
+        "Make a draft flow (administrators, plans that ran to the end): the steps become flow operations, chained in order, with the records as the same ids, the original filter, or whichever record fired an update event. The flow is created switched off and opens in the tester. Record updates and creates use the new Write Records flow operation, which runs as whoever triggered the flow through the normal record rules. When nobody triggers it (a webhook, a schedule, a system event) it runs only as a 'Run as' person named on the operation — never as the flow's author — and refuses without one; that person must be active, and the collection must be named, not templated.",
         "Templates: ready-made plans for common chores (close out a record's open lines, reassign a leaver's open records, move old drafts to a status, tell the owners of matching records). Fill in the blanks and the usual plan preview appears; nothing runs until you approve. Administrators add their own (blanks + steps as JSON).",
         'Data Integrity: on a run\'s field + rule filter, "Fix as a plan…" builds the confident fixes for that cluster as a plan, previewed record by record in the change report before approval.'
       ]
@@ -386,6 +386,10 @@ export const aiQualityDocs: DocSection = {
     {
       type: 'p',
       text: 'Compare runs one prompt on two models; Replay re-runs up to 50 recent Ask AI questions as their askers (read-only, no proposals) on a candidate model. Both show a cost estimate you confirm first, are logged as admin activity and count against budgets. Live calls streams each finished AI call (feature, model, person, cost, status) while the tab is open.'
+    },
+    {
+      type: 'p',
+      text: 'Extension tools lists the tools extensions give Ask AI (`ctx.ai.registerTool`): the extension each comes from, whether answers that used it may be shared (only a read-only tool its extension declared replayable), and its calls and failures since the server started. A tool whose name a built-in already uses is marked and never offered.'
     },
     {
       type: 'pre',
