@@ -14,7 +14,8 @@ vi.mock('../../../middleware/authenticate.js', () => ({
     if (!who) throw Object.assign(new Error('Invalid token'), { statusCode: 401 })
     req.user = { id: who }
     req.isAdmin = false
-  }
+  },
+  requireAuth: async () => {}
 }))
 
 const { mcpRoutes } = await import('../../../routes/mcp.js')
