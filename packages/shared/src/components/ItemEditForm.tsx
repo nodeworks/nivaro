@@ -7970,6 +7970,8 @@ function ItemEditFormView({
     applyToLines,
     openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id }),
     layoutId: layoutMeta?.id ?? null,
+    // #2726: designers trying pickers on the canvas are not people searching.
+    pickerMisses: !designOn,
     fromAutofill
   }
 

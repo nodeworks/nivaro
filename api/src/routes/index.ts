@@ -174,6 +174,7 @@ import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
 import { personSummaryRoutes } from './person-summary.js'
 import { pickerExclusionRoutes } from './picker-exclusions.js'
+import { pickerMissRoutes } from './picker-misses.js'
 import { pickerNarrowingRoutes } from './picker-narrowing.js'
 import { pinnedRoutes } from './pinned.js'
 import { pipelinesRoutes } from './pipelines.js'
@@ -602,6 +603,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(fieldGroupsRoutes, { prefix: '/field-groups' })
   await app.register(collectionLayoutsRoutes, { prefix: '/collection-layouts' })
   await app.register(layoutUsageRoutes, { prefix: '/layout-usage' })
+  // #2726: picker search gaps (zero-result picker searches per placement).
+  await app.register(pickerMissRoutes, { prefix: '/layout-usage' })
   // #2593 / #2609 / #2613 — promote one layout, change requests, dependencies.
   await app.register(layoutPromoteRoutes, { prefix: '/collection-layouts' })
   await app.register(layoutChangeRequestRoutes, { prefix: '/layout-change-requests' })

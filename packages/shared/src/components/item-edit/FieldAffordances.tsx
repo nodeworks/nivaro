@@ -52,6 +52,8 @@ export interface FieldAffordances {
   openRelated?: (collection: string, id: string) => void
   /** The form's layout id — a field's own AI fill button (#2692) names it. */
   layoutId?: number | null
+  /** Pickers count searches that find nothing on this form (#2726); off in design mode. */
+  pickerMisses?: boolean
   /** The form was filled from a document proposal: fields the layout marks
    *  `autofill_check` get a "check this" ring (#2691). */
   fromAutofill?: boolean

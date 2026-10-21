@@ -14,6 +14,20 @@ export const bulkActionsGuide: DocSection = {
       type: 'p',
       text: 'The bars\' own operations are registry entries too, listed under "Built-in" in the same card: Update Field, Transition, Message…, Compare, Merge… (admins, fixed), Saved recipes and Delete for the collection browser; Claim, Release and Transition for queues; Push… and Retry failed pushes on both. Each can be switched off for the collection or given an access rule (everyone / admins / roles). The endpoints behind them (bulk update / delete / transition, message stakeholders, queue claim / release) enforce the same rule, so a stale client cannot drive a disabled operation. Surface allow-lists include built-ins by key (update-field, transition, message, compare, merge, recipes, delete, claim, release, push, retry-push).'
     },
+    { type: 'h3', text: 'Update Field by form' },
+    {
+      type: 'p',
+      text: "Update Field opens a panel beside the button listing only the fields on the selected records' form, grouped by its sections (when the records open different forms, the form most of them use comes first). A field the form locks for you — a section locked for your role, a lock rule for your role or the step the record is in, or a read-only field — shows as locked with the form's reason; one only some records take says how many. Pick a field, set the value with the form's own input, then Apply."
+    },
+    {
+      type: 'p',
+      text: 'The server checks every record again: a field that record\'s form locks for you, or does not show, is refused for that record and counted in the result ("3 refused — …"). Saved recipes are checked for locks too.'
+    },
+    { type: 'h3', text: 'Compare' },
+    {
+      type: 'p',
+      text: "Compare (two or three selected records) lays the records side by side in their form's sections, with differing values highlighted and Differences only to hide the rest. Each record is read as you: fields you cannot see are not shown, and a field one record's form does not show reads Not on this form and never counts as a difference."
+    },
     { type: 'h3', text: 'Custom actions' },
     {
       type: 'table',

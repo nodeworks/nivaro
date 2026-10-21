@@ -20,7 +20,7 @@ function fakeReq(picker: boolean): FastifyRequest {
   return { query: picker ? { picker: '1' } : {} } as unknown as FastifyRequest
 }
 
-async function countOf(
+export async function countOf(
   user: NonNullable<FastifyRequest['user']>,
   collection: string,
   opts: { search?: string; filter?: Record<string, unknown>; picker: boolean }
