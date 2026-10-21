@@ -74,7 +74,7 @@ export function WidgetInspector({ row }: { row: PlacementRow }) {
   }
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       <Setting
         k='widget.label_override'
         label='Title'
@@ -106,7 +106,9 @@ export function WidgetInspector({ row }: { row: PlacementRow }) {
               const value = typeof b?.binding_value === 'string' ? b.binding_value : ''
               return (
                 <div key={inp.key} className='space-y-1'>
-                  <p className='text-[11px] text-muted-foreground'>{inp.label}</p>
+                  <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                    {inp.label}
+                  </p>
                   <Segmented
                     value={type}
                     options={[

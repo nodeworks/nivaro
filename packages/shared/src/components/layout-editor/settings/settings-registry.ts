@@ -52,8 +52,11 @@ export const SECTIONS: SectionDef[] = [
 ]
 
 const ALL: LayoutKind[] = ['grouped', 'table', 'file', 'addendum', 'detail', 'summary']
-const NOT_ADDENDUM: LayoutKind[] = ['grouped', 'table', 'file', 'detail', 'summary']
 const RECORD_VIEWS: LayoutKind[] = ['grouped', 'file', 'detail', 'summary']
+/** Layouts people open a record with. A PDF (file) layout only renders the PDF:
+ *  its buttons, panels, folding and new-record defaults never show. */
+const ON_SCREEN: LayoutKind[] = ['grouped', 'table', 'detail', 'summary']
+const ON_SCREEN_RECORD: LayoutKind[] = ['grouped', 'detail', 'summary']
 
 export const SETTINGS: SettingDef[] = [
   // ── Who gets this form ────────────────────────────────────────────────────
@@ -124,7 +127,7 @@ export const SETTINGS: SettingDef[] = [
     section: 'layout',
     label: 'One section open at a time',
     effect: 'Opening a section closes the others.',
-    types: [...RECORD_VIEWS, 'table']
+    types: ON_SCREEN
   },
   {
     key: 'layout.row_order_field',
@@ -140,7 +143,7 @@ export const SETTINGS: SettingDef[] = [
     section: 'buttons',
     label: 'AI buttons',
     effect: 'Shows the AI fill and summarise buttons on records opened with this layout.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.dossier_enabled',
@@ -148,7 +151,7 @@ export const SETTINGS: SettingDef[] = [
     label: 'Dossier button',
     effect:
       "Adds a Dossier button on saved records: one PDF with values, workflow history, comments and tasks. Only the default form's switch counts.",
-    types: RECORD_VIEWS
+    types: ON_SCREEN_RECORD
   },
   {
     key: 'layout.dossier_label',
@@ -156,77 +159,77 @@ export const SETTINGS: SettingDef[] = [
     label: 'Dossier button label',
     effect:
       "Text on the Dossier button. Empty shows “Dossier”. Only the default form's label counts.",
-    types: RECORD_VIEWS
+    types: ON_SCREEN_RECORD
   },
   {
     key: 'layout.disable_comments',
     section: 'buttons',
     label: 'Hide comments',
     effect: 'Removes the comments panel.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.disable_tasks',
     section: 'buttons',
     label: 'Hide tasks',
     effect: 'Removes the tasks panel.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.disable_revisions',
     section: 'buttons',
     label: 'Hide revisions',
     effect: 'Removes the revision history panel.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.disable_clone',
     section: 'buttons',
     label: 'Hide Clone button',
     effect: 'People cannot copy a record from here.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.disable_delete',
     section: 'buttons',
     label: 'Hide Delete button',
     effect: 'People cannot delete a record from here.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.hide_integrity_banner',
     section: 'buttons',
     label: 'Hide data-integrity banner',
     effect: 'Records with data-integrity findings no longer show the warning strip.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.hide_sla_banner',
     section: 'buttons',
     label: 'Hide SLA banner',
     effect: 'Records past an SLA no longer show the breach strip.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.changes_tray',
     section: 'buttons',
     label: 'Unsaved-changes tray',
     effect: 'Lists every unsaved field and line while editing, each with its own undo.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.allow_schedule',
     section: 'buttons',
     label: 'Schedule button for everyone',
     effect: 'Everyone who can edit may schedule a change for later, not only admins.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.allow_disable_pickers',
     section: 'buttons',
     label: 'Hide-from-pickers button for everyone',
     effect: 'Everyone who can edit may hide a record from pickers, not only admins.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
 
   // ── Read view & summary ───────────────────────────────────────────────────
@@ -397,14 +400,14 @@ export const SETTINGS: SettingDef[] = [
     label: 'Quick picker steps',
     effect:
       'Before a new record opens, people pick these fields one at a time, each narrowed by the ones before.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
   {
     key: 'layout.quick_picker_seed',
     section: 'defaults',
     label: 'Fill steps from cascade rules',
     effect: 'Replaces the steps with the cascade chain of this collection, parents first.',
-    types: NOT_ADDENDUM
+    types: ON_SCREEN
   },
 
   // ── Inheritance ───────────────────────────────────────────────────────────

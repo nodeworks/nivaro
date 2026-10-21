@@ -5,6 +5,7 @@ import type { CMSRelation } from '../../pipeline/types'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { Label } from '../../ui/label'
+import { tintCard } from '../panel-style'
 import { useEditorApi } from './editor-api'
 import type { RowRuleItem } from './row-rule-row'
 
@@ -210,21 +211,21 @@ export function RowRuleTester({
           ? 'text-slate-500 bg-slate-100 dark:bg-white/5 dark:text-slate-400'
           : 'text-amber-700 bg-amber-50 dark:bg-amber-400/10 dark:text-amber-300'
   return (
-    <div className='mt-2 rounded-md border border-slate-200 bg-slate-50/60 p-2 dark:border-border dark:bg-muted/30'>
-      <div className='flex items-center justify-between'>
-        <Label className='text-[11px] text-slate-600 dark:text-muted-foreground'>
+    <div className={cn(tintCard, 'mt-2 space-y-2 p-3')}>
+      <div className='space-y-0.5'>
+        <Label className='text-[12px] font-medium text-slate-800 dark:text-foreground'>
           Test rules against a record
         </Label>
-        <span className='text-[11px] text-slate-400'>
-          Uses the rules as edited above · nothing is saved
-        </span>
+        <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
+          Uses the rules as edited above. Nothing is saved.
+        </p>
       </div>
-      <div className='mt-1.5 flex items-center gap-1.5'>
+      <div className='flex flex-wrap items-center gap-1.5'>
         <Input
           value={recordId}
           onChange={(e) => setRecordId(e.target.value)}
-          placeholder={`${childCollection} id`}
-          className='h-7 w-40 text-[11px]'
+          placeholder='Row id'
+          className='h-7 min-w-0 flex-1 basis-28 text-[12px]'
           onKeyDown={(e) => {
             if (e.key === 'Enter') void run()
           }}
@@ -232,14 +233,14 @@ export function RowRuleTester({
         <Input
           value={changedField}
           onChange={(e) => setChangedField(e.target.value)}
-          placeholder='changed field (optional)'
-          className='h-7 w-44 text-[11px]'
+          placeholder='Changed field (optional)'
+          className='h-7 min-w-0 flex-1 basis-36 text-[12px]'
           title='Simulate a live edit of this field; blank = the create-time pass where every rule gets its chance'
         />
         <Button
           size='sm'
           variant='outline'
-          className='h-7 text-[11px]'
+          className='h-7 text-[12px]'
           onClick={() => void run()}
           disabled={running || !recordId.trim()}
         >

@@ -102,7 +102,7 @@ export function HeaderFieldsPicker({
           {value.map((f, i) => (
             <li
               key={f}
-              className='flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12.5px] dark:border-border dark:bg-card'
+              className='flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[13px] dark:border-border dark:bg-card'
             >
               <span className='min-w-0 flex-1 truncate text-slate-800 dark:text-foreground'>
                 {labelOf(f)}

@@ -1,7 +1,9 @@
 import { Search, X } from 'lucide-react'
-import { type ComponentType, useCallback, useMemo, useState } from 'react'
+import { type ComponentType, type UIEvent, useCallback, useMemo, useState } from 'react'
 import type { LayoutBundle, LayoutOp, LayoutPatch } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
+import { PanelHeader } from '../panel-frame'
+import { groupTitle } from '../panel-style'
 import type { ApplyOptions } from '../useLayoutDraft'
 import { AddendumSection } from './AddendumSection'
 import { ButtonsSection } from './ButtonsSection'
@@ -88,9 +90,25 @@ export function FormSettings({
     [bundle, kind, collection, apply, doFlush]
   )
 
+  const name = typeof bundle.layout.name === 'string' ? bundle.layout.name : ''
+  // A section title stuck to the top of the scroll gets a hairline under it,
+  // so the rows sliding beneath it have an edge.
+  const markStuck = (e: UIEvent<HTMLDivElement>) => {
+    const body = e.currentTarget
+    const top = body.getBoundingClientRect().top
+    for (const h of body.querySelectorAll<HTMLElement>('[data-section-title]')) {
+      const stuck = body.scrollTop > 0 && Math.abs(h.getBoundingClientRect().top - top) < 1
+      h.toggleAttribute('data-stuck', stuck)
+    }
+  }
+
   return (
-    <div className='flex min-h-0 flex-col' data-form-settings={kind}>
-      <div className='shrink-0 border-b border-slate-200 p-3 dark:border-border'>
+    <div className='flex h-full min-h-0 flex-col' data-form-settings={kind}>
+      <PanelHeader
+        eyebrow='Form settings'
+        title={name || 'This form'}
+        sub='Who gets this form and how it behaves'
+      >
         <div className='relative'>
           <Search className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
           <input
@@ -112,10 +130,14 @@ export function FormSettings({
             </button>
           )}
         </div>
-      </div>
-      <div className='min-h-0 flex-1 overflow-y-auto px-3 pb-6'>
+      </PanelHeader>
+      <div
+        data-panel-body=''
+        onScroll={markStuck}
+        className='min-h-0 flex-1 overflow-y-auto px-4 pb-8'
+      >
         {sections.length === 0 ? (
-          <p className={cn('py-6 text-center', quietText)}>No setting matches “{query.trim()}”.</p>
+          <p className={cn('py-8 text-center', quietText)}>No setting matches “{query.trim()}”.</p>
         ) : (
           <VisibleSettingsContext.Provider value={visible}>
             {sections.map(({ section }) => {
@@ -125,15 +147,20 @@ export function FormSettings({
                   key={section.id}
                   data-section={section.id}
                   aria-labelledby={`form-settings-${section.id}`}
-                  className='border-b border-slate-100 py-2 last:border-b-0 dark:border-border/60'
+                  className='border-t border-slate-100 pb-6 first:border-t-0 dark:border-border/60'
                 >
+                  {/* Sticky: the section a row belongs to stays named while scrolling. */}
                   <h3
                     id={`form-settings-${section.id}`}
-                    className='pt-2 text-[11.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'
+                    data-section-title=''
+                    className={cn(
+                      groupTitle,
+                      'sticky top-0 z-10 -mx-4 border-b border-transparent bg-white px-4 pb-3 pt-4 data-[stuck]:border-slate-200 dark:bg-card dark:data-[stuck]:border-border'
+                    )}
                   >
                     {section.title}
                   </h3>
-                  <div className='divide-y divide-slate-100 dark:divide-border/60'>
+                  <div className='space-y-5'>
                     <Body
                       {...props}
                       onPreviewRole={onPreviewRole}

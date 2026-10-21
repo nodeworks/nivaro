@@ -240,7 +240,7 @@
     "tab_or_section": "How it's laid out",
     "scope": "form",
     "status": "fix",
-    "layout_types": ["grouped", "file", "detail", "summary", "table"]
+    "layout_types": ["grouped", "detail", "summary", "table"]
   },
   {
     "key": "layout.row_order_field",
@@ -258,7 +258,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.dossier_enabled",
@@ -267,7 +267,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "file", "detail", "summary"]
+    "layout_types": ["grouped", "detail", "summary"]
   },
   {
     "key": "layout.dossier_label",
@@ -276,7 +276,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "file", "detail", "summary"]
+    "layout_types": ["grouped", "detail", "summary"]
   },
   {
     "key": "layout.disable_comments",
@@ -285,7 +285,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.disable_tasks",
@@ -294,7 +294,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.disable_revisions",
@@ -303,7 +303,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "fix",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.disable_clone",
@@ -312,7 +312,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "fix",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.disable_delete",
@@ -321,7 +321,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "fix",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.hide_integrity_banner",
@@ -330,7 +330,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.hide_sla_banner",
@@ -339,7 +339,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.changes_tray",
@@ -348,7 +348,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.allow_schedule",
@@ -357,7 +357,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "fix",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.allow_disable_pickers",
@@ -366,7 +366,7 @@
     "tab_or_section": "Buttons & panels",
     "scope": "form",
     "status": "fix",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.summary_enabled",
@@ -573,7 +573,7 @@
     "tab_or_section": "Defaults for new records",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.quick_picker_seed",
@@ -582,7 +582,7 @@
     "tab_or_section": "Defaults for new records",
     "scope": "form",
     "status": "keep",
-    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+    "layout_types": ["grouped", "table", "detail", "summary"]
   },
   {
     "key": "layout.parent_layout_id",

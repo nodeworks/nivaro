@@ -511,7 +511,7 @@ export function LayoutEditor({
           </main>
           <aside
             data-editor-inspector=''
-            className='w-[320px] shrink-0 overflow-y-auto border-l border-slate-200 bg-white dark:border-border dark:bg-card'
+            className='flex w-[344px] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white dark:border-border dark:bg-card'
           >
             {bundle &&
               (panel === 'settings' ? (

@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { CornerDownLeft, Plus, X } from 'lucide-react'
-import { cn } from '../../../lib/utils'
+import { cn, titleCase } from '../../../lib/utils'
 import { SimpleSelect } from '../../ui/SimpleSelect'
+import { effectText, inputBase, segOption, tintCard } from '../panel-style'
 import { Combobox } from './controls'
 import { useEditorApi } from './editor-api'
 
@@ -42,135 +43,140 @@ export function InlineDisplaySection({
   })
   const fieldOptions = (relFields as Array<{ field: string; label?: string }>)
     .filter((f) => !f.field.startsWith('__'))
-    .map((f) => ({ value: f.field, label: f.label || f.field }))
+    .map((f) => ({ value: f.field, label: f.label || titleCase(f.field) }))
+  // A path into the picked record's own links ("unit_type.name") is named hop by
+  // hop: "Unit Type → Name". Only the first hop's label is known here.
+  const pathLabel = (path: string) => {
+    const [first, ...rest] = path.split('.')
+    const head = fieldOptions.find((o) => o.value === first)?.label ?? titleCase(first)
+    return [head, ...rest.map((r) => titleCase(r))].join(' → ')
+  }
+  const optionsFor = (value: string) =>
+    value && !fieldOptions.some((o) => o.value === value)
+      ? [...fieldOptions, { value, label: pathLabel(value) }]
+      : fieldOptions
   const FORMAT_OPTS = [
     { value: 'text', label: 'Text' },
     { value: 'date', label: 'Date' },
     { value: 'datetime', label: 'Date & Time' },
     { value: 'boolean', label: 'Yes / No' }
   ]
+  const setEntry = (i: number, patch: Partial<InlineDisplayEntry>) =>
+    onChange(entries.map((e, j) => (j === i ? { ...e, ...patch } : e)))
   return (
-    <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5 dark:border-border'>
-      <p className='text-[11px] font-semibold text-slate-400'>Inline display</p>
-      <div className='flex gap-1 mt-1' data-setting='field.inline_display.mode'>
+    <div className='space-y-3'>
+      <div
+        className='grid grid-cols-2 gap-0.5 rounded-md bg-slate-100 p-0.5 dark:bg-muted'
+        data-setting='field.inline_display.mode'
+      >
         <button
           type='button'
+          aria-pressed={separator === null}
           onClick={() => onSeparatorChange(null)}
-          className={cn(
-            'flex-1 rounded border px-2 py-0.5 text-[11px]',
-            separator === null
-              ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-              : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border dark:text-muted-foreground'
-          )}
+          className={segOption(separator === null)}
         >
-          Stacked
+          One per line
         </button>
         <button
           type='button'
+          aria-pressed={separator !== null}
           onClick={() => onSeparatorChange(separator ?? ', ')}
-          className={cn(
-            'flex-1 rounded border px-2 py-0.5 text-[11px]',
-            separator !== null
-              ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-              : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border dark:text-muted-foreground'
-          )}
+          className={segOption(separator !== null)}
         >
-          Inline
+          On one line
         </button>
       </div>
       {separator !== null && (
-        <div
-          className='flex items-center gap-1.5 mt-1'
-          data-setting='field.inline_display.separator'
-        >
-          <span className='text-[11px] text-slate-400 shrink-0'>Separator</span>
+        <div className='flex items-center gap-2' data-setting='field.inline_display.separator'>
+          <span className={cn(effectText, 'shrink-0')}>Between values</span>
           <input
             type='text'
+            aria-label='Between values'
             value={separator}
             onChange={(e) => onSeparatorChange(e.target.value)}
-            className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:bg-muted dark:border-border'
+            className={cn(inputBase, 'h-7 w-20 font-mono')}
             placeholder=', '
           />
         </div>
       )}
-      {entries.map((entry, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: stable config order
-        <div key={i} className='space-y-1'>
-          {separator !== null && i > 0 && (
-            <button
-              type='button'
-              data-setting='field.inline_display.line_break'
-              data-tip={entry.line_break ? 'Remove line break' : 'Start new line before this field'}
-              onClick={() =>
-                onChange(entries.map((e, j) => (j === i ? { ...e, line_break: !e.line_break } : e)))
-              }
-              className={cn(
-                'flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 border transition-colors',
-                entry.line_break
-                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                  : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
+      {entries.length > 0 && (
+        <ul className='space-y-2'>
+          {entries.map((entry, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: stable config order
+            <li key={i} className={cn(tintCard, 'space-y-2 p-2.5')}>
+              {separator !== null && i > 0 && (
+                <button
+                  type='button'
+                  aria-pressed={!!entry.line_break}
+                  data-setting='field.inline_display.line_break'
+                  data-tip={
+                    entry.line_break ? 'Remove line break' : 'Start new line before this field'
+                  }
+                  onClick={() => setEntry(i, { line_break: !entry.line_break })}
+                  className={cn(
+                    'inline-flex h-6 items-center gap-1 rounded px-1.5 text-[12px] transition-colors',
+                    entry.line_break
+                      ? 'bg-nvr-cyan/10 font-medium text-slate-900 dark:text-foreground'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
+                  )}
+                >
+                  <CornerDownLeft className='h-3 w-3' />
+                  New line before
+                </button>
               )}
-            >
-              <CornerDownLeft className='h-3 w-3' />
-              New line
-            </button>
-          )}
-          <div className='flex items-center gap-1'>
-            <div className='flex-1 min-w-0' data-setting='field.inline_display.fields'>
-              <Combobox
-                value={entry.field}
-                onChange={(v) =>
-                  onChange(entries.map((e, j) => (j === i ? { ...e, field: v } : e)))
-                }
-                options={fieldOptions}
-                placeholder='Field…'
-              />
-            </div>
-            <button
-              type='button'
-              onClick={() => onChange(entries.filter((_, j) => j !== i))}
-              className='shrink-0 text-slate-300 hover:text-red-500'
-            >
-              <X className='h-3.5 w-3.5' />
-            </button>
-          </div>
-          <div className='flex gap-1'>
-            <input
-              type='text'
-              data-setting='field.inline_display.label'
-              value={entry.label ?? ''}
-              placeholder='Label…'
-              onChange={(e) =>
-                onChange(
-                  entries.map((en, j) => (j === i ? { ...en, label: e.target.value || null } : en))
-                )
-              }
-              className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300 dark:bg-muted dark:border-border'
-            />
-            <span className='contents' data-setting='field.inline_display.format'>
-              <SimpleSelect
-                value={entry.format ?? 'text'}
-                onChange={(v) =>
-                  onChange(
-                    entries.map((en, j) =>
-                      j === i ? { ...en, format: v === 'text' ? null : v } : en
-                    )
-                  )
-                }
-                className='h-6 w-auto rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:bg-card dark:border-border dark:text-muted-foreground'
-                options={FORMAT_OPTS.map((o) => ({ value: o.value, label: o.label }))}
-              />
-            </span>
-          </div>
-        </div>
-      ))}
+              <div className='flex items-center gap-1.5'>
+                <div className='min-w-0 flex-1' data-setting='field.inline_display.fields'>
+                  <Combobox
+                    value={entry.field}
+                    onChange={(v) => setEntry(i, { field: v })}
+                    options={optionsFor(entry.field)}
+                    placeholder='Pick a field…'
+                  />
+                </div>
+                <button
+                  type='button'
+                  aria-label='Remove'
+                  data-tip='Remove'
+                  onClick={() => onChange(entries.filter((_, j) => j !== i))}
+                  className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
+                >
+                  <X className='h-3.5 w-3.5' />
+                </button>
+              </div>
+              <div className='flex gap-1.5'>
+                <input
+                  type='text'
+                  aria-label='Label'
+                  data-setting='field.inline_display.label'
+                  value={entry.label ?? ''}
+                  placeholder='Label (optional)'
+                  onChange={(e) => setEntry(i, { label: e.target.value || null })}
+                  className={cn(inputBase, 'h-7 min-w-0 flex-1 text-[12px]')}
+                />
+                <span className='contents' data-setting='field.inline_display.format'>
+                  <SimpleSelect
+                    value={entry.format ?? 'text'}
+                    ariaLabel='Show as'
+                    onChange={(v) => setEntry(i, { format: v === 'text' ? null : v })}
+                    className={cn(
+                      inputBase,
+                      'h-7 w-[108px] shrink-0 text-[12px] focus:ring-0 focus:ring-offset-0'
+                    )}
+                    options={FORMAT_OPTS.map((o) => ({ value: o.value, label: o.label }))}
+                  />
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
       <button
         type='button'
         onClick={() => onChange([...entries, { field: '', label: null, format: null }])}
-        className='flex items-center gap-1 text-[11px] text-slate-400 hover:text-nvr-cyan'
+        className='inline-flex items-center gap-1 text-[12px] font-medium text-sky-700 hover:underline dark:text-nvr-cyan'
       >
         <Plus className='h-3.5 w-3.5' />
-        Add field
+        Add a field
       </button>
     </div>
   )

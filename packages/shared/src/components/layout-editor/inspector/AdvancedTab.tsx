@@ -2,7 +2,10 @@ import { useQuery } from '@tanstack/react-query'
 import { useContext } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { cn } from '../../../lib/utils'
 import type { CascadeFilterRule } from '../editors/cascade-filters'
+import { tintCard } from '../panel-style'
+import { showsRawOption } from './applies'
 import { useFieldCtx } from './field-context'
 import {
   DraftInput,
@@ -48,6 +51,42 @@ interface FieldImpact {
   source: string
   label: string
   detail: string
+}
+
+/** "Layout 'Order form'" → "Order form (layout)": the name first, no quotes. */
+export function impactPlace(i: FieldImpact): string {
+  const m = /^(.*?)\s*'(.*)'$/.exec(i.label)
+  return m ? `${m[2]} (${m[1].toLowerCase()})` : i.label
+}
+
+/** What the reference does, in plain words (the API's detail is a machine-ish note). */
+export function impactUse(i: FieldImpact): string {
+  switch (i.source) {
+    case 'layout':
+      return i.detail === 'field assignment'
+        ? 'Shows this field'
+        : 'Shows a value reached through this field'
+    case 'display-template':
+      return 'Names records in lists and pickers'
+    case 'picker-filter':
+      return 'Narrows a picker'
+    case 'field-rule':
+      return i.detail === 'trigger field' ? 'Starts a field rule' : 'Filled in by a field rule'
+    case 'at-risk-rule':
+      return 'Part of an at-risk condition'
+    case 'alert':
+      return 'Watched by an alert'
+    case 'field-watch':
+      return 'Watched for changes'
+    case 'rule':
+      return 'Used by a rule'
+    case 'workflow-transition':
+      return 'Checked before a step can move on'
+    case 'saved-view':
+      return 'May be a column or filter of a saved view'
+    default:
+      return i.detail ? i.detail.charAt(0).toUpperCase() + i.detail.slice(1) : ''
+  }
 }
 
 export function AdvancedTab() {
@@ -99,8 +138,10 @@ export function AdvancedTab() {
       `${settingKey}#${i}`
     )
 
+  const rawKeys = RAW_OPTION_KEYS.filter((r) => showsRawOption(r.key, info, opts[r.key]))
+
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       {!special && (
         <Setting
           k='field.impact'
@@ -108,40 +149,28 @@ export function AdvancedTab() {
           effect='Check here before renaming or deleting the field.'
         >
           {isLoading ? (
-            <p className='text-[11px] text-muted-foreground'>Looking…</p>
+            <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
+              Looking…
+            </p>
           ) : (impacts ?? []).length === 0 ? (
-            <p className='text-[11px] text-muted-foreground'>Nothing else refers to {name}.</p>
+            <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
+              Nothing else refers to {name}.
+            </p>
           ) : (
-            <ul className='space-y-0.5 text-[12px]'>
+            <ul className='space-y-1.5 text-[12px]'>
               {(impacts ?? []).slice(0, 30).map((i, n) => (
                 // biome-ignore lint/suspicious/noArrayIndexKey: impact rows can repeat a label
-                <li key={n} className='flex justify-between gap-2'>
-                  <span className='truncate text-foreground'>{i.label}</span>
-                  <span className='shrink-0 text-[11px] text-muted-foreground'>{i.detail}</span>
+                <li key={n} data-impact={i.source} className='min-w-0'>
+                  <p className='truncate text-slate-800 dark:text-foreground'>{impactPlace(i)}</p>
+                  <p className='truncate text-slate-500 dark:text-muted-foreground'>
+                    {impactUse(i)}
+                  </p>
                 </li>
               ))}
             </ul>
           )}
         </Setting>
       )}
-
-      <Setting
-        k='field.overrides_raw'
-        label='This form’s settings as JSON'
-        effect='Everything this form changes about the field. Saved when you leave the box, if it parses.'
-      >
-        <JsonInput
-          ariaLabel='This form’s settings as JSON'
-          rows={6}
-          value={Object.keys(ov).length ? ov : null}
-          validate={(v) =>
-            v && typeof v === 'object' && !Array.isArray(v) ? null : 'Needs a JSON object'
-          }
-          onCommit={(v) =>
-            ctx.setPlacement({ overrides: v ?? null }, `Edit the settings of ${name} as JSON`)
-          }
-        />
-      </Setting>
 
       {!special && (
         <Section title='For API callers'>
@@ -189,13 +218,13 @@ export function AdvancedTab() {
       )}
 
       {cascades.length > 0 && (
-        <Section title='Cascade filters (raw)'>
+        <Section title='Cascade filters (raw)' collapsible>
           {cascades.map((r, i) => (
             <div
               key={`${r.parent_field}:${r.filter_column}`}
-              className='space-y-2 rounded-md border border-slate-200 p-2 dark:border-border'
+              className={cn(tintCard, 'space-y-4 p-3')}
             >
-              <p className='text-[11px] text-muted-foreground'>
+              <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
                 Filter {i + 1}: by <span className='font-mono'>{r.parent_field}</span> on{' '}
                 <span className='font-mono'>{r.filter_column}</span>
               </p>
@@ -265,36 +294,58 @@ export function AdvancedTab() {
         </Section>
       )}
 
-      {info.iface === 'inline-table' && (
+      <Section title='Edit as JSON' collapsible>
         <Setting
-          k='field.row_rules.sources_when'
-          label='Row rules as JSON'
-          effect='For settings the rule editor does not show, such as a source gate (sources[].when).'
+          k='field.overrides_raw'
+          label='This form’s settings as JSON'
+          effect='Everything this form changes about the field. Saved when you leave the box, if it parses.'
         >
           <JsonInput
-            ariaLabel='Row rules as JSON'
+            ariaLabel='This form’s settings as JSON'
             rows={6}
-            value={opts.row_rules ?? null}
-            validate={(v) => (Array.isArray(v) ? null : 'Needs a list of rules')}
-            onCommit={(v) => ctx.setOption('row_rules', v, `Edit the rules of ${name} as JSON`)}
+            value={Object.keys(ov).length ? ov : null}
+            validate={(v) =>
+              v && typeof v === 'object' && !Array.isArray(v) ? null : 'Needs a JSON object'
+            }
+            onCommit={(v) =>
+              ctx.setPlacement({ overrides: v ?? null }, `Edit the settings of ${name} as JSON`)
+            }
           />
         </Setting>
-      )}
 
-      <Section title='Stored settings without an editor'>
-        {RAW_OPTION_KEYS.map((r) => (
-          <Setting key={r.key} k={`field.${r.key}`} label={r.label} effect={r.effect}>
+        {info.iface === 'inline-table' && (
+          <Setting
+            k='field.row_rules.sources_when'
+            label='Row rules as JSON'
+            effect='For settings the rule editor does not show, such as a source gate (sources[].when).'
+          >
             <JsonInput
-              ariaLabel={r.label}
-              rows={2}
-              value={opts[r.key] ?? null}
-              onCommit={(v) =>
-                ctx.setOption(r.key, v, `Change the ${r.label.toLowerCase()} of ${name}`)
-              }
+              ariaLabel='Row rules as JSON'
+              rows={6}
+              value={opts.row_rules ?? null}
+              validate={(v) => (Array.isArray(v) ? null : 'Needs a list of rules')}
+              onCommit={(v) => ctx.setOption('row_rules', v, `Edit the rules of ${name} as JSON`)}
             />
           </Setting>
-        ))}
+        )}
       </Section>
+
+      {rawKeys.length > 0 && (
+        <Section title='Stored settings without an editor' collapsible>
+          {rawKeys.map((r) => (
+            <Setting key={r.key} k={`field.${r.key}`} label={r.label} effect={r.effect}>
+              <JsonInput
+                ariaLabel={r.label}
+                rows={2}
+                value={opts[r.key] ?? null}
+                onCommit={(v) =>
+                  ctx.setOption(r.key, v, `Change the ${r.label.toLowerCase()} of ${name}`)
+                }
+              />
+            </Setting>
+          ))}
+        </Section>
+      )}
     </div>
   )
 }

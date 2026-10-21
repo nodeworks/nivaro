@@ -154,7 +154,7 @@ export function PickerTab() {
   const pendingSave = useGlobalValue('field.pending_save', fileOpt('pending_save', false))
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       {(isM2O || isM2M) && (
         <>
           <Toggle

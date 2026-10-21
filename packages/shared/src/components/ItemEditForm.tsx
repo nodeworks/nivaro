@@ -221,6 +221,11 @@ import { DesignDropBody, DesignDropZone, designWrap } from './layout-editor/Desi
 import { DesignCanvas } from './layout-editor/design-canvas'
 import type { DesignTarget, LayoutDesignProp } from './layout-editor/design-context'
 import {
+  DESIGN_SUMMARY_MIN_CANVAS,
+  readDesignSummaryCollapsed,
+  writeDesignSummaryCollapsed
+} from './layout-editor/summary-pref'
+import {
   AccessDeniedPanel,
   AddendumPanel,
   CommentPanel,
@@ -257,6 +262,10 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Skeleton } from './ui/skeleton'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
+
+/** The Summary rail's fold strip on the layout editor canvas (design mode only). */
+const DESIGN_RAIL_TOGGLE =
+  'border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-500 hover:bg-slate-200/70 hover:text-slate-700 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:hover:text-slate-300'
 
 function parseSummaryFields(raw: string[] | string | null | undefined): SummaryEntry[] | undefined {
   if (!raw) return undefined
@@ -4813,7 +4822,24 @@ function ItemEditFormView({
   const effectiveShowClone = layoutMeta ? !layoutMeta.disable_clone && showClone : showClone
   const effectiveShowDelete = layoutMeta ? !layoutMeta.disable_delete : true
   const accordionMode = !!layoutMeta?.accordion_mode
-  const [summaryCollapsed, setSummaryCollapsed] = useState(false)
+  // Design mode (layout editor): the rail eats canvas width, so its fold is
+  // remembered per person. Normal record pages always start open.
+  const [summaryCollapsed, setSummaryCollapsed] = useState(() =>
+    designOn ? (readDesignSummaryCollapsed(authUserId) ?? false) : false
+  )
+  // Design mode, never chosen: fold the rail when the canvas is too narrow to
+  // show the form beside it (a laptop with the editor's side panels open).
+  const [railHost, setRailHost] = useState<HTMLDivElement | null>(null)
+  const railAutoDecided = useRef(false)
+  useEffect(() => {
+    if (!designOn || !summaryEnabled || !railHost || railAutoDecided.current) return
+    // Decided once, on the first real measurement (the body renders after the layout loads).
+    const width = railHost.clientWidth
+    if (!width) return
+    railAutoDecided.current = true
+    if (readDesignSummaryCollapsed(authUserId) !== null) return
+    if (width - 256 < DESIGN_SUMMARY_MIN_CANVAS) setSummaryCollapsed(true)
+  }, [designOn, summaryEnabled, railHost, authUserId])
   // Accordion mode: track the single open section group id (null = none open)
   const [openSectionId, setOpenSectionId] = useState<number | null>(null)
   const [swappedGroups, setSwappedGroups] = useState<Set<number>>(new Set())
@@ -11248,6 +11274,7 @@ function ItemEditFormView({
                                   )}
 
                                 <div
+                                  ref={designOn ? setRailHost : undefined}
                                   className={cn(
                                     'flex-1 min-h-0',
                                     summaryEnabled ? 'flex overflow-hidden' : 'overflow-y-auto'
@@ -11532,13 +11559,40 @@ function ItemEditFormView({
                                     <div className='flex shrink-0 border-l border-slate-200'>
                                       <button
                                         type='button'
-                                        onClick={() => setSummaryCollapsed((v) => !v)}
+                                        onClick={() => {
+                                          const next = !summaryCollapsed
+                                          setSummaryCollapsed(next)
+                                          if (designOn)
+                                            writeDesignSummaryCollapsed(authUserId, next)
+                                        }}
+                                        // Design mode swallows canvas clicks; this one passes.
+                                        data-design-pass={designOn ? '' : undefined}
+                                        data-summary-toggle={designOn ? '' : undefined}
+                                        aria-expanded={designOn ? !summaryCollapsed : undefined}
                                         title={
                                           summaryCollapsed ? 'Expand summary' : 'Collapse summary'
                                         }
-                                        className='border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:text-slate-500 dark:hover:text-slate-300'
+                                        className={
+                                          designOn
+                                            ? DESIGN_RAIL_TOGGLE
+                                            : 'border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:text-slate-500 dark:hover:text-slate-300'
+                                        }
                                       >
-                                        {summaryCollapsed ? (
+                                        {designOn ? (
+                                          // Rides with the canvas scroll; folded, it says what comes back.
+                                          <span className='sticky top-3 flex flex-col items-center gap-2'>
+                                            {summaryCollapsed ? (
+                                              <ChevronLeft className='h-3.5 w-3.5' />
+                                            ) : (
+                                              <ChevronRight className='h-3.5 w-3.5' />
+                                            )}
+                                            {summaryCollapsed && (
+                                              <span className='text-[11px] font-medium text-slate-500 [writing-mode:vertical-rl]'>
+                                                Summary
+                                              </span>
+                                            )}
+                                          </span>
+                                        ) : summaryCollapsed ? (
                                           <ChevronLeft className='h-3.5 w-3.5' />
                                         ) : (
                                           <ChevronRight className='h-3.5 w-3.5' />

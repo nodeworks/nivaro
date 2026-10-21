@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronDown, ChevronRight, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { extractTemplateFields, renderDisplayTemplate } from '../../pipeline/relations'
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '../../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { tintCard } from '../panel-style'
 import { useEditorApi } from './editor-api'
 
 export type RowRuleSource = {
@@ -188,13 +189,13 @@ export function ViaValuePicker({
             return (
               <span
                 key={id}
-                className='inline-flex items-center gap-0.5 rounded bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan text-[11px] px-1.5 py-0.5'
+                className='inline-flex items-center gap-0.5 rounded bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan text-[12px] px-1.5 py-0.5'
               >
                 {item ? getLabel(item) : id}
                 <button
                   type='button'
                   onClick={() => toggle(id)}
-                  className='hover:text-red-400 ml-0.5'
+                  className='hover:text-red-600 dark:hover:text-red-400 ml-0.5'
                 >
                   ✕
                 </button>
@@ -207,7 +208,7 @@ export function ViaValuePicker({
         <PopoverTrigger asChild>
           <button
             type='button'
-            className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left hover:border-slate-400 text-slate-400 dark:bg-card dark:border-border'
+            className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left hover:border-slate-400 text-slate-500 dark:bg-card dark:border-border'
           >
             {isMulti ? '+ add record…' : selectedIds.length ? 'change…' : 'pick record…'}
           </button>
@@ -411,14 +412,15 @@ export function PrecedenceSourceRow({
   )
 
   return (
-    <div className='relative rounded-md border border-slate-200 bg-white overflow-hidden dark:bg-card dark:border-border'>
+    <div className={cn(tintCard, 'relative overflow-hidden')}>
       {/* Actions — pinned top-right */}
       <div className='absolute top-1 right-1 flex items-center gap-px z-10'>
         <button
           type='button'
           onClick={onMoveUp}
           disabled={index === 0}
-          className='h-6 w-6 flex items-center justify-center text-slate-400 hover:text-slate-700 disabled:opacity-20 transition-colors rounded hover:bg-muted'
+          aria-label='Move up'
+          className='h-6 w-6 flex items-center justify-center text-slate-500 hover:text-slate-700 disabled:opacity-20 transition-colors rounded hover:bg-muted'
         >
           ↑
         </button>
@@ -426,22 +428,24 @@ export function PrecedenceSourceRow({
           type='button'
           onClick={onMoveDown}
           disabled={index === total - 1}
-          className='h-6 w-6 flex items-center justify-center text-slate-400 hover:text-slate-700 disabled:opacity-20 transition-colors rounded hover:bg-muted'
+          aria-label='Move down'
+          className='h-6 w-6 flex items-center justify-center text-slate-500 hover:text-slate-700 disabled:opacity-20 transition-colors rounded hover:bg-muted'
         >
           ↓
         </button>
         <button
           type='button'
           onClick={onRemove}
-          className='h-6 w-6 flex items-center justify-center text-slate-300 hover:text-red-400 transition-colors rounded hover:bg-red-50 dark:text-muted-foreground dark:hover:bg-red-500/10'
+          aria-label='Remove'
+          className='h-6 w-6 flex items-center justify-center text-slate-500 hover:text-red-600 dark:hover:text-red-400 transition-colors rounded hover:bg-red-50 dark:hover:bg-red-500/10'
         >
-          ✕
+          <X className='h-3.5 w-3.5' />
         </button>
       </div>
 
       {/* Primary row */}
       <div className='flex items-center gap-1.5 flex-wrap px-2 py-1.5 pr-20'>
-        <span className='text-[11px] font-medium text-slate-400 w-4 text-right shrink-0 tabular-nums'>
+        <span className='text-[12px] font-medium text-slate-500 w-4 text-right shrink-0 tabular-nums'>
           {index + 1}
         </span>
         <SelectButton
@@ -479,18 +483,18 @@ export function PrecedenceSourceRow({
           <PopoverTrigger asChild>
             <button
               type='button'
-              className='h-7 rounded border border-slate-200 bg-slate-50 px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px] transition-colors dark:bg-muted dark:border-border'
+              className='h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px] transition-colors dark:bg-background dark:border-border'
             >
-              {source.source_field || <span className='text-slate-400'>field…</span>}
+              {source.source_field || <span className='text-slate-500'>field…</span>}
             </button>
           </PopoverTrigger>
           <PopoverContent className='w-44 p-0' align='start'>
             <Command>
-              <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+              <CommandInput placeholder='Search…' className='h-7 text-[12px]' />
               <CommandList>
                 <CommandGroup>
                   {sourceFieldOpts.length === 0 ? (
-                    <div className='px-3 py-2 text-[11px] text-slate-400'>No relations</div>
+                    <div className='px-3 py-2 text-[12px] text-slate-500'>No relations</div>
                   ) : (
                     sourceFieldOpts.map((f) => (
                       <CommandItem
@@ -509,7 +513,7 @@ export function PrecedenceSourceRow({
                           })
                           setSfOpen(false)
                         }}
-                        className='text-[11px]'
+                        className='text-[12px]'
                       >
                         {f.label}
                       </CommandItem>
@@ -523,29 +527,29 @@ export function PrecedenceSourceRow({
 
         {!isFiltered && (
           <>
-            <span className='text-slate-300 shrink-0'>→</span>
+            <span className='text-slate-500 shrink-0'>→</span>
             <Popover open={rfOpen} onOpenChange={setRfOpen}>
               <PopoverTrigger asChild>
                 <button
                   type='button'
-                  className='h-7 rounded border border-slate-200 bg-slate-50 px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px] transition-colors dark:bg-muted dark:border-border'
+                  className='h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-[70px] max-w-[110px] transition-colors dark:bg-background dark:border-border'
                 >
                   {source.source_related_field ? (
                     (relFieldOpts.find(
                       (f: { value: string }) => f.value === source.source_related_field
                     )?.label ?? source.source_related_field)
                   ) : (
-                    <span className='text-slate-400'>{relCollection ? 'field…' : '—'}</span>
+                    <span className='text-slate-500'>{relCollection ? 'field…' : '—'}</span>
                   )}
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-44 p-0' align='start'>
                 <Command>
-                  <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                  <CommandInput placeholder='Search…' className='h-7 text-[12px]' />
                   <CommandList>
                     <CommandGroup>
                       {relFieldOpts.length === 0 ? (
-                        <div className='px-3 py-2 text-[11px] text-slate-400'>No fields</div>
+                        <div className='px-3 py-2 text-[12px] text-slate-500'>No fields</div>
                       ) : (
                         relFieldOpts.map((f: { value: string; label: string }) => (
                           <CommandItem
@@ -555,7 +559,7 @@ export function PrecedenceSourceRow({
                               onChange({ ...source, source_related_field: f.value })
                               setRfOpen(false)
                             }}
-                            className='text-[11px]'
+                            className='text-[12px]'
                           >
                             {f.label}
                           </CommandItem>
@@ -572,17 +576,17 @@ export function PrecedenceSourceRow({
 
       {/* Filtered child — condition row */}
       {isFiltered && (
-        <div className='border-t border-slate-100 bg-slate-50 px-2 py-1.5 dark:bg-muted dark:border-border'>
+        <div className='border-t border-slate-200/70 px-2 py-1.5 dark:border-white/[0.06]'>
           <div className='flex items-center gap-1.5 flex-wrap pl-5'>
-            <span className='text-[11px] font-medium text-slate-400 shrink-0'>in</span>
+            <span className='text-[12px] font-medium text-slate-500 shrink-0'>in</span>
             <Popover open={childColOpen} onOpenChange={setChildColOpen}>
               <PopoverTrigger asChild>
                 <button
                   type='button'
-                  className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[100px] max-w-[140px] transition-colors dark:bg-card dark:border-border'
+                  className='h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-[100px] max-w-[140px] transition-colors dark:bg-card dark:border-border'
                 >
                   {source.o2m_collection || (
-                    <span className='text-slate-400'>
+                    <span className='text-slate-500'>
                       {intermediateCollection ? 'collection…' : 'pick field first'}
                     </span>
                   )}
@@ -590,11 +594,11 @@ export function PrecedenceSourceRow({
               </PopoverTrigger>
               <PopoverContent className='w-48 p-0' align='start'>
                 <Command>
-                  <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                  <CommandInput placeholder='Search…' className='h-7 text-[12px]' />
                   <CommandList>
                     <CommandGroup>
                       {childCollectionOpts.length === 0 ? (
-                        <div className='px-3 py-2 text-[11px] text-slate-400'>
+                        <div className='px-3 py-2 text-[12px] text-slate-500'>
                           {intermediateCollection ? 'No child relations' : 'Pick field first'}
                         </div>
                       ) : (
@@ -611,7 +615,7 @@ export function PrecedenceSourceRow({
                               })
                               setChildColOpen(false)
                             }}
-                            className='text-[11px]'
+                            className='text-[12px]'
                           >
                             {c.label}
                           </CommandItem>
@@ -622,23 +626,23 @@ export function PrecedenceSourceRow({
                 </Command>
               </PopoverContent>
             </Popover>
-            <span className='text-[11px] text-slate-400 shrink-0'>where</span>
+            <span className='text-[12px] text-slate-500 shrink-0'>where</span>
             <Popover open={ffOpen} onOpenChange={setFfOpen}>
               <PopoverTrigger asChild>
                 <button
                   type='button'
-                  className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[80px] max-w-[110px] transition-colors dark:bg-card dark:border-border'
+                  className='h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-[80px] max-w-[110px] transition-colors dark:bg-card dark:border-border'
                 >
-                  {source.filter_field || <span className='text-slate-400'>field…</span>}
+                  {source.filter_field || <span className='text-slate-500'>field…</span>}
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-44 p-0' align='start'>
                 <Command>
-                  <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                  <CommandInput placeholder='Search…' className='h-7 text-[12px]' />
                   <CommandList>
                     <CommandGroup>
                       {o2mFieldOpts.length === 0 ? (
-                        <div className='px-3 py-2 text-[11px] text-slate-400'>
+                        <div className='px-3 py-2 text-[12px] text-slate-500'>
                           {source.o2m_collection ? 'No fields' : 'Pick collection first'}
                         </div>
                       ) : (
@@ -650,7 +654,7 @@ export function PrecedenceSourceRow({
                               onChange({ ...source, filter_field: f.value })
                               setFfOpen(false)
                             }}
-                            className='text-[11px]'
+                            className='text-[12px]'
                           >
                             {f.label}
                           </CommandItem>
@@ -661,7 +665,7 @@ export function PrecedenceSourceRow({
                 </Command>
               </PopoverContent>
             </Popover>
-            <span className='text-[11px] text-slate-400 shrink-0'>=</span>
+            <span className='text-[12px] text-slate-500 shrink-0'>=</span>
             <Popover
               open={fvOpen}
               onOpenChange={(v) => {
@@ -672,16 +676,16 @@ export function PrecedenceSourceRow({
               <PopoverTrigger asChild>
                 <button
                   type='button'
-                  className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[100px] max-w-[150px] transition-colors font-mono dark:bg-card dark:border-border'
+                  className='h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-[100px] max-w-[150px] transition-colors font-mono dark:bg-card dark:border-border'
                 >
-                  {source.filter_value || <span className='text-slate-400 font-sans'>value…</span>}
+                  {source.filter_value || <span className='text-slate-500 font-sans'>value…</span>}
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-52 p-0' align='start'>
                 <Command shouldFilter={false}>
                   <CommandInput
                     placeholder='$parent.field or literal…'
-                    className='h-7 text-[11px]'
+                    className='h-7 text-[12px]'
                     value={fvSearch}
                     onValueChange={setFvSearch}
                   />
@@ -700,7 +704,7 @@ export function PrecedenceSourceRow({
                                 setFvOpen(false)
                                 setFvSearch('')
                               }}
-                              className='text-[11px]'
+                              className='text-[12px]'
                             >
                               {p.label}
                             </CommandItem>
@@ -716,7 +720,7 @@ export function PrecedenceSourceRow({
                             setFvOpen(false)
                             setFvSearch('')
                           }}
-                          className='text-[11px] font-mono'
+                          className='text-[12px] font-mono'
                         >
                           {fvSearch}
                         </CommandItem>
@@ -726,25 +730,25 @@ export function PrecedenceSourceRow({
                 </Command>
               </PopoverContent>
             </Popover>
-            <span className='text-slate-300 shrink-0'>→</span>
+            <span className='text-slate-500 shrink-0'>→</span>
             <Popover open={rfOpen} onOpenChange={setRfOpen}>
               <PopoverTrigger asChild>
                 <button
                   type='button'
-                  className='h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-[80px] max-w-[110px] transition-colors dark:bg-card dark:border-border'
+                  className='h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-[80px] max-w-[110px] transition-colors dark:bg-card dark:border-border'
                 >
                   {source.source_related_field || (
-                    <span className='text-slate-400'>{source.o2m_collection ? 'field…' : '—'}</span>
+                    <span className='text-slate-500'>{source.o2m_collection ? 'field…' : '—'}</span>
                   )}
                 </button>
               </PopoverTrigger>
               <PopoverContent className='w-44 p-0' align='start'>
                 <Command>
-                  <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                  <CommandInput placeholder='Search…' className='h-7 text-[12px]' />
                   <CommandList>
                     <CommandGroup>
                       {o2mScalarOpts.length === 0 ? (
-                        <div className='px-3 py-2 text-[11px] text-slate-400'>
+                        <div className='px-3 py-2 text-[12px] text-slate-500'>
                           {source.o2m_collection ? 'No fields' : 'Enter collection first'}
                         </div>
                       ) : (
@@ -756,7 +760,7 @@ export function PrecedenceSourceRow({
                               onChange({ ...source, source_related_field: f.value })
                               setRfOpen(false)
                             }}
-                            className='text-[11px]'
+                            className='text-[12px]'
                           >
                             {f.label}
                           </CommandItem>
@@ -793,12 +797,12 @@ export function SelectButton<T extends string>({
         <button
           type='button'
           className={cn(
-            'h-7 rounded border border-slate-200 bg-white px-2.5 text-[11px] text-slate-700 hover:border-slate-400 flex items-center gap-1 shrink-0 transition-colors dark:bg-card dark:border-border dark:text-foreground',
+            'h-7 rounded border border-slate-200 bg-white px-2.5 text-[12px] text-slate-700 hover:border-slate-400 flex items-center gap-1 shrink-0 transition-colors dark:bg-card dark:border-border dark:text-foreground',
             className
           )}
         >
           {label}
-          <ChevronDown className='h-3 w-3 text-slate-400 ml-0.5 shrink-0' />
+          <ChevronDown className='h-3 w-3 text-slate-500 ml-0.5 shrink-0' />
         </button>
       </PopoverTrigger>
       <PopoverContent className='w-auto min-w-[120px] p-1' align='start'>
@@ -840,18 +844,18 @@ export function OrTriggerPicker({
       <PopoverTrigger asChild>
         <button
           type='button'
-          className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
+          className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
         >
           {value ? (
             (fieldOpts.find((f) => f.value === value)?.label ?? value)
           ) : (
-            <span className='text-slate-400'>field…</span>
+            <span className='text-slate-500'>field…</span>
           )}
         </button>
       </PopoverTrigger>
       <PopoverContent className='w-52 p-0' align='start'>
         <Command>
-          <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+          <CommandInput placeholder='Search…' className='h-7 text-[12px]' />
           <CommandList>
             <CommandGroup>
               {fieldOpts.map((f) => (
@@ -862,7 +866,7 @@ export function OrTriggerPicker({
                     onChange(f.value)
                     setOpen(false)
                   }}
-                  className='text-[11px]'
+                  className='text-[12px]'
                 >
                   {f.label}
                 </CommandItem>
@@ -883,8 +887,11 @@ export function RowRuleRow({
   onChange,
   onRemove,
   portalContainer,
-  parentContextFields
+  parentContextFields,
+  leading
 }: {
+  /** Shown first in the header (the move up / down buttons). */
+  leading?: ReactNode
   rule: RowRuleItem
   childFields: Array<{ field: string; label?: string | null; type?: string }>
   m2oRels: Array<{ many_field: string; one_collection: string }>
@@ -1173,7 +1180,7 @@ export function RowRuleRow({
         : '(new rule — click to configure)'
 
   return (
-    <div className='rounded-md border border-slate-200 bg-white overflow-hidden dark:bg-card dark:border-border'>
+    <div className={cn(tintCard, 'overflow-hidden')}>
       {/* Header — always visible, click to expand/collapse */}
       {/* biome-ignore lint/a11y/useSemanticElements: the header holds its own remove button */}
       <div
@@ -1191,14 +1198,15 @@ export function RowRuleRow({
           }
         }}
       >
+        {leading}
         <ChevronRight
-          className={`h-3.5 w-3.5 text-slate-400 shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+          className={`h-3.5 w-3.5 text-slate-500 shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
         />
-        <span className='flex-1 text-[11px] text-slate-600 truncate min-w-0 dark:text-muted-foreground'>
+        <span className='flex-1 text-[12px] text-slate-600 truncate min-w-0 dark:text-muted-foreground'>
           {collapsedSummary}
         </span>
         {rule.only_if_empty && (
-          <span className='shrink-0 rounded px-1 py-0.5 text-[11px] font-medium bg-amber-50 text-amber-600 border border-amber-100 dark:bg-amber-400/10 dark:text-amber-300 dark:border-amber-700/60'>
+          <span className='shrink-0 rounded px-1 py-0.5 text-[12px] font-medium bg-amber-50 text-amber-700 border border-amber-100 dark:bg-amber-400/10 dark:text-amber-300 dark:border-amber-700/60'>
             fallback
           </span>
         )}
@@ -1209,7 +1217,7 @@ export function RowRuleRow({
             e.stopPropagation()
             onRemove()
           }}
-          className='shrink-0 text-slate-300 hover:text-red-400 transition-colors ml-1 dark:text-muted-foreground'
+          className='shrink-0 text-slate-500 hover:text-red-600 dark:hover:text-red-400 transition-colors ml-1 dark:text-muted-foreground'
         >
           <X className='h-3.5 w-3.5' />
         </button>
@@ -1219,9 +1227,9 @@ export function RowRuleRow({
       {expanded && (
         <>
           {/* IF section */}
-          <div className='border-t border-slate-100 px-2.5 py-2 space-y-1.5 bg-slate-50/50 dark:border-border dark:bg-muted/40'>
+          <div className='border-t border-slate-200/70 px-2.5 py-2 space-y-1.5 dark:border-white/[0.06]'>
             <div className='flex items-start gap-1.5'>
-              <span className='text-[11px] font-semibold text-slate-400 mt-[7px] w-5 shrink-0 tracking-wide'>
+              <span className='text-[12px] font-semibold text-slate-500 mt-[7px] w-5 shrink-0'>
                 IF
               </span>
               <div className='flex-1 min-w-0 space-y-1.5'>
@@ -1234,11 +1242,11 @@ export function RowRuleRow({
                     <PopoverTrigger asChild>
                       <button
                         type='button'
-                        className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
+                        className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
                       >
                         {isParentTrigger ? (
                           <span className='flex items-center gap-1'>
-                            <span className='text-[11px] bg-nvr-cyan/10 text-nvr-cyan rounded px-1 py-0.5 shrink-0'>
+                            <span className='text-[12px] bg-nvr-cyan/10 text-nvr-cyan rounded px-1 py-0.5 shrink-0'>
                               parent
                             </span>
                             {parentTriggerLabel}
@@ -1247,7 +1255,7 @@ export function RowRuleRow({
                           (fieldOpts.find((f) => f.value === rule.trigger_field)?.label ??
                           rule.trigger_field)
                         ) : (
-                          <span className='text-slate-400'>when field changes…</span>
+                          <span className='text-slate-500'>when field changes…</span>
                         )}
                       </button>
                     </PopoverTrigger>
@@ -1272,7 +1280,7 @@ export function RowRuleRow({
                                   className='text-[12px] flex items-center justify-between gap-2'
                                 >
                                   <span className='truncate'>{p.label}</span>
-                                  <span className='shrink-0 text-[11px] bg-nvr-cyan/10 text-nvr-cyan rounded px-1'>
+                                  <span className='shrink-0 text-[12px] bg-nvr-cyan/10 text-nvr-cyan rounded px-1'>
                                     parent
                                   </span>
                                 </CommandItem>
@@ -1298,7 +1306,7 @@ export function RowRuleRow({
                               >
                                 <span className='truncate'>{f.label}</span>
                                 {f.hint && (
-                                  <span className='shrink-0 rounded px-1 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-500 dark:bg-muted'>
+                                  <span className='shrink-0 rounded px-1 py-0.5 text-[12px] font-medium bg-slate-100 text-slate-500 dark:bg-muted'>
                                     {f.hint}
                                   </span>
                                 )}
@@ -1333,18 +1341,18 @@ export function RowRuleRow({
                     className='flex items-center gap-1.5 flex-wrap'
                     data-setting='field.row_rules.trigger_related_field'
                   >
-                    <span className='text-[11px] text-slate-400 shrink-0'>via:</span>
+                    <span className='text-[12px] text-slate-500 shrink-0'>via:</span>
                     <Popover open={trfOpen} onOpenChange={setTrfOpen}>
                       <PopoverTrigger asChild>
                         <button
                           type='button'
-                          className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
+                          className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
                         >
                           {trfSeg1 ? (
                             (relatedFieldOpts.find((f: { value: string }) => f.value === trfSeg1)
                               ?.label ?? trfSeg1)
                           ) : (
-                            <span className='text-slate-400 italic'>FK id (direct)</span>
+                            <span className='text-slate-500 italic'>FK id (direct)</span>
                           )}
                         </button>
                       </PopoverTrigger>
@@ -1354,7 +1362,7 @@ export function RowRuleRow({
                         container={portalContainer}
                       >
                         <Command>
-                          <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                          <CommandInput placeholder='Search…' className='h-7 text-[12px]' />
                           <CommandList className='max-h-[180px]'>
                             <CommandGroup>
                               <CommandItem
@@ -1363,7 +1371,7 @@ export function RowRuleRow({
                                   onChange({ ...rule, trigger_related_field: null })
                                   setTrfOpen(false)
                                 }}
-                                className='text-[11px] text-slate-400 italic'
+                                className='text-[12px] text-slate-500 italic'
                               >
                                 FK id (direct)
                               </CommandItem>
@@ -1375,7 +1383,7 @@ export function RowRuleRow({
                                     onChange({ ...rule, trigger_related_field: f.value })
                                     setTrfOpen(false)
                                   }}
-                                  className='text-[11px]'
+                                  className='text-[12px]'
                                 >
                                   {f.label}
                                 </CommandItem>
@@ -1387,12 +1395,12 @@ export function RowRuleRow({
                     </Popover>
                     {trfSeg1 && relRelCollection && (
                       <>
-                        <span className='text-[11px] text-slate-400 shrink-0'>→</span>
+                        <span className='text-[12px] text-slate-500 shrink-0'>→</span>
                         <Popover open={trf2Open} onOpenChange={setTrf2Open}>
                           <PopoverTrigger asChild>
                             <button
                               type='button'
-                              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
+                              className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
                             >
                               {trfSeg2 === '__entity__' || trfSeg2 === '__id__' ? (
                                 <span className='italic'>(entity)</span>
@@ -1400,7 +1408,7 @@ export function RowRuleRow({
                                 (relRelFieldOpts.find((f: { value: string }) => f.value === trfSeg2)
                                   ?.label ?? trfSeg2)
                               ) : (
-                                <span className='text-slate-400 italic'>field…</span>
+                                <span className='text-slate-500 italic'>field…</span>
                               )}
                             </button>
                           </PopoverTrigger>
@@ -1410,7 +1418,7 @@ export function RowRuleRow({
                             container={portalContainer}
                           >
                             <Command>
-                              <CommandInput placeholder='Search…' className='h-7 text-[11px]' />
+                              <CommandInput placeholder='Search…' className='h-7 text-[12px]' />
                               <CommandList className='max-h-[180px]'>
                                 <CommandGroup>
                                   <CommandItem
@@ -1423,7 +1431,7 @@ export function RowRuleRow({
                                       })
                                       setTrf2Open(false)
                                     }}
-                                    className='text-[11px] italic text-slate-500'
+                                    className='text-[12px] italic text-slate-500'
                                   >
                                     (entity) — record picker
                                   </CommandItem>
@@ -1439,7 +1447,7 @@ export function RowRuleRow({
                                         })
                                         setTrf2Open(false)
                                       }}
-                                      className='text-[11px]'
+                                      className='text-[12px]'
                                     >
                                       {f.label}
                                     </CommandItem>
@@ -1499,7 +1507,7 @@ export function RowRuleRow({
                             ? 'val1, val2 (comma-separated)'
                             : 'value (or $parent.field_name)'
                         }
-                        className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:bg-card dark:border-border'
+                        className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[12px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:bg-card dark:border-border'
                       />
                     )}
                   </div>
@@ -1509,7 +1517,7 @@ export function RowRuleRow({
                 <div className='space-y-1.5' data-setting='field.row_rules.trigger_fields'>
                   {(rule.trigger_fields ?? []).map((tf, i) => (
                     <div key={i} className='flex items-center gap-1'>
-                      <span className='text-[11px] text-slate-400 shrink-0 italic'>or</span>
+                      <span className='text-[12px] text-slate-500 shrink-0 italic'>or</span>
                       <OrTriggerPicker
                         value={tf}
                         fieldOpts={fieldOpts}
@@ -1527,7 +1535,7 @@ export function RowRuleRow({
                             trigger_fields: (rule.trigger_fields ?? []).filter((_, j) => j !== i)
                           })
                         }
-                        className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'
+                        className='shrink-0 text-slate-500 hover:text-red-600 dark:hover:text-red-400 text-[12px] px-0.5'
                       >
                         ✕
                       </button>
@@ -1539,7 +1547,7 @@ export function RowRuleRow({
                       onClick={() =>
                         onChange({ ...rule, trigger_fields: [...(rule.trigger_fields ?? []), ''] })
                       }
-                      className='text-[11px] text-nvr-cyan hover:underline'
+                      className='text-[12px] text-nvr-cyan hover:underline'
                     >
                       + or when another field changes
                     </button>
@@ -1552,7 +1560,7 @@ export function RowRuleRow({
           {/* SET section */}
           <div className='border-t border-slate-100 px-2.5 py-2 space-y-1.5 dark:border-border'>
             <div className='flex items-start gap-1.5'>
-              <span className='text-[11px] font-semibold text-slate-500 mt-[7px] w-5 shrink-0 tracking-wide'>
+              <span className='text-[12px] font-semibold text-slate-500 mt-[7px] w-5 shrink-0'>
                 SET
               </span>
               <div className='flex-1 min-w-0 space-y-1.5'>
@@ -1563,13 +1571,13 @@ export function RowRuleRow({
                       <button
                         type='button'
                         data-setting='field.row_rules.target_field'
-                        className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
+                        className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
                       >
                         {rule.target_field ? (
                           (fieldOpts.find((f) => f.value === rule.target_field)?.label ??
                           rule.target_field)
                         ) : (
-                          <span className='text-slate-400'>target field…</span>
+                          <span className='text-slate-500'>target field…</span>
                         )}
                       </button>
                     </PopoverTrigger>
@@ -1590,7 +1598,7 @@ export function RowRuleRow({
                               >
                                 <span className='truncate'>{f.label}</span>
                                 {f.hint && (
-                                  <span className='shrink-0 rounded px-1 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-500 dark:bg-muted'>
+                                  <span className='shrink-0 rounded px-1 py-0.5 text-[12px] font-medium bg-slate-100 text-slate-500 dark:bg-muted'>
                                     {f.hint}
                                   </span>
                                 )}
@@ -1631,14 +1639,14 @@ export function RowRuleRow({
                       <button
                         type='button'
                         data-setting='field.row_rules.target_value'
-                        className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 dark:bg-card dark:border-border'
+                        className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 dark:bg-card dark:border-border'
                       >
                         {rule.target_value ? (
                           (relatedFieldOpts.find(
                             (f: { value: string }) => f.value === rule.target_value
                           )?.label ?? rule.target_value)
                         ) : (
-                          <span className='text-slate-400'>field from {relatedCollection}…</span>
+                          <span className='text-slate-500'>field from {relatedCollection}…</span>
                         )}
                       </button>
                     </PopoverTrigger>
@@ -1648,7 +1656,7 @@ export function RowRuleRow({
                         <CommandList className='max-h-[180px]'>
                           <CommandGroup>
                             {relatedFieldOpts.length === 0 ? (
-                              <div className='px-3 py-2 text-[11px] text-slate-400'>
+                              <div className='px-3 py-2 text-[12px] text-slate-500'>
                                 No fields found
                               </div>
                             ) : (
@@ -1685,7 +1693,7 @@ export function RowRuleRow({
                           ? 'select an M2O trigger field first'
                           : 'value'
                       }
-                      className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0 dark:bg-card dark:border-border'
+                      className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[12px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0 dark:bg-card dark:border-border'
                       readOnly={rule.target_type === 'relation_field'}
                     />
                     {parentContextFields &&
@@ -1696,7 +1704,7 @@ export function RowRuleRow({
                             <button
                               type='button'
                               title='Use parent field value'
-                              className='h-7 px-1.5 rounded border border-slate-200 bg-white text-[11px] text-nvr-cyan hover:border-nvr-cyan shrink-0 dark:bg-card dark:border-border'
+                              className='h-7 px-1.5 rounded border border-slate-200 bg-white text-[12px] text-nvr-cyan hover:border-nvr-cyan shrink-0 dark:bg-card dark:border-border'
                             >
                               ↑
                             </button>
@@ -1720,7 +1728,7 @@ export function RowRuleRow({
                                       className='text-[12px] flex items-center justify-between gap-2'
                                     >
                                       <span className='truncate'>{p.label}</span>
-                                      <span className='shrink-0 text-[11px] font-mono text-slate-400'>
+                                      <span className='shrink-0 text-[12px] font-mono text-slate-500'>
                                         {p.field}
                                       </span>
                                     </CommandItem>
@@ -1737,7 +1745,7 @@ export function RowRuleRow({
                 {/* Pick record combobox */}
                 {showPickCombobox &&
                   (!targetRelCollection ? (
-                    <p className='text-[11px] text-slate-400 italic'>
+                    <p className='text-[12px] text-slate-500 italic'>
                       Select an M2O target field first
                     </p>
                   ) : (
@@ -1746,7 +1754,7 @@ export function RowRuleRow({
                         <button
                           type='button'
                           data-setting='field.row_rules.target_value'
-                          className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 dark:bg-card dark:border-border'
+                          className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[12px] text-left truncate hover:border-slate-400 dark:bg-card dark:border-border'
                         >
                           {rule.target_value ? (
                             (resolveItemLabel(
@@ -1754,7 +1762,7 @@ export function RowRuleRow({
                               rule.target_value
                             ) ?? String(rule.target_value))
                           ) : (
-                            <span className='text-slate-400'>pick from {targetRelCollection}…</span>
+                            <span className='text-slate-500'>pick from {targetRelCollection}…</span>
                           )}
                         </button>
                       </PopoverTrigger>
@@ -1773,7 +1781,7 @@ export function RowRuleRow({
                           <CommandList className='max-h-[180px]'>
                             <CommandGroup>
                               {pickItems.length === 0 ? (
-                                <div className='px-3 py-2 text-[11px] text-slate-400'>
+                                <div className='px-3 py-2 text-[12px] text-slate-500'>
                                   No records found
                                 </div>
                               ) : (
@@ -1795,7 +1803,7 @@ export function RowRuleRow({
                                     >
                                       <span className='truncate'>{label}</span>
                                       {label !== id && (
-                                        <span className='shrink-0 font-mono text-[11px] text-slate-400'>
+                                        <span className='shrink-0 font-mono text-[12px] text-slate-500'>
                                           {id}
                                         </span>
                                       )}
@@ -1813,7 +1821,7 @@ export function RowRuleRow({
                 {/* Precedence chain sources */}
                 {rule.target_type === 'precedence' && (
                   <div className='space-y-1.5 pt-0.5' data-setting='field.row_rules.sources'>
-                    <p className='text-[11px] text-slate-500 font-medium'>
+                    <p className='text-[12px] text-slate-500 font-medium'>
                       Sources — first non-null wins:
                     </p>
                     {sources.map((src, idx) => (
@@ -1853,7 +1861,7 @@ export function RowRuleRow({
                           ]
                         })
                       }
-                      className='text-[11px] text-nvr-cyan hover:text-nvr-cyan/80 font-medium transition-colors'
+                      className='text-[12px] text-nvr-cyan hover:text-nvr-cyan/80 font-medium transition-colors'
                     >
                       + Add source
                     </button>
@@ -1875,7 +1883,7 @@ export function RowRuleRow({
                 onChange={(e) => onChange({ ...rule, only_if_empty: e.target.checked })}
                 className='h-3.5 w-3.5 accent-nvr-cyan'
               />
-              <span className='text-[11px] text-slate-600 dark:text-muted-foreground'>
+              <span className='text-[12px] text-slate-600 dark:text-muted-foreground'>
                 Only set if target is currently empty
               </span>
             </label>
@@ -1891,7 +1899,7 @@ export function RowRuleRow({
                   className='h-3.5 w-3.5 accent-nvr-cyan'
                 />
                 <span
-                  className='text-[11px] text-slate-600 dark:text-muted-foreground'
+                  className='text-[12px] text-slate-600 dark:text-muted-foreground'
                   data-tip='The target is an input this rule only seeds when empty (a project default). Re-run rules never blanks it to re-derive, and Data Integrity never reports it as drift.'
                 >
                   Seed only — target is an input, never re-derived
@@ -1916,7 +1924,7 @@ export function RowRuleRow({
                     className='h-3.5 w-3.5 accent-nvr-cyan'
                   />
                   <span
-                    className='text-[11px] text-slate-600 dark:text-muted-foreground'
+                    className='text-[12px] text-slate-600 dark:text-muted-foreground'
                     data-tip='Admins (role admin_access) keep editing the field — the lock binds everyone else, in the grid and on API writes.'
                   >
                     Except admins — view only for non-admins
@@ -1927,7 +1935,7 @@ export function RowRuleRow({
                   value={rule.reason ?? ''}
                   onChange={(e) => onChange({ ...rule, reason: e.target.value || null })}
                   placeholder='Lock message shown on hover (optional) — e.g. "set by the rules; ask an admin"'
-                  className='h-7 w-full rounded border border-slate-200 bg-white px-2 text-[11px] dark:bg-card dark:border-border'
+                  className='h-7 w-full rounded border border-slate-200 bg-white px-2 text-[12px] dark:bg-card dark:border-border'
                 />
               </div>
             )}
@@ -1948,7 +1956,7 @@ export function RowRuleRow({
                   className='h-3.5 w-3.5 accent-nvr-cyan'
                 />
                 <span
-                  className='text-[11px] text-slate-600 dark:text-muted-foreground'
+                  className='text-[12px] text-slate-600 dark:text-muted-foreground'
                   data-tip='On by default: an API PATCH that changes one of this rule&apos;s trigger fields re-derives the target, the same way the form does on edit (a target the caller sent explicitly still wins). Untick to run this rule on creates only.'
                 >
                   Re-run on API updates when a trigger field changes

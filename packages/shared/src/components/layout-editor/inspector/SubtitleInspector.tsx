@@ -1,4 +1,6 @@
+import { cn } from '../../../lib/utils'
 import type { CMSRelation } from '../../pipeline/types'
+import { tintCard } from '../panel-style'
 import { FieldPicker } from '../pickers/field-picker'
 import { useCollectionMeta } from './field-context'
 import { COLORS, DISPLAY_AS, WEIGHTS } from './HeaderItemInspector'
@@ -37,7 +39,7 @@ export function SubtitleInspector() {
     )
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       <Toggle
         k='subtitle.enabled'
         label='Subtitle under the title'
@@ -83,10 +85,7 @@ export function SubtitleInspector() {
           >
             <div className='space-y-2'>
               {cfg.fields.map((f, i) => (
-                <div
-                  key={f.field}
-                  className='space-y-1.5 rounded-md border border-slate-200 p-2 dark:border-border'
-                >
+                <div key={f.field} className={cn(tintCard, 'space-y-3 p-3')}>
                   <div className='flex items-center justify-between gap-2'>
                     <span className='truncate text-[12px] text-foreground'>
                       {f.label ?? f.field}

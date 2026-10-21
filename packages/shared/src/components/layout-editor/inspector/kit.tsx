@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, ChevronDown, Globe2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Globe2, X } from 'lucide-react'
 import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { Switch } from '../../ui/switch'
 import { useFocusBuffer } from '../focus-buffer'
+import { effectText, groupTitle, inputBase, labelText, segOption, segTrack } from '../panel-style'
 import type { ApplyOptions } from '../useLayoutDraft'
 
 // ── Environment every inspector part reads ──────────────────────────────────
@@ -187,20 +188,42 @@ export function GlobalConfirm() {
 
 export type Scope = 'form' | 'field'
 
+/** Where a setting applies. "This form only" is the rule and stays out of the
+ *  way (screen readers still hear it); "Every form" is the exception and shows. */
 export function ScopeTag({ scope }: { scope: Scope }) {
   return scope === 'field' ? (
     <span
       data-scope='field'
       data-tip='Saved on the field itself: every form that shows this field changes'
-      className='inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-300 px-1.5 text-[11px] font-medium text-amber-700 dark:border-amber-700/60 dark:text-amber-300'
+      className='inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-300'
     >
       <Globe2 className='h-3 w-3' />
       Every form
     </span>
   ) : (
-    <span data-scope='form' className='shrink-0 text-[11px] text-muted-foreground'>
+    <span data-scope='form' className='sr-only'>
       This form only
     </span>
+  )
+}
+
+/** Said once per panel instead of on every row. */
+export function ScopeLegend({ field }: { field?: boolean }) {
+  return (
+    <p data-scope-legend='' className={effectText}>
+      {field ? (
+        <>
+          Changes here apply to this form only, except settings marked{' '}
+          <span className='inline-flex items-center gap-1 whitespace-nowrap font-medium text-amber-700 dark:text-amber-300'>
+            <Globe2 className='h-3 w-3' />
+            Every form
+          </span>
+          .
+        </>
+      ) : (
+        'Changes here apply to this form only.'
+      )}
+    </p>
   )
 }
 
@@ -214,7 +237,7 @@ export function EnforcementNote({ className }: { className?: string }) {
     <p
       data-setting='inspector.enforcement_note'
       data-enforcement=''
-      className={cn('text-[11px] text-amber-700 dark:text-amber-300', className)}
+      className={cn('text-[12px] leading-snug text-amber-700 dark:text-amber-300', className)}
       data-tip='The server applies this from the active grouped layout. On this form it only works in the browser.'
     >
       {DEFAULT_FORM_ONLY}
@@ -250,16 +273,16 @@ export function Setting({
 }) {
   const w = useContext(GlobalWriterContext)
   return (
-    <div data-setting={k} data-setting-row='' className={cn('space-y-1', className)}>
-      <div className='flex min-h-6 items-center justify-between gap-2'>
-        <span className='min-w-0 text-[12px] font-medium text-foreground'>{label}</span>
-        <span className='flex shrink-0 items-center gap-2'>
+    <div data-setting={k} data-setting-row='' className={cn('space-y-1.5', className)}>
+      <div className='flex min-h-5 items-center justify-between gap-3'>
+        <span className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5'>
+          <span className={labelText}>{label}</span>
           <ScopeTag scope={scope} />
-          {inline && children}
         </span>
+        {inline && <span className='flex shrink-0 items-center'>{children}</span>}
       </div>
       {!inline && children}
-      <p data-effect='' className='text-[11px] leading-snug text-muted-foreground'>
+      <p data-effect='' className={effectText}>
         {effect}
       </p>
       {enforced && <EnforcementNote />}
@@ -304,14 +327,13 @@ export function Toggle({
         disabled={disabled}
         onCheckedChange={onChange}
         aria-label={typeof label === 'string' ? label : undefined}
-        className='h-5 w-9 [&>span]:h-4 [&>span]:w-4 [&>span]:data-[state=checked]:translate-x-4'
+        className='h-[18px] w-8 border-0 data-[state=checked]:bg-nvr-cyan data-[state=unchecked]:bg-slate-300 dark:data-[state=unchecked]:bg-slate-600 [&>span]:mx-0.5 [&>span]:h-3.5 [&>span]:w-3.5 [&>span]:bg-white [&>span]:shadow-sm [&>span]:data-[state=checked]:translate-x-3.5'
       />
     </Setting>
   )
 }
 
-export const inputCls =
-  'h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] text-foreground placeholder:text-slate-400 focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
+export const inputCls = inputBase
 
 /** A text input that saves while typing (coalesced by the draft) and sends on blur / Enter. */
 export function TextInput({
@@ -377,7 +399,7 @@ export function TextArea({
         onChange(e.target.value)
       }}
       {...buf.props}
-      className='w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
+      className={cn(inputBase, 'h-auto py-1.5 leading-snug')}
     />
   )
 }
@@ -457,8 +479,8 @@ export function Segmented<T extends string>({
   disabled?: boolean
 }) {
   return (
-    <div className='inline-flex w-full overflow-hidden rounded-md border border-slate-200 dark:border-border'>
-      {options.map((o, i) => (
+    <div className={segTrack(options.length)}>
+      {options.map((o) => (
         <button
           key={o.value}
           type='button'
@@ -466,13 +488,7 @@ export function Segmented<T extends string>({
           disabled={disabled}
           data-tip={o.tip}
           onClick={() => onChange(o.value)}
-          className={cn(
-            'flex-1 px-2 py-1 text-[12px] transition-colors disabled:opacity-40',
-            i > 0 && 'border-l border-slate-200 dark:border-border',
-            o.value === value
-              ? 'bg-nvr-cyan/10 font-medium text-foreground'
-              : 'text-muted-foreground hover:bg-muted'
-          )}
+          className={segOption(o.value === value)}
         >
           {o.label}
         </button>
@@ -486,22 +502,30 @@ export function Choice({
   options,
   onChange,
   ariaLabel,
-  disabled
+  disabled,
+  unknownLabel = (v: string) => v
 }: {
   value: string
   options: Array<{ value: string; label: string }>
   onChange: (v: string) => void
   ariaLabel?: string
   disabled?: boolean
+  /** How a stored value this list does not offer is named. */
+  unknownLabel?: (value: string) => string
 }) {
+  // A stored value this list does not offer still shows (and is kept) until changed.
+  const shown =
+    value && !options.some((o) => o.value === value)
+      ? [...options, { value, label: unknownLabel(value) }]
+      : options
   return (
     <SimpleSelect
       value={value}
       onChange={onChange}
-      options={options}
+      options={shown}
       ariaLabel={ariaLabel}
       disabled={disabled}
-      className='h-7 w-full rounded-md border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
+      className={cn(inputBase, 'focus:ring-0 focus:ring-offset-0')}
     />
   )
 }
@@ -570,32 +594,69 @@ export function JsonInput({
           commit()
         }}
         className={cn(
-          'w-full rounded-md border bg-white px-2 py-1.5 font-mono text-[11px] leading-snug text-foreground placeholder:text-slate-400 focus:outline-none dark:bg-card',
+          'w-full rounded-md border bg-white px-2.5 py-1.5 font-mono text-[12px] leading-snug text-foreground placeholder:text-slate-400 focus:outline-none dark:bg-background',
           error
             ? 'border-red-400 dark:border-red-500'
             : 'border-slate-200 focus:border-nvr-cyan dark:border-border'
         )}
       />
-      {error && <p className='text-[11px] text-red-600 dark:text-red-400'>{error}</p>}
+      {error && <p className='text-[12px] text-red-600 dark:text-red-400'>{error}</p>}
     </div>
   )
 }
 
+/**
+ * A named group of settings. `collapsible` folds it (closed unless
+ * `defaultOpen`): for raw JSON and other rarely needed detail. Folded content
+ * stays mounted, so what is typed in it survives a fold.
+ */
 export function Section({
   title,
   children,
-  className
+  className,
+  collapsible,
+  defaultOpen = false
 }: {
   title: ReactNode
   children: ReactNode
   className?: string
+  collapsible?: boolean
+  defaultOpen?: boolean
 }) {
+  const [open, setOpen] = useState(!collapsible || defaultOpen)
   return (
     <section
-      className={cn('space-y-3 border-t border-slate-200 pt-3 dark:border-border', className)}
+      className={cn(
+        'space-y-4 border-t border-slate-100 pt-5 dark:border-border/60',
+        collapsible && !open && 'space-y-0',
+        className
+      )}
     >
-      <h3 className='text-[12px] font-semibold text-foreground'>{title}</h3>
-      {children}
+      {collapsible ? (
+        <button
+          type='button'
+          aria-expanded={open}
+          data-section-toggle=''
+          onClick={() => setOpen((v) => !v)}
+          className={cn(
+            groupTitle,
+            '-mx-1 flex w-[calc(100%+0.5rem)] items-center gap-1.5 rounded px-1 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:hover:bg-muted/60'
+          )}
+        >
+          <ChevronRight
+            className={cn(
+              'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150',
+              open && 'rotate-90'
+            )}
+          />
+          {title}
+        </button>
+      ) : (
+        <h3 className={groupTitle}>{title}</h3>
+      )}
+      <div hidden={!open} className='space-y-5'>
+        {children}
+      </div>
     </section>
   )
 }
@@ -622,7 +683,10 @@ export function FieldMultiPicker({
         <button
           type='button'
           aria-label={ariaLabel}
-          className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-left text-[12px] hover:border-slate-300 dark:border-border dark:bg-card'
+          className={cn(
+            inputBase,
+            'flex items-center justify-between text-left hover:border-slate-300'
+          )}
         >
           <span className={cn('truncate', !value.length && 'text-slate-400')}>
             {value.length ? value.map(labelOf).join(', ') : placeholder}
@@ -732,10 +796,11 @@ export function ConditionBuilder({
             <button
               type='button'
               aria-label='Remove condition'
+              data-tip='Remove condition'
               onClick={() => onChange(value.filter((_, j) => j !== i))}
-              className='shrink-0 px-1 text-[12px] text-slate-400 hover:text-red-500'
+              className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
             >
-              ✕
+              <X className='h-3.5 w-3.5' />
             </button>
           </div>
         )
@@ -743,7 +808,7 @@ export function ConditionBuilder({
       <button
         type='button'
         onClick={() => onChange([...value, { field: '', op: 'eq', value: '' }])}
-        className='text-[12px] text-nvr-cyan hover:underline'
+        className={addLinkCls}
       >
         + Add condition
       </button>
@@ -751,9 +816,11 @@ export function ConditionBuilder({
   )
 }
 
+export const addLinkCls = 'text-[12px] font-medium text-sky-700 hover:underline dark:text-nvr-cyan'
+
 export function AddButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
   return (
-    <button type='button' onClick={onClick} className='text-[12px] text-nvr-cyan hover:underline'>
+    <button type='button' onClick={onClick} className={addLinkCls}>
       {children}
     </button>
   )

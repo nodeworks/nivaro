@@ -411,7 +411,7 @@ export function GridTab() {
   }
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       <Setting
         k='field.grid_layout'
         label='Rows use the layout'
@@ -594,36 +594,40 @@ export function GridTab() {
                     <>
                       {list.map((rule, i) => (
                         // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
-                        <div key={i} className='flex items-start gap-1'>
-                          <div
-                            className='flex shrink-0 flex-col pt-1.5'
-                            data-setting='field.row_rules.sort'
-                          >
-                            <button
-                              type='button'
-                              aria-label='Move rule up'
-                              disabled={i === 0}
-                              onClick={() =>
-                                save(reorder(list, i, i - 1), `Move a rule of ${name} up`)
-                              }
-                              className='text-slate-400 hover:text-nvr-cyan disabled:opacity-30'
-                            >
-                              <ChevronUp className='h-3.5 w-3.5' />
-                            </button>
-                            <button
-                              type='button'
-                              aria-label='Move rule down'
-                              disabled={i === list.length - 1}
-                              onClick={() =>
-                                save(reorder(list, i, i + 1), `Move a rule of ${name} down`)
-                              }
-                              className='text-slate-400 hover:text-nvr-cyan disabled:opacity-30'
-                            >
-                              <ChevronDown className='h-3.5 w-3.5' />
-                            </button>
-                          </div>
-                          <div className='min-w-0 flex-1'>
+                        <div key={i}>
+                          <div className='min-w-0'>
                             <RowRuleRow
+                              leading={
+                                <span
+                                  className='-my-1 flex shrink-0 flex-col'
+                                  data-setting='field.row_rules.sort'
+                                >
+                                  <button
+                                    type='button'
+                                    aria-label='Move rule up'
+                                    disabled={i === 0}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      save(reorder(list, i, i - 1), `Move a rule of ${name} up`)
+                                    }}
+                                    className='rounded text-slate-500 hover:text-slate-900 disabled:opacity-30 dark:hover:text-foreground'
+                                  >
+                                    <ChevronUp className='h-3.5 w-3.5' />
+                                  </button>
+                                  <button
+                                    type='button'
+                                    aria-label='Move rule down'
+                                    disabled={i === list.length - 1}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      save(reorder(list, i, i + 1), `Move a rule of ${name} down`)
+                                    }}
+                                    className='rounded text-slate-500 hover:text-slate-900 disabled:opacity-30 dark:hover:text-foreground'
+                                  >
+                                    <ChevronDown className='h-3.5 w-3.5' />
+                                  </button>
+                                </span>
+                              }
                               rule={rule}
                               childFields={ruleFields}
                               m2oRels={childM2ORels}
@@ -923,7 +927,7 @@ export function GridTab() {
             </Setting>
           </Section>
 
-          <Section title='More grid features'>
+          <Section title='More grid features (JSON)' collapsible>
             {JSON_KEYS.map((j) => (
               <Setting
                 key={j.key}
