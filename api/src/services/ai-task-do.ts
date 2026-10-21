@@ -155,7 +155,7 @@ export interface TaskDoAccess {
   kind: TaskDoKind
   /** Why not, in a sentence the button can show. */
   reason?: string
-  code?: 'off' | 'role' | 'category' | 'not_assignee' | 'status' | 'cap'
+  code?: 'off' | 'role' | 'category' | 'not_assignee' | 'status'
   settings: TaskDoSettings
 }
 
@@ -192,22 +192,45 @@ function startOfTodayUtc(): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
 }
 
-export async function draftsToday(userId: string): Promise<number> {
-  const row = (await db('nivaro_ai_proposals')
-    .where({ user: userId, action_type: PLAN_ACTION_TYPE })
-    .where('created_at', '>=', startOfTodayUtc())
-    .where('payload', 'like', `%"kind":"${TASK_DO_SOURCE}"%`)
+export const DAILY_CAP_CODE = 'TASK_DO_DAILY_CAP'
+
+/**
+ * Count a draft ATTEMPT against the person's daily cap and say whether it
+ * may go ahead — before the model is called, so questions, "can't do",
+ * failed and abandoned drafts all count (#2866). Redis INCR on a per-tenant
+ * per-UTC-day key that expires at midnight; when Redis is down, the AI call
+ * log (feature `task-do`) stands in. Over the cap = refused, still counted.
+ */
+export async function reserveDraftAttempt(
+  userId: string,
+  cap: number
+): Promise<{ ok: boolean; used: number }> {
+  if (cap <= 0) return { ok: true, used: 0 }
+  const start = startOfTodayUtc()
+  const redis = getApp()?.redis
+  if (redis) {
+    try {
+      const { currentTenantKey } = await import('./tenant-rooms.js')
+      const day = start.toISOString().slice(0, 10)
+      const key = `nvr:taskdo:${currentTenantKey()}:${day}:${userId.toUpperCase()}`
+      const n = await redis.incr(key)
+      if (n === 1) await redis.expireat(key, Math.floor(start.getTime() / 1000) + 86_400)
+      return n > cap ? { ok: false, used: n - 1 } : { ok: true, used: n }
+    } catch {
+      // fall through to the call log
+    }
+  }
+  const row = (await db('nivaro_ai_calls')
+    .where({ user: userId, feature: 'task-do' })
+    .where('created_at', '>=', start)
     .count({ c: '*' })
     .first()
     .catch(() => ({ c: 0 }))) as { c?: unknown } | undefined
-  return Number(row?.c ?? 0)
+  const used = Number(row?.c ?? 0)
+  return used >= cap ? { ok: false, used } : { ok: true, used: used + 1 }
 }
 
-export async function taskDoAccess(
-  user: User,
-  task: DoTask,
-  opts: { checkCap?: boolean } = {}
-): Promise<TaskDoAccess> {
+export async function taskDoAccess(user: User, task: DoTask): Promise<TaskDoAccess> {
   const settings = await getTaskDoSettings()
   const kind = kindOf(task)
   const no = (code: TaskDoAccess['code'], reason: string): TaskDoAccess => ({
@@ -235,11 +258,6 @@ export async function taskDoAccess(
     return no('status', `This ${kind} is ${task.status}`)
   if (!(await isTaskDoer(user, task)))
     return no('not_assignee', `Only the person this ${kind} is assigned to can ask AI to do it`)
-  if (opts.checkCap && settings.daily_cap > 0) {
-    const n = await draftsToday(String(user.id))
-    if (n >= settings.daily_cap)
-      return no('cap', `You have asked AI ${n} times today — the limit is ${settings.daily_cap}`)
-  }
   return { ok: true, kind, settings }
 }
 
@@ -551,8 +569,18 @@ export async function draftTaskDo(
   task: DoTask,
   extra: { answers?: TaskDoAnswer[]; note?: string | null; previous_plan_id?: string | null } = {}
 ): Promise<TaskDoDraft> {
-  const access = await taskDoAccess(user, task, { checkCap: true })
-  if (!access.ok) throw httpError(access.reason ?? 'Not allowed', access.code === 'cap' ? 429 : 403)
+  const access = await taskDoAccess(user, task)
+  if (!access.ok) throw httpError(access.reason ?? 'Not allowed', 403)
+  const attempt = await reserveDraftAttempt(String(user.id), access.settings.daily_cap)
+  if (!attempt.ok) {
+    throw Object.assign(
+      httpError(
+        `You have asked AI ${attempt.used} times today — the limit is ${access.settings.daily_cap}`,
+        429
+      ),
+      { code: DAILY_CAP_CODE }
+    )
+  }
   const { getAiClient, getAiModelSettings } = await import('./ai-client.js')
   const { chatModel } = await getAiModelSettings()
   const client = await getAiClient({ model: chatModel })
@@ -680,10 +708,16 @@ export interface PlanApproval {
   required: boolean
   reason: string
   requested_at: string
-  /** People asked to approve (task creator, else administrators). */
+  /** People asked to approve: the task creator when they hold write rights on
+   *  every collection the plan touches, else the administrators. */
   approvers: string[]
+  /** Records the plan changed when approval was asked — a plan that grows past
+   *  this on a re-check or edit needs approving again. */
+  records: number
   approved_by?: string | null
   approved_at?: string | null
+  /** An earlier approval this one replaced ("approved for 40 records"). */
+  superseded?: string | null
 }
 
 export interface TaskDoPlanView extends PlanView {
@@ -714,8 +748,62 @@ export async function recentPlanDurations(): Promise<RecentDurations | null> {
   return recentDurations(rows.map((r) => parseDoc(r.payload)))
 }
 
-async function approversFor(task: DoTask, ownerId: string): Promise<string[]> {
-  if (task.created_by && !sameId(task.created_by, ownerId)) return [String(task.created_by)]
+/** The writes a plan makes, per collection — what a second approver must be allowed to do. */
+export function neededWrites(
+  steps: StoredPlanDoc['steps']
+): Array<{ collection: string; action: 'update' | 'create' | 'delete' }> {
+  const out = new Map<string, { collection: string; action: 'update' | 'create' | 'delete' }>()
+  for (const s of steps) {
+    const collection = String(
+      s.preview?.collection ??
+        s.targets?.collection ??
+        s.payload?.collection ??
+        s.input?.collection ??
+        ''
+    )
+    if (!collection) continue
+    const action =
+      s.kind === 'create_record'
+        ? 'create'
+        : /delete|remove|purge/i.test(s.kind)
+          ? 'delete'
+          : 'update'
+    out.set(`${action}:${collection}`, { collection, action })
+  }
+  return [...out.values()]
+}
+
+/**
+ * Who may give the second approval: never the owner; the task creator only
+ * when they could make every write the plan makes themselves (an
+ * administrator, or `can()` for each collection + action), else every active
+ * administrator. A creator the assignee may control (a task they had a
+ * colleague raise for them) gains nothing without the rights.
+ */
+export async function approversFor(
+  d: TaskDoDoc,
+  task: DoTask | null,
+  ownerId: string
+): Promise<string[]> {
+  const creator = task?.created_by ? String(task.created_by) : null
+  if (creator && !sameId(creator, ownerId)) {
+    const { canSignIn, getUser } = await import('./users.js')
+    const u = await getUser(creator).catch(() => undefined)
+    if (u && canSignIn(u)) {
+      let fit = await isAdmin(u)
+      if (!fit) {
+        const { can } = await import('./permissions.js')
+        fit = true
+        for (const w of neededWrites(d.steps)) {
+          if (!(await can(u, w.action, w.collection).catch(() => false))) {
+            fit = false
+            break
+          }
+        }
+      }
+      if (fit) return [creator]
+    }
+  }
   const { supportAudience } = await import('./support-tickets.js')
   return (await supportAudience(null).catch(() => [])).filter((id) => !sameId(id, ownerId))
 }
@@ -737,35 +825,50 @@ async function annotatePlan(
     answered: meta.answered,
     note: meta.note
   }
-  await applyApproval(d, task, settings, String(user.id))
+  await refreshApproval(d, String(user.id), { task, settings, planId })
   await db('nivaro_ai_proposals')
     .where({ id: planId })
     .update({ payload: JSON.stringify(d) })
-  if (d.approval?.required && !d.approval.approved_by) await askApprovers(planId, d, task)
   return taskDoView(user, row, d)
 }
 
-/** Over the threshold → a second person must approve before it may run. */
-async function applyApproval(
+/**
+ * The ONE place the second-approval requirement is computed — from the steps
+ * AS BUILT NOW (#2866). Called when a plan is drafted, edited, re-checked and
+ * right before it runs or is scheduled. Over the threshold: an approval
+ * already given still holds while the plan changes no more records than it
+ * was approved for; a plan that grew drops it and asks again. Under the
+ * threshold: no approval. Returns whether the doc changed (the caller saves).
+ */
+export async function refreshApproval(
   d: TaskDoDoc,
-  task: DoTask,
-  settings: TaskDoSettings,
-  ownerId: string
-): Promise<void> {
-  const review = reviewPlan(d.steps, null, null)
-  const records = review.risk.records
+  ownerId: string,
+  opts: { task?: DoTask | null; settings?: TaskDoSettings; planId?: string | null } = {}
+): Promise<{ changed: boolean; dropped: boolean }> {
+  const settings = opts.settings ?? (await getTaskDoSettings())
+  const records = reviewPlan(d.steps, null, null).risk.records
+  const before = JSON.stringify(d.approval ?? null)
   if (settings.approval_threshold > 0 && records > settings.approval_threshold) {
-    // Keep an approval already given when a smaller edit follows.
-    if (d.approval?.approved_by) return
+    const prev = d.approval
+    if (prev?.approved_by && records <= (prev.records ?? 0))
+      return { changed: false, dropped: false }
+    const task =
+      opts.task !== undefined ? opts.task : await loadTask(taskIdOf(d) ?? 0).catch(() => null)
     d.approval = {
       required: true,
       reason: `Changes ${records.toLocaleString('en-US')} records — more than the ${settings.approval_threshold} one person may approve alone`,
       requested_at: new Date().toISOString(),
-      approvers: await approversFor(task, ownerId)
+      records,
+      approvers: await approversFor(d, task, ownerId),
+      superseded: prev?.approved_by
+        ? `an earlier approval covered ${prev.records ?? 0} records; the plan now changes ${records}`
+        : null
     }
-  } else if (d.approval && !d.approval.approved_by) {
-    d.approval = null
+    if (opts.planId && task) await askApprovers(opts.planId, d, task)
+    return { changed: true, dropped: !!prev?.approved_by }
   }
+  if (d.approval) d.approval = null
+  return { changed: before !== 'null', dropped: false }
 }
 
 async function askApprovers(planId: string, d: TaskDoDoc, task: DoTask): Promise<void> {
@@ -806,14 +909,52 @@ async function taskDoView(
   const undoUntil = ran ? new Date(ran + OWNER_UNDO_DAYS * 86_400_000) : null
   const hasUndo = Object.values(d.made ?? {}).some((m) => !m.undone_at)
   const canUndo = hasUndo && (admin || (owner && !!undoUntil && undoUntil.getTime() > Date.now()))
+  const review = reviewPlan(d.steps, recent ?? null, d.task_do?.hands_on_minutes ?? null)
+  // An approver who is neither the owner nor an administrator sees only the
+  // fields their own read policy allows — the preview was built as the owner.
+  if (!owner && !admin) await maskForViewer(viewer, base, review)
   return {
     ...base,
-    review: reviewPlan(d.steps, recent ?? null, d.task_do?.hands_on_minutes ?? null),
+    review,
     task_do: d.task_do ?? null,
     approval,
     can_approve: canApprove,
     can_undo: canUndo,
     undo_until: undoUntil?.toISOString() ?? null
+  }
+}
+
+/** Drop preview fields and sample labels the viewer may not read (per step collection). */
+async function maskForViewer(viewer: User, view: PlanView, review: PlanReview): Promise<void> {
+  const { getAllowedFields } = await import('./permissions.js')
+  const cache = new Map<string, Set<string> | null>()
+  const allowedFor = async (collection: string) => {
+    if (!cache.has(collection)) {
+      const list: string[] | null = await getAllowedFields(viewer, 'read', collection).catch(
+        () => []
+      )
+      cache.set(collection, list === null || list.includes('*') ? null : new Set(list))
+    }
+    return cache.get(collection) ?? null
+  }
+  for (const t of review.touches) {
+    if (!t.collection) continue
+    const allowed = await allowedFor(t.collection)
+    if (!allowed) continue
+    const hidden = t.fields.filter((f) => !allowed.has(f.field)).length
+    t.fields = t.fields.filter((f) => allowed.has(f.field))
+    const step = view.steps.find((s) => s.id === t.step_id)
+    if (!step) continue
+    const p = { ...step.preview }
+    if (p.changes && typeof p.changes === 'object') {
+      p.changes = Object.fromEntries(
+        Object.entries(p.changes as Record<string, unknown>).filter(([k]) => allowed.has(k))
+      )
+    }
+    // Labels are values of the record too.
+    if (Array.isArray(p.sample)) p.sample = []
+    if (hidden) p.hidden_fields = hidden
+    step.preview = p
   }
 }
 
@@ -933,8 +1074,7 @@ export async function editTaskDoPlan(
     s.n = i + 1
   })
   const task = await loadTask(taskId)
-  const settings = await getTaskDoSettings()
-  if (task) await applyApproval(d, task, settings, String(user.id))
+  await refreshApproval(d, String(user.id), { task, planId: id })
   const n = await db('nivaro_ai_proposals')
     .where({ id, status: 'proposed' })
     .update({
@@ -942,7 +1082,6 @@ export async function editTaskDoPlan(
       preview: JSON.stringify({ title: d.title, count: d.steps.length })
     })
   if (Number(n) !== 1) throw httpError('The plan changed — reload it', 409)
-  if (task && d.approval?.required && !d.approval.approved_by) await askApprovers(id, d, task)
   const view = await taskDoView(user, row, d, await recentPlanDurations())
   emitPlan(String(user.id), view)
   return view

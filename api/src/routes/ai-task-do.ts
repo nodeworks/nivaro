@@ -41,8 +41,11 @@ import { isTaskParty } from '../services/tasks.js'
  */
 export async function aiTaskDoRoutes(app: FastifyInstance) {
   const fail = (reply: FastifyReply, err: unknown) => {
-    const status = (err as { statusCode?: number }).statusCode ?? 400
-    return reply.code(status).send({ error: err instanceof Error ? err.message : 'Failed' })
+    const { statusCode, code } = err as { statusCode?: number; code?: string }
+    return reply.code(statusCode ?? 400).send({
+      error: err instanceof Error ? err.message : 'Failed',
+      ...(code ? { code } : {})
+    })
   }
   const taskOf = async (req: FastifyRequest<{ Params: { id: string } }>) => {
     const t = await loadTask(Number(req.params.id))

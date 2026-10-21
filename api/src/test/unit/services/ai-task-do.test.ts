@@ -44,12 +44,21 @@ function chain(table: string): Record<string, unknown> {
 vi.mock('../../../db/index.js', () => ({ db: vi.fn((table: string) => chain(table)) }))
 const emitted: Array<{ event: string; payload: Row }> = []
 const notified: Array<{ to: string; subject: string }> = []
+let redisMock: {
+  counters: Map<string, number>
+  incr: (k: string) => Promise<number>
+  expireat: ReturnType<typeof vi.fn>
+} | null = null
 vi.mock('../../../services/io-holder.js', () => ({
   getApp: () => ({
     io: { to: () => ({ emit: (event: string, payload: Row) => emitted.push({ event, payload }) }) },
-    log: { error: vi.fn(), warn: vi.fn() }
+    log: { error: vi.fn(), warn: vi.fn() },
+    get redis() {
+      return redisMock
+    }
   })
 }))
+vi.mock('../../../services/tenant-rooms.js', () => ({ currentTenantKey: () => '-' }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
 vi.mock('../../../services/notification-channels.js', () => ({
   notifyUser: vi.fn(async (_app: unknown, to: string, o: { subject: string }) => {
@@ -71,8 +80,9 @@ vi.mock('../../../services/items.js', () => ({
   updateOne: (...a: unknown[]) => updateOne(...(a as [])),
   deleteOne: vi.fn()
 }))
+const canMock = vi.fn(async (_u: unknown, _a: string, _c: string) => true)
 vi.mock('../../../services/permissions.js', () => ({
-  can: vi.fn(async () => true),
+  can: (...a: unknown[]) => canMock(...(a as [unknown, string, string])),
   getAllowedFields: vi.fn(async () => null),
   getRowFilter: vi.fn(async () => null)
 }))
@@ -96,6 +106,10 @@ vi.mock('../../../services/support-tickets.js', () => ({
   nameOf: vi.fn(async (id: string | null) => (id ? `Name ${id}` : null)),
   notifyTicket: vi.fn(async () => undefined),
   supportAudience: vi.fn(async () => ['ADMIN1'])
+}))
+vi.mock('../../../services/users.js', () => ({
+  getUser: vi.fn(async (id: string) => ({ id, role: 'R1', status: 'active', email: `${id}@x` })),
+  canSignIn: () => true
 }))
 const taskEvents: string[] = []
 vi.mock('../../../services/tasks.js', () => ({
@@ -182,6 +196,9 @@ beforeEach(() => {
   raw.clear()
   revs.clear()
   isAdminRole.mockResolvedValue(false)
+  canMock.mockReset()
+  canMock.mockResolvedValue(true)
+  redisMock = null
   readOne.mockReset()
   readOne.mockResolvedValue(null)
   create.mockReset()
@@ -257,10 +274,62 @@ describe('permission gate', () => {
     expect(
       (await td.taskDoAccess(user, { ...(task as object), status: 'done' } as never)).code
     ).toBe('status')
+  })
+})
+
+describe('daily cap counts ATTEMPTS (#2866)', () => {
+  const toolMsg = (name: string, input: Row) => ({
+    content: [{ type: 'tool_use', id: 't', name, input }]
+  })
+  beforeEach(() => {
+    tables.nivaro_users = { rows: [], first: undefined }
+    tables.nivaro_comments = { rows: [] }
+    tables.nivaro_ai_proposals = { rows: [], first: undefined }
+  })
+
+  it('a draft that ended in questions or "can\u2019t do" still counts; the cap refuses at the limit', async () => {
     settings({ daily_cap: 2 })
-    tables.nivaro_ai_proposals = { rows: [], first: { c: 2 } }
-    expect((await td.taskDoAccess(user, task, { checkCap: true })).code).toBe('cap')
-    expect((await td.taskDoAccess(user, task)).ok).toBe(true)
+    redisMock = {
+      counters: new Map(),
+      async incr(k: string) {
+        const n = (this.counters.get(k) ?? 0) + 1
+        this.counters.set(k, n)
+        return n
+      },
+      expireat: vi.fn(async () => 1)
+    }
+    create.mockResolvedValueOnce(toolMsg('ask_questions', { questions: [{ id: 'q', text: '?' }] }))
+    create.mockResolvedValueOnce(toolMsg('cannot_do', { reason: 'no' }))
+    expect((await td.draftTaskDo(user, task)).kind).toBe('questions')
+    expect((await td.draftTaskDo(user, task)).kind).toBe('cannot')
+    const third = await td.draftTaskDo(user, task).catch((e) => e)
+    expect(third).toBeInstanceOf(Error)
+    expect(third.statusCode).toBe(429)
+    expect(third.code).toBe('TASK_DO_DAILY_CAP')
+    expect(third.message).toContain('2 times today')
+    // the model was never called for the refused attempt
+    expect(create).toHaveBeenCalledTimes(2)
+    // one key per tenant + UTC day + person, expiring at the end of the day
+    const [key] = [...redisMock.counters.keys()]
+    expect(key).toMatch(/^nvr:taskdo:[^:]+:\d{4}-\d{2}-\d{2}:U1$/)
+    expect(redisMock.expireat).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the AI call log when Redis is down', async () => {
+    settings({ daily_cap: 1 })
+    redisMock = {
+      counters: new Map(),
+      incr: async () => {
+        throw new Error('down')
+      },
+      expireat: vi.fn()
+    }
+    tables.nivaro_ai_calls = { rows: [], first: { c: 1 } }
+    const r = await td.draftTaskDo(user, task).catch((e) => e)
+    expect(r.statusCode).toBe(429)
+    tables.nivaro_ai_calls.first = { c: 0 }
+    create.mockResolvedValueOnce(toolMsg('cannot_do', { reason: 'no' }))
+    expect((await td.draftTaskDo(user, task)).kind).toBe('cannot')
   })
 })
 
@@ -622,6 +691,115 @@ describe('undo window and conflicts (#2865)', () => {
   })
 })
 
+describe('second approval (#2866)', () => {
+  const docOf = (count: number, approval: Row | null) => ({
+    title: 'P',
+    steps: [
+      step(1, 'test_step', {
+        targets: { collection: 'orders', ids: Array.from({ length: count }, (_, i) => `${i}`) }
+      })
+    ],
+    state: [],
+    source: { kind: 'task-do', ref: 'task:7' },
+    ...(approval ? { approval } : {})
+  })
+
+  it('an approval given for 2 records no longer covers a plan that grew to 5', async () => {
+    settings({ approval_threshold: 3 })
+    tables.nivaro_tasks = { rows: [], first: { ...(task as object) } as Row }
+    tables.nivaro_users = { rows: [], first: undefined }
+    const d = docOf(5, {
+      required: true,
+      reason: 'old',
+      requested_at: 'x',
+      records: 2,
+      approvers: ['U9'],
+      approved_by: 'U9',
+      approved_at: 'y'
+    }) as never
+    const r = await td.refreshApproval(d, 'U1', { task: task as never })
+    expect(r).toEqual({ changed: true, dropped: true })
+    const a = (d as { approval: Row }).approval
+    expect(a.approved_by).toBeUndefined()
+    expect(a.records).toBe(5)
+    expect(String(a.superseded)).toContain('covered 2 records')
+    expect(plans.needsSecondApproval(d)).toContain('Waiting for a second approval')
+    // an approval that still covers the plan holds
+    const same = docOf(4, {
+      required: true,
+      reason: 'old',
+      requested_at: 'x',
+      records: 5,
+      approvers: ['U9'],
+      approved_by: 'U9'
+    }) as never
+    expect(await td.refreshApproval(same, 'U1', { task: task as never })).toEqual({
+      changed: false,
+      dropped: false
+    })
+    // under the threshold needs none
+    const small = docOf(2, {
+      required: true,
+      reason: 'old',
+      requested_at: 'x',
+      records: 5,
+      approvers: ['U9']
+    }) as never
+    expect((await td.refreshApproval(small, 'U1', { task: task as never })).changed).toBe(true)
+    expect((small as { approval: unknown }).approval).toBeNull()
+  })
+
+  it('runPlan recomputes the gate from the stored steps before running', async () => {
+    settings({ approval_threshold: 3 })
+    tables.nivaro_tasks = { rows: [], first: { ...(task as object) } as Row }
+    tables.nivaro_users = { rows: [], first: undefined }
+    tables.nivaro_ai_proposals = {
+      rows: [],
+      first: {
+        id: PLAN2,
+        user: 'U1',
+        action_type: 'plan',
+        status: 'proposed',
+        created_at: new Date(),
+        payload: JSON.stringify(
+          docOf(5, {
+            required: true,
+            reason: 'old',
+            requested_at: 'x',
+            records: 2,
+            approvers: ['U9'],
+            approved_by: 'U9'
+          })
+        )
+      }
+    }
+    await expect(plans.runPlan(user, PLAN2)).rejects.toThrow('Waiting for a second approval')
+    expect(updates.filter((u) => u.v.status === 'running')).toEqual([])
+    const saved = updates.find((u) => u.table === 'nivaro_ai_proposals')
+    expect(JSON.parse(String(saved?.v.payload)).approval.approved_by).toBeUndefined()
+  })
+
+  it('the task creator approves only with write rights on every touched collection; the owner never', async () => {
+    settings({ approval_threshold: 3 })
+    tables.nivaro_users = { rows: [], first: undefined }
+    const d = docOf(5, null) as never
+    canMock.mockImplementation(
+      async (_u, action, collection) => !(action === 'update' && collection === 'orders')
+    )
+    expect(await td.approversFor(d, task as never, 'U1')).toEqual(['ADMIN1'])
+    expect(canMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'U9' }), 'update', 'orders')
+    canMock.mockResolvedValue(true)
+    expect(await td.approversFor(d, task as never, 'U1')).toEqual(['U9'])
+    // a creator who is the owner is skipped even with rights
+    expect(
+      await td.approversFor(d, { ...(task as object), created_by: 'U1' } as never, 'U1')
+    ).toEqual(['ADMIN1'])
+    expect(td.neededWrites((d as { steps: never[] }).steps)).toEqual([
+      { collection: 'orders', action: 'update' }
+    ])
+  })
+})
+
 describe('the plan engine gate', () => {
   it('runPlan refuses a plan still waiting for its second approval', async () => {
     tables.nivaro_ai_proposals = {
@@ -634,10 +812,14 @@ describe('the plan engine gate', () => {
         created_at: new Date(),
         payload: JSON.stringify({
           title: 'P',
-          steps: [step(1, 'test_step')],
+          steps: [
+            step(1, 'test_step', {
+              targets: { collection: 'orders', ids: Array.from({ length: 70 }, (_, i) => `${i}`) }
+            })
+          ],
           state: [],
           source: { kind: 'task-do', ref: 'task:7' },
-          approval: { required: true, reason: 'Changes 70 records', approvers: ['U9'] }
+          approval: { required: true, reason: 'Changes 70 records', records: 70, approvers: ['U9'] }
         })
       }
     }

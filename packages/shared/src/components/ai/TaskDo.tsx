@@ -103,8 +103,10 @@ export interface TaskDoPlan extends AiPlan {
     required: boolean
     reason: string
     approvers: string[]
+    records?: number
     approved_by?: string | null
     approved_at?: string | null
+    superseded?: string | null
   } | null
   can_approve: boolean
   can_undo: boolean
@@ -714,6 +716,8 @@ function StepExtra({
     for (const f of t.fields.filter((x) => x.from !== undefined).slice(0, 4))
       parts.push(`${f.field} ${fmt(f.from)} → ${fmt(f.to)}`)
   }
+  const hidden = Number(step.preview?.hidden_fields ?? 0)
+  if (hidden) parts.push(`${hidden} field${hidden === 1 ? '' : 's'} you may not read`)
   return (
     <div className='mt-1 pl-5' data-task-do-step-extra>
       {(parts.length > 0 || t?.irreversible) && (
@@ -893,7 +897,7 @@ function PlanReview({
         >
           <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
           <span className='min-w-0 flex-1'>
-            {p.approval!.reason}.{' '}
+            {p.approval!.reason}. {p.approval!.superseded ? `${p.approval!.superseded}. ` : ''}
             {p.can_approve
               ? 'You were asked to approve it.'
               : `Waiting for ${p.approval!.approvers.length === 1 ? 'one person' : `one of ${p.approval!.approvers.length} people`} to approve.`}
