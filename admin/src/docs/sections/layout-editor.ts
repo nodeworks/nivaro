@@ -248,9 +248,18 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Every field or section an unsaved change touched shows a small blue dot until you save. Click the unsaved count in the top bar to list the changes; click one to select what it changed and scroll to it (a form-settings change opens Form settings).'
     },
+    { type: 'h3', id: 'layout-editor-staged', text: 'Your draft is staged until you save' },
     {
       type: 'p',
-      text: 'Unsaved changes are also kept in this browser. If the tab crashed or was closed, opening the layout again offers Recover, which brings them back as unsaved changes. If the layout was saved by anyone since, they cannot be laid on it safely: the editor says so and drops them.'
+      text: 'Unsaved changes are a private draft: only you see them, on the canvas and nowhere else. About a second after each change they are kept for you on the server (and in this browser), so a closed tab, a crash or a switch to another computer loses nothing. Opening the layout again offers Recover, which brings the changes back unsaved, and Discard, which drops them. The status chip\'s tip says where the draft stands ("Kept for you on the server").'
+    },
+    {
+      type: 'p',
+      text: "If the layout was saved by anyone since (or staging took the night's layouts from development), Recover lays your changes on top of the layout as it is now; a change that no longer fits is listed in a banner instead of applied, the rest are kept. Save is still one step: every change lands together against the layout's current revision, or none does."
+    },
+    {
+      type: 'p',
+      text: 'A small "Ana is drafting" chip beside the layout\'s name says who else has unsaved changes staged on it, and how many — never what they are. Saving, discarding or scheduling your changes clears your draft.'
     },
     { type: 'h3', id: 'layout-editor-presence', text: 'Who else is here' },
     {
@@ -266,6 +275,10 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: 'History lists the saved versions of the layout — one per editing burst, sections included — with who saved and the change\'s name. "What the last save changed" shows the newest difference first; any version can be compared with the layout now. Restore replaces the layout with that version exactly (sections added since are removed) after keeping the current one as a version first. Versions survive a layout delete.'
+    },
+    {
+      type: 'p',
+      text: 'Piece on a version restores one section or one field from it without rolling back the rest. It lists only what differs from the form now, each with what restoring does ("Back on the form · 2 settings", "1 field removed · Order"): a field comes back with its settings, in the version\'s section when it is elsewhere or gone (its place among its neighbours is kept as it is now); a section comes back exactly as the version had it — its settings, its tabs, its fields in that order, fields added since removed. Each restore is one change: one Undo step, one unsaved change to save (or one autosave). A field whose section is gone says so; restore the section instead.'
     },
     {
       type: 'p',
