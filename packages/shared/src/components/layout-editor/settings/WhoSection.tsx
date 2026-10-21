@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { RecordConditionsEditor, RecordConditionsJson } from '../editors/RecordConditionsEditor'
 import { RolesPicker } from '../editors/RolesPicker'
+import { DependencyDiagram } from '../ops/DependencyDiagram'
+import { useLayoutDependencies } from '../ops/ops-api'
 import { LAYOUT_TYPES } from '../overview/OverviewActions'
 import { useRoleNames } from '../overview/overview-api'
 import { quietText, Segmented, Setting, smallBtn } from './controls'
@@ -105,6 +107,7 @@ export function WhoSection(props: SectionProps) {
           layout.slug ? (
             <>
               Opens with <code className='font-mono'>?layout={String(layout.slug)}</code>
+              <SlugUsers layoutId={Number(layout.id)} />
             </>
           ) : null
         }
@@ -119,9 +122,34 @@ export function WhoSection(props: SectionProps) {
   )
 }
 
+/** #2613 — before a link name changes: what finds this layout by it, drawn. */
+function SlugUsers({ layoutId }: { layoutId: number }) {
+  const { data } = useLayoutDependencies(layoutId)
+  const [open, setOpen] = useState(false)
+  const bySlug = (data?.nodes ?? []).filter((n) => n.breaks.includes('slug')).length
+  if (!bySlug) return null
+  return (
+    <>
+      {' · '}
+      <button
+        type='button'
+        data-slug-users
+        className='font-medium text-amber-700 hover:underline dark:text-amber-300'
+        onClick={() => setOpen((o) => !o)}
+      >
+        {bySlug} {bySlug === 1 ? 'thing finds' : 'things find'} it by this name
+      </button>
+      {open && <DependencyDiagram layoutId={layoutId} change='slug' compact className='mt-2' />}
+    </>
+  )
+}
+
 function KindSetting(props: SectionProps) {
   const { layout, kind, bundle } = props
   const [confirm, setConfirm] = useState<LayoutKind | null>(null)
+  // #2613 — what relies on this layout is drawn before its kind changes.
+  const { data: deps } = useLayoutDependencies(Number(layout.id))
+  const used = (deps?.nodes.length ?? 0) > 0
   const placed = bundle.placements.length + bundle.groups.length
   const change = (to: LayoutKind) =>
     props.set({ layout_type: to }, `Change kind to ${kindLabel(to)}`)
@@ -204,7 +232,7 @@ function KindSetting(props: SectionProps) {
         ariaLabel='Kind of layout'
         value={kind}
         options={LAYOUT_TYPES.map((t) => ({ value: t.type, label: t.label }))}
-        onChange={(to) => (placed > 0 ? setConfirm(to) : change(to))}
+        onChange={(to) => (placed > 0 || used ? setConfirm(to) : change(to))}
       />
       {confirm && (
         <div
@@ -219,6 +247,14 @@ function KindSetting(props: SectionProps) {
                 ? 'grid columns use only its fields, not its sections.'
                 : 'some of them may not apply to this kind.'}
           </p>
+          {used && (
+            <DependencyDiagram
+              layoutId={Number(layout.id)}
+              change='type'
+              compact
+              className='mt-2 rounded-md bg-white p-2 text-slate-800 dark:bg-card dark:text-foreground'
+            />
+          )}
           <div className='mt-1.5 flex gap-1.5'>
             <button
               type='button'

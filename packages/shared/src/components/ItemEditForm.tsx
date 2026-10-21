@@ -15,6 +15,7 @@ import {
   FileDown,
   LifeBuoy,
   Loader2,
+  MessageSquarePlus,
   PencilLine,
   PictureInPicture2,
   Save,
@@ -200,6 +201,7 @@ import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordGraphSheet } from './RecordGraph'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
+import { SuggestFormChangeDialog } from './support/SuggestFormChangeDialog'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
 
 let formulaCtxHydrated = false
@@ -5918,6 +5920,8 @@ function ItemEditFormView({
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
   // Request a change (#999) — a support ticket about this record.
   const [supportOpen, setSupportOpen] = useState(false)
+  // Suggest a form change (#2609) — about the form, not this record's data.
+  const [suggestOpen, setSuggestOpen] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [templateShared, setTemplateShared] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
@@ -10223,6 +10227,19 @@ function ItemEditFormView({
                                               <LifeBuoy className='h-3.5 w-3.5' />
                                               Request a change
                                             </button>
+                                            {!isAdmin && !isNew && itemId && (
+                                              <button
+                                                type='button'
+                                                title='Tell the administrators how this form could work better'
+                                                data-suggest-form-change-open
+                                                data-nvr-menu-close
+                                                onClick={() => setSuggestOpen(true)}
+                                                className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                              >
+                                                <MessageSquarePlus className='h-3.5 w-3.5' />
+                                                Suggest a form change
+                                              </button>
+                                            )}
                                             {isAdmin && (
                                               <>
                                                 <div data-nvr-menu-divider />
@@ -10723,6 +10740,33 @@ function ItemEditFormView({
                                     recordLabel={itemTitle ? String(itemTitle) : null}
                                     onCreated={(t) =>
                                       toast.success(`Request #${t.id} sent to the administrators`)
+                                    }
+                                  />
+                                )}
+                                {!isAdmin && !isNew && itemId && (
+                                  <SuggestFormChangeDialog
+                                    open={suggestOpen}
+                                    onOpenChange={setSuggestOpen}
+                                    collection={collection}
+                                    item={String(itemId)}
+                                    layoutId={layoutMeta?.id != null ? Number(layoutMeta.id) : null}
+                                    layoutName={
+                                      typeof layoutMeta?.name === 'string' ? layoutMeta.name : null
+                                    }
+                                    fields={(fieldConfig ?? [])
+                                      .filter(
+                                        (f) =>
+                                          !f.hidden &&
+                                          (visibleFields.size === 0 || visibleFields.has(f.field))
+                                      )
+                                      .map((f) => ({
+                                        field: f.field,
+                                        label: f.label || titleCase(f.field.replace(/_/g, ' '))
+                                      }))}
+                                    onSent={(r) =>
+                                      toast.success(
+                                        `Suggestion #${r.id} sent — follow it under My requests`
+                                      )
                                     }
                                   />
                                 )}

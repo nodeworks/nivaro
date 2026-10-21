@@ -131,6 +131,9 @@ import { jobRunRoutes } from './job-runs.js'
 import { journeyRoutes } from './journeys.js'
 import { lastTouchRoutes } from './last-touch.js'
 import { layoutUsageRoutes } from './layout-usage.js'
+import { layoutChangeRequestRoutes } from './layout-change-requests.js'
+import { layoutDependencyRoutes } from './layout-dependencies.js'
+import { layoutPromoteRoutes } from './layout-promote.js'
 import { legalHoldRoutes } from './legal-holds.js'
 import { lineageRoutes } from './lineage.js'
 import { mailRoutes } from './mail.js'
@@ -591,6 +594,10 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(fieldGroupsRoutes, { prefix: '/field-groups' })
   await app.register(collectionLayoutsRoutes, { prefix: '/collection-layouts' })
   await app.register(layoutUsageRoutes, { prefix: '/layout-usage' })
+  // #2593 / #2609 / #2613 — promote one layout, change requests, dependencies.
+  await app.register(layoutPromoteRoutes, { prefix: '/collection-layouts' })
+  await app.register(layoutChangeRequestRoutes, { prefix: '/layout-change-requests' })
+  await app.register(layoutDependencyRoutes, { prefix: '/collection-layouts' })
   await app.register(virtualCollectionsRoutes, { prefix: '/virtual-collections' })
   await app.register(recordTemplatesRoutes, { prefix: '/record-templates' })
   await app.register(collectionPresetsRoutes, { prefix: '/collection-presets' })

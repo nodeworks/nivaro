@@ -282,6 +282,20 @@ export interface ExtensionContext {
   cache: {
     registerWarm(name: string, fn: CacheWarmFn, opts?: { budgetMs?: number }): void
   }
+  /** Layouts the extension's code opens (#2613), so the layout editor can show
+   *  them before a layout is renamed, retyped or deleted. Name the layout by
+   *  `slug` (its link name) or `layout_id`. Optional: older APIs do not offer
+   *  it — call `ctx.layouts?.dependsOn(…)`. A malformed declaration is logged
+   *  and skipped. */
+  layouts?: {
+    dependsOn(dep: {
+      collection: string
+      slug?: string
+      layout_id?: number
+      /** What uses it, in plain words ("Order PDF email"). */
+      label: string
+    }): void
+  }
   /** Checked-in rows of a configuration collection, applied by a task —
    *  never at boot — with a drift report as its dry run. */
   seeds: { register(def: ConfigSeedDef): void }
