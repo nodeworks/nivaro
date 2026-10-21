@@ -145,6 +145,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Every 5 minutes — samples DB connection pool usage and leak attribution for the DB Health console.',
   'concurrency-sample':
     'Every 5 minutes — records connected socket / active user counts for the concurrency chart on the Realtime console.',
+  'infra-health-sample':
+    "Every 2 minutes — reads each Docker host's container healthchecks and keeps the changes (healthy, unhealthy, starting) for three days, so the Infrastructure Health tab can show when a container turned unhealthy. Only scheduled where a Docker host is configured; only failed ticks are recorded.",
   'storage-snapshot': 'Nightly — records storage usage so DB Health can project the runway.',
   'config-snapshot':
     'Stores a gzipped snapshot of every configuration table so Environment Config can show what drifted since any past night.',
