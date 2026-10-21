@@ -14,6 +14,8 @@
  * (`on` / `emit`), which admin and portals already mount.
  */
 
+import { loadDevicePrefs, micConstraints } from './huddle-device-prefs'
+
 export interface HuddlePeer {
   socket: string
   user: string
@@ -56,6 +58,8 @@ export interface HuddleState {
   localScreen: MediaStream | null
   startedAt: number | null
   peers: LivePeer[]
+  /** The microphone in use, by name (#2847). */
+  micLabel: string | null
 }
 
 const IDLE: HuddleState = {
@@ -67,7 +71,8 @@ const IDLE: HuddleState = {
   sharing: false,
   localScreen: null,
   startedAt: null,
-  peers: []
+  peers: [],
+  micLabel: null
 }
 
 /** Every 15 s the server hears we are still here (it forgets us after 45 s). */
@@ -217,7 +222,7 @@ class HuddleStore {
     this.set({ room, status: 'joining', error: null, startedAt: null })
     try {
       this.mic = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        audio: micConstraints(loadDevicePrefs())
       })
     } catch (err) {
       const name = (err as { name?: string })?.name
@@ -233,6 +238,7 @@ class HuddleStore {
       return
     }
     for (const t of this.mic.getAudioTracks()) t.enabled = !this.state.muted
+    this.set({ micLabel: this.mic.getAudioTracks()[0]?.label || null })
     await this.iceServers(room).catch(() => null)
     this.transport.emit('huddle:join', { room })
   }
@@ -415,6 +421,7 @@ class HuddleStore {
       el.style.display = 'none'
       document.body.appendChild(el)
       this.audio.set(socket, el)
+      if (this.sinkId) void applySink(el, this.sinkId)
     }
     el.srcObject = stream
     void el.play().catch(() => null)
@@ -514,6 +521,88 @@ class HuddleStore {
       this.transport?.emit('huddle:state', { room: this.state.room, screen: false })
     }
   }
+
+  // ── Audio quality and control (#2845–#2848) ───────────────────────────────
+  private sinkId = ''
+  private quality: HuddleQualitySnapshot | null = null
+
+  /** The microphone stream I send (null when not in a huddle). */
+  localMic(): MediaStream | null {
+    return this.mic
+  }
+
+  /** Each peer link, for stats and sender tuning — read-only use. */
+  peerLinks(): Array<{ socket: string; pc: RTCPeerConnection; screenSender: RTCRtpSender | null }> {
+    return [...this.links].map(([socket, l]) => ({
+      socket,
+      pc: l.pc,
+      screenSender: l.screenSender
+    }))
+  }
+
+  /** Swap the microphone on every link in place (replaceTrack: no renegotiation). */
+  async swapMic(stream: MediaStream): Promise<void> {
+    const track = stream.getAudioTracks()[0]
+    if (!track || !this.state.room || this.state.status === 'idle') {
+      for (const t of stream.getTracks()) t.stop()
+      return
+    }
+    track.enabled = !this.state.muted
+    const old = this.mic
+    this.mic = stream
+    for (const [, link] of this.links) {
+      for (const sender of link.pc.getSenders()) {
+        if (sender === link.screenSender || sender.track?.kind !== 'audio') continue
+        await sender.replaceTrack(track).catch(() => null)
+      }
+    }
+    for (const t of old?.getTracks() ?? []) t.stop()
+    this.set({ micLabel: track.label || null })
+  }
+
+  /** Play everyone through this output ('' = the system default), where the browser can. */
+  setSpeaker(sinkId: string) {
+    this.sinkId = sinkId
+    for (const [, el] of this.audio) void applySink(el, sinkId)
+  }
+
+  speaker(): string {
+    return this.sinkId
+  }
+
+  /** Written by the quality monitor every poll; read by anyone through getHuddleQuality(). */
+  reportQuality(q: HuddleQualitySnapshot | null) {
+    this.quality = q
+  }
+
+  getHuddleQuality(): HuddleQualitySnapshot | null {
+    return this.state.status === 'live' ? this.quality : null
+  }
+}
+
+/** A point-in-time view of the call's links (#2848), for anything that reports on it. */
+export interface HuddleQualitySnapshot {
+  at: number
+  room: string
+  /** My own side looks poor (every connected link poor for 10 s). */
+  poor: boolean
+  peers: Array<{
+    socket: string
+    user: string
+    rtt: number | null
+    loss: number | null
+    jitter: number | null
+    path: 'direct' | 'relay' | null
+    inKbps: number | null
+    outKbps: number | null
+    bars: 0 | 1 | 2 | 3 | 4
+  }>
+}
+
+async function applySink(el: HTMLAudioElement, sinkId: string) {
+  const media = el as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }
+  if (typeof media.setSinkId !== 'function') return
+  await media.setSinkId(sinkId).catch(() => null)
 }
 
 interface SignalIn {
@@ -524,6 +613,11 @@ interface SignalIn {
 }
 
 export const huddleStore = new HuddleStore()
+
+/** The latest connection-quality snapshot of the huddle I am in (null = none / not measured). */
+export function getHuddleQuality(): HuddleQualitySnapshot | null {
+  return huddleStore.getHuddleQuality()
+}
 
 /** Browser support, read once per render (SSR-safe). */
 export function huddleSupport(): { audio: boolean; screen: boolean } {

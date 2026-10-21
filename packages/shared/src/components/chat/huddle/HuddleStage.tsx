@@ -1,9 +1,12 @@
 import { Headphones, Maximize2, MicOff, ScreenShare, X } from 'lucide-react'
 import type React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '../../../lib/utils'
+import { MutedTalkingHint, PoorConnectionBanner, QualityBars, SpeakingRing } from './HuddleAudioUi'
+import type { PeerQuality } from './huddle-audio-logic'
 import { formatElapsed, type LivePeer } from './huddle-store'
 import type { HuddleHandle } from './useHuddle'
+import { useHuddleQuality, useHuddleSpeaking } from './useHuddleAudio'
 
 /** A live MediaStream in a <video>; muted because audio plays through the store's own elements. */
 function ScreenView({
@@ -73,6 +76,8 @@ function Person({
   muted,
   screen,
   connection,
+  speaking = false,
+  quality,
   renderAvatar
 }: {
   id: string
@@ -80,6 +85,10 @@ function Person({
   muted: boolean
   screen: boolean
   connection?: LivePeer['connection']
+  /** #2845 */
+  speaking?: boolean
+  /** #2848 — peers only; absent for me. */
+  quality?: PeerQuality | null
   renderAvatar: (id: string, name: string | null) => React.ReactNode
 }) {
   const connecting = connection === 'new' || connection === 'connecting'
@@ -99,8 +108,11 @@ function Person({
       }
       data-huddle-person={id}
     >
-      <span style={{ lineHeight: 0 }}>{renderAvatar(id, name)}</span>
+      <SpeakingRing speaking={speaking && !muted}>{renderAvatar(id, name)}</SpeakingRing>
       <span className='max-w-[120px] truncate'>{name ?? 'Someone'}</span>
+      {connection === 'connected' && quality !== null && (
+        <QualityBars name={name ?? 'Someone'} quality={quality} />
+      )}
       {muted && <MicOff className='h-3 w-3 text-slate-400' strokeWidth={2} aria-label='muted' />}
       {screen && (
         <ScreenShare className='h-3 w-3 text-nvr-cyan' strokeWidth={2} aria-label='sharing' />
@@ -127,6 +139,17 @@ export function HuddleStage({
   renderAvatar: (id: string, name: string | null) => React.ReactNode
 }) {
   const { state, inThis } = huddle
+  // #2845 speaking + order, #2848 link quality
+  const speaking = useHuddleSpeaking()
+  const quality = useHuddleQuality()
+  const orderedPeers = useMemo(() => {
+    const at = new Map(speaking.order.map((s, i) => [s, i]))
+    return [...state.peers].sort(
+      (a, b) =>
+        (at.get(a.socket) ?? Number.MAX_SAFE_INTEGER) -
+        (at.get(b.socket) ?? Number.MAX_SAFE_INTEGER)
+    )
+  }, [state.peers, speaking.order])
   if (state.status === 'error' && (state.room === room || !state.room)) {
     return (
       <div
@@ -167,10 +190,13 @@ export function HuddleStage({
             name={me.name}
             muted={state.muted}
             screen={state.sharing}
+            speaking={speaking.selfSpeaking}
+            quality={null}
             renderAvatar={renderAvatar}
           />
         )}
-        {state.peers.map((p) => (
+        {speaking.mutedTalking && <MutedTalkingHint />}
+        {orderedPeers.map((p) => (
           <Person
             key={p.socket}
             id={p.user}
@@ -178,6 +204,8 @@ export function HuddleStage({
             muted={p.muted}
             screen={p.screen}
             connection={p.connection}
+            speaking={!!speaking.speaking[p.socket]}
+            quality={quality.peers[p.socket]}
             renderAvatar={renderAvatar}
           />
         ))}
@@ -187,6 +215,7 @@ export function HuddleStage({
           </span>
         )}
       </div>
+      {quality.poor && <PoorConnectionBanner sharing={state.sharing} />}
       {sharedByPeer?.video && (
         <div className='mt-1.5'>
           <ScreenView

@@ -10,6 +10,7 @@ import {
   huddleSupport,
   type IceConfig
 } from './huddle-store'
+import { startHuddleExtras } from './useHuddleAudio'
 
 const EMPTY: HuddlePeer[] = []
 
@@ -45,6 +46,7 @@ export function useHuddle(room: string | null) {
 
   useEffect(() => {
     if (realtime && support.audio) huddleStore.attach(realtime, fetchIce)
+    if (support.audio) startHuddleExtras() // #2845–#2848
   }, [realtime, support.audio, fetchIce])
 
   const state: HuddleState = useSyncExternalStore(huddleStore.subscribe, huddleStore.getSnapshot)
