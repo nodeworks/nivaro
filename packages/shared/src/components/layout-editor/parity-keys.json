@@ -1107,6 +1107,33 @@
     "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "group.empty_text",
+    "label": "Text for a section with nothing filled (#2700)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.sticky",
+    "label": "Stick the section to the top of the form (#2699)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.row_groups",
+    "label": "Rows of fields side by side under one label (#2697)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
     "key": "group.skip_if_filled",
     "label": "Skip as first step when these fields are filled",
     "home": "inspector",
@@ -1554,6 +1581,15 @@
     "tab_or_section": "Look",
     "scope": "form",
     "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.fold",
+    "label": "Behind “Show more” while empty (#2698)",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "add",
     "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
   },
   {

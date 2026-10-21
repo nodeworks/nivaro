@@ -3,6 +3,7 @@ import type { Browser } from 'puppeteer'
 import puppeteer from 'puppeteer'
 import { db } from '../db/index.js'
 import { resolveDisplayValue } from './display-value.js'
+import { isEmptyValue, isFolded, shapePdfFields } from './form-structure.js'
 import type { PdfLayoutData } from './pdf-layout-themes.js'
 import { classicTheme, escHtml, executiveTheme, minimalTheme } from './pdf-layout-themes.js'
 import { resolvePlacementText, type TextContext, textRulesOf } from './placement-behaviour.js'
@@ -490,6 +491,8 @@ interface GroupRow {
   key: string
   label: string
   sort: number
+  /** Rows of fields and the empty-section text (services/form-structure.ts). */
+  swap_config?: string | null
 }
 interface AssignmentRow {
   field: string
@@ -662,6 +665,10 @@ export async function generatePdfFromLayout(params: {
               : (o2mHtml[a.field] ??
                 renderFieldValue(meta?.type ?? 'string', enrichedItem[a.field], fieldOpts))
           return {
+            field: a.field,
+            // A child table counts as filled; M2M lists come resolved on enrichedItem.
+            empty: o2mHtml[a.field] == null && isEmptyValue(enrichedItem[a.field]),
+            folded: isFolded(a.overrides),
             label: hideLabel
               ? ''
               : (ovLabel ??
@@ -681,7 +688,11 @@ export async function generatePdfFromLayout(params: {
       const hasChildTable = groupFields.some(
         (f) => f.rawHtml && String(f.value).startsWith('<table')
       )
-      return { label: group.label, pageBreak: hasChildTable, fields: groupFields }
+      return {
+        label: group.label,
+        pageBreak: hasChildTable,
+        fields: shapePdfFields(groupFields, group.swap_config)
+      }
     })
     .filter((s) => s.fields.length > 0)
     .map((s, i) => ({ ...s, pageBreak: s.pageBreak && i > 0 }))

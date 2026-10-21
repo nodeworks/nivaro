@@ -448,7 +448,9 @@ const READOUTS = new Set([
   'field.impact',
   'field.row_rules_lint',
   'field.drawer_relations.hint',
-  'inspector.enforcement_note'
+  'inspector.enforcement_note',
+  // #2697: lists the section's rows; with none yet it says how to add one.
+  'group.row_groups'
 ])
 
 /** Keys whose marker holds a real control (or is a read-out row). */
