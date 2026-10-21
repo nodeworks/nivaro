@@ -1629,6 +1629,15 @@
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "field.ai_generate",
+    "label": "AI fill button on this field, with a prompt template naming other fields",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum"]
+  },
+  {
     "key": "field.required",
     "label": "Required on this form",
     "home": "inspector",

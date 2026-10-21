@@ -1,4 +1,5 @@
 import { InlineDisplaySection } from '../editors/inline-display'
+import { AiFillSetting } from './AiFillSetting'
 import { showsDateMode, showsInputMask, showsNumbers } from './applies'
 import { useFieldCtx } from './field-context'
 import { currentInterface, interfaceLabel, interfaceOptions } from './interfaces'
@@ -335,6 +336,8 @@ export function LookTab() {
           />
         </Setting>
       )}
+
+      {isText && !info.isPath && !info.computedType && <AiFillSetting />}
     </div>
   )
 }

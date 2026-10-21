@@ -48,6 +48,11 @@ export interface FieldAffordances {
   lockReasons: Record<string, string>
   applyToLines: Record<string, ApplyToLinesSpec>
   openRelated?: (collection: string, id: string) => void
+  /** The form's layout id — a field's own AI fill button (#2692) names it. */
+  layoutId?: number | null
+  /** The form was filled from a document proposal: fields the layout marks
+   *  `autofill_check` get a "check this" ring (#2691). */
+  fromAutofill?: boolean
 }
 
 export const FieldAffordancesContext = createContext<FieldAffordances | null>(null)

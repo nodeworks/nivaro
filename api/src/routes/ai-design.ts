@@ -3,12 +3,20 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
+import { describeAiProvider } from '../services/ai-client.js'
+import { CORRECTED_SHARE, MIN_PROPOSED } from '../services/ai-design/autofill-tuning.js'
 import {
   applyHelpText,
   draftHelpText,
   HELP_MAX,
   helpTextCandidates
 } from '../services/ai-design/help-text.js'
+import {
+  labelLookup,
+  loadCorrectedFields,
+  loadFieldMeta,
+  loadRoleAccess
+} from '../services/ai-design/layout-ai-load.js'
 import {
   buildCommandPrompt,
   COMMAND_SYSTEM,
@@ -29,6 +37,13 @@ import {
   titleCase
 } from '../services/ai-design/model.js'
 import {
+  buildPersonaPrompt,
+  buildWalkthrough,
+  PERSONA_SYSTEM,
+  parsePersonaAnswer,
+  walkthroughRuleFindings
+} from '../services/ai-design/persona-test.js'
+import {
   applyRoleProposal,
   countReadImpact,
   designRole,
@@ -38,6 +53,15 @@ import {
   simulateRoleProposal
 } from '../services/ai-design/role-design.js'
 import { DEFAULT_DAYS, suggestRoleViews } from '../services/ai-design/role-views.js'
+import {
+  buildCritiquePrompt,
+  CRITIQUE_SYSTEM,
+  cleanGeometry,
+  critiqueRuleComments,
+  critiqueSections,
+  imageFromDataUri,
+  parseCritiqueAnswer
+} from '../services/ai-design/visual-critique.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { loadLayoutBundle } from '../services/layout-ops.js'
 
@@ -166,6 +190,183 @@ export async function aiDesignRoutes(app: FastifyInstance) {
       if (parsed.error) return reply.code(422).send({ error: parsed.error })
       return reply.send({
         data: { intents: parsed.intents, explanation: parsed.explanation, dropped: parsed.dropped }
+      })
+    }
+  )
+
+  // ── Role persona test (#2685) ──────────────────────────────────────────────
+  // Read-only: the model walks a new record through the form as the role and
+  // reports what would confuse that person. Rule checks run without the model.
+
+  app.post<{ Params: { id: string }; Body: { role_id?: string; goal?: string } }>(
+    '/layouts/:id/persona-test',
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Invalid layout id' })
+      const roleId = cleanText(req.body?.role_id, 64)
+      if (!roleId) return reply.code(400).send({ error: 'Pick a role to play' })
+      const bundle = await loadLayoutBundle(db, id)
+      if (!bundle) return reply.code(404).send({ error: 'Layout not found' })
+      const collection = bundle.layout.collection
+      const meta = await loadFieldMeta(collection)
+      const role = await loadRoleAccess(collection, roleId, [...meta.keys()])
+      if (!role) return reply.code(404).send({ error: 'Role not found' })
+      const steps = buildWalkthrough(bundle, meta, role, roleId)
+      const ruleFindings = walkthroughRuleFindings(steps, role)
+      const walkthrough = steps.map((s) => ({
+        key: s.key,
+        label: s.label,
+        kind: s.kind,
+        fields: s.fields.filter((f) => !f.hidden).length,
+        required: s.fields.filter((f) => !f.hidden && f.required).length
+      }))
+      const base = { role: role.name, walkthrough, written: false }
+      const complete = await defaultComplete('chat')
+      if (!complete)
+        return reply.send({
+          data: {
+            ...base,
+            summary: null,
+            steps: [],
+            findings: ruleFindings,
+            dropped: [],
+            ai_configured: false
+          }
+        })
+      let answer: string
+      try {
+        answer = await complete({
+          system: PERSONA_SYSTEM,
+          user: buildPersonaPrompt({
+            collection,
+            layout: String(bundle.layout.name ?? ''),
+            role: role.name,
+            goal: cleanText(req.body?.goal, 300),
+            steps,
+            ruleFindings
+          }),
+          maxTokens: 3000
+        })
+      } catch (err) {
+        return reply.code(502).send({
+          error: `The AI could not run the test: ${(err as Error).message}`.slice(0, 400)
+        })
+      }
+      const parsed = parsePersonaAnswer(answer, steps)
+      return reply.send({
+        data: {
+          ...base,
+          summary: parsed.summary,
+          steps: parsed.steps,
+          findings: [...ruleFindings, ...parsed.findings],
+          dropped: parsed.dropped,
+          ai_configured: true
+        }
+      })
+    }
+  )
+
+  // ── Visual critique (#2690) ────────────────────────────────────────────────
+  // The editor sends its canvas picture (no preview record, values masked) and
+  // each section's measured box; comments come back pinned to section keys.
+
+  app.post<{
+    Params: { id: string }
+    Body: { image?: string; sections?: unknown; canvas?: { w?: number; h?: number } }
+  }>('/layouts/:id/visual-critique', { bodyLimit: 4 * 1024 * 1024 }, async (req, reply) => {
+    const id = Number(req.params.id)
+    if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Invalid layout id' })
+    const bundle = await loadLayoutBundle(db, id)
+    if (!bundle) return reply.code(404).send({ error: 'Layout not found' })
+    const meta = await loadFieldMeta(bundle.layout.collection)
+    const keys = new Set(bundle.groups.map((g) => g.key))
+    const sections = critiqueSections(
+      bundle,
+      labelLookup(meta),
+      cleanGeometry(req.body?.sections, keys)
+    )
+    const ruleComments = critiqueRuleComments(sections)
+    const complete = await defaultComplete('chat')
+    if (!complete)
+      return reply.send({
+        data: {
+          summary: null,
+          comments: ruleComments,
+          dropped: [],
+          used_image: false,
+          ai_configured: false
+        }
+      })
+    // The OpenAI-compatible gateway shim drops pictures: send structure only there.
+    const provider = await describeAiProvider()
+    const seesImages = provider.provider === 'anthropic' || provider.format === 'anthropic'
+    const image = seesImages ? imageFromDataUri(req.body?.image) : null
+    const w = Number(req.body?.canvas?.w)
+    const h = Number(req.body?.canvas?.h)
+    let answer: string
+    try {
+      answer = await complete({
+        system: CRITIQUE_SYSTEM,
+        user: buildCritiquePrompt({
+          layout: String(bundle.layout.name ?? ''),
+          layout_type: String(bundle.layout.layout_type ?? 'grouped'),
+          steps: bundle.layout.tab_mode === 'steps',
+          canvas:
+            Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0
+              ? { w: Math.round(w), h: Math.round(h) }
+              : null,
+          sections,
+          ruleComments,
+          hasImage: !!image
+        }),
+        image: image ?? undefined,
+        maxTokens: 2500
+      })
+    } catch (err) {
+      return reply.code(502).send({
+        error: `The AI could not review the form: ${(err as Error).message}`.slice(0, 400)
+      })
+    }
+    const parsed = parseCritiqueAnswer(answer, new Set(sections.map((s) => s.key)))
+    return reply.send({
+      data: {
+        summary: parsed.summary,
+        comments: [...ruleComments, ...parsed.comments],
+        dropped: parsed.dropped,
+        used_image: !!image,
+        image_skipped:
+          !image && typeof req.body?.image === 'string'
+            ? seesImages
+              ? 'invalid'
+              : 'provider'
+            : null,
+        ai_configured: true
+      }
+    })
+  })
+
+  // ── Layout tuned by autofill (#2691) ───────────────────────────────────────
+  // Counts only: which fields people change after "Fill from document".
+
+  app.get<{ Params: { id: string }; Querystring: { days?: string } }>(
+    '/layouts/:id/autofill-corrections',
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Invalid layout id' })
+      const layout = (await db('nivaro_collection_layouts').where({ id }).first('collection')) as
+        | { collection: string }
+        | undefined
+      if (!layout) return reply.code(404).send({ error: 'Layout not found' })
+      const days = Math.max(7, Math.min(365, Number(req.query?.days) || 90))
+      const { documents, fields } = await loadCorrectedFields(layout.collection, days)
+      return reply.send({
+        data: {
+          days,
+          documents,
+          min_proposed: MIN_PROPOSED,
+          corrected_share: CORRECTED_SHARE,
+          fields: fields.slice(0, 100)
+        }
       })
     }
   )

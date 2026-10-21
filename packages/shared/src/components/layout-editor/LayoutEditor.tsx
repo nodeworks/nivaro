@@ -16,6 +16,8 @@ import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
 import { AutoArrangeButton } from './AutoArrange'
+import { AiToolsButton } from './ai/AiToolsButton'
+import { type AiPin, mergeMarks, pinsToMarks } from './ai/ai-tools-api'
 import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
 import {
   type DesignMark,
@@ -549,6 +551,21 @@ export function LayoutEditor({
     [bundle, parent]
   )
   const lint = useLayoutLint(collection, bundle, parent)
+  // AI tools' findings pinned on the canvas (#2685 #2690).
+  const [aiPins, setAiPins] = useState<AiPin[]>([])
+  // One merged function per pane marks function, so the canvas memo holds.
+  const withAiMarks = useMemo(() => {
+    const ai = pinsToMarks(aiPins)
+    const cache = new WeakMap<object, ReturnType<typeof mergeMarks>>()
+    return (m: Parameters<typeof mergeMarks>[0]) => {
+      if (!m || !ai) return mergeMarks(m, ai)
+      const hit = cache.get(m)
+      if (hit) return hit
+      const merged = mergeMarks(m, ai)
+      cache.set(m, merged)
+      return merged
+    }
+  }, [aiPins])
 
   useUndoKeys(draft)
   useLeaveGuard(draft)
@@ -712,11 +729,22 @@ export function LayoutEditor({
         }
         checks={
           bundle && (
-            <LintButton
-              findings={lint.findings}
-              active={panel === 'checks'}
-              onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
-            />
+            <>
+              <LintButton
+                findings={lint.findings}
+                active={panel === 'checks'}
+                onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
+              />
+              <AiToolsButton
+                collection={collection}
+                layoutId={currentId}
+                bundle={bundle}
+                apply={draft.apply}
+                previewRecordShown={preview.record != null}
+                onPins={setAiPins}
+                onSelect={onSelect}
+              />
+            </>
           )
         }
       />
@@ -863,7 +891,7 @@ export function LayoutEditor({
                     parent={parent}
                     roleId={pane.roleId}
                     stateKey={pane.stateKey}
-                    marks={pane.marks}
+                    marks={withAiMarks(pane.marks)}
                     overlay={pane.overlay}
                     noDnd={pane.noDnd}
                     record={pane.record}

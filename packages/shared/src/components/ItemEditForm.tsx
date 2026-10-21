@@ -2145,9 +2145,12 @@ function ItemEditFormView({
   // the save flush treat these lines exactly like an import prefill.
   // The proposal this NEW record was filled from (outcome event at Create, #701).
   const autofillAppliedRef = useRef<{ id: string; fields: string[] } | null>(null)
+  // Filled from a document: fields the layout marks autofill_check get a ring (#2691).
+  const [fromAutofill, setFromAutofill] = useState(false)
   const applyDocumentProposal = useCallback(
     async (sel: DocumentApplySelection) => {
       autofillAppliedRef.current = { id: sel.proposal_id, fields: Object.keys(sel.values) }
+      setFromAutofill(true)
       const values: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(sel.values)) {
         const cfg = (fieldConfig ?? []).find((f) => f.field === k)
@@ -7886,7 +7889,9 @@ function ItemEditFormView({
     },
     lockReasons,
     applyToLines,
-    openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id })
+    openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id }),
+    layoutId: layoutMeta?.id ?? null,
+    fromAutofill
   }
 
   // ── Design mode shells ─────────────────────────────────────────────────────
