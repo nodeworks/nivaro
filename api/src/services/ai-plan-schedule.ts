@@ -15,6 +15,7 @@ import {
   parseDoc,
   planLink,
   planView,
+  refreshTaskDoGate,
   type StoredPlanDoc
 } from './ai-plans.js'
 import { getApp } from './io-holder.js'
@@ -42,6 +43,8 @@ export async function schedulePlan(user: User, id: string, runAtRaw: unknown): P
   if (status !== 'proposed' && status !== 'paused') {
     throw httpError(`A ${status} plan cannot be scheduled`, 409)
   }
+  const gate = await refreshTaskDoGate(id, row, doc)
+  if (gate) throw httpError(gate, 409)
   const runAt = new Date(String(runAtRaw ?? ''))
   if (Number.isNaN(runAt.getTime())) throw httpError('run_at must be a date and time', 400)
   const lead = runAt.getTime() - Date.now()
@@ -209,6 +212,13 @@ export async function runDuePlans(now = new Date()): Promise<{ ran: number; held
         ? `step ${check.broken.n} no longer builds (${check.broken.error})`
         : `the records ${check.changed.length === 1 ? `step ${check.changed[0]}` : `steps ${check.changed.join(', ')}`} would act on changed since it was approved`
       await hold(id, row, doc, reason)
+      held++
+      continue
+    }
+    // The rebuilt steps may now need a second approval they did not before.
+    const gate = await refreshTaskDoGate(id, row, doc)
+    if (gate) {
+      await hold(id, row, doc, gate)
       held++
       continue
     }

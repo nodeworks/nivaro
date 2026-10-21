@@ -100,6 +100,11 @@ DELETE /api/tasks/:id`
         '`done` records who finished it (`completed_by`) and when.',
         '`cancelled` is what a deleted record does to its open tasks.'
       ]
+    },
+    { type: 'h3', id: 'tasks-ai-do', text: 'Let AI do this' },
+    {
+      type: 'p',
+      text: 'When an administrator has turned it on (Settings → AI Features → Let AI do this), the assignee of an open task sees a sparkle button that asks AI to draft a plan for it — reviewed, approved and undoable like any Ask AI plan, with the outcome posted on the task. See the AI Features → Let AI do this section.'
     }
   ]
 }
@@ -995,6 +1000,11 @@ PATCH /api/support/tickets/:id           { "status": "done" }
 GET   /api/support/summary               // badge counts
 GET   /api/support/categories?collection=orders
 GET   /api/tasks/requested               // tasks I asked others to do`
+    },
+    { type: 'h3', id: 'support-ai-do', text: 'Let AI do this' },
+    {
+      type: 'p',
+      text: 'With it turned on for support tickets (Settings → AI Features → Let AI do this, optionally per request type), the person a ticket is assigned to sees “Let AI do this” on the Desk detail: AI drafts a plan from the ticket and its thread, the outcome lands on the thread as a reply, and a drafted reply to the requester can be edited and sent. See AI Features → Let AI do this.'
     },
     { type: 'h3', id: 'support-report-problem', text: 'Report a problem' },
     {

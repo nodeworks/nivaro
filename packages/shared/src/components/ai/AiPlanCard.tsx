@@ -10,6 +10,7 @@ import {
   SkipForward,
   X
 } from 'lucide-react'
+import type React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useOptionalNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -151,13 +152,28 @@ function fmt(v: unknown): string {
 export function AiPlanCard({
   plan: initial,
   subscribe,
-  className
+  className,
+  beforeSteps,
+  stepExtra,
+  extraActions,
+  runDisabled,
+  onPlan
 }: {
   plan: AiPlan
   /** The host's socket — `ai:plan` events for this person. Optional: the
    *  card polls while a plan runs either way. */
   subscribe?: AiPlanSubscribe
   className?: string
+  /** Rendered between the title and the steps (a review strip, #2863). */
+  beforeSteps?: React.ReactNode
+  /** Rendered under a step (edit controls, per-step impact). */
+  stepExtra?: (step: AiPlanStep, plan: AiPlan) => React.ReactNode
+  /** Rendered in the actions row (after the engine's own buttons). */
+  extraActions?: (plan: AiPlan) => React.ReactNode
+  /** Why approve / run is withheld (a second approval pending) — shown in place of the buttons. */
+  runDisabled?: string | null
+  /** Every plan change the card sees (events, polls, actions). */
+  onPlan?: (plan: AiPlan) => void
 }) {
   const client = useOptionalNivaroClient()
   const [plan, setPlan] = useState<AiPlan>(initial)
@@ -167,6 +183,11 @@ export function AiPlanCard({
   const [showChanges, setShowChanges] = useState(false)
   const id = initial.plan_id
   const lastRead = useRef(0)
+  const onPlanRef = useRef(onPlan)
+  onPlanRef.current = onPlan
+  useEffect(() => {
+    onPlanRef.current?.(plan)
+  }, [plan])
 
   const refresh = useCallback(async () => {
     if (!client) return
@@ -278,6 +299,8 @@ export function AiPlanCard({
         </p>
       )}
 
+      {beforeSteps}
+
       <ol className='mt-2 space-y-1.5'>
         {plan.steps.map((s) => {
           const p = s.preview ?? {}
@@ -366,6 +389,7 @@ export function AiPlanCard({
                   {s.state.error}
                 </p>
               )}
+              {stepExtra?.(s, plan)}
             </li>
           )
         })}
@@ -404,7 +428,16 @@ export function AiPlanCard({
       )}
 
       <div className='mt-2 flex flex-wrap items-center gap-2'>
-        {canRun && client && (
+        {canRun && client && runDisabled && (
+          <span
+            className='flex items-center gap-1.5 text-[12px] text-amber-800 dark:text-amber-300'
+            data-ai-plan-run-withheld
+          >
+            <Clock className='h-3 w-3' />
+            {runDisabled}
+          </span>
+        )}
+        {canRun && client && !runDisabled && (
           <>
             <Button
               size='sm'
@@ -538,6 +571,7 @@ export function AiPlanCard({
         {plan.status === 'expired' && (
           <span className='text-[12px] text-muted-foreground'>Expired — ask again.</span>
         )}
+        {extraActions?.(plan)}
         {client && plan.impact !== undefined && (
           <button
             type='button'

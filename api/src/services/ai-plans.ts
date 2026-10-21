@@ -406,6 +406,8 @@ export async function runPlan(
   const ordered = [...doc.steps].sort((a, b) => a.n - b.n)
   const next = ordered.find((s) => doc.state.find((x) => x.id === s.id)?.status === 'pending')
   if (!next) throw httpError('Nothing left to run', 409)
+  const gate = await refreshTaskDoGate(id, row, doc)
+  if (gate) throw httpError(gate, 409)
   doc.approved_by = String(user.id)
   doc.approved_at = new Date().toISOString()
   doc.held = null
@@ -483,6 +485,11 @@ export async function executePlan(
     })
     if (out.status === 'executed' || out.status === 'failed') {
       await notifyPlanFinished(id, doc, view, String(doc.approved_by ?? user.id))
+      // A plan drafted for a task / ticket (#2864) reports on its thread.
+      if (doc.source?.kind === 'task-do') {
+        const { onTaskDoPlanFinished } = await import('./ai-task-do.js')
+        await onTaskDoPlanFinished(id, doc, view)
+      }
     }
     return view
   } catch (err) {
@@ -551,6 +558,8 @@ export async function recheckPlan(user: User, id: string): Promise<PlanView> {
   }
   resetFailedSteps(doc)
   doc.rechecked_at = new Date().toISOString()
+  // The rebuilt steps may change more records than were approved (#2866).
+  await refreshTaskDoGate(id, row, doc)
   const n = await db('nivaro_ai_proposals')
     .where({ id, status })
     .update({ payload: JSON.stringify(doc), status: 'paused' })
@@ -592,6 +601,41 @@ export async function cancelPlan(user: User, id: string): Promise<PlanView> {
 /** A plan's id is also a proposal id; the single-proposal routes refuse it. */
 export function isPlanRow(row: { action_type?: unknown } | null | undefined): boolean {
   return row?.action_type === PLAN_ACTION_TYPE
+}
+
+/**
+ * A task-do plan over the records threshold (#2866) waits for a second
+ * person: the reason it may not run yet, or null. Pure — the approval block
+ * rides the doc (`doc.approval`, written by services/ai-task-do.ts).
+ */
+/**
+ * Recompute that requirement from the steps as built NOW (a re-check or edit
+ * may have grown the plan past what was approved), save the doc when it
+ * changed, and return the gate. Only plans drafted for a task / ticket carry
+ * one; every other plan passes.
+ */
+export async function refreshTaskDoGate(
+  id: string,
+  row: Record<string, unknown>,
+  doc: StoredPlanDoc
+): Promise<string | null> {
+  if (doc.source?.kind !== 'task-do') return null
+  const { refreshApproval } = await import('./ai-task-do.js')
+  const { changed } = await refreshApproval(doc as never, String(row.user), { planId: id })
+  if (changed) {
+    await db('nivaro_ai_proposals')
+      .where({ id })
+      .update({ payload: JSON.stringify(doc) })
+  }
+  return needsSecondApproval(doc)
+}
+
+export function needsSecondApproval(doc: StoredPlanDoc): string | null {
+  const a = (
+    doc as { approval?: { required?: boolean; approved_by?: string | null; reason?: string } }
+  ).approval
+  if (!a?.required || a.approved_by) return null
+  return `${a.reason ?? 'This plan needs a second approval'}. Waiting for a second approval.`
 }
 
 /** The plan's page — where a notification about it lands. */

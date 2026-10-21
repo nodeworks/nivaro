@@ -84,6 +84,7 @@ import { aiDesignDocs } from './sections/ai-design.js'
 import { aiExplainGuide } from './sections/ai-explain.js'
 import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
 import { aiPanelDocs } from './sections/ai-panel.js'
+import { aiTaskDoDocs } from './sections/ai-task-do.js'
 import {
   adminI18nDocs,
   aiChatDocs,
@@ -657,6 +658,7 @@ export const navSections: NavGroup[] = [
       aiKnowledgeDocs,
       aiActionsDocs,
       aiPlansDocs,
+      aiTaskDoDocs,
       accessInsightsDocs,
       aiOverview,
       aiGenerate,

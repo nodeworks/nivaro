@@ -51,6 +51,14 @@ export {
 export { DataGuideCard } from './components/ai/DataGuideCard'
 export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
+export {
+  TaskDoButton,
+  TaskDoPanel,
+  type TaskDoPlan,
+  type TaskDoTask,
+  taskDoAllowed,
+  useTaskDoAvailable
+} from './components/ai/TaskDo'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
   AlertRuleDrawer,

@@ -12,6 +12,7 @@ import { useOptionalRealtime } from '../lib/realtime'
 import { slaChip, withinDay } from '../lib/sla-chip'
 import { cn } from '../lib/utils'
 import { FirstWeekCard } from './ai/FirstWeekCard'
+import { TaskDoButton } from './ai/TaskDo'
 import { canOpenChatRoom, openChatRoom } from './chat/chat-core'
 import { useMyRecordRooms } from './chat/chat-hooks'
 import { LearningPathCard } from './help-videos/viewer/LearningPathCard'
@@ -631,6 +632,12 @@ export function MyWorkView({
                           </span>
                         )}
                       </button>
+                      <TaskDoButton
+                        task={t}
+                        isAssignee
+                        compact
+                        onTaskChanged={() => void qc.invalidateQueries({ queryKey: ['my-work'] })}
+                      />
                       {t.due_date && (
                         <span
                           className={`text-[11px] tabular-nums ${

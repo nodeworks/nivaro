@@ -5,6 +5,7 @@ import { useApiFetchConfig, useItemNavigation, useNavigation, useNivaroClient } 
 import { get, patch, post } from '../../lib/commands'
 import { signalSentence, useTopicPresence } from '../../lib/presence-signals'
 import { replayHref } from '../../lib/replay-capture'
+import { TaskDoButton } from '../ai/TaskDo'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
@@ -195,6 +196,19 @@ export function TicketDetailSheet({
                         </>
                       )}
                     </span>
+                    <TaskDoButton
+                      task={{
+                        id: t.id,
+                        kind: 'support',
+                        status: t.status,
+                        assignee: t.assignee,
+                        category_id: t.category_id,
+                        title: t.title
+                      }}
+                      onTaskChanged={() =>
+                        void qc.invalidateQueries({ queryKey: ['support-ticket', ticketId] })
+                      }
+                    />
                     {(t.status === 'open' || t.status === 'in_progress') && (
                       <button
                         type='button'

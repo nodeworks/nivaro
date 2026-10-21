@@ -4,7 +4,7 @@ import { logActivity } from './activity.js'
 import { latestRevisionIds, readRaw } from './ai-plan-made.js'
 import type { PlanMadeRecord } from './ai-plan-runner.js'
 import { getPlanStepKind, labelsFor, sameValue, stillVisibleIds } from './ai-plan-steps.js'
-import { httpError, isAdmin, loadPlan } from './ai-plans.js'
+import { httpError, isAdmin, loadPlan, type StoredPlanDoc, sameId } from './ai-plans.js'
 import { deleteOne, updateOne } from './items.js'
 
 /**
@@ -43,6 +43,23 @@ export interface UndoStepCheck {
 }
 
 const SHOWN = 50
+/** The owner of a task-do plan (#2865) may undo it this long after it ran. */
+export const OWNER_UNDO_DAYS = 7
+
+/** An administrator always; the owner of a plan drafted for a task or ticket
+ *  while the undo window is open. Anyone else: 403. */
+export async function assertCanUndo(user: User, row: Record<string, unknown>, doc: StoredPlanDoc) {
+  if (await isAdmin(user)) return
+  if (doc.source?.kind === 'task-do' && sameId(row.user, user.id)) {
+    const ran = row.executed_at ? new Date(String(row.executed_at)).getTime() : 0
+    if (ran && Date.now() - ran <= OWNER_UNDO_DAYS * 86_400_000) return
+    throw httpError(
+      `You can undo your own plan for ${OWNER_UNDO_DAYS} days after it ran — ask an administrator`,
+      403
+    )
+  }
+  throw httpError('Only administrators can undo a plan', 403)
+}
 
 async function checkRecords(
   collection: string,
@@ -84,8 +101,8 @@ export async function undoCheck(
   admin: User,
   id: string
 ): Promise<{ plan_id: string; steps: UndoStepCheck[] }> {
-  if (!(await isAdmin(admin))) throw httpError('Only administrators can undo a plan', 403)
   const { row, doc } = await loadPlan(id)
+  await assertCanUndo(admin, row, doc)
   const steps: UndoStepCheck[] = []
   for (const step of [...doc.steps].sort((a, b) => a.n - b.n)) {
     const state = doc.state.find((x) => x.id === step.id)
@@ -160,8 +177,8 @@ export async function undoPlan(
   id: string,
   stepId?: string | null
 ): Promise<UndoResult> {
-  if (!(await isAdmin(admin))) throw httpError('Only administrators can undo a plan', 403)
   const { row, doc } = await loadPlan(id)
+  await assertCanUndo(admin, row, doc)
   const status = String(row.status)
   if (status === 'running' || status === 'scheduled') {
     throw httpError(`A ${status} plan cannot be undone — stop it first`, 409)

@@ -528,6 +528,8 @@ export {
   startMetadataPersistence,
   startRum,
   stuckText,
+  TaskDoButton,
+  TaskDoPanel,
   TaskPanel,
   TeamScopeEditor,
   TeamSuggestionsPanel,
