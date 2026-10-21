@@ -707,6 +707,16 @@ export {
   routeOfReplayEvent
 } from './lib/replay-sampling'
 export {
+  describeSocketPayload,
+  instrumentSocket,
+  reportSocketConnection,
+  reportSocketEvent,
+  SOCKET_MAX_EVENTS,
+  type SocketConnectionState,
+  type SocketTrackEvent,
+  tapReplaySocket
+} from './lib/replay-socket'
+export {
   formatReplayTail,
   getReplayTail,
   installReplayTail,

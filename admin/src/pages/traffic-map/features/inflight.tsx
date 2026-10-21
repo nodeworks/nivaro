@@ -34,11 +34,22 @@ interface InflightRow {
   sql_ms: number
   rows: number
   running: Array<{ sql: string; age_ms: number }>
+  node?: string
+  person?: string | null
+  phase?: 'auth' | 'sql' | 'handler'
+  wait?: {
+    session_id: number
+    wait_type: string | null
+    wait_ms: number
+    blocked_by: number | null
+  } | null
 }
 interface InflightList {
   rows: InflightRow[]
   total: number
   at: string
+  self?: string
+  nodes?: Array<{ node: string; total: number; self: boolean }>
 }
 
 /** Older than this reads as long-running. */
@@ -107,7 +118,7 @@ export function InflightPanel() {
     <PanelCard
       title='In flight'
       id='tm-inflight'
-      hint='Requests this node has not finished · oldest first, with the SQL they are running'
+      hint='Requests no replica has finished · oldest first, with the SQL they are running and what it waits on'
       actions={
         list && list.total > list.rows.length ? (
           <span className='text-[11.5px] tabular-nums text-[var(--tm-muted)]'>
@@ -126,7 +137,7 @@ export function InflightPanel() {
             <p className='text-[12px] text-[var(--tm-muted)]'>Loading…</p>
           ) : (
             <p className='text-[12px] text-[var(--tm-muted)]' id='tm-inflight-empty'>
-              Nothing in flight — every request on this node has answered.
+              Nothing in flight — every request has answered.
             </p>
           )}
         </div>
@@ -136,6 +147,7 @@ export function InflightPanel() {
             const slow = r.age_ms >= SLOW_MS
             const sql = r.running[0]
             const isOpen = open === r.id
+            const remote = !!list.self && !!r.node && r.node !== list.self
             return (
               <li key={r.id} className='px-3.5 py-2 text-[12px]' data-tm-inflight={r.id}>
                 <div className='flex min-w-0 items-baseline gap-2'>
@@ -151,14 +163,19 @@ export function InflightPanel() {
                     {r.method} {r.route}
                   </span>
                   <span className='max-w-[30%] shrink-0 truncate text-[var(--tm-muted)]'>
-                    {callerLabel(catalog, r.caller)}
+                    {r.person || callerLabel(catalog, r.caller)}
+                    {list.nodes && list.nodes.length > 1 && r.node ? ` · ${r.node}` : ''}
                   </span>
                 </div>
                 <div className='mt-0.5 flex min-w-0 items-baseline gap-2 pl-[72px] text-[11.5px] text-[var(--tm-muted)]'>
                   <span className='min-w-0 flex-1 truncate tabular-nums'>
                     {sql ? (
                       <>
-                        Running SQL {fmtAge(sql.age_ms)} ·{' '}
+                        Running SQL {fmtAge(sql.age_ms)}
+                        {r.wait?.wait_type
+                          ? ` · waiting on ${r.wait.wait_type} ${fmtAge(r.wait.wait_ms)}${r.wait.blocked_by ? ` (blocked by session ${r.wait.blocked_by})` : ''}`
+                          : ''}{' '}
+                        ·{' '}
                         <span className='font-mono text-[11px]' title={sql.sql}>
                           {sql.sql}
                         </span>
@@ -167,7 +184,15 @@ export function InflightPanel() {
                       `In the handler · ${r.queries} statements so far, ${fmtAge(r.sql_ms)} in SQL`
                     )}
                   </span>
-                  {sql && (
+                  {sql && remote && (
+                    <span
+                      className='shrink-0'
+                      data-tip='Runs on another replica; cancel it from there'
+                    >
+                      {r.node}
+                    </span>
+                  )}
+                  {sql && !remote && (
                     <button
                       type='button'
                       className={cn(BTN, 'shrink-0')}

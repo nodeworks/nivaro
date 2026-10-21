@@ -151,6 +151,26 @@ describe('parseReplayContext (#1357)', () => {
       { offset: 4_000, method: 'POST', route: '/api/flows', status: 0, duration_ms: null }
     ])
   })
+
+  it('reads socket events and connection changes (#2476)', () => {
+    const ev = (ts: number, payload: Record<string, unknown>) => ({
+      type: 5,
+      timestamp: FIRST + ts,
+      data: { tag: 'socket', payload }
+    })
+    const ctx = parseReplayContext(
+      [
+        ev(2_000, { kind: 'connection', name: 'reconnected', detail: 'x' }),
+        ev(1_000, { kind: 'event', name: 'items:update', room: 'a', ids: ['1'], fields: ['title'] })
+      ],
+      FIRST
+    )
+    expect(ctx.socket.map((s) => [s.offset, s.kind, s.name])).toEqual([
+      [1_000, 'event', 'items:update'],
+      [2_000, 'connection', 'reconnected']
+    ])
+    expect(ctx.socket[0].fields).toEqual(['title'])
+  })
 })
 
 describe('appendReplayContext (live follow)', () => {
@@ -186,7 +206,9 @@ describe('appendReplayContext (live follow)', () => {
     expect(next.console).toHaveLength(1)
     expect(next.routes).toEqual([{ offset: 4_000, text: '/queues' }])
     expect(base.network).toHaveLength(1)
-    expect(appendReplayContext(base, { routes: [], console: [], network: [] })).toBe(base)
+    expect(appendReplayContext(base, { routes: [], console: [], network: [], socket: [] })).toBe(
+      base
+    )
   })
 })
 

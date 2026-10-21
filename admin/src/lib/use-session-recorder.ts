@@ -1,6 +1,7 @@
 import {
   clipEndOffset,
   emitReplayTap,
+  instrumentSocket,
   type ReplayClipKind,
   registerReplayCapture,
   setReplayRecorderMode
@@ -255,6 +256,7 @@ function instrumentReplayContext(
 ): () => void {
   const undoConsole = instrumentConsole(addCustomEvent)
   const undoRequests = instrumentRequests(addCustomEvent)
+  const undoSocket = instrumentSocket(addCustomEvent)
   const routeEvent = () => {
     onRoute?.()
     try {
@@ -281,6 +283,7 @@ function instrumentReplayContext(
   return () => {
     undoConsole()
     undoRequests()
+    undoSocket()
     history.pushState = origPush
     history.replaceState = origReplace
     window.removeEventListener('popstate', routeEvent)

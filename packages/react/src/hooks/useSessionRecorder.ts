@@ -13,15 +13,16 @@ import {
   emitReplayTap,
   instrumentConsole,
   instrumentRequests,
+  instrumentSocket,
   isReplayRouteSampled,
   normalizeReplayMasking,
   normalizeReplaySampling,
-  redactSecrets,
-  registerReplayCapture,
   type ReplayClipKind,
   type ReplayMaskingRules,
-  replaySampleDraw,
   type ReplaySampling,
+  redactSecrets,
+  registerReplayCapture,
+  replaySampleDraw,
   setReplayRecorderMode,
   withClipKind
 } from '@nivaro/shared'
@@ -241,6 +242,7 @@ function instrumentReplayContext(
 ): () => void {
   const undoConsole = instrumentConsole(addCustomEvent)
   const undoRequests = instrumentRequests(addCustomEvent)
+  const undoSocket = instrumentSocket(addCustomEvent)
   const routeEvent = () => {
     onRoute?.()
     try {
@@ -267,6 +269,7 @@ function instrumentReplayContext(
   return () => {
     undoConsole()
     undoRequests()
+    undoSocket()
     history.pushState = origPush
     history.replaceState = origReplace
     window.removeEventListener('popstate', routeEvent)
