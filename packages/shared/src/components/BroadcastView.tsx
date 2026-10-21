@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { useLiveOps } from '../lib/live-ops'
+import { useLiveRefetchInterval } from '../lib/live-queries'
 import { cn } from '../lib/utils'
 import { BroadcastDraftPanel } from './BroadcastDraft'
 import { useHelpVideoLibrary } from './help-videos/api'
@@ -755,6 +756,9 @@ function HistoryRow({
       void qc.invalidateQueries({ queryKey: ['broadcast-receipts', a.id] })
     }
   })
+  // #2450 — the `broadcasts` topic refreshes these as deliveries and acknowledgements land, so the
+  // fast poll only runs while that topic cannot reach this tab.
+  const tickerPoll = useLiveRefetchInterval(4000)
   const { data: receipts } = useQuery<{
     acks: Array<{ acked_at: string | null; user_name: string | null; user_email: string | null }>
     deliveries: Array<{
@@ -773,7 +777,9 @@ function HistoryRow({
     // Live ticker (#265): a freshly-sent broadcast's counts climb in real
     // time while the fan-out runs — fast poll for the first 10 minutes.
     refetchInterval:
-      open && a.sent_at && Date.now() - new Date(a.sent_at).getTime() < 10 * 60_000 ? 4000 : false
+      open && a.sent_at && Date.now() - new Date(a.sent_at).getTime() < 10 * 60_000
+        ? tickerPoll
+        : false
   })
 
   return (

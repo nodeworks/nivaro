@@ -162,7 +162,8 @@ useQuery({
         'The bridge joins the collection rooms that active tagged queries read and leaves them 30 s after the last one goes. Events coalesce for 300 ms per collection. Only queries on screen refetch; the rest are marked stale and refetch when they next mount. A hidden tab marks stale and refetches when it is shown again.',
         'Reconcile — every tagged query plus the active record, list, queue, My Work and widget reads refetch once — after a reconnect whose catch-up could not replay the gap (`status().resumed` is `unverified`), on `nvr:catchup-full`, and when a tab comes back after being hidden five minutes or more. A reconnect that replayed every missed event does not reconcile.',
         'At sign-in the server sends `catchup:cursor {seq}` — the event journal position — so a tab that has not received an event yet still replays its gap after a reconnect instead of missing it.',
-        'Permissions: the refetch runs through the query’s own route as the viewer. An event naming a record the viewer cannot read only re-asks for what they could already see.'
+        'Permissions: the refetch runs through the query’s own route as the viewer. An event naming a record the viewer cannot read only re-asks for what they could already see.',
+        'The notification badge, the Issue log, broadcast receipts, a record’s partner submissions, a help video’s render status and the chat Online list follow socket events the same way: while the socket is live their polls drop to a safety net (five minutes; two for the badge, since a timed snooze coming back sends no event). Operations pages with no event behind them (Traffic Map, health, logs, jobs, crons) keep polling, and only while the tab is visible.'
       ]
     },
     { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },

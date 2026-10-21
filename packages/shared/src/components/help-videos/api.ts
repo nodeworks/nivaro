@@ -4,6 +4,7 @@ import { useRef } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { useLiveEvent } from '../../lib/live'
+import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { type CardBrand, cardAccent } from './cards'
 import type {
   ActivitySpan,
@@ -92,6 +93,9 @@ export async function fetchHelpVideo(client: NivaroClient, id: string): Promise<
 export function useHelpVideo(id: string | null) {
   const client = useNivaroClient()
   useHelpVideoLive([helpVideoKeys.one(id ?? '')], id)
+  // #2450 — a finished or failed render sends help-video:changed (above), so while the socket is
+  // live the render poll is a 5-minute safety net.
+  const renderPoll = useLiveRefetchInterval(4000)
   return useQuery({
     queryKey: helpVideoKeys.one(id ?? ''),
     enabled: !!id,
@@ -99,7 +103,7 @@ export function useHelpVideo(id: string | null) {
     // Poll while a render runs so the status chip and the stream switch over by themselves.
     refetchInterval: (q) => {
       const s = q.state.data?.published?.render_status
-      return s === 'queued' || s === 'rendering' ? 4000 : false
+      return s === 'queued' || s === 'rendering' ? renderPoll : false
     }
   })
 }
