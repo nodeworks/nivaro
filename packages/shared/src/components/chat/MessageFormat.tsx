@@ -16,6 +16,7 @@ import { cn, getDisplayTimezone } from '../../lib/utils'
 import { formatDuration } from '../help-videos/viewer/format'
 import { parseMomentUrl } from '../help-videos/viewer/moments'
 import { type MessageToken, splitMessageTokens } from './chat-core'
+import { useEmojiUrls, withCustomEmoji } from './chat-emoji'
 import { useLinkPreview } from './chat-hooks'
 import { OpsProposalCard, type OpsProposalCardData } from './OpsProposalCard'
 
@@ -32,6 +33,7 @@ import { OpsProposalCard, type OpsProposalCardData } from './OpsProposalCard'
 export type TokenRenderer = (token: MessageToken, key: string) => ReactNode
 
 interface Ctx {
+  emoji?: Map<string, string>
   mine: boolean
   renderToken: TokenRenderer
   entityPattern: string
@@ -122,6 +124,18 @@ function TimeChip({ text, at, mine }: { text: string; at: string; mine: boolean 
 /** Plain text leaf: time chips, then entity/mention tokens. */
 function renderLeaf(text: string, ctx: Ctx, key: string): ReactNode[] {
   const out: ReactNode[] = []
+  // Custom workspace emoji (#2459): known :shortcode: runs become images, the rest stays text.
+  if (ctx.emoji && ctx.emoji.size > 0 && text.includes(':')) {
+    const parts = withCustomEmoji(text, ctx.emoji, key)
+    if (parts.length > 1 || typeof parts[0] !== 'string') {
+      parts.forEach((p, i) =>
+        typeof p === 'string'
+          ? out.push(...renderLeaf(p, { ...ctx, emoji: undefined }, `${key}.m${i}`))
+          : out.push(p)
+      )
+      return out
+    }
+  }
   const refs = ctx.timeRefs.filter((r) => r.text && text.includes(r.text))
   if (refs.length === 0) {
     splitMessageTokens(text, ctx.entityPattern).forEach((t, i) =>
@@ -338,7 +352,8 @@ export function FormattedMessage({
   navigate?: (url: string) => void
 }) {
   const blocks = useMemo(() => parseBlocks(text), [text])
-  const ctx: Ctx = { mine, renderToken, entityPattern, timeRefs: timeRefs ?? [], navigate }
+  const emoji = useEmojiUrls()
+  const ctx: Ctx = { emoji, mine, renderToken, entityPattern, timeRefs: timeRefs ?? [], navigate }
   // One short paragraph renders as bare inline text (no extra block margin),
   // which keeps ordinary chat bubbles exactly as tight as before.
   if (blocks.length === 1 && blocks[0].t === 'p') {

@@ -323,6 +323,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_outbound_side_log',
   'nivaro_chat_auto_joins',
   'nivaro_chat_scheduled',
+  'nivaro_chat_drafts', // #2474 unsent composer text per person per room
+  'nivaro_chat_emoji', // #2459 rows point at nivaro_files ids, which promotion does not carry
   'nivaro_integration_obligations',
   'nivaro_announcement_acks',
   'nivaro_announcement_deliveries',

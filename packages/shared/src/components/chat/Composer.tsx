@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { AlarmClock, AlertTriangle, Hash, Paperclip, Quote, Send, Type, X } from 'lucide-react'
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useApiFetchConfig, useNivaroClient } from '../../context'
+import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -19,6 +19,8 @@ import {
   useTypingIndicator,
   useUserSearch
 } from './chat-core'
+import { useDraftSync } from './chat-drafts'
+import { EmojiButton } from './chat-emoji'
 import { useRoomInfo, useScheduledMessages } from './chat-hooks'
 import { tsvToTable } from './MessageFormat'
 import {
@@ -93,6 +95,8 @@ export const ChatComposer = forwardRef<
     onSent?: (text: string) => void
     /** Posting is closed here (announcement channel) — says why. */
     disabledReason?: string | null
+    /** A quiet line above the box while the draft is non-empty (DM outside the peer's hours, #2484). */
+    quietNote?: string | null
     compact?: boolean
     th: { input: string; divider: string; surface: string; accentSoft: string; action: string }
     renderAvatar: (id: string, name: string | null) => React.ReactNode
@@ -106,6 +110,7 @@ export const ChatComposer = forwardRef<
     onClearQuote,
     onSent,
     disabledReason,
+    quietNote,
     compact,
     th,
     renderAvatar
@@ -124,6 +129,8 @@ export const ChatComposer = forwardRef<
   const { create: schedule } = useScheduledMessages(false)
   const [draft, setDraft] = useState('')
   const [urgent, setUrgent] = useState(false)
+  // Unsent text follows the person across devices (#2474); thread composers stay local.
+  useDraftSync(room, parentId == null, draft, setDraft)
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [recordQ, setRecordQ] = useState<string | null>(null)
   const [pickIndex, setPickIndex] = useState(0)
@@ -142,6 +149,16 @@ export const ChatComposer = forwardRef<
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const isChannel = room.startsWith('ch:') && !room.startsWith('ch:grp-')
+  const { isAdmin } = useItemEditAuth()
+  // Who may use @channel / @here is a channel setting (#2483); the server decides, this hides the offer.
+  const roomChannel = rooms.find((r) => r.room === room)?.channel ?? null
+  const policy = roomChannel?.mention_policy ?? 'owner'
+  const canBroadcast =
+    isAdmin ||
+    policy === 'members' ||
+    (policy === 'owner' &&
+      !!me &&
+      String(roomChannel?.created_by ?? '').toUpperCase() === me.id.toUpperCase())
 
   useImperativeHandle(ref, () => ({
     addFiles: (f: File[]) => startUploads(f),
@@ -190,7 +207,7 @@ export const ChatComposer = forwardRef<
       seen.add(k)
       out.push(c)
     }
-    if (isChannel) {
+    if (isChannel && canBroadcast) {
       if ('here'.startsWith(q))
         out.push({
           user_id: '__here__',
@@ -233,7 +250,7 @@ export const ChatComposer = forwardRef<
     }
     const ranked = out.map((c, i) => ({ c, i, t: tier(c) })).sort((a, b) => a.t - b.t || a.i - b.i)
     return ranked.map((r) => r.c).slice(0, 8)
-  }, [mentionQuery, info, dmPeers, cfg.onlineUsers, searched, botName, isChannel, me])
+  }, [mentionQuery, info, dmPeers, cfg.onlineUsers, searched, botName, isChannel, canBroadcast, me])
 
   // ── # record picker (#934) ────────────────────────────────────────────────
   const { data: roomTypes } = useQuery(chatRoomTypesQuery(client))
@@ -562,6 +579,14 @@ export const ChatComposer = forwardRef<
 
   return (
     <div className={cn('shrink-0 border-t', th.divider)} data-chat-composer-wrap>
+      {quietNote && draft.trim() && (
+        <p
+          className='px-3 pt-1.5 text-[11px] text-slate-500 dark:text-slate-400'
+          data-chat-off-hours-note
+        >
+          {quietNote}
+        </p>
+      )}
       {slashForm && (
         <SlashForm
           kind={slashForm.kind}
@@ -769,6 +794,23 @@ export const ChatComposer = forwardRef<
               }}
             />
             <FormattingHint botName={botName} />
+            <EmojiButton
+              label='Emoji'
+              className='flex h-7 w-7 shrink-0 items-center justify-center rounded-md p-0 text-slate-500 hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100 [&>svg]:h-4 [&>svg]:w-4'
+              onPick={(value) => {
+                const el = inputRef.current
+                const a = el?.selectionStart ?? draft.length
+                const b = el?.selectionEnd ?? draft.length
+                const pad =
+                  value.startsWith(':') && a > 0 && !/\s$/.test(draft.slice(0, a)) ? ' ' : ''
+                setDraft(draft.slice(0, a) + pad + value + draft.slice(b))
+                requestAnimationFrame(() => {
+                  el?.focus()
+                  const at = a + pad.length + value.length
+                  el?.setSelectionRange(at, at)
+                })
+              }}
+            />
             <button
               type='button'
               onClick={() => fileInputRef.current?.click()}

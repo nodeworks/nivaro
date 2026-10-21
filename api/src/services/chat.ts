@@ -88,6 +88,26 @@ export interface ChatChannel {
   welcome_note?: string | null
   /** Roles whose members join automatically (#960). */
   default_roles?: string[]
+  /** Who may use @channel / @here (#2483): the owner and admins (default), every member, or admins only. */
+  mention_policy?: MentionPolicy | null
+  /** Idle-channel archive suggestion (#2485): when it was sent / when the owner chose to keep it. */
+  archive_suggested_at?: string | Date | null
+  archive_kept_at?: string | Date | null
+}
+
+export type MentionPolicy = 'owner' | 'members' | 'admins'
+export const MENTION_POLICIES: readonly MentionPolicy[] = ['owner', 'members', 'admins']
+
+/** Can this person use @channel / @here in the channel? Owner-or-admin unless the channel says otherwise. */
+export function mayBroadcastMention(
+  ch: Pick<ChatChannel, 'created_by' | 'mention_policy'> | null | undefined,
+  actor: { id: string; isAdmin?: boolean }
+): boolean {
+  if (actor.isAdmin) return true
+  const policy = ch?.mention_policy ?? 'owner'
+  if (policy === 'admins') return false
+  if (policy === 'members') return true
+  return String(ch?.created_by ?? '').toUpperCase() === String(actor.id).toUpperCase()
 }
 
 function jsonList<T>(raw: unknown): T[] {
@@ -409,6 +429,8 @@ export interface RoomSummary {
     links: Array<{ label: string; url: string }>
     welcome_note: string | null
     default_roles: string[]
+    mention_policy: MentionPolicy | null
+    archive_suggested_at: string | null
   } | null
   /** Pinned to the top of this person's list (#957). */
   starred: boolean
@@ -542,7 +564,11 @@ export async function listRooms(
             description: channel.description ?? null,
             links: channel.links ?? [],
             welcome_note: channel.welcome_note ?? null,
-            default_roles: channel.default_roles ?? []
+            default_roles: channel.default_roles ?? [],
+            mention_policy: channel.mention_policy ?? null,
+            archive_suggested_at: channel.archive_suggested_at
+              ? new Date(channel.archive_suggested_at).toISOString()
+              : null
           }
         : null,
       starred: !!membership?.starred,
@@ -757,6 +783,17 @@ export async function autoJoinDefaultChannels(user: User): Promise<void> {
       await db('nivaro_chat_memberships')
         .insert({ user: user.id, room, joined_at: new Date(), last_read_at: new Date() })
         .catch(() => {})
+      // History (#2784): a default-role join has no human actor.
+      if (c !== general) {
+        const { logActivity } = await import('./activity.js')
+        void logActivity({
+          action: 'chat-channel-member-add',
+          user: null,
+          collection: 'nivaro_chat_channels',
+          item: c.key,
+          comment: `${user.id} joined #${c.key} by default role`
+        }).catch(() => {})
+      }
     }
   }
 }

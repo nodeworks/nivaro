@@ -793,8 +793,9 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
   /**
    * Last seen + time zone for chosen people (#950, #951), under the same
    * visibility rule as /online — someone the viewer may not see is simply
-   * absent from the answer. `timezone` is the person's own setting only (null
-   * when they never chose one), so a header never claims a zone they didn't.
+   * absent from the answer. `timezone` is the person's own setting, else the
+   * zone their browser reported at sign-in (`timezone_source` says which); null
+   * when neither is known, so a header never claims a zone nobody reported.
    */
   app.get('/people', { preHandler: requireAuth }, async (req, reply) => {
     const raw = String((req.query as { ids?: string }).ids ?? '')
@@ -883,11 +884,23 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       const prefs = parsePrefs(u.preferences)
       const access = u.last_access ? new Date(u.last_access).getTime() : 0
       const last = Math.max(seen.get(k) ?? 0, access)
-      const tz = typeof prefs.timezone === 'string' && prefs.timezone ? prefs.timezone : null
+      const profileTz = typeof prefs.timezone === 'string' && prefs.timezone ? prefs.timezone : null
+      // Profile zone first, else the zone their browser reported at sign-in (#2484).
+      const browserTz =
+        typeof prefs.browser_timezone === 'string' && prefs.browser_timezone
+          ? prefs.browser_timezone
+          : null
+      const tz = profileTz ?? browserTz
+      const wh = prefs.working_hours as { start?: unknown; end?: unknown } | null | undefined
       return {
         user_id: u.id,
         last_seen: last ? new Date(last).toISOString() : null,
         timezone: tz,
+        timezone_source: profileTz ? 'profile' : browserTz ? 'browser' : null,
+        working_hours:
+          wh && typeof wh.start === 'string' && typeof wh.end === 'string'
+            ? { start: wh.start, end: wh.end }
+            : null,
         away: awayOverride(prefs),
         out_of_office: !!u.is_out_of_office,
         ooo_end: u.is_out_of_office && u.ooo_end ? new Date(u.ooo_end).toISOString() : null,

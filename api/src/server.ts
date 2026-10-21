@@ -1577,6 +1577,16 @@ export async function buildServer() {
         },
         { quiet: true }
       )
+      // Idle channels get an archive suggestion to their owner (#2485); stale composer drafts go (#2474).
+      app.cron.schedule('chat-archive-suggestions', '10 4 * * *', async () => {
+        const { suggestIdleChannels } = await import('./services/chat-archive.js')
+        const n = await suggestIdleChannels(app)
+        if (n.length > 0) app.log.info(`chat: ${n.length} archive suggestion(s) sent`)
+      })
+      app.cron.schedule('chat-drafts-prune', '20 4 * * *', async () => {
+        const { pruneDrafts } = await import('./services/chat-drafts.js')
+        await pruneDrafts()
+      })
       // Close chat polls whose time has passed and post their summary line (#2337).
       app.cron.schedule(
         'chat-polls-close',

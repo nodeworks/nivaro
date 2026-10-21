@@ -11,6 +11,7 @@ import {
   CommandList
 } from '../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { SimpleSelect } from '../ui/SimpleSelect'
 import { type ChannelMeta, useChannelAdmin, useChatRoles } from './chat-core'
 import { useBulkInvite, useChannelAudit, useTeams } from './chat-hooks'
 
@@ -45,6 +46,7 @@ export function ChannelExtrasEditor({
   const { update } = useChannelAdmin(channel.id)
   const roles = useChatRoles()
   const [announce, setAnnounce] = useState(!!channel.announce)
+  const [mentionPolicy, setMentionPolicy] = useState<string>(channel.mention_policy ?? 'owner')
   const [description, setDescription] = useState(channel.description ?? '')
   const [links, setLinks] = useState<Array<{ label: string; url: string }>>(channel.links ?? [])
   const [welcome, setWelcome] = useState(channel.welcome_note ?? '')
@@ -54,6 +56,7 @@ export function ChannelExtrasEditor({
   const cleanLinks = links.filter((l) => l.url.trim())
   const dirty =
     announce !== !!channel.announce ||
+    mentionPolicy !== (channel.mention_policy ?? 'owner') ||
     description !== (channel.description ?? '') ||
     welcome !== (channel.welcome_note ?? '') ||
     JSON.stringify(cleanLinks) !== JSON.stringify(channel.links ?? []) ||
@@ -64,6 +67,7 @@ export function ChannelExtrasEditor({
     update.mutate(
       {
         announce,
+        mention_policy: mentionPolicy as 'owner' | 'members' | 'admins',
         description: description.trim() || null,
         links: cleanLinks.map((l) => ({
           label: l.label.trim() || l.url.trim(),
@@ -100,6 +104,25 @@ export function ChannelExtrasEditor({
           </span>
         </span>
       </label>
+
+      {channel.id !== 0 && (
+        <div data-chat-channel-mention-policy>
+          <span className='mb-1 block text-[11px] font-medium text-slate-400'>
+            Who can use @channel and @here
+          </span>
+          <SimpleSelect
+            value={mentionPolicy}
+            onChange={setMentionPolicy}
+            ariaLabel='Who can use @channel and @here'
+            className='h-8 text-[12px]'
+            options={[
+              { value: 'owner', label: 'Channel owner and admins' },
+              { value: 'members', label: 'Every member' },
+              { value: 'admins', label: 'Admins only' }
+            ]}
+          />
+        </div>
+      )}
 
       <label className='block'>
         <span className='mb-1 block text-[11px] font-medium text-slate-400'>Description</span>

@@ -26,6 +26,7 @@ import {
   NotebookPen,
   Paperclip,
   Pencil,
+  PencilLine,
   Pin,
   PinOff,
   Plane,
@@ -58,6 +59,7 @@ import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { BotStreamBubble, useBotStream } from './BotStream'
+import { ArchiveSuggestionBanner, MembershipHistory } from './ChannelArchive'
 import { BulkInvitePanel, ChannelAuditLog, ChannelExtrasEditor } from './ChannelExtras'
 import { ChannelLookPicker, ChannelTile } from './ChannelLook'
 import {
@@ -111,6 +113,7 @@ import {
   useOpenRoomRegistration,
   useOutbox,
   usePeerReadAt,
+  useRecordBrowserTimezone,
   useRoomMembership,
   useRoomPins,
   useSendChatMessage,
@@ -120,7 +123,10 @@ import {
   useTypingIndicator,
   useUserSearch
 } from './chat-core'
+import { useDraftRooms } from './chat-drafts'
+import { EmojiButton, EmojiGlyph, useCustomEmoji } from './chat-emoji'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
+import { offHoursNote } from './chat-local-time'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
 import { PollCard } from './PollCard'
 import {
@@ -265,6 +271,8 @@ interface PersonInfo {
   user_id: string
   last_seen: string | null
   timezone: string | null
+  timezone_source?: 'profile' | 'browser' | null
+  working_hours?: { start: string; end: string } | null
   away: boolean
   out_of_office?: boolean
   ooo_end?: string | null
@@ -1382,6 +1390,13 @@ export function ChatRoomView({
         ? 'Only admins post here. Hover a message and reply in its thread.'
         : 'Only the channel owner and admins post here. Hover a message and reply in its thread.'
       : null
+  // Quiet composer note (#2484): writing to a DM peer outside their working hours.
+  const dmPeerId = me ? dmPeer(room, me.id) : null
+  const dmPeerInfo = usePersonInfo(dmPeerId)
+  useMinuteTick()
+  const dmOffHoursNote = dmPeerId ? offHoursNote(dmPeerInfo, label, new Date()) : null
+  useRecordBrowserTimezone()
+  useCustomEmoji() // fills the :shortcode: image map for message text and reactions (#2459)
   const showWelcome =
     !!channel?.welcome_note &&
     !!roomInfo?.joined &&
@@ -1512,6 +1527,11 @@ export function ChatRoomView({
                   {e}
                 </button>
               ))}
+              <EmojiButton
+                label='More reactions'
+                className={toolBtn}
+                onPick={(emoji) => toggleReaction.mutate({ messageId: m.id, emoji })}
+              />
               {!opts.inThread && !m.parent_id && (
                 <button
                   type='button'
@@ -1806,7 +1826,7 @@ export function ChatRoomView({
                       : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-muted'
                   )}
                 >
-                  <span>{emoji}</span>
+                  <EmojiGlyph value={emoji} />
                   <span className='tabular-nums'>{g.count}</span>
                 </button>
               ))}
@@ -1884,6 +1904,7 @@ export function ChatRoomView({
       onClearQuote={() => (parentId ? setThreadQuote(null) : setQuote(null))}
       onSent={onSent}
       disabledReason={parentId ? null : announceClosed}
+      quietNote={dmOffHoursNote}
       th={th}
       renderAvatar={(id, name) => (
         <Avatar id={id} name={name} size={22} presence={id !== '__bot__'} />
@@ -2266,6 +2287,13 @@ export function ChatRoomView({
             <ChevronLeft className='ml-auto h-3 w-3 -rotate-90' />
           </button>
         </div>
+      )}
+      {channel?.archive_suggested_at && channel.id !== 0 && (ownsChannel || isAdmin) && (
+        <ArchiveSuggestionBanner
+          channelId={channel.id}
+          channelName={label}
+          suggestedAt={channel.archive_suggested_at}
+        />
       )}
       {showWelcome && channel?.welcome_note && (
         <WelcomeNote
@@ -3108,6 +3136,9 @@ export function ChatChannelSettings({
             </div>
           )}
         </div>
+        {canEdit && !channel.is_direct && channel.id !== 0 && (
+          <MembershipHistory channelId={channel.id} border={th.divider} />
+        )}
         {!channel.is_direct && <ChannelAuditLog channelId={channel.id} th={th} />}
       </div>
     </div>
@@ -3247,6 +3278,7 @@ export function ChatRoomList({
     return [...m.entries()].sort((a, b) => b[1].length - a[1].length)
   }, [hits])
   const unreadRooms = rooms.filter((r) => r.unread > 0 && !r.muted).length
+  const draftRooms = useDraftRooms() // rooms holding an unsent draft (#2474)
   const roomByKey = useMemo(() => new Map(rooms.map((r) => [r.room, r])), [rooms])
   const prefs = useMyPreferences()
   const setPrefs = useSetMyPreferences()
@@ -3497,6 +3529,15 @@ export function ChatRoomList({
                       </span>
                       {r.muted && (
                         <BellOff className='h-3 w-3 shrink-0 text-slate-300' strokeWidth={2} />
+                      )}
+                      {draftRooms.has(r.room) && (
+                        <PencilLine
+                          className='h-3 w-3 shrink-0 text-slate-400'
+                          strokeWidth={2}
+                          aria-label='Unsent draft'
+                          data-tip='Unsent draft'
+                          data-chat-room-draft
+                        />
                       )}
                     </span>
                     {r.lastMessage && (
