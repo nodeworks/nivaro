@@ -835,7 +835,21 @@ export const collabChat: DocSection = {
     { type: 'h2', id: 'collab-chat-huddles', text: 'Huddles and screen clips' },
     {
       type: 'p',
-      text: 'A huddle is a voice call inside a channel, General or a record’s room, started from the headphones button in the room header. While one runs, the header shows who is in it with a Join button; a strip under the header shows the people, how long it has run and, when someone shares their screen, that screen. The room gets a line when a huddle starts and when it ends. You can open other rooms while you talk — the huddle keeps going and the header says so. Huddles are not recorded, and they do not run in direct messages.'
+      text: 'A huddle is a voice call inside a channel, General or a record’s room, started from the headphones button in the room header. While one runs, the header shows who is in it with a Join button; a strip under the header shows the people, how long it has run and, when someone shares their screen, that screen. The room gets a line when a huddle starts and when it ends. You can open other rooms while you talk — the huddle keeps going and the header says so. Huddles are not recorded.'
+    },
+    {
+      type: 'h3',
+      id: 'collab-chat-huddle-calls',
+      text: 'Calls, invitations and scheduled huddles'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Starting a huddle in a direct message (or a group conversation) calls the other people: each of them gets a call card at the top of the screen with Accept and Decline, a ring with their own notification sound, and a notification through the normal path (category "Huddles & calls" in Profile → Notification rules), so a closed tab still learns of it through push. Under do not disturb the card and the ring are held. Nobody answers in 30 seconds and the room reads "No answer from …"; a Decline reads "… declined the call". The caller sees "Ringing …" in the strip under the header, with a way to stop ringing.',
+        'Add people from the strip while you talk: the picker lists only people who can see that room (the server checks each one), and whoever you pick is called the same way. An invitation never grants access to a room.',
+        'While you are in a huddle your presence reads "In a huddle" wherever people are listed (beside any status you set, never instead of it), and notification toasts and sounds are held: the strip shows how many are waiting, and when you leave they are released as one summary with one sound. Turn that off under Profile → Notification rules → "Hold notifications during huddles". The inbox and the badges move either way; a critical notification still breaks through.',
+        'Schedule a huddle from the room header’s ⋯ menu: a title, a start, how long, and who to invite (in a direct message the other person is already in). The room gets a card showing the time and the people, with Join while it is on, a calendar file (.ics) and an "Outlook" link that opens a pre-filled event — nothing is written to anyone’s calendar. Five minutes before the start everyone invited gets a reminder; at the start the invitees are called. The organizer or an administrator can cancel it from the card.'
+      ]
     },
     {
       type: 'ul',

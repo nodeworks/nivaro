@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch as patch2, post } from '../../lib/commands'
 import { isDndActive } from '../../lib/dnd'
+import { holdNotification, huddleHolds } from './huddle/huddle-hold'
 import { playNotificationSound } from '../../lib/notification-sound'
 import { announceLocalPrefs } from '../../lib/user-sync'
 import { bindChatOutbox, enqueueChatOutbox } from './chat-outbox'
@@ -937,8 +938,11 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
           .reduce((n, r) => n + r.unread, 0)
       : totalUnread
     const grew = conversationUnread > prevUnread
-    const held = isDndActive(prefsRef.current)
+    // Do not disturb, or a huddle I am in (#2852): the sound and the toast wait.
+    const inHuddle = huddleHolds(prefsRef.current)
+    const held = isDndActive(prefsRef.current) || inHuddle
     if (cfg.sound && grew && !held) playNotificationSound(soundPref)
+    if (cfg.sound && grew && inHuddle) holdNotification({ kind: 'chat', title: 'New message' })
 
     if (rooms) {
       // First pass seeds the watermarks; toasting then would announce every

@@ -76,6 +76,7 @@ import {
   ErrorSurface,
   focusPopoutOpener,
   HelpVideoRecordingProvider,
+  HuddleCallLayer,
   IncidentBanner,
   isRecordPopout,
   JobsTray,
@@ -888,6 +889,7 @@ export function AppLayout() {
         <IntentPrefetchHost />
         <UserSyncHost />
         <OutboxHost userId={authUser?.id ?? null} />
+        <HuddleCallHost />
       </TooltipProvider>
     </RealtimeContext.Provider>
   )
@@ -1125,6 +1127,16 @@ function IntentPrefetchHost() {
     preloadRoute
   })
   return null
+}
+
+/** Incoming huddle calls (#2843): one layer for the whole app, above every page,
+ *  inside the realtime adapter; the chat dock's room opener takes Accept to the room. */
+function HuddleCallHost() {
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <HuddleCallLayer />
+    </NivaroProvider>
+  )
 }
 
 /** The Jobs tray (#1724): long things the person started, on every page. */

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { useOptionalRealtime } from '../../../lib/realtime'
+import { huddleCalls } from './huddle-calls'
 import {
   type HuddlePeer,
   type HuddleState,
@@ -44,7 +45,11 @@ export function useHuddle(room: string | null) {
   const enabled = usable && ice?.enabled !== false
 
   useEffect(() => {
-    if (realtime && support.audio) huddleStore.attach(realtime, fetchIce)
+    if (realtime && support.audio) {
+      huddleStore.attach(realtime, fetchIce)
+      // #2843 — ringing rides the same adapter (the stage shows who I am calling).
+      huddleCalls.attach(realtime)
+    }
   }, [realtime, support.audio, fetchIce])
 
   const state: HuddleState = useSyncExternalStore(huddleStore.subscribe, huddleStore.getSnapshot)

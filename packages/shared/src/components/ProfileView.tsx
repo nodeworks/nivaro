@@ -144,6 +144,11 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
     help: 'A partner system was not told something about your record, a send is still unanswered, or an integration alert you turned on in the Integrations console fired.'
   },
   {
+    key: 'huddle',
+    label: 'Huddles & calls',
+    help: 'Someone calls you in a huddle or adds you to one, and reminders for huddles you were invited to. Push is what rings a closed tab.'
+  },
+  {
     key: 'system',
     label: 'System & digests',
     help: 'Maintenance windows, failing monitors, import results, and the daily action summary itself. Maintenance and monitor failures always email immediately.'
@@ -590,6 +595,21 @@ export function NotificationRulesCard() {
           />
           <span className='text-[11px] text-slate-400'>
             plays when a notification or a direct message arrives
+          </span>
+        </div>
+        <div className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+          <Toggle
+            on={prefs?.huddle_hold_notifications !== false}
+            onChange={() =>
+              saveRaw.mutate({
+                huddle_hold_notifications: prefs?.huddle_hold_notifications === false
+              })
+            }
+            label='Hold notifications during huddles'
+          />
+          Hold notifications during huddles
+          <span className='text-[11px] text-slate-400'>
+            toasts and sounds wait while you talk; you get one summary when you leave
           </span>
         </div>
         <table className='w-full text-[12px]'>

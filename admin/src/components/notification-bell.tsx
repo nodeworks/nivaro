@@ -1,6 +1,9 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
   breaksThroughDnd,
+  holdNotification,
+  huddleCallLayerMounted,
+  huddleHolds,
   isDndActive,
   NivaroProvider,
   type NotificationRouteMap,
@@ -90,6 +93,13 @@ export function NotificationBell({
         // Do not disturb (#2114) holds the toast and the sound; the inbox row and the badge
         // still arrive, and a critical notification still breaks through.
         if (isDndActive(prefsRef.current as Record<string, unknown>) && !breaksThroughDnd(n)) return
+        // A call shows its own card (HuddleCallLayer) — no second toast for it.
+        if (n.category === 'huddle' && huddleCallLayerMounted()) return
+        // In a huddle (#2852): held, counted on the stage, released as one summary on leave.
+        if (huddleHolds(prefsRef.current as Record<string, unknown>) && !breaksThroughDnd(n)) {
+          holdNotification({ kind: 'notification', title: n.subject ?? n.title ?? 'Notification' })
+          return
+        }
         toast.info(n.subject ?? n.title ?? 'New notification')
         playNotificationSound(
           soundForCategory(prefsRef.current as Record<string, unknown>, n.category)

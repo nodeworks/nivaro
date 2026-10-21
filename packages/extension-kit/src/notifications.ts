@@ -8,6 +8,8 @@ export type NotifyCategory =
   | 'reports'
   | 'integrations'
   | 'system'
+  /** Huddle calls and scheduled huddles (#2843). */
+  | 'huddle'
   | 'other'
 
 export type NotificationKind =

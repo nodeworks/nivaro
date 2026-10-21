@@ -3,6 +3,7 @@ import {
   ArchiveRestore,
   AtSign,
   BellOff,
+  CalendarClock,
   CalendarDays,
   Check,
   ChevronLeft,
@@ -78,6 +79,8 @@ interface Props {
   onJump: (dateIso: string) => void
   onOpenRecord?: () => void
   onTeamsCall?: () => void
+  /** #2860 — the schedule-a-huddle form, rendered as its own view; omitted = no item. */
+  huddleSchedule?: (close: () => void) => ReactNode
   onSettings?: () => void
   archived?: boolean
   onArchive?: () => void
@@ -85,7 +88,7 @@ interface Props {
   tips: ReactNode
 }
 
-type View = 'menu' | 'date' | 'tips'
+type View = 'menu' | 'date' | 'tips' | 'huddle'
 
 /** The room header's More menu: every action that is not used on most visits
  *  (star, notifications, jump to date, Teams call, archive, leave, settings,
@@ -124,7 +127,13 @@ export function RoomHeaderMenu(p: Props) {
         align='end'
         className={cn(
           'p-1',
-          view === 'tips' ? 'w-[420px] max-w-[92vw]' : view === 'date' ? 'w-[240px]' : 'w-[232px]'
+          view === 'tips'
+            ? 'w-[420px] max-w-[92vw]'
+            : view === 'date'
+              ? 'w-[240px]'
+              : view === 'huddle'
+                ? 'w-[320px] max-w-[92vw]'
+                : 'w-[232px]'
         )}
         data-chat-room-menu
       >
@@ -147,6 +156,15 @@ export function RoomHeaderMenu(p: Props) {
             {p.onTeamsCall && (
               <Row icon={<Video />} onClick={run(p.onTeamsCall)} data='teams-call'>
                 Start a Teams call
+              </Row>
+            )}
+            {p.huddleSchedule && (
+              <Row
+                icon={<CalendarClock />}
+                onClick={() => setView('huddle')}
+                data='schedule-huddle'
+              >
+                Schedule a huddle…
               </Row>
             )}
             <Row icon={<CalendarDays />} onClick={() => setView('date')} data='jump-date'>
@@ -218,6 +236,12 @@ export function RoomHeaderMenu(p: Props) {
           <div className='p-1.5'>
             <BackRow onClick={() => setView('menu')} />
             <JumpToDateForm onJump={p.onJump} onDone={close} />
+          </div>
+        )}
+        {view === 'huddle' && p.huddleSchedule && (
+          <div className='p-1.5'>
+            <BackRow onClick={() => setView('menu')} />
+            {p.huddleSchedule(close)}
           </div>
         )}
         {view === 'tips' && (
