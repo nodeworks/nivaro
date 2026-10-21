@@ -14,6 +14,7 @@ import {
   roomSchedules,
   scheduleCard
 } from '../services/huddle-schedule.js'
+import { scheduleQuota } from '../services/huddle-schedule-quota.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 
@@ -25,6 +26,7 @@ import type { User } from '../types.js'
  *                               canSeeRoom for THAT room — nobody else is ever listed
  *   GET    /schedules?room=     the room's upcoming huddles (canSeeRoom)
  *   POST   /schedules           make one {room, title, starts_at, duration_min, invitees}
+ *                               (429 past 20 upcoming or 10 in an hour per organizer)
  *   GET    /schedules/:id       the card (canSeeRoom on its room)
  *   DELETE /schedules/:id       cancel (organizer or an administrator)
  */
@@ -98,6 +100,9 @@ export async function chatHuddleCallRoutes(app: FastifyInstance) {
     const parsed = parseScheduleInput(req.body)
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
     if (!(await canSeeRoom(req.user!, parsed.value.room))) return reply.code(404).send(notFound)
+    // Each schedule notifies its invitees three times: upcoming ones and the pace are capped.
+    const over = await scheduleQuota(String(req.user!.id))
+    if (over) return reply.code(429).send({ error: over.error, code: over.code })
     let card: Awaited<ReturnType<typeof createHuddleSchedule>>
     try {
       card = await createHuddleSchedule(app, req.user!, !!req.isAdmin, parsed.value)
