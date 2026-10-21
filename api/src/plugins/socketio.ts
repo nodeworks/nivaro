@@ -62,6 +62,7 @@ import {
   recordOutbound,
   splitTenantRoom
 } from '../services/socket-transport.js'
+import { attachSocketVerification } from '../services/socket-verify.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import { registerWidgetLive } from '../services/widget-live.js'
 
@@ -630,7 +631,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     const client = socket.client as unknown as {
       writeToEngine(encoded: unknown, opts: Record<string, unknown>): void
     }
-    const origWrite = client.writeToEngine.bind(client)
+    // #2463 chaos, #2760 leak audit, #2477 acks, #2478 replay rooms (services/socket-verify.ts).
+    const origWrite = attachSocketVerification(socket, client.writeToEngine.bind(client), {
+      rtt: () => socketMeta.get(socket.id)?.rtt ?? null,
+      room: () => broadcastRoom
+    })
     const sizeOf = (p: unknown) =>
       typeof p === 'string'
         ? Buffer.byteLength(p)

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Gauge } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -15,6 +16,23 @@ interface SloTargets {
   availability_pct: number
   p95_ms: number
   window_days: number
+  /** #2477 — realtime delivery target (older servers do not send these). */
+  delivery_p95_ms?: number
+  delivery_good_pct?: number
+}
+/** #2477 — socket delivery from the probe and sampled real clients. */
+interface DeliverySlo {
+  target_ms: number
+  good_pct_target: number
+  overall: {
+    samples: number
+    missed: number
+    p95_ms: number | null
+    good_pct: number | null
+    meets: boolean | null
+  }
+  by_source: { probe: { samples: number }; client: { samples: number } }
+  burn: { h1: number | null; h6: number | null; h24: number | null }
 }
 interface InstanceSlo {
   instance: string
@@ -42,6 +60,7 @@ interface SloReport {
   /** The longest window this instance can compute. */
   window_max_days?: number
   note?: string
+  realtime?: DeliverySlo | null
 }
 interface RemoteSlo {
   id: number
@@ -191,7 +210,9 @@ function TargetsEditor({ t, maxDays }: { t: SloTargets; maxDays: number | null }
   const [draft, setDraft] = useState({
     availability_pct: String(t.availability_pct),
     p95_ms: String(t.p95_ms),
-    window_days: String(t.window_days)
+    window_days: String(t.window_days),
+    delivery_p95_ms: String(t.delivery_p95_ms ?? 2000),
+    delivery_good_pct: String(t.delivery_good_pct ?? 95)
   })
   const save = useMutation({
     mutationFn: () =>
@@ -199,7 +220,9 @@ function TargetsEditor({ t, maxDays }: { t: SloTargets; maxDays: number | null }
         slo_targets: {
           availability_pct: Number(draft.availability_pct),
           p95_ms: Number(draft.p95_ms),
-          window_days: Number(draft.window_days)
+          window_days: Number(draft.window_days),
+          delivery_p95_ms: Number(draft.delivery_p95_ms),
+          delivery_good_pct: Number(draft.delivery_good_pct)
         }
       }),
     onSuccess: () => {
@@ -228,6 +251,8 @@ function TargetsEditor({ t, maxDays }: { t: SloTargets; maxDays: number | null }
       {field('availability_pct', 'Availability %')}
       {field('p95_ms', 'p95 ms')}
       {field('window_days', 'Window days')}
+      {field('delivery_good_pct', 'Realtime %')}
+      {field('delivery_p95_ms', 'within ms')}
       {maxDays != null && (
         <span className='text-[11px] text-slate-500 dark:text-slate-400'>
           up to {maxDays} days
@@ -242,6 +267,48 @@ function TargetsEditor({ t, maxDays }: { t: SloTargets; maxDays: number | null }
       >
         Save targets
       </button>
+    </div>
+  )
+}
+
+/** #2477 — the realtime delivery SLO, one line under the instances. */
+function DeliveryRow({ d }: { d: DeliverySlo }) {
+  const o = d.overall
+  return (
+    <div
+      data-slo-realtime
+      className='mt-3 flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-slate-100 pt-2 text-[11px] tabular-nums dark:border-border/50'
+    >
+      <span className='text-slate-500'>Realtime delivery:</span>
+      <span
+        className={cn(
+          'text-[12px] font-semibold',
+          o.meets === false
+            ? 'text-red-700 dark:text-red-300'
+            : 'text-slate-800 dark:text-slate-100'
+        )}
+      >
+        {o.good_pct == null ? '—' : `${o.good_pct}%`}
+      </span>
+      <span className='text-slate-500'>
+        within {n(d.target_ms)} ms (≥ {d.good_pct_target}%) · p95{' '}
+        {o.p95_ms == null ? 'too many missed' : `${n(o.p95_ms)} ms`}
+      </span>
+      <span>
+        <span className={burnTone(d.burn.h1, true)}>1h {d.burn.h1 ?? '—'}×</span>
+        <span className='mx-1 text-slate-300'>·</span>
+        <span className={burnTone(d.burn.h6, false)}>6h {d.burn.h6 ?? '—'}×</span>
+      </span>
+      <span className='text-slate-500'>
+        {n(d.by_source.probe.samples)} probe · {n(d.by_source.client.samples)} from real clients
+        {o.missed ? ` · ${n(o.missed)} missed` : ''}
+      </span>
+      <Link
+        to='/realtime?tab=verify'
+        className='text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline dark:text-slate-400 dark:hover:text-slate-100'
+      >
+        Per server
+      </Link>
     </div>
   )
 }
@@ -367,6 +434,7 @@ export function SloPanel() {
                 .join(' · ')}
             </p>
           )}
+          {r.realtime && r.realtime.overall.samples > 0 && <DeliveryRow d={r.realtime} />}
           {r.monitors.length > 0 && (
             <div className='mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 pt-2 text-[11px] dark:border-border/50'>
               <span className='text-slate-500'>Monitor uptime:</span>

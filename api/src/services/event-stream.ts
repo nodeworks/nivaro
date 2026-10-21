@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis'
 import type { JournalEntry } from './event-journal.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
+import { ackSampled } from './realtime-ack-sample.js'
 import { noteAdapterLag } from './traffic-taps/realtime.js'
 
 /**
@@ -148,7 +149,13 @@ function deliver(d: DecodedStreamEntry): void {
   const io = getIo()
   if (!io) return
   const { entry } = d
-  const payload = entry.seq == null ? entry.payload : { ...entry.payload, _seq: entry.seq }
+  const payload =
+    entry.seq == null
+      ? entry.payload
+      : // #2477 — a sampled event carries the time it was written, for client acknowledgements.
+        ackSampled(entry.seq) && d.at
+        ? { ...entry.payload, _seq: entry.seq, _st: d.at }
+        : { ...entry.payload, _seq: entry.seq }
   io.local.to(entry.room).emit(entry.event, payload)
   stats.delivered++
   if (d.at) {

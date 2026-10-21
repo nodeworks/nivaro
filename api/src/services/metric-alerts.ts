@@ -42,6 +42,15 @@ export type MetricSource =
       metric: 'error_rate' | 'p95_ms' | 'p50_ms' | 'availability' | 'calls'
       window_minutes?: number
     }
+  | {
+      /**
+       * #2477 — realtime delivery over the last day: p95_ms, good_pct (share within the
+       * target), burn_1h / burn_6h (the SLO page's burn rates), samples. Evaluated after every
+       * realtime monitor run.
+       */
+      type: 'realtime_slo'
+      metric: 'p95_ms' | 'good_pct' | 'burn_1h' | 'burn_6h' | 'samples'
+    }
 
 export function parseJsonSafe<T>(v: unknown): T | null {
   if (v == null) return null
@@ -87,7 +96,25 @@ export async function resolveMetricValue(
   asUser?: { user: User; isAdmin: boolean }
 ): Promise<number | null> {
   try {
-    if (asUser && source.type === 'external_api_slo' && !asUser.isAdmin) return null
+    if (
+      asUser &&
+      (source.type === 'external_api_slo' || source.type === 'realtime_slo') &&
+      !asUser.isAdmin
+    )
+      return null
+    if (source.type === 'realtime_slo') {
+      const [{ deliverySloMetric }, { parseSloTargets }] = await Promise.all([
+        import('./realtime-delivery-slo.js'),
+        import('./slo.js')
+      ])
+      const row = await db('nivaro_settings')
+        .first('slo_targets')
+        .catch(() => null)
+      return await deliverySloMetric(
+        source.metric,
+        parseSloTargets((row as { slo_targets?: unknown } | null)?.slo_targets)
+      )
+    }
     if (asUser && source.type === 'collection')
       return await countAsUser(source, filters, asUser.user)
     if (source.type === 'external_api_slo') {

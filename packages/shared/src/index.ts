@@ -522,6 +522,7 @@ export {
 export * from './lib/commands'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export { useAfterIdle } from './lib/defer'
+export { deliveryAckFor } from './lib/delivery-ack'
 export { breaksThroughDnd, type DndPref, dndUntil, isDndActive } from './lib/dnd'
 export {
   deleteDraft,

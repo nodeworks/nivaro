@@ -8,6 +8,7 @@ import {
 import { publishToStream, streamActive } from './event-stream.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
+import { ackSampled } from './realtime-ack-sample.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -100,7 +101,13 @@ export async function journaledEmit(
   } catch {
     seq = null // Redis down — emit unjournaled (fail open)
   }
-  const out = seq == null ? payload : { ...payload, _seq: seq }
+  // #2477 — a sampled event carries the time it left, for the clients' delivery acknowledgements.
+  const out =
+    seq == null
+      ? payload
+      : ackSampled(seq)
+        ? { ...payload, _seq: seq, _st: Date.now() }
+        : { ...payload, _seq: seq }
   let path: EmitResult['path'] = 'adapter'
   if (seq != null) {
     const entry: JournalEntry = { seq, room, event, payload }

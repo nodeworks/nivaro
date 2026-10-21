@@ -2,6 +2,7 @@ import {
   type ClockSample,
   type CollectionUpdateEvent,
   createLeaderSocket,
+  deliveryAckFor,
   forgetSettledReads,
   measureClockOffset,
   type RealtimeAdapter,
@@ -324,6 +325,9 @@ export function getSocket(): Socket {
   socket.onAny((_event, payload) => {
     const seq = (payload as { _seq?: number } | undefined)?._seq
     if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
+    // #2477 — a sampled event asks for its receive time (the delivery SLO's real clients).
+    const ack = deliveryAckFor(payload)
+    if (ack) socket?.emit('rt:ack', ack)
   })
   socket.on(
     'catchup:events',

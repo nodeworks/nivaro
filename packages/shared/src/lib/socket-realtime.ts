@@ -1,3 +1,4 @@
+import { deliveryAckFor } from './delivery-ack'
 import type { CollectionUpdateEvent, RealtimeAdapter, RealtimeStatus } from './realtime'
 import { forgetSettledReads } from './request-gate'
 
@@ -194,6 +195,9 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     s.onAny?.((_event, payload) => {
       const seq = (payload as { _seq?: number } | undefined)?._seq
       if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
+      // #2477 — a sampled event asks for its receive time (the delivery SLO's real clients).
+      const ack = deliveryAckFor(payload)
+      if (ack) s.emit('rt:ack', ack)
     })
     s.on(
       'catchup:events',

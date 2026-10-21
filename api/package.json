@@ -11,6 +11,7 @@
     "migrate": "tsx src/db/migrate.ts",
     "migrate:rollback": "tsx src/db/migrate.ts rollback",
     "traffic:replay": "tsx src/scripts/traffic-replay.ts",
+    "realtime:replay": "tsx src/scripts/realtime-replay.ts",
     "runbook:agent": "tsx src/scripts/runbook-agent.ts",
     "quality:checks": "tsx src/scripts/quality-checks.ts",
     "permission-cache:check": "tsx src/scripts/permission-cache-equivalence.ts",

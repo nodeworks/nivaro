@@ -29,12 +29,17 @@ export interface SloTargets {
   availability_pct: number
   p95_ms: number
   window_days: number
+  /** #2477 — realtime delivery: this share of socket deliveries within `delivery_p95_ms`. */
+  delivery_p95_ms: number
+  delivery_good_pct: number
 }
 
 export const DEFAULT_SLO_TARGETS: SloTargets = {
   availability_pct: 99.5,
   p95_ms: 2000,
-  window_days: 7
+  window_days: 7,
+  delivery_p95_ms: 2000,
+  delivery_good_pct: 95
 }
 const LOG_RETENTION_DAYS = 14
 /** Up to this many days the store's request lines answer (exact p95); longer reads rollups. */
@@ -67,7 +72,11 @@ export function parseSloTargets(raw: unknown): SloTargets {
         num(o.window_days, 1, ROLLUP_WINDOW_DAYS, DEFAULT_SLO_TARGETS.window_days),
         maxSloWindowDays()
       )
-    )
+    ),
+    delivery_p95_ms: Math.round(
+      num(o.delivery_p95_ms, 50, 60_000, DEFAULT_SLO_TARGETS.delivery_p95_ms)
+    ),
+    delivery_good_pct: num(o.delivery_good_pct, 50, 99.99, DEFAULT_SLO_TARGETS.delivery_good_pct)
   }
 }
 
@@ -94,7 +103,9 @@ export function validateSloTargets(raw: unknown): string | null {
   return (
     check('availability_pct', 50, 99.999) ??
     check('p95_ms', 50, 120_000) ??
-    check('window_days', 1, maxSloWindowDays())
+    check('window_days', 1, maxSloWindowDays()) ??
+    check('delivery_p95_ms', 50, 60_000) ??
+    check('delivery_good_pct', 50, 99.99)
   )
 }
 
@@ -158,6 +169,8 @@ export interface SloReport {
   window_max_days: number
   /** Set when the store was needed but did not answer (the window was cut to 14 days). */
   note?: string
+  /** #2477 — socket delivery latency (synthetic probe + sampled client acks); null = no Redis. */
+  realtime?: import('./realtime-delivery-slo.js').DeliverySlo | null
 }
 
 const UNTRACKED = '(before tracking)'
@@ -167,6 +180,9 @@ export async function computeSlo(): Promise<SloReport> {
     .first('slo_targets')
     .catch(() => null)
   const targets = parseSloTargets((row as { slo_targets?: unknown } | null)?.slo_targets)
+  const realtime = await import('./realtime-delivery-slo.js')
+    .then((m) => m.computeDeliverySlo(targets))
+    .catch(() => null)
   // The histogram SQL is T-SQL; other dialects report targets only.
   if (!isMssql(db))
     return {
@@ -176,7 +192,8 @@ export async function computeSlo(): Promise<SloReport> {
       instance_tracked: false,
       computed_at: new Date().toISOString(),
       source: 'log',
-      window_max_days: maxSloWindowDays()
+      window_max_days: maxSloWindowDays(),
+      realtime
     }
   const tracked = await hasColumn('nivaro_api_logs', 'instance')
   const inst = tracked ? `ISNULL(instance, '${UNTRACKED}')` : `'${UNTRACKED}'`
@@ -349,14 +366,15 @@ export async function computeSlo(): Promise<SloReport> {
     computed_at: new Date().toISOString(),
     source,
     window_max_days: maxSloWindowDays(),
-    ...(note ? { note } : {})
+    ...(note ? { note } : {}),
+    realtime
   }
 }
 
 /** InstanceSlo rows from the store's per-instance, per-day figures (#2544). */
 export function storeInstances(
   rows: { days: StoreSloDay[]; p95ByInstance: Map<string, number | null> },
-  targets: SloTargets,
+  targets: Pick<SloTargets, 'availability_pct' | 'p95_ms' | 'window_days'>,
   burnFor: (instance: string) => InstanceSlo['burn']
 ): InstanceSlo[] {
   const allowedShare = 1 - targets.availability_pct / 100

@@ -18,7 +18,13 @@ describe('SLO helpers (#666)', () => {
     expect(percentileFromHistogram([], 0.95)).toBeNull()
   })
   it('targets default and clamp', () => {
-    expect(parseSloTargets(null)).toEqual({ availability_pct: 99.5, p95_ms: 2000, window_days: 7 })
+    expect(parseSloTargets(null)).toEqual({
+      availability_pct: 99.5,
+      p95_ms: 2000,
+      window_days: 7,
+      delivery_p95_ms: 2000,
+      delivery_good_pct: 95
+    })
     // Without the long-history store a saved 30-day window is shortened to the log's 14 days.
     expect(parseSloTargets('{"availability_pct":99.9,"window_days":30}').window_days).toBe(14)
     // 13 months is a valid window (#2544 Phase 5); without the store it is shortened too.

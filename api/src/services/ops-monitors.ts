@@ -530,9 +530,11 @@ export async function evaluateMonitor(
 export async function evaluateAllMonitors(app: FastifyInstance | null): Promise<string> {
   const monitors = (await db('nivaro_monitors').where('is_active', true)) as MonitorRow[]
   let failing = 0
+  let realtimeRan = false
   for (const m of monitors) {
     const r = await evaluateMonitor(m, app)
     if (r.status === 'failing') failing++
+    if (m.type === 'realtime' && r.status !== 'unknown') realtimeRan = true
     // Live monitor board (#279): each evaluation lands on watchers instantly.
     try {
       const { getIo } = await import('./io-holder.js')
@@ -541,6 +543,28 @@ export async function evaluateAllMonitors(app: FastifyInstance | null): Promise<
         .emit('monitor:status', { id: m.id, name: m.name, status: r.status })
     } catch {
       /* emit is decoration */
+    }
+  }
+  // #2477 — the delivery SLO's burn-rate alert and the metric-alert rules that read it, once
+  // the realtime monitor has added this cycle's sample.
+  if (realtimeRan) {
+    try {
+      const [{ evaluateDeliveryBurn }, { parseSloTargets }] = await Promise.all([
+        import('./realtime-delivery-slo.js'),
+        import('./slo.js')
+      ])
+      const row = await db('nivaro_settings')
+        .first('slo_targets')
+        .catch(() => null)
+      await evaluateDeliveryBurn(
+        parseSloTargets((row as { slo_targets?: unknown } | null)?.slo_targets)
+      )
+      if (app) {
+        const { runMetricAlertChecks } = await import('./metric-alerts.js')
+        await runMetricAlertChecks(app, 'all', { sourceType: 'realtime_slo' })
+      }
+    } catch {
+      /* the SLO page still shows the figures */
     }
   }
   return `${monitors.length} monitor(s) evaluated, ${failing} failing`
