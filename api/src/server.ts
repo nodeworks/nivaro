@@ -987,6 +987,17 @@ export async function buildServer() {
         await runConfigHealthSweep()
       })
 
+      // Form usage per layout (#2597/#2598): keep 180 days.
+      app.cron.schedule(
+        'layout-usage-prune',
+        '25 3 * * *',
+        async () => {
+          const { pruneLayoutUsage } = await import('./services/layout-usage.js')
+          await pruneLayoutUsage()
+        },
+        { description: 'Deletes form usage counts (per layout and day) older than 180 days.' }
+      )
+
       // Config review (#1913/#2020/#1999): monthly report of configuration
       // problems, cleanup suggestions and label inconsistencies, with the
       // model re-wording reasons when AI is configured; admins are told.

@@ -13,6 +13,7 @@ import { cn } from '../../lib/utils'
 import type { DesignTarget, LayoutDesign } from './design-context'
 import { targetKey, useLayoutDesign } from './design-context'
 import { NO_DND, useDesignDndNode, useDesignDropBody } from './dnd/node'
+import { FillChip } from './usage/FillChip'
 
 type ChildProps = {
   className?: string
@@ -165,6 +166,10 @@ export function DesignNode({
     onKeyDown
   }
   const MarkIcon = mark?.kind === 'hidden' ? EyeOff : Lock
+  const fill =
+    target.kind === 'field' || target.kind === 'header'
+      ? (design.fillRate?.(target.field) ?? null)
+      : null
   const badge =
     tabLike && parent && !mark ? (
       // Steps and tabs: a dot above the label, the parent's name in the tip.
@@ -174,11 +179,12 @@ export function DesignNode({
       >
         <span className='sr-only'>from {parent}</span>
       </span>
-    ) : parent || mark ? (
+    ) : parent || mark || fill != null ? (
       <span
         data-design-badges=''
         className='pointer-events-none absolute -top-2 right-1 z-10 flex items-center gap-1'
       >
+        {fill != null && <FillChip pct={fill} />}
         {mark && (
           <span
             data-design-role-tag={mark.kind}

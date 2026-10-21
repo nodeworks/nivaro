@@ -18,6 +18,8 @@ export interface LayoutDesign {
   /** "Preview as role": what that role's field permissions do to the node
    *  (hidden: faint with a tag, still selectable; read-only: a lock tag). */
   roleMark?(t: DesignTarget): RoleMark | null
+  /** How often a field is filled across the collection's records (#2588); null = unknown or off. */
+  fillRate?(field: string): number | null
 }
 
 export interface RoleMark {

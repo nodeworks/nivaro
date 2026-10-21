@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Plus } from 'lucide-react'
+import { AlertTriangle, BarChart3, Plus } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
@@ -33,6 +33,13 @@ import {
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { useRolePreview } from './settings/settings-api'
+import { UsagePanel } from './usage/UsagePanel'
+import {
+  usageTodayText,
+  useFieldFillRates,
+  useLayoutUsageToday,
+  useShowFillRates
+} from './usage/usage-api'
 import {
   type LayoutDraft,
   layoutDraftKeys,
@@ -210,7 +217,8 @@ function Canvas({
   onSelect,
   showHidden,
   apply,
-  whenIdle
+  whenIdle,
+  fillRate
 }: {
   collection: string
   bundle: LayoutBundle
@@ -222,6 +230,8 @@ function Canvas({
   showHidden: boolean
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
   whenIdle: () => Promise<void>
+  /** "N% filled" hints on fields (#2588); undefined = off. */
+  fillRate?: (field: string) => number | null
 }) {
   const dnd = useLayoutDnd()
   const canvas = useMemo(() => bundleToActiveLayout(bundle, parent), [bundle, parent])
@@ -242,9 +252,10 @@ function Canvas({
       showHidden,
       inheritedFrom: (t) => canvas.inherited.get(targetKey(t)) ?? null,
       dnd,
-      roleMark
+      roleMark,
+      fillRate
     }),
-    [selected, onSelect, showHidden, canvas.inherited, dnd, roleMark]
+    [selected, onSelect, showHidden, canvas.inherited, dnd, roleMark, fillRate]
   )
   return (
     <EditorCanvas
@@ -264,11 +275,13 @@ function EditingBanner({
   collection,
   name,
   row,
+  layoutId,
   rows,
   fields,
   onDone
 }: {
   collection: string
+  layoutId: number
   name: string
   row: OverviewRow | undefined
   rows: OverviewRow[]
@@ -277,6 +290,8 @@ function EditingBanner({
 }) {
   const choices = useRuleChoiceLabels(collection, fields, rows)
   const { data: count } = useApproxRecordCount(collection, row, rows)
+  // Live usage (#2597): people and records that used this form today.
+  const usedToday = usageTodayText(useLayoutUsageToday(layoutId).data)
   const segs: Segment[] = !row
     ? []
     : row.section === 'forms' && (row.reason.kind === 'default' || row.reason.kind === 'fallback')
@@ -284,6 +299,7 @@ function EditingBanner({
       : purposeSegments(row, fields, choices)
   if (segs.length > 0 && typeof count === 'number')
     segs.push({ text: ` (≈ ${count.toLocaleString()} ${count === 1 ? 'record' : 'records'})` })
+  if (usedToday) segs.push({ text: segs.length > 0 ? `; ${usedToday}` : usedToday })
   return (
     <div
       data-editing-banner=''
@@ -333,10 +349,20 @@ export function LayoutEditor({
   const draft = useLayoutDraft(currentId, { onSaved })
   const bundle = draft.bundle
 
-  const [left, setLeft] = useState<'layouts' | 'add'>('layouts')
+  const [left, setLeft] = useState<'layouts' | 'add' | 'usage'>('layouts')
   const [panel, setPanel] = useState<'inspector' | 'settings'>('inspector')
   const [selected, setSelected] = useState<DesignTarget | null>(null)
   const [showHidden, setShowHidden] = useState(false)
+  // Fill-rate hints on the canvas (#2588): on unless turned off in the Usage tab.
+  const [showFill, setShowFill] = useShowFillRates()
+  const { data: fill } = useFieldFillRates(collection, showFill)
+  const fillRate = useMemo(
+    () =>
+      showFill && fill && fill.total > 0
+        ? (field: string) => fill.pct.get(field) ?? null
+        : undefined,
+    [showFill, fill]
+  )
   const [preview, setPreview] = useState<PreviewAs>({
     record: previewRecordId ? { id: previewRecordId, label: `#${previewRecordId}` } : null,
     roleId: null
@@ -438,6 +464,7 @@ export function LayoutEditor({
       {overlay && (
         <EditingBanner
           collection={collection}
+          layoutId={currentId}
           name={layoutName}
           row={row}
           rows={overview?.rows ?? []}
@@ -486,6 +513,19 @@ export function LayoutEditor({
                 <Plus className='h-3.5 w-3.5' />
                 Add
               </button>
+              <button
+                type='button'
+                role='tab'
+                aria-selected={left === 'usage'}
+                data-editor-tab='usage'
+                className={leftTab(left === 'usage')}
+                onClick={() => setLeft('usage')}
+                disabled={!bundle}
+                data-tip='How this form is used and where it slows people down'
+              >
+                <BarChart3 className='h-3.5 w-3.5' />
+                Usage
+              </button>
             </div>
             <div className='min-h-0 flex-1 overflow-y-auto'>
               {left === 'add' && bundle ? (
@@ -495,6 +535,15 @@ export function LayoutEditor({
                   selected={selected}
                   apply={draft.apply}
                   onSelect={onSelect}
+                />
+              ) : left === 'usage' && bundle ? (
+                <UsagePanel
+                  bundle={bundle}
+                  collection={collection}
+                  fields={fields}
+                  apply={draft.apply}
+                  showFill={showFill}
+                  onShowFill={setShowFill}
                 />
               ) : (
                 <LayoutsRail
@@ -520,6 +569,7 @@ export function LayoutEditor({
                 showHidden={showHidden}
                 apply={draft.apply}
                 whenIdle={draft.whenIdle}
+                fillRate={fillRate}
               />
             ) : draft.error ? (
               <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
