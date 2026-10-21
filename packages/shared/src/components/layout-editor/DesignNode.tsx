@@ -14,6 +14,7 @@ import { cn, formatRelative } from '../../lib/utils'
 import type { DesignMark, DesignTarget, DiffMark, LayoutDesign } from './design-context'
 import { isSelectedIn, targetKey, useLayoutDesign } from './design-context'
 import { NO_DND, useDesignDndNode, useDesignDropBody } from './dnd/node'
+import { ResizeHandle } from './grid-guides'
 import { NoteMarker } from './NoteMarker'
 import { FillChip } from './usage/FillChip'
 
@@ -410,19 +411,30 @@ export function DesignNode({
     />
   ) : null
 
+  // #2701: a selected field or in-section panel drags its width from its right edge.
+  const resize =
+    selected &&
+    !locked &&
+    design.resizeWidth &&
+    (target.kind === 'field' || target.kind === 'slot') &&
+    target.group_key !== null ? (
+      <ResizeHandle onCommit={(span) => design.resizeWidth?.(target, span)} />
+    ) : null
+
   if (child) {
     const { children: inner, ...childOwn } = child.props as Props & { children?: ReactNode }
     return cloneElement(
       child,
       // The child's own classes, style, ref and handlers are kept and merged.
       mergeProps(childOwn, rest as Props, dragProps, own) as ChildProps,
-      badge || lastTag || indicator || dot || noteMarker ? (
+      badge || lastTag || indicator || dot || noteMarker || resize ? (
         <>
           {dot}
           {badge}
           {lastTag}
           {noteMarker}
           {indicator}
+          {resize}
           {inner}
         </>
       ) : (
@@ -438,6 +450,7 @@ export function DesignNode({
       {lastTag}
       {noteMarker}
       {indicator}
+      {resize}
       {children}
     </Tag>
   )

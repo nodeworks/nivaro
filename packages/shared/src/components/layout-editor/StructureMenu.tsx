@@ -1,11 +1,14 @@
 import {
   ArrowLeft,
   ClipboardCopy,
+  Columns3,
   CopyPlus,
   Group,
+  Merge,
   Pin,
   PinOff,
   Shuffle,
+  SquareSplitVertical,
   Ungroup
 } from 'lucide-react'
 import {
@@ -19,6 +22,7 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
+import { stickyGroupKey } from '../../lib/form-structure'
 import {
   type GroupRow,
   isCanvasSlot,
@@ -26,12 +30,22 @@ import {
   type LayoutOp,
   UNGROUPED_KEY
 } from '../../lib/layout-ops'
-import { cn } from '../../lib/utils'
+import { cn, titleCase } from '../../lib/utils'
 import { Checkbox } from '../ui/checkbox'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { duplicateKeys, STRUCTURE_MENU_EVENT } from './ArrangeButton'
 import type { DesignMark, DesignTarget } from './design-context'
+import { readOverrides } from './inspector/model'
 import { isTyping } from './is-typing'
+import {
+  joinBlocked,
+  joinPlan,
+  joinTarget,
+  rowBlocked,
+  rowPlan,
+  splitBlocked,
+  splitPlan
+} from './section-structure'
 import { effectText, tintCard } from './panel-style'
 import {
   convertChoices,
@@ -56,7 +70,7 @@ import type { ApplyOptions } from './useLayoutDraft'
 
 export { ArrangeButton, openStructureMenu } from './ArrangeButton'
 
-// The canvas menu (#2623 #2624 #2625 #2628 #2643): right-click (or the
+// The canvas menu (#2623 #2624 #2625 #2628 #2643 #2696 #2697): right-click (or the
 // context-menu key) on a canvas node, or a section's Arrange button in the
 // inspector, opens one anchored menu — Duplicate, Wrap / Unwrap, Convert,
 // Copy rules, Pin. ⌘D / Ctrl+D duplicates the selection. Every action is one
@@ -95,11 +109,27 @@ export function usePinMarks(
 ): (t: DesignTarget) => DesignMark[] {
   return useMemo(() => {
     const pinned = new Set(bundle.groups.filter((g) => isPinned(g)).map((g) => g.key))
+    const sticky = stickyGroupKey(
+      [...bundle.groups].filter((g) => g.parent_key === null).sort((a, b) => a.sort - b.sort)
+    )
     return (t: DesignTarget) => {
       const own = marks?.(t) ?? []
-      if (t.kind !== 'group' || !pinned.has(t.key)) return own
+      if (t.kind !== 'group') return own
+      // #2699: the form's one sticky section says so on the canvas (it does not stick there).
+      const withSticky: DesignMark[] =
+        t.key === sticky
+          ? [
+              ...own,
+              {
+                text: 'Sticks to the top',
+                tone: 'slate',
+                tip: 'People see this section stay at the top of the form while they scroll the rest (not on phones).'
+              }
+            ]
+          : own
+      if (!pinned.has(t.key)) return withSticky
       return [
-        ...own,
+        ...withSticky,
         {
           text: 'Pinned',
           tone: 'slate',
@@ -247,6 +277,13 @@ export function StructureActions({
   )
 }
 
+/** A field's label on this form, for a new row's label: its override, else its name. */
+const labelIn = (bundle: LayoutBundle) => (field: string) => {
+  const p = bundle.placements.find((x) => x.field === field)
+  const ov = readOverrides(p).label
+  return (typeof ov === 'string' && ov) || p?.label_override || titleCase(field)
+}
+
 function targetKeyOf(t: DesignTarget): string {
   if (t.kind === 'group') return `group:${t.key}`
   if (t.kind === 'header') return `header:${t.field}`
@@ -365,8 +402,39 @@ function MenuView({
           {wrap.ok ? wrap.label.replace(/^Wrap \d+ fields?/, 'Wrap') : 'Wrap in a new section'}
         </MenuItem>
       )}
+      {one && (one.kind === 'field' || one.kind === 'slot') && one.group_key !== null && (
+        <MenuItem
+          icon={<SquareSplitVertical />}
+          blocked={splitBlocked(bundle, one)}
+          data-structure-action='split'
+          onPick={() => run(splitPlan(bundle, one), { toastNotes: true })}
+        >
+          Split the section here
+        </MenuItem>
+      )}
+      {fieldTargets.length > 1 && (
+        <MenuItem
+          icon={<Columns3 />}
+          blocked={rowBlocked(bundle, fieldTargets)}
+          data-structure-action='row'
+          onPick={() => run(rowPlan(bundle, fieldTargets, labelIn(bundle)), { toastNotes: true })}
+        >
+          Put side by side under one label
+        </MenuItem>
+      )}
       {group && (
         <>
+          <MenuItem
+            icon={<Merge />}
+            blocked={joinBlocked(bundle, group.key)}
+            data-structure-action='join'
+            onPick={() => run(joinPlan(bundle, group.key), { toastNotes: true })}
+          >
+            {(() => {
+              const next = joinTarget(bundle, group.key)
+              return next ? `Join with ${groupName(next)}` : 'Join with the next section'
+            })()}
+          </MenuItem>
           <MenuItem
             icon={<Ungroup />}
             blocked={unwrapBlocked(bundle, group.key)}

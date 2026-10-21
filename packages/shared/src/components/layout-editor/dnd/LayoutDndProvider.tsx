@@ -391,6 +391,8 @@ export function LayoutDndProvider({
   // cancelled pointerdown. This wrapper sees it first and hands it to the
   // innermost node's activator.
   const relay = (e: PointerEvent<HTMLDivElement>) => {
+    // A width handle (#2701) drags the width, not the field.
+    if ((e.target as Element | null)?.closest?.('[data-design-resize]')) return
     const el = (e.target as Element | null)?.closest?.('[data-design-target]')
     if (el) store.activators.get(el)?.()?.(e)
   }
