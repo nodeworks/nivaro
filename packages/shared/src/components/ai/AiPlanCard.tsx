@@ -149,6 +149,33 @@ function fmt(v: unknown): string {
   return String(v)
 }
 
+/** Amber = an Ask AI proposal standing out in a conversation; quiet = the plan is
+ *  the whole surface (Let AI do this), where amber is kept for real cautions. */
+const TONES = {
+  amber: {
+    box: 'rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-800 dark:bg-amber-900/10',
+    icon: 'text-amber-700 dark:text-amber-300',
+    title: 'text-amber-900 dark:text-amber-200',
+    impact: 'text-amber-900/90 dark:text-amber-200/90',
+    progress: 'text-amber-800/80 dark:text-amber-300/80',
+    step: 'border-amber-200/70 bg-white/70 dark:border-amber-800/60 dark:bg-card',
+    status: 'text-amber-800 dark:text-amber-300',
+    link: 'text-amber-800 dark:text-amber-300',
+    stepTitle: 'truncate'
+  },
+  quiet: {
+    box: '',
+    icon: 'text-slate-400',
+    title: 'text-foreground',
+    impact: 'text-muted-foreground',
+    progress: 'text-muted-foreground',
+    step: 'border-slate-200 bg-white dark:border-border dark:bg-card',
+    status: 'text-muted-foreground',
+    link: 'text-nvr-navy dark:text-nvr-cyan',
+    stepTitle: 'break-words'
+  }
+}
+
 export function AiPlanCard({
   plan: initial,
   subscribe,
@@ -157,7 +184,9 @@ export function AiPlanCard({
   stepExtra,
   extraActions,
   runDisabled,
-  onPlan
+  onPlan,
+  quiet,
+  stepChanges
 }: {
   plan: AiPlan
   /** The host's socket — `ai:plan` events for this person. Optional: the
@@ -174,7 +203,12 @@ export function AiPlanCard({
   runDisabled?: string | null
   /** Every plan change the card sees (events, polls, actions). */
   onPlan?: (plan: AiPlan) => void
+  /** Neutral surface for hosts where the plan is the whole panel. */
+  quiet?: boolean
+  /** Replaces a step's "field → value" lines (a host that knows the old values). */
+  stepChanges?: (step: AiPlanStep) => React.ReactNode | undefined
 }) {
+  const tone = TONES[quiet ? 'quiet' : 'amber']
   const client = useOptionalNivaroClient()
   const [plan, setPlan] = useState<AiPlan>(initial)
   const [busy, setBusy] = useState<string | null>(null)
@@ -256,29 +290,20 @@ export function AiPlanCard({
   const pending = plan.steps.filter((s) => s.state.status === 'pending').length
 
   return (
-    <div
-      className={cn(
-        'mt-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-800 dark:bg-amber-900/10',
-        className
-      )}
-      data-ai-plan={plan.status}
-    >
+    <div className={cn('mt-2', tone.box, className)} data-ai-plan={plan.status}>
       <div className='flex items-start gap-2'>
-        <ListChecks className='mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300' />
+        <ListChecks className={cn('mt-0.5 h-4 w-4 shrink-0', tone.icon)} />
         <div className='min-w-0 flex-1'>
-          <p className='text-[12.5px] font-semibold text-amber-900 dark:text-amber-200'>
+          <p className={cn('text-[12.5px] font-semibold', tone.title)}>
             {plan.status === 'proposed' ? 'Proposed plan: ' : 'Plan: '}
             {plan.title}
           </p>
           {plan.impact?.summary && (
-            <p
-              className='text-[11.5px] text-amber-900/90 dark:text-amber-200/90'
-              data-ai-plan-impact
-            >
+            <p className={cn('text-[11.5px]', tone.impact)} data-ai-plan-impact>
               {plan.impact.summary}
             </p>
           )}
-          <p className='text-[11px] text-amber-800/80 dark:text-amber-300/80' data-ai-plan-progress>
+          <p className={cn('text-[11px]', tone.progress)} data-ai-plan-progress>
             {plan.steps.length} step{plan.steps.length === 1 ? '' : 's'}
             {done + skipped > 0 ? ` · ${done} done` : ''}
             {skipped > 0 ? ` · ${skipped} skipped` : ''}
@@ -305,10 +330,11 @@ export function AiPlanCard({
         {plan.steps.map((s) => {
           const p = s.preview ?? {}
           const changes = p.changes && typeof p.changes === 'object' ? p.changes : null
+          const hostChanges = stepChanges?.(s)
           return (
             <li
               key={s.id}
-              className='rounded-md border border-amber-200/70 bg-white/70 px-2.5 py-1.5 dark:border-amber-800/60 dark:bg-card'
+              className={cn('rounded-md border px-2.5 py-1.5', tone.step)}
               data-ai-plan-step={s.state.status}
             >
               <div className='flex items-center gap-1.5'>
@@ -316,7 +342,9 @@ export function AiPlanCard({
                 <span className='text-[11px] font-medium tabular-nums text-muted-foreground'>
                   {s.n}.
                 </span>
-                <span className='min-w-0 flex-1 truncate text-[12.5px] text-foreground'>
+                <span
+                  className={cn('min-w-0 flex-1 text-[12.5px] text-foreground', tone.stepTitle)}
+                >
                   {s.title}
                 </span>
                 <span className='shrink-0 rounded bg-muted px-1.5 py-px text-[10px] text-muted-foreground'>
@@ -333,7 +361,8 @@ export function AiPlanCard({
                   Re-checked — this step changed since it was proposed.
                 </p>
               )}
-              {changes && Object.keys(changes).length > 0 && (
+              {hostChanges}
+              {hostChanges === undefined && changes && Object.keys(changes).length > 0 && (
                 <div className='mt-0.5 space-y-px pl-5'>
                   {Object.entries(changes)
                     .slice(0, 6)
@@ -401,12 +430,18 @@ export function AiPlanCard({
 
       {later != null && canRun && (
         <div className='mt-2 flex flex-wrap items-center gap-2' data-ai-plan-later>
-          <span className='text-[11.5px] text-amber-900 dark:text-amber-200'>Run at</span>
+          <span className={cn('text-[11.5px]', tone.title)}>Run at</span>
           <input
             type='datetime-local'
             value={later}
             onChange={(e) => setLater(e.target.value)}
-            className='h-7 rounded-md border border-amber-300 bg-white px-2 text-[12px] text-foreground dark:border-amber-700 dark:bg-card'
+            aria-label='Run at'
+            className={cn(
+              'h-7 rounded-md border bg-white px-2 text-[12px] text-foreground dark:bg-card',
+              quiet
+                ? 'border-slate-200 dark:border-border'
+                : 'border-amber-300 dark:border-amber-700'
+            )}
           />
           <Button
             size='sm'
@@ -430,7 +465,7 @@ export function AiPlanCard({
       <div className='mt-2 flex flex-wrap items-center gap-2'>
         {canRun && client && runDisabled && (
           <span
-            className='flex items-center gap-1.5 text-[12px] text-amber-800 dark:text-amber-300'
+            className={cn('flex items-center gap-1.5 text-[12px]', tone.status)}
             data-ai-plan-run-withheld
           >
             <Clock className='h-3 w-3' />
@@ -488,7 +523,7 @@ export function AiPlanCard({
         {plan.status === 'scheduled' && (
           <>
             <span
-              className='flex items-center gap-1.5 text-[12px] text-amber-800 dark:text-amber-300'
+              className={cn('flex items-center gap-1.5 text-[12px]', tone.status)}
               data-ai-plan-scheduled
             >
               <Clock className='h-3 w-3' />
@@ -509,7 +544,7 @@ export function AiPlanCard({
         )}
         {plan.status === 'running' && (
           <>
-            <span className='flex items-center gap-1.5 text-[12px] text-amber-800 dark:text-amber-300'>
+            <span className={cn('flex items-center gap-1.5 text-[12px]', tone.status)}>
               <Loader2 className='h-3 w-3 animate-spin' /> Running…
             </span>
             {client && (
@@ -575,7 +610,10 @@ export function AiPlanCard({
         {client && plan.impact !== undefined && (
           <button
             type='button'
-            className='ml-auto text-[11.5px] font-medium text-amber-800 underline-offset-2 hover:underline dark:text-amber-300'
+            className={cn(
+              'ml-auto text-[11.5px] font-medium underline-offset-2 hover:underline',
+              tone.link
+            )}
             onClick={() => setShowChanges((v) => !v)}
             data-ai-plan-changes-toggle
           >

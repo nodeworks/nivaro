@@ -2,16 +2,18 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   Check,
+  CircleSlash,
+  Clock,
   Loader2,
   MessageSquareText,
   Pencil,
+  RotateCcw,
+  ShieldCheck,
   Sparkles,
-  Timer,
   Trash2,
-  Undo2,
-  X
+  Undo2
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useItemEditAuth, useOptionalNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
@@ -151,6 +153,15 @@ function fmt(v: unknown): string {
   return String(v)
 }
 
+/** `completed_on` → "Completed on" — the plan payload carries keys, not labels. */
+function fieldLabel(k: string): string {
+  const s = k.replace(/_/g, ' ').trim()
+  return s ? s[0].toUpperCase() + s.slice(1) : k
+}
+
+const plural = (n: number, one: string, many = `${one}s`) =>
+  `${n.toLocaleString()} ${n === 1 ? one : many}`
+
 export function humanSeconds(s: number): string {
   if (s < 60) return `${Math.max(1, Math.round(s))} s`
   if (s < 3600) return `${Math.round(s / 60)} min`
@@ -255,6 +266,7 @@ export function TaskDoButton({
       </PopoverTrigger>
       <PopoverContent
         align='end'
+        collisionPadding={16}
         className='w-[min(540px,calc(100vw-32px))] p-0'
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
@@ -341,27 +353,49 @@ export function TaskDoPanel({
 
   const p = plan.data
   const started = !!planId
+  const canRedraft =
+    !!cannot ||
+    (started &&
+      !!p &&
+      (p.status === 'proposed' || p.status === 'rejected' || p.status === 'expired'))
+  const header = (
+    <div className='flex items-start gap-2'>
+      <Sparkles className='mt-0.5 h-4 w-4 shrink-0 text-nvr-navy dark:text-nvr-cyan' />
+      <div className='min-w-0 flex-1'>
+        <p className='text-[13px] font-semibold text-foreground'>Let AI do this</p>
+        <p className='text-[11.5px] text-muted-foreground'>
+          It reads the {ticket ? 'ticket' : 'task'}, the record and the thread as you, then drafts a
+          plan you approve. Nothing changes until you say so.
+        </p>
+      </div>
+    </div>
+  )
   if (access.isLoading) return <Loading text='Checking…' />
-  if (!access.data) return <Problem text={errText(access.error)} />
-  if (!access.data.ok && !started) {
-    return <Problem text={access.data.reason ?? 'Not available'} />
+  if (!access.data || (!access.data.ok && !started)) {
+    const failed = !access.data
+    return (
+      <div className='p-4' data-task-do-panel>
+        {header}
+        <Problem
+          text={
+            failed
+              ? `Could not check whether AI can help with this ${ticket ? 'ticket' : 'task'}.`
+              : (access.data?.reason ?? 'Not available')
+          }
+          detail={failed ? errText(access.error) : null}
+          onRetry={failed ? () => void access.refetch() : undefined}
+          retrying={access.isFetching}
+        />
+      </div>
+    )
   }
 
   return (
     <div
-      className='max-h-[min(72vh,760px)] overflow-y-auto overscroll-contain p-4'
+      className='max-h-[min(78vh,820px)] overflow-y-auto overscroll-contain p-4'
       data-task-do-panel
     >
-      <div className='flex items-start gap-2'>
-        <Sparkles className='mt-0.5 h-4 w-4 shrink-0 text-nvr-navy dark:text-nvr-cyan' />
-        <div className='min-w-0 flex-1'>
-          <p className='text-[13px] font-semibold text-foreground'>Let AI do this</p>
-          <p className='text-[11.5px] text-muted-foreground'>
-            It reads the {ticket ? 'ticket' : 'task'}, the record and the thread as you, then drafts
-            a plan you approve. Nothing changes until you say so.
-          </p>
-        </div>
-      </div>
+      {header}
 
       {draft.isPending && (
         <div className='mt-3 space-y-2' data-task-do-drafting>
@@ -385,7 +419,7 @@ export function TaskDoPanel({
               answers: questions.list.map((q) => ({
                 id: q.id,
                 question: q.text,
-                answer: answers[q.id] ?? ''
+                answer: (answers[q.id] ?? '').trim() || 'No answer'
               }))
             })
           }}
@@ -406,6 +440,7 @@ export function TaskDoPanel({
                       <button
                         key={o}
                         type='button'
+                        aria-pressed={answers[q.id] === o}
                         onClick={() => setAnswers((a) => ({ ...a, [q.id]: o }))}
                         className={cn(
                           'h-6 rounded-md border px-2 text-[11.5px]',
@@ -434,7 +469,7 @@ export function TaskDoPanel({
               type='submit'
               size='sm'
               className='h-7 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
-              disabled={questions.list.some((q) => !(answers[q.id] ?? '').trim())}
+              disabled={!questions.list.some((q) => (answers[q.id] ?? '').trim())}
             >
               Draft with these answers
             </Button>
@@ -454,26 +489,29 @@ export function TaskDoPanel({
       {!draft.isPending && cannot && (
         <div className='mt-3 space-y-2' data-task-do-cannot>
           <p className='flex items-start gap-1.5 text-[12.5px] text-foreground'>
-            <X className='mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-400' />
+            <CircleSlash className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400' />
             <span>
-              <span className='font-medium'>AI can’t do this.</span> {cannot.reason}
+              <span className='font-medium'>AI can’t do this one.</span> {cannot.reason}
             </span>
           </p>
+          <p className='pl-5 text-[11.5px] text-muted-foreground'>Nothing was changed.</p>
           {cannot.checklist.length > 0 && (
-            <div>
+            <div className='pl-5'>
               <p className='text-[11.5px] font-medium text-muted-foreground'>To do it yourself</p>
-              <ul className='mt-1 space-y-1'>
+              <ol className='mt-1 space-y-1'>
                 {cannot.checklist.map((c, i) => (
                   <li
                     // biome-ignore lint/suspicious/noArrayIndexKey: a static list the model wrote
                     key={`${i}-${c}`}
-                    className='flex items-start gap-1.5 text-[12px] text-foreground'
+                    className='flex items-start gap-2 text-[12px] text-foreground'
                   >
-                    <span className='mt-1 h-3 w-3 shrink-0 rounded-sm border border-slate-300 dark:border-border' />
+                    <span className='w-3.5 shrink-0 text-right tabular-nums text-muted-foreground'>
+                      {i + 1}.
+                    </span>
                     {c}
                   </li>
                 ))}
-              </ul>
+              </ol>
             </div>
           )}
         </div>
@@ -521,7 +559,7 @@ export function TaskDoPanel({
         </p>
       )}
 
-      {!draft.isPending && (started || cannot) && access.data.ok && (
+      {!draft.isPending && canRedraft && access.data.ok && (
         <div className='mt-3 border-t border-slate-200 pt-2.5 dark:border-border'>
           {redrafting ? (
             <form
@@ -534,6 +572,7 @@ export function TaskDoPanel({
             >
               <Textarea
                 autoFocus
+                aria-label={cannot ? 'What should it try instead' : 'What should be different'}
                 className='min-h-[56px] text-[12px]'
                 placeholder={
                   cannot
@@ -569,20 +608,14 @@ export function TaskDoPanel({
               </div>
             </form>
           ) : (
-            (cannot ||
-              (p &&
-                (p.status === 'proposed' ||
-                  p.status === 'rejected' ||
-                  p.status === 'expired'))) && (
-              <button
-                type='button'
-                className='text-[11.5px] font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
-                onClick={() => setRedrafting(true)}
-                data-task-do-redraft-toggle
-              >
-                {cannot ? 'Try again with a note' : 'Ask for a different plan…'}
-              </button>
-            )
+            <button
+              type='button'
+              className='text-[11.5px] font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+              onClick={() => setRedrafting(true)}
+              data-task-do-redraft-toggle
+            >
+              {cannot ? 'Try again with a note' : 'Ask for a different plan…'}
+            </button>
           )}
         </div>
       )}
@@ -602,27 +635,59 @@ function Loading({ text }: { text: string }) {
   )
 }
 
-function Problem({ text }: { text: string }) {
+function Problem({
+  text,
+  detail,
+  onRetry,
+  retrying
+}: {
+  text: string
+  detail?: string | null
+  onRetry?: () => void
+  retrying?: boolean
+}) {
   return (
-    <p className='p-4 text-[12px] text-muted-foreground' data-task-do-problem>
-      {text}
-    </p>
+    <div className='mt-3 rounded-md bg-slate-50 px-3 py-2.5 dark:bg-muted/40' data-task-do-problem>
+      <p className='flex items-start gap-1.5 text-[12px] text-foreground'>
+        <CircleSlash className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400' />
+        <span>{text}</span>
+      </p>
+      {detail && <p className='mt-0.5 pl-5 text-[11px] text-muted-foreground'>{detail}</p>}
+      {onRetry && (
+        <Button
+          size='sm'
+          variant='outline'
+          className='ml-5 mt-2 h-7'
+          onClick={onRetry}
+          disabled={retrying}
+        >
+          {retrying ? (
+            <Loader2 className='h-3 w-3 animate-spin' />
+          ) : (
+            <RotateCcw className='h-3 w-3' />
+          )}
+          Try again
+        </Button>
+      )}
+    </div>
   )
 }
+
+const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' } as const
 
 function RiskPill({ level }: { level: 'low' | 'medium' | 'high' }) {
   const cls =
     level === 'high'
       ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
       : level === 'medium'
-        ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+        ? 'bg-amber-500/10 text-amber-800 dark:text-amber-300'
         : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
   return (
     <span
-      className={cn('rounded px-1.5 py-px text-[11px] font-medium capitalize', cls)}
+      className={cn('rounded px-1.5 py-px text-[11px] font-medium', cls)}
       data-task-do-risk={level}
     >
-      {level} risk
+      {RISK_LABEL[level]}
     </span>
   )
 }
@@ -631,53 +696,111 @@ function RiskPill({ level }: { level: 'low' | 'medium' | 'high' }) {
 function ReviewStrip({ plan }: { plan: TaskDoPlan }) {
   const r = plan.review
   const notRevertible = r.risk.irreversible
+  // The box below lists the steps that can't be undone — don't say it twice.
+  const why = r.risk.reasons.filter(
+    (x) => !(notRevertible.length > 0 && /cannot be rolled back/.test(x))
+  )
+  const cell = 'bg-white px-2.5 py-1.5 dark:bg-card'
   return (
-    <div className='mt-2 space-y-2' data-task-do-review>
-      <div className='grid grid-cols-3 gap-px overflow-hidden rounded-md border border-amber-200/80 bg-amber-200/80 dark:border-amber-800/60 dark:bg-amber-800/60'>
-        <div className='bg-white/80 px-2.5 py-1.5 dark:bg-card'>
-          <p className='text-[10.5px] text-muted-foreground'>Run time</p>
-          <p className='text-[12.5px] font-medium tabular-nums text-foreground'>
+    <div className='mt-2.5 space-y-2' data-task-do-review>
+      <div className='grid grid-cols-3 gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
+        <div className={cell}>
+          <p className='text-[11px] text-muted-foreground'>Runs in</p>
+          <p className='text-[13px] font-medium tabular-nums text-foreground'>
             ≈ {humanSeconds(r.estimate.run_seconds)}
           </p>
           <p className='text-[10.5px] text-muted-foreground'>
-            {r.estimate.run_basis === 'recent runs' ? 'from recent runs' : 'default rate'}
+            {r.estimate.run_basis === 'recent runs' ? 'from recent runs' : 'typical rate'}
           </p>
         </div>
-        <div className='bg-white/80 px-2.5 py-1.5 dark:bg-card'>
-          <p className='text-[10.5px] text-muted-foreground'>Hands-on time saved</p>
-          <p className='text-[12.5px] font-medium tabular-nums text-foreground'>
+        <div className={cell}>
+          <p className='text-[11px] text-muted-foreground'>Saves you</p>
+          <p className='text-[13px] font-medium tabular-nums text-foreground'>
             {r.estimate.hands_on_minutes != null
               ? `≈ ${humanMinutes(r.estimate.hands_on_minutes)}`
               : '—'}
           </p>
           <p className='text-[10.5px] text-muted-foreground'>AI’s estimate</p>
         </div>
-        <div className='bg-white/80 px-2.5 py-1.5 dark:bg-card'>
-          <p className='text-[10.5px] text-muted-foreground'>Risk</p>
+        <div className={cell}>
+          <p className='text-[11px] text-muted-foreground'>Risk</p>
           <p className='mt-0.5'>
             <RiskPill level={r.risk.level} />
           </p>
-          <p
-            className='truncate text-[10.5px] text-muted-foreground'
-            title={r.risk.reasons.join('; ')}
-          >
-            {r.risk.reasons[0] ?? `${r.risk.records} record${r.risk.records === 1 ? '' : 's'}`}
-          </p>
+          <p className='text-[10.5px] text-muted-foreground'>{plural(r.risk.records, 'record')}</p>
         </div>
       </div>
-      {notRevertible.length > 0 && (
-        <p
-          className='flex items-start gap-1.5 rounded-md border border-amber-300 bg-white/70 px-2.5 py-1.5 text-[11.5px] text-amber-900 dark:border-amber-700 dark:bg-card dark:text-amber-200'
+      {r.risk.level !== 'low' && why.length > 0 && (
+        <p className='text-[11.5px] text-muted-foreground' data-task-do-risk-why>
+          {RISK_LABEL[r.risk.level]}: {why.join(' · ')}
+        </p>
+      )}
+      {notRevertible.length > 0 ? (
+        <div
+          className='rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11.5px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
           data-task-do-irreversible
         >
-          <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' />
-          <span>
-            <span className='font-medium'>Can’t be rolled back:</span>{' '}
-            {notRevertible.map((s) => `step ${s.n} (${s.why})`).join(', ')}.
-          </span>
+          <p className='flex items-center gap-1.5 font-medium'>
+            <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
+            {notRevertible.length === 1
+              ? 'One step can’t be undone once it runs'
+              : `${notRevertible.length} steps can’t be undone once they run`}
+          </p>
+          <ul className='mt-0.5 space-y-px pl-5'>
+            {notRevertible.map((s) => (
+              <li key={s.n}>
+                Step {s.n} — {s.why}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p
+          className='flex items-center gap-1.5 text-[11.5px] text-muted-foreground'
+          data-task-do-reversible
+        >
+          <ShieldCheck className='h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400' />
+          Everything this plan changes can be undone afterwards.
         </p>
       )}
     </div>
+  )
+}
+
+/** One step's field changes, old → new where the preview knows the old value. */
+function StepChanges({ step, plan }: { step: AiPlanStep; plan: TaskDoPlan }) {
+  const t = plan.review.touches.find((x) => x.step_id === step.id)
+  const preview =
+    step.preview?.changes && typeof step.preview.changes === 'object' ? step.preview.changes : {}
+  const known = new Map((t?.fields ?? []).map((f) => [f.field, f]))
+  const keys = [...new Set([...Object.keys(preview), ...known.keys()])]
+  if (keys.length === 0) return null
+  return (
+    <dl className='mt-0.5 space-y-px pl-5' data-task-do-step-changes>
+      {keys.slice(0, 6).map((k) => {
+        const f = known.get(k)
+        const to = f ? f.to : preview[k]
+        return (
+          <div key={k} className='flex min-w-0 gap-1.5 text-[11px]'>
+            <dt className='shrink-0 text-muted-foreground'>{fieldLabel(k)}</dt>
+            <dd className='min-w-0 truncate text-slate-700 dark:text-slate-300'>
+              {f && f.from !== undefined && (
+                <>
+                  <span className='text-muted-foreground line-through decoration-slate-300 dark:decoration-slate-600'>
+                    {fmt(f.from)}
+                  </span>{' '}
+                  →{' '}
+                </>
+              )}
+              {fmt(to)}
+            </dd>
+          </div>
+        )
+      })}
+      {keys.length > 6 && (
+        <p className='text-[11px] text-muted-foreground'>+{keys.length - 6} more fields</p>
+      )}
+    </dl>
   )
 }
 
@@ -708,13 +831,10 @@ function StepExtra({
   const canEdit = plan.status === 'proposed'
   const parts: string[] = []
   if (t) {
-    if (t.records)
-      parts.push(`${t.records} ${t.collection ?? 'record'}${t.records === 1 ? '' : 's'}`)
-    if (t.people) parts.push(`tells ${t.people} ${t.people === 1 ? 'person' : 'people'}`)
+    if (t.records) parts.push(plural(t.records, t.collection ?? 'record'))
+    if (t.people) parts.push(`tells ${plural(t.people, 'person', 'people')}`)
     if (t.external) parts.push('calls other systems')
     if (t.email) parts.push('may email')
-    for (const f of t.fields.filter((x) => x.from !== undefined).slice(0, 4))
-      parts.push(`${f.field} ${fmt(f.from)} → ${fmt(f.to)}`)
   }
   const hidden = Number(step.preview?.hidden_fields ?? 0)
   if (hidden) parts.push(`${hidden} field${hidden === 1 ? '' : 's'} you may not read`)
@@ -724,7 +844,9 @@ function StepExtra({
         <p className='text-[11px] text-muted-foreground'>
           {parts.join(' · ')}
           {t?.irreversible && (
-            <span className='ml-1 text-amber-700 dark:text-amber-300'>· not reversible</span>
+            <span className='text-amber-800 dark:text-amber-300'>
+              {parts.length > 0 ? ' · ' : ''}can’t be undone
+            </span>
           )}
         </p>
       )}
@@ -775,7 +897,7 @@ function StepExtra({
               setField(v)
               setValue(changes && v in changes ? fmt(changes[v]) : '')
             }}
-            options={editableFields.map((f) => ({ value: f, label: f }))}
+            options={editableFields.map((f) => ({ value: f, label: fieldLabel(f) }))}
             ariaLabel='Field'
             className='h-7 w-[150px] text-[11.5px]'
           />
@@ -826,7 +948,11 @@ function PlanReview({
   const [reply, setReply] = useState<string | null>(null)
   const [showUndo, setShowUndo] = useState(false)
   const [doneSent, setDoneSent] = useState(false)
+  // The card's own copy (events, polls, its actions) — what the person sees right now.
+  const [live, setLive] = useState<AiPlan>(p)
   const key = ['task-do', 'plan', p.plan_id]
+  // An edit (step removed, value changed) re-mounts the card on the new steps.
+  const stepsSig = JSON.stringify(p.steps.map((s) => [s.id, s.preview?.changes ?? null]))
 
   const edit = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
@@ -887,47 +1013,65 @@ function PlanReview({
   const waiting = p.approval?.required && !p.approval.approved_by
   const finished = p.status === 'executed'
   const taskOpen = task.status === 'open' || task.status === 'in_progress'
+  const beforeRun = live.status === 'proposed' || live.status === 'scheduled'
 
   return (
-    <div className='mt-2' data-task-do-plan={p.status}>
+    <div className='mt-3' data-task-do-plan={p.status}>
+      <PlanStatus plan={live} waiting={!!waiting} />
       {waiting && (
         <div
-          className='mb-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11.5px] text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200'
+          className='flex items-start gap-1.5 rounded-md bg-slate-50 px-2.5 py-1.5 text-[11.5px] text-foreground dark:bg-muted/40'
           data-task-do-approval
         >
-          <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
+          <Clock className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400' />
           <span className='min-w-0 flex-1'>
-            {p.approval!.reason}. {p.approval!.superseded ? `${p.approval!.superseded}. ` : ''}
+            <span className='font-medium'>Needs a second approval.</span> {p.approval!.reason}.{' '}
+            {p.approval!.superseded ? `${p.approval!.superseded}. ` : ''}
             {p.can_approve
-              ? 'You were asked to approve it.'
-              : `Waiting for ${p.approval!.approvers.length === 1 ? 'one person' : `one of ${p.approval!.approvers.length} people`} to approve.`}
+              ? 'You were asked to approve it — review the steps below first.'
+              : `Waiting for ${p.approval!.approvers.length === 1 ? 'one person' : `one of ${p.approval!.approvers.length} people`} to approve; they have been told.`}
           </span>
-          {p.can_approve && (
+        </div>
+      )}
+      <AiPlanCard
+        key={stepsSig}
+        plan={p}
+        quiet
+        subscribe={subscribe}
+        className='mt-3'
+        beforeSteps={beforeRun ? <ReviewStrip plan={p} /> : null}
+        stepChanges={(s) => <StepChanges step={s} plan={p} />}
+        stepExtra={(s) => (
+          <StepExtra step={s} plan={p} onEdit={(b) => edit.mutate(b)} busy={edit.isPending} />
+        )}
+        runDisabled={
+          waiting
+            ? p.can_approve
+              ? 'Once you approve, the assignee can run it.'
+              : 'Approve & run opens once a second person approves.'
+            : null
+        }
+        onPlan={(next) => {
+          setLive(next)
+          onPlan(next)
+        }}
+        extraActions={(live) =>
+          waiting && p.can_approve && live.status === 'proposed' ? (
             <Button
               size='sm'
-              className='h-6 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+              className='h-7 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
               disabled={approve.isPending}
               onClick={() => approve.mutate()}
               data-task-do-approve
             >
-              {approve.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : null}
-              Approve
+              {approve.isPending ? (
+                <Loader2 className='h-3 w-3 animate-spin' />
+              ) : (
+                <Check className='h-3 w-3' />
+              )}
+              Approve plan
             </Button>
-          )}
-        </div>
-      )}
-      <AiPlanCard
-        plan={p}
-        subscribe={subscribe}
-        className='mt-0'
-        beforeSteps={<ReviewStrip plan={p} />}
-        stepExtra={(s) => (
-          <StepExtra step={s} plan={p} onEdit={(b) => edit.mutate(b)} busy={edit.isPending} />
-        )}
-        runDisabled={waiting ? 'Approve & run opens once a second person approves.' : null}
-        onPlan={onPlan}
-        extraActions={(live) =>
-          live.status === 'executed' || p.can_undo ? (
+          ) : live.status === 'executed' || p.can_undo ? (
             <>
               {live.status === 'executed' && taskOpen && !doneSent && (
                 <Button
@@ -979,7 +1123,9 @@ function PlanReview({
         }
       />
       {doneSent && (
-        <p className='mt-2 text-[11.5px] text-emerald-700 dark:text-emerald-400'>Marked done.</p>
+        <p className='mt-2 flex items-center gap-1 text-[11.5px] text-emerald-700 dark:text-emerald-400'>
+          <Check className='h-3 w-3' /> {ticket ? 'Ticket' : 'Task'} marked done.
+        </p>
       )}
       {reply != null && (
         <form
@@ -990,11 +1136,19 @@ function PlanReview({
             if (reply.trim()) sendReply.mutate(reply.trim())
           }}
         >
+          <label
+            htmlFor={`task-do-reply-${p.plan_id}`}
+            className='block text-[12px] font-medium text-foreground'
+          >
+            Reply to the requester
+          </label>
           <p className='text-[11.5px] text-muted-foreground'>
-            A draft for the requester — edit it, then send. It goes out as your reply.
+            AI drafted this from what the plan did. Edit it, then send — it goes out as your reply.
+            Nothing is sent until you do.
           </p>
           <Textarea
-            className='min-h-[88px] text-[12px]'
+            id={`task-do-reply-${p.plan_id}`}
+            className='min-h-[96px] text-[12px]'
             value={reply}
             onChange={(e) => setReply(e.target.value)}
           />
@@ -1031,13 +1185,86 @@ function PlanReview({
       )}
       {finished && !p.can_undo && p.made_steps?.length === 0 && (
         <p className='mt-2 text-[11px] text-muted-foreground'>
-          Nothing this plan did can be rolled back.
+          Nothing this plan did can be undone.
         </p>
       )}
       {error && (
         <p className='mt-2 text-[11.5px] text-rose-700 dark:text-rose-400' data-task-do-plan-error>
           {error}
         </p>
+      )}
+    </div>
+  )
+}
+
+/** One plain sentence on where the plan stands, above everything else in the panel. */
+function PlanStatus({ plan, waiting }: { plan: AiPlan; waiting?: boolean }) {
+  const total = plan.steps.length
+  const done = plan.steps.filter((s) => s.state.status === 'done' || s.state.status === 'skipped')
+  const failed = plan.steps.find((s) => s.state.status === 'failed')
+  const changed =
+    plan.records_changed > 0 ? ` · ${plural(plan.records_changed, 'record')} changed` : ''
+  let icon: ReactNode = null
+  let text: ReactNode = null
+  let tone = 'text-foreground'
+  switch (plan.status) {
+    case 'proposed':
+      // A plan waiting for a second approval says so in its own line.
+      if (waiting) return null
+      icon = <ShieldCheck className='h-3.5 w-3.5 text-slate-400' />
+      text = 'Nothing has run yet. Check the steps, then approve — or change or discard them.'
+      tone = 'text-muted-foreground'
+      break
+    case 'running': {
+      const n = Math.min(total, done.length + 1)
+      icon = <Loader2 className='h-3.5 w-3.5 animate-spin text-nvr-cyan' />
+      text = `Running step ${n} of ${total}${changed}`
+      break
+    }
+    case 'executed':
+      icon = <Check className='h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400' />
+      text = `Done — ${plural(total, 'step')} ran${changed}. The thread has a summary.`
+      break
+    case 'failed':
+    case 'paused':
+      icon = <Clock className='h-3.5 w-3.5 text-amber-600 dark:text-amber-400' />
+      text = failed
+        ? `Paused at step ${failed.n} — the reason is under it. Steps after it have not run.`
+        : `Paused after ${plural(done.length, 'step')}${changed}.`
+      break
+    case 'rejected':
+      text = done.length
+        ? 'Stopped — the remaining steps did not run.'
+        : 'Discarded — nothing changed.'
+      tone = 'text-muted-foreground'
+      break
+    default:
+      return null
+  }
+  const pct = total ? Math.round((done.length / total) * 100) : 0
+  return (
+    <div data-task-do-status={plan.status}>
+      <p className={cn('flex items-center gap-1.5 text-[12px]', tone)} aria-live='polite'>
+        {icon}
+        {text}
+      </p>
+      {(plan.status === 'running' || plan.status === 'failed' || plan.status === 'paused') && (
+        <div
+          className='mt-1.5 h-1 overflow-hidden rounded-full bg-slate-100 dark:bg-muted'
+          role='progressbar'
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={done.length}
+          aria-label='Steps finished'
+        >
+          <div
+            className={cn(
+              'h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none',
+              plan.status === 'running' ? 'bg-nvr-cyan' : 'bg-amber-500'
+            )}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
       )}
     </div>
   )
@@ -1097,49 +1324,82 @@ function UndoSection({
   }, [undoUntil])
   return (
     <div
-      className='mt-2 rounded-md border border-slate-200 bg-white p-2.5 dark:border-border dark:bg-card'
+      className='mt-3 rounded-md border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'
       data-task-do-undo
     >
-      <p className='flex items-center gap-1.5 text-[12px] font-medium text-foreground'>
+      <p className='flex items-center gap-1.5 text-[12.5px] font-medium text-foreground'>
         <Undo2 className='h-3.5 w-3.5 text-slate-400' /> Undo what AI did
-        {until && <span className='font-normal text-muted-foreground'>· until {until}</span>}
+        {until && (
+          <span className='font-normal text-muted-foreground'>· possible until {until}</span>
+        )}
       </p>
       {check.isLoading && (
-        <p className='mt-1 text-[11.5px] text-muted-foreground'>Checking what can be restored…</p>
+        <div className='mt-2 space-y-1.5'>
+          <Skeleton className='h-3.5 w-2/3' />
+          <Skeleton className='h-3.5 w-1/2' />
+        </div>
+      )}
+      {check.isError && (
+        <p className='mt-1.5 text-[11.5px] text-rose-700 dark:text-rose-400'>
+          Could not check what can be restored: {errText(check.error)}
+        </p>
       )}
       {check.data && (
-        <div className='mt-1 space-y-1 text-[11.5px]'>
-          <p className='text-foreground'>
+        <div className='mt-2 space-y-2 text-[11.5px]'>
+          <p className='flex items-start gap-1.5 text-foreground'>
+            <Check className='mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400' />
             {revertible > 0
-              ? `${revertible} record${revertible === 1 ? '' : 's'} will go back to what they were.`
+              ? `${plural(revertible, 'record')} will go back to what ${revertible === 1 ? 'it was' : 'they were'} before the plan ran.`
               : 'Nothing is left to restore.'}
           </p>
           {blocked.length > 0 && (
-            <p className='text-amber-800 dark:text-amber-300' data-task-do-undo-conflicts>
-              Left alone ({blocked.length}):{' '}
-              {blocked
-                .slice(0, 4)
-                .map((r) => `${r.label} — ${r.reason ?? r.status}`)
-                .join('; ')}
-              {blocked.length > 4 ? ` +${blocked.length - 4} more` : ''}. Newer edits are never
-              overwritten.
-            </p>
+            <div className='flex items-start gap-1.5' data-task-do-undo-conflicts>
+              <CircleSlash className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400' />
+              <div className='min-w-0'>
+                <p className='text-foreground'>
+                  {plural(blocked.length, 'record')} left as{' '}
+                  {blocked.length === 1 ? 'it is' : 'they are'} — changed since, and newer edits are
+                  never overwritten:
+                </p>
+                <ul className='mt-0.5 space-y-px text-muted-foreground'>
+                  {blocked.slice(0, 4).map((r) => (
+                    <li key={`${r.collection}:${r.id}`} className='truncate'>
+                      {r.label} — {r.reason ?? r.status}
+                    </li>
+                  ))}
+                  {blocked.length > 4 && <li>+{blocked.length - 4} more</li>}
+                </ul>
+              </div>
+            </div>
           )}
           {never.length > 0 && (
-            <p className='text-muted-foreground'>
-              Cannot be restored: {never.map((s) => `step ${s.n} (${s.not_revertible})`).join(', ')}
-              .
-            </p>
+            <div className='flex items-start gap-1.5 text-muted-foreground'>
+              <CircleSlash className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400' />
+              <div className='min-w-0'>
+                <p>Can’t be undone:</p>
+                <ul className='mt-0.5 space-y-px'>
+                  {never.map((s) => (
+                    <li key={s.step_id}>
+                      Step {s.n} — {s.not_revertible}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           )}
         </div>
       )}
-      {result && <p className='mt-1.5 text-[11.5px] text-foreground'>{result}</p>}
+      {result && (
+        <p className='mt-2 text-[11.5px] text-foreground' aria-live='polite'>
+          {result}
+        </p>
+      )}
       {revertible > 0 && (
-        <div className='mt-2 flex items-center gap-2'>
+        <div className='mt-2.5 flex items-center gap-2'>
           <Button
             size='sm'
-            variant={confirm ? 'destructive' : 'outline'}
-            className='h-7'
+            variant={confirm ? 'default' : 'outline'}
+            className={cn('h-7', confirm && 'bg-nvr-cyan text-white hover:bg-nvr-cyan/90')}
             disabled={run.isPending}
             onClick={() => (confirm ? run.mutate() : setConfirm(true))}
             data-task-do-undo-run
@@ -1147,9 +1407,11 @@ function UndoSection({
             {run.isPending ? (
               <Loader2 className='h-3 w-3 animate-spin' />
             ) : (
-              <Timer className='h-3 w-3' />
+              <RotateCcw className='h-3 w-3' />
             )}
-            {confirm ? `Yes, restore ${revertible}` : 'Restore'}
+            {confirm
+              ? `Yes, restore ${plural(revertible, 'record')}`
+              : `Restore ${plural(revertible, 'record')}`}
           </Button>
           {confirm && (
             <Button size='sm' variant='ghost' className='h-7' onClick={() => setConfirm(false)}>
