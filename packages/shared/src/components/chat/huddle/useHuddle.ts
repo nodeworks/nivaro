@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { useOptionalRealtime } from '../../../lib/realtime'
+import { installHuddleCamera } from './huddle-camera'
+import { installHuddleDraw } from './huddle-draw'
+import { installHuddleReactions } from './huddle-reactions'
 import type { SfuTokenConfig } from './huddle-sfu'
 import {
   type HuddlePeer,
@@ -55,8 +58,13 @@ export function useHuddle(room: string | null) {
   )
 
   useEffect(() => {
-    if (realtime && support.audio) huddleStore.attach(realtime, fetchIce, fetchSfu)
-    if (support.audio) startHuddleExtras() // #2845–#2848
+    if (!realtime || !support.audio) return
+    // #2856/#2857/#2858 — stage features plug into the store (idempotent).
+    installHuddleReactions()
+    installHuddleCamera()
+    installHuddleDraw()
+    huddleStore.attach(realtime, fetchIce, fetchSfu)
+    startHuddleExtras() // #2845–#2848
   }, [realtime, support.audio, fetchIce, fetchSfu])
 
   const state: HuddleState = useSyncExternalStore(huddleStore.subscribe, huddleStore.getSnapshot)

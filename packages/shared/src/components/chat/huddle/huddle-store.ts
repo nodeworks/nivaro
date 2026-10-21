@@ -31,6 +31,11 @@ export interface HuddlePeer {
   muted: boolean
   screen: boolean
   since: number
+  /** #2857 — when their hand went up (null = down). */
+  hand_at?: number | null
+  /** #2858 — their camera's MediaStream id while it is on, and when it went on. */
+  cam?: string | null
+  cam_at?: number | null
 }
 
 export interface HuddleTransport {
@@ -54,6 +59,25 @@ export interface LivePeer extends HuddlePeer {
   /** The peer's screen, while they share. */
   video: MediaStream | null
   connection: 'new' | 'connecting' | 'connected' | 'failed'
+  /** #2858 — the peer's camera, while it is on and reaching us. */
+  camera?: MediaStream | null
+}
+
+/**
+ * Feature modules (stage tools, camera, drawing…) hook into the store here
+ * instead of growing this file. Every hook is optional.
+ */
+export interface HuddleExtension {
+  /** The host's transport was bound: subscribe, return the unsubscribers. */
+  attach?(transport: HuddleTransport): Array<() => void>
+  /** A peer connection was made (mic + screen tracks already added), before it negotiates. */
+  link?(socket: string, pc: RTCPeerConnection): void
+  /** A peer connection closed (they left, or the link was rebuilt). */
+  unlink?(socket: string): void
+  /** I am live in a huddle (first join or a rejoin): re-announce what the server forgot. */
+  joined?(): void
+  /** I left the huddle, or was removed. */
+  teardown?(): void
 }
 
 export interface HuddleState {
@@ -71,6 +95,8 @@ export interface HuddleState {
   mode: HuddleMode
   /** The microphone in use, by name (#2847). */
   micLabel: string | null
+  /** #2857 — when my hand went up, from the server's roster (null = down). */
+  handAt: number | null
 }
 
 const IDLE: HuddleState = {
@@ -84,7 +110,8 @@ const IDLE: HuddleState = {
   startedAt: null,
   peers: [],
   mode: 'mesh',
-  micLabel: null
+  micLabel: null,
+  handAt: null
 }
 
 /** Every 15 s the server hears we are still here (it forgets us after 45 s). */
@@ -105,11 +132,7 @@ export function mergeRoster(
   for (const p of roster) {
     if (p.socket === self) continue
     const prev = current.find((c) => c.socket === p.socket)
-    out.push(
-      prev
-        ? { ...prev, name: p.name, muted: p.muted, screen: p.screen, user: p.user, since: p.since }
-        : { ...p, audio: null, video: null, connection: 'new' }
-    )
+    out.push(prev ? { ...prev, ...p } : { ...p, audio: null, video: null, connection: 'new' })
   }
   return out
 }
@@ -169,6 +192,10 @@ class HuddleStore {
   private meshCloseTimer: ReturnType<typeof setTimeout> | null = null
   /** Peers whose audio already comes through the SFU (the mesh may close once all do). */
   private sfuAudio = new Set<string>()
+  /** Every video stream each peer sends (screen and camera), live or muted, by stream id. */
+  private remoteVideo = new Map<string, Map<string, { stream: MediaStream; live: boolean }>>()
+  private exts = new Set<HuddleExtension>()
+  private extOffs = new Map<HuddleExtension, Array<() => void>>()
 
   // ── React plumbing ────────────────────────────────────────────────────────
   subscribe = (l: Listener) => {
@@ -231,6 +258,57 @@ class HuddleStore {
         }
       })
     ]
+    for (const ext of this.exts) this.attachExt(ext)
+  }
+
+  // ── Extensions ────────────────────────────────────────────────────────────
+  /** Plug a feature module in (idempotent per object); returns the unplug. */
+  use(ext: HuddleExtension): () => void {
+    if (!this.exts.has(ext)) {
+      this.exts.add(ext)
+      if (this.transport) this.attachExt(ext)
+      if (this.state.status === 'live') {
+        for (const [socket, link] of this.links) ext.link?.(socket, link.pc)
+      }
+    }
+    return () => {
+      for (const off of this.extOffs.get(ext) ?? []) off()
+      this.extOffs.delete(ext)
+      this.exts.delete(ext)
+    }
+  }
+
+  private attachExt(ext: HuddleExtension) {
+    for (const off of this.extOffs.get(ext) ?? []) off()
+    this.extOffs.set(ext, this.transport && ext.attach ? ext.attach(this.transport) : [])
+  }
+
+  /** Emit a huddle event for the room I am live in; false when I am in none. */
+  send(event: string, payload: Record<string, unknown> = {}): boolean {
+    if (!this.state.room || this.state.status !== 'live' || !this.transport) return false
+    this.transport.emit(event, { ...payload, room: this.state.room })
+    return true
+  }
+
+  /** Every open peer connection, by the peer's socket id. */
+  forEachLink(fn: (socket: string, pc: RTCPeerConnection) => void) {
+    for (const [socket, link] of this.links) fn(socket, link.pc)
+  }
+
+  /**
+   * Close a mesh link and forget it. Quietly: its "closed" state must not read as a failed
+   * peer (#2859). `keepAudio` = the SFU already owns this peer's audio element.
+   */
+  private closeLink(socket: string, link: PeerLink, keepAudio = false) {
+    link.pc.onconnectionstatechange = null
+    link.pc.ontrack = null
+    link.pc.onicecandidate = null
+    link.pc.onnegotiationneeded = null
+    link.pc.close()
+    this.links.delete(socket)
+    if (!keepAudio) this.dropAudio(socket)
+    this.remoteVideo.delete(socket)
+    for (const ext of this.exts) ext.unlink?.(socket)
   }
 
   private async iceServers(room: string): Promise<RTCIceServer[]> {
@@ -295,12 +373,13 @@ class HuddleStore {
     this.sfu?.disconnect()
     this.sfu = null
     this.sfuAudio.clear()
-    for (const [, link] of this.links) this.closeLink(link)
-    this.links.clear()
+    for (const [socket, link] of this.links) this.closeLink(socket, link)
     for (const socket of [...this.audio.keys()]) this.dropAudio(socket)
+    this.remoteVideo.clear()
     for (const t of this.mic?.getTracks() ?? []) t.stop()
     this.mic = null
     for (const t of this.state.localScreen?.getTracks() ?? []) t.stop()
+    for (const ext of this.exts) ext.teardown?.()
     this.set({ ...IDLE, muted: this.state.muted })
   }
 
@@ -309,11 +388,7 @@ class HuddleStore {
     // A rejoin after a reconnect: every old link names a socket id that is gone.
     const rejoined = !!this.state.self && this.state.self !== p.self
     if (rejoined) {
-      for (const [socket, link] of this.links) {
-        link.pc.close()
-        this.dropAudio(socket)
-      }
-      this.links.clear()
+      for (const [socket, link] of this.links) this.closeLink(socket, link)
     }
     const peers = mergeRoster([], p.peers, p.self)
     const since = Math.min(Date.now(), ...p.peers.map((x) => x.since).filter(Boolean))
@@ -334,6 +409,7 @@ class HuddleStore {
         screen: this.state.sharing
       })
     }
+    for (const ext of this.exts) ext.joined?.()
   }
 
   private onPeers(p: { room: string; peers: HuddlePeer[]; mode?: HuddleMode }) {
@@ -345,10 +421,7 @@ class HuddleStore {
     const peers = mergeRoster(this.state.peers, p.peers, self)
     // Links to people who left close; people who arrived get one.
     for (const [socket, link] of this.links) {
-      if (!peers.some((x) => x.socket === socket)) {
-        link.pc.close()
-        this.links.delete(socket)
-      }
+      if (!peers.some((x) => x.socket === socket)) this.closeLink(socket, link)
     }
     // Their audio element goes with them, whichever way the sound came (mesh or SFU).
     for (const socket of [...this.audio.keys()]) {
@@ -369,11 +442,19 @@ class HuddleStore {
       for (const r of link.pc.getReceivers()) {
         if (r.track?.readyState !== 'live') continue
         const ms = new MediaStream([r.track])
-        if (r.track.kind === 'video') peer.video = ms
-        else peer.audio = ms
+        if (r.track.kind === 'video') {
+          if (!this.remoteVideo.get(peer.socket)?.size) peer.video = ms
+        } else peer.audio = ms
       }
     }
-    this.set({ peers })
+    // The roster says which of a peer's video streams is the camera (#2858).
+    for (const peer of peers) {
+      if (this.remoteVideo.get(peer.socket)?.size) {
+        Object.assign(peer, this.videoOf(peer.socket, peer.cam ?? null))
+      }
+    }
+    const mine = self ? p.peers.find((x) => x.socket === self) : undefined
+    this.set({ peers, handAt: mine?.hand_at ?? null })
     if (this.state.mode === 'sfu') return
     for (const peer of peers) if (!this.links.has(peer.socket)) void this.link(peer.socket)
   }
@@ -458,23 +539,13 @@ class HuddleStore {
   private closeMeshLinks() {
     if (this.meshCloseTimer) clearTimeout(this.meshCloseTimer)
     this.meshCloseTimer = null
-    for (const [, link] of this.links) this.closeLink(link)
-    this.links.clear()
+    for (const [socket, link] of this.links) this.closeLink(socket, link, true)
     this.set({
       peers: this.state.peers.map((p) => ({
         ...p,
         connection: this.sfuAudio.has(p.socket) ? 'connected' : 'connecting'
       }))
     })
-  }
-
-  /** Close a mesh link quietly: its "closed" state must not read as a failed peer. */
-  private closeLink(link: PeerLink) {
-    link.pc.onconnectionstatechange = null
-    link.pc.ontrack = null
-    link.pc.onicecandidate = null
-    link.pc.onnegotiationneeded = null
-    link.pc.close()
   }
 
   private onDenied(p: { room: string | null; reason: string }) {
@@ -531,6 +602,8 @@ class HuddleStore {
     if (screen && this.state.localScreen) {
       link.screenSender = pc.addTrack(screen, this.state.localScreen)
     }
+    // Before the first negotiation, so a data channel or camera rides the same offer.
+    for (const ext of this.exts) ext.link?.(socket, pc)
     pc.onnegotiationneeded = async () => {
       try {
         link.makingOffer = true
@@ -548,10 +621,7 @@ class HuddleStore {
     pc.ontrack = (e) => {
       const stream = e.streams[0] ?? new MediaStream([e.track])
       if (e.track.kind === 'video') {
-        this.updatePeer(socket, { video: stream })
-        e.track.onended = () => this.updatePeer(socket, { video: null })
-        e.track.onmute = () => this.updatePeer(socket, { video: null })
-        e.track.onunmute = () => this.updatePeer(socket, { video: stream })
+        this.trackVideo(socket, stream, e.track)
       } else {
         this.updatePeer(socket, { audio: stream })
         this.playAudio(socket, stream)
@@ -583,6 +653,48 @@ class HuddleStore {
         /* a closed link has no stats */
       }
     }
+  }
+
+  /** A peer's video track: a screen share, or (#2858) the camera the roster names. */
+  private trackVideo(socket: string, stream: MediaStream, track: MediaStreamTrack) {
+    let byId = this.remoteVideo.get(socket)
+    if (!byId) {
+      byId = new Map()
+      this.remoteVideo.set(socket, byId)
+    }
+    const entry = { stream, live: true }
+    byId.set(stream.id, entry)
+    const refresh = () => {
+      const cam = this.state.peers.find((p) => p.socket === socket)?.cam ?? null
+      this.updatePeer(socket, this.videoOf(socket, cam))
+    }
+    track.onended = () => {
+      this.remoteVideo.get(socket)?.delete(stream.id)
+      refresh()
+    }
+    track.onmute = () => {
+      entry.live = false
+      refresh()
+    }
+    track.onunmute = () => {
+      entry.live = true
+      refresh()
+    }
+    refresh()
+  }
+
+  private videoOf(
+    socket: string,
+    cam: string | null
+  ): { video: MediaStream | null; camera: MediaStream | null } {
+    let video: MediaStream | null = null
+    let camera: MediaStream | null = null
+    for (const [id, v] of this.remoteVideo.get(socket) ?? []) {
+      if (!v.live) continue
+      if (cam && id === cam) camera = v.stream
+      else video = v.stream
+    }
+    return { video, camera }
   }
 
   private playAudio(socket: string, stream: MediaStream) {

@@ -11,6 +11,7 @@ import type React from 'react'
 import { cn } from '../../../lib/utils'
 import { canOpenChatRoom, openChatRoom } from '../chat-core'
 import { DeviceSettingsButton, PreJoinCheck, ShortcutSheetAnchor } from './HuddleAudioUi'
+import { HuddleCameraButton } from './HuddleCamera'
 import { peerSummary } from './huddle-store'
 import type { HuddleHandle } from './useHuddle'
 import { useHuddleShortcuts, useHuddleSpeaking } from './useHuddleAudio'
@@ -142,6 +143,8 @@ export function HuddleControls({
           </button>
         )}
         {!joining && <DeviceSettingsButton muted={state.muted} />}
+        {/* #2858 — optional camera, off by default. */}
+        <HuddleCameraButton disabled={joining} />
         <button
           type='button'
           onClick={huddle.leave}

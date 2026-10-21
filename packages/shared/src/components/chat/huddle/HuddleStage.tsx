@@ -3,7 +3,16 @@ import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { MutedTalkingHint, PoorConnectionBanner, QualityBars, SpeakingRing } from './HuddleAudioUi'
+import { HuddleVideoGrid } from './HuddleCamera'
+import { HuddleDrawOverlay } from './HuddleDraw'
+import {
+  HuddleCameraNotice,
+  HuddleHands,
+  HuddleReactionLayer,
+  HuddleStageTools
+} from './HuddleStageTools'
 import type { PeerQuality } from './huddle-audio-logic'
+import { HuddlePipOffer, HuddlePopOutButton, useHuddlePip } from './huddle-pip'
 import { formatElapsed, type LivePeer } from './huddle-store'
 import type { HuddleHandle } from './useHuddle'
 import { useHuddleQuality, useHuddleSpeaking } from './useHuddleAudio'
@@ -12,14 +21,18 @@ import { useHuddleQuality, useHuddleSpeaking } from './useHuddleAudio'
 function ScreenView({
   stream,
   label,
-  mirror
+  mirror,
+  screen
 }: {
   stream: MediaStream
   label: string
   /** My own share: a quiet preview, not a second copy at full size. */
   mirror?: boolean
+  /** #2856 — the sharer's socket id: marks drawn on this screen show over it. */
+  screen?: string | null
 }) {
   const ref = useRef<HTMLVideoElement>(null)
+  const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -31,20 +44,27 @@ function ScreenView({
   }, [stream])
   return (
     <div
+      ref={box}
       className={cn(
-        'group relative overflow-hidden rounded-lg bg-[#0f172a]',
+        'group relative overflow-hidden rounded-lg bg-[#0f172a] [&:fullscreen]:flex [&:fullscreen]:max-h-none [&:fullscreen]:items-center [&:fullscreen]:rounded-none',
         mirror ? 'max-h-[120px]' : 'max-h-[280px]'
       )}
       data-huddle-screen={mirror ? 'mine' : 'peer'}
     >
-      <video ref={ref} muted playsInline className='mx-auto block max-h-[inherit] w-auto' />
+      <video
+        ref={ref}
+        muted
+        playsInline
+        className='mx-auto block max-h-[inherit] w-auto max-w-full [:fullscreen>&]:h-full [:fullscreen>&]:max-h-full'
+      />
+      {screen && <HuddleDrawOverlay screen={screen} videoRef={ref} presenter={mirror} />}
       <span className='absolute bottom-1.5 left-2 rounded bg-black/55 px-1.5 py-0.5 text-[10.5px] font-medium text-white'>
         {label}
       </span>
       {!mirror && (
         <button
           type='button'
-          onClick={() => void ref.current?.requestFullscreen?.()}
+          onClick={() => void (box.current ?? ref.current)?.requestFullscreen?.()}
           className='absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded bg-black/55 text-white opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan group-hover:opacity-100'
           aria-label='View the shared screen full size'
           data-tip='Full screen'
@@ -150,6 +170,8 @@ export function HuddleStage({
         (at.get(b.socket) ?? Number.MAX_SAFE_INTEGER)
     )
   }, [state.peers, speaking.order])
+  // #2853 — the mini-player and its one-time offer.
+  const pip = useHuddlePip(inThis, me)
   if (state.status === 'error' && (state.room === room || !state.room)) {
     return (
       <div
@@ -174,7 +196,7 @@ export function HuddleStage({
   const joining = state.status === 'joining'
   return (
     <div
-      className='shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-border dark:bg-background motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200'
+      className='relative shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-border dark:bg-background motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200'
       data-huddle-stage
       data-huddle-mode={state.mode}
     >
@@ -215,21 +237,35 @@ export function HuddleStage({
             Only you so far — people in the room see a Join button.
           </span>
         )}
+        <HuddleStageTools me={me} handAt={state.handAt} disabled={joining}>
+          <HuddlePopOutButton pip={pip} />
+        </HuddleStageTools>
       </div>
       {quality.poor && <PoorConnectionBanner sharing={state.sharing} />}
+      <HuddleHands roster={huddle.roster} self={state.self} />
+      <HuddlePipOffer pip={pip} />
+      <HuddleCameraNotice />
+      <HuddleVideoGrid peers={state.peers} roster={huddle.roster} muted={state.muted} />
       {sharedByPeer?.video && (
         <div className='mt-1.5'>
           <ScreenView
             stream={sharedByPeer.video}
             label={`${sharedByPeer.name ?? 'Someone'}'s screen`}
+            screen={sharedByPeer.socket}
           />
         </div>
       )}
       {state.sharing && state.localScreen && (
         <div className='mt-1.5'>
-          <ScreenView stream={state.localScreen} label='You are sharing your screen' mirror />
+          <ScreenView
+            stream={state.localScreen}
+            label='You are sharing your screen'
+            mirror
+            screen={state.self}
+          />
         </div>
       )}
+      <HuddleReactionLayer roster={huddle.roster} me={me} />
     </div>
   )
 }

@@ -890,6 +890,21 @@ export const collabChat: DocSection = {
       text: 'Shortcuts never fire while you are typing in a field. Space on another button presses that button as usual; on the huddle controls it is push to talk. Switching to another window or tab while holding Space mutes you again.'
     },
     {
+      type: 'h3',
+      id: 'collab-chat-huddle-stage',
+      text: 'Reactions, raised hands, camera, marks and the mini-player'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Reactions: the smiley button in the huddle strip opens six emoji. The one you pick floats up over the strip for everyone in the huddle, with your name under it. You can send one a second.',
+        'Raise hand: the hand button puts you in the queue, which the strip shows in the order hands went up. Click it again (or the × on your name) to lower yours. Anyone in the huddle can use **Lower all** — there is no host.',
+        'Camera: the camera button in the controls turns your camera on (it is off when you join). People with their camera on show as tiles in the strip — one, two side by side or a 2×2 grid, and a sideways strip on a narrow screen; your own tile is mirrored. Only the first four cameras turned on are sent: a fifth sees "Video paused to keep the call smooth" on their own tile, and their video starts by itself when someone turns theirs off.',
+        'Point and draw: over a screen someone shares, the small tool strip lets you point, draw or drop an arrow; everyone in the huddle sees your marks in your own colour, and the person sharing sees them on their preview with "2 people are pointing". Marks fade after four seconds; the eraser clears every mark on that screen. Press Esc or click the tool again to stop. Marks go browser to browser and never through the server.',
+        'Mini-player: in Chrome and Edge the pop-out button in the strip opens a small window that stays on top of other windows and apps, with who is here (and who is speaking), the timer, mute, leave and a thumbnail of a shared screen. It keeps going when you close the chat panel or open another room; closing it changes nothing, and leaving the huddle closes it. The first time you switch away from the tab during a huddle, coming back offers it once — **Every time** makes the browser pop it out by itself whenever you leave the tab. Other browsers do not show the button.'
+      ]
+    },
+    {
       type: 'p',
       text: 'A screen clip is a short recording — up to 60 seconds of your screen and microphone — made from the clapperboard button in the composer and sent like any other attachment. The button becomes the clock while it records; Stop, the 60 s mark or the browser’s "Stop sharing" ends it. The clip arrives with a poster frame and plays inline in the message. It is an ordinary file in the file manager (tagged `chat-clip`), not a help video.'
     }
