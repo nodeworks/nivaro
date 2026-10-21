@@ -750,7 +750,14 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
       })
       if (id == null) throw new Error('No id came back')
       // The first form is the default, so the overview never says none is marked.
-      await client.request(post(`/collection-layouts/${id}/activate`)).catch(() => undefined)
+      // The form exists either way: say so if it could not be made the default.
+      await client
+        .request(post(`/collection-layouts/${id}/activate`))
+        .catch((err) =>
+          toast.error(
+            `Main form was created but not made the default: ${apiFailure(err, 'the server refused').message}`
+          )
+        )
       created('grouped', id)
     } catch (err) {
       toast.error(apiFailure(err, 'Could not create the form').message)
@@ -784,6 +791,9 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
       )
     } catch (err) {
       toast.error(apiFailure(err, 'Could not save the new order').message)
+      // The refetch may return the same data (structural sharing keeps the
+      // reference), so the reset effect would not run: drop the order here.
+      setOtherOrder(null)
     } finally {
       invalidate()
     }
