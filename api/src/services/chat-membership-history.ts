@@ -85,6 +85,16 @@ export function toMembershipEvent(r: {
   return null
 }
 
+/**
+ * The activity `item` values a channel's membership rows are written under:
+ * always the channel key (join/leave use the room key, add/remove the audit
+ * item). Never the numeric id — a channel keyed "42" would otherwise leak into
+ * the history of the channel whose id is 42.
+ */
+export function historyItemsFor(ch: { key: string }): string[] {
+  return [ch.key]
+}
+
 export async function loadMembershipHistory(opts: {
   /** Channel keys (the activity `item`). Omit for every channel (admin analytics). */
   items?: string[]

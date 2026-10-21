@@ -24,7 +24,7 @@ import {
   SHORTCODE_RE,
   sniffImageType
 } from '../services/chat-emoji.js'
-import { loadMembershipHistory } from '../services/chat-membership-history.js'
+import { historyItemsFor, loadMembershipHistory } from '../services/chat-membership-history.js'
 import { deleteFile, getFile, readFileBuffer, uploadFileBuffer } from '../services/files.js'
 
 /**
@@ -244,7 +244,7 @@ export function registerChatExtras(app: FastifyInstance): void {
     if (!ch) return reply.code(404).send({ error: 'Not found' })
     if (!ownsOrAdmin(ch, req))
       return reply.code(403).send({ error: 'Only the channel owner or an admin can see this' })
-    return { data: await loadMembershipHistory({ items: [ch.key, String(ch.id)], limit: 200 }) }
+    return { data: await loadMembershipHistory({ items: historyItemsFor(ch), limit: 200 }) }
   })
 
   /** Every channel's membership changes (admins), for chat analytics. */

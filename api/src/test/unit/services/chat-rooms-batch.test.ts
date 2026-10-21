@@ -7,7 +7,7 @@ vi.mock('../../../services/chat.js', () => ({ channels: vi.fn(), clearChatCaches
 
 import { idleSince, shouldSuggestArchive } from '../../../services/chat-archive.js'
 import { cleanShortcode, sniffImageType } from '../../../services/chat-emoji.js'
-import { toMembershipEvent } from '../../../services/chat-membership-history.js'
+import { historyItemsFor, toMembershipEvent } from '../../../services/chat-membership-history.js'
 
 const U = 'aaaaaaaa-0000-0000-0000-000000000001'
 const V = 'bbbbbbbb-0000-0000-0000-000000000002'
@@ -100,6 +100,14 @@ describe('membership history (#2784)', () => {
   it('ignores rows that are not membership changes', () => {
     expect(toMembershipEvent(row('chat-channel-member-add', 'something else', U))).toBeNull()
     expect(toMembershipEvent(row('chat-channel-member-remove', null, U))).toBeNull()
+  })
+})
+
+describe('membership history scope (#2784)', () => {
+  it('queries the channel key only, so a key equal to another channel id cannot collide', () => {
+    expect(historyItemsFor({ key: 'ops' })).toEqual(['ops'])
+    // channel id 42 keyed "ops" must not read rows of the channel keyed "42"
+    expect(historyItemsFor({ key: 'ops' })).not.toContain('42')
   })
 })
 
