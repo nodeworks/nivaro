@@ -5,6 +5,7 @@
  */
 import { type Command, cmd } from '../command.js'
 import type { ISODate, UUID } from '../index.js'
+import type { LayoutPatch, PlacementPatch } from './layout-editor.js'
 
 // ─── Dev tools ────────────────────────────────────────────────────────────────
 
@@ -415,21 +416,36 @@ export function retryDeadLetter(
 
 // ─── Collection layouts ───────────────────────────────────────────────────────
 
+export type CollectionLayoutType = 'grouped' | 'summary' | 'detail' | 'file' | 'addendum' | 'table'
+
 export interface CollectionLayout {
   id: number
   collection: string
   name: string
+  slug?: string | null
+  layout_type?: CollectionLayoutType | (string & {})
   is_active: boolean | number
   sort: number
   created_at: string
+  /** Show in the New-item menu; clones start hidden until an admin opts in. */
+  create_hidden?: boolean | number
+  create_label?: string | null
   // Layout behaviour
   tab_mode?: 'tabs' | 'steps'
   validate_before_next?: boolean | number
   summary_enabled?: boolean | number
+  /** @deprecated Retired: no longer writable; the API may still return it. */
   summary_show_all?: boolean | number
   ai_enabled?: boolean | number
   disable_comments?: boolean | number
   disable_tasks?: boolean | number
+  disable_clone?: boolean | number
+  /** @deprecated Retired: replaced by `disable_clone`; no longer writable. */
+  allow_clone?: boolean | number
+  /** @deprecated Retired: no longer writable. */
+  addendum_lock_fields?: unknown
+  /** @deprecated Retired: no longer writable. */
+  hide_actions_when_collapsed?: boolean | number
   // Conditional layout: only activates for users with these roles
   conditions?: { role_ids?: string[] } | null
 }
@@ -442,6 +458,15 @@ export interface LayoutAssignment {
   label_override?: string | null
   is_visible?: boolean | number
   default_expanded?: boolean | number
+  /** Column span on the record page (slot cards size by it). */
+  col_span?: number | null
+  lock_conditions?: string | null
+  overrides?: unknown
+  show_row_revisions?: boolean | number
+  show_approval_chain?: boolean | number
+  allow_revision_restore?: boolean | number | null
+  widget_id?: number | null
+  input_bindings?: unknown
 }
 
 export interface LayoutGroup {
@@ -475,10 +500,19 @@ export function readCollectionLayouts(collection: string): Command<{ data: Colle
 }
 
 /** Read the active layout for a collection with groups + assignments. */
-export function readActiveLayout(collection: string): Command<{
-  data: { layout: CollectionLayout; groups: LayoutGroup[]; assignments: LayoutAssignment[] }
+export function readActiveLayout(
+  collection: string,
+  /** `slug` pins a layout by link name; `item` resolves record-conditional layouts. */
+  opts?: { slug?: string; item?: string | number }
+): Command<{
+  data: {
+    layout: CollectionLayout
+    groups: LayoutGroup[]
+    assignments: LayoutAssignment[]
+    ungrouped_sort: number | null
+  }
 }> {
-  return cmd('GET', '/collection-layouts/active', { collection })
+  return cmd('GET', '/collection-layouts/active', { collection, ...opts })
 }
 
 /** Read groups for a specific layout by collection + layout id. */
@@ -499,37 +533,34 @@ export function activateLayout(layoutId: number): Command<{ data: CollectionLayo
   return cmd('POST', `/collection-layouts/${layoutId}/activate`)
 }
 
-/** Clone a layout under a new name. */
-export function cloneLayout(layoutId: number, name: string): Command<{ data: CollectionLayout }> {
-  return cmd('POST', `/collection-layouts/${layoutId}/clone`, undefined, { name })
+/**
+ * Clone a layout under a new name. The copy lands hidden from the New menu
+ * (`create_hidden`) until an admin opts in; `layout_type` may differ from the source.
+ */
+export function cloneLayout(
+  layoutId: number,
+  name: string,
+  opts?: { slug?: string | null; layout_type?: CollectionLayoutType }
+): Command<{ data: CollectionLayout }> {
+  return cmd('POST', `/collection-layouts/${layoutId}/clone`, undefined, { name, ...opts })
 }
 
-/** Create a new layout for a collection. */
+/**
+ * Create a new layout for a collection. `seed_fields` starts it with one
+ * "Main" section holding every visible field.
+ */
 export function createCollectionLayout(
   collection: string,
-  name: string
+  name: string,
+  opts?: { slug?: string | null; layout_type?: CollectionLayoutType; seed_fields?: boolean }
 ): Command<{ data: CollectionLayout }> {
-  return cmd('POST', '/collection-layouts', undefined, { collection, name })
+  return cmd('POST', '/collection-layouts', undefined, { collection, name, ...opts })
 }
 
-/** Update layout behaviour/metadata. */
+/** Update layout behaviour/metadata (any of the settings in `LayoutPatch`). */
 export function updateCollectionLayout(
   layoutId: number,
-  patch: Partial<
-    Pick<
-      CollectionLayout,
-      | 'name'
-      | 'sort'
-      | 'tab_mode'
-      | 'validate_before_next'
-      | 'summary_enabled'
-      | 'summary_show_all'
-      | 'ai_enabled'
-      | 'disable_comments'
-      | 'disable_tasks'
-      | 'conditions'
-    >
-  >
+  patch: LayoutPatch
 ): Command<{ data: CollectionLayout }> {
   return cmd('PATCH', `/collection-layouts/${layoutId}`, undefined, patch)
 }
@@ -538,17 +569,13 @@ export function deleteCollectionLayout(layoutId: number): Command<void> {
   return cmd('DELETE', `/collection-layouts/${layoutId}`)
 }
 
-/** Bulk-replace a layout's field→group assignments (and slot sentinels). */
+/**
+ * Bulk-replace a layout's field→group assignments (and slot sentinels).
+ * The layout editor saves through `submitLayoutOps` instead.
+ */
 export function updateLayoutAssignments(
   layoutId: number,
-  assignments: Array<{
-    field: string
-    group_key: string | null
-    sort: number
-    label_override?: string | null
-    is_visible?: boolean
-    default_expanded?: boolean
-  }>
+  assignments: Array<{ field: string; group_key: string | null; sort: number } & PlacementPatch>
 ): Command<{ data: LayoutAssignment[] }> {
   return cmd('PUT', `/collection-layouts/${layoutId}/assignments`, undefined, { assignments })
 }

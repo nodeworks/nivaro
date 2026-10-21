@@ -117,6 +117,12 @@ export function createScheduledChange(body: {
   changes: Record<string, unknown>
   /** ISO date string. */
   scheduled_at: string
+  /**
+   * The ?layout= slug of the form the record was opened with. A non-admin may
+   * schedule only when that form grants it (allow_schedule) and only fields
+   * they may update that are real, writable columns.
+   */
+  layout?: string | null
 }): Command<{ data: ScheduledChange }> {
   return cmd('POST', '/scheduled-changes', undefined, body)
 }
@@ -176,8 +182,12 @@ export interface FieldConfig {
   is_translatable: boolean
 }
 
-export function readFieldConfig(collection: string): Command<{ data: FieldConfig[] }> {
-  return cmd('GET', `/field-config/${collection}`)
+/** Field config overlaid with a layout's placements (`layout_id`, else the active layout). */
+export function readFieldConfig(
+  collection: string,
+  opts?: { layout_id?: number }
+): Command<{ data: FieldConfig[]; ungrouped_sort?: number | null }> {
+  return cmd('GET', `/field-config/${collection}`, opts)
 }
 
 /** Update one field's behavioral config (admin). */
