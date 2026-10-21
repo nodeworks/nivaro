@@ -2,6 +2,7 @@ import { type CSSProperties, createContext, type ReactNode, useContext } from 'r
 import { isCanvasSlot } from '../../lib/layout-ops'
 import type { ActiveLayoutData } from '../item-edit/types'
 import type { RefusedWrite } from './design-canvas'
+import type { EditorNote } from './editor-notes'
 
 export type DesignTarget =
   | { kind: 'field'; field: string; group_key: string | null }
@@ -33,6 +34,8 @@ export interface LayoutDesign {
   overlay?(t: DesignTarget): DesignOverlay | null
   /** How often a field is filled across the collection's records (#2588); null = unknown or off. */
   fillRate?(field: string): number | null
+  /** #2608: the editor note pinned to the node, shown as a marker on the canvas. */
+  note?(t: DesignTarget): EditorNote | null
 }
 
 export interface DesignMark {

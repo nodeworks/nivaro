@@ -134,6 +134,7 @@ import { layoutUsageRoutes } from './layout-usage.js'
 import { layoutChangeRequestRoutes } from './layout-change-requests.js'
 import { layoutDependencyRoutes } from './layout-dependencies.js'
 import { layoutPromoteRoutes } from './layout-promote.js'
+import { layoutWhyRoutes } from './layout-why.js'
 import { legalHoldRoutes } from './legal-holds.js'
 import { lineageRoutes } from './lineage.js'
 import { mailRoutes } from './mail.js'
@@ -598,6 +599,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(layoutPromoteRoutes, { prefix: '/collection-layouts' })
   await app.register(layoutChangeRequestRoutes, { prefix: '/layout-change-requests' })
   await app.register(layoutDependencyRoutes, { prefix: '/collection-layouts' })
+  // #2596: GET /collection-layouts/why (static path beside the layouts routes' /:id).
+  await app.register(layoutWhyRoutes, { prefix: '/collection-layouts' })
   await app.register(virtualCollectionsRoutes, { prefix: '/virtual-collections' })
   await app.register(recordTemplatesRoutes, { prefix: '/record-templates' })
   await app.register(collectionPresetsRoutes, { prefix: '/collection-presets' })

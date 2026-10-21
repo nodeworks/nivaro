@@ -13,6 +13,7 @@ import { cn } from '../../lib/utils'
 import type { DesignMark, DesignTarget, LayoutDesign } from './design-context'
 import { isSelectedIn, targetKey, useLayoutDesign } from './design-context'
 import { NO_DND, useDesignDndNode, useDesignDropBody } from './dnd/node'
+import { NoteMarker } from './NoteMarker'
 import { FillChip } from './usage/FillChip'
 
 type ChildProps = {
@@ -117,6 +118,8 @@ export function DesignNode({
   const extra = design.marks?.(target) ?? []
   const overlay = design.overlay?.(target) ?? null
   const highlight = extra.some((m) => m.highlight)
+  const note = design.note?.(target) ?? null
+  const noteMarker = note ? <NoteMarker note={note} /> : null
   const dragProps = (locked ? {} : nd.props) as Props
   const dragging = nd.dragging
   const slot = locked ? null : nd.slot
@@ -259,9 +262,10 @@ export function DesignNode({
       child,
       // The child's own classes, style, ref and handlers are kept and merged.
       mergeProps(childOwn, rest as Props, dragProps, own) as ChildProps,
-      badge || indicator ? (
+      badge || indicator || noteMarker ? (
         <>
           {badge}
+          {noteMarker}
           {indicator}
           {inner}
         </>
@@ -274,6 +278,7 @@ export function DesignNode({
   return (
     <Tag {...mergeProps(rest as Props, dragProps, own)}>
       {badge}
+      {noteMarker}
       {indicator}
       {children}
     </Tag>

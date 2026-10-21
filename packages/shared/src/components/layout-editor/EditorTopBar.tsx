@@ -281,7 +281,8 @@ export function EditorTopBar({
   tools,
   previewExtra,
   checks,
-  more
+  more,
+  formMap
 }: {
   collection: string
   layoutId: number
@@ -319,6 +320,8 @@ export function EditorTopBar({
   checks?: ReactNode
   /** The ⋯ menu (Save as template, New form from this record). */
   more?: ReactNode
+  /** The printable form map button, before History. */
+  formMap?: ReactNode
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const unsaved = draft.unsavedCount ?? 0
@@ -393,6 +396,7 @@ export function EditorTopBar({
         onChange={onShowHidden}
       />
       {checks}
+      {formMap}
       <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
         <PopoverTrigger asChild>
           <button type='button' className={btn} aria-label='History'>

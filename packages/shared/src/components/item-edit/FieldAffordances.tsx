@@ -46,6 +46,8 @@ export interface FieldAffordances {
   takeRemoteChange?: (field: string) => void
   /** field → human reason the input is read-only (shown on the lock glyph + hover). */
   lockReasons: Record<string, string>
+  /** #2596: pointing at a locked field asks the server for the exact rule (once). */
+  onLockHover?: () => void
   applyToLines: Record<string, ApplyToLinesSpec>
   openRelated?: (collection: string, id: string) => void
 }
@@ -140,9 +142,10 @@ export function RemoteChangeGhost({
 }
 
 /** Lock glyph beside a read-only field's label carrying the reason. */
-export function LockReasonBadge({ reason }: { reason: string }) {
+export function LockReasonBadge({ reason, onHover }: { reason: string; onHover?: () => void }) {
   return (
     <span
+      onPointerEnter={onHover}
       className='inline-flex cursor-help items-center gap-1 text-amber-500 dark:text-amber-400'
       data-tip={reason}
       data-lock-reason

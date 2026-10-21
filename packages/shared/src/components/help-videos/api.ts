@@ -125,6 +125,26 @@ export function useHelpVideosFor(
   })
 }
 
+export type FormVideos = {
+  fields: Record<string, HelpVideoDto[]>
+  sections: Record<string, HelpVideoDto[]>
+}
+
+/** #2615: the videos attached to single fields and sections of a collection's form. */
+export function useHelpVideosForForm(collection: string | null | undefined, enabled = true) {
+  const client = useNivaroClient()
+  useHelpVideoLive([['help-videos', 'form']])
+  return useQuery({
+    queryKey: ['help-videos', 'form', collection ?? ''] as const,
+    enabled: enabled && !!collection,
+    staleTime: 60_000,
+    queryFn: () =>
+      client
+        .request(get<{ data: FormVideos }>('/help-videos/for-form', { collection }))
+        .then((r) => r.data)
+  })
+}
+
 type LibraryPage = {
   data: HelpVideoDto[]
   total: number

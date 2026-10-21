@@ -4,6 +4,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import type { RecordedClick } from './help-video-walk.js'
+import type { ContextKind } from './help-videos.js'
 import { getApp } from './io-holder.js'
 
 // Videos that may be out of date (#1495). A nightly check (server.ts,
@@ -36,7 +37,7 @@ export const LABEL_LIMITS = { labels: 300, label: 80 }
 
 export interface StaleFacts {
   published_at: Date
-  contexts: Array<{ kind: 'collection' | 'page'; key: string; state_key: string | null }>
+  contexts: Array<{ kind: ContextKind; key: string; state_key: string | null }>
   clicks: RecordedClick[] | null
 }
 export interface StaleWorld {
@@ -384,7 +385,7 @@ export async function runStaleCheck(now = new Date()): Promise<string> {
       const id = String(c.video_id).toLowerCase()
       const list = contexts.get(id) ?? []
       list.push({
-        kind: c.kind as 'collection' | 'page',
+        kind: c.kind as ContextKind,
         key: String(c.key),
         state_key: c.state_key ? String(c.state_key) : null
       })

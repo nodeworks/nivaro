@@ -30,6 +30,8 @@ import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
+import { noteKey, notesOf } from './editor-notes'
+import { FormMapButton } from './FormMapButton'
 import { useLayoutEditorHost } from './host'
 import { BulkInspector } from './inspector/BulkInspector'
 import { FormSettings, Inspector } from './inspector-slot'
@@ -370,6 +372,8 @@ function Canvas({
     () => (roleId ? roleMarker(rolePreview) : undefined),
     [roleId, rolePreview]
   )
+  // #2608: notes pinned to fields and sections show as markers on the canvas.
+  const notes = useMemo(() => notesOf(bundle), [bundle])
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
@@ -381,9 +385,25 @@ function Canvas({
       roleMark,
       marks,
       overlay,
-      fillRate
+      fillRate,
+      note: (t) => {
+        const k = noteKey(t)
+        return k ? (notes.get(k) ?? null) : null
+      }
     }),
-    [selected, selection, onSelect, showHidden, canvas.inherited, dnd, roleMark, marks, overlay, fillRate]
+    [
+      selected,
+      selection,
+      onSelect,
+      showHidden,
+      canvas.inherited,
+      dnd,
+      roleMark,
+      marks,
+      overlay,
+      fillRate,
+      notes
+    ]
   )
   return (
     <EditorCanvas
@@ -732,6 +752,7 @@ export function LayoutEditor({
             onOpenLayout={openLayout}
           />
         }
+        formMap={<FormMapButton bundle={bundle} collection={collection} />}
       />
       {overlay && (
         <EditingBanner

@@ -29,6 +29,7 @@ import {
 import { GridTab } from './GridTab'
 import { GroupInspector } from './GroupInspector'
 import { HeaderItemInspector } from './HeaderItemInspector'
+import { HelpVideoSetting, NoteSetting } from './HelpTab'
 import {
   GlobalWriterContext,
   type InspectorEnv,
@@ -77,7 +78,7 @@ const isSlotField = (f: string) =>
   f === '__pdf__' ||
   EXT_RE.test(f)
 
-type TabKey = 'look' | 'rules' | 'picker' | 'grid' | 'advanced'
+type TabKey = 'look' | 'rules' | 'picker' | 'grid' | 'help' | 'advanced'
 
 function placementOf(target: DesignTarget): { field: string; group_key: string | null } | null {
   switch (target.kind) {
@@ -356,6 +357,21 @@ function GroupPanel({
                 />
               )}
             {body}
+            {/* #2615 / #2608: help video and editor note for the section. */}
+            <div
+              data-group-help=''
+              className='mt-5 space-y-5 border-t border-slate-100 pt-5 dark:border-border/60'
+            >
+              <HelpVideoSetting
+                kind='section'
+                name={group.key}
+                label={group.label || titleCase(group.key)}
+              />
+              <NoteSetting
+                target={{ kind: 'group', key: group.key }}
+                name={group.label || titleCase(group.key)}
+              />
+            </div>
           </>
         )}
       </PanelBody>
@@ -527,6 +543,7 @@ function FieldInspector({
     ...(showGrid
       ? [{ key: 'grid' as const, label: info.iface === 'inline-table' ? 'Table' : 'Grid' }]
       : []),
+    { key: 'help', label: 'Help' },
     { key: 'advanced', label: 'Advanced' }
   ]
   const [tab, setTab] = useState<TabKey>('look')
@@ -545,6 +562,17 @@ function FieldInspector({
         <PickerTab />
       ) : active === 'grid' ? (
         <GridTab />
+      ) : active === 'help' ? (
+        <div data-help-tab='' className='space-y-5'>
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Help text and the placeholder are on the Look tab.
+          </p>
+          <HelpVideoSetting kind='field' name={row.field} label={info.label} />
+          <NoteSetting
+            target={{ kind: 'field', field: row.field, group_key: row.group_key }}
+            name={info.label}
+          />
+        </div>
       ) : (
         <AdvancedTab />
       )}

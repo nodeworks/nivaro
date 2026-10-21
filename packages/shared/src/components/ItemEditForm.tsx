@@ -169,6 +169,7 @@ import {
   parseRollupParentFilter,
   parseRollupSources
 } from './item-edit/live-rollups'
+import { HiddenByRulesNote, refineLockReasons, useLockWhy } from './item-edit/lock-why'
 import { m2aWriteMeta, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import {
@@ -4094,6 +4095,12 @@ function ItemEditFormView({
     staleTime: 5 * 60_000,
     enabled: hasLockConditions || addendumEnabled || summaryNeedsRole
   })
+  // #2596: the exact rule behind a lock (and, for admins, what rules hide) —
+  // fetched on the first hover of a locked field; admins with the form.
+  const lockWhy = useLockWhy(collection, isNew ? null : itemId, {
+    enabled: !designCtx,
+    eager: isAdmin
+  })
 
   // Layout editor "preview by state" (#2599): the chosen state stands in for
   // the record's own, so locks and summary rules evaluate for that step.
@@ -7620,6 +7627,7 @@ function ItemEditFormView({
       else lockReasons[key] = 'Read-only field'
     }
   }
+  const exactLockReasons = refineLockReasons(lockReasons, lockWhy.data)
 
   // Apply-to-lines (#5): a header/field assignment carrying
   // overrides.apply_to_lines {grid, target, label?} gets a button that copies
@@ -7888,7 +7896,8 @@ function ItemEditFormView({
         return next
       })
     },
-    lockReasons,
+    lockReasons: exactLockReasons,
+    onLockHover: lockWhy.want,
     applyToLines,
     openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id })
   }
@@ -11454,6 +11463,13 @@ function ItemEditFormView({
                                           onJumpToField={flashField}
                                         />
                                       )}
+                                    {isAdmin && !designOn && !!lockWhy.data?.hidden?.length && (
+                                      <HiddenByRulesNote
+                                        why={lockWhy.data}
+                                        fields={fieldConfig ?? []}
+                                        stepVisible={stepVisible}
+                                      />
+                                    )}
                                     {!isNew &&
                                       itemId &&
                                       !activeLayoutData?.layout?.hide_sla_banner && (

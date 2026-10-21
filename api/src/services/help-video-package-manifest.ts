@@ -40,7 +40,8 @@ export interface ManifestFile {
   sha256: string
 }
 export interface PackageContext {
-  kind: 'collection' | 'page'
+  /** field / section (#2615): key = collection, state_key = the field or section. */
+  kind: 'collection' | 'page' | 'field' | 'section'
   key: string
   state_key: string | null
 }
@@ -167,8 +168,13 @@ function checkContexts(raw: unknown): { ok: PackageContext[]; bad: string[] } {
     const r = (c ?? {}) as Record<string, unknown>
     const kind = r.kind
     const key = String(r.key ?? '')
-    const state = kind === 'collection' && r.state_key ? String(r.state_key) : null
-    if ((kind !== 'collection' && kind !== 'page') || !KEY_RE.test(key)) {
+    const target = kind === 'field' || kind === 'section'
+    const state = (kind === 'collection' || target) && r.state_key ? String(r.state_key) : null
+    if (
+      (kind !== 'collection' && kind !== 'page' && !target) ||
+      !KEY_RE.test(key) ||
+      (target && state === null)
+    ) {
       bad.push(`An unreadable screen (${String(kind)} ${key.slice(0, 40)})`)
       continue
     }
@@ -179,7 +185,7 @@ function checkContexts(raw: unknown): { ok: PackageContext[]; bad: string[] } {
     const sig = `${kind}|${key}|${state ?? ''}`
     if (seen.has(sig)) continue
     seen.add(sig)
-    ok.push({ kind, key, state_key: state })
+    ok.push({ kind: kind as PackageContext['kind'], key, state_key: state })
   }
   return { ok, bad }
 }
@@ -351,7 +357,8 @@ export function matchContexts(
       skipped.push({ ...c, reason: `There is no collection named ${c.key} here` })
       continue
     }
-    if (c.state_key && !here.states.get(c.key)?.has(c.state_key)) {
+    // A field or section's name is not a step: the collection being here is enough.
+    if (c.kind === 'collection' && c.state_key && !here.states.get(c.key)?.has(c.state_key)) {
       skipped.push({ ...c, reason: `${c.key} has no step called ${c.state_key} here` })
       continue
     }

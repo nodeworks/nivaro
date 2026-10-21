@@ -96,7 +96,10 @@ export function registerHelpVideoStarter(
   const ids =
     def.ids === undefined ? undefined : (def.ids ?? []).map((i) => String(i).toLowerCase())
   if (ids?.some((i) => !UUID_RE.test(i))) throw new Error('Starter ids must be video ids (uuids)')
-  const contexts = def.contexts === undefined ? [] : toPackageContexts(def.contexts)
+  // Starters declare collections and pages only (toPackageContexts refuses the rest).
+  const contexts = (
+    def.contexts === undefined ? [] : toPackageContexts(def.contexts)
+  ) as HelpVideoContextDecl[]
   regsFor(extId).starters.push({ def: { ...def, ids, contexts }, path, extDir })
   return def.package
 }

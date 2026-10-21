@@ -23,6 +23,7 @@ import {
 } from '../ui/dropdown-menu'
 import { type InputBinding, WidgetSlot } from '../WidgetSlot'
 import { FieldRow } from './FieldRow'
+import { FormHelpVideoButton, useFormHelpVideos } from './FormHelpVideoButton'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
 import type {
   CMSField,
@@ -1153,6 +1154,8 @@ export function GroupSection({
   // Unreported widgets count as empty, so the section stays hidden until
   // rows actually arrive.
   const [widgetContent, setWidgetContent] = useState<Record<string, boolean>>({})
+  // #2615: help videos on this collection's sections (one shared query per form).
+  const { data: formVideos } = useFormHelpVideos(collection)
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
   const controlled = onToggle !== undefined
   const collapsed = controlled ? !isOpen : localCollapsed
@@ -1192,6 +1195,27 @@ export function GroupSection({
   const visibleFields_ = showHidden ? fields : fields.filter((f) => !f.hidden)
   // Design mode + "show hidden": a field hidden here (flag or a rule) renders
   // forced-visible but faint, so it can still be selected.
+  // #2615: a help video on this section plays from beside the chevron — a
+  // sibling of the header button (never inside it), wrapped only when one exists.
+  const sectionVideos = formVideos?.sections?.[group.key]
+  const hasSectionVideo = Array.isArray(sectionVideos) && sectionVideos.length > 0
+  const withSectionVideo = (header: ReactNode) =>
+    hasSectionVideo ? (
+      <div className='relative'>
+        {header}
+        <span className='absolute right-[52px] top-1/2 flex -translate-y-1/2'>
+          <FormHelpVideoButton
+            collection={collection}
+            kind='section'
+            name={group.key}
+            label={group.label || group.key}
+          />
+        </span>
+      </div>
+    ) : (
+      header
+    )
+
   const hiddenInDesign = (f: CMSField) =>
     showHidden && (f.hidden || !(visibleFields.has(f.field) || !visibleFields.size))
 
@@ -1203,37 +1227,39 @@ export function GroupSection({
         hiddenWhenEmpty && 'hidden'
       )}
     >
-      <button
-        type='button'
-        onClick={toggle}
-        // Layout editor: a field dropped on the header goes first in the section.
-        data-design-group-header={design ? '' : undefined}
-        className={cn(
-          'flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-slate-50/50 dark:hover:bg-white/[0.02] rounded-t-xl',
-          // Round the bottom only when nothing renders below the header — an
-          // expanded body (or collapsed summary strip) square-joins it, and a
-          // rounded hover overlay would leave see-through notches at the seam.
-          collapsed && !(summaryFields && summaryFields.length > 0) && 'rounded-b-xl'
-        )}
-      >
-        {GroupIcon && (
-          <GroupIcon className='h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500' />
-        )}
-        <span className='font-medium text-[13px] shrink-0 text-slate-800 dark:text-slate-200'>
-          {group.label}
-        </span>
-        <span className='flex-1' />
-        {hasErrors && <span className='nvr-pop h-2 w-2 rounded-full bg-destructive shrink-0' />}
-        <ChevronDown
-          // Design mode: the chevron still folds the section; the rest of
-          // the header selects it.
-          data-design-pass={design ? '' : undefined}
+      {withSectionVideo(
+        <button
+          type='button'
+          onClick={toggle}
+          // Layout editor: a field dropped on the header goes first in the section.
+          data-design-group-header={design ? '' : undefined}
           className={cn(
-            'h-4 w-4 text-slate-400 dark:text-slate-500 transition-transform duration-200',
-            collapsed && '-rotate-90'
+            'flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-slate-50/50 dark:hover:bg-white/[0.02] rounded-t-xl',
+            // Round the bottom only when nothing renders below the header — an
+            // expanded body (or collapsed summary strip) square-joins it, and a
+            // rounded hover overlay would leave see-through notches at the seam.
+            collapsed && !(summaryFields && summaryFields.length > 0) && 'rounded-b-xl'
           )}
-        />
-      </button>
+        >
+          {GroupIcon && (
+            <GroupIcon className='h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500' />
+          )}
+          <span className='font-medium text-[13px] shrink-0 text-slate-800 dark:text-slate-200'>
+            {group.label}
+          </span>
+          <span className='flex-1' />
+          {hasErrors && <span className='nvr-pop h-2 w-2 rounded-full bg-destructive shrink-0' />}
+          <ChevronDown
+            // Design mode: the chevron still folds the section; the rest of
+            // the header selects it.
+            data-design-pass={design ? '' : undefined}
+            className={cn(
+              'h-4 w-4 text-slate-400 dark:text-slate-500 transition-transform duration-200',
+              collapsed && '-rotate-90'
+            )}
+          />
+        </button>
+      )}
       {collapsed && summaryFields && summaryFields.length > 0 && (
         <SummaryStrip
           summaryFields={summaryFields}

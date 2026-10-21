@@ -9,6 +9,7 @@ import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
+import { stripEditorNotes } from '../services/layout-editor-notes.js'
 import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
 import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
 import {
@@ -815,7 +816,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     )
     const ungrouped_sort: number | null = ungroupedRow ? ungroupedRow.sort : null
 
-    return reply.send({ data: { layout, groups, assignments, ungrouped_sort } })
+    return reply.send({
+      data: { layout, ...stripEditorNotes(groups, assignments), ungrouped_sort }
+    })
   })
 
   // GET /collection-layouts/detail/:collection?layout_id= — resolve the detail
@@ -863,7 +866,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         )
         .orderBy('sort', 'asc')
     ])
-    return reply.send({ data: { layout, groups, assignments } })
+    return reply.send({ data: { layout, ...stripEditorNotes(groups, assignments) } })
   })
 
   // GET /collection-layouts/summary/:collection — the layout Summary mode
@@ -900,7 +903,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         )
         .orderBy('sort', 'asc')
     ])
-    return reply.send({ data: { layout, groups, assignments } })
+    return reply.send({ data: { layout, ...stripEditorNotes(groups, assignments) } })
   })
 
   // GET /collection-layouts?collection=x[&active=true][&layout_type=grouped]

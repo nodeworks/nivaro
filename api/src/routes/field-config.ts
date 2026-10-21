@@ -198,8 +198,11 @@ export function normalizeLayoutAssignment(a: Record<string, unknown>): LayoutFie
   let overrides: Record<string, unknown> | null = null
   try {
     const raw = typeof a.overrides === 'string' ? JSON.parse(a.overrides) : a.overrides
-    if (raw && typeof raw === 'object' && !Array.isArray(raw))
-      overrides = raw as Record<string, unknown>
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      // #2608: an editor note is for the layout editor only, never a record page.
+      const { editor_note: _note, ...rest } = raw as Record<string, unknown>
+      overrides = rest
+    }
   } catch {
     /* noop */
   }
