@@ -200,13 +200,14 @@ async function loadDeltas(
         'SELECT st, ts AS t, 1 AS d FROM h UNION ALL SELECT st, nxt, -1 FROM h WHERE nxt IS NOT NULL'
       )
     )
-    .from('ev')
-    .select('st as state')
-    .select(db.raw(`${dayExpr} AS day`, [from]))
+    // The day is computed once in its own CTE: SQL Server binds the CASE's parameter twice when
+    // it is repeated in SELECT and GROUP BY (@p2 vs @p4), sees two different expressions and
+    // refuses the query (8120).
+    .with('ed', db.raw(`SELECT st, d, ${dayExpr} AS day FROM ev WHERE t < ?`, [from, toExclusive]))
+    .from('ed')
+    .select('st as state', 'day')
     .sum({ delta: 'd' })
-    .where('t', '<', toExclusive)
-    .groupBy('st')
-    .groupByRaw(dayExpr, [from])) as unknown as Array<{
+    .groupBy('st', 'day')) as unknown as Array<{
     state: string
     day: string | null
     delta: number

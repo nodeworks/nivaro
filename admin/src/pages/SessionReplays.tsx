@@ -542,10 +542,10 @@ function SessionReplaysAdmin() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-3'>
-          <Clapperboard className='h-4 w-4 text-nvr-cyan' />
-          <div>
-            <h1 className='text-[16px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+        <div className='flex flex-wrap items-center gap-x-3 gap-y-2'>
+          <Clapperboard className='h-4 w-4 shrink-0 text-nvr-cyan' />
+          <div className='shrink-0'>
+            <h1 className='whitespace-nowrap text-[16px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
               Session Replays
             </h1>
             <p className='text-[12px] text-muted-foreground'>
@@ -557,15 +557,15 @@ function SessionReplaysAdmin() {
             </p>
           </div>
           {(apps.length > 1 || envBuckets.size > 1) && (
-            <div className='ml-6 flex items-center gap-1.5'>
+            <div className='flex min-w-0 flex-wrap items-center gap-1.5 lg:ml-3'>
               <button
                 type='button'
                 onClick={() => setAppFilter(null)}
                 className={cn(
-                  'rounded-full border px-2.5 py-0.5 text-[11.5px]',
+                  'whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11.5px]',
                   appFilter === null
                     ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                    : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                    : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
                 )}
               >
                 All apps
@@ -576,10 +576,10 @@ function SessionReplaysAdmin() {
                   type='button'
                   onClick={() => setAppFilter(a)}
                   className={cn(
-                    'rounded-full border px-2.5 py-0.5 text-[11.5px]',
+                    'whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11.5px]',
                     appFilter === a
                       ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                      : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                      : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
                   )}
                 >
                   {a}
@@ -592,10 +592,10 @@ function SessionReplaysAdmin() {
                     type='button'
                     onClick={() => setEnvFilter(null)}
                     className={cn(
-                      'rounded-full border px-2.5 py-0.5 text-[11.5px]',
+                      'whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11.5px]',
                       envFilter === null
                         ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                        : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                        : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
                     )}
                   >
                     All environments
@@ -606,10 +606,10 @@ function SessionReplaysAdmin() {
                       type='button'
                       onClick={() => setEnvFilter(env)}
                       className={cn(
-                        'rounded-full border px-2.5 py-0.5 text-[11.5px]',
+                        'whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11.5px]',
                         envFilter === env
                           ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                          : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
+                          : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
                       )}
                     >
                       {env}
@@ -621,7 +621,7 @@ function SessionReplaysAdmin() {
           )}
           {/* Beside the on/off switch: how long recordings live is the other
               half of the same decision, and it was previously a code constant. */}
-          <label className='ml-auto flex items-center gap-1.5 text-[12.5px] text-slate-600 dark:text-slate-300'>
+          <label className='ml-auto flex items-center gap-1.5 whitespace-nowrap text-[12.5px] text-slate-600 dark:text-slate-300'>
             Keep for
             <SimpleSelect
               value={String(retention)}
@@ -634,7 +634,7 @@ function SessionReplaysAdmin() {
               }))}
             />
           </label>
-          <label className='flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
+          <label className='flex items-center gap-2 whitespace-nowrap text-[12.5px] text-slate-600 dark:text-slate-300'>
             Recording {enabled ? 'on' : 'off'}
             <Switch
               checked={!!enabled}
@@ -643,7 +643,7 @@ function SessionReplaysAdmin() {
             />
           </label>
           <label
-            className='flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'
+            className='flex items-center gap-2 whitespace-nowrap text-[12.5px] text-slate-600 dark:text-slate-300'
             title='Keeps a rolling in-memory buffer (last ~60s, inputs masked, nothing uploaded) and attaches it to the issue log when a client error is reported — support sees what happened without continuous recording.'
           >
             Error clips {errorReplay ? 'on' : 'off'}
@@ -654,7 +654,7 @@ function SessionReplaysAdmin() {
             />
           </label>
           <div
-            className='flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'
+            className='flex items-center gap-2 whitespace-nowrap text-[12.5px] text-slate-600 dark:text-slate-300'
             title='When someone rage-clicks, a burst of their clicks does nothing, an ops monitor flips to failing or a breaker opens, the people affected record the next 3 minutes (labelled auto:<signal>, inputs masked) even with recording off. Capped per hour.'
           >
             Auto-record on signals {autoSignals ? 'on' : 'off'}

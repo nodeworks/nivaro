@@ -73,10 +73,10 @@ type Prices = Record<string, { input: number; cached: number; output: number }>
 
 const EMPTY_PRICE = { input: '', cached: '', output: '' }
 
-const DIMS: Array<{ value: Dim; label: string }> = [
-  { value: 'model', label: 'By model' },
-  { value: 'feature', label: 'By feature' },
-  { value: 'user', label: 'By person' }
+const DIMS: Array<{ value: Dim; label: string; column: string }> = [
+  { value: 'model', label: 'By model', column: 'Model' },
+  { value: 'feature', label: 'By feature', column: 'Feature' },
+  { value: 'user', label: 'By person', column: 'Person' }
 ]
 
 export function SpendTab() {
@@ -111,7 +111,7 @@ export function SpendTab() {
             {
               label: 'Against last month',
               value:
-                d.totals.change_pct == null
+                !d.history || d.totals.change_pct == null
                   ? '—'
                   : `${d.totals.change_pct > 0 ? '+' : ''}${d.totals.change_pct}%`
             }
@@ -148,9 +148,7 @@ export function SpendTab() {
             <table className='w-full text-[12px]'>
               <thead className='border-b border-slate-200 dark:border-border'>
                 <tr>
-                  <th className={thCls}>
-                    {DIMS.find((x) => x.value === dim)?.label.replace('By ', '')}
-                  </th>
+                  <th className={thCls}>{DIMS.find((x) => x.value === dim)?.column}</th>
                   <th className={cn(thCls, 'text-right')}>Calls</th>
                   <th className={cn(thCls, 'text-right')}>So far</th>
                   <th className={cn(thCls, 'text-right')}>Projected</th>

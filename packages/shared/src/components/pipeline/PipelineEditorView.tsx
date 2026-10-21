@@ -6650,16 +6650,18 @@ function PipelineFlowMapCard({ templateId }: { templateId: string }) {
   if (states.length === 0) return null
 
   return (
-    <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
+    <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4 dark:border-border dark:bg-card'>
       <div className='flex items-center justify-between'>
         <div>
-          <h2 className='text-[13px] font-semibold text-slate-800'>Flow Map</h2>
-          <p className='text-[12px] text-slate-400'>
+          <h2 className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+            Flow Map
+          </h2>
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
             {total.toLocaleString()} transitions in the last {days} days — red ribbons are
             send-backs.
           </p>
         </div>
-        <div className='flex items-center rounded-lg border border-slate-200 p-0.5'>
+        <div className='flex items-center rounded-lg border border-slate-200 p-0.5 dark:border-border'>
           {[30, 90, 365].map((d) => (
             <button
               key={d}
@@ -6667,7 +6669,9 @@ function PipelineFlowMapCard({ templateId }: { templateId: string }) {
               onClick={() => setDays(d)}
               className={cn(
                 'h-6 rounded-md px-2 text-[11px] font-medium',
-                days === d ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-700'
+                days === d
+                  ? 'bg-slate-900 text-white dark:bg-nvr-cyan dark:text-[#172940]'
+                  : 'text-slate-500 hover:text-slate-700 dark:text-muted-foreground dark:hover:text-foreground'
               )}
             >
               {d}d
@@ -6716,7 +6720,7 @@ function PipelineFlowMapCard({ templateId }: { templateId: string }) {
               x={FLOW_COL_W - 8}
               y={p.y + p.h / 2 + 3}
               textAnchor='end'
-              className='fill-slate-700 text-[10.5px] font-medium'
+              className='fill-slate-700 text-[10.5px] font-medium dark:fill-slate-200'
             >
               {(stateById.get(sid)?.label ?? '').slice(0, 32)}
             </text>
@@ -6745,7 +6749,7 @@ function PipelineFlowMapCard({ templateId }: { templateId: string }) {
             <text
               x={FLOW_W - FLOW_COL_W + 8}
               y={p.y + p.h / 2 + 3}
-              className='fill-slate-700 text-[10.5px] font-medium'
+              className='fill-slate-700 text-[10.5px] font-medium dark:fill-slate-200'
             >
               {(stateById.get(sid)?.label ?? '').slice(0, 32)}
             </text>

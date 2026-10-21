@@ -77,23 +77,29 @@ export function AiQualityPage() {
           </p>
         </div>
       </header>
-      <nav className='flex shrink-0 gap-1 border-b border-slate-200 bg-white px-4 dark:border-border dark:bg-card'>
+      <div
+        role='tablist'
+        aria-label='AI quality views'
+        className='flex shrink-0 gap-1 overflow-x-auto border-b border-slate-200 bg-white px-4 dark:border-border dark:bg-card'
+      >
         {TABS.map((t) => (
           <button
             key={t.id}
             type='button'
+            role='tab'
+            aria-selected={tab === t.id}
             onClick={() => setTab(t.id)}
             className={cn(
-              'border-b-2 px-3 py-2 text-[12px] font-medium',
+              'shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
               tab === t.id
                 ? 'border-nvr-cyan text-slate-900 dark:text-foreground'
-                : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-muted-foreground'
+                : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
             )}
           >
             {t.label}
           </button>
         ))}
-      </nav>
+      </div>
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
         {tab === 'review' && <ReviewTab />}
         {tab === 'spend' && <SpendTab />}

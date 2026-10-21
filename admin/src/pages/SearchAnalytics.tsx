@@ -48,7 +48,7 @@ const ms = (v: number | null | undefined) =>
 
 function Fixes({ line }: { line: Line }) {
   const q = encodeURIComponent(line.query)
-  const cls = 'text-[11.5px] font-medium text-nvr-cyan hover:underline'
+  const cls = 'text-[11.5px] font-medium text-cyan-700 hover:underline dark:text-nvr-cyan'
   return line.collection ? (
     <span className='flex flex-wrap gap-x-3 gap-y-1'>
       <Link to={`/collections/${line.collection}?search=${q}`} className={cls}>
@@ -89,14 +89,16 @@ function Table({
   return (
     <section className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
       <h2 className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>{title}</h2>
-      <p className='mt-0.5 text-[11.5px] text-slate-500'>{hint}</p>
+      <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>{hint}</p>
       {rows.length === 0 ? (
-        <p className='mt-3 text-[12px] text-slate-400'>Nothing here.</p>
+        <p className='mt-3 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          None in this window.
+        </p>
       ) : (
         <div className='mt-3 overflow-x-auto'>
           <table className='w-full text-[12px] tabular-nums'>
             <thead>
-              <tr className='text-left text-[11px] text-slate-500'>
+              <tr className='text-left text-[11px] text-slate-500 dark:text-muted-foreground'>
                 <th className='py-1 pr-3 font-medium'>Search</th>
                 {columns.map((c) => (
                   <th key={c.label} className='py-1 pr-3 text-right font-medium'>
@@ -119,7 +121,12 @@ function Table({
                     >
                       {r.query}
                     </span>
-                    <span className='text-[11px] text-slate-400'>
+                    <span
+                      className={cn(
+                        'text-[11px] text-slate-500 dark:text-muted-foreground',
+                        r.collection && 'font-mono'
+                      )}
+                    >
                       {r.collection ? r.collection : 'Cmd+K'}
                     </span>
                   </td>
@@ -171,15 +178,19 @@ export function SearchAnalyticsPage() {
             </p>
           </div>
         </div>
-        <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+        <span className='flex shrink-0 rounded-md border border-slate-200 p-0.5 dark:border-border'>
           {WINDOWS.map((d) => (
             <button
               key={d}
               type='button'
               onClick={() => setDays(d)}
+              aria-pressed={days === d}
+              aria-label={`Last ${d} days`}
               className={cn(
-                'rounded px-2 py-0.5 text-[11px] font-medium',
-                days === d ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground' : 'text-slate-500'
+                'rounded px-2.5 py-1 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                days === d
+                  ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                  : 'text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
               )}
             >
               {d}d
@@ -194,9 +205,11 @@ export function SearchAnalyticsPage() {
             <Skeleton className='h-48 w-full' />
           </>
         ) : isError || !data ? (
-          <p className='text-[12.5px] text-red-500'>Search analytics could not be loaded.</p>
+          <p className='text-[12.5px] text-red-600 dark:text-red-400'>
+            Search analytics could not be loaded.
+          </p>
         ) : !data.ready ? (
-          <p className='py-10 text-center text-[12.5px] text-slate-400'>
+          <p className='py-10 text-center text-[12.5px] text-slate-500 dark:text-muted-foreground'>
             The search log is not set up on this database yet. It appears after the next update.
           </p>
         ) : (
@@ -213,16 +226,18 @@ export function SearchAnalyticsPage() {
                 ['Typical speed', ms(data.totals?.p75_ms), 'p75 time to results']
               ].map(([label, value, sub]) => (
                 <div key={label} className='bg-white px-4 py-3 dark:bg-card'>
-                  <p className='text-[11.5px] text-slate-500'>{label}</p>
+                  <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>{label}</p>
                   <p className='mt-1 text-[18px] font-semibold tabular-nums text-slate-900 dark:text-foreground'>
                     {value}
                   </p>
-                  <p className='mt-0.5 text-[11.5px] text-slate-500'>{sub}</p>
+                  <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                    {sub}
+                  </p>
                 </div>
               ))}
             </div>
             {(data.totals?.searches ?? 0) === 0 ? (
-              <p className='py-10 text-center text-[12.5px] text-slate-400'>
+              <p className='py-10 text-center text-[12.5px] text-slate-500 dark:text-muted-foreground'>
                 No searches logged in the last {days} days. They appear as people use Cmd+K and the
                 search boxes on lists.
               </p>
@@ -269,7 +284,7 @@ export function SearchAnalyticsPage() {
                 />
               </>
             )}
-            <p className='text-[11.5px] text-slate-400'>
+            <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
               Search text is personal data: only administrators see this page and rows are deleted
               after {data.window?.retention_days} days. Results are never stored.
               {data.window?.truncated ? ' The window holds more searches than are counted.' : ''}

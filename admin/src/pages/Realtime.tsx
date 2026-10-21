@@ -26,6 +26,18 @@ type Tab =
   | 'pipeline'
   | 'verify'
 
+const REALTIME_TABS: Array<[Tab, string]> = [
+  ['sockets', 'Sockets & rooms'],
+  ['health', 'Socket health'],
+  ['payload', 'Payload size'],
+  ['traffic', 'Live traffic'],
+  ['editing', 'Now editing'],
+  ['concurrency', 'Concurrency'],
+  ['firehose', 'Firehose'],
+  ['pipeline', 'Event pipeline'],
+  ['verify', 'Verification']
+]
+
 interface SocketRow {
   id: string
   user: string | null
@@ -86,13 +98,12 @@ interface VersionGroup {
 }
 
 export default function Realtime() {
-  // ?tab=verify opens the Verification tab (the SLO panel links there).
-  const [tab, setTab] = useState<Tab>(() =>
-    typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('tab') === 'verify'
-      ? 'verify'
-      : 'sockets'
-  )
+  // ?tab=<key> opens that tab (the SLO panel links to ?tab=verify).
+  const [tab, setTab] = useState<Tab>(() => {
+    const asked =
+      typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tab') : null
+    return REALTIME_TABS.some(([k]) => k === asked) ? (asked as Tab) : 'sockets'
+  })
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
@@ -110,26 +121,20 @@ export default function Realtime() {
           </div>
           <ForceRefreshControl />
         </div>
-        <div className='mt-3 flex gap-1'>
-          {(
-            [
-              ['sockets', 'Sockets & rooms'],
-              ['health', 'Socket health'],
-              ['payload', 'Payload size'],
-              ['traffic', 'Live traffic'],
-              ['editing', 'Now editing'],
-              ['concurrency', 'Concurrency'],
-              ['firehose', 'Firehose'],
-              ['pipeline', 'Event pipeline'],
-              ['verify', 'Verification']
-            ] as Array<[Tab, string]>
-          ).map(([key, label]) => (
+        <div
+          role='tablist'
+          aria-label='Realtime views'
+          className='-mx-1 mt-3 flex gap-1 overflow-x-auto px-1'
+        >
+          {REALTIME_TABS.map(([key, label]) => (
             <button
               key={key}
               type='button'
+              role='tab'
+              aria-selected={tab === key}
               onClick={() => setTab(key)}
               className={cn(
-                'rounded-md px-3 py-1.5 text-[12.5px] font-medium',
+                'shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-[12.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
                 tab === key
                   ? 'bg-[#00ceff]/10 text-[#0e7490] dark:text-[#67e8f9]'
                   : 'text-slate-500 hover:bg-muted dark:text-muted-foreground'

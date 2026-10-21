@@ -172,9 +172,13 @@ export function EmbeddingFreshnessTab() {
                   <td className='px-3 py-2 text-right'>
                     <Button
                       size='sm'
-                      variant={r.warn ? 'default' : 'outline'}
+                      variant='outline'
                       className='h-7 px-2 text-[11.5px]'
-                      disabled={reindex.isPending || !r.fields.length}
+                      disabled={
+                        reindex.isPending ||
+                        !r.fields.length ||
+                        (r.records === 0 && r.status !== 'needs_reindex')
+                      }
                       data-tip={
                         r.status === 'needs_reindex'
                           ? 'Rebuilds every vector with the live provider'

@@ -947,7 +947,7 @@ export function AiKnowledgeView({
   return (
     <div className='flex flex-col gap-4' data-ai-knowledge>
       {tabs.length > 1 && (
-        <div className='inline-flex w-fit rounded-md border border-border p-0.5'>
+        <div className='inline-flex w-fit max-w-full overflow-x-auto rounded-md border border-border p-0.5'>
           {tabs.map((t) => (
             <button
               key={t.id}
@@ -955,7 +955,7 @@ export function AiKnowledgeView({
               onClick={() => select(t.id)}
               aria-pressed={active === t.id}
               className={cn(
-                'rounded px-3 py-1 text-[12.5px]',
+                'shrink-0 whitespace-nowrap rounded px-3 py-1 text-[12.5px]',
                 active === t.id
                   ? 'bg-nvr-cyan/15 font-medium'
                   : 'text-muted-foreground hover:bg-muted'

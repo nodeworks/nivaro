@@ -50,9 +50,10 @@ export function ExtensionToolsTab() {
           No extension adds Ask AI tools
         </p>
         <p className='max-w-[65ch] text-[12.5px] text-slate-600 dark:text-muted-foreground'>
-          An extension can give Ask AI its own tools with ctx.ai.registerTool. They run as the
-          person asking, and an answer that used one stays that person's unless the tool only reads
-          and says it may be replayed for others.
+          An extension can give Ask AI its own tools with{' '}
+          <span className='font-mono text-[12px]'>ctx.ai.registerTool</span>. They run as the person
+          asking, and an answer that used one stays that person's unless the tool only reads and
+          says it may be replayed for others.
         </p>
       </div>
     )

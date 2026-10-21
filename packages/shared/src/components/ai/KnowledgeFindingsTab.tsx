@@ -108,7 +108,7 @@ export function KnowledgeFindingsTab({ onOpenSide }: { onOpenSide: (side: Findin
           data-tip='Also asks the AI to read the definitions for contradictions the word match cannot see'
           onClick={() => run.mutate(true)}
         >
-          Check with AI read
+          Check with AI too
         </Button>
       </div>
       <p className='max-w-[75ch] text-[11.5px] text-muted-foreground'>

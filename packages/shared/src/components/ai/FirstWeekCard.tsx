@@ -92,7 +92,7 @@ export function FirstWeekCard({ onOpenPath }: { onOpenPath?: (path: string) => v
           onClick={() => dismiss.mutate()}
           aria-label='Hide the first-week checklist'
           data-tip='Hide this for good'
-          className='ml-auto rounded p-1 text-muted-foreground hover:bg-muted'
+          className='ml-auto rounded p-1 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
         >
           <X className='h-3.5 w-3.5' />
         </button>
@@ -100,6 +100,7 @@ export function FirstWeekCard({ onOpenPath }: { onOpenPath?: (path: string) => v
       <div
         className='mt-2 h-1 overflow-hidden rounded-full bg-slate-100 dark:bg-muted'
         role='progressbar'
+        aria-label='First-week steps done'
         aria-valuemin={0}
         aria-valuemax={total}
         aria-valuenow={d.done_count}
@@ -115,7 +116,8 @@ export function FirstWeekCard({ onOpenPath }: { onOpenPath?: (path: string) => v
             <button
               type='button'
               onClick={() => go(s)}
-              className='flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted'
+              disabled={!s.path}
+              className='flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-default disabled:hover:bg-transparent'
             >
               <span
                 aria-hidden
