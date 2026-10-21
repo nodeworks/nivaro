@@ -14,6 +14,7 @@ import {
 } from '../../lib/layout-ops'
 import type { CMSField } from '../item-edit/types'
 import { LayoutEditor } from './LayoutEditor'
+import { pickBarRow } from './toolbar-kit.test-utils'
 
 // Way-finding in the editor: Find (#2620), the outline (#2621), the
 // inspector breadcrumb (#2622), the shortcut sheet (#2626), compact canvas and
@@ -223,7 +224,7 @@ async function mount(firstField = 'title') {
   )
   await settle(() => !!canvasField(firstField))
   // Autosave on: each change reaches the server as it is made.
-  click($('[data-autosave-switch]'))
+  await pickBarRow('Save options', '[data-autosave-switch]')
   await settle(() => !$('[data-editor-save]'))
   return { calls }
 }
@@ -242,9 +243,11 @@ describe('Find on canvas (#2620)', () => {
     expect(title()).toBe('Notes')
     expect($('[data-editor-find]')).toBeNull()
     await settle(() => !!canvasField('notes'))
-    expect($('[role="switch"][aria-label="Show hidden"]')?.getAttribute('aria-checked')).toBe(
-      'true'
-    )
+    // Show hidden lives in the Preview popover; the Preview button marks it on.
+    expect($('[data-preview-hidden-on]')).not.toBeNull()
+    click($('[data-preview-as]'))
+    await settle(() => !!$('[data-show-hidden-switch]'))
+    expect($('[data-show-hidden-switch]')?.getAttribute('aria-checked')).toBe('true')
   })
 
   it('opens the step a field sits on', async () => {
@@ -293,7 +296,7 @@ describe('Inspector breadcrumb (#2622)', () => {
 describe('Outline (#2621)', () => {
   it('a row selects on the canvas; the canvas selection marks its row', async () => {
     await mount()
-    click($('[data-editor-outline-toggle]'))
+    await pickBarRow('Tools', '[data-editor-outline-toggle]')
     await settle(() => !!$('[data-editor-outline]'))
     const rows = [...document.querySelectorAll('[data-outline-row]')].map((r) =>
       r.getAttribute('data-outline-row')
@@ -318,7 +321,7 @@ describe('Outline (#2621)', () => {
 
   it('a row dropped on another emits the canvas’s own move op', async () => {
     const { calls } = await mount()
-    click($('[data-editor-outline-toggle]'))
+    await pickBarRow('Tools', '[data-editor-outline-toggle]')
     await settle(() => !!$('[data-editor-outline]'))
     const drag = (type: string, el: HTMLElement, y: number) =>
       act(() => {
@@ -364,9 +367,7 @@ describe('Compact canvas and collapse all (#2627)', () => {
   it('compact is an editor-only zoom kept for this viewer', async () => {
     await mount()
     expect($('[data-canvas-density]')?.getAttribute('data-canvas-density')).toBe('normal')
-    click($('[data-editor-view-menu]'))
-    await settle(() => !!$('[data-editor-compact]'))
-    click($('[data-editor-compact]'))
+    await pickBarRow('Tools', '[data-editor-compact]')
     await settle(
       () => $('[data-canvas-density]')?.getAttribute('data-canvas-density') === 'compact'
     )
@@ -376,12 +377,10 @@ describe('Compact canvas and collapse all (#2627)', () => {
 
   it('collapse all folds every section; expand all opens them and lays out every step', async () => {
     await mount()
-    click($('[data-editor-view-menu]'))
-    await settle(() => !!$('[data-editor-collapse-all]'))
-    click($('[data-editor-collapse-all]'))
+    await pickBarRow('Tools', '[data-editor-collapse-all]')
     await settle(() => !canvasField('title'))
     expect(canvasField('amount')).toBeNull()
-    click($('[data-editor-expand-all]'))
+    await pickBarRow('Tools', '[data-editor-expand-all]')
     await settle(() => !!canvasField('title'))
     expect(canvasField('amount')).not.toBeNull()
   })
@@ -390,14 +389,12 @@ describe('Compact canvas and collapse all (#2627)', () => {
     bundleOf = steps
     await mount()
     expect(canvasField('notes')).toBeNull()
-    click($('[data-editor-view-menu]'))
-    await settle(() => !!$('[data-editor-expand-all]'))
-    click($('[data-editor-expand-all]'))
+    await pickBarRow('Tools', '[data-editor-expand-all]')
     await settle(() => !!canvasField('notes'))
     expect(canvasField('title')).not.toBeNull()
     expect(canvasField('vendor')).not.toBeNull()
     expect($('[data-design-stacked="two"]')?.textContent).toBe('Billing')
-    click($('[data-editor-collapse-all]'))
+    await pickBarRow('Tools', '[data-editor-collapse-all]')
     await settle(() => !canvasField('notes'))
     expect(canvasField('title')).not.toBeNull()
   })

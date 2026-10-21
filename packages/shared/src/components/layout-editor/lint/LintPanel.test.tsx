@@ -75,7 +75,7 @@ describe('LintPanel', () => {
     expect(host.textContent).toContain('1 problem · 2 warnings')
     expect(host.querySelector('[data-health-score]')?.textContent).toBe('82 / 100')
     const sections = [...host.querySelectorAll('section')].map((s) => s.getAttribute('aria-label'))
-    expect(sections).toEqual(['Health', 'Problems', 'Warnings'])
+    expect(sections).toEqual(['Health', 'Errors', 'Warnings'])
 
     const rows = host.querySelectorAll<HTMLElement>('[data-lint-finding]')
     act(() => rows[1].querySelector('button')?.click())

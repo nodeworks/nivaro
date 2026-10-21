@@ -1,12 +1,15 @@
 import {
+  ChevronDown,
   ChevronLeft,
   Eye,
   GitCompare,
   History,
+  MoreHorizontal,
   Redo2,
   Save,
+  Sparkles,
   Undo2,
-  UserRound,
+  Wrench,
   X
 } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
@@ -19,7 +22,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { AiChangeCheck } from './ai/ChangeCheck'
 import { ShareButton, WatchButton } from './collab/FormFollowShare'
-import { CommandPalette } from './commands/CommandPalette'
 import { HistoryPanel } from './HistoryPanel'
 import type { DescribeField } from './overview/describe-conditions'
 import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overview/overview-api'
@@ -27,11 +29,25 @@ import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/p
 import type { OverviewRow } from './overview/types'
 import type { PreviewDevice } from './preview/preview-model'
 import { ScheduleChange } from './ScheduleChange'
+import {
+  BarMenu,
+  barBtn,
+  barBtnOn,
+  barIconBtn,
+  barIconOn,
+  MenuSeparator,
+  ToolButton
+} from './toolbar-kit'
 import { unsavedText } from './UnsavedConfirm'
 import type { LayoutDraft } from './useLayoutDraft'
 
-// The editor's top bar: which layout this is and when it is used, Preview as,
-// Show hidden, History, Undo / Redo, Autosave, the one save status and Save.
+// The editor's top bar, one row at every width (sketch A of the design
+// review): ‹ Forms │ name, its use and who else is here │ Undo Redo │ the
+// views and Rules │ Preview ▾ │ Tools ▾ │ AI ▾ │ Problems │ History │ ⋯ │
+// the save status │ Save ▾. Everything else lives in those menus. The bar is
+// a size container: below 1400 px the view toggle is icons only, below
+// 1100 px the Preview summary and the Rules / Tools / AI / back labels go,
+// and the form's name truncates before anything wraps.
 
 export interface PreviewAs {
   record: { id: string; label: string } | null
@@ -48,13 +64,21 @@ export interface PreviewAs {
   who?: boolean
 }
 
-const iconBtn =
-  'inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 disabled:pointer-events-none disabled:opacity-40 dark:text-muted-foreground dark:hover:text-foreground'
-const btn =
-  'inline-flex h-8 max-w-[220px] items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 const inputCls =
   'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-muted-foreground'
 const labelCls = 'mb-1 block text-[11.5px] font-semibold text-slate-600 dark:text-muted-foreground'
+
+/**
+ * Width steps of the bar, as attribute rules the bar owns: a host stylesheet
+ * loading after the shared one re-declares plain utilities (`hidden`,
+ * `inline`) and would win over responsive classes (gotchas: host CSS).
+ */
+const BAR_CSS = `
+[data-editor-topbar]{container-type:inline-size;container-name:letb}
+@container letb (max-width: 1499px){[data-editor-topbar] [data-tb-sentence]{display:none}}
+@container letb (max-width: 1399px){[data-editor-topbar] [data-tb-xwide]{display:none}}
+@container letb (max-width: 1099px){[data-editor-topbar] [data-tb-wide],[data-editor-topbar] [data-tb-menu-label]{display:none}}
+`
 
 function StatusChip({
   draft,
@@ -92,7 +116,7 @@ function StatusChip({
             : undefined
       }
       className={cn(
-        'inline-flex max-w-[260px] items-center truncate whitespace-nowrap rounded-full px-2 py-px text-[11px] font-semibold',
+        'inline-flex max-w-[180px] shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-px text-[11px] font-semibold',
         status === 'saving' &&
           'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground',
         (status === 'saved' || status === 'idle') &&
@@ -104,7 +128,10 @@ function StatusChip({
           'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
       )}
     >
-      {text}
+      {pendingOnly && (
+        <span aria-hidden className='h-1.5 w-1.5 shrink-0 rounded-full bg-nvr-cyan' />
+      )}
+      <span className='min-w-0 truncate'>{text}</span>
     </span>
   )
   if (!pendingOnly || !onOpen) return chip
@@ -121,29 +148,31 @@ function StatusChip({
   )
 }
 
-/** The top bar's small on/off switches (Show hidden, Autosave). */
-function BarSwitch({
+/** An on/off row inside the Preview popover (Show hidden). */
+function SwitchRow({
   icon,
   label,
-  tip,
+  hint,
   on,
   onChange,
   data
 }: {
   icon?: ReactNode
   label: string
-  tip: string
+  hint: string
   on: boolean
   onChange: (on: boolean) => void
   data?: Record<string, string>
 }) {
   return (
-    <label
-      className='inline-flex h-8 cursor-pointer items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'
-      data-tip={tip}
-    >
-      {icon}
-      {label}
+    <div className='flex items-start gap-2 text-[12.5px] text-slate-700 dark:text-foreground'>
+      <span className='mt-0.5 text-slate-500 dark:text-muted-foreground'>{icon}</span>
+      <span className='flex min-w-0 flex-1 flex-col'>
+        <span className='font-medium'>{label}</span>
+        <span className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+          {hint}
+        </span>
+      </span>
       <button
         type='button'
         role='switch'
@@ -152,7 +181,7 @@ function BarSwitch({
         onClick={() => onChange(!on)}
         {...data}
         className={cn(
-          'relative h-4 w-7 shrink-0 rounded-full transition-colors',
+          'relative mt-0.5 h-4 w-7 shrink-0 rounded-full transition-colors',
           on ? 'bg-nvr-cyan' : 'bg-slate-300 dark:bg-border'
         )}
       >
@@ -163,7 +192,7 @@ function BarSwitch({
           )}
         />
       </button>
-    </label>
+    </div>
   )
 }
 
@@ -171,11 +200,15 @@ function PreviewAsButton({
   collection,
   value,
   onChange,
+  showHidden,
+  onShowHidden,
   extra
 }: {
   collection: string
   value: PreviewAs
   onChange: (v: PreviewAs) => void
+  showHidden: boolean
+  onShowHidden: (v: boolean) => void
   /** More preview modes, below the record and role (LayoutEditor's PreviewModes). */
   extra?: ReactNode
 }) {
@@ -211,18 +244,32 @@ function PreviewAsButton({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <span className='hidden text-[12px] text-slate-500 lg:inline dark:text-muted-foreground'>
-        Preview as
-      </span>
       <PopoverTrigger asChild>
         <button
           type='button'
-          className={btn}
+          className={cn(barBtn, 'min-w-0 max-w-[260px]', open && barBtnOn)}
           aria-label='Preview as'
+          data-preview-as=''
           data-tip='Show the form with a real record’s values, as a role sees it'
         >
-          <UserRound className='h-3.5 w-3.5 shrink-0' />
-          <span className='truncate'>{summary}</span>
+          <Eye className='h-3.5 w-3.5 shrink-0' />
+          <span className='min-w-0 truncate'>
+            Preview
+            <span data-tb-wide=''>
+              :{' '}
+              <span data-preview-summary='' className='text-slate-500 dark:text-muted-foreground'>
+                {summary}
+              </span>
+            </span>
+          </span>
+          {showHidden && (
+            <span
+              data-preview-hidden-on=''
+              aria-hidden
+              className='h-1.5 w-1.5 shrink-0 rounded-full bg-nvr-cyan'
+            />
+          )}
+          <ChevronDown className='h-3 w-3 shrink-0 text-slate-500 dark:text-muted-foreground' />
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -287,6 +334,16 @@ function PreviewAsButton({
           The form shows this record’s values, steps and rules. Nothing you do here changes the
           record.
         </p>
+        <div className='mt-3 border-t border-slate-100 pt-3 dark:border-border'>
+          <SwitchRow
+            icon={<Eye className='h-3.5 w-3.5' />}
+            label='Show hidden'
+            hint='Fields and sections the preview would hide, faintly, so you can select them'
+            on={showHidden}
+            onChange={onShowHidden}
+            data={{ 'data-show-hidden-switch': '' }}
+          />
+        </div>
         {extra}
       </PopoverContent>
     </Popover>
@@ -306,12 +363,13 @@ export function EditorTopBar({
   showHidden,
   onShowHidden,
   onBack,
-  backLabel = 'Layouts',
+  backLabel = 'Forms',
+  view,
   tools,
+  ai,
   previewExtra,
-  checks,
+  problems,
   more,
-  formMap,
   presence,
   onOpenUnsaved,
   onSelectField,
@@ -359,18 +417,20 @@ export function EditorTopBar({
   onShowHidden: (v: boolean) => void
   /** Leave; `anchor` is the back button (an unsaved-changes confirm sits beside it). */
   onBack: (anchor?: HTMLElement) => void
-  /** What the back button returns to ("Layouts", or the record in overlay mode). */
+  /** What the back button returns to ("Forms", or the record in overlay mode). */
   backLabel?: string
-  /** Editing tools the host adds after Undo / Redo (view toggle, auto-arrange). */
+  /** The view toggle and the Rules switch, after Undo / Redo. */
+  view?: ReactNode
+  /** Rows of the Tools menu (ToolButton-based tools). */
   tools?: ReactNode
-  /** More preview modes inside the Preview as popover. */
+  /** Rows of the AI menu. */
+  ai?: ReactNode
+  /** More preview modes inside the Preview popover. */
   previewExtra?: ReactNode
-  /** The Checks (lint) button, beside History. */
-  checks?: ReactNode
-  /** The ⋯ menu (Save as template, New form from this record). */
+  /** The Problems (lint) button, after AI. */
+  problems?: ReactNode
+  /** Rows of the ⋯ menu after Test, Share and Watch (Save as template, New form from this record, Download). */
   more?: ReactNode
-  /** The printable form map button, before History. */
-  formMap?: ReactNode
   /** Who else has this layout open (#2651), after the layout's name. */
   presence?: ReactNode
   /** Opens the unsaved-changes list from the unsaved count (#2629). */
@@ -379,12 +439,12 @@ export function EditorTopBar({
   onSelectField?: (field: string) => void
   /** History's "Show on canvas" (#2591): compare a version with the editor's layout. */
   onShowOnCanvas?: (base: LayoutBundle, label: string) => void
-  /** "Review changes" beside Save: the unsaved changes on the canvas (#2591). */
+  /** Save menu → "Review changes on canvas" (#2591). */
   onReviewChanges?: () => void
   reviewing?: boolean
-  /** The Test popover (test records, new-record walkthrough, form cost), after History. */
+  /** The Test row of the ⋯ menu (test records, new-record walkthrough, form cost). */
   testing?: ReactNode
-  /** Beside Save while changes wait for it (Check impact). */
+  /** Save menu rows while changes wait for Save (What changes). */
   beforeSave?: ReactNode
 }) {
   // A save notice links here with ?history=1 (#2655): History opens on arrival.
@@ -402,38 +462,51 @@ export function EditorTopBar({
     : TYPE_USE[layoutType]
       ? [{ text: TYPE_USE[layoutType] }]
       : []
+  const manual = !!draft.save && !draft.autosave
+  const waiting = manual && unsaved > 0
 
   return (
     <header
       data-editor-topbar=''
-      className='flex shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
+      className='flex shrink-0 flex-nowrap items-center gap-1.5 overflow-hidden border-b border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
     >
+      <style>{BAR_CSS}</style>
       <button
         type='button'
+        aria-label={backLabel}
+        data-editor-back=''
         onClick={(e) => onBack(e.currentTarget)}
-        className='inline-flex h-8 items-center gap-0.5 rounded-md pl-1 pr-2 text-[12px] text-slate-500 transition-colors hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+        className='inline-flex h-8 shrink-0 items-center gap-0.5 rounded-md pl-1 pr-2 text-[12px] text-slate-500 transition-colors hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
       >
         <ChevronLeft className='h-4 w-4' />
-        {backLabel}
+        <span data-tb-wide=''>{backLabel}</span>
       </button>
-      <div className='flex min-w-0 flex-1 items-center gap-2'>
-        <h2 className='truncate text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+      <Sep />
+      <div className='flex min-w-[64px] flex-1 items-center gap-2'>
+        <h2 className='min-w-0 truncate text-[14px] font-semibold text-slate-900 dark:text-foreground'>
           {layoutName}
         </h2>
-        {pill && <Pill tone={pill.tone}>{pill.text}</Pill>}
+        {pill && (
+          <span className='shrink-0'>
+            <Pill tone={pill.tone}>{pill.text}</Pill>
+          </span>
+        )}
         {segs.length > 0 && (
-          <span className='hidden min-w-0 truncate text-[12px] text-slate-500 md:inline dark:text-muted-foreground'>
+          <span
+            data-tb-sentence=''
+            className='min-w-0 truncate text-[12px] text-slate-500 dark:text-muted-foreground'
+          >
             · <Sentence segs={segs} muted />
           </span>
         )}
+        {presence}
       </div>
-      {presence}
-      <CommandPalette collection={collection} layoutId={layoutId} draft={draft} />
-      <div className='flex items-center gap-0.5'>
+      <Sep />
+      <div className='flex shrink-0 items-center gap-0.5'>
         <button
           type='button'
           aria-label='Undo'
-          className={iconBtn}
+          className={barIconBtn}
           disabled={!draft.canUndo}
           onClick={draft.undo}
           data-tip={draft.undoLabel ? `Undo ${draft.undoLabel} (⌘Z)` : 'Undo (⌘Z)'}
@@ -443,7 +516,7 @@ export function EditorTopBar({
         <button
           type='button'
           aria-label='Redo'
-          className={iconBtn}
+          className={barIconBtn}
           disabled={!draft.canRedo}
           onClick={draft.redo}
           data-tip={draft.redoLabel ? `Redo ${draft.redoLabel} (⇧⌘Z)` : 'Redo (⇧⌘Z)'}
@@ -451,29 +524,47 @@ export function EditorTopBar({
           <Redo2 className='h-4 w-4' />
         </button>
       </div>
-      {tools}
+      {view && (
+        <>
+          <Sep />
+          <div className='flex shrink-0 items-center gap-1'>{view}</div>
+        </>
+      )}
+      <Sep />
       <PreviewAsButton
         collection={collection}
         value={preview}
         onChange={onPreview}
+        showHidden={showHidden}
+        onShowHidden={onShowHidden}
         extra={previewExtra}
       />
-      <BarSwitch
-        icon={<Eye className='h-3.5 w-3.5' />}
-        label='Show hidden'
-        tip='Show fields and sections the preview would hide, faintly, so you can select them'
-        on={showHidden}
-        onChange={onShowHidden}
-      />
-      {checks}
-      {formMap}
-      <WatchButton layoutId={layoutId} />
-      <ShareButton layoutId={layoutId} fields={fields} onSelectField={onSelectField} />
+      <BarMenu
+        label='Tools'
+        icon={<Wrench className='h-3.5 w-3.5' />}
+        tip='Arrange, find, outline, every form, form map and shortcuts'
+      >
+        {tools}
+      </BarMenu>
+      <BarMenu
+        label='AI'
+        icon={<Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />}
+        tip='Rebuild, review and ask about this form with AI; type a change'
+        width='w-[320px]'
+      >
+        {ai}
+      </BarMenu>
+      {problems}
       <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
         <PopoverTrigger asChild>
-          <button type='button' className={btn} aria-label='History' data-editor-history=''>
-            <History className='h-3.5 w-3.5' />
-            History
+          <button
+            type='button'
+            className={cn(barIconBtn, historyOpen && barIconOn)}
+            aria-label='History'
+            data-tip='History: saved versions, this session’s steps, restore'
+            data-editor-history=''
+          >
+            <History className='h-4 w-4' />
           </button>
         </PopoverTrigger>
         <PopoverContent
@@ -500,66 +591,106 @@ export function EditorTopBar({
           )}
         </PopoverContent>
       </Popover>
-      {testing}
-      {more}
-      {draft.setAutosave && (
-        <BarSwitch
-          label='Autosave'
-          tip={
-            draft.autosave
-              ? 'Every change saves as you make it, until you close the editor'
-              : 'Off: changes wait for Save. On: every change saves as you make it, until you close the editor'
-          }
-          on={!!draft.autosave}
-          onChange={draft.setAutosave}
-          data={{ 'data-autosave-switch': '' }}
-        />
-      )}
+      <BarMenu
+        label='More'
+        icon={<MoreHorizontal className='h-4 w-4' />}
+        iconOnly
+        align='end'
+        tip='Test, share and watch this form, templates and download'
+        data={{ 'data-editor-more': '' }}
+      >
+        {testing}
+        <MenuSeparator />
+        <ShareButton layoutId={layoutId} fields={fields} onSelectField={onSelectField} />
+        <WatchButton layoutId={layoutId} />
+        <MenuSeparator />
+        {more}
+      </BarMenu>
+      <Sep />
       <StatusChip draft={draft} onOpen={onOpenUnsaved} />
-      <AiChangeCheck layoutId={layoutId} draft={draft} />
-      {onReviewChanges && !draft.autosave && unsaved > 0 && (
-        <button
-          type='button'
-          data-editor-review=''
-          aria-pressed={reviewing}
-          onClick={onReviewChanges}
-          data-tip={
-            reviewing
-              ? 'Stop marking the unsaved changes on the canvas'
-              : 'Mark the unsaved changes on the canvas before you save'
-          }
-          className={cn(btn, reviewing && 'border-nvr-cyan bg-nvr-cyan/10')}
-        >
-          <GitCompare className='h-3.5 w-3.5' />
-          Review changes
-        </button>
-      )}
-      {draft.unsavedOps && draft.discard && !draft.autosave && unsaved > 0 && (
-        <ScheduleChange
-          collection={collection}
-          layoutId={layoutId}
-          draft={{ unsavedOps: draft.unsavedOps, discard: draft.discard, unsavedCount: unsaved }}
-        />
-      )}
-      {draft.save && !draft.autosave && unsaved > 0 && beforeSave}
-      {draft.save && !draft.autosave && (
-        <button
-          type='button'
-          data-editor-save=''
-          disabled={unsaved === 0}
-          onClick={() => void draft.save?.()}
-          data-tip={unsaved > 0 ? `Save ${unsavedText(unsaved)} (⌘S)` : 'Nothing to save'}
+      <div data-save-split='' className='flex shrink-0 items-center'>
+        {manual && (
+          <button
+            type='button'
+            data-editor-save=''
+            disabled={unsaved === 0}
+            onClick={() => void draft.save?.()}
+            data-tip={unsaved > 0 ? `Save ${unsavedText(unsaved)} (⌘S)` : 'Nothing to save'}
+            className={cn(
+              'inline-flex h-8 items-center gap-1.5 rounded-l-md px-3 text-[12.5px] font-medium transition-opacity disabled:pointer-events-none disabled:opacity-40',
+              unsaved > 0
+                ? 'bg-nvr-cyan text-white hover:opacity-90'
+                : 'border border-slate-200 text-slate-700 dark:border-border dark:text-foreground'
+            )}
+          >
+            <Save className='h-3.5 w-3.5' />
+            Save
+          </button>
+        )}
+        <BarMenu
+          label='Save options'
+          icon={<ChevronDown className='h-3.5 w-3.5' />}
+          iconOnly
+          align='end'
+          width='w-[300px]'
+          tip={manual ? 'Review, check or schedule the changes; Autosave' : 'Autosave'}
           className={cn(
-            'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12.5px] font-medium transition-opacity disabled:pointer-events-none disabled:opacity-40',
-            unsaved > 0
-              ? 'bg-nvr-cyan text-white hover:opacity-90'
-              : 'border border-slate-200 text-slate-700 dark:border-border dark:text-foreground'
+            manual
+              ? 'rounded-l-none border border-l-0 border-slate-200 dark:border-border'
+              : 'border border-slate-200 dark:border-border'
           )}
+          data={{ 'data-save-menu': '' }}
         >
-          <Save className='h-3.5 w-3.5' />
-          Save
-        </button>
-      )}
+          {onReviewChanges && waiting && (
+            <ToolButton
+              label='Review changes on canvas'
+              icon={<GitCompare className='h-3.5 w-3.5' />}
+              hint='Mark the unsaved changes on the form'
+              checked={reviewing}
+              onClick={onReviewChanges}
+              data={{ 'data-editor-review': '' }}
+            />
+          )}
+          {waiting && beforeSave}
+          <AiChangeCheck layoutId={layoutId} draft={draft} />
+          {draft.unsavedOps && draft.discard && waiting && (
+            <ScheduleChange
+              collection={collection}
+              layoutId={layoutId}
+              draft={{
+                unsavedOps: draft.unsavedOps,
+                discard: draft.discard,
+                unsavedCount: unsaved
+              }}
+            />
+          )}
+          {draft.setAutosave && (
+            <>
+              <MenuSeparator />
+              <ToolButton
+                label='Autosave'
+                icon={<Save className='h-3.5 w-3.5' />}
+                hint={
+                  draft.autosave
+                    ? 'Every change saves as you make it, until you close the editor'
+                    : 'Off: changes wait for Save'
+                }
+                checked={!!draft.autosave}
+                onClick={() => draft.setAutosave?.(!draft.autosave)}
+                data={{ 'data-autosave-switch': '' }}
+              />
+            </>
+          )}
+        </BarMenu>
+      </div>
     </header>
+  )
+}
+
+/** A thin rule between groups of the bar (wide bars only). */
+function Sep() {
+  // Goes with the labels below 1100 px: the gaps alone keep the groups apart.
+  return (
+    <span aria-hidden data-tb-wide='' className='h-5 w-px shrink-0 bg-slate-200 dark:bg-border' />
   )
 }

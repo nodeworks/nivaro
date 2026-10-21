@@ -1,5 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, BarChart3, Grid3x3, LayoutGrid, Plus, Table2, Users } from 'lucide-react'
+import {
+  AlertTriangle,
+  BarChart3,
+  Grid3x3,
+  LayoutGrid,
+  Percent,
+  Plus,
+  Table2,
+  Users
+} from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -16,6 +25,7 @@ import { cn } from '../../lib/utils'
 import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
+import { AutoArrangeButton } from './AutoArrange'
 import { AiToolsButton } from './ai/AiToolsButton'
 import { type AiPin, mergeMarks, pinsToMarks } from './ai/ai-tools-api'
 import { AiFormsButton } from './ai-forms/AiFormsButton'
@@ -24,7 +34,6 @@ import { type AskCite, useAskThread } from './assist/assist-api'
 import { jumpToSetting } from './assist/jump'
 import { ProposalsButton } from './assist/ProposalsButton'
 import type { SettingEntry } from './assist/settings-index'
-import { AutoArrangeButton } from './AutoArrange'
 import { BulkChangesButton } from './bulk/BulkChangesButton'
 import { useMacroRecorder } from './bulk/useMacroRecorder'
 import { bundleToActiveLayout, previewForRole, roleMarker } from './bundle-to-active'
@@ -38,6 +47,7 @@ import {
   changeNoteReady
 } from './ChangeNote'
 import { DroppedBanner, PresenceAvatars, RecoveryBanner, UnsavedList } from './CollabParts'
+import { CommandPalette } from './commands/CommandPalette'
 import {
   type DesignMark,
   type DesignOverlay,
@@ -77,7 +87,7 @@ import { LintButton, LintPanel } from './lint/LintPanel'
 import { useLayoutLint } from './lint/lint-api'
 import { FieldStateMatrix } from './matrix/FieldStateMatrix'
 import { RoleSectionMatrix } from './matrix/RoleSectionMatrix'
-import { NavTools } from './nav/NavTools'
+import { FindTool, OutlineTool, ShortcutsTool, ViewTools } from './nav/NavTools'
 import { OutlinePanel } from './nav/OutlinePanel'
 import { useEditorNav } from './nav/useEditorNav'
 import { COMPACT_ZOOM } from './nav/view-prefs'
@@ -92,15 +102,17 @@ import {
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { PlacementsTable } from './PlacementsTable'
+import { amberStrip, segOption, segTrack } from './panel-style'
 import { peersByTarget, useLayoutPresence } from './presence'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
 import { useRailCopy } from './reuse/useRailCopy'
+import { StructureActions, usePinMarks } from './StructureMenu'
 import { useRolePreview } from './settings/settings-api'
 import { layoutKindOf } from './settings/settings-registry'
-import { StructureActions, usePinMarks } from './StructureMenu'
 import { ImpactButton, TestingButton } from './testing/TestingPanels'
+import { MenuSeparator, ToolButton } from './toolbar-kit'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import { describeTarget, targetFromKey, unsavedKeys } from './unsaved-marks'
 import { UsagePanel } from './usage/UsagePanel'
@@ -594,24 +606,21 @@ function ViewToggle({ view, onView }: { view: EditorView; onView: (v: EditorView
     <button
       type='button'
       aria-pressed={view === v}
+      aria-label={label}
       data-editor-view={v}
       data-tip={tip}
       onClick={() => onView(v)}
-      className={cn(
-        'inline-flex h-7 items-center gap-1 rounded px-2 text-[12px] font-medium transition-colors',
-        view === v
-          ? 'bg-white text-slate-900 shadow-sm dark:bg-background dark:text-foreground'
-          : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
-      )}
+      className={cn(segOption(view === v), 'inline-flex items-center justify-center gap-1')}
     >
-      <Icon className='h-3.5 w-3.5' />
-      {label}
+      <Icon className='h-3.5 w-3.5 shrink-0' />
+      {/* Icons only once the bar is under 1400 px (EditorTopBar's container rules). */}
+      <span data-tb-xwide=''>{label}</span>
     </button>
   )
   return (
     <fieldset
-      aria-label='Show the layout as'
-      className='m-0 inline-flex h-8 min-w-0 items-center gap-0.5 rounded-md border-0 bg-slate-100 p-0.5 dark:bg-muted'
+      aria-label='Show the form as'
+      className={cn('m-0 min-w-0 shrink-0 border-0', segTrack(4))}
     >
       {opt('canvas', 'Canvas', LayoutGrid, 'The form as people see it')}
       {opt('table', 'Table', Table2, 'Every field as a row: label, section, width, rules')}
@@ -662,7 +671,8 @@ export function LayoutEditor({
   const selected = selection.length > 0 ? selection[selection.length - 1] : null
   const [view, setView] = useState<EditorView>('canvas')
   const [showHidden, setShowHidden] = useState(false)
-  // Fill-rate hints on the canvas (#2588): on unless turned off in the Usage tab.
+  // Fill-rate hints on the canvas (#2588), the Usage lens: off unless turned on
+  // (Usage tab, or Tools → Show how full each field is).
   const [showFill, setShowFill] = useShowFillRates()
   const { data: fill } = useFieldFillRates(collection, showFill)
   const fillRate = useMemo(
@@ -776,7 +786,7 @@ export function LayoutEditor({
   useEffect(
     () => () => {
       if (unsavedOpsRef.current().length > 0)
-        toast.warning('Unsaved layout changes kept — open the layout again to save or discard them')
+        toast.warning('Unsaved form changes kept — open the form again to save or discard them')
     },
     []
   )
@@ -791,7 +801,7 @@ export function LayoutEditor({
   }, [draft.whenIdle, invalidateLayouts, onBack])
   const leave = useCallback(
     (anchor?: HTMLElement | null) =>
-      guard(mode === 'overlay' ? 'go back to the record' : 'leave this layout', leaveNow, anchor),
+      guard(mode === 'overlay' ? 'go back to the record' : 'leave this form', leaveNow, anchor),
     [guard, leaveNow, mode]
   )
 
@@ -916,7 +926,7 @@ export function LayoutEditor({
     const anchor =
       active instanceof HTMLElement && bodyRef.current?.contains(active) ? active : null
     guard(
-      'open another layout',
+      'open another form',
       () => {
         draft.flush()
         setSelection([])
@@ -944,7 +954,7 @@ export function LayoutEditor({
             openAddPanel: () => setLeft('add'),
             root: bodyRef.current
           })
-        : Promise.resolve({ ok: false as const, message: 'The layout is still loading' }),
+        : Promise.resolve({ ok: false as const, message: 'The form is still loading' }),
     [bundle, selection]
   )
   const openLayoutRef = useRef(openLayout)
@@ -993,7 +1003,7 @@ export function LayoutEditor({
     ? {
         role: 'dialog',
         'aria-modal': true,
-        'aria-label': `Edit layout ${layoutName}`,
+        'aria-label': `Edit form ${layoutName}`,
         tabIndex: -1
       }
     : {}
@@ -1024,7 +1034,7 @@ export function LayoutEditor({
         showHidden={showHidden}
         onShowHidden={setShowHidden}
         onBack={leave}
-        backLabel={overlay ? 'Back to record' : 'Layouts'}
+        backLabel={overlay ? 'Back to record' : 'Forms'}
         onShowOnCanvas={compareState.showVersion}
         onReviewChanges={compareState.toggleReview}
         reviewing={compareState.compare?.kind === 'unsaved'}
@@ -1051,26 +1061,24 @@ export function LayoutEditor({
             group_key: bundle?.placements.find((p) => p.field === field)?.group_key ?? null
           })
         }
+        view={
+          bundle && arrangeable ? (
+            <>
+              <ViewToggle view={view} onView={setView} />
+              <RulesToggle on={rulesOn} onChange={setRulesOn} />
+            </>
+          ) : null
+        }
         tools={
           <>
+            {bundle && arrangeable && <AutoArrangeButton bundle={bundle} apply={draft.apply} />}
+            {bundle && <FindTool find={nav.find} />}
             {bundle && arrangeable && (
-              <>
-                <ViewToggle view={view} onView={setView} />
-                <RulesToggle on={rulesOn} onChange={setRulesOn} />
-                <AutoArrangeButton bundle={bundle} apply={draft.apply} />
-                <FindReplaceButton bundle={bundle} apply={draft.apply} collection={collection} />
-                <AiFormsButton
-                  collection={collection}
-                  layoutId={currentId}
-                  draft={draft}
-                  onOpenLayout={openLayout}
-                />
-              </>
+              <FindReplaceButton bundle={bundle} apply={draft.apply} collection={collection} />
             )}
+            <MenuSeparator />
             {bundle && (
-              <NavTools
-                find={nav.find}
-                shortcuts={nav.shortcuts}
+              <OutlineTool
                 outline={
                   arrangeable
                     ? {
@@ -1079,6 +1087,10 @@ export function LayoutEditor({
                       }
                     : null
                 }
+              />
+            )}
+            {bundle && (
+              <ViewTools
                 view={
                   arrangeable && view === 'canvas'
                     ? {
@@ -1091,12 +1103,58 @@ export function LayoutEditor({
                 }
               />
             )}
+            {bundle && arrangeable && (
+              <ToolButton
+                label='Show how full each field is'
+                icon={<Percent className='h-3.5 w-3.5' />}
+                hint='The share of records with a value, on each field'
+                checked={showFill}
+                onClick={() => setShowFill(!showFill)}
+                data={{ 'data-editor-fill-toggle': '' }}
+              />
+            )}
+            <MenuSeparator />
             <BulkChangesButton
               collection={collection}
               layoutId={currentId}
               dirty={draft.dirty}
               recorder={recorder}
             />
+            <FormMapButton bundle={bundle} collection={collection} />
+            <MenuSeparator />
+            {bundle && <ShortcutsTool shortcuts={nav.shortcuts} />}
+          </>
+        }
+        ai={
+          <>
+            {bundle && arrangeable && (
+              <AiFormsButton
+                collection={collection}
+                layoutId={currentId}
+                draft={draft}
+                onOpenLayout={openLayout}
+              />
+            )}
+            {bundle && (
+              <AiToolsButton
+                collection={collection}
+                layoutId={currentId}
+                bundle={bundle}
+                apply={draft.apply}
+                previewRecordShown={preview.record != null}
+                onPins={setAiPins}
+                onSelect={onSelect}
+              />
+            )}
+            <MenuSeparator />
+            {bundle && host.isAdmin && (
+              <AskButton
+                active={panel === 'ask'}
+                onClick={() => setPanel((p) => (p === 'ask' ? 'inspector' : 'ask'))}
+              />
+            )}
+            <CommandPalette collection={collection} layoutId={currentId} draft={draft} />
+            {bundle && <ProposalsButton layoutId={currentId} draft={draft} />}
           </>
         }
         testing={
@@ -1134,31 +1192,13 @@ export function LayoutEditor({
             fields={fields}
           />
         }
-        checks={
+        problems={
           bundle && (
-            <>
-              <LintButton
-                findings={lint.findings}
-                active={panel === 'checks'}
-                onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
-              />
-              <AiToolsButton
-                collection={collection}
-                layoutId={currentId}
-                bundle={bundle}
-                apply={draft.apply}
-                previewRecordShown={preview.record != null}
-                onPins={setAiPins}
-                onSelect={onSelect}
-              />
-              {host.isAdmin && (
-                <AskButton
-                  active={panel === 'ask'}
-                  onClick={() => setPanel((p) => (p === 'ask' ? 'inspector' : 'ask'))}
-                />
-              )}
-              <ProposalsButton layoutId={currentId} draft={draft} />
-            </>
+            <LintButton
+              findings={lint.findings}
+              active={panel === 'checks'}
+              onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
+            />
           )
         }
         more={
@@ -1169,7 +1209,6 @@ export function LayoutEditor({
             onOpenLayout={openLayout}
           />
         }
-        formMap={<FormMapButton bundle={bundle} collection={collection} />}
       />
       {overlay && (
         <EditingBanner
@@ -1186,12 +1225,15 @@ export function LayoutEditor({
         <div
           role='alert'
           data-unsaved-conflict=''
-          className='flex shrink-0 items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-[12.5px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+          className={cn(
+            'flex shrink-0 items-center gap-3 border-b px-4 py-1.5 text-[12.5px]',
+            amberStrip
+          )}
         >
           <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
           <p className='m-0 min-w-0 flex-1'>
-            {draft.error ?? 'Someone else saved this layout'}. Save again to try once more, or
-            reload their version.
+            {draft.error ?? 'Someone else saved this form'}. Save again to try once more, or reload
+            their version.
           </p>
           <button
             type='button'
@@ -1212,7 +1254,10 @@ export function LayoutEditor({
       {warning && (
         <div
           role='note'
-          className='flex shrink-0 items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-[12.5px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+          className={cn(
+            'flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-[12.5px]',
+            amberStrip
+          )}
         >
           <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
           {warning}
@@ -1241,7 +1286,7 @@ export function LayoutEditor({
                 className={leftTab(left === 'layouts')}
                 onClick={() => setLeft('layouts')}
               >
-                Layouts
+                Forms
               </button>
               <button
                 type='button'

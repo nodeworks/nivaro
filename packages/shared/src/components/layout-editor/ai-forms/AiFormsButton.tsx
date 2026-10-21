@@ -1,8 +1,9 @@
 import { ChevronRight, FileImage, FileText, Sparkles, UserRound, Wand2 } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { Popover, PopoverContent } from '../../ui/popover'
 import { useLayoutEditorHost } from '../host'
+import { ToolButton } from '../toolbar-kit'
 import type { LayoutDraft } from '../useLayoutDraft'
 import { AiComposer } from './AiComposer'
 import type { ComposeMode } from './ai-forms-api'
@@ -11,7 +12,7 @@ import { usePendingBuild } from './pending'
 import { SlimPanel } from './SlimPanel'
 
 /**
- * The editor's "AI" button (admins): rebuild the draft from a description, a
+ * AI → "Rebuild or lighter version" (admins): rebuild the draft from a description, a
  * picture / PDF of an old form or a process document (#2668-#2670), make a
  * lighter version for a role (#2671), or place unplaced fields by meaning
  * (#2672). Every proposal is reviewed in plain words first and lands through
@@ -21,9 +22,6 @@ import { SlimPanel } from './SlimPanel'
  */
 
 type View = 'menu' | ComposeMode | 'slim' | 'meaning'
-
-const trigger =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 
 export function AiFormsButton({
   collection,
@@ -58,18 +56,15 @@ export function AiFormsButton({
         if (!v) setView('menu')
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          className={trigger}
-          aria-label='AI'
-          data-ai-forms-trigger=''
-          data-tip='Rebuild this form with AI, or make a lighter version for a role'
-        >
-          <Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />
-          AI
-        </button>
-      </PopoverTrigger>
+      <ToolButton
+        popover
+        onOpen={() => setOpen(true)}
+        label='Rebuild or lighter version'
+        icon={<Wand2 className='h-3.5 w-3.5 text-nvr-cyan' />}
+        tip='Rebuild this form with AI, or make a lighter version for a role'
+        hint='From a description, a picture or a process; lighter for a role'
+        data={{ 'data-ai-forms-trigger': '' }}
+      />
       <PopoverContent
         align='end'
         className='max-h-[min(72vh,560px)] w-[460px] overflow-y-auto overscroll-contain p-3'

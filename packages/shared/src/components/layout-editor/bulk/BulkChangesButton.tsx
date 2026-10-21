@@ -1,9 +1,10 @@
 import { Layers } from 'lucide-react'
 import { useState } from 'react'
 import { cn, formatNumber } from '../../../lib/utils'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { Popover, PopoverContent } from '../../ui/popover'
 import { effectText, labelText, tintCard } from '../panel-style'
 import { PickList, type PickOption, Segmented } from '../settings/controls'
+import { ToolButton } from '../toolbar-kit'
 import { BulkRun } from './BulkRun'
 import type { BulkAction, BulkChange, BulkFlag } from './bulk-api'
 import { useFieldLabels } from './field-labels'
@@ -16,9 +17,6 @@ import type { MacroRecorder } from './useMacroRecorder'
 // on the Layouts overview.
 
 type Tab = 'retire' | 'change' | 'macros'
-
-const triggerCls =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 
 export interface BulkChangesButtonProps {
   collection: string
@@ -40,16 +38,21 @@ export function BulkChangesButton({
   const recording = !!recorder?.recording
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          data-bulk-button=''
-          className={triggerCls}
-          data-tip='Retire a field, make one change on every form, or replay a recorded macro'
-        >
-          <Layers className='h-3.5 w-3.5' />
-          Every form
-          {recording && (
+      <ToolButton
+        popover
+        onOpen={() => setOpen(true)}
+        label='Every form'
+        icon={<Layers className='h-3.5 w-3.5' />}
+        tip='Retire a field, make one change on every form, or replay a recorded macro'
+        hint={
+          recording
+            ? `Recording a macro: ${recorder?.steps.length ?? 0} steps`
+            : 'Retire a field, one change everywhere, macros'
+        }
+        dot={recording}
+        data={{ 'data-bulk-button': '' }}
+        trailing={
+          recording && (
             <span
               data-recording=''
               className='ml-0.5 inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 text-[11px] font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300'
@@ -57,9 +60,9 @@ export function BulkChangesButton({
               <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-rose-500' />
               {recorder?.steps.length ?? 0}
             </span>
-          )}
-        </button>
-      </PopoverTrigger>
+          )
+        }
+      />
       <PopoverContent
         align='end'
         data-bulk-panel=''

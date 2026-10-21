@@ -1,25 +1,18 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Languages } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { get, post } from '../../../lib/commands'
 import type { LayoutBundle, LayoutOp } from '../../../lib/layout-ops'
 import { titleCase } from '../../../lib/utils'
-import {
-  inspectKeys,
-  type OrphanLayout,
-  useOrphans,
-  useTranslationSummary
-} from '../inspect/inspect-api'
+import { inspectKeys, type OrphanLayout } from '../inspect/inspect-api'
 import { slotName } from '../slot-names'
 import { layoutDraftKeys } from '../useLayoutDraft'
 import { btnOutline } from './OverviewActions'
 import { apiFailure } from './overview-api'
 
-// Under the overview header: placements that point at nothing, with one click
-// to remove them per layout (#2650), and the forms still missing translations
-// of their labels and help text (#2665).
+// Rows of the overview's findings strip: placements that point at nothing,
+// with one click to remove them per form (#2650).
 
 const REASON: Record<OrphanLayout['placements'][number]['reason'], string> = {
   column_dropped: 'column no longer exists',
@@ -31,45 +24,7 @@ const REASON: Record<OrphanLayout['placements'][number]['reason'], string> = {
 const nameOf = (field: string) =>
   field.startsWith('__') ? slotName(field) : titleCase(field.split('.').pop() ?? field)
 
-export function InspectStrip({ collection, onChanged }: { collection: string; onChanged(): void }) {
-  const { data: orphans = [] } = useOrphans(collection)
-  const { data: i18n } = useTranslationSummary(collection)
-  const missing = (i18n?.layouts ?? []).filter((l) => l.missing > 0)
-  if (!orphans.length && !(i18n?.locales.length && missing.length)) return null
-  return (
-    <div className='space-y-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-      {orphans.length > 0 && (
-        <div data-orphans='' className='space-y-1.5'>
-          <p className='flex items-center gap-1.5 text-[12.5px] font-semibold text-amber-800 dark:text-amber-200'>
-            <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
-            Placements that point at nothing
-          </p>
-          {orphans.map((l) => (
-            <OrphanRow key={l.layout_id} layout={l} collection={collection} onChanged={onChanged} />
-          ))}
-        </div>
-      )}
-      {i18n && i18n.locales.length > 0 && missing.length > 0 && (
-        <p
-          data-missing-translations=''
-          className='flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px] text-slate-600 dark:text-muted-foreground'
-        >
-          <Languages className='h-3.5 w-3.5 shrink-0' />
-          <span>Missing translations ({i18n.locales.join(', ')}):</span>
-          {missing.map((l, i) => (
-            <span key={l.layout_id} data-missing-layout={l.layout_id}>
-              <span className='font-medium text-slate-800 dark:text-foreground'>{l.name}</span>{' '}
-              {l.missing} of {l.total}
-              {i < missing.length - 1 ? ' ·' : ''}
-            </span>
-          ))}
-        </p>
-      )}
-    </div>
-  )
-}
-
-function OrphanRow({
+export function OrphanRow({
   layout,
   collection,
   onChanged

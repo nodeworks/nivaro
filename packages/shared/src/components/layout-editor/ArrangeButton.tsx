@@ -1,6 +1,7 @@
 import { Shuffle } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import type { DesignTarget } from './design-context'
+import { barBtn } from './toolbar-kit'
 
 // The inspector's way into the canvas menu (StructureMenu): its buttons
 // dispatch an event the editor's StructureActions answers, so the inspector
@@ -30,10 +31,7 @@ export function ArrangeButton({
       data-structure-open=''
       onClick={(e) => openStructureMenu(e.currentTarget, targets)}
       data-tip={`Duplicate (${duplicateKeys()}), wrap, unwrap, convert, copy rules, pin — or right-click it on the form`}
-      className={cn(
-        'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted',
-        className
-      )}
+      className={cn(barBtn, className)}
     >
       <Shuffle className='h-3.5 w-3.5 shrink-0' />
       Arrange…

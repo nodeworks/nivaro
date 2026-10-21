@@ -1,16 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
-import { Loader2, Sparkles, X } from 'lucide-react'
+import { FileCheck2, Loader2, ScanEye, Sparkles, UserRound, X } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get, post } from '../../../lib/commands'
 import type { LayoutBundle, LayoutOp } from '../../../lib/layout-ops'
 import { cn, titleCase } from '../../../lib/utils'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { Popover, PopoverContent } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import type { DesignTarget } from '../design-context'
 import { useLayoutEditorHost } from '../host'
 import { withOverride } from '../inspector/model'
 import { useOverviewFields, useRoleNames } from '../overview/overview-api'
+import { ToolButton, useBarMenu } from '../toolbar-kit'
 import { parseSaveFailure } from '../useLayoutDraft'
 import {
   type AiPin,
@@ -35,7 +36,8 @@ import {
 import { canvasRoot, captureCanvas, measureSections } from './canvas-capture'
 
 /**
- * The top bar's AI button (admins): three read-only reviews of the layout.
+ * Three read-only AI reviews of the layout (admins), each a row of the top
+ * bar's AI menu: Test as a role, Review the look, Tune from autofill.
  *
  * - Persona test (#2685): the model plays a role filling a new record and
  *   reports confusing steps, labels and fields.
@@ -55,8 +57,26 @@ const primaryBtn =
   'inline-flex h-7 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-40'
 const ghostBtn =
   'inline-flex h-7 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 disabled:pointer-events-none disabled:opacity-40 dark:text-muted-foreground dark:hover:text-foreground'
-const trigger =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+const ROWS: Array<{ tab: Tab; label: string; hint: string; icon: ReactNode }> = [
+  {
+    tab: 'persona',
+    label: 'Test as a role',
+    hint: 'AI fills a new record as a role and says what confused it',
+    icon: <UserRound className='h-3.5 w-3.5' />
+  },
+  {
+    tab: 'critique',
+    label: 'Review the look',
+    hint: 'Density, hierarchy and alignment of the canvas',
+    icon: <ScanEye className='h-3.5 w-3.5' />
+  },
+  {
+    tab: 'autofill',
+    label: 'Tune from autofill',
+    hint: 'Fields people often correct after Fill from document',
+    icon: <FileCheck2 className='h-3.5 w-3.5' />
+  }
+]
 
 const CHIP: Record<string, string> = {
   blocking: 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200',
@@ -112,6 +132,7 @@ export function AiToolsButton({
   onSelect: (t: DesignTarget) => void
 }) {
   const host = useLayoutEditorHost()
+  const menu = useBarMenu()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('persona')
   const triggerRef = useRef<HTMLButtonElement | null>(null)
@@ -151,29 +172,45 @@ export function AiToolsButton({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          ref={triggerRef}
-          type='button'
-          className={trigger}
-          aria-label='AI tools'
-          data-ai-tools-trigger=''
-          data-tip='Test the form as a role, review its look, tune it from autofill'
+      {menu ? (
+        ROWS.map((r) => (
+          <ToolButton
+            key={r.tab}
+            popover
+            onOpen={() => {
+              setTab(r.tab)
+              setOpen(true)
+            }}
+            label={r.label}
+            icon={r.icon}
+            hint={r.hint}
+            disabled={!bundle}
+            data={{ 'data-ai-tools-row': r.tab }}
+          />
+        ))
+      ) : (
+        <ToolButton
+          popover
+          buttonRef={(el) => {
+            triggerRef.current = el
+          }}
+          label='AI'
+          ariaLabel='AI tools'
+          icon={<Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />}
+          tip='Test the form as a role, review its look, tune it from autofill'
           disabled={!bundle}
-        >
-          <Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />
-          AI
-        </button>
-      </PopoverTrigger>
+          data={{ 'data-ai-tools-trigger': '' }}
+        />
+      )}
       <PopoverContent align='end' className='w-[460px] overflow-hidden p-0' data-ai-tools=''>
         <div
           role='tablist'
           aria-label='AI tools'
           className='flex items-center gap-1 border-b border-slate-200 px-2 py-1.5 dark:border-border'
         >
-          {tabBtn('persona', 'Persona test')}
-          {tabBtn('critique', 'Visual critique')}
-          {tabBtn('autofill', 'After autofill')}
+          {tabBtn('persona', 'Test as a role')}
+          {tabBtn('critique', 'Review the look')}
+          {tabBtn('autofill', 'Tune from autofill')}
         </div>
         <div className='max-h-[min(65vh,520px)] overflow-y-auto overscroll-contain px-3 py-3'>
           {bundle && tab === 'persona' && (
@@ -191,7 +228,10 @@ export function AiToolsButton({
               layoutId={layoutId}
               bundle={bundle}
               previewRecordShown={previewRecordShown}
-              editor={() => triggerRef.current?.closest('[data-layout-editor]') ?? null}
+              editor={() =>
+                (triggerRef.current ?? menu?.anchor.current)?.closest('[data-layout-editor]') ??
+                null
+              }
               onPins={onPins}
               select={select}
             />
@@ -495,7 +535,7 @@ function CritiqueTab({
         Reviews how the form looks — density, order of sections, alignment — and pins each comment
         to its section.{' '}
         {previewRecordShown
-          ? 'A preview record is shown, so only the layout’s structure and sizes are sent, no picture.'
+          ? 'A preview record is shown, so only the form’s structure and sizes are sent, no picture.'
           : 'A picture of the canvas is sent with typed values hidden, when the AI can read pictures.'}
       </p>
       <div className='flex justify-end'>

@@ -14,6 +14,7 @@ import {
 } from '../../lib/layout-ops'
 import type { CMSField } from '../item-edit/types'
 import { LayoutEditor } from './LayoutEditor'
+import { closeBarMenu, openBarMenu } from './toolbar-kit.test-utils'
 
 // The editor with #2583 multi-select, #2603 Alt+arrow and #2602 Table view
 // wired in: what the person sees after each gesture (the draft is optimistic).
@@ -212,7 +213,10 @@ describe('LayoutEditor canvas editing', () => {
         r.getAttribute('data-table-row')
       )
     ).toEqual(['field:title:main', 'field:amount:main', 'field:notes:extra'])
+    // Auto-arrange works on the table too: it is in the Tools menu.
+    await openBarMenu('Tools')
     expect(document.querySelector('[data-auto-arrange="form"]')).not.toBeNull()
+    await closeBarMenu('Tools')
     act(() => (document.querySelector('[data-editor-view="canvas"]') as HTMLElement).click())
     await settle(() => canvasFields().length === 3)
   })

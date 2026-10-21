@@ -154,7 +154,7 @@ describe('AiChangeCheck', () => {
     render(BASE, 0, 'idle')
     expect(el.querySelector('[data-ai-change-check]')).toBeNull()
     render(hidden, 1, 'idle')
-    expect(el.querySelector('[data-ai-change-check]')?.textContent).toContain('Check')
+    expect(el.querySelector('[data-ai-change-check]')?.textContent).toContain('AI review')
     render(hidden, 0, 'saving')
     await flush()
     expect(calls).toHaveLength(1)

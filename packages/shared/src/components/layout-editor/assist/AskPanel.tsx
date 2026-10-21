@@ -14,6 +14,7 @@ import { useRoleNames } from '../overview/overview-api'
 import { PanelBody, PanelHeader } from '../panel-frame'
 import { effectText } from '../panel-style'
 import type { LayoutKind } from '../settings/settings-registry'
+import { ToolButton } from '../toolbar-kit'
 import { parseSaveFailure } from '../useLayoutDraft'
 import {
   type AskCite,
@@ -398,21 +399,15 @@ export function AskPanel({
 /** The top-bar toggle for the panel. */
 export function AskButton({ active, onClick }: { active: boolean; onClick: () => void }) {
   return (
-    <button
-      type='button'
+    <ToolButton
+      label='Ask…'
+      ariaLabel='Ask'
+      icon={<MessageCircleQuestion className='h-3.5 w-3.5' />}
+      tip='Ask why someone sees a field, which form a record gets, or where a setting is'
+      hint='Who sees a field, which form a record gets'
+      active={active}
       onClick={onClick}
-      aria-pressed={active}
-      data-editor-ask=''
-      data-tip='Ask why someone sees a field, which form a record gets, or where a setting is'
-      className={cn(
-        'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[12.5px] font-medium transition-colors',
-        active
-          ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-foreground'
-          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
-      )}
-    >
-      <MessageCircleQuestion className='h-3.5 w-3.5' />
-      Ask
-    </button>
+      data={{ 'data-editor-ask': '' }}
+    />
   )
 }

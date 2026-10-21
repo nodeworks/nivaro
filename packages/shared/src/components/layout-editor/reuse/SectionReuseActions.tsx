@@ -119,7 +119,7 @@ export function CopyToLayout({
         field_map: target === collection ? undefined : mapping.map
       })
       invalidateTarget()
-      const to = layouts.find((l) => l.layout_id === layoutId)?.name ?? 'the layout'
+      const to = layouts.find((l) => l.layout_id === layoutId)?.name ?? 'the form'
       const extra = leftOutWords(res)
       toast.success(`Copied ${name} to ${to}${extra ? ` (${extra})` : ''}`)
       onCopied?.(layoutId, target)
@@ -149,7 +149,7 @@ export function CopyToLayout({
       <PopoverContent align='start' className='w-[340px] p-3'>
         <p className='mb-2 text-[12px] leading-snug text-slate-600 dark:text-muted-foreground'>
           Copy <b className='font-semibold text-slate-800 dark:text-foreground'>{name}</b> with its
-          fields and settings. Tip: drag the section onto a layout in the Layouts list.
+          fields and settings. Tip: drag the section onto a form in the Forms list.
         </p>
         {picking ? (
           <>

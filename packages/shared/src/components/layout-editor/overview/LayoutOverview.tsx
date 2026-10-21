@@ -17,8 +17,8 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import {
   AlertTriangle,
+  BarChart3,
   Check,
-  Columns2,
   FileStack,
   GripVertical,
   MoreHorizontal,
@@ -37,7 +37,6 @@ import { OwnerLine } from '../collab/OwnerLine'
 import { useCollectionBody } from '../collection-meta'
 import {
   CompareForms,
-  CrossformFindings,
   defaultComparePair,
   FindFieldButton,
   LayoutThumb,
@@ -51,12 +50,13 @@ import { type ScheduleRow, useLayoutSchedules } from '../history-api'
 import { DependencyDiagram } from '../ops/DependencyDiagram'
 import { downloadLayout, requestsByLayout, useChangeRequests } from '../ops/ops-api'
 import { PromotePanel } from '../ops/PromotePanel'
+import { amberStrip } from '../panel-style'
 import { FormFromRecordButton } from '../reuse/FormFromRecordButton'
+import { BarMenu } from '../toolbar-kit'
 import {
   AnalysisButtons,
   AnalysisProvider,
   CoverageNote,
-  CoverageStrip,
   HealthChip,
   sortWorstFirst,
   useOverviewAnalysis
@@ -67,7 +67,7 @@ import {
   describeReason,
   type Segment
 } from './describe-conditions'
-import { InspectStrip } from './InspectStrip'
+import { FindingsStrip } from './FindingsStrip'
 import {
   btnOutline,
   btnPrimary,
@@ -326,7 +326,7 @@ function RowMenu({
               )
             }}
           >
-            Download this layout
+            Download this form
           </button>
           <div className='my-1 h-px bg-slate-100 dark:bg-border' />
           <button
@@ -377,7 +377,7 @@ function DeleteConfirm({
       toast.success(`${row.name} deleted`)
       onDeleted()
     } catch (err) {
-      const f = apiFailure(err, 'Could not delete the layout')
+      const f = apiFailure(err, 'Could not delete the form')
       if (f.status === 409) setBlocked({ message: f.message, refs: f.references })
       else toast.error(f.message)
     } finally {
@@ -414,7 +414,7 @@ function DeleteConfirm({
               </>
             ) : (
               <p className='mt-1 text-slate-600 dark:text-muted-foreground'>
-                Nothing uses this layout. Its sections, placements and history go with it.
+                Nothing uses this form. Its sections, placements and history go with it.
               </p>
             )}
           </div>
@@ -875,6 +875,68 @@ function ExplainStrip({
 
 // ─── Page ───────────────────────────────────────────────────────────────────
 
+/**
+ * "3 suggested changes" in the overview's subtitle (#2609): a link that
+ * lists the forms people suggested changes for; opening one shows them under
+ * Form settings → Tools.
+ */
+function SuggestedChangesLink({
+  total,
+  counts,
+  rows,
+  onOpen
+}: {
+  total: number
+  counts: Map<number, number>
+  rows: OverviewRow[]
+  onOpen: (id: number) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const forms = rows.filter((r) => (counts.get(r.layout_id) ?? 0) > 0)
+  const loose = counts.get(0) ?? 0
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-overview-requests={total}
+          className='font-medium text-[#0089ad] hover:underline dark:text-nvr-cyan'
+        >
+          {total} suggested {total === 1 ? 'change' : 'changes'}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-[300px] p-1.5'>
+        <p className='px-2 pb-1 pt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          Suggested changes · from people, on record pages. Open a form to read its own.
+        </p>
+        {forms.map((r) => (
+          <button
+            key={r.layout_id}
+            type='button'
+            data-requests-form={r.layout_id}
+            onClick={() => {
+              setOpen(false)
+              onOpen(r.layout_id)
+            }}
+            className='flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-foreground'
+          >
+            <span className='min-w-0 flex-1 truncate'>{r.name}</span>
+            <span className='shrink-0 tabular-nums text-slate-500 dark:text-muted-foreground'>
+              {counts.get(r.layout_id)}
+            </span>
+          </button>
+        ))}
+        {loose > 0 && (
+          <p className='px-2 py-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            {loose} {loose === 1 ? 'suggestion names' : 'suggestions name'} no form: read them in
+            any form’s Form settings → Tools.
+          </p>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewProps) {
   const client = useNivaroClient()
   const { data, isLoading, isError, refetch } = useLayoutOverview(collection)
@@ -1001,7 +1063,7 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
   const renderRow = (stored: OverviewRow, draggable?: boolean) => {
     const own = loops.byLayout.get(stored.layout_id)
     const row = own
-      ? { ...stored, warnings: [...stored.warnings, ...own.map((t) => `rule loop: ${t}`)] }
+      ? { ...stored, warnings: [...stored.warnings, ...own.map((t) => `Rule loop: ${t}`)] }
       : stored
     const common = {
       row,
@@ -1023,58 +1085,74 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
     )
   }
 
+  const comparePair = defaultComparePair(rows)
   const header = (
-    <header className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
+    <header className='flex shrink-0 flex-nowrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
       <div className='min-w-0 flex-1'>
-        <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+        <h2 className='truncate text-[14px] font-semibold text-slate-900 dark:text-foreground'>
           Which form does each record get?
         </h2>
-        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+        <p className='truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
           {analysis.worstFirst
             ? 'Sorted by health, worst first. Turn it off to see the order records are matched in.'
             : 'Read top to bottom: records are matched the same way.'}
+          {requestTotal > 0 && (
+            <>
+              {' · '}
+              <SuggestedChangesLink
+                total={requestTotal}
+                counts={requestCounts}
+                rows={rows}
+                onOpen={onOpen}
+              />
+            </>
+          )}
         </p>
       </div>
-      {requestTotal > 0 && (
-        <span
-          data-overview-requests={requestTotal}
-          data-tip='Suggestions people sent from record pages; open a form to read its own'
-          className='rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11.5px] font-semibold text-nvr-navy dark:text-nvr-cyan'
-        >
-          {requestTotal} form {requestTotal === 1 ? 'suggestion' : 'suggestions'}
-        </span>
-      )}
-      {rows.length > 0 && (
-        <AnalysisButtons
-          hasCoverage={!!analysis.value.coverage}
-          checking={analysis.checking}
-          onCheck={() => void analysis.check(false)}
-          worstFirst={analysis.worstFirst}
-          onWorstFirst={analysis.setWorstFirst}
-        />
-      )}
-      {rows.length > 0 && <BulkChangesButton collection={collection} />}
-      {rows.length > 0 && <TestRecordButton collection={collection} onResult={setExplain} />}
-      {rows.length > 0 && <FindFieldButton collection={collection} onOpen={onOpen} />}
-      {defaultComparePair(rows) && (
-        <button
-          type='button'
-          className={btnOutline}
-          data-tip='Two forms side by side, with their differences'
-          onClick={() => setCompare(defaultComparePair(rows))}
-        >
-          <Columns2 className='h-3.5 w-3.5' />
-          Compare
-        </button>
-      )}
-      <NewFormButton collection={collection} onCreated={created} />
+      <div className='flex shrink-0 items-center gap-1.5'>
+        {rows.length > 0 && <TestRecordButton collection={collection} onResult={setExplain} />}
+        {rows.length > 0 && <FindFieldButton collection={collection} onOpen={onOpen} />}
+        {rows.length > 0 && (
+          <BarMenu
+            label='Analyze'
+            icon={<BarChart3 className='h-3.5 w-3.5' />}
+            align='end'
+            tip='Coverage, health order and comparing forms'
+          >
+            <AnalysisButtons
+              hasCoverage={!!analysis.value.coverage}
+              checking={analysis.checking}
+              onCheck={() => void analysis.check(!!analysis.value.coverage)}
+              worstFirst={analysis.worstFirst}
+              onWorstFirst={analysis.setWorstFirst}
+              onCompare={comparePair ? () => setCompare(comparePair) : undefined}
+            />
+          </BarMenu>
+        )}
+        {rows.length > 0 && (
+          <BarMenu
+            label='More'
+            icon={<MoreHorizontal className='h-4 w-4' />}
+            iconOnly
+            align='end'
+            tip='Changes to every form'
+            data={{ 'data-overview-more': '' }}
+          >
+            <BulkChangesButton collection={collection} />
+          </BarMenu>
+        )}
+        <NewFormButton collection={collection} onCreated={created} />
+      </div>
     </header>
   )
 
   const banner = data?.warning ? (
     <div
       role='status'
-      className='flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12.5px] font-medium text-amber-800 dark:border-amber-500/30 dark:bg-[#2b2111] dark:text-amber-200'
+      className={cn(
+        'flex items-start gap-2 border-b px-4 py-2 text-[12.5px] font-medium',
+        amberStrip
+      )}
     >
       <AlertTriangle className='mt-[2px] h-3.5 w-3.5 shrink-0' />
       {data.warning}
@@ -1130,11 +1208,6 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
   } else {
     body = (
       <div>
-        <CrossformFindings
-          collection={collection}
-          onOpen={onOpen}
-          onCompare={(a, b) => setCompare([a, b])}
-        />
         {SECTIONS.map((s) => {
           const list = bySection.get(s.id) ?? []
           if (!list.length && s.id !== 'forms') return null
@@ -1195,28 +1268,6 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
       <div className='flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-background'>
         {header}
         {banner}
-        {loops.collection.length > 0 && (
-          <div
-            role='note'
-            data-rule-loops=''
-            className='flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12.5px] text-amber-800 dark:border-amber-500/30 dark:bg-[#2b2111] dark:text-amber-200'
-          >
-            <AlertTriangle className='mt-[2px] h-3.5 w-3.5 shrink-0' />
-            <div className='min-w-0'>
-              {loops.collection.map((t) => (
-                <p key={t} className='m-0'>
-                  Rule loop on every form: {t}.
-                </p>
-              ))}
-            </div>
-          </div>
-        )}
-        {rows.length > 0 && <InspectStrip collection={collection} onChanged={invalidate} />}
-        <CoverageStrip
-          rows={rows}
-          checking={analysis.checking}
-          onRecheck={() => void analysis.check(true)}
-        />
         {explain && (
           <ExplainStrip
             collection={collection}
@@ -1226,6 +1277,18 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
             choices={choices}
             onClear={() => setExplain(null)}
             onMade={(id) => created('grouped', id)}
+          />
+        )}
+        {rows.length > 0 && (
+          <FindingsStrip
+            collection={collection}
+            rows={rows}
+            loops={loops}
+            checking={analysis.checking}
+            onRecheck={() => void analysis.check(true)}
+            onOpen={onOpen}
+            onCompare={(a, b) => setCompare([a, b])}
+            onChanged={invalidate}
           />
         )}
         <div className='min-h-0 flex-1 overflow-y-auto'>{body}</div>

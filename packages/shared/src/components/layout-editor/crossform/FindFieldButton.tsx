@@ -141,7 +141,7 @@ export function FindFieldButton({
               <span className='ml-auto text-[11.5px] text-slate-500 dark:text-muted-foreground'>
                 {hit.placements.length === 0
                   ? 'on no form'
-                  : `on ${hit.placements.length} ${hit.placements.length === 1 ? 'layout' : 'layouts'}`}
+                  : `on ${hit.placements.length} ${hit.placements.length === 1 ? 'form' : 'forms'}`}
               </span>
             </div>
             {hit.placements.length > 0 && (
@@ -173,7 +173,7 @@ export function FindFieldButton({
         <button
           type='button'
           className={btnOutline}
-          data-tip='Every form, in every collection, that places a field'
+          data-tip='Find a field on every form, in every collection'
         >
           <Search className='h-3.5 w-3.5' />
           Find a field
@@ -184,7 +184,7 @@ export function FindFieldButton({
           <input
             // biome-ignore lint/a11y/noAutofocus: the popover opens to type a name
             autoFocus
-            aria-label='Field name or label'
+            aria-label='Find a field on every form'
             placeholder='Field name or label'
             value={text}
             onChange={(e) => setText(e.target.value)}

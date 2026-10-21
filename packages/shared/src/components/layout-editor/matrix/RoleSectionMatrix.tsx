@@ -6,6 +6,7 @@ import type { DesignTarget, SelectOptions } from '../design-context'
 import { fieldZones } from '../field-zones'
 import { resetGroupPlan } from '../inheritance'
 import { overrideGroupOps } from '../inspector/model'
+import { LoadError } from '../load-error'
 import type { ApplyOptions } from '../useLayoutDraft'
 import {
   type CellTone,
@@ -81,7 +82,7 @@ export function sectionRows(bundle: LayoutBundle, parent: LayoutBundle | null): 
 }
 
 export function RoleSectionMatrix({ bundle, parent, apply, onSelect }: RoleSectionMatrixProps) {
-  const { data: roles = [], isLoading } = useMatrixRoles()
+  const { data: roles = [], isLoading, isError, refetch } = useMatrixRoles()
   const menu = useCellMenu()
   const rows = useMemo(() => sectionRows(bundle, parent), [bundle, parent])
   const parentName = String(parent?.layout.name ?? 'the parent layout')
@@ -118,6 +119,8 @@ export function RoleSectionMatrix({ bundle, parent, apply, onSelect }: RoleSecti
       </p>
       {isLoading ? (
         <Skeleton className='h-48 w-full rounded-lg' />
+      ) : isError ? (
+        <LoadError what='the roles' onRetry={() => void refetch()} />
       ) : (
         <MatrixMenu
           menu={menu}

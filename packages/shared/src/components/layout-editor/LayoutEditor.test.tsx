@@ -13,7 +13,9 @@ import {
   ungroupedGroup
 } from '../../lib/layout-ops'
 import type { CMSField } from '../item-edit/types'
+import { LayoutEditorHostContext } from './host'
 import { isTyping, LayoutEditor } from './LayoutEditor'
+import { closeBarMenu, openBarMenu, pickBarRow } from './toolbar-kit.test-utils'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -229,17 +231,28 @@ async function mount(
     onBack?: () => void
     /** Most tests watch each change reach the server: turn Autosave on (default off in the app). */
     autosave?: boolean
+    /** An administrator's editor (the AI tools). */
+    admin?: boolean
   } = {}
 ) {
   const { client, calls } = makeClient()
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const editor = (
-    <LayoutEditor
-      collection='orders'
-      layoutId={7}
-      onBack={opts.onBack ?? (() => {})}
-      mode={opts.mode ?? 'page'}
-    />
+    <LayoutEditorHostContext.Provider
+      value={{
+        isAdmin: !!opts.admin,
+        navigate: () => {},
+        warning: null,
+        recordLink: (c, id) => `/collections/${c}/${id}`
+      }}
+    >
+      <LayoutEditor
+        collection='orders'
+        layoutId={7}
+        onBack={opts.onBack ?? (() => {})}
+        mode={opts.mode ?? 'page'}
+      />
+    </LayoutEditorHostContext.Provider>
   )
   const render = (open: boolean) =>
     root.render(
@@ -263,8 +276,11 @@ async function mount(
   await act(async () => render(true))
   await settle(() => canvasFields().length >= 3)
   if (opts.autosave ?? true) {
-    click(document.querySelector('[data-autosave-switch]'))
+    // The switch is a Save menu row; opening the menu moves focus, so put it back.
+    const focused = document.activeElement as HTMLElement | null
+    await pickBarRow('Save options', '[data-autosave-switch]')
     await settle(() => !document.querySelector('[data-editor-save]'))
+    focused?.focus()
   }
   return { calls, close: () => act(() => render(false)) }
 }
@@ -905,8 +921,10 @@ describe('LayoutEditor — Save (autosave off)', () => {
 
   it('holds changes until Save; the top bar counts them; Save sends one batch', async () => {
     const { calls } = await mount({ autosave: false })
+    await openBarMenu('Save options')
     const sw = document.querySelector('[data-autosave-switch]')
     expect(sw?.getAttribute('aria-checked')).toBe('false')
+    await closeBarMenu('Save options')
     expect(saveBtn().disabled).toBe(true)
     await addVendor()
     expect(opsCalls(calls)).toHaveLength(0)
@@ -995,5 +1013,116 @@ describe('isTyping', () => {
     expect(isTyping(make('<div contenteditable="plaintext-only">x</div>'))).toBe(true)
     expect(isTyping(make('<div contenteditable="false">x</div>'))).toBe(false)
     expect(isTyping(make('<button>x</button>'))).toBe(false)
+  })
+})
+
+describe('LayoutEditor — top bar (design review)', () => {
+  const inMenu = (menu: string, sel: string) =>
+    document.querySelector(`[data-bar-menu-list="${menu}"] ${sel}`)
+  const addVendor = async () => {
+    click(document.querySelector('[data-editor-tab="add"]'))
+    await settle(() => !!document.querySelector('[data-add-field="vendor"]'))
+    click(document.querySelector('[data-add-field="vendor"]'))
+    await settle(
+      () => document.querySelector('[data-save-status]')?.getAttribute('data-unsaved') === '1'
+    )
+  }
+
+  it('is one row: it never wraps, and the rest lives in Tools, AI, More and Save', async () => {
+    await mount({ admin: true, autosave: false })
+    const bar = document.querySelector('[data-editor-topbar]') as HTMLElement
+    expect(bar.className).toContain('flex-nowrap')
+    expect(bar.className).not.toMatch(/(^|\s)flex-wrap(\s|$)/)
+    // A size container: narrow bars drop labels instead of wrapping.
+    expect(bar.querySelector('style')?.textContent).toContain('container-type:inline-size')
+    for (const menu of ['Tools', 'AI', 'More', 'Save options'])
+      expect(bar.querySelector(`[data-bar-menu="${menu}"]`), menu).not.toBeNull()
+    // Nothing that moved into a menu is still a bar button.
+    for (const sel of [
+      '[data-auto-arrange]',
+      '[data-find-replace-open]',
+      '[data-command-palette-trigger]',
+      '[data-ai-forms-trigger]',
+      '[data-editor-testing]',
+      '[data-form-share]',
+      '[data-autosave-switch]'
+    ])
+      expect(bar.querySelector(sel), sel).toBeNull()
+    // Save is the one solid cyan button.
+    expect(bar.querySelectorAll('.bg-nvr-cyan.text-white').length).toBeLessThanOrEqual(1)
+  })
+
+  it('Tools, AI, More and Save ▾ hold their items', async () => {
+    await mount({ admin: true, autosave: false })
+    await openBarMenu('Tools')
+    for (const sel of [
+      '[data-auto-arrange="form"]',
+      '[data-editor-find-button]',
+      '[data-find-replace-open]',
+      '[data-editor-outline-toggle]',
+      '[data-editor-compact]',
+      '[data-editor-expand-all]',
+      '[data-editor-collapse-all]',
+      '[data-editor-fill-toggle]',
+      '[data-bulk-button]',
+      '[data-form-map-open]',
+      '[data-editor-shortcuts-button]'
+    ])
+      expect(inMenu('Tools', sel), sel).not.toBeNull()
+    await closeBarMenu('Tools')
+
+    await openBarMenu('AI')
+    for (const sel of [
+      '[data-ai-forms-trigger]',
+      '[data-ai-tools-row="persona"]',
+      '[data-ai-tools-row="critique"]',
+      '[data-ai-tools-row="autofill"]',
+      '[data-editor-ask]',
+      '[data-command-palette-trigger]'
+    ])
+      expect(inMenu('AI', sel), sel).not.toBeNull()
+    await closeBarMenu('AI')
+
+    await openBarMenu('More')
+    for (const sel of [
+      '[data-editor-testing]',
+      '[data-form-share]',
+      '[data-form-watch]',
+      '[data-more-save-template]',
+      '[data-more-download]'
+    ])
+      expect(inMenu('More', sel), sel).not.toBeNull()
+    await closeBarMenu('More')
+
+    await addVendor()
+    await openBarMenu('Save options')
+    for (const sel of [
+      '[data-editor-review]',
+      '[data-editor-impact]',
+      '[data-ai-change-check]',
+      '[data-editor-schedule]',
+      '[data-autosave-switch]'
+    ])
+      expect(inMenu('Save options', sel), sel).not.toBeNull()
+    await closeBarMenu('Save options')
+  })
+
+  it('a picked row closes the menu and opens its tool beside the menu', async () => {
+    await mount({ admin: true })
+    await pickBarRow('AI', '[data-ai-tools-row="critique"]')
+    await settle(() => !!document.querySelector('[data-ai-tools]'))
+    expect(document.querySelector('[data-bar-menu-list="AI"]')).toBeNull()
+    expect(
+      document.querySelector('[data-ai-tools-tab="critique"]')?.getAttribute('aria-selected')
+    ).toBe('true')
+  })
+
+  it('a non-administrator gets only Type a change in the AI menu', async () => {
+    await mount()
+    await openBarMenu('AI')
+    expect(inMenu('AI', '[data-command-palette-trigger]')).not.toBeNull()
+    expect(inMenu('AI', '[data-ai-forms-trigger]')).toBeNull()
+    expect(inMenu('AI', '[data-editor-ask]')).toBeNull()
+    await closeBarMenu('AI')
   })
 })

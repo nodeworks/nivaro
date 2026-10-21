@@ -3,18 +3,20 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { applyLayoutOps, type LayoutBundle } from '../../../lib/layout-ops'
 import { cn, formatRelative } from '../../../lib/utils'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { Popover, PopoverContent } from '../../ui/popover'
 import { useLayoutEditorHost } from '../host'
+import { barCount, ToolButton } from '../toolbar-kit'
 import { humanizeOpError, type LayoutDraft } from '../useLayoutDraft'
 import { type LayoutProposal, useLayoutProposals, useResolveProposal } from './assist-api'
 
 /**
- * "Proposals (N)" (#2694): layout changes a connected assistant (claude.ai,
- * ChatGPT, Claude Code over MCP) or an API caller proposed for this form.
+ * "Suggested changes" (#2694), in the AI menu: layout changes a connected
+ * assistant (claude.ai, ChatGPT, Claude Code over MCP) or an API caller
+ * proposed for this form, each with who sent it and through what.
  * Each one reads as plain sentences; Try on canvas applies it to the draft as
  * ONE undo step (nothing is saved until Save, unless Autosave is on), then
  * Keep marks it applied or Take back undoes it. Reject closes it. Admins only;
- * the button shows only while proposals wait.
+ * the row shows only while suggestions wait (their count rides on AI).
  */
 
 const quiet = 'text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'
@@ -52,10 +54,10 @@ export function ProposalsButton({
   const tryOn = (p: LayoutProposal) => {
     const why = conflictOf(p, draft.bundle)
     if (why) {
-      toast.error(`This proposal no longer fits the form: ${why}`)
+      toast.error(`This suggested change no longer fits the form: ${why}`)
       return
     }
-    draft.apply(p.ops, { label: `Proposal from ${p.proposer.name}` })
+    draft.apply(p.ops, { label: `Suggested change from ${p.proposer.name}` })
     setTried(p.id)
   }
   const keep = (p: LayoutProposal) =>
@@ -65,7 +67,9 @@ export function ProposalsButton({
         onSuccess: () => {
           setTried(null)
           toast.success(
-            draft.autosave ? 'Proposal applied and saved' : 'Proposal applied — Save to keep it'
+            draft.autosave
+              ? 'Suggested change applied and saved'
+              : 'Suggested change applied — Save to keep it'
           )
         }
       }
@@ -77,25 +81,18 @@ export function ProposalsButton({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          data-layout-proposals={open_.length}
-          data-tip='Changes an assistant or an API caller proposed for this form. Nothing changes until you apply one.'
-          className={cn(
-            'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[12.5px] font-medium transition-colors',
-            open
-              ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-foreground'
-              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
-          )}
-        >
-          <Inbox className='h-3.5 w-3.5' />
-          Proposals
-          <span className='inline-flex min-w-[18px] items-center justify-center rounded-full bg-nvr-cyan/15 px-1 text-[11px] font-semibold tabular-nums text-slate-800 dark:text-foreground'>
-            {open_.length}
-          </span>
-        </button>
-      </PopoverTrigger>
+      <ToolButton
+        popover
+        onOpen={() => setOpen(true)}
+        label='Suggested changes'
+        icon={<Inbox className='h-3.5 w-3.5' />}
+        tip='Changes an assistant or an API caller suggested for this form. Nothing changes until you apply one.'
+        hint='From assistants and API callers'
+        active={open}
+        badge={open_.length}
+        data={{ 'data-layout-proposals': open_.length }}
+        trailing={<span className={barCount}>{open_.length}</span>}
+      />
       <PopoverContent
         align='end'
         className='w-[440px] overflow-hidden p-0'
@@ -103,7 +100,7 @@ export function ProposalsButton({
       >
         <div className='border-b border-slate-200 px-3 py-2 dark:border-border'>
           <p className='text-[12.5px] font-semibold text-slate-800 dark:text-foreground'>
-            Proposed changes
+            Suggested changes · from assistants and API callers
           </p>
           <p className={quiet}>
             Try one on the canvas to see it. It joins your unsaved changes as one undo step.

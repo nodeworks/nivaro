@@ -115,8 +115,8 @@ export function PresenceAvatars({
             key={p.id}
             type='button'
             data-presence-peer={p.id}
-            data-tip={what ? `${p.name} — on ${what}` : `${p.name} is editing this layout too`}
-            aria-label={what ? `${p.name}, on ${what}` : `${p.name}, editing this layout`}
+            data-tip={what ? `${p.name} — on ${what}` : `${p.name} is editing this form too`}
+            aria-label={what ? `${p.name}, on ${what}` : `${p.name}, editing this form`}
             disabled={!what}
             onClick={() => p.selected && onJump(p.selected)}
             className={cn(

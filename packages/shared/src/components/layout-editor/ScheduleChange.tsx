@@ -2,7 +2,7 @@ import { CalendarClock } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { formatDateTime } from '../../lib/utils'
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { Popover, PopoverContent } from '../ui/popover'
 import {
   fromLocalInput,
   type ScheduleRow,
@@ -10,11 +10,10 @@ import {
   useLayoutSchedules,
   useScheduleActions
 } from './history-api'
+import { barBtn, ToolButton } from './toolbar-kit'
 import { unsavedText } from './UnsavedConfirm'
 import { type LayoutDraft, parseSaveFailure, useLayoutBundle } from './useLayoutDraft'
 
-const btn =
-  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 const inputCls =
   'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-muted-foreground'
 const labelCls = 'mb-1 block text-[11.5px] font-semibold text-slate-600 dark:text-muted-foreground'
@@ -32,7 +31,7 @@ export function scheduleWhen(row: Pick<ScheduleRow, 'run_at'>): string {
 }
 
 /**
- * "Schedule…" beside Save (#2590, manual mode with unsaved changes): the
+ * "Schedule…" in the Save menu (#2590, manual mode with unsaved changes): the
  * unsaved changes are stored with the rev they were made on and a time, then
  * dropped from the draft. The server applies them then, through the same path
  * a Save takes; if the layout changed meanwhile they apply only if they still
@@ -76,18 +75,16 @@ export function ScheduleChange({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          data-editor-schedule=''
-          disabled={count === 0}
-          className={btn}
-          data-tip='Apply these changes at a later time instead of now'
-        >
-          <CalendarClock className='h-3.5 w-3.5' />
-          Schedule…
-        </button>
-      </PopoverTrigger>
+      <ToolButton
+        popover
+        onOpen={() => setOpen(true)}
+        label='Schedule…'
+        icon={<CalendarClock className='h-3.5 w-3.5' />}
+        tip='Apply these changes at a later time instead of now'
+        hint='Apply these changes at a later time'
+        disabled={count === 0}
+        data={{ 'data-editor-schedule': '' }}
+      />
       <PopoverContent align='end' className='w-[320px] p-3' data-schedule-popover=''>
         <p className='mb-2 text-[12.5px] text-slate-700 dark:text-foreground'>
           Apply your {unsavedText(count)} later. They leave the editor now and nobody sees them
@@ -121,14 +118,14 @@ export function ScheduleChange({
         </p>
         {pending.length > 0 && (
           <p className='mt-2 text-[11.5px] text-slate-600 dark:text-slate-300'>
-            Already scheduled for this layout:{' '}
+            Already scheduled for this form:{' '}
             {pending
               .map((s) => `${scheduleWhen(s)} (${s.created_by_name ?? 'an admin'})`)
               .join(', ')}
           </p>
         )}
         <div className='mt-3 flex justify-end gap-2'>
-          <button type='button' className={btn} onClick={() => setOpen(false)}>
+          <button type='button' className={barBtn} onClick={() => setOpen(false)}>
             Cancel
           </button>
           <button

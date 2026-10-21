@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DesignNode } from './DesignNode'
+import { DesignNode, markRank, rankChips } from './DesignNode'
 import { type DesignTarget, type LayoutDesign, LayoutDesignContext } from './design-context'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -347,5 +347,111 @@ describe('DesignNode preview marks and overlay', () => {
     act(() => (host.querySelector('#chip') as HTMLElement).click())
     expect(d.onSelect).toHaveBeenCalledWith(target)
     expect(onChip).toHaveBeenCalled()
+  })
+})
+
+describe('DesignNode tag row (design review)', () => {
+  it('ranks tags: comparison, preview, rule loop, rules, AI, from parent', () => {
+    expect(markRank({ kind: 'preview' })).toBe(1)
+    expect(markRank({ kind: 'loop' })).toBe(2)
+    expect(markRank({ highlight: true })).toBe(2)
+    expect(markRank({})).toBe(3)
+    expect(markRank({ kind: 'ai', highlight: true })).toBe(4)
+    const { shown, rest } = rankChips([
+      { rank: 4, id: 'ai' },
+      { rank: 3, id: 'rule-a' },
+      { rank: 1, id: 'preview' },
+      { rank: 3, id: 'rule-b' }
+    ])
+    expect(shown.map((c) => c.id)).toEqual(['preview', 'rule-a'])
+    expect(rest.map((c) => c.id)).toEqual(['rule-b', 'ai'])
+  })
+
+  it('shows two tags, the rest behind "+n" with their names in its tip', () => {
+    const d = design({
+      marks: () => [
+        { text: 'Required', tone: 'amber' },
+        { text: 'AI: unclear label', tone: 'violet', highlight: true, kind: 'ai' },
+        { text: 'Rule loop', tone: 'amber', highlight: true, kind: 'loop' },
+        { text: 'Locked in Review', tone: 'slate', kind: 'preview' }
+      ]
+    })
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target}>
+            <span>hi</span>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    const tags = [...host.querySelectorAll('[data-design-mark]')].map((t) => t.textContent)
+    expect(tags).toEqual(['Locked in Review', 'Rule loop'])
+    const more = host.querySelector('[data-design-more-tags]') as HTMLElement
+    expect(more.textContent).toBe('+2')
+    expect(more.getAttribute('data-tip')).toBe('Required · AI: unclear label')
+  })
+
+  it('an unsaved change is a cyan dot; a peer is an initials avatar', () => {
+    const d = design({
+      unsaved: () => true,
+      peers: () => [{ id: 'u2', name: 'Ben Ode', outline: 'outline-violet-400', chip: '' }]
+    })
+    act(() =>
+      root.render(
+        <LayoutDesignContext.Provider value={d}>
+          <DesignNode target={target}>
+            <span>hi</span>
+          </DesignNode>
+        </LayoutDesignContext.Provider>
+      )
+    )
+    expect(host.querySelector('[data-unsaved-dot]')?.className).toContain('bg-nvr-cyan')
+    const peer = host.querySelector('[data-design-peer="u2"]') as HTMLElement
+    expect(peer.textContent).toBe('BO')
+    expect(peer.getAttribute('data-tip')).toBe('Ben Ode')
+  })
+
+  it('who last changed a section shows on the selected section, else only on hover', () => {
+    const section: DesignTarget = { kind: 'group', key: 'main' }
+    const last = { by: 'Dana Ortiz', at: null }
+    const render = (selected: DesignTarget | null) =>
+      act(() =>
+        root.render(
+          <LayoutDesignContext.Provider value={design({ selected, lastChange: () => last })}>
+            <DesignNode target={section}>
+              <span>hi</span>
+            </DesignNode>
+          </LayoutDesignContext.Provider>
+        )
+      )
+    render(null)
+    const tag = () => host.querySelector('[data-design-last-change]') as HTMLElement
+    expect(tag().className).toContain('invisible')
+    expect(tag().className).toContain('text-slate-500')
+    const node = host.querySelector('[data-design-target]') as HTMLElement
+    expect(node.className).toContain('[&:hover>[data-design-last-change]]:visible')
+    render(section)
+    expect(tag().className).not.toContain('invisible')
+  })
+
+  it('the "Controls n" tag moves right of a note marker', () => {
+    const note = { text: 'Ask Finance first', by: null, by_name: null, at: '2020-01-01T00:00:00Z' }
+    const render = (withNote: boolean) =>
+      act(() =>
+        root.render(
+          <LayoutDesignContext.Provider value={design({ note: () => (withNote ? note : null) })}>
+            <DesignNode target={target}>
+              <span>hi</span>
+            </DesignNode>
+          </LayoutDesignContext.Provider>
+        )
+      )
+    render(false)
+    const node = () => host.querySelector('[data-design-target]') as HTMLElement
+    expect(node().className).toContain('data-[rule-drives]:after:left-1')
+    render(true)
+    expect(node().className).toContain('data-[rule-drives]:after:left-7')
+    expect(host.querySelector('[data-editor-note-marker]')).not.toBeNull()
   })
 })

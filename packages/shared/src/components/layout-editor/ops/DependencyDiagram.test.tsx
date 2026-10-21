@@ -54,7 +54,7 @@ describe('DependencyDiagram (#2613)', () => {
       '1 of 2 find it by its link name and stop finding it when the link name changes.'
     )
     expect(impactSentence(DATA.nodes, 'delete')).toBe('2 of 2 stop working when it is deleted.')
-    expect(impactSentence([], 'delete')).toBe('Nothing stored here uses this layout.')
+    expect(impactSentence([], 'delete')).toBe('Nothing stored here uses this form.')
   })
 
   it('draws every dependent in its lane and marks what the change breaks', () => {

@@ -1,23 +1,24 @@
-import { AlertCircle, AlertTriangle, CheckCircle2, Info, ListChecks, Sparkles } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2, CircleAlert, Info, Sparkles } from 'lucide-react'
 import type { LayoutHealth, LintFinding, LintSeverity } from '../../../lib/layout-lint'
 import type { LayoutOp } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
 import type { DesignTarget } from '../design-context'
 import { PanelBody, PanelHeader } from '../panel-frame'
 import { effectText, groupTitle } from '../panel-style'
+import { barBtn, barBtnOn } from '../toolbar-kit'
 import { findingDesignTarget } from './lint-api'
 
 /**
- * The editor's Checks panel (#2592, #2582, #2607): what the deterministic lint
+ * The editor's Problems panel (#2592, #2582, #2607): what the deterministic lint
  * finds on the draft, worst first. A finding selects its target on the canvas;
  * a fix is one undo step through the draft. The AI review stays in Form
  * settings → Tools — this panel links there.
  */
 
 const SECTIONS: Array<{ severity: LintSeverity; title: string }> = [
-  { severity: 'error', title: 'Problems' },
+  { severity: 'error', title: 'Errors' },
   { severity: 'warn', title: 'Warnings' },
-  { severity: 'info', title: 'Suggestions' }
+  { severity: 'info', title: 'Tips' }
 ]
 
 const ICON: Record<LintSeverity, typeof AlertCircle> = {
@@ -62,28 +63,23 @@ export function LintButton({
       type='button'
       onClick={onClick}
       aria-pressed={active}
-      aria-label={`Checks: ${c.error} problems, ${c.warn} warnings`}
+      aria-label={`Problems: ${c.error} errors, ${c.warn} warnings`}
       data-editor-checks=''
       data-tip='Problems this form has: hidden required fields, missing cascade parents, empty steps, unreachable fields and accessibility'
-      className={cn(
-        'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[12.5px] font-medium transition-colors',
-        active
-          ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-foreground'
-          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
-      )}
+      className={cn(barBtn, 'gap-1 px-2', active && barBtnOn)}
     >
-      <ListChecks className='h-3.5 w-3.5' />
-      Checks
+      <CircleAlert
+        className={cn(
+          'h-3.5 w-3.5',
+          c.error > 0
+            ? 'text-red-600 dark:text-red-400'
+            : count > 0
+              ? 'text-amber-600 dark:text-amber-400'
+              : 'text-slate-500 dark:text-muted-foreground'
+        )}
+      />
       {count > 0 ? (
-        <span
-          data-checks-count={count}
-          className={cn(
-            'inline-flex min-w-[18px] items-center justify-center rounded-full px-1 text-[11px] font-semibold tabular-nums',
-            c.error > 0
-              ? 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300'
-              : 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300'
-          )}
-        >
+        <span data-checks-count={count} className='tabular-nums'>
           {count}
         </span>
       ) : (
@@ -175,7 +171,7 @@ export function LintPanel({
           .join(' · ')
   return (
     <div data-lint-panel='' className='flex min-h-0 flex-1 flex-col'>
-      <PanelHeader eyebrow='Form' title='Checks' sub={sub} />
+      <PanelHeader eyebrow='Form' title='Problems' sub={sub} />
       <PanelBody>
         {health && (
           <section aria-label='Health' className='space-y-1.5'>

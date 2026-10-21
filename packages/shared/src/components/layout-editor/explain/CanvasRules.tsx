@@ -1,7 +1,8 @@
-import { AlertTriangle, ListChecks } from 'lucide-react'
+import { AlertTriangle, GitBranch } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import type { DesignMark, DesignTarget } from '../design-context'
+import { amberStrip } from '../panel-style'
 import { loopSentence, type OpenSource, type StateChip } from './field-sources'
 import type { CanvasExplain } from './use-explain'
 
@@ -43,6 +44,7 @@ export function RulesToggle({ on, onChange }: { on: boolean; onChange: (on: bool
     <button
       type='button'
       aria-pressed={on}
+      aria-label='Rules'
       data-rules-view={on ? 'on' : 'off'}
       data-tip={
         on
@@ -57,8 +59,8 @@ export function RulesToggle({ on, onChange }: { on: boolean; onChange: (on: bool
           : 'text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
       )}
     >
-      <ListChecks className='h-3.5 w-3.5' />
-      Rules
+      <GitBranch className='h-3.5 w-3.5' />
+      <span data-tb-wide=''>Rules</span>
     </button>
   )
 }
@@ -97,7 +99,13 @@ export function explainMarks(
     if (t.kind !== 'field' && t.kind !== 'header') return out
     const loops = loopTip.get(t.field)
     if (loops)
-      out.push({ text: 'Rule loop', tone: 'amber', tip: loops.join(' · '), highlight: true })
+      out.push({
+        text: 'Rule loop',
+        tone: 'amber',
+        tip: loops.join(' · '),
+        highlight: true,
+        kind: 'loop'
+      })
     if (opts.chips)
       for (const c of explain.fieldChips.get(t.field) ?? [])
         out.push({
@@ -131,7 +139,10 @@ export function RuleLoopsBanner({
     <div
       role='note'
       data-rule-loops=''
-      className='flex shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-[12.5px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+      className={cn(
+        'flex shrink-0 items-start gap-2 border-b px-4 py-1.5 text-[12.5px]',
+        amberStrip
+      )}
     >
       <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' />
       <ul className='m-0 min-w-0 flex-1 list-none space-y-0.5 p-0'>

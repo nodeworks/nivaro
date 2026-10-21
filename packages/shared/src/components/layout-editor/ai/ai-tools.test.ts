@@ -202,7 +202,8 @@ describe('canvas pins (#2685 #2690)', () => {
         text: 'Blocks Clerk · 2',
         tone: 'amber',
         tip: 'Required but hidden. Add a default.\nRequired but hidden. Add a default.',
-        highlight: true
+        highlight: true,
+        kind: 'ai'
       }
     ])
     expect(marks({ kind: 'group', key: 'main' })[0]).toMatchObject({ text: 'Design: density' })
