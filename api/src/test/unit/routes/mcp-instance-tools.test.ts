@@ -16,8 +16,23 @@ vi.mock('../../../middleware/authenticate.js', () => {
     req.user = { id: 'U1', email: 'pat@example.com' }
     req.isAdmin = false
   }
-  return { authenticate, requireAdmin: authenticate, requireAuth: authenticate }
+  // The per-connection tool-call limit (#2469) never trips here.
+  return {
+    authenticate,
+    requireAdmin: authenticate,
+    requireAuth: authenticate,
+    enforceRateLimit: async () => {}
+  }
 })
+vi.mock('../../../services/mcp-calls.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/mcp-calls.js')>()),
+  readMcpSettings: async () => ({
+    idle_flag_days: 60,
+    idle_revoke_days: 90,
+    rate_limit_per_minute: 120,
+    connection_limits: {}
+  })
+}))
 // No database here: named tools (migration 473) read as "not there yet".
 vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: async () => false }))
 
