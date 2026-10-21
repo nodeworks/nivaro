@@ -4,6 +4,8 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { scrubText } from './ai-explain.js'
 import { parseRoom } from './chat.js'
+import { INFRA_TOOL_NAMES, INFRA_TOOLS, infraAvailable } from './infra-ai-tools.js'
+import type { HealthStore } from './infra-swarm/health.js'
 import { executeTelemetryTool, TELEMETRY_TOOL_NAMES, TELEMETRY_TOOLS } from './telemetry-ai.js'
 import { storeEnabled } from './telemetry-store.js'
 
@@ -376,16 +378,17 @@ export const OPS_PROPOSE_TOOL: Anthropic.Tool = {
 export const OPS_TOOL_NAMES = new Set([
   OPS_STATUS_TOOL.name,
   OPS_PROPOSE_TOOL.name,
-  ...TELEMETRY_TOOL_NAMES
+  ...TELEMETRY_TOOL_NAMES,
+  ...INFRA_TOOL_NAMES
 ])
 
 /** #2544 — the telemetry tools join the ops tools when this instance has a telemetry store. */
 export function opsTelemetryTools(): Anthropic.Tool[] {
-  return storeEnabled() ? TELEMETRY_TOOLS : []
+  return [...(storeEnabled() ? TELEMETRY_TOOLS : []), ...(infraAvailable() ? INFRA_TOOLS : [])]
 }
 
 export const OPS_PROMPT =
-  'This channel is an admin-only operations channel. You may use ops_status for live facts and propose_ops_action to suggest an action; proposals become approval cards that an administrator must approve — never say an action ran until it is approved. When telemetry tools are offered (telemetry_status, request_stats, find_requests, slow_traces, get_trace, metric_series, search_logs), use them for history and "why was it slow at …" questions: they reach weeks back, cite trace ids and times (UTC), and never guess numbers.'
+  'This channel is an admin-only operations channel. You may use ops_status for live facts and propose_ops_action to suggest an action; proposals become approval cards that an administrator must approve — never say an action ran until it is approved. When telemetry tools are offered (telemetry_status, request_stats, find_requests, slow_traces, get_trace, metric_series, search_logs) or infrastructure tools (infra_stacks, infra_containers, infra_updates, infra_swarm, infra_storage, infra_logs, infra_reboot, infra_hosts, infra_proxy, infra_resources, infra_secrets, infra_gitlab) are offered, use them for history and "why was it slow at …" questions: they reach weeks back, cite trace ids and times (UTC), and never guess numbers.'
 
 /**
  * Run an ops tool for the asker. Re-checks the asker and the room on EVERY
@@ -405,7 +408,8 @@ export async function executeOpsTool(
       : 'overview'
     return opsFacts(app, section)
   }
-  if (TELEMETRY_TOOL_NAMES.has(name)) return executeTelemetryTool(name, input)
+  if (TELEMETRY_TOOL_NAMES.has(name) || INFRA_TOOL_NAMES.has(name))
+    return executeTelemetryTool(name, input, { redis: app.redis as unknown as HealthStore })
   if (name === OPS_PROPOSE_TOOL.name) {
     const { createProposal } = await import('./ops-proposals.js')
     const p = await createProposal(app, asker, room as string, input)

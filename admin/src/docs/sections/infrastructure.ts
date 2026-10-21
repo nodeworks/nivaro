@@ -76,6 +76,44 @@ export const infrastructureDocs: DocSection = {
     {
       type: 'warn',
       text: 'Only names and dates are shown. Docker never returns secret values, and Nivaro never reads configs (their contents can hold credentials).'
+    },
+
+    { type: 'h2', id: 'infrastructure-ask', text: 'Ask AI and connected apps' },
+    {
+      type: 'p',
+      text: 'Administrators can ask about the infrastructure in plain words. The Ask box on the Telemetry page and the admin-only operations chat channel have twelve read-only infrastructure tools beside the telemetry ones: they read the same Docker hosts, swarm, proxy and host facts as the tabs above, cut down to counts and the top rows. Nothing they do changes anything, and they never return secret values or config contents: the secrets tool gives names and which services use them. A tool whose source is not set up says so instead of guessing.'
+    },
+    {
+      type: 'table',
+      head: ['Question', 'What the answer reads'],
+      rows: [
+        [
+          'What restarted today and why?',
+          'infra_containers (started in the last 24 hours, exit status, flapping health), then infra_stacks (failed tasks and engine errors) and infra_updates (rollouts that paused or rolled back).'
+        ],
+        [
+          'What is eating /var?',
+          'infra_logs (log growth, days until full, containers with no rotation), then infra_storage (volumes, images, what a prune would free).'
+        ],
+        [
+          'Would anything stay down after a reboot?',
+          'infra_reboot, with infra_hosts for pending kernels and hung IO.'
+        ],
+        ['Which routers have no healthy backend?', 'infra_proxy.'],
+        [
+          'Which containers are throttled?',
+          'infra_resources (CPU throttling, memory headroom, out-of-memory kills).'
+        ],
+        [
+          'When do swarm certificates expire? Is any secret unused?',
+          'infra_swarm and infra_secrets.'
+        ],
+        ['Is CI healthy?', 'infra_gitlab.']
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The same figures are offered to connected apps (Claude, ChatGPT, Codex) as MCP tools with the same names, for administrators only. Each one reads GET /api/infrastructure/summary/<tool>, which accepts host, limit and (for infra_resources) window = 24h or 7d. A connection that is not an administrator does not see the tools, and the API refuses the route to anyone else.'
     }
   ]
 }

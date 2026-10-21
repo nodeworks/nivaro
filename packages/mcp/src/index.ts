@@ -30,6 +30,7 @@ import { registerApprovalTools } from './tools/approvals.js'
 import { type ChatAccess, registerChatTools } from './tools/chat.js'
 import { registerCollectionTools } from './tools/collections.js'
 import { registerDashboardTools } from './tools/dashboards.js'
+import { registerInfrastructureTools } from './tools/infrastructure.js'
 import { registerInstanceTools, registerNamedInstanceTools } from './tools/instance.js'
 import { registerItemTools } from './tools/items.js'
 import { registerLayoutTools } from './tools/layouts.js'
@@ -54,7 +55,7 @@ export interface NivaroMcpOptions {
   fetch?: typeof fetch
   /**
    * Also register the read-only admin/ops tools (ADMIN_TOOL_NAMES) and the layout tools
-   * (LAYOUT_TOOL_NAMES). Default false. Pass
+   * (LAYOUT_TOOL_NAMES) and the infrastructure tools (INFRA_TOOL_NAMES). Default false. Pass
    * true only for an administrator's key — the API refuses them to anyone else anyway.
    */
   adminTools?: boolean
@@ -248,6 +249,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
     registerAdminTools(server, client)
     registerAccessTools(server, client)
     registerLayoutTools(server, client)
+    registerInfrastructureTools(server, client)
   }
   // After every built-in, so a built-in name always wins.
   if (options.instanceTools?.length)
@@ -275,6 +277,7 @@ export { registerChatTools } from './tools/chat.js'
 export type { CollectionSchema, CollectionSummary, FieldSummary } from './tools/collections.js'
 export { summarizeCollection, summarizeSchema } from './tools/collections.js'
 export { compactFigure, registerDashboardTools } from './tools/dashboards.js'
+export { INFRA_TOOL_NAMES, registerInfrastructureTools } from './tools/infrastructure.js'
 export { registerInstanceTools, registerNamedInstanceTools, zodShapeOf } from './tools/instance.js'
 export { registerLayoutTools } from './tools/layouts.js'
 export type { PipelineStateView } from './tools/pipeline.js'

@@ -28,7 +28,12 @@ import {
 /** Built-in tool names a named tool may never take (loaded on first admin save). */
 async function builtinNames(): Promise<Set<string>> {
   const m = await import('@nivaro/mcp')
-  return new Set<string>([...m.TOOL_NAMES, ...m.ADMIN_TOOL_NAMES, ...m.LAYOUT_TOOL_NAMES])
+  return new Set<string>([
+    ...m.TOOL_NAMES,
+    ...m.ADMIN_TOOL_NAMES,
+    ...m.LAYOUT_TOOL_NAMES,
+    ...m.INFRA_TOOL_NAMES
+  ])
 }
 
 export async function mcpToolRoutes(app: FastifyInstance) {

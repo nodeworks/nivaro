@@ -9,6 +9,9 @@
  * model writes is ever run as query text. Results are capped and scrubbed (scrubText) before
  * they reach the provider; request lines carry ids, routes, status and timings only, as stored.
  *
+ * Infrastructure questions (restarts, disk, reboot risk, proxy, throttling) use the infra_* tools
+ * of infra-ai-tools.ts, offered alongside these (#2842).
+ *
  * Used by POST /api/telemetry/ask (the Telemetry page, administrators) and by the ops assistant
  * in admin-only chat channels (ops-assistant.ts), which re-checks the asker on every call.
  */
@@ -16,6 +19,14 @@ import type Anthropic from '@anthropic-ai/sdk'
 import type { User } from '../types.js'
 import { getAiClient, getAiModelSettings } from './ai-client.js'
 import { scrubText } from './ai-explain.js'
+import {
+  executeInfraTool,
+  INFRA_PROMPT,
+  INFRA_TOOL_NAMES,
+  INFRA_TOOLS,
+  type InfraToolContext,
+  infraAvailable
+} from './infra-ai-tools.js'
 import {
   baseFilter,
   containsRe,
@@ -329,6 +340,10 @@ export const TELEMETRY_TOOLS: Anthropic.Tool[] = [
 
 export const TELEMETRY_TOOL_NAMES = new Set(TELEMETRY_TOOLS.map((t) => t.name))
 
+/** #2842 — the telemetry tools plus the read-only infrastructure tools (infra-ai-tools.ts). */
+export const ASK_TOOLS: Anthropic.Tool[] = [...TELEMETRY_TOOLS, ...INFRA_TOOLS]
+export const ASK_TOOL_NAMES = new Set(ASK_TOOLS.map((t) => t.name))
+
 const r1 = (v: unknown) => Math.round(num(v) * 10) / 10
 
 async function requestStats(input: Record<string, unknown>) {
@@ -511,8 +526,11 @@ async function stackStatus() {
 /** Run one telemetry tool. Throws TelemetryToolError for bad input (shown to the model). */
 export async function executeTelemetryTool(
   name: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  ctx: InfraToolContext = {}
 ): Promise<unknown> {
+  // Infrastructure tools read Docker / the proxy directly and work without the telemetry store.
+  if (INFRA_TOOL_NAMES.has(name)) return executeInfraTool(name, input, ctx)
   if (!storeConfig())
     throw new TelemetryToolError('The telemetry store is not configured on this instance')
   switch (name) {
@@ -543,7 +561,7 @@ export function toolResultText(result: unknown): string {
 
 // ── Asking ───────────────────────────────────────────────────────────────────
 
-export const TELEMETRY_PROMPT = `You answer operations questions about this Nivaro instance for an administrator, using the telemetry tools: request log (weeks), request traces (7 days; slow, failed, kept and sampled requests), metrics (13 months), container logs and the monitoring stack's status.
+export const TELEMETRY_PROMPT = `You answer operations questions about this Nivaro instance for an administrator, using the telemetry tools: request log (weeks), request traces (7 days; slow, failed, kept and sampled requests), metrics (13 months), container logs and the monitoring stack's status, plus the infrastructure tools (Docker hosts, swarm, proxy, host health).
 
 Rules:
 - Every claim comes from a tool result. If the tools cannot show it, say what you checked and what is missing. Never guess numbers.
@@ -551,7 +569,9 @@ Rules:
 - Times are UTC; write them as ISO times or "14:05 UTC".
 - Cite evidence: trace ids in backticks (\`trace 4b66…\` with the full id), routes in backticks.
 - When a trace shows a repeated statement (5+ calls) call it an N+1; when database time is a small part of the request, say the time went elsewhere.
-- Be brief: a two-line answer first, then the evidence as a short list, then what to do next. No preamble.`
+- Be brief: a two-line answer first, then the evidence as a short list, then what to do next. No preamble.
+
+${INFRA_PROMPT}`
 
 export interface AskTurn {
   role: 'user' | 'assistant'
@@ -623,13 +643,21 @@ export class TelemetryAskError extends Error {
 export async function askTelemetry(
   question: string,
   _asker: User,
-  opts: { history?: AskTurn[]; client?: Client; signal?: AbortSignal } = {}
+  opts: {
+    history?: AskTurn[]
+    client?: Client
+    signal?: AbortSignal
+    redis?: InfraToolContext['redis']
+  } = {}
 ): Promise<TelemetryAnswer> {
   const q = question.trim()
   if (q.length < 3 || q.length > 1000)
     throw new TelemetryAskError(400, 'Ask a question of 3 to 1,000 characters')
-  if (!storeConfig())
-    throw new TelemetryAskError(409, 'The telemetry store is not configured on this instance')
+  if (!storeConfig() && !infraAvailable())
+    throw new TelemetryAskError(
+      409,
+      'The telemetry store and Docker hosts are not configured on this instance'
+    )
   const client = (opts.client ?? (await getAiClient())) as Client | null
   if (!client) throw new TelemetryAskError(503, 'AI is not configured on this instance')
   const model = (await getAiModelSettings()).chatModel
@@ -651,7 +679,7 @@ export async function askTelemetry(
         model,
         max_tokens: 1200,
         system: TELEMETRY_PROMPT,
-        tools: TELEMETRY_TOOLS,
+        tools: ASK_TOOLS,
         messages: convo
       })
     } catch (err) {
@@ -678,11 +706,12 @@ export async function askTelemetry(
     for (const block of res.content) {
       if (block.type !== 'tool_use') continue
       try {
-        if (!TELEMETRY_TOOL_NAMES.has(block.name))
+        if (!ASK_TOOL_NAMES.has(block.name))
           throw new TelemetryToolError(`Unknown tool ${block.name}`)
         const out = await executeTelemetryTool(
           block.name,
-          (block.input ?? {}) as Record<string, unknown>
+          (block.input ?? {}) as Record<string, unknown>,
+          { redis: opts.redis }
         )
         collectTraces(out, traces)
         results.push({ type: 'tool_result', tool_use_id: block.id, content: toolResultText(out) })
