@@ -103,11 +103,14 @@ export function ChangeNoteSave({
   value,
   onChange,
   onSave,
-  onClose
+  onClose,
+  intro
 }: {
   open: boolean
   anchor: HTMLElement | null
   policy: ChangeNotePolicy
+  /** Replaces the line under the title (the edit freeze explains itself, #2717). */
+  intro?: string
   count: number
   /** Kept by the editor: the leave confirm asks with the same boxes. */
   value: ChangeNoteValue
@@ -145,7 +148,7 @@ export function ChangeNoteSave({
           Save {unsavedText(count)}
         </p>
         <p className='mb-2 mt-0.5 text-[12px] leading-snug text-slate-600 dark:text-muted-foreground'>
-          This layout keeps a reason with every save. It shows in History.
+          {intro ?? 'This layout keeps a reason with every save. It shows in History.'}
         </p>
         <ChangeNoteFields
           policy={policy}

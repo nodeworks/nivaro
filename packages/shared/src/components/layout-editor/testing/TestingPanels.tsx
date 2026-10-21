@@ -597,6 +597,11 @@ export function CostLine({ cost, limit }: { cost: FormCost; limit: number }) {
         opens {over ? `— above the limit of ${limit}` : `(limit ${limit})`}
       </p>
       {parts.length > 0 && <p className={hintCls}>{parts.join(' · ')}</p>}
+      {cost.deferred > 0 && (
+        <p className={hintCls} data-form-cost-deferred={cost.deferred}>
+          + {cost.deferred} more once someone opens the sections that load when opened
+        </p>
+      )}
     </div>
   )
 }
@@ -637,7 +642,9 @@ function CostTab(props: TestingProps & { open: boolean; active: ActiveLayoutData
               <span className='min-w-0 flex-1 truncate text-slate-700 dark:text-foreground'>
                 {i.label}
               </span>
-              <span className='shrink-0 text-slate-500 dark:text-muted-foreground'>{i.kind}</span>
+              <span className='shrink-0 text-slate-500 dark:text-muted-foreground'>
+                {i.deferred ? `${i.kind}, on open` : i.kind}
+              </span>
               <span className='w-6 shrink-0 text-right font-mono text-slate-600 dark:text-muted-foreground'>
                 {i.requests}
               </span>

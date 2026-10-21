@@ -124,17 +124,19 @@ export function checkColumns(wanted: string[], physical: string[]): string[] {
 
 /**
  * Layout conditions as a non-admin is sent them: `testing` (pinned test
- * records, cost limit) and `ab` (an A/B test, #2614) are the editor's and
- * never leave for anyone else.
+ * records, cost limit), `ab` (an A/B test, #2614) and `freeze` (who froze
+ * edits, #2717) are the editor's and never leave for anyone else.
  */
 export function shownConditions<T>(conditions: T, isAdmin: boolean): T {
-  if (
-    isAdmin ||
-    !conditions ||
-    typeof conditions !== 'object' ||
-    !('testing' in conditions || 'ab' in conditions)
-  )
+  if (isAdmin || !conditions || typeof conditions !== 'object') return conditions
+  // The edit freeze (#2717) names who set it: editors only, like the test records.
+  if (!('testing' in conditions) && !('ab' in conditions) && !('freeze' in conditions))
     return conditions
-  const { testing: _testing, ab: _ab, ...rest } = conditions as Record<string, unknown>
+  const {
+    testing: _testing,
+    ab: _ab,
+    freeze: _freeze,
+    ...rest
+  } = conditions as Record<string, unknown>
   return (Object.keys(rest).length > 0 ? rest : null) as T
 }

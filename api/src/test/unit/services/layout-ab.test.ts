@@ -88,7 +88,7 @@ describe('pickBestLayoutTraced with an A/B test', () => {
   const other = row(3)
 
   it('never picks the variant on its own', () => {
-    const res = pickBestLayoutTraced([a, b, other], 'OTHER', null, false, userIn('b'))
+    const res = pickBestLayoutTraced([a, b, other], 'OTHER', null, false, { userId: userIn('b') })
     expect(res.row).toBe(a)
     expect(res.ab).toBeNull()
     // Even as first in order with no default.
@@ -97,7 +97,7 @@ describe('pickBestLayoutTraced with an A/B test', () => {
   })
 
   it('gives half b the variant and half a the control, deterministically', () => {
-    const inB = pickBestLayoutTraced([a, b], ROLE, null, false, userIn('b'))
+    const inB = pickBestLayoutTraced([a, b], ROLE, null, false, { userId: userIn('b') })
     expect(inB.row).toBe(b)
     expect(inB.reason).toMatchObject({
       kind: 'ab',
@@ -105,18 +105,18 @@ describe('pickBestLayoutTraced with an A/B test', () => {
     })
     expect(inB.checked.find((c) => c.layout_id === 2)).toMatchObject({ matched: true })
     expect(inB.checked.find((c) => c.layout_id === 1)?.why).toMatch(/A\/B test half/)
-    const inA = pickBestLayoutTraced([a, b], ROLE, null, false, userIn('a'))
+    const inA = pickBestLayoutTraced([a, b], ROLE, null, false, { userId: userIn('a') })
     expect(inA.row).toBe(a)
     expect(inA.ab?.half).toBe('a')
     expect(inA.checked.find((c) => c.layout_id === 2)?.why).toMatch(/keeps/)
     for (let i = 0; i < 5; i++)
-      expect(pickBestLayoutTraced([a, b], ROLE, null, false, userIn('b')).row).toBe(b)
+      expect(pickBestLayoutTraced([a, b], ROLE, null, false, { userId: userIn('b') }).row).toBe(b)
   })
 
   it('role ids compare without case; admins and other roles keep the control', () => {
-    expect(pickBestLayoutTraced([a, b], ROLE.toLowerCase(), null, false, userIn('b')).row).toBe(b)
-    expect(pickBestLayoutTraced([a, b], null, null, true, userIn('b')).row).toBe(a)
-    expect(pickBestLayoutTraced([a, b], 'OTHER', null, false, userIn('b')).row).toBe(a)
+    expect(pickBestLayoutTraced([a, b], ROLE.toLowerCase(), null, false, { userId: userIn('b') }).row).toBe(b)
+    expect(pickBestLayoutTraced([a, b], null, null, true, { userId: userIn('b') }).row).toBe(a)
+    expect(pickBestLayoutTraced([a, b], 'OTHER', null, false, { userId: userIn('b') }).row).toBe(a)
   })
 
   it('explains the split as a role when no person is given', () => {
@@ -130,14 +130,14 @@ describe('pickBestLayoutTraced with an A/B test', () => {
     const rule = row(5, {
       record_conditions: JSON.stringify([{ field: 's', op: 'eq', value: 'x' }])
     })
-    const res = pickBestLayoutTraced([a, b, rule], ROLE, { s: 'x' }, false, userIn('b'))
+    const res = pickBestLayoutTraced([a, b, rule], ROLE, { s: 'x' }, false, { userId: userIn('b') })
     expect(res.row).toBe(rule)
     expect(res.ab).toBeNull()
   })
 
   it('keeps the control when the variant is closed to the role', () => {
     const closed = row(2, { conditions: { ...ab(1), role_ids: ['SOMEONE-ELSE'] } })
-    expect(pickBestLayoutTraced([a, closed], ROLE, null, false, userIn('b')).row).toBe(a)
+    expect(pickBestLayoutTraced([a, closed], ROLE, null, false, { userId: userIn('b') }).row).toBe(a)
   })
 })
 

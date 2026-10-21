@@ -1,7 +1,8 @@
 import type { Knex } from 'knex'
 import { changeNoteColumnReady, normalizeChangeNote } from './layout-change-note.js'
-import { entryConfigColumnReady, normalizeEntryConfig, parseEntryConfig } from './layout-entry.js'
 import { emailSectionColumnReady, normalizeEmailSection } from './layout-email-section.js'
+import { entryConfigColumnReady, normalizeEntryConfig, parseEntryConfig } from './layout-entry.js'
+import { validateResolveConditions } from './layout-resolve-rules.js'
 
 /**
  * Layout settings — the parsers, validators and the PATCH body → column
@@ -261,6 +262,11 @@ export async function normalizeLayoutPatch(
   }
   if (body.default_values !== undefined && body.default_values !== null) {
     const err = validateDefaultValues(body.default_values)
+    if (err) return { status: 400, error: err }
+  }
+  if (body.conditions !== undefined && body.conditions !== null) {
+    // Active dates, phone version, freeze, lazy sections (#2713–#2717).
+    const err = await validateResolveConditions(q, Number(id), existing.collection, body.conditions)
     if (err) return { status: 400, error: err }
   }
 

@@ -283,11 +283,15 @@ export const LAYOUT_PATCH_KEYS = [
 
 /** Why a layout won resolution. */
 export interface LayoutPickReason {
-  kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use'
+  kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use' | 'phone'
   rules?: Array<{ field: string; op: string; value?: unknown }>
   role_ids?: string[]
   role_names?: string[]
   type_use?: string
+  /** kind 'phone': the desktop form this phone version stands in for, and why that won. */
+  phone_of?: number
+  phone_of_name?: string
+  desktop_kind?: LayoutPickReason['kind']
 }
 
 export interface LayoutOverviewRow {
@@ -307,6 +311,13 @@ export interface LayoutOverviewRow {
   }
   references: Array<{ kind: string; id: string | number; label: string }>
   warnings: string[]
+  /** The days the form resolves on, and where today falls. */
+  active_window?: { from: string | null; until: string | null; state: 'before' | 'open' | 'after' }
+  /** This form's phone version / the form this one is the phone version of. */
+  phone_version?: { layout_id: number; name: string } | null
+  phone_of?: number | null
+  /** Edits refused until this day. */
+  frozen?: { until: string; reason: string } | null
 }
 
 /**
@@ -322,18 +333,24 @@ export function readLayoutOverview(
 /**
  * Which layout a saved record opens with, and why: the resolution itself, with
  * each candidate's check. `role_id` tests as that role (none = as an admin);
- * `slug` pins a layout by its link name. Admin only.
+ * `slug` pins a layout by its link name; `viewport: 'phone'` answers as on a
+ * small screen (phone versions); `at` (yyyy-mm-dd) as on that day (active
+ * dates). Admin only.
  */
 export function explainLayout(query: {
   collection: string
   item?: string | number
   role_id?: string
   slug?: string
+  viewport?: 'phone'
+  at?: string
 }): Command<{
   data: {
     layout_id: number | null
     reason: LayoutPickReason | null
     checked: Array<{ layout_id: number; matched: boolean; why: string }>
+    at: string
+    viewport: 'phone' | null
   }
 }> {
   return cmd('GET', '/collection-layouts/explain', query)
@@ -353,7 +370,9 @@ export function readLayoutBundle(layoutId: number): Command<LayoutBundle> {
  * 409 `{ error: 'stale', bundle }` when the layout changed since `base_rev`
  * (re-apply on `response.bundle`), 400 `{ error, op_index }` when an op is
  * refused, 400 `{ error, code: 'CHANGE_NOTE_REQUIRED' }` when the layout's
- * `change_note` asks for a `reason` (and `ticket`) the batch lacks. Admin only.
+ * `change_note` asks for a `reason` (and `ticket`) the batch lacks, 400
+ * `{ error, code: 'LAYOUT_FROZEN', freeze }` while the layout is frozen and
+ * the batch carries no `freeze_override` note. Admin only.
  */
 export function submitLayoutOps(
   layoutId: number,
@@ -363,6 +382,7 @@ export function submitLayoutOps(
     note?: string | null
     reason?: string | null
     ticket?: string | null
+    freeze_override?: string | null
   }
 ): Command<LayoutBundle> {
   return cmd('POST', `/collection-layouts/${layoutId}/ops`, undefined, body)

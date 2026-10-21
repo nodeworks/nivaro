@@ -1095,7 +1095,9 @@ export function GroupSection({
   swapped,
   onSwapToggle,
   alternateFields,
-  alternateWidths
+  alternateWidths,
+  deferred,
+  onFirstOpen
 }: {
   group: FieldGroup
   fields: CMSField[]
@@ -1144,6 +1146,10 @@ export function GroupSection({
   onSwapToggle?: () => void
   alternateFields?: CMSField[]
   alternateWidths?: Record<string, 1 | 2>
+  /** #2713: a section that loads when opened and has not been opened yet. */
+  deferred?: boolean
+  /** Called once the deferred section opens: the form loads what it holds. */
+  onFirstOpen?: (key: string) => void
 }) {
   const [localCollapsed, setLocalCollapsed] = useState(group.is_collapsed ?? false)
   // #2698: "Show N more" opened by hand (a folded field with a value opens it on its own).
@@ -1179,6 +1185,9 @@ export function GroupSection({
   // Accordion mode: parent controls open/closed via isOpen + onToggle.
   const controlled = onToggle !== undefined
   const collapsed = designFolded ?? (controlled ? !isOpen : localCollapsed)
+  useEffect(() => {
+    if (deferred && !collapsed) onFirstOpen?.(group.key)
+  }, [deferred, collapsed, onFirstOpen, group.key])
   const baseToggle =
     designFolded !== null
       ? () => setDesignFolded((v) => !v)
@@ -1256,6 +1265,7 @@ export function GroupSection({
 
   return (
     <div
+      data-loads-on-open={deferred ? '' : undefined}
       className={cn(
         'nvr-section-enter rounded-xl border border-slate-200 bg-white dark:bg-card dark:border-border',
         displayOnly && 'bg-slate-50/60 dark:bg-slate-900/20',
@@ -1328,7 +1338,8 @@ export function GroupSection({
           hide_when_empty section could never report content and stayed hidden
           forever. Probe-mount the widgets invisibly while collapsed so the
           content reports still arrive; the expanded body takes over on open. */}
-      {collapsed && group.hide_when_empty && groupWidgets.length > 0 && (
+      {/* A section that loads when opened (#2713) skips the probe: it stays shown until opened. */}
+      {collapsed && !deferred && group.hide_when_empty && groupWidgets.length > 0 && (
         <div className='hidden'>
           {groupWidgets
             .filter((ws) => ws.widget_id != null)

@@ -189,6 +189,24 @@
     "layout_types": ["grouped"]
   },
   {
+    "key": "layout.conditions.active_window",
+    "label": "Active dates: the form applies only between two days (#2714)",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.conditions.phone_of",
+    "label": "Phone version of a form, opened on small screens (#2715)",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
     "key": "layout.layout_type",
     "label": "Kind of layout (6 types)",
     "home": "form_settings",
@@ -639,6 +657,15 @@
     "layout_types": ["grouped"]
   },
   {
+    "key": "layout.conditions.freeze",
+    "label": "Freeze edits until a date, with a reason; admins override with a note (#2717)",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
     "key": "tool.ai_review",
     "label": "Review this layout (AI) + Apply fix + Undo",
     "home": "form_settings",
@@ -1051,6 +1078,15 @@
     "scope": "form",
     "status": "keep",
     "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.load_on_open",
+    "label": "Load when opened (#2713)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail"]
   },
   {
     "key": "group.tab_mode",

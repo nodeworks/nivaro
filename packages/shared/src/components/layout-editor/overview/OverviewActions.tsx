@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { AiStartComposer, AiStartOptions } from '../ai-forms/AiStart'
 import type { ComposeMode } from '../ai-forms/ai-forms-api'
+import { segOption, segTrack } from '../panel-style'
 import { BLANK_SEED, NewFormStart, type StartSeed } from '../reuse/NewFormStart'
 import { barBtn } from '../toolbar-kit'
 import { apiFailure, fetchExplain, useDisplayTemplate, useRoleNames } from './overview-api'
@@ -230,6 +231,9 @@ export function TestRecordButton({
   const debounced = useDebounced(search, 250)
   const [record, setRecord] = useState<{ id: string | number; label: string } | null>(null)
   const [roleId, setRoleId] = useState(AS_MYSELF)
+  // #2715 / #2714: on a phone, and on another day (active dates).
+  const [screen, setScreen] = useState<'desktop' | 'phone'>('desktop')
+  const [day, setDay] = useState('')
   const [busy, setBusy] = useState(false)
   const { data: template } = useDisplayTemplate(collection, open)
   const { data: roles = [] } = useRoleNames(open)
@@ -247,7 +251,9 @@ export function TestRecordButton({
       const res = await fetchExplain(client, {
         collection,
         item: record.id,
-        role_id: roleId || null
+        role_id: roleId || null,
+        viewport: screen === 'phone' ? 'phone' : null,
+        at: day || null
       })
       onResult({
         ...res,
@@ -326,6 +332,35 @@ export function TestRecordButton({
             ...roles.map((r) => ({ value: r.id, label: r.name }))
           ]}
         />
+        <div className='mt-3 flex flex-wrap items-end gap-3'>
+          <fieldset className='m-0 min-w-0 border-0 p-0'>
+            <legend className={labelCls}>Screen</legend>
+            <div className={cn(segTrack(2), 'w-[160px]')}>
+              {(['desktop', 'phone'] as const).map((v) => (
+                <button
+                  key={v}
+                  type='button'
+                  aria-pressed={screen === v}
+                  data-test-screen={v}
+                  onClick={() => setScreen(v)}
+                  className={segOption(screen === v)}
+                >
+                  {v === 'desktop' ? 'Desktop' : 'Phone'}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <label className='block'>
+            <span className={labelCls}>On day (optional)</span>
+            <input
+              type='date'
+              aria-label='Test on day'
+              value={day}
+              onChange={(e) => setDay(e.target.value)}
+              className={cn(inputCls, 'h-8 w-[150px] font-mono dark:[color-scheme:dark]')}
+            />
+          </label>
+        </div>
         <div className='mt-3 flex justify-end'>
           <button
             type='button'

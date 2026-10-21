@@ -108,6 +108,24 @@ export const SETTINGS: SettingDef[] = [
     effect: 'Leaves this layout out of the New menu; its link name keeps working.',
     types: NEW_MENU
   },
+  {
+    key: 'layout.conditions.active_window',
+    section: 'who',
+    label: 'Active dates',
+    effect:
+      'The form applies only on these days, both included; outside them records open with the next form that fits.',
+    types: ['grouped'],
+    keywords: 'window from until year end close season schedule period'
+  },
+  {
+    key: 'layout.conditions.phone_of',
+    section: 'who',
+    label: 'Phone version',
+    effect:
+      'A lighter copy of a form that opens instead of it on small screens; it never opens on its own.',
+    types: ['grouped'],
+    keywords: 'mobile small screen variant device lighter'
+  },
 
   // ── How it's laid out ─────────────────────────────────────────────────────
   {
@@ -570,6 +588,15 @@ export const SETTINGS: SettingDef[] = [
       'Notification emails summarise the record with this section’s fields, in this form’s order, cut to what each person may see. None keeps the header strip. Only the default form’s choice counts.',
     types: NEW_MENU,
     keywords: 'email mail notification summary body section'
+  },
+  {
+    key: 'layout.conditions.freeze',
+    section: 'tools',
+    label: 'Freeze edits',
+    effect:
+      'Until the date, saves to this layout are refused with your reason; an administrator can still save by giving a note.',
+    types: ALL,
+    keywords: 'freeze lock go-live audit read-only block edits override'
   },
   {
     key: 'tool.cost_limit',

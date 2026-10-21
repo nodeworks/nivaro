@@ -82,7 +82,8 @@ describe('pickerToggleRefusal — "Disable in pickers" for all users', () => {
       slug: null,
       item: '7',
       role: 'R1',
-      isAdmin: false
+      isAdmin: false,
+      userId: 'U1'
     })
     // The record's own form granted it — the pin is never consulted.
     expect(state.pinArgs).toHaveLength(0)

@@ -3,6 +3,7 @@ import { EyeOff } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { currentViewport } from '../../lib/layout-resolve'
 import type { DescribeField } from '../layout-editor/overview/describe-conditions'
 import { describeShowWhen } from '../layout-editor/show-when'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -44,14 +45,22 @@ export function useLockWhy(
   const client = useNivaroClient()
   const [wanted, setWanted] = useState(false)
   const id = itemId == null || itemId === '' ? null : String(itemId)
+  // The form the record page opened: a small screen gets the phone version (#2715).
+  const [viewport] = useState(currentViewport)
   const q = useQuery({
-    queryKey: ['layout-why', collection, id] as const,
+    queryKey: ['layout-why', collection, id, viewport] as const,
     enabled: opts.enabled && !!id && (opts.eager || wanted),
     staleTime: 60_000,
     retry: false,
     queryFn: () =>
       client
-        .request<{ data: LockWhy | null }>(get('/collection-layouts/why', { collection, item: id }))
+        .request<{ data: LockWhy | null }>(
+          get('/collection-layouts/why', {
+            collection,
+            item: id,
+            ...(viewport ? { viewport } : {})
+          })
+        )
         .then((r) => r.data ?? null)
   })
   const want = useCallback(() => setWanted(true), [])

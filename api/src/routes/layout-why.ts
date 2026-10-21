@@ -45,7 +45,7 @@ function reasonText(reason: PickReason | null, isAdmin: boolean): string | null 
  */
 export async function layoutWhyRoutes(app: FastifyInstance) {
   app.get('/why', { preHandler: authenticate }, async (req, reply) => {
-    const q = req.query as { collection?: string; item?: string }
+    const q = req.query as { collection?: string; item?: string; viewport?: string }
     const collection = String(q.collection ?? '')
     const item = q.item ? String(q.item) : null
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
@@ -67,7 +67,9 @@ export async function layoutWhyRoutes(app: FastifyInstance) {
       item: recordId,
       role: user.role ?? null,
       isAdmin,
-      userId: user.id ? String(user.id) : null
+      userId: user.id ? String(user.id) : null,
+      // The form a small screen opens (#2715).
+      viewport: q.viewport === 'phone' ? 'phone' : null
     })
     const layout = res.row
     if (!layout) return reply.send({ data: null })

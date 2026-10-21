@@ -18,6 +18,7 @@ export type OverviewReasonKind =
   | 'type_use'
   /** #2614: an A/B test version, standing in for its original for half of one role. */
   | 'ab'
+  | 'phone'
 
 export interface OverviewReason {
   kind: OverviewReasonKind
@@ -25,6 +26,10 @@ export interface OverviewReason {
   role_ids?: string[]
   role_names?: string[]
   type_use?: string
+  /** kind 'phone' (#2715): the desktop form this phone version stands in for. */
+  phone_of?: number
+  phone_of_name?: string
+  desktop_kind?: OverviewReasonKind
 }
 
 export interface OverviewReference {
@@ -61,6 +66,13 @@ export interface OverviewRow {
     }>
     placements: Array<{ field: string; group_key: string | null }>
   }
+  /** #2714: the days the form resolves on, and where today falls. */
+  active_window?: { from: string | null; until: string | null; state: 'before' | 'open' | 'after' }
+  /** #2715: this form's phone version / the form this one is the phone version of. */
+  phone_version?: { layout_id: number; name: string } | null
+  phone_of?: number | null
+  /** #2717: edits refused until this day. */
+  frozen?: { until: string; reason: string } | null
 }
 
 export interface OverviewResponse {
@@ -72,4 +84,7 @@ export interface ExplainResponse {
   layout_id: number | null
   reason: OverviewReason | null
   checked: Array<{ layout_id: number; matched: boolean; why: string }>
+  /** The day and screen the answer is for (#2714 #2715). */
+  at?: string | null
+  viewport?: 'phone' | null
 }
