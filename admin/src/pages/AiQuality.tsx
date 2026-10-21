@@ -11,6 +11,7 @@ import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 import { ModelsTab } from './ai-quality/ModelsTab'
 import { PromptCostTab } from './ai-quality/PromptCostTab'
+import { SavingsTab } from './ai-quality/SavingsTab'
 import { SpendTab } from './ai-quality/SpendTab'
 import { ToolsTab } from './ai-quality/ToolsTab'
 
@@ -18,6 +19,7 @@ type Tab =
   | 'review'
   | 'spend'
   | 'budgets'
+  | 'savings'
   | 'prompts'
   | 'tools'
   | 'models'
@@ -29,6 +31,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'review', label: 'Review queue' },
   { id: 'spend', label: 'Spend' },
   { id: 'budgets', label: 'Budgets & fallback' },
+  { id: 'savings', label: 'Cost savings' },
   { id: 'prompts', label: 'Prompt cost' },
   { id: 'tools', label: 'Tool reliability' },
   { id: 'models', label: 'Models' },
@@ -92,6 +95,7 @@ export function AiQualityPage() {
         {tab === 'review' && <ReviewTab />}
         {tab === 'spend' && <SpendTab />}
         {tab === 'budgets' && <BudgetsTab />}
+        {tab === 'savings' && <SavingsTab />}
         {tab === 'prompts' && <PromptCostTab />}
         {tab === 'tools' && <ToolsTab />}
         {tab === 'models' && <ModelsTab />}

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
@@ -6,7 +6,12 @@ import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hoo
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { MAX_ROUNDS, runChatLoop } from '../services/ai-chat-loop.js'
-import { describeAiProvider, getAiClient, getAiModelSettings } from '../services/ai-client.js'
+import {
+  cheapClientFor,
+  describeAiProvider,
+  getAiClient,
+  getAiModelSettings
+} from '../services/ai-client.js'
 import {
   feedbackSummary,
   formatPlaybooksForPrompt,
@@ -15,6 +20,7 @@ import {
   retrievePlaybooks
 } from '../services/ai-playbooks.js'
 import { takeFallbackNote } from '../services/ai-quality.js'
+import { routedCreate } from '../services/ai-routing.js'
 import { consumeText, streamMessage } from '../services/ai-stream.js'
 import {
   pickStreamMode,
@@ -34,6 +40,9 @@ import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { currentTraceMeta, runInTrace } from '../services/request-trace.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
+import { isAdminRole } from '../services/user-scopes.js'
+import { userTimeZone } from '../services/user-time.js'
 import type { User } from '../types.js'
 
 /** AI governance (#407): per-feature toggles — settings.ai_disabled_features
@@ -1056,12 +1065,20 @@ export async function aiRoutes(app: FastifyInstance) {
         max_tokens: maxTokensGenerate,
         messages: [{ role: 'user' as const, content: prompt }]
       }
+      // #2471 — a streamed reply stays on the main model (a move up would
+      // re-stream it); the plain call may start cheap.
       const message = sink
         ? await consumeText(
             await streamMessage(client, params, { signal: sink.signal }),
             sink.onDelta
           )
-        : await client.messages.create(params)
+        : (
+            await routedCreate({
+              main: { client, model },
+              cheap: await cheapClientFor('generate', model),
+              params
+            })
+          ).message
       const value = message.content[0]?.type === 'text' ? message.content[0].text.trim() : ''
       await logActivity({
         action: 'ai-generate',
@@ -1129,7 +1146,13 @@ export async function aiRoutes(app: FastifyInstance) {
             await streamMessage(client, params, { signal: sink.signal }),
             sink.onDelta
           )
-        : await client.messages.create(params)
+        : (
+            await routedCreate({
+              main: { client, model },
+              cheap: await cheapClientFor('summarize', model),
+              params
+            })
+          ).message
       const summary = message.content[0]?.type === 'text' ? message.content[0].text.trim() : ''
       await logActivity({
         action: 'ai-summarize',
@@ -1314,10 +1337,12 @@ ${Object.entries(children)
 Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"suggestion","field":"<field name or area>","message":"<specific, actionable finding>"}]. Return [] if the record looks ready.`
 
     const { model } = await getAiModelSettings()
-    const message = await client.messages.create({
-      model,
-      max_tokens: 1500,
-      messages: [{ role: 'user', content: prompt }]
+    // #2471 — may start cheap; a reply that is not the JSON array moves up.
+    const { message, routing } = await routedCreate({
+      main: { client, model },
+      cheap: await cheapClientFor('review', model),
+      params: { max_tokens: 1500, messages: [{ role: 'user', content: prompt }] },
+      expectJson: 'array'
     })
     const text = message.content[0]?.type === 'text' ? message.content[0].text : ''
     let findings: Array<{ severity: string; field: string; message: string }> = []
@@ -1351,7 +1376,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       item: String(item),
       req
     })
-    return reply.send({ data: { findings } })
+    return reply.send({ data: { findings, ...(routing ? { routing } : {}) } })
   })
 
   // POST /ai/brief — render a short plain-text briefing from caller-supplied
@@ -1695,20 +1720,27 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         .code(503)
         .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
-    const { messages, fresh, conversation_id, save, command, context } = req.body as {
-      /** #1884 — a slash command that shapes the answer (chart, table, explain, steps). */
-      command?: string
-      messages?: Array<{ role: string; content: string }>
-      fresh?: boolean
-      /** #1835 — the page asked from: ids and filters only, re-read below as the asker. */
-      context?: unknown
-      /** #688 — deliver the answer as it is written (socket or SSE). */
-      stream?: boolean
-      /** #1833 — continue this stored conversation (history comes from it). */
-      conversation_id?: string
-      /** #1833 — start a stored conversation with this question. */
-      save?: boolean
-    }
+    const { messages, conversation_id, save, command, context, try_harder, retry_of } =
+      req.body as {
+        /** #1884 — a slash command that shapes the answer (chart, table, explain, steps). */
+        command?: string
+        /** #2471 — "Try harder": the feature's main model from the start, no cache. */
+        try_harder?: boolean
+        /** #2471 — the request whose quick answer "Try harder" replaces. */
+        retry_of?: string
+        messages?: Array<{ role: string; content: string }>
+        fresh?: boolean
+        /** #1835 — the page asked from: ids and filters only, re-read below as the asker. */
+        context?: unknown
+        /** #688 — deliver the answer as it is written (socket or SSE). */
+        stream?: boolean
+        /** #1833 — continue this stored conversation (history comes from it). */
+        conversation_id?: string
+        /** #1833 — start a stored conversation with this question. */
+        save?: boolean
+      }
+    const tryHarder = try_harder === true
+    const fresh = Boolean((req.body as { fresh?: boolean }).fresh) || tryHarder
     if (!Array.isArray(messages) || messages.length === 0) {
       return reply.code(400).send({ error: 'messages array is required' })
     }
@@ -1800,35 +1832,84 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         { ...last, content: last.content + commandDirective(answerCommand) }
       ]
     }
-    const playbooks = await retrievePlaybooks(question)
     // #1835 #1886 #1842 #1993 #1837 — what the page handed the question,
     // read again as the asker (unreadable ids are dropped). Last in the
     // prompt: it changes with every page, the long prefix stays cached.
     const { normalizeAskContext, resolveAskContext } = await import('../services/ai-ask-context.js')
     const pageContext = await resolveAskContext(app, req.user!, normalizeAskContext(context))
+    // `convo` below aliases `history` and grows per round — judge "standalone" now.
+    const standalone = history.length === 1
+    const redis = (req.server as FastifyInstance & { redis?: import('ioredis').Redis }).redis
+    const answerCache = await import('../services/ai-answer-cache.js')
+    // #2455 — a docs-style question that may be answered for everyone is
+    // answered from a prompt with nothing of the asker's in it: no readable
+    // collections, saved queries, queues, saved views or playbooks (the room
+    // bot's prompt). Only such an answer is ever kept under the shared key.
+    const docsShare = answerCache.sharedDocsCandidate({
+      standalone,
+      pageContext: !!pageContext.trace,
+      memoryNotes: memoryNotes.length,
+      cacheOn: answerCacheMinutes > 0 && !!redis,
+      question
+    })
+    const playbooks = docsShare ? [] : await retrievePlaybooks(question)
     const system =
       (await buildChatSystemPrompt(req.user!, {
         playbooks: formatPlaybooksForPrompt(playbooks),
-        question
+        question,
+        ...(docsShare ? { catalogues: false } : {})
       })) +
       memoryBlock +
       pageContext.block
     const playbooksUsed = playbooks.length
-    // `convo` below aliases `history` and grows per round — judge "standalone" now.
-    const standalone = history.length === 1
     // #723 — the same standalone question by the same person inside the
     // window answers from cache (per person: answers are permission-scoped).
     // A question asked with page context never is: the page, its rows and
     // the person's access to them all move under the same words.
-    const redis = (req.server as FastifyInstance & { redis?: import('ioredis').Redis }).redis
     const cacheKey =
       standalone && !pageContext.trace && answerCacheMinutes > 0 && redis
-        ? `nvr:aichat:${req.user!.id}:${createHash('sha1')
-            .update(`${answerCommand ?? ''}|${question.trim().toLowerCase().replace(/\s+/g, ' ')}`)
-            .digest('hex')}`
+        ? answerCache.personalAnswerKey(String(req.user!.id), answerCommand ?? null, question)
+        : null
+    // The docs audience is the one search_docs uses (the asker's role), and
+    // the time zone rides the key because the prompt's date follows it.
+    const docsVersion = docsShare
+      ? await import('../services/docs-search.js').then((m) => m.docsIndexVersion())
+      : 'none'
+    const sharedKey =
+      docsShare && cacheKey && docsVersion !== 'none'
+        ? answerCache.sharedAnswerKey({
+            tenant: currentTenantKey(),
+            docsVersion,
+            admin: await isAdminRole(req.user!.role),
+            locale: answerCache.askLocale(req.user!.preferences, req.headers['accept-language']),
+            timeZone: await userTimeZone(req.user! as { preferences?: unknown }),
+            command: answerCommand ?? null,
+            question
+          })
         : null
     const userId = String(req.user!.id)
     const user = req.user!
+
+    // #2471 — start cheap when an admin switched it on for Ask AI; "Try
+    // harder" asks the main model straight away (and names the quick answer).
+    const cheap = await cheapClientFor('chat', settings.model)
+    const routing = cheap
+      ? {
+          cheapModel: cheap.model,
+          cheapClient: tryHarder ? null : cheap.client,
+          retryOf: typeof retry_of === 'string' ? retry_of.slice(0, 64) : null
+        }
+      : undefined
+    // #2737 — read-tool results kept for this conversation, per asker.
+    const { conversationKeyFor, toolReuseFor } = await import('../services/ai-tool-reuse.js')
+    const reuse = toolReuseFor(
+      userId,
+      conversationKeyFor({
+        conversationId: turn?.conversation.id ?? null,
+        firstQuestion: history[0]?.content ?? question
+      }),
+      redis ?? null
+    )
 
     // How the answer travels (#688): a plain reply, the caller's socket, or
     // SSE. A `stream: true` caller without a connected socket gets the plain
@@ -1849,6 +1930,23 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             req
           })
           cachedBody = { ...cached, cached: true, playbooks_used: 0 }
+        }
+        if (!cachedBody && sharedKey) {
+          const shared = await redis!.get(sharedKey)
+          if (shared) {
+            await logActivity({
+              action: 'ai-chat',
+              user: user.id,
+              comment: 'answered from the shared docs cache',
+              req
+            })
+            cachedBody = {
+              ...(JSON.parse(shared) as Record<string, unknown>),
+              cached: true,
+              shared_cache: true,
+              playbooks_used: 0
+            }
+          }
         }
       } catch {
         // a cache miss is the normal path
@@ -1890,7 +1988,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           warn: (err, msg) => req.log.warn({ err }, msg),
           // #1845 — the model may offer "Remember this?"; nothing is saved
           // until the asker clicks it (POST /ai/memory).
-          memorySuggestions: { existing: memoryNotes }
+          memorySuggestions: { existing: memoryNotes },
+          routing,
+          reuse
         })
         const { proposals, plans, choices } = result
         // The context rides the trace: it names what the answer read, and a
@@ -1968,6 +2068,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         if (choices.length > 0) payload.choices = choices
         if (followups.length > 0) payload.followups = followups
         if (result.stopped) payload.stopped = true
+        if (result.routing) payload.routing = result.routing
         // An answer that proposes an ACTION is never cached — a proposal
         // is single-use and expires; only plain answers repeat. Memory
         // offers are added after the cache copy: a repeat never re-offers.
@@ -1987,6 +2088,22 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
               answerCacheMinutes * 60
             )
             .catch(() => {})
+          // #2455 — docs only: everyone with the same audience may reuse it
+          // (no request id: thumbs on a shared copy belong to its asker).
+          if (sharedKey && answerCache.isDocsOnlyTrace(result.trace)) {
+            void redis!
+              .set(
+                sharedKey,
+                JSON.stringify({
+                  ...payload,
+                  request_id: null,
+                  cached_at: new Date().toISOString()
+                }),
+                'EX',
+                answerCacheMinutes * 60
+              )
+              .catch(() => {})
+          }
         }
         return Object.assign(payload, offers)
       } finally {
@@ -3128,10 +3245,13 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       if (q.request_id) b.where('c.request_id', q.request_id)
       return b
     }
+    const { aiCallMetaSupported, parseAiCallMeta } = await import('../services/ai-call-meta.js')
+    const withMeta = await aiCallMetaSupported()
     const [rows, total] = await Promise.all([
       apply(db('nivaro_ai_calls as c'))
         .leftJoin('nivaro_users as u', 'u.id', 'c.user')
         .select(
+          ...(withMeta ? ['c.meta'] : []),
           'c.id',
           'c.created_at',
           'c.request_id',
@@ -3160,12 +3280,18 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       apply(db('nivaro_ai_calls as c')).count({ n: '*' }).first()
     ])
     return {
-      data: (rows as Array<Record<string, unknown>>).map((r) => ({
-        ...r,
-        id: Number(r.id),
-        cost_usd: r.cost_usd == null ? null : Number(r.cost_usd),
-        user_name: [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || null
-      })),
+      data: (rows as Array<Record<string, unknown>>).map(({ meta, ...r }) => {
+        // #2471 — the start-cheap tier rides the row; the rest of meta stays on /calls/:id.
+        const routing = parseAiCallMeta(meta)?.routing
+        return {
+          ...r,
+          id: Number(r.id),
+          cost_usd: r.cost_usd == null ? null : Number(r.cost_usd),
+          user_name: [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || null,
+          tier: routing?.tier ?? null,
+          tier_reason: routing?.reason ?? null
+        }
+      }),
       total: Number((total as { n?: unknown } | undefined)?.n ?? 0),
       page,
       limit
@@ -3194,7 +3320,8 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           ...row,
           id: Number(row.id),
           request: parse(row.request),
-          response: parse(row.response)
+          response: parse(row.response),
+          meta: parse(row.meta)
         }
       }
     }

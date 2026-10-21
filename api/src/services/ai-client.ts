@@ -997,6 +997,24 @@ async function buildAiClient(
   return caching ? cachingClient(inner, 'anthropic') : loggedClient(inner, 'anthropic')
 }
 
+/**
+ * #2471 — the small model a feature starts on, when an admin switched "start
+ * cheap" on for it (AI quality → Cost savings); null = the feature runs on
+ * `mainModel` as before. Never used for proposals or plans (the callers
+ * move up before one is made).
+ */
+export async function cheapClientFor(
+  feature: string,
+  mainModel: string
+): Promise<{ client: Anthropic; model: string } | null> {
+  const { cheapModelFor } = await import('./ai-routing.js')
+  const s = (await settingsRow()) ?? {}
+  const cheap = cheapModelFor(qualityFromSettings(s).routing, feature, mainModel)
+  if (!cheap) return null
+  const client = await getAiClient({ model: cheap })
+  return client ? { client, model: cheap } : null
+}
+
 export async function getAiModelSettings() {
   const row = (await settingsRow()) ?? {}
   const gateway = row.ai_provider === 'gateway'

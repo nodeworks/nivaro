@@ -1,6 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
+import { aiCallMetaSupported, currentAiCallMeta, serializeAiCallMeta } from './ai-call-meta.js'
 import { applyUsage, measureParts, type PartTokens, serializeParts } from './ai-prompt-parts.js'
 import { emitAiCallLive } from './ai-quality.js'
 import {
@@ -42,6 +43,11 @@ const priceState = tenantState<{ prices: Prices }>(() => ({ prices: {} }))
 
 export function setPriceOverrides(prices: Prices | null | undefined): void {
   priceState().prices = prices ?? {}
+}
+
+/** Model ids with a known price, built in or set by an admin (a cost figure can be computed). */
+export function pricedModels(): string[] {
+  return [...new Set([...Object.keys(PRICES), ...Object.keys(priceState().prices)])]
 }
 
 export function priceFor(model: string) {
@@ -117,9 +123,26 @@ function capJson(value: unknown, cap: number): string | null {
 
 type MessageParams = Anthropic.MessageCreateParams
 
+/** Insert one log row; `meta` (#2471 #2765, migration 469) rides only where the column exists. */
+function insertCallRow(
+  row: Record<string, unknown>,
+  meta: string | null,
+  promptParts: string | null = null
+): void {
+  void (async () => {
+    const out: Record<string, unknown> = { ...row }
+    // Each column is written only once its migration has run (469 meta, 470 prompt_parts).
+    if (meta && (await aiCallMetaSupported())) out.meta = meta
+    if (promptParts && (await promptPartsSupported())) out.prompt_parts = promptParts
+    await db('nivaro_ai_calls').insert(out)
+  })().catch(() => undefined)
+}
+
 /** One call's log row in flight — `ok` / `fail` each write at most once. */
 function beginAiCall(provider: AiProviderKind, params: MessageParams) {
   const meta = currentTraceMeta()
+  // Read at the START: a stream finishes outside the caller's context.
+  const callMeta = serializeAiCallMeta(currentAiCallMeta())
   const started = performance.now()
   const base = {
     created_at: new Date(),
@@ -193,10 +216,8 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
           }),
           NIVARO_VERSION
         )
-      void (async () => {
-        const withParts = stored && (await promptPartsSupported())
-        await db('nivaro_ai_calls').insert({
-          ...(withParts ? { prompt_parts: stored } : {}),
+      insertCallRow(
+        {
           ...base,
           model: res.model || base.model,
           status: 'ok',
@@ -209,8 +230,10 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
           stop_reason: res.stop_reason ?? null,
           tool_calls: content.filter((b) => b.type === 'tool_use').length,
           response: capJson(content, RESPONSE_CAP)
-        })
-      })().catch(() => undefined)
+        },
+        callMeta,
+        stored || null
+      )
     },
     fail(err: unknown) {
       if (written) return
@@ -235,18 +258,16 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
         output_tokens: null,
         error: String((err as Error)?.message ?? err).slice(0, 200)
       })
-      void (async () => {
-        const withParts = parts && (await promptPartsSupported())
-        await db('nivaro_ai_calls').insert({
-          ...(withParts
-            ? { prompt_parts: serializeParts(applyUsage(parts, {}), NIVARO_VERSION) }
-            : {}),
+      insertCallRow(
+        {
           ...base,
           status: 'error',
           latency_ms: Math.round(performance.now() - started),
           error: String((err as Error)?.message ?? err).slice(0, 1000)
-        })
-      })().catch(() => undefined)
+        },
+        callMeta,
+        parts ? serializeParts(applyUsage(parts, {}), NIVARO_VERSION) : null
+      )
     }
   }
 }

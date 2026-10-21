@@ -78,6 +78,9 @@ export interface AiCallRow {
   tool_calls: number | null
   rounds: number | null
   error: string | null
+  /** #2471 — start-cheap tier and why it moved up (null = not routed). */
+  tier?: 'cheap' | 'main' | null
+  tier_reason?: string | null
 }
 
 const RANGES = [
@@ -452,7 +455,21 @@ export function AiAnalyticsView() {
                     <td className='max-w-[160px] truncate px-2 py-1.5'>
                       {r.user_name ?? (r.user ? '…' : 'System')}
                     </td>
-                    <td className='px-2 py-1.5 font-mono text-[11px]'>{r.model}</td>
+                    <td className='px-2 py-1.5 font-mono text-[11px]'>
+                      {r.model}
+                      {r.tier && (
+                        <span
+                          className='ml-1.5 rounded bg-muted px-1 py-px font-sans text-[10px] text-muted-foreground'
+                          data-tip={
+                            r.tier === 'cheap'
+                              ? 'Started cheap: the small model'
+                              : `Moved up to the main model${r.tier_reason ? ` (${r.tier_reason.replace(/_/g, ' ')})` : ''}`
+                          }
+                        >
+                          {r.tier === 'cheap' ? 'quick' : 'moved up'}
+                        </span>
+                      )}
+                    </td>
                     <td className='px-2 py-1.5 text-right'>{tok(r.input_tokens)}</td>
                     <td className='px-2 py-1.5 text-right text-muted-foreground'>
                       {tok(r.cache_read_tokens)}

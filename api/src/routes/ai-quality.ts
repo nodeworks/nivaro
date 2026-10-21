@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { aiCallMetaSupported, parseAiCallMeta } from '../services/ai-call-meta.js'
 import {
   describeAiProvider,
   getAiClient,
@@ -12,7 +13,7 @@ import {
 } from '../services/ai-client.js'
 import { lastAiHealth, probeAiProvider, registerAiHealthReadiness } from '../services/ai-health.js'
 import { registerCorrectionSource } from '../services/ai-knowledge-suggest.js'
-import { costOf, priceFor } from '../services/ai-log.js'
+import { costOf, pricedModels, priceFor } from '../services/ai-log.js'
 import { bustPlaybookCache } from '../services/ai-playbooks.js'
 import {
   type BudgetCap,
@@ -39,6 +40,12 @@ import {
   type ReplayRun,
   replayRuns
 } from '../services/ai-replay.js'
+import {
+  normalizeRouting,
+  ROUTABLE_FEATURES,
+  type RoutingCallRow,
+  routingSavings
+} from '../services/ai-routing.js'
 import { currentStoreId } from '../services/traffic-taps.js'
 import { aiQualityInsightRoutes } from './ai-quality-insights.js'
 
@@ -70,6 +77,9 @@ async function allowedModels(): Promise<string[]> {
   const q = parseQualityConfig(row?.ai_models)
   if (q.fallback_model) out.add(q.fallback_model)
   for (const c of q.budgets.caps) if (c.cheaper_model) out.add(c.cheaper_model)
+  if (q.routing?.cheap_model) out.add(q.routing.cheap_model)
+  // #2471 — a small model to start on is usually one the gateway prices.
+  for (const v of pricedModels()) out.add(v)
   return [...out]
 }
 
@@ -127,6 +137,8 @@ export async function aiQualityRoutes(app: FastifyInstance) {
     const body = (req.body ?? {}) as {
       budgets?: { enabled?: unknown; caps?: unknown }
       fallback_model?: unknown
+      /** #2471 — absent = keep what is saved (the budgets card never sends it). */
+      routing?: unknown
     }
     const rawCaps = Array.isArray(body.budgets?.caps) ? (body.budgets?.caps as unknown[]) : []
     if (rawCaps.length > 50) return reply.code(400).send({ error: 'At most 50 caps' })
@@ -150,7 +162,8 @@ export async function aiQualityRoutes(app: FastifyInstance) {
     const next: QualityConfig = {
       ...current,
       budgets: { enabled: body.budgets?.enabled === true, caps },
-      fallback_model: fallback
+      fallback_model: fallback,
+      routing: body.routing === undefined ? current.routing : normalizeRouting(body.routing)
     }
     if (id == null) return reply.code(500).send({ error: 'No settings row' })
     await db('nivaro_settings')
@@ -160,7 +173,7 @@ export async function aiQualityRoutes(app: FastifyInstance) {
     await logActivity({
       action: 'ai-quality-config',
       user: req.user!.id,
-      comment: `budgets ${next.budgets.enabled ? 'on' : 'off'} · ${caps.length} cap(s) · fallback ${fallback ?? 'none'}`,
+      comment: `budgets ${next.budgets.enabled ? 'on' : 'off'} · ${caps.length} cap(s) · fallback ${fallback ?? 'none'} · start cheap ${next.routing?.cheap_model && next.routing.features.length ? next.routing.features.join(', ') : 'off'}`,
       req
     })
     return reply.send({ data: next })
@@ -635,6 +648,77 @@ export async function aiQualityRoutes(app: FastifyInstance) {
           .code(404)
           .send({ error: 'No such replay on this server (they are kept for an hour)' })
       return reply.send({ data: run })
+    }
+  )
+
+  /**
+   * #2471 routing savings + #2765 tool payload sizes + #2737 reuse, from the
+   * call log's `meta` (migration 469). `window=month` (default: since the 1st,
+   * UTC) or `30d`. `supported: false` until the column exists.
+   */
+  app.get<{ Querystring: { window?: string } }>(
+    '/quality/savings',
+    { preHandler: requireAdmin },
+    async (req) => {
+      const { cfg } = await readQuality()
+      const now = new Date()
+      const since =
+        req.query?.window === '30d'
+          ? new Date(now.getTime() - 30 * 86_400_000)
+          : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+      const base = {
+        routing: cfg.routing ?? normalizeRouting(null),
+        features: ROUTABLE_FEATURES,
+        models: await allowedModels(),
+        since: since.toISOString()
+      }
+      if (!(await aiCallMetaSupported())) return { data: { ...base, supported: false } }
+      const CAP = 20_000
+      const rows = (await db('nivaro_ai_calls')
+        .where('created_at', '>=', since)
+        .whereNotNull('meta')
+        .orderBy('id', 'desc')
+        .limit(CAP)
+        .select(
+          'request_id',
+          'model',
+          'cost_usd',
+          'input_tokens',
+          'output_tokens',
+          'cache_read_tokens',
+          'meta'
+        )) as RoutingCallRow[]
+      const tools = new Map<
+        string,
+        { tool: string; calls: number; before: number; after: number; reused: number }
+      >()
+      for (const r of rows) {
+        const tp = parseAiCallMeta(r.meta)?.tool_payload
+        if (!tp) continue
+        for (const [tool, st] of Object.entries(tp)) {
+          const t = tools.get(tool) ?? { tool, calls: 0, before: 0, after: 0, reused: 0 }
+          t.calls += Number(st.calls) || 0
+          t.before += Number(st.before) || 0
+          t.after += Number(st.after) || 0
+          t.reused += Number(st.reused) || 0
+          tools.set(tool, t)
+        }
+      }
+      return {
+        data: {
+          ...base,
+          supported: true,
+          capped: rows.length >= CAP,
+          savings: routingSavings(rows),
+          tools: [...tools.values()]
+            .map((t) => ({
+              ...t,
+              saved_pct:
+                t.before > 0 ? Math.round(((t.before - t.after) / t.before) * 1000) / 10 : 0
+            }))
+            .sort((a, b) => b.before - a.before)
+        }
+      }
     }
   )
 
