@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
-import { announceConfigChanged, collectionHint } from '../services/config-live.js'
+import { announceConfigChanged, collectionHint, isConfigReadPost } from '../services/config-live.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { bustLayoutReferences } from '../services/layout-references.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
@@ -338,7 +338,8 @@ export async function registerRoutes(app: FastifyInstance) {
     if (DEFINITION_ROUTES.test(req.url) && !/\/(render|action|execute|run)\b/.test(req.url)) {
       bustDefinitionCache()
     }
-    if (META_ROUTES.test(req.url)) {
+    // Read-only POSTs (draft projection, rule evaluation) change nothing.
+    if (META_ROUTES.test(req.url) && !isConfigReadPost(req.url)) {
       clearMetadataCache()
       bustSectionLockCache()
       // Live integrity checks compile field/layout config per collection — same

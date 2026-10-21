@@ -60,19 +60,40 @@ export function announceConfigChanged(
 }
 
 /**
- * The collection a config write names: the body or query's `collection`, or the path segment
- * after `/fields/` or `/collections/` (never a numeric id). null = "any form may be affected".
+ * POSTs under a config route that only read: the layout editor's draft projection and the
+ * form-rule evaluators. They change no configuration, so they flush no cache and push nothing
+ * (any signed-in caller reaches the evaluators; a push per call would re-fetch every open form).
+ */
+const CONFIG_READ_POST =
+  /^\/api\/field-config\/[^/?]+\/(project|evaluate-visibility|evaluate-defaults|evaluate-lock|cascade)(\?|$)/
+
+/** Whether a successful non-GET on `url` may have changed form configuration. */
+export function isConfigReadPost(url: string): boolean {
+  return CONFIG_READ_POST.test(url)
+}
+
+/** Lets a write keyed by id (a layout, a group) name the collection it changed. */
+export function nameConfigCollection(req: object, collection: unknown): void {
+  if (typeof collection === 'string' && collection)
+    (req as { nvrConfigCollection?: string }).nvrConfigCollection = collection
+}
+
+/**
+ * The collection a config write names: the one the route set with nameConfigCollection, the
+ * body or query's `collection`, or the path segment after `/fields/` or `/collections/` (never
+ * a numeric id). null = "any form may be affected".
  */
 export function collectionHint(req: {
   url: string
   body?: unknown
   query?: unknown
+  nvrConfigCollection?: unknown
 }): string | null {
   const pick = (v: unknown) =>
     typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) && !/^\d+$/.test(v) ? v : null
   const body = req.body as { collection?: unknown } | null | undefined
   const query = req.query as { collection?: unknown } | null | undefined
-  const direct = pick(body?.collection) ?? pick(query?.collection)
+  const direct = pick(req.nvrConfigCollection) ?? pick(body?.collection) ?? pick(query?.collection)
   if (direct) return direct
   const m = req.url.split('?')[0].match(/^\/api\/(?:data-model\/)?(?:fields|collections)\/([^/]+)/)
   return m ? pick(m[1]) : null

@@ -541,7 +541,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
   // POST /field-config/:collection/project {assignments} — the rows GET would
   // answer if these placements were the saved layout (the layout editor's
   // canvas renders its unsaved draft through it). A read: writes nothing.
-  app.post('/:collection/project', { preHandler: authenticate }, async (req, reply) => {
+  app.post('/:collection/project', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
     const list = (req.body as { assignments?: unknown } | null)?.assignments
     if (!Array.isArray(list) || list.length > 2000)
