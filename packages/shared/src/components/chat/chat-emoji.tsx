@@ -63,7 +63,7 @@ export function useCustomEmoji() {
       )
     )
   }, [list, fetchCfg.apiBase])
-  return { emoji: list ?? [], loading: q.isLoading }
+  return { emoji: list ?? [], loading: q.isLoading, error: q.isError }
 }
 
 /** The image for `:code:`, or the text itself when the emoji is gone. */
@@ -76,7 +76,7 @@ export function EmojiGlyph({ value, size = 16 }: { value: string; size?: number 
     <img
       src={src}
       alt={value}
-      title={value}
+      data-tip={value}
       width={size}
       height={size}
       loading='lazy'
@@ -104,7 +104,7 @@ export function withCustomEmoji(text: string, map: Map<string, string>, key: str
         key={`${key}.em${i++}`}
         src={src}
         alt={m[0]}
-        title={m[0]}
+        data-tip={m[0]}
         loading='lazy'
         draggable={false}
         className='mx-px inline-block h-[1.25em] w-[1.25em] align-text-bottom object-contain'
@@ -147,13 +147,20 @@ const MAX_BYTES = 256 * 1024
 export function EmojiPicker({
   onPick,
   children,
-  align = 'start'
+  align = 'start',
+  onOpenChange
 }: {
   onPick: (value: string) => void
   children: ReactNode
   align?: 'start' | 'center' | 'end'
+  /** A trigger inside a hover-revealed toolbar keeps the toolbar up while the picker is open. */
+  onOpenChange?: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpenState] = useState(false)
+  const setOpen = (v: boolean) => {
+    setOpenState(v)
+    onOpenChange?.(v)
+  }
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
@@ -173,7 +180,7 @@ export function EmojiPicker({
 
 function PickerBody({ onPick }: { onPick: (value: string) => void }) {
   const [tab, setTab] = useState<'common' | 'workspace'>('common')
-  const { emoji, loading } = useCustomEmoji()
+  const { emoji, loading, error } = useCustomEmoji()
   const [q, setQ] = useState('')
   const tabBtn = (id: 'common' | 'workspace', label: string) => (
     <button
@@ -213,7 +220,14 @@ function PickerBody({ onPick }: { onPick: (value: string) => void }) {
           ))}
         </div>
       ) : (
-        <WorkspaceTab emoji={emoji} loading={loading} q={q} setQ={setQ} onPick={onPick} />
+        <WorkspaceTab
+          emoji={emoji}
+          loading={loading}
+          error={error}
+          q={q}
+          setQ={setQ}
+          onPick={onPick}
+        />
       )}
     </div>
   )
@@ -222,12 +236,14 @@ function PickerBody({ onPick }: { onPick: (value: string) => void }) {
 function WorkspaceTab({
   emoji,
   loading,
+  error,
   q,
   setQ,
   onPick
 }: {
   emoji: CustomEmoji[]
   loading: boolean
+  error: boolean
   q: string
   setQ: (v: string) => void
   onPick: (value: string) => void
@@ -239,6 +255,8 @@ function WorkspaceTab({
   const [adding, setAdding] = useState(false)
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
+  // Removing asks twice in place (the bin turns into "Remove?") — never a browser dialog.
+  const [armed, setArmed] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const shown = useMemo(
     () => emoji.filter((e) => !q.trim() || e.shortcode.includes(q.trim().toLowerCase())),
@@ -299,6 +317,10 @@ function WorkspaceTab({
               <Skeleton key={i} className='h-8 w-8 rounded-md' />
             ))}
           </div>
+        ) : error ? (
+          <p className='px-1 py-3 text-center text-[12px] text-slate-500 dark:text-slate-400'>
+            Workspace emoji could not be loaded.
+          </p>
         ) : shown.length === 0 ? (
           <p className='px-1 py-3 text-center text-[12px] text-slate-500 dark:text-slate-400'>
             {emoji.length === 0
@@ -324,17 +346,31 @@ function WorkspaceTab({
                   <button
                     type='button'
                     onClick={() => {
-                      if (!window.confirm(`Remove :${e.shortcode}:? It will show as text again.`))
+                      if (armed !== e.id) {
+                        setArmed(e.id)
                         return
+                      }
+                      setArmed(null)
                       void client
                         .request(del(`/chat/emoji/${e.id}`))
                         .then(refresh)
                         .catch(() => toast.error('Could not remove that emoji'))
                     }}
-                    className='absolute -right-0.5 -top-0.5 hidden h-4 w-4 items-center justify-center rounded-full bg-white text-slate-500 shadow ring-1 ring-slate-200 hover:text-red-600 group-hover/em:flex dark:bg-card dark:ring-border'
-                    aria-label={`Remove :${e.shortcode}:`}
+                    onBlur={() => setArmed((a) => (a === e.id ? null : a))}
+                    className={cn(
+                      'absolute -right-0.5 -top-0.5 z-[1] flex h-4 items-center justify-center rounded-full ring-1 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                      armed === e.id
+                        ? 'bg-red-600 px-1.5 text-[10px] font-medium text-white opacity-100 ring-red-600'
+                        : 'w-4 bg-white text-slate-500 opacity-0 ring-slate-200 hover:text-red-600 group-hover/em:opacity-100 dark:bg-card dark:text-slate-400 dark:ring-border'
+                    )}
+                    aria-label={
+                      armed === e.id
+                        ? `Confirm: remove :${e.shortcode}: (it shows as text again)`
+                        : `Remove :${e.shortcode}:`
+                    }
+                    data-tip={armed === e.id ? 'Click again — it shows as text again' : undefined}
                   >
-                    <Trash2 className='h-2.5 w-2.5' />
+                    {armed === e.id ? 'Remove?' : <Trash2 className='h-2.5 w-2.5' />}
                   </button>
                 )}
               </div>
@@ -349,7 +385,7 @@ function WorkspaceTab({
               <input
                 value={code}
                 onChange={(e) => setCode(e.target.value.toLowerCase().replace(/[^a-z0-9_+-]/g, ''))}
-                placeholder='shortcode'
+                placeholder='party_parrot'
                 maxLength={40}
                 className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] outline-none placeholder:text-slate-500 focus:border-nvr-cyan dark:border-border dark:bg-card'
                 aria-label='Emoji shortcode'
@@ -393,14 +429,16 @@ function WorkspaceTab({
 export function EmojiButton({
   onPick,
   className,
-  label = 'Emoji'
+  label = 'Emoji',
+  onOpenChange
 }: {
   onPick: (value: string) => void
   className?: string
   label?: string
+  onOpenChange?: (open: boolean) => void
 }) {
   return (
-    <EmojiPicker onPick={onPick}>
+    <EmojiPicker onPick={onPick} onOpenChange={onOpenChange}>
       <button
         type='button'
         className={cn(

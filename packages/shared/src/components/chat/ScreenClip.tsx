@@ -220,7 +220,7 @@ export function ScreenClipButton({
         phase === 'asking' && 'text-nvr-cyan'
       )}
       aria-label='Record a screen clip (up to 60 seconds)'
-      title='Record a screen clip — up to 60 s, with your microphone'
+      data-tip='Record a screen clip — up to 60 s, with your microphone'
       data-chat-clip='idle'
     >
       <Clapperboard className='h-4 w-4' strokeWidth={2} />

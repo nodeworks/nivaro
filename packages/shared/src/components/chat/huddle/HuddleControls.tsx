@@ -35,7 +35,7 @@ export function HuddleControls({
       <button
         type='button'
         onClick={() => (canOpenChatRoom() ? openChatRoom(other) : huddle.leave())}
-        className='flex h-7 items-center gap-1.5 rounded-md bg-nvr-cyan/10 px-2 text-[11px] font-medium text-slate-700 transition-colors hover:bg-nvr-cyan/20 dark:text-slate-100'
+        className='flex h-7 items-center gap-1.5 rounded-md bg-nvr-cyan/10 px-2 text-[11px] font-medium text-slate-700 transition-colors hover:bg-nvr-cyan/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-100'
         data-tip={canOpenChatRoom() ? 'Back to the room you are talking in' : 'Leave that huddle'}
         data-huddle-elsewhere
       >
@@ -136,7 +136,9 @@ export function HuddleControls({
             </span>
           ))}
         </span>
-        {roster.length > 3 && <span className='text-slate-500'>+{roster.length - 3}</span>}
+        {roster.length > 3 && (
+          <span className='text-slate-500 dark:text-slate-400'>+{roster.length - 3}</span>
+        )}
         <Headphones className='h-3.5 w-3.5 text-nvr-cyan' strokeWidth={2} />
         Join
       </button>

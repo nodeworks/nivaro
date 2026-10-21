@@ -1159,7 +1159,8 @@ export function ChatRoomView({
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
-  // #2763 — extension message actions; the toolbar stays up while its menu is open.
+  // #2763 — extension message actions; the toolbar stays up while its menu (or the
+  // reaction emoji picker) is open, or the popover loses its anchor.
   const msgActions = useMessageActions(room)
   const [actionsOpenId, setActionsOpenId] = useState<number | null>(null)
   const [preview, setPreview] = useState<PreviewFile | null>(null)
@@ -1563,6 +1564,7 @@ export function ChatRoomView({
                 label='More reactions'
                 className={toolBtn}
                 onPick={(emoji) => toggleReaction.mutate({ messageId: m.id, emoji })}
+                onOpenChange={(o) => setActionsOpenId(o ? m.id : null)}
               />
               {!opts.inThread && !m.parent_id && (
                 <button
@@ -2484,7 +2486,7 @@ export function ChatRoomView({
                         data-chat-unread-divider
                       >
                         <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
-                        <span className='text-[10px] font-semibold uppercase tracking-wide text-red-500'>
+                        <span className='text-[11px] font-semibold text-red-600 dark:text-red-400'>
                           New messages
                         </span>
                         {initialUnreadRef.current > 20 && (
@@ -3023,7 +3025,9 @@ export function ChatChannelSettings({
         {canEdit ? (
           <>
             <label className='block'>
-              <span className='mb-1 block text-[11px] font-medium text-slate-400'>Name</span>
+              <span className='mb-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+                Name
+              </span>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -3039,7 +3043,9 @@ export function ChatChannelSettings({
               </div>
             )}
             <label className='block'>
-              <span className='mb-1 block text-[11px] font-medium text-slate-400'>Topic</span>
+              <span className='mb-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+                Topic
+              </span>
               <input
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
@@ -3050,7 +3056,7 @@ export function ChatChannelSettings({
 
             {!isGeneral && (
               <div>
-                <span className='mb-1 block text-[11px] font-medium text-slate-400'>
+                <span className='mb-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400'>
                   Who can see it
                 </span>
                 <div className='flex flex-wrap gap-1.5'>

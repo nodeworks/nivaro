@@ -107,25 +107,31 @@ export function ChannelExtrasEditor({
 
       {channel.id !== 0 && (
         <div data-chat-channel-mention-policy>
-          <span className='mb-1 block text-[11px] font-medium text-slate-400'>
+          <span className='mb-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400'>
             Who can use @channel and @here
           </span>
           <SimpleSelect
             value={mentionPolicy}
             onChange={setMentionPolicy}
             ariaLabel='Who can use @channel and @here'
-            className='h-8 text-[12px]'
+            className='h-8 w-full max-w-[280px] text-[12px]'
             options={[
               { value: 'owner', label: 'Channel owner and admins' },
               { value: 'members', label: 'Every member' },
               { value: 'admins', label: 'Admins only' }
             ]}
           />
+          <p className='mt-1 text-[11px] leading-snug text-slate-500 dark:text-slate-400'>
+            They notify everyone in the channel (@here: everyone online). From anyone else they post
+            as plain text and notify nobody.
+          </p>
         </div>
       )}
 
       <label className='block'>
-        <span className='mb-1 block text-[11px] font-medium text-slate-400'>Description</span>
+        <span className='mb-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+          Description
+        </span>
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
@@ -140,7 +146,9 @@ export function ChannelExtrasEditor({
       </label>
 
       <div>
-        <span className='mb-1 block text-[11px] font-medium text-slate-400'>Links</span>
+        <span className='mb-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+          Links
+        </span>
         {links.map((l, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: rows are edited in place and have no id
           <div key={i} className='mb-1 flex items-center gap-1'>
@@ -191,7 +199,7 @@ export function ChannelExtrasEditor({
       </div>
 
       <label className='block'>
-        <span className='mb-1 block text-[11px] font-medium text-slate-400'>
+        <span className='mb-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400'>
           Welcome note — shown once to each new member
         </span>
         <textarea
@@ -209,7 +217,7 @@ export function ChannelExtrasEditor({
 
       {isAdmin && (
         <div>
-          <span className='mb-1 block text-[11px] font-medium text-slate-400'>
+          <span className='mb-1 block text-[11px] font-medium text-slate-500 dark:text-slate-400'>
             Join automatically — everyone with these roles
           </span>
           <div className='flex flex-wrap items-center gap-1'>

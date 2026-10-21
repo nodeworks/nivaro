@@ -9,7 +9,7 @@ import {
   Plug,
   Undo2
 } from 'lucide-react'
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useRef, useState } from 'react'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import {
@@ -363,12 +363,23 @@ function CallRow({
       >
         <td className='w-5 py-2 pl-1 pr-0'>
           {expandable && (
-            <ChevronRight
-              className={cn(
-                'h-3.5 w-3.5 text-slate-400 transition-transform duration-150',
-                openRow && 'rotate-90'
-              )}
-            />
+            <button
+              type='button'
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpenRow((v) => !v)
+              }}
+              aria-expanded={openRow}
+              aria-label={openRow ? 'Hide what this call changed' : 'Show what this call changed'}
+              className='flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:hover:text-slate-200'
+            >
+              <ChevronRight
+                className={cn(
+                  'h-3.5 w-3.5 transition-transform duration-150',
+                  openRow && 'rotate-90'
+                )}
+              />
+            </button>
           )}
         </td>
         <td
@@ -459,6 +470,7 @@ export function AgentsPanel({ className }: { className?: string }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [conn, setConn] = useState('')
+  const callsRef = useRef<HTMLDivElement>(null)
   const [notice, setNotice] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null)
 
   const connections = useQuery({
@@ -573,7 +585,10 @@ export function AgentsPanel({ className }: { className?: string }) {
                 <ConnectionRow
                   key={c.conn}
                   c={c}
-                  onShowCalls={() => setConn(c.conn)}
+                  onShowCalls={() => {
+                    setConn(c.conn)
+                    callsRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+                  }}
                   onDisconnect={() => disconnect.mutate(c.conn)}
                   disconnecting={disconnect.isPending && disconnect.variables === c.conn}
                 />
@@ -590,74 +605,76 @@ export function AgentsPanel({ className }: { className?: string }) {
         )}
       </SectionCard>
 
-      <SectionCard
-        icon={<ListChecks className='h-4 w-4' />}
-        title='What my agents did'
-        hint='Every tool call, newest first. Open one to see its changes and undo them.'
-        actions={
-          filterOptions.length > 2 ? (
-            <SimpleSelectXs
-              value={conn}
-              onChange={setConn}
-              options={filterOptions}
-              ariaLabel='Show calls from'
-            />
-          ) : null
-        }
-      >
-        {!logged ? (
-          <EmptyLine>
-            Tool calls are not recorded on this instance yet — it needs the latest update.
-          </EmptyLine>
-        ) : calls.isLoading ? (
-          <RowSkeleton rows={5} />
-        ) : calls.isError ? (
-          <EmptyLine>The list could not be loaded. Try again in a moment.</EmptyLine>
-        ) : rows.length === 0 ? (
-          <EmptyLine>
-            {conn
-              ? 'This app made no tool calls in the last 14 days.'
-              : 'Your agents made no tool calls in the last 14 days.'}
-          </EmptyLine>
-        ) : (
-          <div className='-mx-1 overflow-x-auto'>
-            <table className='w-full min-w-[640px] text-left text-[12px]'>
-              <thead>
-                <tr className='border-b border-slate-200 text-[11px] font-medium text-slate-500 dark:border-border dark:text-slate-400'>
-                  <th className='w-5' />
-                  <th className='py-1.5 pr-3 font-medium'>When</th>
-                  <th className='py-1.5 pr-3 font-medium'>App</th>
-                  <th className='py-1.5 pr-3 font-medium'>Tool</th>
-                  <th className='py-1.5 pr-3 font-medium'>Record</th>
-                  <th className='py-1.5 pr-3 font-medium'>Result</th>
-                  <th className='py-1.5 pr-1 text-right font-medium'>Answer</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((call) => (
-                  <CallRow
-                    key={call.id}
-                    call={call}
-                    onUndo={(w) => undo.mutate(w)}
-                    undoingId={undo.isPending ? (undo.variables?.activity_id ?? null) : null}
-                  />
-                ))}
-              </tbody>
-            </table>
-            {calls.hasNextPage && (
-              <button
-                type='button'
-                onClick={() => void calls.fetchNextPage()}
-                disabled={calls.isFetchingNextPage}
-                className='mt-3 inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 transition-colors hover:bg-muted disabled:opacity-40 dark:border-border dark:text-slate-200'
-              >
-                {calls.isFetchingNextPage && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
-                Show older calls
-              </button>
-            )}
-          </div>
-        )}
-      </SectionCard>
+      <div ref={callsRef} className='scroll-mt-4'>
+        <SectionCard
+          icon={<ListChecks className='h-4 w-4' />}
+          title='What my agents did'
+          hint='Every tool call, newest first. Open one to see its changes and undo them.'
+          actions={
+            filterOptions.length > 2 ? (
+              <SimpleSelectXs
+                value={conn}
+                onChange={setConn}
+                options={filterOptions}
+                ariaLabel='Show calls from'
+              />
+            ) : null
+          }
+        >
+          {!logged ? (
+            <EmptyLine>
+              Tool calls are not recorded on this instance yet — it needs the latest update.
+            </EmptyLine>
+          ) : calls.isLoading ? (
+            <RowSkeleton rows={5} />
+          ) : calls.isError ? (
+            <EmptyLine>The list could not be loaded. Try again in a moment.</EmptyLine>
+          ) : rows.length === 0 ? (
+            <EmptyLine>
+              {conn
+                ? 'This app made no tool calls in the last 14 days.'
+                : 'Your agents made no tool calls in the last 14 days.'}
+            </EmptyLine>
+          ) : (
+            <div className='-mx-1 overflow-x-auto'>
+              <table className='w-full min-w-[640px] text-left text-[12px]'>
+                <thead>
+                  <tr className='border-b border-slate-200 text-[11px] font-medium text-slate-500 dark:border-border dark:text-slate-400'>
+                    <th className='w-5' />
+                    <th className='py-1.5 pr-3 font-medium'>When</th>
+                    <th className='py-1.5 pr-3 font-medium'>App</th>
+                    <th className='py-1.5 pr-3 font-medium'>Tool</th>
+                    <th className='py-1.5 pr-3 font-medium'>Record</th>
+                    <th className='py-1.5 pr-3 font-medium'>Result</th>
+                    <th className='py-1.5 pr-1 text-right font-medium'>Answer size</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((call) => (
+                    <CallRow
+                      key={call.id}
+                      call={call}
+                      onUndo={(w) => undo.mutate(w)}
+                      undoingId={undo.isPending ? (undo.variables?.activity_id ?? null) : null}
+                    />
+                  ))}
+                </tbody>
+              </table>
+              {calls.hasNextPage && (
+                <button
+                  type='button'
+                  onClick={() => void calls.fetchNextPage()}
+                  disabled={calls.isFetchingNextPage}
+                  className='mt-3 inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 transition-colors hover:bg-muted disabled:opacity-40 dark:border-border dark:text-slate-200'
+                >
+                  {calls.isFetchingNextPage && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
+                  Show older calls
+                </button>
+              )}
+            </div>
+          )}
+        </SectionCard>
+      </div>
     </div>
   )
 }

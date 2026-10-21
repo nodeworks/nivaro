@@ -201,8 +201,8 @@ export function McpToolsPage() {
               <ListGroup label='From extensions' count={ext.length}>
                 {ext.length === 0 && (
                   <p className='px-3 pb-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
-                    No extension registers MCP tools. An extension adds one with
-                    ctx.mcp.registerTool.
+                    No extension registers MCP tools. An extension adds one with{' '}
+                    <code className='font-mono text-[11.5px]'>ctx.mcp.registerTool</code>.
                   </p>
                 )}
                 {ext.map((t) => (
