@@ -702,6 +702,12 @@ export interface ChatMessage {
   deleted_at?: ISODate | null
   attachments: string[]
   reactions: ChatReaction[]
+  /** Thread reply: the root it answers. */
+  parent_id?: number | null
+  /** Thread summary on a root. */
+  thread?: { count: number; last_reply_at: ISODate | null } | null
+  /** The connected app (an AI assistant over MCP) that posted it for the sender. */
+  via_app?: string | null
 }
 
 export interface ChatPin {
@@ -748,23 +754,35 @@ export function readChatDirectory(search?: string): Command<{ data: ChatDirector
   return cmd('GET', '/chat/directory', search ? { search } : undefined)
 }
 
-/** Newest messages in a room, ascending for rendering. `before` = message id cursor. */
+/**
+ * Newest messages in a room, ascending for rendering. `before` = message id cursor;
+ * `thread` = a root message id (its replies instead of the timeline).
+ */
 export function listChatMessages(
   room: string,
-  options?: { before?: number; limit?: number }
-): Command<{ data: ChatMessage[] }> {
+  options?: { before?: number; limit?: number; thread?: number }
+): Command<{
+  data: ChatMessage[]
+  meta?: { has_older: boolean; has_newer: boolean; anchor: number | null }
+}> {
   const params: Record<string, unknown> = { room }
   if (options?.before != null) params.before = options.before
   if (options?.limit != null) params.limit = options.limit
+  if (options?.thread != null) params.thread = options.thread
   return cmd('GET', '/chat/messages', params)
 }
 
-/** Send a message. `attachments` = uploaded nivaro_files ids; mentions notify explicitly. */
+/**
+ * Send a message. `attachments` = uploaded nivaro_files ids; mentions notify explicitly;
+ * `parent_id` replies in a thread; `client_id` makes a retry return the first send.
+ */
 export function sendChatMessage(body: {
   room: string
   message?: string
   mentions?: string[]
   attachments?: string[]
+  parent_id?: number | null
+  client_id?: string | null
 }): Command<{ data: ChatMessage }> {
   return cmd('POST', '/chat/messages', undefined, body)
 }

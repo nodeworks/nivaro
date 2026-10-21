@@ -46,6 +46,79 @@ interface ApiKey {
 const ACTIONS = ['create', 'read', 'update', 'delete'] as const
 const ALL_COLLECTIONS = '*'
 
+/**
+ * Chat for AI assistants (#2492): a `$chat` scope entry, never implied by `*`.
+ * Read = list rooms and read messages; post = also post (labelled with the key's name).
+ */
+const CHAT_SCOPE = '$chat'
+type ChatAccess = 'none' | 'read' | 'post'
+
+function chatAccessOf(scopes: ApiKeyScope[]): ChatAccess {
+  const actions = scopes.find((s) => s.collection === CHAT_SCOPE)?.actions ?? []
+  if (actions.includes('*') || actions.includes('create')) return 'post'
+  return actions.includes('read') ? 'read' : 'none'
+}
+
+function withChatAccess(scopes: ApiKeyScope[], access: ChatAccess): ApiKeyScope[] {
+  const rest = scopes.filter((s) => s.collection !== CHAT_SCOPE)
+  if (access === 'none') return rest
+  return [
+    ...rest,
+    { collection: CHAT_SCOPE, actions: access === 'post' ? ['read', 'create'] : ['read'] }
+  ]
+}
+
+const CHAT_OPTIONS: Array<{ value: ChatAccess; label: string }> = [
+  { value: 'none', label: 'Off' },
+  { value: 'read', label: 'Read' },
+  { value: 'post', label: 'Read and post' }
+]
+
+const CHAT_HINT: Record<ChatAccess, string> = {
+  none: 'AI assistants using this key get no chat tools and never see chat messages.',
+  read: "An assistant using this key (through MCP) can list the owner's rooms and read messages in the ones the owner can open.",
+  post: "An assistant using this key (through MCP) can also post in those rooms as the owner. Each message says it came through this key's name."
+}
+
+function ChatAccessControl({
+  value,
+  onChange,
+  disabled
+}: {
+  value: ChatAccess
+  onChange: (v: ChatAccess) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className='space-y-1.5'>
+      <fieldset
+        aria-label='Chat for AI assistants'
+        className='m-0 inline-flex min-w-0 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'
+        data-key-chat-access
+      >
+        {CHAT_OPTIONS.map((o) => (
+          <button
+            key={o.value}
+            type='button'
+            aria-pressed={value === o.value}
+            disabled={disabled}
+            onClick={() => onChange(o.value)}
+            className={cn(
+              'h-7 rounded px-3 text-[12px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:cursor-not-allowed disabled:opacity-60',
+              value === o.value
+                ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-slate-100'
+                : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+            )}
+          >
+            {o.label}
+          </button>
+        ))}
+      </fieldset>
+      <p className='text-[11px] text-slate-500 dark:text-slate-400'>{CHAT_HINT[value]}</p>
+    </div>
+  )
+}
+
 function CollectionCombobox({
   value,
   onChange,
@@ -208,6 +281,7 @@ interface FormState {
   rate_limit_per_minute: string
   scope_restrictions: string
   sandbox: boolean
+  chat: ChatAccess
 }
 
 const FORM_DEFAULTS: FormState = {
@@ -217,7 +291,8 @@ const FORM_DEFAULTS: FormState = {
   ip_allowlist: '',
   rate_limit_per_minute: '',
   scope_restrictions: '',
-  sandbox: false
+  sandbox: false,
+  chat: 'none'
 }
 
 function MetaCell({ label, value }: { label: string; value: React.ReactNode }) {
@@ -286,10 +361,23 @@ export function ApiKeysPage() {
     onError: () => toast.error('Failed to delete API key')
   })
 
+  const chatMut = useMutation({
+    mutationFn: ({ key, access }: { key: ApiKey; access: ChatAccess }) =>
+      api.patch(`/api-keys/${key.id}`, { scopes: withChatAccess(key.scopes, access) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['api-keys'] })
+      toast.success('Chat access saved')
+    },
+    onError: () => toast.error('Failed to save chat access')
+  })
+
   const selected = keys.find((k) => k.id === selectedId) ?? null
 
   const submitCreate = () => {
-    const scopes = form.scopes.filter((s) => s.collection && s.actions.length > 0)
+    const scopes = withChatAccess(
+      form.scopes.filter((s) => s.collection && s.actions.length > 0),
+      form.chat
+    )
     if (!form.name.trim()) return toast.error('Name is required')
     if (scopes.length === 0) return toast.error('At least one scope is required')
     const allowlist = form.ip_allowlist
@@ -506,6 +594,14 @@ export function ApiKeysPage() {
               </div>
 
               <div className='space-y-1.5'>
+                <Label>Chat for AI assistants</Label>
+                <ChatAccessControl
+                  value={form.chat}
+                  onChange={(chat) => setForm((f) => ({ ...f, chat }))}
+                />
+              </div>
+
+              <div className='space-y-1.5'>
                 <Label htmlFor='key-allowlist'>IP allowlist (one CIDR per line, optional)</Label>
                 <Textarea
                   id='key-allowlist'
@@ -635,28 +731,43 @@ export function ApiKeysPage() {
                   Scopes
                 </h3>
                 <div className='space-y-1.5'>
-                  {selected.scopes.length === 0 ? (
-                    <p className='text-[12px] text-slate-400'>No scopes — key has no access.</p>
+                  {selected.scopes.filter((s) => s.collection !== CHAT_SCOPE).length === 0 ? (
+                    <p className='text-[12px] text-slate-400'>
+                      No collection scopes — the key reads and writes no records.
+                    </p>
                   ) : (
-                    selected.scopes.map((scope) => (
-                      <div
-                        key={`${scope.collection}:${scope.actions.join(',')}`}
-                        className='flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
-                      >
-                        <code className='font-mono text-[12px] text-slate-700 dark:text-slate-200'>
-                          {scope.collection}
-                        </code>
-                        <div className='flex gap-1'>
-                          {scope.actions.map((a) => (
-                            <Badge key={a} className='h-4 px-1.5 text-[10px]'>
-                              {a}
-                            </Badge>
-                          ))}
+                    selected.scopes
+                      .filter((s) => s.collection !== CHAT_SCOPE)
+                      .map((scope) => (
+                        <div
+                          key={`${scope.collection}:${scope.actions.join(',')}`}
+                          className='flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
+                        >
+                          <code className='font-mono text-[12px] text-slate-700 dark:text-slate-200'>
+                            {scope.collection}
+                          </code>
+                          <div className='flex gap-1'>
+                            {scope.actions.map((a) => (
+                              <Badge key={a} className='h-4 px-1.5 text-[10px]'>
+                                {a}
+                              </Badge>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    ))
+                      ))
                   )}
                 </div>
+              </div>
+
+              <div className='space-y-2'>
+                <h3 className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+                  Chat for AI assistants
+                </h3>
+                <ChatAccessControl
+                  value={chatAccessOf(selected.scopes)}
+                  disabled={chatMut.isPending || !selected.is_active}
+                  onChange={(access) => chatMut.mutate({ key: selected, access })}
+                />
               </div>
 
               {selected.ip_allowlist.length > 0 && (

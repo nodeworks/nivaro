@@ -61,6 +61,8 @@ export const mcpDocs: DocSection = {
         'Create, update and delete records — creates rehearse first unless told to store, deletes need an explicit confirm — and move records through their pipeline.',
         'Work with My Work, queues, comments and mentions, tasks, revision history, custom queries, notifications, files (details only, never contents) and search.',
         'Ask Nivaro’s own data assistant (Ask AI) a question.',
+        'Read dashboards and reports: `list_dashboards` lists the dashboards and Report Studio reports you can open, `read_dashboard` gives a dashboard’s widget figures and `run_report` a report’s. Every figure is computed as you, the same way the widget computes it for you in the app — a widget you cannot see says so instead of showing a number. The saved filter bar and date range apply unless the assistant asks for others.',
+        'Chat, only when you allowed it: `list_chat_rooms`, `read_chat_messages` and `post_chat_message` reach only the rooms you can open. Posting rehearses first unless told to post, goes out as you, and every message shows **via** the app’s name beside it.',
         'Administrators also get read-only operations tools: health and readiness, runtime and database pool, Traffic Map summary, scheduled jobs and their runs, and a CPU profile of the API. Nothing restarts, pauses or reconfigures anything.',
         'Administrators also get layout tools: describe_layout (a form in plain terms, or every form of a collection), which_form (which form a record gets for a role, and why), explain_field (why a field shows, hides or is read-only for a role on a record) and propose_layout_ops. A proposal never changes a form: it waits under Proposals in the layout editor until an administrator tries it on the canvas and keeps it, or rejects it.'
       ]
@@ -70,10 +72,15 @@ export const mcpDocs: DocSection = {
       type: 'p',
       text: 'Signing in (OAuth) connects the assistant as you, with your permissions, and needs nothing stored on your machine; access tokens last an hour and renew themselves for 30 days of use. An API key gives you finer control: a key with **narrowed scopes** is held to them, a key with **row restrictions** sees only those rows, and a **sandbox** key can explore everything and never changes anything — a safe way to try an assistant out.'
     },
+    { type: 'h2', id: 'mcp-chat', text: 'Chat needs its own permission' },
+    {
+      type: 'p',
+      text: 'Chat is never part of a connection by default. When you sign in, the consent page has a box **Also let it read and post in your chat conversations** — ticked only if the app asked for chat, and yours to untick. Without it the connection gets no chat tools, is refused on every chat route, and sees chat notifications only as "a chat message", never their words. Connecting again with a different choice changes the existing connection at once. For an API key, an administrator sets **Chat for AI assistants** on the key (Off, Read, or Read and post); `*` scopes never include chat. Messages an assistant posts with a key are labelled with the key’s name.'
+    },
     { type: 'h2', id: 'mcp-connections', text: 'Connected apps' },
     {
       type: 'p',
-      text: 'Every assistant you allowed is a connection: `GET /api/oauth/connections` lists them (name, when you connected, when it was last used) and `DELETE /api/oauth/connections/:id` disconnects one — its tokens stop working at once. Connecting and disconnecting are logged in Activity (`oauth-connect`, `oauth-revoke`). Suspending an account ends its connections too: every request checks the account is still active.'
+      text: 'Every assistant you allowed is a connection: `GET /api/oauth/connections` lists them (name, when you connected, when it was last used, and whether it may use chat) and `DELETE /api/oauth/connections/:id` disconnects one — its tokens stop working at once. Connecting and disconnecting are logged in Activity (`oauth-connect`, `oauth-revoke`). Suspending an account ends its connections too: every request checks the account is still active.'
     },
     { type: 'h2', id: 'mcp-settings', text: 'Settings and how it works' },
     {
@@ -82,6 +89,7 @@ export const mcpDocs: DocSection = {
         '`MCP_HTTP=off` turns the hosted endpoint off (the npm server keeps working with a key); `MCP_OAUTH=off` turns sign-in off and leaves API keys working on `/api/mcp`.',
         '`MCP_PUBLIC_URL` names the address assistants reach this API on, when it is not the API’s own host — the sign-in must start and end there, and that address must be registered with your identity provider.',
         'Discovery: `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`. Clients register themselves (`/oauth/register`, public clients only), must use PKCE (S256), and may only return to https addresses or to `localhost` on your machine.',
+        'The npm server asks `GET /api/mcp/capabilities` at startup which optional tools the key gets (`admin_tools`, `chat`: none, read or post).',
         'Each `/api/mcp` request is answered on its own (no server-side session), so any API replica can serve it, and every tool call inside it is an ordinary API request — rate limits, the maintenance freeze and the request log apply to each call. Traffic Map counts connected assistants with people.'
       ]
     }

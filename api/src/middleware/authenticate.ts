@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { ACCESS_PREFIX } from '../lib/oauth.js'
+import { ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
-import { mcpOAuthEnabled, oauthAudienceRefusal } from '../services/mcp-config.js'
+import { mcpOAuthEnabled, oauthAudienceRefusal, oauthScopeRefusal } from '../services/mcp-config.js'
 import { resolveAccessToken } from '../services/oauth-store.js'
 import { notePrincipalKind } from '../services/permission-cache.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
@@ -37,6 +37,11 @@ declare module 'fastify' {
     /** Set when the request authenticated with an OAuth access token (nvo_*) from a connected app. */
     oauthClientId?: string
     oauthGrantId?: string
+    /** The connected app's registered name and its grant's scope tokens (#2492). */
+    oauthClientName?: string
+    oauthScopes?: string[]
+    /** The API key's own name — labels chat messages an assistant posts with it (#2492). */
+    apiKeyName?: string
     /** An in-process tool call made by POST /api/mcp (services/mcp-config.ts). */
     mcpInner?: boolean
   }
@@ -318,6 +323,7 @@ async function applyApiKey(
   // them: every permission-checked read and write is held to them.
   if (!scopesAreOpen(req.apiKeyScopes)) user.api_key_scopes = req.apiKeyScopes
   req.apiKeyRateLimit = key.rate_limit_per_minute ?? null
+  req.apiKeyName = key.name
   if (simulated) return
   req.apiKeyId = Number(key.id)
 
@@ -430,9 +436,14 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
           throw httpError(401, 'The account behind this token is not active', 'ACCOUNT_NOT_ACTIVE')
         const refusal = oauthAudienceRefusal(req)
         if (refusal) throw httpError(403, refusal, 'OAUTH_TOKEN_AUDIENCE')
+        const scopes = scopeTokens(rec.scope)
+        const scopeRefusal = oauthScopeRefusal(req, scopes)
+        if (scopeRefusal) throw httpError(403, scopeRefusal, 'OAUTH_SCOPE_MISSING')
         await hydrateRole(req, user)
         req.oauthClientId = rec.client_id
         req.oauthGrantId = rec.grant_id
+        req.oauthClientName = rec.client_name
+        req.oauthScopes = scopes
         return
       }
       // Static user token

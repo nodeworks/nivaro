@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { authenticate } from '../middleware/authenticate.js'
+import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import {
   MCP_INNER_HEADER,
+  mcpAdminTools,
+  mcpChatAccess,
   mcpHttpEnabled,
   mcpInnerHeaderValue,
   mcpOAuthEnabled,
@@ -114,7 +116,10 @@ export async function mcpRoutes(app: FastifyInstance) {
       token,
       fetch: injectFetch(app, req),
       // Administrator tools only for an administrator who is not on a collection-scoped key.
-      adminTools: !!req.isAdmin && !req.user?.api_key_scopes
+      adminTools: mcpAdminTools(req),
+      // Chat tools only for a connection allowed chat (#2492): the OAuth chat scope or a
+      // key's $chat scope. Without it the server never registers them.
+      chatAccess: mcpChatAccess(req)
     } as Parameters<typeof createNivaroMcpServer>[0])
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -142,6 +147,15 @@ export async function mcpRoutes(app: FastifyInstance) {
       }
     }
   })
+
+  /**
+   * GET /api/mcp/capabilities — which optional tool sets this credential gets. The
+   * npm stdio server asks at startup (an OAuth connection never needs to: the
+   * hosted endpoint above decides for it).
+   */
+  app.get('/mcp/capabilities', { preHandler: requireAuth }, async (req) => ({
+    data: { admin_tools: mcpAdminTools(req), chat: mcpChatAccess(req) }
+  }))
 
   // Stateless server: no standalone event stream and no sessions to end.
   const notAllowed = async (_req: FastifyRequest, reply: FastifyReply) =>

@@ -319,6 +319,75 @@ describe('OAuth for remote MCP clients', () => {
     expect(await resolveAccessToken(redis as never, ref.json().access_token)).toBeNull()
   })
 
+  it("chat is the person's choice on the consent page and rides the grant (#2492)", async () => {
+    const reg = await app.inject({
+      method: 'POST',
+      url: '/oauth/register',
+      payload: { client_name: 'Claude', redirect_uris: ['https://claude.ai/cb'] }
+    })
+    const clientId = reg.json().client_id as string
+    const p = {
+      client_id: clientId,
+      redirect_uri: 'https://claude.ai/cb',
+      response_type: 'code',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state: 's',
+      scope: 'nivaro chat'
+    }
+    const as = (await app.inject({ url: '/.well-known/oauth-authorization-server' })).json()
+    expect(as.scopes_supported).toEqual(['nivaro', 'chat'])
+    session.userId = 'U1'
+    session.authAt = Date.now()
+    const page = await app.inject({ url: `/oauth/authorize?${new URLSearchParams(p)}` })
+    // Asked for chat → the box is pre-ticked; the person may still untick it.
+    expect(page.body).toMatch(/name="chat" value="1" checked/)
+    const consent = async (chat: boolean) => {
+      await app.inject({ url: `/oauth/authorize?${new URLSearchParams(p)}` })
+      const allow = await app.inject({
+        method: 'POST',
+        url: '/oauth/authorize',
+        ...form({
+          ...p,
+          csrf: session.oauthCsrf as string,
+          decision: 'allow',
+          ...(chat ? { chat: '1' } : {})
+        })
+      })
+      const code = new URL(String(allow.headers.location)).searchParams.get('code') as string
+      return (
+        await app.inject({
+          method: 'POST',
+          url: '/oauth/token',
+          ...form({
+            grant_type: 'authorization_code',
+            code,
+            client_id: clientId,
+            redirect_uri: 'https://claude.ai/cb',
+            code_verifier: verifier
+          })
+        })
+      ).json()
+    }
+    const withChat = await consent(true)
+    expect(withChat.scope).toBe('nivaro chat')
+    expect(await resolveAccessToken(redis as never, withChat.access_token)).toMatchObject({
+      scope: 'nivaro chat',
+      client_name: 'Claude'
+    })
+    // A second consent without chat takes it away from the earlier token too.
+    const without = await consent(false)
+    expect(without.scope).toBe('nivaro')
+    expect(await resolveAccessToken(redis as never, withChat.access_token)).toMatchObject({
+      scope: 'nivaro'
+    })
+    // An unknown scope is still refused before anything else.
+    const bad = await app.inject({
+      url: `/oauth/authorize?${new URLSearchParams({ ...p, scope: 'nivaro admin' })}`
+    })
+    expect(bad.statusCode).toBe(400)
+  })
+
   it('Cancel sends access_denied back to the client', async () => {
     const reg = await app.inject({
       method: 'POST',

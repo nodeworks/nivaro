@@ -52,7 +52,19 @@ export function summarizeTask(t: Row): Row {
   return out
 }
 
-function summarizeNotification(n: Row): Row {
+/**
+ * A chat notification (a mention, an urgent DM) quotes the message. A connection
+ * that was not allowed chat (#2492) sees that one arrived, never what it said.
+ */
+function summarizeNotification(n: Row, chat = true): Row {
+  if (!chat && n.collection === '__chat__') {
+    return {
+      id: n.id,
+      unread: n.status === 'inbox',
+      at: n.timestamp ?? n.created_at ?? null,
+      chat_hidden: 'A chat message. This connection is not allowed to read chat.'
+    }
+  }
   const out: Row = {
     id: n.id,
     subject: n.subject ?? n.title ?? null,
@@ -69,7 +81,13 @@ function summarizeNotification(n: Row): Row {
 const ownerName = (o: QueueOwner | null | undefined) =>
   o ? personName(o.first_name, o.last_name, o.email) : null
 
-export function registerWorkTools(server: McpServer, client: NivaroClient) {
+export function registerWorkTools(
+  server: McpServer,
+  client: NivaroClient,
+  options: { chat?: boolean } = {}
+) {
+  const chat = options.chat === true
+  const note = (n: Row) => summarizeNotification(n, chat)
   server.registerTool(
     'my_work',
     {
@@ -109,7 +127,7 @@ export function registerWorkTools(server: McpServer, client: NivaroClient) {
           team_tasks: take('team_tasks').map(summarizeTask),
           requested: take('requested').map(summarizeTask),
           approvals: take('approvals'),
-          notifications: take('notifications').map(summarizeNotification)
+          notifications: take('notifications').map(note)
         }
         if (truncated.length > 0) {
           out.truncated = truncated
@@ -345,7 +363,7 @@ export function registerWorkTools(server: McpServer, client: NivaroClient) {
           listNotifications({ status: unread_only ? 'inbox' : 'all', page: at, limit: size })
         )
         return ok({
-          notifications: res.data.map((n) => summarizeNotification(n as unknown as Row)),
+          notifications: res.data.map((n) => note(n as unknown as Row)),
           total: res.total,
           page: at,
           limit: size,

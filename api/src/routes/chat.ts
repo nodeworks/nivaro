@@ -21,17 +21,6 @@ import {
 } from '../services/chat.js'
 import { botUserId, chatBotName } from '../services/chat-bot.js'
 import { recordChatDelivery } from '../services/chat-health.js'
-import { clearRoomTypeCache, roomForRecord, roomRecordFacts } from '../services/chat-records.js'
-import {
-  ChatSendError,
-  chatColumns,
-  parseJsonList,
-  postChatMessage,
-  changeChatMessage,
-  redeemReplyToken,
-  touchWatermark,
-  upsertMembership
-} from '../services/chat-send.js'
 import {
   castVote,
   closeDuePolls,
@@ -39,8 +28,20 @@ import {
   createPoll,
   loadPolls
 } from '../services/chat-polls.js'
+import { clearRoomTypeCache, roomForRecord, roomRecordFacts } from '../services/chat-records.js'
 import { dropEmbedding, indexChatMessage, searchByMeaning } from '../services/chat-semantic.js'
+import {
+  ChatSendError,
+  changeChatMessage,
+  chatColumns,
+  parseJsonList,
+  postChatMessage,
+  redeemReplyToken,
+  touchWatermark,
+  upsertMembership
+} from '../services/chat-send.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
+import { mcpAppLabel } from '../services/mcp-config.js'
 import {
   loadVisibleMessage,
   nonAdminsFor,
@@ -326,7 +327,8 @@ export async function chatRoutes(app: FastifyInstance) {
         {
           user: req.user!,
           isAdmin: !!req.isAdmin,
-          masqueradeAdminId: req.masqueradeAdminId ?? null
+          masqueradeAdminId: req.masqueradeAdminId ?? null,
+          viaApp: mcpAppLabel(req)
         },
         {
           room: String(b.room ?? ''),

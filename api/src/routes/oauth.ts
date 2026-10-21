@@ -5,9 +5,14 @@ import { db } from '../db/index.js'
 import {
   cleanClientName,
   escapeHtml,
+  grantedScope,
   isAllowedRedirectUri,
+  OAUTH_CHAT_SCOPE,
   OAUTH_SCOPE,
+  OAUTH_SCOPES,
+  offeredScope,
   redirectMatches,
+  scopeTokens,
   verifyPkceS256,
   withAuthResponse
 } from '../lib/oauth.js'
@@ -18,6 +23,7 @@ import {
   consumeCode,
   consumeRefresh,
   getClient,
+  grantScope,
   issueCode,
   issueTokens,
   listGrants,
@@ -66,7 +72,7 @@ function protectedResourceDoc() {
     resource: mcpResourceUrl(),
     authorization_servers: [mcpPublicOrigin()],
     bearer_methods_supported: ['header'],
-    scopes_supported: [OAUTH_SCOPE],
+    scopes_supported: [...OAUTH_SCOPES],
     resource_name: 'Nivaro',
     resource_documentation: 'https://nivaro.dev/docs.html#s-mcp'
   }
@@ -85,7 +91,7 @@ function authorizationServerDoc() {
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
     revocation_endpoint_auth_methods_supported: ['none'],
-    scopes_supported: [OAUTH_SCOPE],
+    scopes_supported: [...OAUTH_SCOPES],
     authorization_response_iss_parameter_supported: true
   }
 }
@@ -135,9 +141,9 @@ async function checkAuthorize(app: FastifyInstance, p: AuthorizeParams): Promise
   if (p.response_type !== 'code') return fail('This app asked for an unsupported response type.')
   if (p.code_challenge_method !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(p.code_challenge))
     return fail('This app did not use PKCE (S256), which Nivaro requires.')
-  if (p.scope && !p.scope.split(/\s+/).every((s) => s === OAUTH_SCOPE || s === ''))
+  if (!offeredScope(p.scope))
     return fail(
-      `This app asked for a scope Nivaro does not offer (the only one is ${OAUTH_SCOPE}).`
+      `This app asked for a scope Nivaro does not offer (they are ${OAUTH_SCOPES.join(' and ')}).`
     )
   if (!acceptableResource(p.resource)) return fail('This app asked for access to another server.')
   return { ok: true, client, p }
@@ -154,6 +160,7 @@ main{width:100%;max-width:440px;background:var(--card);border:1px solid var(--li
 h1{font-size:18px;margin:0 0 12px}p{margin:0 0 12px;color:var(--muted)}strong{color:var(--fg)}
 ul{margin:0 0 16px;padding-left:18px;color:var(--muted)}.who{font-size:12.5px;border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
 .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.opt{display:flex;gap:8px;align-items:flex-start;margin:0 0 16px;color:var(--fg);cursor:pointer}.opt input{margin:3px 0 0;accent-color:var(--accent)}.opt span span{display:block;color:var(--muted);font-size:12.5px}
 button{font:inherit;border-radius:6px;padding:8px 14px;cursor:pointer;border:1px solid var(--line);background:var(--btn);color:var(--fg)}
 button.allow{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
 </style></head><body><main>${body}</main></body></html>`
@@ -164,6 +171,8 @@ function consentPage(client: OAuthClient, p: AuthorizeParams, user: User, csrf: 
   const who = escapeHtml(
     [user.first_name, user.last_name].filter(Boolean).join(' ') || String(user.email ?? user.id)
   )
+  // Chat (#2492) is the person's choice, pre-ticked only when the app asked for it.
+  const askedChat = scopeTokens(p.scope).includes(OAUTH_CHAT_SCOPE)
   const hidden = Object.entries({ ...p, csrf })
     .filter(([, v]) => v != null)
     .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(String(v))}">`)
@@ -176,6 +185,8 @@ function consentPage(client: OAuthClient, p: AuthorizeParams, user: User, csrf: 
 <li>Its actions are recorded as yours.</li>
 <li>You can disconnect it at any time from your profile.</li></ul>
 <form method="post" action="/oauth/authorize">${hidden}
+<label class="opt"><input type="checkbox" name="chat" value="1"${askedChat ? ' checked' : ''}>
+<span>Also let it read and post in your chat conversations<span>Only rooms you can open. Its messages say they came from ${name}.</span></span></label>
 <div class="who">Signed in as <strong>${who}</strong></div>
 <div class="row"><button type="submit" name="decision" value="deny">Cancel</button>
 <button type="submit" name="decision" value="allow" class="allow">Allow</button></div></form>`
@@ -328,7 +339,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         token_endpoint_auth_method: 'none',
         grant_types: ['authorization_code', 'refresh_token'],
         response_types: ['code'],
-        scope: OAUTH_SCOPE
+        scope: OAUTH_SCOPES.join(' ')
       })
   })
 
@@ -373,7 +384,8 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
           iss: mcpPublicOrigin()
         })
       )
-    const grant = await upsertGrant(app.redis, String(user.id), checked.client)
+    const scope = grantedScope(body.chat === '1' || body.chat === 'on')
+    const grant = await upsertGrant(app.redis, String(user.id), checked.client, scope)
     const code = await issueCode(app.redis, {
       client_id: checked.client.client_id,
       user_id: String(user.id),
@@ -385,7 +397,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     await logActivity({
       action: 'oauth-connect',
       user: user.id,
-      comment: `${checked.client.client_name} (${new URL(p.redirect_uri).host})`,
+      comment: `${checked.client.client_name} (${new URL(p.redirect_uri).host})${scope === OAUTH_SCOPE ? '' : ` · ${scope}`}`,
       req
     }).catch(() => {})
     return reply.redirect(
@@ -425,7 +437,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       })
       return reply
         .header('Cache-Control', 'no-store')
-        .send({ ...tokens, token_type: 'Bearer', scope: OAUTH_SCOPE })
+        .send({ ...tokens, token_type: 'Bearer', scope: await grantScope(app.redis, rec.grant_id) })
     }
 
     if (grantType === 'refresh_token') {
@@ -439,7 +451,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       const tokens = await issueTokens(app.redis, rec)
       return reply
         .header('Cache-Control', 'no-store')
-        .send({ ...tokens, token_type: 'Bearer', scope: OAUTH_SCOPE })
+        .send({ ...tokens, token_type: 'Bearer', scope: await grantScope(app.redis, rec.grant_id) })
     }
 
     return oauthError(
@@ -467,7 +479,9 @@ export async function oauthConnectionRoutes(app: FastifyInstance) {
         id: g.id,
         client_name: g.client_name,
         created_at: g.created_at,
-        last_used_at: g.last_used_at
+        last_used_at: g.last_used_at,
+        scope: g.scope || OAUTH_SCOPE,
+        chat: scopeTokens(g.scope).includes(OAUTH_CHAT_SCOPE)
       }))
     }
   })

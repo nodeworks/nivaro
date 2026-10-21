@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
+import { OAUTH_CHAT_SCOPE } from '../lib/oauth.js'
 
 /**
  * Remote MCP settings (env only):
@@ -95,4 +96,62 @@ export function oauthAudienceRefusal(req: FastifyRequest): string | null {
   if (m !== 'GET' && m !== 'HEAD' && OAUTH_NO_WRITE.test(path))
     return 'A connected app cannot use this route'
   return null
+}
+
+// ─── Chat consent (#2492) ──────────────────────────────────────────────────
+
+/**
+ * The API-key scope entry that lets an AI assistant use chat through MCP:
+ * `{ collection: '$chat', actions: ['read'] | ['read', 'create'] }`. Never
+ * implied by `*` — a key made before chat tools existed does not gain them.
+ */
+export const CHAT_KEY_SCOPE = '$chat'
+
+export type McpChatAccess = 'none' | 'read' | 'post'
+
+type KeyScope = { collection: string; actions: string[] }
+
+/** What a key's scope list allows in chat. */
+export function keyChatAccess(scopes: KeyScope[] | null | undefined): McpChatAccess {
+  const entry = (scopes ?? []).find((s) => s?.collection === CHAT_KEY_SCOPE)
+  const actions = Array.isArray(entry?.actions) ? entry.actions : []
+  if (actions.includes('*') || actions.includes('create')) return 'post'
+  return actions.includes('read') ? 'read' : 'none'
+}
+
+/**
+ * The chat tools a connection gets: an OAuth connection the person allowed chat
+ * for may read and post; an API key gets what its `$chat` scope says; anything
+ * else (static tokens, sessions, masquerade) gets none.
+ */
+export function mcpChatAccess(req: FastifyRequest): McpChatAccess {
+  if (req.authMethod === 'oauth')
+    return req.oauthScopes?.includes(OAUTH_CHAT_SCOPE) ? 'post' : 'none'
+  if (req.authMethod === 'api_key' || req.authMethod === 'key_sim')
+    return keyChatAccess(req.apiKeyScopes)
+  return 'none'
+}
+
+/** Administrator tools: an administrator who is not on a collection-scoped key. */
+export const mcpAdminTools = (req: FastifyRequest) => !!req.isAdmin && !req.user?.api_key_scopes
+
+const CHAT_PATH = /^\/api\/chat(\/|$)/
+
+/** An OAuth connection without the chat scope is refused on every chat route. */
+export function oauthScopeRefusal(req: FastifyRequest, scopes: string[]): string | null {
+  if (CHAT_PATH.test(normalizedPath(req.url ?? '')) && !scopes.includes(OAUTH_CHAT_SCOPE))
+    return 'This connection was not allowed to use chat'
+  return null
+}
+
+/**
+ * The name a chat message posted through MCP is labelled with: the connected
+ * app's registered name, else the API key's name. Null for anything that did
+ * not come through the MCP server (the browser, flows, other integrations).
+ */
+export function mcpAppLabel(req: FastifyRequest): string | null {
+  const viaMcp = !!req.mcpInner || req.headers['x-nivaro-app'] === 'mcp'
+  if (!viaMcp && req.authMethod !== 'oauth') return null
+  const name = (req.oauthClientName ?? req.apiKeyName ?? '').trim()
+  return (name || 'AI assistant').slice(0, 80)
 }
