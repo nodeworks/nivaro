@@ -64,6 +64,8 @@ export interface GroupPatch {
   hidden_for_roles?: string | null
   locked_for_roles?: string | null
   read_width?: string | null
+  /** #2608: an editor-only note, JSON {text, by, by_name, at}. Never sent to record pages. */
+  editor_note?: string | null
 }
 
 export interface GroupRow {
@@ -88,6 +90,8 @@ export interface GroupRow {
   hidden_for_roles: string | null
   locked_for_roles: string | null
   read_width: string | null
+  /** #2608 — absent on databases without the column (migration 460). */
+  editor_note?: string | null
 }
 
 /** The layout settings PATCH /collection-layouts/:id accepts. */
@@ -184,6 +188,9 @@ export const PLACEMENT_PATCH_KEYS = [
   'show_approval_chain'
 ] as const
 
+/** #2608: the longest stored editor note (the JSON around its text included). */
+export const EDITOR_NOTE_MAX = 4000
+
 export const GROUP_PATCH_KEYS = [
   'label',
   'type',
@@ -201,7 +208,8 @@ export const GROUP_PATCH_KEYS = [
   'visible_when',
   'hidden_for_roles',
   'locked_for_roles',
-  'read_width'
+  'read_width',
+  'editor_note'
 ] as const
 
 export const LAYOUT_PATCH_KEYS = [
