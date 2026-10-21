@@ -153,6 +153,7 @@ export function HuddleStage({
     <div
       className='shrink-0 border-b border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-border dark:bg-background motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200'
       data-huddle-stage
+      data-huddle-mode={state.mode}
     >
       <div className='flex flex-wrap items-center gap-1.5 text-[11px]'>
         <span className='inline-flex items-center gap-1 font-medium text-slate-700 dark:text-slate-200'>

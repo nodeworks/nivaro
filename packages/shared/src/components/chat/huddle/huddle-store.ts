@@ -12,10 +12,16 @@
  *
  * Nothing here imports socket.io: the transport is the host's RealtimeAdapter
  * (`on` / `emit`), which admin and portals already mount.
+ *
+ * Large huddles (#2859): when the server says the huddle outgrew the mesh
+ * (`huddle:mode {mode:'sfu'}`, or `mode` on huddle:joined) the store moves to
+ * a LiveKit SFU through huddle-sfu.ts — same roster, same controls, same
+ * hidden audio elements; the mesh links stay open for MESH_OVERLAP_MS so
+ * nobody hears a gap, then close. A huddle never goes back to mesh mid-call.
  */
-
 import { huddleLive } from './huddle-live'
 import { aggregateQuality, type LinkSummary, summarizeStats } from './huddle-quality'
+import { MESH_OVERLAP_MS, SfuSession, type SfuTokenConfig } from './huddle-sfu'
 
 export interface HuddlePeer {
   socket: string
@@ -39,6 +45,7 @@ export interface IceConfig {
 }
 
 export type HuddleStatus = 'idle' | 'joining' | 'live' | 'error'
+export type HuddleMode = 'mesh' | 'sfu'
 
 export interface LivePeer extends HuddlePeer {
   /** The peer's microphone, once the connection delivered it. */
@@ -59,6 +66,8 @@ export interface HuddleState {
   localScreen: MediaStream | null
   startedAt: number | null
   peers: LivePeer[]
+  /** How media travels (#2859): browser to browser, or through the instance's SFU. */
+  mode: HuddleMode
 }
 
 const IDLE: HuddleState = {
@@ -70,7 +79,8 @@ const IDLE: HuddleState = {
   sharing: false,
   localScreen: null,
   startedAt: null,
-  peers: []
+  peers: [],
+  mode: 'mesh'
 }
 
 /** Every 15 s the server hears we are still here (it forgets us after 45 s). */
@@ -149,6 +159,12 @@ class HuddleStore {
   /** #2849 — the latest stats per peer link (sampled on each ping) and the ICE failures seen. */
   private linkStats = new Map<string, LinkSummary>()
   private iceFailed = 0
+  /** #2859: the SFU link while the huddle is large; mesh links close once it carries audio. */
+  private sfu: SfuSession | null = null
+  private fetchSfu: ((room: string, socket: string) => Promise<SfuTokenConfig>) | null = null
+  private meshCloseTimer: ReturnType<typeof setTimeout> | null = null
+  /** Peers whose audio already comes through the SFU (the mesh may close once all do). */
+  private sfuAudio = new Set<string>()
 
   // ── React plumbing ────────────────────────────────────────────────────────
   subscribe = (l: Listener) => {
@@ -182,8 +198,13 @@ class HuddleStore {
 
   // ── Transport ─────────────────────────────────────────────────────────────
   /** Bind the host's socket adapter once; later calls with the same adapter are no-ops. */
-  attach(transport: HuddleTransport, fetchIce: (room: string) => Promise<IceConfig>) {
+  attach(
+    transport: HuddleTransport,
+    fetchIce: (room: string) => Promise<IceConfig>,
+    fetchSfu?: (room: string, socket: string) => Promise<SfuTokenConfig>
+  ) {
     this.fetchIce = fetchIce
+    this.fetchSfu = fetchSfu ?? null
     if (this.transport === transport) return
     for (const off of this.offs) off()
     this.transport = transport
@@ -197,6 +218,8 @@ class HuddleStore {
       transport.on('huddle:denied', (p: { room: string | null; reason: string }) =>
         this.onDenied(p)
       ),
+      // #2859: the huddle outgrew the mesh — everyone moves to the SFU.
+      transport.on('huddle:mode', (p: { room: string; mode: HuddleMode }) => this.onMode(p)),
       // A reconnect is a new server socket: join again and rebuild every link.
       transport.on('auth:ok', () => {
         if (this.state.room && this.state.status === 'live') {
@@ -262,21 +285,25 @@ class HuddleStore {
   private teardown() {
     if (this.ping) clearInterval(this.ping)
     this.ping = null
-    for (const [socket, link] of this.links) {
-      link.pc.close()
-      this.dropAudio(socket)
-    }
+    if (this.meshCloseTimer) clearTimeout(this.meshCloseTimer)
+    this.meshCloseTimer = null
+    this.sfu?.disconnect()
+    this.sfu = null
+    this.sfuAudio.clear()
+    for (const [, link] of this.links) this.closeLink(link)
     this.links.clear()
+    for (const socket of [...this.audio.keys()]) this.dropAudio(socket)
     for (const t of this.mic?.getTracks() ?? []) t.stop()
     this.mic = null
     for (const t of this.state.localScreen?.getTracks() ?? []) t.stop()
     this.set({ ...IDLE, muted: this.state.muted })
   }
 
-  private onJoined(p: { room: string; self: string; peers: HuddlePeer[] }) {
+  private onJoined(p: { room: string; self: string; peers: HuddlePeer[]; mode?: HuddleMode }) {
     if (p.room !== this.state.room) return
     // A rejoin after a reconnect: every old link names a socket id that is gone.
-    if (this.state.self && this.state.self !== p.self) {
+    const rejoined = !!this.state.self && this.state.self !== p.self
+    if (rejoined) {
       for (const [socket, link] of this.links) {
         link.pc.close()
         this.dropAudio(socket)
@@ -285,8 +312,11 @@ class HuddleStore {
     }
     const peers = mergeRoster([], p.peers, p.self)
     const since = Math.min(Date.now(), ...p.peers.map((x) => x.since).filter(Boolean))
-    this.set({ status: 'live', self: p.self, peers, startedAt: since, error: null })
-    for (const peer of peers) void this.link(peer.socket)
+    const mode: HuddleMode = p.mode === 'sfu' ? 'sfu' : 'mesh'
+    this.set({ status: 'live', self: p.self, peers, startedAt: since, error: null, mode })
+    // #2859: a huddle already on the SFU (or a new socket id after a reconnect) joins it directly.
+    if (mode === 'sfu') void this.enterSfu(rejoined)
+    else for (const peer of peers) void this.link(peer.socket)
     if (this.ping) clearInterval(this.ping)
     this.ping = setInterval(() => {
       if (this.state.room) this.transport?.emit('huddle:ping', { room: this.state.room })
@@ -301,9 +331,11 @@ class HuddleStore {
     }
   }
 
-  private onPeers(p: { room: string; peers: HuddlePeer[] }) {
+  private onPeers(p: { room: string; peers: HuddlePeer[]; mode?: HuddleMode }) {
     this.setRoster(p.room, p.peers)
     if (p.room !== this.state.room || this.state.status !== 'live') return
+    // #2859: the roster says the huddle is on the SFU (a missed huddle:mode) — move too.
+    if (p.mode === 'sfu' && this.state.mode !== 'sfu') void this.enterSfu(false)
     const self = this.state.self
     const peers = mergeRoster(this.state.peers, p.peers, self)
     // Links to people who left close; people who arrived get one.
@@ -311,13 +343,24 @@ class HuddleStore {
       if (!peers.some((x) => x.socket === socket)) {
         link.pc.close()
         this.links.delete(socket)
-        this.dropAudio(socket)
       }
+    }
+    // Their audio element goes with them, whichever way the sound came (mesh or SFU).
+    for (const socket of [...this.audio.keys()]) {
+      if (!peers.some((x) => x.socket === socket)) this.dropAudio(socket)
     }
     // A link whose tracks arrived before the roster named the peer: pick them up now.
     for (const peer of peers) {
+      if (peer.audio || peer.video) continue
+      // SFU audio that landed before the roster named the peer lives in its element already.
+      const el = this.audio.get(peer.socket)
+      if (this.sfuAudio.has(peer.socket) && el?.srcObject instanceof MediaStream) {
+        peer.audio = el.srcObject
+        peer.connection = 'connected'
+        continue
+      }
       const link = this.links.get(peer.socket)
-      if (!link || peer.audio || peer.video) continue
+      if (!link) continue
       for (const r of link.pc.getReceivers()) {
         if (r.track?.readyState !== 'live') continue
         const ms = new MediaStream([r.track])
@@ -326,7 +369,107 @@ class HuddleStore {
       }
     }
     this.set({ peers })
+    if (this.state.mode === 'sfu') return
     for (const peer of peers) if (!this.links.has(peer.socket)) void this.link(peer.socket)
+  }
+
+  // ── Large huddles (#2859) ─────────────────────────────────────────────────
+  private onMode(p: { room: string; mode: HuddleMode }) {
+    if (p.room !== this.state.room || this.state.status !== 'live') return
+    if (p.mode === 'sfu' && this.state.mode !== 'sfu') void this.enterSfu(false)
+  }
+
+  /**
+   * Move this browser onto the SFU: fetch a token for the room, connect, publish
+   * the mic (and the screen if sharing), then close the mesh links once the SFU
+   * carries audio — at most MESH_OVERLAP_MS later. `fresh` = my socket id changed
+   * (a reconnect), so any earlier session is for an identity that no longer exists.
+   */
+  private async enterSfu(fresh: boolean): Promise<void> {
+    const room = this.state.room
+    const self = this.state.self
+    if (!room || !self) return
+    if (this.sfu && !fresh) return
+    this.set({ mode: 'sfu' })
+    if (!this.fetchSfu) return
+    this.sfu?.disconnect()
+    this.sfu = null
+    let session: SfuSession
+    try {
+      const cfg = await this.fetchSfu(room, self)
+      if (this.state.room !== room || this.state.self !== self) return
+      session = new SfuSession()
+      this.sfu = session
+      await session.connect(cfg, {
+        onTrack: (socket, kind, stream) => this.onSfuTrack(socket, kind, stream),
+        onTrackEnd: (socket, kind) =>
+          this.updatePeer(socket, kind === 'video' ? { video: null } : { audio: null }),
+        onDisconnected: () => {
+          if (this.sfu !== session) return
+          this.leave()
+          this.set({
+            status: 'error',
+            error: 'The media server dropped the call. Join again to continue.',
+            room
+          })
+        }
+      })
+      if (this.sfu !== session) return
+      const mic = this.mic?.getAudioTracks()[0]
+      if (mic) await session.publishMic(mic)
+      if (this.state.muted) void session.setMicMuted(true)
+      const screen = this.state.localScreen?.getVideoTracks()[0]
+      if (screen && this.state.sharing) await session.publishScreen(screen)
+    } catch {
+      if (this.state.room !== room) return
+      this.leave()
+      this.set({
+        status: 'error',
+        error: 'Could not reach the media server for this large huddle.',
+        room
+      })
+      return
+    }
+    if (this.meshCloseTimer) clearTimeout(this.meshCloseTimer)
+    this.meshCloseTimer = setTimeout(() => this.closeMeshLinks(), MESH_OVERLAP_MS)
+  }
+
+  private onSfuTrack(socket: string, kind: 'audio' | 'video', stream: MediaStream) {
+    if (kind === 'video') {
+      this.updatePeer(socket, { video: stream })
+      return
+    }
+    this.sfuAudio.add(socket)
+    this.updatePeer(socket, { audio: stream, connection: 'connected' })
+    this.playAudio(socket, stream)
+    // Once everyone I can hear comes through the SFU, the mesh has nothing left to carry.
+    const waiting = this.state.peers.some(
+      (p) => this.links.has(p.socket) && !this.sfuAudio.has(p.socket)
+    )
+    if (!waiting && this.links.size) this.closeMeshLinks()
+  }
+
+  /** Close the mesh after the switch: the SFU streams already own the audio elements. */
+  private closeMeshLinks() {
+    if (this.meshCloseTimer) clearTimeout(this.meshCloseTimer)
+    this.meshCloseTimer = null
+    for (const [, link] of this.links) this.closeLink(link)
+    this.links.clear()
+    this.set({
+      peers: this.state.peers.map((p) => ({
+        ...p,
+        connection: this.sfuAudio.has(p.socket) ? 'connected' : 'connecting'
+      }))
+    })
+  }
+
+  /** Close a mesh link quietly: its "closed" state must not read as a failed peer. */
+  private closeLink(link: PeerLink) {
+    link.pc.onconnectionstatechange = null
+    link.pc.ontrack = null
+    link.pc.onicecandidate = null
+    link.pc.onnegotiationneeded = null
+    link.pc.close()
   }
 
   private onDenied(p: { room: string | null; reason: string }) {
@@ -364,6 +507,8 @@ class HuddleStore {
     const self = this.state.self
     const room = this.state.room
     if (!self || !room || !this.transport) return null
+    // On the SFU there are no mesh links to make (a late offer from a peer is ignored).
+    if (this.state.mode === 'sfu') return null
     const iceServers = await this.iceServers(room).catch(() => [] as RTCIceServer[])
     if (this.links.has(socket)) return this.links.get(socket) ?? null
     const pc = new RTCPeerConnection({ iceServers })
@@ -501,6 +646,7 @@ class HuddleStore {
   // ── Controls ──────────────────────────────────────────────────────────────
   setMuted(muted: boolean) {
     for (const t of this.mic?.getAudioTracks() ?? []) t.enabled = !muted
+    void this.sfu?.setMicMuted(muted)
     this.set({ muted })
     if (this.state.room && this.state.status === 'live') {
       this.transport?.emit('huddle:state', { room: this.state.room, muted })
@@ -521,13 +667,15 @@ class HuddleStore {
     const track = stream.getVideoTracks()[0]
     if (!track) return
     track.onended = () => this.stopShare()
-    for (const [, link] of this.links) link.screenSender = link.pc.addTrack(track, stream)
+    if (this.state.mode === 'sfu') void this.sfu?.publishScreen(track)
+    else for (const [, link] of this.links) link.screenSender = link.pc.addTrack(track, stream)
     this.set({ sharing: true, localScreen: stream })
     this.transport?.emit('huddle:state', { room: this.state.room, screen: true })
   }
 
   stopShare(): void {
     if (!this.state.sharing) return
+    void this.sfu?.unpublishScreen()
     for (const t of this.state.localScreen?.getTracks() ?? []) t.stop()
     for (const [, link] of this.links) {
       if (link.screenSender) {

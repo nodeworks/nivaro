@@ -1,0 +1,24 @@
+# Large huddles (#2859): a self-hosted LiveKit SFU next to the Nivaro API.
+# Copy this folder to the media host, fill in livekit.yaml, then:
+#   docker compose up -d
+# See README.md for ports, TLS and the Settings → Huddles values.
+services:
+  livekit:
+    image: livekit/livekit-server:v1.9
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    # Host networking keeps the UDP media port range (50000-60000) out of
+    # Docker's per-port NAT, which cannot cope with ten thousand mappings.
+    network_mode: host
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:7880/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { useOptionalRealtime } from '../../../lib/realtime'
+import type { SfuTokenConfig } from './huddle-sfu'
 import {
   type HuddlePeer,
   type HuddleState,
@@ -43,9 +44,18 @@ export function useHuddle(room: string | null) {
   })
   const enabled = usable && ice?.enabled !== false
 
+  // #2859: the LiveKit token for a large huddle, minted for my socket once I am in the roster.
+  const fetchSfu = useCallback(
+    (forRoom: string, socket: string) =>
+      client
+        .request<{ data: SfuTokenConfig }>(get('/chat/huddle/sfu-token', { room: forRoom, socket }))
+        .then((r) => r.data),
+    [client]
+  )
+
   useEffect(() => {
-    if (realtime && support.audio) huddleStore.attach(realtime, fetchIce)
-  }, [realtime, support.audio, fetchIce])
+    if (realtime && support.audio) huddleStore.attach(realtime, fetchIce, fetchSfu)
+  }, [realtime, support.audio, fetchIce, fetchSfu])
 
   const state: HuddleState = useSyncExternalStore(huddleStore.subscribe, huddleStore.getSnapshot)
 

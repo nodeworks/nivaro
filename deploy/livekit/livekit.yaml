@@ -1,0 +1,48 @@
+# LiveKit server config for Nivaro large huddles (#2859). Template: replace
+# every <...> before starting. Reference: https://docs.livekit.io/home/self-hosting/deployment/
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  # Behind NAT: the public address browsers reach the media host on.
+  # Leave commented on a host with a public IP (LiveKit detects it).
+  # node_ip: <public ip>
+  use_external_ip: true
+  # TURN for browsers that cannot reach UDP: the SAME coturn the huddles already
+  # use (Settings → Huddles → TURN servers). LiveKit hands these to its clients
+  # as ICE servers; the credential is coturn's long-term pair for this server
+  # (add `user=<turn user>:<turn password>` to turnserver.conf, or use
+  # `use-auth-secret` and mint one with the coturn REST scheme).
+  turn_servers:
+    - host: <turn.example.com>
+      port: 3478
+      protocol: udp
+      username: <turn user>
+      credential: <turn password>
+    - host: <turn.example.com>
+      port: 5349
+      protocol: tls
+      username: <turn user>
+      credential: <turn password>
+
+# LiveKit's built-in TURN is OFF: the external coturn above does that job.
+turn:
+  enabled: false
+
+# API key/secret pairs. Generate with `openssl rand -base64 32` (secret) and
+# any short id (key). Put the same pair under Settings → Huddles → Large
+# huddles; the Nivaro API signs every join token with the secret.
+keys:
+  <api key>: <api secret>
+
+room:
+  # Rooms are created on first join (Nivaro names them by an opaque hash).
+  auto_create: true
+  empty_timeout: 300
+  max_participants: 100
+
+logging:
+  level: info
+  json: true

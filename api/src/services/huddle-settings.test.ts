@@ -12,6 +12,7 @@ import {
   maskHuddleSettings,
   mergeHuddlePatch,
   normalizeHuddleSettings,
+  sfuConfigured,
   turnRestCredential
 } from './huddle-settings.js'
 
@@ -71,6 +72,68 @@ describe('mask + merge', () => {
   it('ignores unknown keys', () => {
     const next = mergeHuddlePatch(stored, { evil: 1 } as unknown)
     expect((next as unknown as Record<string, unknown>).evil).toBeUndefined()
+  })
+})
+
+describe('large huddles (#2859) settings', () => {
+  const sfu = {
+    livekit_url: 'wss://media.example.com',
+    livekit_api_key: 'APIkey',
+    livekit_api_secret: 'lk-secret'
+  }
+
+  it('defaults: no SFU, switch at 5; a bad url is dropped', () => {
+    expect(HUDDLE_DEFAULTS).toMatchObject({
+      livekit_url: null,
+      livekit_api_key: null,
+      livekit_api_secret: null,
+      switch_at: 5
+    })
+    expect(sfuConfigured(HUDDLE_DEFAULTS)).toBe(false)
+    expect(normalizeHuddleSettings({ livekit_url: 'https://nope' }).livekit_url).toBeNull()
+    expect(normalizeHuddleSettings({ livekit_url: 'ws://localhost:7880' }).livekit_url).toBe(
+      'ws://localhost:7880'
+    )
+    expect(normalizeHuddleSettings({ switch_at: 0 }).switch_at).toBe(5)
+    expect(normalizeHuddleSettings({ switch_at: 1 }).switch_at).toBe(2)
+  })
+
+  it('the participant cap follows the media path: mesh 8/16, SFU 25/100', () => {
+    const mesh = normalizeHuddleSettings({ max_participants: 40 })
+    expect(mesh.max_participants).toBe(16)
+    const s = normalizeHuddleSettings(sfu)
+    expect(sfuConfigured(s)).toBe(true)
+    expect(s.max_participants).toBe(25)
+    expect(normalizeHuddleSettings({ ...sfu, max_participants: 40 }).max_participants).toBe(40)
+    expect(normalizeHuddleSettings({ ...sfu, max_participants: 500 }).max_participants).toBe(100)
+    // Only a url + key + secret together make an SFU.
+    expect(sfuConfigured(normalizeHuddleSettings({ ...sfu, livekit_api_secret: '' }))).toBe(false)
+  })
+
+  it('masked secret round trip: the mask keeps the stored secret, blank clears it', () => {
+    const stored = normalizeHuddleSettings(sfu)
+    const masked = maskHuddleSettings(stored)
+    expect(masked.livekit_api_secret).toBe(HUDDLE_MASK)
+    expect(masked.livekit_api_key).toBe('APIkey')
+    expect(JSON.stringify(masked)).not.toContain('lk-secret')
+    // The Settings page sends back exactly what it was shown.
+    const kept = mergeHuddlePatch(stored, { ...masked, switch_at: 8 })
+    expect(kept.livekit_api_secret).toBe('lk-secret')
+    expect(kept.switch_at).toBe(8)
+    const cleared = mergeHuddlePatch(stored, { livekit_api_secret: '' })
+    expect(cleared.livekit_api_secret).toBeNull()
+    expect(sfuConfigured(cleared)).toBe(false)
+    expect(cleared.max_participants).toBe(16)
+  })
+
+  it('configuring the SFU lets an untouched mesh cap re-default to 25', () => {
+    const mesh = normalizeHuddleSettings({})
+    expect(mergeHuddlePatch(mesh, sfu).max_participants).toBe(25)
+    // An explicit cap is a choice and stays.
+    expect(
+      mergeHuddlePatch(normalizeHuddleSettings({ max_participants: 6 }), sfu).max_participants
+    ).toBe(6)
+    expect(mergeHuddlePatch(mesh, { ...sfu, max_participants: 12 }).max_participants).toBe(12)
   })
 })
 

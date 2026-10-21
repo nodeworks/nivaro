@@ -21,6 +21,7 @@ import {
   formatHuddleDuration,
   type HuddleDeps,
   type HuddleRedis,
+  huddleMode,
   huddlePeers,
   huddleRoomKind,
   registerHuddle,
@@ -343,6 +344,65 @@ describe('registerHuddle', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('large huddles (#2859): the mode switch', () => {
+  it('the join that exceeds switch_at moves the huddle to the SFU, once, until it ends', async () => {
+    const redis = fakeRedis()
+    const io = fakeIo()
+    const { d } = deps(redis, {
+      settings: async () => ({ enabled: true, max_participants: 25, sfu: true, switch_at: 2 })
+    })
+    const socks = ['S1', 'S2', 'S3'].map((id) => fakeSocket(id))
+    for (const s of socks) registerHuddle(io as never, s.socket as never, () => rob, scope, d)
+
+    await socks[0].fire('huddle:join', { room: 'ch:ops' })
+    await socks[1].fire('huddle:join', { room: 'ch:ops' })
+    expect((socks[1].emitted[0].payload as { mode: string }).mode).toBe('mesh')
+    expect(io.sent.some((s) => s.event === 'huddle:mode')).toBe(false)
+    expect(await huddleMode(redis, null, 'ch:ops')).toBe('mesh')
+
+    // Third person: 3 > 2 → everyone in the huddle hears huddle:mode, the joiner lands in sfu.
+    await socks[2].fire('huddle:join', { room: 'ch:ops' })
+    expect((socks[2].emitted[0].payload as { mode: string }).mode).toBe('sfu')
+    expect(io.sent.filter((s) => s.event === 'huddle:mode')).toEqual([
+      { to: 'huddle:ch:ops', event: 'huddle:mode', payload: { room: 'ch:ops', mode: 'sfu' } }
+    ])
+    expect(await huddleMode(redis, null, 'ch:ops')).toBe('sfu')
+    const peers = io.sent.filter((s) => s.event === 'huddle:peers').at(-1)?.payload as {
+      mode: string
+    }
+    expect(peers.mode).toBe('sfu')
+
+    // People leaving never flips it back…
+    await socks[2].fire('huddle:leave', { room: 'ch:ops' })
+    await socks[1].fire('huddle:leave', { room: 'ch:ops' })
+    expect(await huddleMode(redis, null, 'ch:ops')).toBe('sfu')
+    expect(io.sent.filter((s) => s.event === 'huddle:mode')).toHaveLength(1)
+    // …a rejoin lands straight in sfu, and only the last leave resets the room.
+    await socks[1].fire('huddle:join', { room: 'ch:ops' })
+    expect((socks[1].emitted.at(-1)?.payload as { mode: string }).mode).toBe('sfu')
+    await socks[1].fire('huddle:leave', { room: 'ch:ops' })
+    await socks[0].fire('huddle:leave', { room: 'ch:ops' })
+    expect(redis.store.has('nvr:huddle:-:ch:ops:mode')).toBe(false)
+    expect(await huddleMode(redis, null, 'ch:ops')).toBe('mesh')
+  })
+
+  it('without an SFU the mesh carries on past switch_at', async () => {
+    const redis = fakeRedis()
+    const io = fakeIo()
+    const { d } = deps(redis, {
+      settings: async () => ({ enabled: true, max_participants: 8, sfu: false, switch_at: 1 })
+    })
+    const a = fakeSocket('S1')
+    const b = fakeSocket('S2')
+    registerHuddle(io as never, a.socket as never, () => rob, scope, d)
+    registerHuddle(io as never, b.socket as never, () => amy, scope, d)
+    await a.fire('huddle:join', { room: 'ch:ops' })
+    await b.fire('huddle:join', { room: 'ch:ops' })
+    expect((b.emitted[0].payload as { mode: string }).mode).toBe('mesh')
+    expect(io.sent.some((s) => s.event === 'huddle:mode')).toBe(false)
   })
 })
 
