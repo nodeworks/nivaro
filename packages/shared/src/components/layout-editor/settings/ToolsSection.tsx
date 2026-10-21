@@ -15,6 +15,7 @@ import { RelationPicker } from '../pickers/relation-picker'
 import { CostLimitSetting } from '../testing/CostLimitSetting'
 import { humanizeOpError } from '../useLayoutDraft'
 import { PickList, quietText, Segmented, Setting, smallBtn, useSettingVisible } from './controls'
+import { FreezeSetting } from './ResolveSettings'
 import type { SectionProps } from './section-props'
 import { type RolePreview, useRolePreview } from './settings-api'
 import { settingDef } from './settings-registry'
@@ -39,6 +40,7 @@ export function ToolsSection(props: ToolsSectionProps) {
       <CostLimitSetting {...props} />
       <HistorySetting layoutId={id} />
       <ChangeNoteSetting {...props} />
+      <FreezeSetting {...props} />
       <DriftSetting layoutId={id} />
       <LayoutOpsBlocks
         collection={props.collection}

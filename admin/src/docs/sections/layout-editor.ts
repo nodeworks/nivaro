@@ -56,6 +56,20 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Test a record… picks a saved record and lights up the row it resolves to, with the reason in words, and says for every other form why it was passed over ("Its record rules do not match", "A form with record rules matched first", "Restricted to other roles"). Optionally test as a role. The test runs the live `/active` resolution itself — there is no separate preview logic — so the answer is what that person would get.'
     },
+    {
+      type: 'p',
+      text: 'Pick Phone under Screen to see which form the record opens with on a small screen, and a day under On day to test active dates on another day.'
+    },
+    { type: 'h3', id: 'layout-editor-active-dates', text: 'Active dates' },
+    {
+      type: 'p',
+      text: 'Form settings → Who gets this form → Active dates limits a form to the days between From and Until (both included, in the instance time zone). Outside them the form takes no part in choosing a form: records open with the next form that fits, as if the form were restricted to other roles. A link that names the form falls through the same way. The overview shows the dates beside the form and warns when they have not started or have passed. Scheduled changes publish edits to a form; active dates decide when the form is used at all.'
+    },
+    { type: 'h3', id: 'layout-editor-phone-version', text: 'Phone version' },
+    {
+      type: 'p',
+      text: 'Form settings → Who gets this form → Phone version → Make a phone version copies the form as a lighter one for small screens (remove what a phone does not need). Record pages on a screen narrower than 640 px ask for the phone version (`viewport=phone` on `/collection-layouts/active`): after the usual rules pick a form, its phone version opens in its place. A phone version never opens on its own and needs no rules of its own; its roles and active dates still apply. On the overview it sits under the form it stands in for.'
+    },
     { type: 'h3', id: 'layout-editor-coverage', text: 'Check coverage and health' },
     {
       type: 'p',
@@ -261,6 +275,16 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: "Form settings → Tools → Ask why on every save makes Save ask for a short reason, or a reason and a ticket link. The reason and ticket lead the version's note in History. Autosave stays off for that layout, and the server refuses a save without them (turning the setting off needs a reason too)."
+    },
+    { type: 'h3', id: 'layout-editor-freeze', text: 'Freeze edits' },
+    {
+      type: 'p',
+      text: 'Form settings → Tools → Freeze edits stops changes to a layout until a date (a go-live or an audit), with a reason people read. Until that day the server refuses every save, restore, settings change and delete of the layout with the reason (400 `LAYOUT_FROZEN`). An administrator can still save by giving an override note: the editor asks for it at Save, the note becomes the version note in History and an activity entry (`layout-freeze-override`). Lifting the freeze early is a save too, so it asks for a note. The freeze lifts by itself on its date; copies of a frozen layout are not frozen.'
+    },
+    { type: 'h3', id: 'layout-editor-sections-on-open', text: 'Sections that load when opened' },
+    {
+      type: 'p',
+      text: 'Select a section that starts collapsed and turn on Load when opened. Until someone opens it, the record page does not read what only that section holds: its grids\' rows, its relation-path values and its widgets. Fields the folded section shows in its summary still load. Test → Cost counts these requests apart ("more once someone opens…"). It changes when data loads on live records, so it is off unless you turn it on for a section.'
     },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {

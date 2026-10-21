@@ -77,6 +77,7 @@ import {
 } from '../lib/header-strip'
 import { type LayoutGrantFlags, layoutGrantedTools } from '../lib/layout-grants'
 import { formLocale, translateFieldRow, translateGroup } from '../lib/layout-i18n'
+import { currentViewport } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useRecordReader } from '../lib/record-loader'
@@ -165,6 +166,7 @@ import {
 } from './item-edit/helpers'
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
+import { deferredSections } from './item-edit/lazy-sections'
 import {
   computeLiveRollup,
   isDerivedForRecord,
@@ -1338,14 +1340,25 @@ function ItemEditFormView({
   const isNew = !itemIdIn || itemIdIn === 'new'
 
   // ── Data fetching ──────────────────────────────────────────────────────────
+  // A small screen gets a form's phone version (#2715) — read once per open,
+  // so turning the device never swaps the form under someone's edits.
+  const [viewport] = useState(currentViewport)
   const { data: fetchedLayoutData } = useQuery<ActiveLayoutData | null>({
-    queryKey: ['active-layout', collection, layoutSlug ?? null, itemId],
+    // Desktop keeps the key the host's own /active read shares (admin ItemEdit).
+    queryKey: [
+      'active-layout',
+      collection,
+      layoutSlug ?? null,
+      itemId,
+      ...(viewport ? [viewport] : [])
+    ],
     queryFn: () =>
       client
         .request<{ data: ActiveLayoutData | null }>(
           get('/collection-layouts/active', {
             collection,
-            ...(layoutSlug ? { slug: layoutSlug } : itemId !== 'new' ? { item: itemId } : {})
+            ...(layoutSlug ? { slug: layoutSlug } : itemId !== 'new' ? { item: itemId } : {}),
+            ...(viewport ? { viewport } : {})
           })
         )
         .then((r) => r.data)
@@ -1356,6 +1369,19 @@ function ItemEditFormView({
   const activeLayoutData = designOn ? design.layout : fetchedLayoutData
 
   const layoutId = activeLayoutData?.layout?.id ?? null
+
+  // Sections that load when opened (#2713): what they alone need waits until
+  // someone opens them; opened ones stay loaded for this record.
+  const [openedLazy, setOpenedLazy] = useState<ReadonlySet<string>>(() => new Set())
+  // biome-ignore lint/correctness/useExhaustiveDependencies: another record or form starts folded again
+  useEffect(() => setOpenedLazy(new Set()), [collection, itemId, layoutId])
+  const deferred = useMemo(
+    () => deferredSections(activeLayoutData, openedLazy, { design: designOn }),
+    [activeLayoutData, openedLazy, designOn]
+  )
+  const openLazySection = useCallback((key: string) => {
+    setOpenedLazy((cur) => (cur.has(key) ? cur : new Set([...cur, key])))
+  }, [])
 
   // Summary layout (layout_type 'summary'): the customisable read-only
   // presentation Summary mode renders. Null = the collection has none, and
@@ -3060,9 +3086,14 @@ function ItemEditFormView({
   const relationPathFields = useMemo(
     () =>
       (fieldConfig ?? [])
-        .filter((f) => f.interface === 'relation-path' && f.field.includes('.'))
+        .filter(
+          (f) =>
+            f.interface === 'relation-path' &&
+            f.field.includes('.') &&
+            !deferred.fields.has(f.field)
+        )
         .map((f) => f.field),
-    [fieldConfig]
+    [fieldConfig, deferred]
   )
   const { data: resolvedPaths } = useQuery<
     Record<string, { value: string; ids: string[]; target_collection: string | null }>
@@ -3986,7 +4017,8 @@ function ItemEditFormView({
           )
           .then((res) => res.data ?? []),
       select: (rows: Record<string, unknown>[]) => rows.length,
-      enabled: !!itemId && !isNew,
+      // A grid only in a section that loads when opened waits for it (#2713).
+      enabled: !!itemId && !isNew && !deferred.fields.has(r.one_field as string),
       staleTime: 30_000
     }))
   })
@@ -8774,6 +8806,8 @@ function ItemEditFormView({
             : undefined
         }
         summaryFields={parseSummaryFields(g.summary_fields)}
+        deferred={deferred.groups.has(g.key)}
+        onFirstOpen={deferred.groups.has(g.key) ? openLazySection : undefined}
         m2mCounts={fieldCounts}
         o2mCounts={o2mCounts}
         o2mAggValues={o2mAggValues}

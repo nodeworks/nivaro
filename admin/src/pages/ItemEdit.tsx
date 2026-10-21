@@ -1,6 +1,7 @@
 import type { ImportParseResponse } from '@nivaro/sdk'
 import { createNivaro } from '@nivaro/sdk'
 import {
+  currentViewport,
   DrilldownContext,
   type DrilldownTarget,
   ItemActionChoiceList,
@@ -595,8 +596,16 @@ export function ItemEditPage() {
     staleTime: 60_000
   })
 
+  // Same screen class and key as the shared form's read (#2715 phone version).
+  const [viewport] = useState(currentViewport)
   const { data: activeLayoutData } = useQuery({
-    queryKey: ['active-layout', collection, layoutSlug ?? null, id],
+    queryKey: [
+      'active-layout',
+      collection,
+      layoutSlug ?? null,
+      id,
+      ...(viewport ? [viewport] : [])
+    ],
     queryFn: () =>
       api
         .get<{
@@ -611,7 +620,8 @@ export function ItemEditPage() {
         }>('/collection-layouts/active', {
           params: {
             collection,
-            ...(layoutSlug ? { slug: layoutSlug } : !isNew ? { item: id } : {})
+            ...(layoutSlug ? { slug: layoutSlug } : !isNew ? { item: id } : {}),
+            ...(viewport ? { viewport } : {})
           }
         })
         .then((r) => r.data.data)

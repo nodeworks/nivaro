@@ -29,6 +29,7 @@ import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useStat
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { del, patch, post } from '../../../lib/commands'
+import { dayWords, localDay } from '../../../lib/layout-resolve'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
@@ -83,7 +84,7 @@ import {
   useOverviewFields,
   useRuleChoiceLabels
 } from './overview-api'
-import { Pill, Sentence, shapeLine, TYPE_USE } from './purpose'
+import { Pill, ResolvePills, Sentence, shapeLine, TYPE_USE } from './purpose'
 import { ScheduledChanges } from './ScheduledChanges'
 import type {
   LayoutType,
@@ -567,6 +568,7 @@ function RowView({
               <Pill tone='rule'>rule</Pill>
             )}
             {row.section === 'forms' && row.reason.kind === 'role' && <Pill tone='role'>role</Pill>}
+            <ResolvePills row={row} />
             {row.section === 'link_only' && (
               <Pill tone='link'>
                 {row.new_menu && !row.new_menu.hidden ? 'link or New menu' : 'link only'}
@@ -791,6 +793,12 @@ function explainWords(
       return [{ text: 'no rule caught it and no form is default, so it gets the first in order' }]
     case 'slug':
       return [{ text: 'pinned by the form’s link name' }]
+    case 'phone':
+      return [
+        { text: 'on a phone, the phone version of ' },
+        { text: reason.phone_of_name ?? 'its form', strong: true },
+        { text: ' opens' }
+      ]
     default:
       return reason.type_use ? [{ text: reason.type_use }] : []
   }
@@ -824,6 +832,15 @@ function ExplainStrip({
           <span className='font-semibold'>{result.recordLabel}</span>
           {result.roleName && (
             <span className='text-slate-500 dark:text-muted-foreground'> as {result.roleName}</span>
+          )}
+          {result.viewport === 'phone' && (
+            <span className='text-slate-500 dark:text-muted-foreground'> on a phone</span>
+          )}
+          {result.at && result.at !== localDay() && (
+            <span className='text-slate-500 dark:text-muted-foreground'>
+              {' '}
+              on {dayWords(result.at)}
+            </span>
           )}{' '}
           opens{' '}
           <b className='font-semibold text-[#0089ad] dark:text-nvr-cyan'>

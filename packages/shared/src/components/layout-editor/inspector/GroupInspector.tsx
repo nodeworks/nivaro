@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { GroupPatch, GroupRow } from '../../../lib/layout-ops'
+import { lazySectionPatch, lazySectionsOf } from '../../../lib/layout-resolve'
 import { titleCase } from '../../../lib/utils'
 import { RuleWriter } from '../ai-rules/RuleWriter'
 import { RoleConditionRow } from '../editors/lock-conditions'
@@ -78,6 +79,9 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
     .filter((t) => t === type || !(holdsFields && (t === 'container' || t === 'content')))
     .map((t) => ({ value: t, label: TYPE_LABELS[t] }))
   const sectionLike = type === 'section' || type === 'metadata' || type === 'tab'
+  // #2713: kept in the layout's conditions.lazy_sections, by section key.
+  const lazy = lazySectionsOf(env.bundle.layout.conditions).includes(group.key)
+  const accordion = !!env.bundle.layout.accordion_mode
 
   // Fields of the collection, by label (pickers + condition builder)
   const fieldOptions = globals
@@ -200,6 +204,30 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
           effect='The section opens folded; people unfold it.'
           checked={group.is_collapsed}
           onChange={(v) => update({ is_collapsed: v }, v ? `Collapse ${name}` : `Expand ${name}`)}
+        />
+      )}
+      {(type === 'section' || type === 'metadata') && (
+        <Toggle
+          k='group.load_on_open'
+          label='Load when opened'
+          effect={
+            group.is_collapsed || accordion
+              ? 'Its pickers, grids and widgets load only once someone opens it; a lighter open for every record.'
+              : 'Turn on Starts collapsed first: an open section loads straight away.'
+          }
+          checked={lazy}
+          disabled={!lazy && !group.is_collapsed && !accordion}
+          onChange={(v) =>
+            env.apply(
+              [
+                {
+                  op: 'layout_update',
+                  patch: lazySectionPatch(env.bundle.layout.conditions, group.key, v)
+                }
+              ],
+              { label: v ? `Load ${name} when opened` : `Load ${name} with the form` }
+            )
+          }
         />
       )}
       {type === 'content' && (

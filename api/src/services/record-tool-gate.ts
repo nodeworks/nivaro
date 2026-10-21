@@ -49,6 +49,18 @@ export async function recordToolRefusal(
     isAdmin: false
   })
   let granted = !!row?.[grant]
+  // On a small screen the record opens with its form's phone version (#2715).
+  if (!granted) {
+    const phone = await resolveLayout({
+      collection,
+      slug: null,
+      item: itemId,
+      role,
+      isAdmin: false,
+      viewport: 'phone'
+    })
+    if (phone.reason?.kind === 'phone') granted = !!phone.row?.[grant]
+  }
   if (!granted && opts.layout) {
     const pin = await legitimatePinForRecord({ collection, slug: opts.layout, item: itemId, role })
     granted = !!pin?.[grant]

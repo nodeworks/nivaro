@@ -488,3 +488,56 @@ describe('POST /collection-layouts/:id/ops — required change note (#2654)', ()
     expect(res.statusCode).toBe(200)
   })
 })
+
+describe('POST /collection-layouts/:id/ops — edit freeze (#2717)', () => {
+  const move = {
+    op: 'move',
+    from: { field: 'b', group_key: 'main' },
+    to_group_key: 'main',
+    index: 0
+  }
+  const send = async (extra: Record<string, unknown>) => {
+    const rev = (await bundle()).rev
+    vi.mocked(snapshotLayoutVersion).mockClear()
+    return call('POST', '/collection-layouts/1/ops', {
+      ops: [move],
+      base_rev: rev,
+      note: 'Move b',
+      ...extra
+    })
+  }
+  const freeze = (until: string) => {
+    fake.tables.nivaro_collection_layouts[0].conditions = JSON.stringify({
+      freeze: { until, reason: 'Go-live on Monday' }
+    })
+  }
+
+  it('refuses a save with the reason while frozen', async () => {
+    freeze('2999-01-01')
+    const before = JSON.stringify(fake.tables)
+    const res = await send({})
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({
+      code: 'LAYOUT_FROZEN',
+      freeze: { until: '2999-01-01', reason: 'Go-live on Monday' }
+    })
+    expect(res.json().error).toMatch(/Go-live on Monday/)
+    expect(JSON.stringify(fake.tables)).toBe(before)
+  })
+
+  it('saves with an override note, kept as the version note', async () => {
+    freeze('2999-01-01')
+    const res = await send({ freeze_override: 'Typo on the go-live form' })
+    expect(res.statusCode).toBe(200)
+    expect(find('b', 'main')?.sort).toBe(0)
+    expect(vi.mocked(snapshotLayoutVersion).mock.calls[0][1]).toBe(
+      'Freeze override: Typo on the go-live form'
+    )
+  })
+
+  it('saves as usual once the freeze date has come', async () => {
+    freeze('2000-01-01')
+    const res = await send({})
+    expect(res.statusCode).toBe(200)
+  })
+})

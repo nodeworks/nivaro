@@ -2,6 +2,14 @@
 // cycle (TDZ at boot). The parsers live in services/layout-patch.
 import type { PickReason } from '../routes/collection-layouts.js'
 import { parseConditions, parseRecordConditions, type RecordConditionRule } from './layout-patch.js'
+import {
+  activeFreeze,
+  activeWindowOf,
+  phoneOf,
+  todayInInstance,
+  windowState,
+  windowWords
+} from './layout-resolve-rules.js'
 
 /**
  * "Which form does each kind of record get?" — the Layouts overview. One row
@@ -42,6 +50,13 @@ export interface OverviewRow {
   /** Forms only: the sections (with their show-when rules) and where each field
    *  sits — the editor's rule-loop check (#2642) runs on it client-side. */
   rule_shape?: RuleShape
+  /** #2714: the days the form resolves on, and where today falls. */
+  active_window?: { from: string | null; until: string | null; state: 'before' | 'open' | 'after' }
+  /** #2715: this form's phone version (desktop rows) / the form it is the phone version of. */
+  phone_version?: { layout_id: number; name: string } | null
+  phone_of?: number | null
+  /** #2717: edits refused until this day (today inside the freeze). */
+  frozen?: { until: string; reason: string } | null
 }
 
 export interface RuleShape {
@@ -187,6 +202,9 @@ export function buildLayoutOverview(
   const isGrouped = (l: OverviewLayoutInput) => !l.layout_type || l.layout_type === 'grouped'
   const grouped = ordered.filter(isGrouped)
 
+  // Phone versions (#2715) never win on their own: listed after their desktop form.
+  const phoneRows = grouped.filter((l) => phoneOf(l.conditions) != null)
+  const today = todayInInstance()
   const rulesOf = new Map<number, RecordConditionRule[]>()
   for (const l of grouped) {
     const rules = parseRecordConditions(l.record_conditions)
@@ -195,14 +213,14 @@ export function buildLayoutOverview(
 
   // Record-rule forms in pick order: most rules first, ties in candidate order.
   const ruleRows = grouped
-    .filter((l) => rulesOf.has(l.id))
+    .filter((l) => rulesOf.has(l.id) && !phoneRows.includes(l))
     .map((l, i) => ({ l, i }))
     .sort(
       (a, b) => (rulesOf.get(b.l.id)?.length ?? 0) - (rulesOf.get(a.l.id)?.length ?? 0) || a.i - b.i
     )
     .map((x) => x.l)
 
-  const pool = grouped.filter((l) => !rulesOf.has(l.id))
+  const pool = grouped.filter((l) => !rulesOf.has(l.id) && !phoneRows.includes(l))
   // What an admin (no role preference) gets: the active one, else the first.
   const defaultRow = pool.find((l) => !!l.is_active) ?? pool[0] ?? null
   // When the default is role-restricted, everyone outside its roles gets the
@@ -242,8 +260,36 @@ export function buildLayoutOverview(
       shape: shapeOf(l),
       references: refsByLayout.get(Number(l.id)) ?? [],
       warnings: [],
-      ...(isGrouped(l) || l.layout_type === 'addendum' ? { rule_shape: ruleShapeOf(l) } : {})
+      ...(isGrouped(l) || l.layout_type === 'addendum' ? { rule_shape: ruleShapeOf(l) } : {}),
+      ...resolveExtras(l)
     }
+  }
+  // Active dates, phone version, freeze (#2714 #2715 #2717) — only keys a form has.
+  const resolveExtras = (l: OverviewLayoutInput): Partial<OverviewRow> => {
+    const out: Partial<OverviewRow> = {}
+    const win = activeWindowOf(l.conditions)
+    const state = windowState(win, today)
+    if (win && state) out.active_window = { ...win, state }
+    if (isGrouped(l)) {
+      const of = phoneOf(l.conditions)
+      if (of != null) out.phone_of = of
+      else {
+        const v = phoneRows.find((p) => phoneOf(p.conditions) === Number(l.id))
+        if (v) out.phone_version = { layout_id: Number(v.id), name: v.name }
+      }
+    }
+    const f = activeFreeze(l.conditions, today)
+    if (f) out.frozen = { until: f.until, reason: f.reason }
+    return out
+  }
+  const windowWarning = (row: OverviewRow) => {
+    const w = row.active_window
+    if (!w || w.state === 'open') return
+    row.warnings.push(
+      w.state === 'before'
+        ? `not in use yet: active ${windowWords(w)}`
+        : `no longer in use: its active dates (${windowWords(w)}) have passed`
+    )
   }
   const withRoles = (reason: PickReason, ids: string[]): PickReason =>
     ids.length ? { ...reason, role_ids: ids, role_names: roleNames(ids) } : reason
@@ -297,6 +343,20 @@ export function buildLayoutOverview(
   }
   if (fallbackRow)
     rows.push({ ...base(fallbackRow), section: 'forms', reason: { kind: 'fallback' } })
+
+  // Phone versions sit right after the form they stand in for.
+  for (const p of phoneRows) {
+    const of = phoneOf(p.conditions) as number
+    const at = rows.findIndex((r) => r.layout_id === of)
+    const desktop = grouped.find((l) => Number(l.id) === of)
+    if (at < 0 || !desktop) continue
+    rows.splice(at + 1, 0, {
+      ...base(p),
+      section: 'forms',
+      reason: { kind: 'phone', phone_of: of, phone_of_name: desktop.name }
+    })
+  }
+  for (const r of rows) windowWarning(r)
 
   // 4. Grouped forms resolution never picks: reached by a link name or a reference.
   const placed = new Set(rows.map((r) => r.layout_id))

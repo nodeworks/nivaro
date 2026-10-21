@@ -127,8 +127,9 @@ export function checkColumns(wanted: string[], physical: string[]): string[] {
  * records, cost limit) is the editor's and never leaves for anyone else.
  */
 export function shownConditions<T>(conditions: T, isAdmin: boolean): T {
-  if (isAdmin || !conditions || typeof conditions !== 'object' || !('testing' in conditions))
-    return conditions
-  const { testing: _testing, ...rest } = conditions as Record<string, unknown>
+  if (isAdmin || !conditions || typeof conditions !== 'object') return conditions
+  // The edit freeze (#2717) names who set it: editors only, like the test records.
+  if (!('testing' in conditions) && !('freeze' in conditions)) return conditions
+  const { testing: _testing, freeze: _freeze, ...rest } = conditions as Record<string, unknown>
   return (Object.keys(rest).length > 0 ? rest : null) as T
 }

@@ -4,6 +4,7 @@ import {
   BarChart3,
   Grid3x3,
   LayoutGrid,
+  Lock,
   Percent,
   Plus,
   Table2,
@@ -20,6 +21,7 @@ import {
   type LayoutOp,
   UNGROUPED_KEY
 } from '../../lib/layout-ops'
+import { activeFreeze, dayWords, type LayoutFreeze } from '../../lib/layout-resolve'
 import { useMyUserId } from '../../lib/presence-signals'
 import { cn } from '../../lib/utils'
 import { modalHostOf } from '../ui/popover'
@@ -727,19 +729,29 @@ export function LayoutEditor({
 
   // Required change note (#2654): the server's copy decides (turning it off asks too).
   const { data: serverBundle } = useLayoutBundle(currentId)
-  const notePolicy = changeNotePolicyOf(serverBundle?.layout) ?? changeNotePolicyOf(bundle?.layout)
+  // Edit freeze (#2717): until its date every save asks for an override note.
+  const freeze = activeFreeze(serverBundle?.layout?.conditions ?? bundle?.layout?.conditions)
+  const notePolicy =
+    changeNotePolicyOf(serverBundle?.layout) ??
+    changeNotePolicyOf(bundle?.layout) ??
+    (freeze ? 'note' : null)
   const [note, setNote] = useState<ChangeNoteValue>({ reason: '', ticket: '' })
   // Where the change-note Save popover sits; null = closed.
   const [noteAnchor, setNoteAnchor] = useState<HTMLElement | null>(null)
   const noteRef = useRef(note)
   noteRef.current = note
   const saveNow = useCallback(async () => {
-    const meta = notePolicy ? changeNoteMeta(noteRef.current) : undefined
+    const meta = notePolicy
+      ? {
+          ...changeNoteMeta(noteRef.current),
+          ...(freeze ? { freeze_override: noteRef.current.reason.trim() } : {})
+        }
+      : undefined
     await draft.save(meta)
     const ok = draft.unsavedOps().length === 0
     if (ok && meta) setNote((n) => ({ ...n, reason: '' }))
     return ok
-  }, [draft.save, draft.unsavedOps, notePolicy])
+  }, [draft.save, draft.unsavedOps, notePolicy, freeze])
   // Save (button, ⌘S): straight away, or ask for the reason first.
   const requestSave = useCallback(() => {
     if (!notePolicy) return draft.save()
@@ -1263,6 +1275,19 @@ export function LayoutEditor({
           {warning}
         </div>
       )}
+      {freeze && (
+        <div
+          role='note'
+          data-editor-frozen={freeze.until}
+          className={cn(
+            'flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-[12.5px]',
+            amberStrip
+          )}
+        >
+          <Lock className='h-3.5 w-3.5 shrink-0' />
+          {frozenSaveIntro(freeze)}
+        </div>
+      )}
       <RuleLoopsBanner explain={explain} onShow={showField} />
       {/* Drag and drop spans the whole body: Add panel rows drag onto the canvas. */}
       <LayoutDndProvider
@@ -1545,6 +1570,7 @@ export function LayoutEditor({
           open
           anchor={noteAnchor}
           policy={notePolicy}
+          intro={freeze ? frozenSaveIntro(freeze) : undefined}
           count={draft.unsavedCount}
           value={note}
           onChange={setNote}
@@ -1583,4 +1609,10 @@ export function LayoutEditor({
       {container && createPortal(body, container)}
     </>
   )
+}
+
+/** "Frozen until 15 Dec 2026: go-live. Saving asks for an override note." (#2717) */
+function frozenSaveIntro(f: LayoutFreeze): string {
+  const why = f.reason.trim() ? `: ${f.reason.trim()}` : ''
+  return `Frozen until ${dayWords(f.until)}${why}. Saving asks for an override note, kept in History.`
 }

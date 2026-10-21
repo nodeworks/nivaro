@@ -1,6 +1,7 @@
 import { TABLE_FORM_GROUP_KEYS } from '../../../lib/layout-ops'
 import { matchesVisibleWhen, parseVisibleWhen } from '../../../lib/visible-when'
 import { SYSTEM_FIELDS } from '../../item-edit/helpers'
+import { deferredSections } from '../../item-edit/lazy-sections'
 import type { ActiveLayoutData, FieldGroup } from '../../item-edit/types'
 import { fieldAccessForRole, type RoleAccessInput } from '../preview/preview-model'
 
@@ -628,10 +629,15 @@ export interface CostItem {
   key: string
   label: string
   requests: number
+  /** #2713: in a folded section that loads when opened — asked for on open, not up front. */
+  deferred?: boolean
 }
 
 export interface FormCost {
+  /** Requests on open (deferred items left out). */
   total: number
+  /** Requests the sections that load when opened hold back until someone opens them. */
+  deferred: number
   items: CostItem[]
   counts: Record<Exclude<CostKind, 'base'>, number>
 }
@@ -674,7 +680,9 @@ const PANEL_LABELS: Record<string, string> = {
  * own reads, one per picker (its current value's label), three per inline
  * grid (rows, their columns, their field config), one per widget, panel
  * and relation-path or remote-options field. Every visible placement counts,
- * collapsed sections too. An estimate to compare forms by, not a measurement.
+ * collapsed sections too — except folded sections that load when opened
+ * (#2713), whose requests wait for the open and are counted apart. An
+ * estimate to compare forms by, not a measurement.
  */
 export function formCost(input: {
   layout: ActiveLayoutData
@@ -733,7 +741,19 @@ export function formCost(input: {
       items.push({ kind: 'picker', key, label: name, requests: 1 })
     else if (r?.remote_options_config) items.push({ kind: 'query', key, label: name, requests: 1 })
   }
+  const lazy = deferredSections(layout, new Set()).groups
+  if (lazy.size > 0)
+    for (const i of items) {
+      const gk = i.key.split('\u0000')[1] ?? ''
+      if (gk && lazy.has(gk)) i.deferred = true
+    }
   const counts = { picker: 0, grid: 0, widget: 0, panel: 0, query: 0 }
-  for (const i of items) if (i.kind !== 'base') counts[i.kind]++
-  return { total: items.reduce((s, i) => s + i.requests, 0), items, counts }
+  for (const i of items) if (i.kind !== 'base' && !i.deferred) counts[i.kind]++
+  const sum = (list: CostItem[]) => list.reduce((s, i) => s + i.requests, 0)
+  return {
+    total: sum(items.filter((i) => !i.deferred)),
+    deferred: sum(items.filter((i) => i.deferred)),
+    items,
+    counts
+  }
 }

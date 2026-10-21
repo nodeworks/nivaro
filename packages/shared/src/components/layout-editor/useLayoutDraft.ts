@@ -68,6 +68,8 @@ export interface ApplyOptions {
 export interface SaveMeta {
   reason: string
   ticket?: string | null
+  /** The override note that lets a save through an edit freeze (#2717). */
+  freeze_override?: string | null
 }
 
 /** One unsaved change: its label and ops (the unsaved list, crash recovery). */
@@ -1196,7 +1198,8 @@ function engineFor(layoutId: number, current: Live, autosave: boolean) {
             ops,
             base_rev: baseRev,
             note,
-            ...(meta ? { reason: meta.reason, ticket: meta.ticket ?? null } : {})
+            ...(meta ? { reason: meta.reason, ticket: meta.ticket ?? null } : {}),
+            ...(meta?.freeze_override ? { freeze_override: meta.freeze_override } : {})
           })
         )
         const bundle = parseBundle(res)

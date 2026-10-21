@@ -203,6 +203,11 @@ export function describeReason(
       return [{ text: 'anything else', strong: true }]
     case 'type_use':
       return reason.type_use ? [{ text: reason.type_use }] : []
+    case 'phone':
+      return [
+        { text: 'on small screens, instead of ' },
+        { text: reason.phone_of_name ?? 'its form', strong: true }
+      ]
     default:
       return []
   }

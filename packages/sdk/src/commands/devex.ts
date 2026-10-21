@@ -502,8 +502,9 @@ export function readCollectionLayouts(collection: string): Command<{ data: Colle
 /** Read the active layout for a collection with groups + assignments. */
 export function readActiveLayout(
   collection: string,
-  /** `slug` pins a layout by link name; `item` resolves record-conditional layouts. */
-  opts?: { slug?: string; item?: string | number }
+  /** `slug` pins a layout by link name; `item` resolves record-conditional layouts;
+   *  `viewport: 'phone'` gets a form's phone version where it has one. */
+  opts?: { slug?: string; item?: string | number; viewport?: 'phone' }
 ): Command<{
   data: {
     layout: CollectionLayout
