@@ -103,6 +103,7 @@ export function useInvalidateLayouts(collection: string) {
       const refetchType = opts?.lazy ? 'none' : 'active'
       for (const queryKey of [
         overviewKeys.overview(collection),
+        ['layout-editor', 'health', collection],
         ['collection-layouts', collection],
         ['active-layout', collection]
       ])

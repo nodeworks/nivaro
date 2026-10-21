@@ -22,6 +22,8 @@ import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { useLayoutEditorHost } from './host'
 import { FormSettings, Inspector } from './inspector-slot'
 import { LayoutsRail } from './LayoutsRail'
+import { LintButton, LintPanel } from './lint/LintPanel'
+import { useLayoutLint } from './lint/lint-api'
 import type { DescribeField, Segment } from './overview/describe-conditions'
 import {
   useApproxRecordCount,
@@ -334,7 +336,7 @@ export function LayoutEditor({
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add'>('layouts')
-  const [panel, setPanel] = useState<'inspector' | 'settings'>('inspector')
+  const [panel, setPanel] = useState<'inspector' | 'settings' | 'checks'>('inspector')
   const [selected, setSelected] = useState<DesignTarget | null>(null)
   const [showHidden, setShowHidden] = useState(false)
   const [preview, setPreview] = useState<PreviewAs>({
@@ -349,6 +351,7 @@ export function LayoutEditor({
     bundle?.layout.parent_layout_id != null ? Number(bundle.layout.parent_layout_id) : null
   const { data: parent = null } = useLayoutBundle(parentId)
   const { data: record = null } = usePreviewRecord(collection, preview.record?.id ?? null)
+  const lint = useLayoutLint(collection, bundle, parent)
 
   useUndoKeys(draft)
   useLeaveGuard(draft)
@@ -434,6 +437,15 @@ export function LayoutEditor({
         onShowHidden={setShowHidden}
         onBack={leave}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
+        checks={
+          bundle && (
+            <LintButton
+              findings={lint.findings}
+              active={panel === 'checks'}
+              onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
+            />
+          )
+        }
       />
       {overlay && (
         <EditingBanner
@@ -535,7 +547,16 @@ export function LayoutEditor({
             className='flex w-[344px] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white dark:border-border dark:bg-card'
           >
             {bundle &&
-              (panel === 'settings' ? (
+              (panel === 'checks' ? (
+                <LintPanel
+                  findings={lint.findings}
+                  health={lint.health}
+                  ready={lint.ready}
+                  onSelect={setSelected}
+                  apply={draft.apply}
+                  onOpenAiReview={host.aiReviewSlot ? () => setPanel('settings') : undefined}
+                />
+              ) : panel === 'settings' ? (
                 <FormSettings
                   bundle={bundle}
                   apply={draft.apply}
