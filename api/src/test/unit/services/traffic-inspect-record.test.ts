@@ -2,7 +2,7 @@
 // Traffic Map drill-down group "record" (chain, recording, record, write, issue) through the
 // Wave 0 harness: the generic inspect routes + the group's own route, with the database mocked.
 import Fastify from 'fastify'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type Call = [string, unknown[]]
 interface Q {
@@ -118,12 +118,17 @@ const get = async (url: string) => {
   return res
 }
 
+// The fixtures sit at T; retention windows (recordings 7 days, API log 14)
+// are measured from now, so the clock is pinned just after T.
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'], now: T + 60 * 60_000 })
   for (const k of Object.keys(h.handlers)) delete h.handlers[k]
   vi.mocked(readOne).mockReset()
   vi.mocked(readOne).mockResolvedValue({ id: 12, title: 'Hello' })
   vi.mocked(buildChainPath).mockReset()
 })
+
+afterEach(() => vi.useRealTimers())
 
 describe('registration', () => {
   it('registers the five kinds of the group', () => {

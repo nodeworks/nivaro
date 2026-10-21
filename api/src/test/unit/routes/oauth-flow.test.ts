@@ -28,6 +28,12 @@ vi.mock('../../../db/index.js', () => {
   return { db }
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+// servesAdminSpa follows whether admin/dist exists on disk; pin the API-only
+// case so a local admin build doesn't change the sign-in redirect.
+vi.mock('../../../admin-base.js', async (orig) => ({
+  ...(await orig<object>()),
+  servesAdminSpa: false
+}))
 // The consent page authenticates like every route; here the session's user stands in.
 vi.mock('../../../middleware/authenticate.js', () => ({
   requireAuth: vi.fn(async () => {}),

@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { hasFfmpeg, probeVideo, runFfmpeg } from '../../services/ffmpeg.js'
+import { ffmpegOutput, hasFfmpeg, probeVideo, runFfmpeg } from '../../services/ffmpeg.js'
 import { buildCursorAss } from '../../services/help-video-cursor.js'
 import { normalizeEdits } from '../../services/help-video-edits.js'
 import { renderSizes } from '../../services/help-video-render-plan.js'
@@ -14,6 +14,9 @@ import { runRenderPlan } from './help-video-graph-file.js'
 describe('moving zoom and cursor through real ffmpeg', () => {
   it('renders a clip with a panning zoom and an ASS cursor', async (ctx) => {
     if (!(await hasFfmpeg())) ctx.skip()
+    // The cursor burns in through libass; an ffmpeg built without it (stock
+    // Homebrew) has no `ass` filter, so there is nothing to prove here.
+    if (!/^\s*\S+\s+ass\s/m.test(await ffmpegOutput(['-hide_banner', '-filters']))) ctx.skip()
     const dir = mkdtempSync(join(tmpdir(), 'nvr-cursor-'))
     const src = join(dir, 'src.webm')
     await runFfmpeg([
