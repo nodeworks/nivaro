@@ -82,6 +82,7 @@ import {
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
 import { prefetchRecord, useIdleNextPage } from '../lib/prefetch'
+import { rowPresenceKey, useRowPresence } from '../lib/presence-hooks'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { logSearch, logSearchOpen } from '../lib/search-log'
@@ -130,6 +131,7 @@ import {
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
+import { RowPresence } from './RowPresence'
 import { TipLayer } from './TipLayer'
 import { UnseenDot } from './UnseenDot'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
@@ -4861,6 +4863,12 @@ export function CollectionBrowserView({
   const rowChanges = useRowChanges()
   const visibleIdsRef = useRef<Set<string>>(new Set())
   visibleIdsRef.current = new Set(rows.map((r) => String(r.id)))
+  // Who has each row open (#2486): pushed through the presence room; the mark slot shows it.
+  const presenceRows = useMemo(
+    () => rows.slice(0, 100).map((r) => ({ collection, item: String(r.id) })),
+    [rows, collection]
+  )
+  const rowViewers = useRowPresence(presenceRows)
   const itemsKeyRef = useRef<unknown[]>([])
   itemsKeyRef.current = [
     'cbv-items',
@@ -8389,6 +8397,11 @@ export function CollectionBrowserView({
                                     lock={rowLock}
                                     isNew={rowChanges.isNew(String(id))}
                                     dataAttr='data-cbv-live-mark'
+                                  />
+                                ) : rowViewers[rowPresenceKey(collection, String(id))] ? (
+                                  <RowPresence
+                                    viewers={rowViewers[rowPresenceKey(collection, String(id))]}
+                                    dataAttr='data-cbv-presence'
                                   />
                                 ) : (
                                   <UnseenDot change={unseen} dataAttr='data-cbv-unseen' />

@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 import { useAuth } from '@/lib/auth'
+import { getSocket, usesWorkerSocket } from '@/lib/socket'
 import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 
 /**
@@ -17,6 +18,10 @@ import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
  * changes are needed. Editing indicators are applied two ways: returned as
  * state (header chips) and as an imperative outline class on the field
  * wrapper (`nvr-remote-editing`), which the caller's page styles.
+ *
+ * The record room rides a socket of its own per record page — unless the tab shares the
+ * browser's socket (#2475): then it is the shared one, which sits in several record rooms
+ * at once and routes each room's events to the tabs holding it.
  */
 
 export interface Viewer {
@@ -37,34 +42,45 @@ export function useRecordPresence(collection: string | undefined, item: string |
   useEffect(() => {
     if (!collection || !item || item === 'new') return
 
-    const socket = io(API_URL, {
-      ...SOCKET_TRANSPORT_OPTIONS,
-      withCredentials: true,
-      reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
-      reconnectionDelayMax: 15_000,
-      randomizationFactor: 0.6
-    })
+    const shared = usesWorkerSocket()
+    const socket = shared
+      ? getSocket()
+      : io(API_URL, {
+          ...SOCKET_TRANSPORT_OPTIONS,
+          withCredentials: true,
+          reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
+          reconnectionDelayMax: 15_000,
+          randomizationFactor: 0.6
+        })
     socketRef.current = socket
     let disposed = false
+    /** Everything this record page put on the socket, so a shared one is left clean. */
+    const bound: Array<[string, (...a: any[]) => void]> = []
+    const bind = (event: string, cb: (...a: any[]) => void) => {
+      socket.on(event, cb)
+      bound.push([event, cb])
+    }
 
-    socket.on('connect', async () => {
-      // Session-cookie users mint a one-time ws token; static-token users
-      // authenticate directly.
-      let token = user?.static_token ?? null
-      if (!token) {
-        try {
-          const r = await api.get<{ data: { token: string } }>('/auth/ws-token')
-          token = r.data.data?.token ?? (r.data as unknown as { token?: string }).token ?? null
-        } catch {
-          token = null
+    if (!shared)
+      bind('connect', async () => {
+        // Session-cookie users mint a one-time ws token; static-token users
+        // authenticate directly.
+        let token = user?.static_token ?? null
+        if (!token) {
+          try {
+            const r = await api.get<{ data: { token: string } }>('/auth/ws-token')
+            token = r.data.data?.token ?? (r.data as unknown as { token?: string }).token ?? null
+          } catch {
+            token = null
+          }
         }
-      }
-      if (token && !disposed) socket.emit('auth', { token })
-    })
+        if (token && !disposed) socket.emit('auth', { token })
+      })
 
-    socket.on('auth:ok', () => {
-      socket.emit('record:join', { collection, item })
-    })
+    const join = () => socket.emit('record:join', { collection, item })
+    bind('auth:ok', join)
+    // The shared socket is usually signed in already: join now, and again after each auth:ok.
+    if (shared && socket.connected) join()
 
     // This socket is the one inside the record room (and the user room): hand
     // the live-record notices to the shared hooks (lib/live.ts useLiveEvent).
@@ -75,9 +91,11 @@ export function useRecordPresence(collection: string | undefined, item: string |
       'access:changed',
       'record:signal'
     ]
-    for (const ev of relayed) socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
+    // On the shared socket the host relays these once for every record page (getSocket).
+    if (!shared)
+      for (const ev of relayed) bind(ev, (payload: unknown) => relayLiveEvent(ev, payload))
 
-    socket.on(
+    bind(
       'record:viewers',
       (payload: { collection?: string | null; item?: string | null; viewers: Viewer[] }) => {
         if (
@@ -108,25 +126,45 @@ export function useRecordPresence(collection: string | undefined, item: string |
       if (d?.collection === collection && String(d.item) === String(item) && d.kind)
         socket.emit('record:signal', { collection, item, kind: d.kind, state: d.state })
     }
-    window.addEventListener('nvr:record-signal-out', onSignalOut)
-    socket.on('record:uploading', (payload: unknown) => {
+    // On the shared socket the sender's own `realtime.emit('record:signal')` already reaches it.
+    if (!shared) window.addEventListener('nvr:record-signal-out', onSignalOut)
+    bind('record:uploading', (payload: unknown) => {
       window.dispatchEvent(new CustomEvent('nvr:record-uploading', { detail: payload }))
     })
 
-    socket.on('field:editing', (payload: { field: string; user: Viewer | null }) => {
-      setEditing((prev) => {
-        const next = { ...prev }
-        if (payload.user && payload.user.id !== user?.id) next[payload.field] = payload.user
-        else delete next[payload.field]
-        return next
-      })
-    })
+    const forThisRecord = (p: { collection?: string | null; item?: string | null }) =>
+      p?.collection == null ||
+      p?.item == null ||
+      (p.collection === collection && String(p.item) === String(item))
+    bind(
+      'field:editing',
+      (payload: {
+        field: string
+        user: Viewer | null
+        collection?: string | null
+        item?: string | null
+      }) => {
+        if (!forThisRecord(payload)) return
+        setEditing((prev) => {
+          const next = { ...prev }
+          if (payload.user && payload.user.id !== user?.id) next[payload.field] = payload.user
+          else delete next[payload.field]
+          return next
+        })
+      }
+    )
 
     // Live keystroke preview from other editors
-    socket.on(
+    bind(
       'field:changed',
-      (payload: { field: string; value?: unknown; user: Viewer | null }) => {
-        if (!payload.user || payload.user.id === user?.id) return
+      (payload: {
+        field: string
+        value?: unknown
+        user: Viewer | null
+        collection?: string | null
+        item?: string | null
+      }) => {
+        if (!forThisRecord(payload) || !payload.user || payload.user.id === user?.id) return
         setEditing((prev) => ({
           ...prev,
           [payload.field]: { ...payload.user!, value: payload.value }
@@ -200,7 +238,8 @@ export function useRecordPresence(collection: string | undefined, item: string |
       document.removeEventListener('focusout', onFocusOut)
       document.removeEventListener('input', onInput)
       socket.emit('record:leave', { collection, item })
-      socket.disconnect()
+      for (const [ev, cb] of bound) socket.off(ev, cb)
+      if (!shared) socket.disconnect()
       socketRef.current = null
       setViewers([])
       setEditing({})

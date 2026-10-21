@@ -75,6 +75,18 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
         node_scope: 'this API process only (Redis adapter fans out across nodes)',
         journal_seq: await currentSeq(),
         socket_count: stats.sockets.length,
+        // #2475 — how many connections are shared workers (one per browser and app), and how
+        // many signed-in people the sockets on this node belong to (sockets ÷ people = tabs or
+        // browsers per person).
+        shared_worker_count: stats.sockets.filter((s) => s.shared_worker).length,
+        people_count: new Set(
+          stats.sockets
+            .map((s) =>
+              s.user && typeof s.user === 'object' ? (s.user as { id?: string }).id : s.user
+            )
+            .filter(Boolean)
+            .map((u) => String(u).toUpperCase())
+        ).size,
         transports,
         sse_streams: sseListenerCount(),
         polling_allowed: socketPollingAllowed(),
@@ -95,6 +107,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
           app: s.app,
           transport: s.transport,
           coalesce: s.coalesce,
+          shared_worker: s.shared_worker,
           build: s.version?.build ?? null,
           api_version: s.version?.api ?? null,
           connected_seconds: Math.round((Date.now() - s.connectedAt) / 1000),

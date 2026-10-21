@@ -39,6 +39,8 @@ vi.mock('@nivaro/shared', () => ({
   tapReplaySocket: () => {},
   // #2477 — no event here is sampled for a delivery ack.
   deliveryAckFor: () => null,
+  // #2475 — these tests exercise the per-tab socket and the leader relay, not the worker.
+  shouldUseWorkerSocket: () => false,
   createLeaderSocket: (
     _key: string,
     cbs: { becomeLeader: (deliver: unknown, emit: { current: unknown }) => void }

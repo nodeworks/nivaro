@@ -3,6 +3,8 @@ import {
   type CollectionUpdateEvent,
   createLeaderSocket,
   createRoomGapTracker,
+  createSocketRealtime,
+  createWorkerSocket,
   deliveryAckFor,
   forgetSettledReads,
   measureClockOffset,
@@ -10,8 +12,12 @@ import {
   type RealtimeStatus,
   refetchEventsFor,
   relayLiveEvent,
+  type SocketLike,
+  type SocketRealtime,
   setServerClockOffset,
-  tapReplaySocket
+  shouldUseWorkerSocket,
+  tapReplaySocket,
+  type WorkerSocket
 } from '@nivaro/shared'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
@@ -45,6 +51,12 @@ import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
  * - Missed events while connected (#2462): a room whose own counter (`_rseq`) skips is caught up
  *   alone (`catchup:room`); `realtime:stale` (#2460, the server held this tab's broadcasts while
  *   it was too far behind) refetches the rooms it names.
+ * - One socket per browser (#2475): when the browser has SharedWorker and the API serves the
+ *   worker script, `getSocket()` is a facade over the shared worker's port (every tab, one
+ *   connection, rooms and catch-up owned by the worker) and the shared `createSocketRealtime`
+ *   is the adapter. The leader-tab model below is the fallback: no SharedWorker, a View-as
+ *   tab, the worker switched off (`REALTIME_SHARED_WORKER=off`, localStorage
+ *   `nvr-realtime-worker=off`), or a worker that cannot connect while the API answers HTTP.
  */
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
@@ -222,6 +234,9 @@ function syncSse() {
 async function considerSseFallback() {
   socketFailures++
   if (sseMode || socketFailures < 2) return
+  // The shared worker's failures are its own to judge: it hands the tab its own socket when
+  // the API answers HTTP but no transport connects, and that socket's errors land here.
+  if (workerSocket && workerSocket.mode() !== 'fallback') return
   // A View-as tab never falls back (H9): EventSource cannot send the View-as token, so the
   // stream would open on the administrator's own cookie and show their events in this tab.
   if (readMasquerade()) return
@@ -251,9 +266,19 @@ async function authToken(): Promise<string | null> {
   }
 }
 
-export function getSocket(): Socket {
-  if (socket) return socket
-  socket = io(API_URL, {
+// ── One socket per browser (#2475) ──────────────────────────────────────────
+const WORKER_URL = `${API_URL}/api/realtime/worker.js`
+let workerSocket: WorkerSocket | null = null
+let workerDecided: boolean | null = null
+
+/** Whether this tab shares the browser's socket (decided once, before the first socket). */
+export function usesWorkerSocket(): boolean {
+  if (workerDecided == null) workerDecided = !readMasquerade() && shouldUseWorkerSocket(WORKER_URL)
+  return workerDecided
+}
+
+function openSocket(): Socket {
+  const options = {
     ...SOCKET_TRANSPORT_OPTIONS,
     withCredentials: true,
     reconnection: true,
@@ -262,7 +287,26 @@ export function getSocket(): Socket {
     reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
     reconnectionDelayMax: 15_000,
     randomizationFactor: 0.6
+  }
+  if (!usesWorkerSocket()) return io(API_URL, options)
+  workerSocket = createWorkerSocket({
+    url: WORKER_URL,
+    name: 'admin',
+    app: 'admin',
+    version: { ...clientVersion() },
+    authToken,
+    fallback: () => io(API_URL, options),
+    onMode: (mode, reason) => {
+      if (mode === 'fallback' && reason !== 'unsupported')
+        reportConnection('downgraded', 'worker', reason)
+    }
   })
+  return workerSocket as unknown as Socket
+}
+
+export function getSocket(): Socket {
+  if (socket) return socket
+  socket = openSocket()
   // #2476 — the session recorder lists the events this socket receives (names, rooms, ids).
   tapReplaySocket(socket)
   socket.on('connect', () => {
@@ -351,25 +395,38 @@ export function getSocket(): Socket {
     if (lastSeq === 0 && typeof p?.seq === 'number' && p.seq > 0) lastSeq = p.seq
   })
   socket.on('nvr:ping', (p: { t?: number }) => socket?.emit('nvr:pong', { t: p?.t }))
+  // #2475 — on the shared worker's socket the shared adapter (viaWorker) owns room gaps, delivery
+  // acks and stale-room refetches; doing them here as well would ask and ack twice per tab.
+  const perTab = !usesWorkerSocket()
   socket.onAny((_event, payload) => {
     const seq = (payload as { _seq?: number } | undefined)?._seq
     if (typeof seq === 'number' && seq > lastSeq) lastSeq = seq
+    if (!perTab) return
     roomGaps.observe(payload)
     // #2477 — a sampled event asks for its receive time (the delivery SLO's real clients).
     const ack = deliveryAckFor(payload)
     if (ack) socket?.emit('rt:ack', ack)
   })
-  socket.on('catchup:room:events', (p: Parameters<typeof roomGaps.replayed>[0]) =>
-    roomGaps.replayed(p)
-  )
-  socket.on('realtime:stale', (p: { rooms?: string[]; all?: boolean }) => {
-    const rooms = Array.isArray(p?.rooms) ? p.rooms.filter((r) => typeof r === 'string') : []
-    roomGaps.reset(rooms)
-    if (p?.all) {
-      window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
-      window.dispatchEvent(new CustomEvent('nvr:realtime-stale', { detail: { rooms, all: true } }))
-    } else if (rooms.length) refetchRooms(rooms)
-  })
+  if (perTab) {
+    socket.on('catchup:room:events', (p: Parameters<typeof roomGaps.replayed>[0]) =>
+      roomGaps.replayed(p)
+    )
+    socket.on('realtime:stale', (p: { rooms?: string[]; all?: boolean }) => {
+      const rooms = Array.isArray(p?.rooms) ? p.rooms.filter((r) => typeof r === 'string') : []
+      roomGaps.reset(rooms)
+      if (p?.all) {
+        window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
+        window.dispatchEvent(
+          new CustomEvent('nvr:realtime-stale', { detail: { rooms, all: true } })
+        )
+      } else if (rooms.length) refetchRooms(rooms)
+    })
+  } else {
+    // The adapter leaves this window event to getSocket() (viaWorker's windowEvents).
+    socket.on('realtime:stale', (p: { all?: boolean }) => {
+      if (p?.all) window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
+    })
+  }
   socket.on(
     'catchup:events',
     (p: { events?: Array<{ seq: number; event: string; payload: Record<string, unknown> }> }) => {
@@ -406,6 +463,11 @@ export function getSocket(): Socket {
   for (const ev of ['job:progress', 'bulk:rows', 'announcements:changed', 'flags:changed']) {
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   }
+  // #2475 — on the shared socket the record rooms ride this connection too (the per-record
+  // socket in use-record-presence relays these itself otherwise).
+  if (usesWorkerSocket())
+    for (const ev of ['record:integrity', 'record:automation', 'owners:changed', 'record:signal'])
+      socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   return socket
 }
 
@@ -532,9 +594,33 @@ function ensureLeaderSocket() {
   return leaderHandle
 }
 
+/**
+ * #2475 — with the shared worker the socket is already one per browser and the worker keeps
+ * every tab's rooms, so the shared adapter over it is the whole story; the leader-tab relay
+ * below is for the per-tab socket.
+ */
+let workerRealtime: SocketRealtime | null = null
+function viaWorker(): SocketRealtime | null {
+  if (!usesWorkerSocket()) return null
+  if (!workerRealtime)
+    workerRealtime = createSocketRealtime({
+      socket: () => getSocket() as unknown as SocketLike,
+      // getSocket() raises these window events itself.
+      windowEvents: {
+        catchupFull: false,
+        accessChanged: false,
+        configUpdate: false,
+        forceRefresh: false
+      }
+    })
+  return workerRealtime
+}
+
 /** RealtimeAdapter for shared components (CBV patches, RecordLiveSync, MyWork). */
 export const adminRealtime: RealtimeAdapter = {
   subscribeCollections(collections, cb) {
+    const w = viaWorker()
+    if (w) return w.subscribeCollections(collections, cb)
     const handle = ensureLeaderSocket()
     for (const c of collections) {
       // Track locally too — if this tab later PROMOTES to leader it must know
@@ -550,12 +636,16 @@ export const adminRealtime: RealtimeAdapter = {
     return off
   },
   on(event, cb) {
+    const w = viaWorker()
+    if (w) return w.on(event, cb)
     const handle = ensureLeaderSocket()
     return handle.onEvent((ev, payload) => {
       if (ev === event) cb(payload)
     })
   },
   emit(event, payload) {
+    const w = viaWorker()
+    if (w) return w.emit(event, payload)
     const handle = ensureLeaderSocket()
     // Topic joins are reference counted and re-sent after a reconnect (auth:ok above).
     if (event === 'ops:join' || event === 'ops:leave') {
@@ -570,9 +660,11 @@ export const adminRealtime: RealtimeAdapter = {
     handle.emit(event, payload)
   },
   status() {
-    return status
+    return viaWorker()?.status() ?? status
   },
   onStatus(cb) {
+    const w = viaWorker()
+    if (w) return w.onStatus(cb)
     // The state is this tab's own socket; make sure there is one to report on.
     getSocket()
     statusListeners.add(cb)
@@ -587,6 +679,8 @@ export const adminRealtime: RealtimeAdapter = {
 
 /** Join an admin watch room (traffic/jobs/monitors); returns leave fn. */
 export function joinWatchRoom(room: string): () => void {
+  const w = viaWorker()
+  if (w) return w.joinWatch(room)
   const handle = ensureLeaderSocket()
   localWatchRefs.set(room, (localWatchRefs.get(room) ?? 0) + 1)
   handle.emit('__join_watch', room)

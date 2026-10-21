@@ -10,7 +10,8 @@ function meta(user: string, build: string): SocketMeta {
     app: 'admin',
     version: { build, api: '0.2.39', tab: null, loaded: null } as SocketMeta['version'],
     transport: 'websocket',
-    coalesce: true
+    coalesce: true,
+    shared_worker: false
   }
 }
 

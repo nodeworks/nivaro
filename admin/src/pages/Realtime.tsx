@@ -41,6 +41,8 @@ interface SocketRow {
   transport?: string | null
   /** #1681 — the client takes coalesced collection:update bursts. */
   coalesce?: boolean
+  /** #2475 — a browser's shared worker: one connection carrying every tab of that app. */
+  shared_worker?: boolean
 }
 
 /** #1730 — bytes written to sockets, by event type and by room kind (this node). */
@@ -62,6 +64,9 @@ interface RealtimeStats {
   api_version?: string
   versions?: VersionGroup[]
   transports?: Record<string, number>
+  /** #2475 — connections that are shared workers, and distinct signed-in people (this node). */
+  shared_worker_count?: number
+  people_count?: number
   sse_streams?: number
   polling_allowed?: boolean
   compression?: boolean
@@ -513,7 +518,17 @@ function SocketsTab() {
             {data.sockets.map((s) => (
               <tr key={s.id}>
                 <td className='px-3 py-1.5 font-mono text-[11px]'>{s.user ?? '(unauth)'}</td>
-                <td className='px-3 py-1.5'>{s.app ?? '—'}</td>
+                <td className='px-3 py-1.5'>
+                  {s.app ?? '—'}
+                  {s.shared_worker && (
+                    <span
+                      className='ml-1 rounded bg-slate-100 px-1 text-[10px] text-slate-500 dark:bg-muted dark:text-muted-foreground'
+                      data-tip='A shared worker: one connection for every tab of this app in that browser'
+                    >
+                      shared
+                    </span>
+                  )}
+                </td>
                 <td className='px-3 py-1.5'>
                   <span
                     className={cn(
@@ -765,10 +780,20 @@ function TransportStrip({ data }: { data: RealtimeStats }) {
       'Compression',
       data.compression === false ? 'Off' : 'On',
       'Per-message deflate for frames over 1 KB (SOCKET_COMPRESSION=off disables it)'
+    ],
+    [
+      'Shared workers',
+      String(data.shared_worker_count ?? 0),
+      "Connections that are a browser's shared worker — one carrying every tab of that app (REALTIME_SHARED_WORKER=off turns the worker off)"
+    ],
+    [
+      'Per person',
+      data.people_count ? (data.socket_count / data.people_count).toFixed(1) : '–',
+      `Sockets per signed-in person on this node (${data.people_count ?? 0} people): tabs or browsers each person holds open`
     ]
   ]
   return (
-    <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-5 dark:border-border dark:bg-border'>
+    <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-7 dark:border-border dark:bg-border'>
       {cells.map(([label, value, tip]) => (
         <div key={label} data-tip={tip} className='bg-white px-3 py-2 dark:bg-card'>
           <div className='text-[10.5px] uppercase tracking-wide text-slate-400'>{label}</div>
