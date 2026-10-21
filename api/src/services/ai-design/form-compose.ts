@@ -1,7 +1,13 @@
 import { extname } from 'node:path'
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../../db/index.js'
-import { getAiClient, getAiModelSettings, settingsRow } from '../ai-client.js'
+import {
+  AiImagesUnsupportedError,
+  getAiClient,
+  getAiModelSettings,
+  IMAGES_REQUIRED,
+  settingsRow
+} from '../ai-client.js'
 import { ACCEPTED_EXTENSIONS, extractDocumentText, MAX_TEXT_CHARS } from '../document-extract.js'
 import { isPersonField } from '../layout-usage.js'
 import { asArray, cleanText, parseJsonLoose, titleCase } from './model.js'
@@ -383,12 +389,22 @@ export async function composeAsk(kind: 'chat' | 'generate' = 'chat'): Promise<Co
   const client = await getAiClient({ model })
   if (!client) return null
   return async (system, content, maxTokens) => {
-    const msg = await client.messages.create({
-      model,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: 'user', content }]
-    })
+    // A picture IS the input here: a gateway that cannot read it must say so,
+    // not answer from "[image omitted]" (ai-client withImageFallback).
+    const pictures = Array.isArray(content) && content.some((b) => b.type === 'image')
+    let msg: Anthropic.Message
+    try {
+      msg = (await client.messages.create({
+        model,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: 'user', content }],
+        ...(pictures ? { [IMAGES_REQUIRED]: true } : {})
+      })) as Anthropic.Message
+    } catch (err) {
+      if (err instanceof AiImagesUnsupportedError) throw new ComposeRefusal(err.message)
+      throw err
+    }
     return msg.content
       .filter((c) => c.type === 'text')
       .map((c) => ('text' in c ? c.text : ''))

@@ -10,8 +10,10 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../services/ai-client.js', () => ({
   getAiClient: vi.fn(),
-  getAiModelSettings: vi.fn(),
-  settingsRow: vi.fn()
+  getAiModelSettings: vi.fn(async () => ({ chatModel: 'chat-m', generateModel: 'gen-m' })),
+  settingsRow: vi.fn(),
+  IMAGES_REQUIRED: Symbol.for('nivaro.ai.imagesRequired'),
+  AiImagesUnsupportedError: class AiImagesUnsupportedError extends Error {}
 }))
 vi.mock('../../../services/read-gate.js', () => ({
   withReadGate: (_who: unknown, fn: () => unknown) => fn()
@@ -28,9 +30,15 @@ vi.mock('../../../services/document-extract.js', () => ({
 }))
 
 import {
+  AiImagesUnsupportedError,
+  getAiClient,
+  IMAGES_REQUIRED
+} from '../../../services/ai-client.js'
+import {
   buildComposeContextJson,
   type ComposeContext,
   ComposeRefusal,
+  composeAsk,
   composeForm,
   documentContent,
   fieldResolver,
@@ -390,5 +398,34 @@ describe('planSlim', () => {
     expect(plan.min_changes).toBe(4)
     expect(plan.keep.map((k) => k.field)).toEqual(['reason'])
     expect(plan.hide_groups).toEqual([{ key: 'internal', label: 'Internal' }])
+  })
+})
+
+describe('composeAsk', () => {
+  it('marks a call with pictures as needing them and turns a refusal into a clear 422', async () => {
+    const create = vi.fn(async () => {
+      throw new AiImagesUnsupportedError('The configured AI cannot read pictures.')
+    })
+    vi.mocked(getAiClient).mockResolvedValue({ messages: { create } } as never)
+    const ask = await composeAsk('chat')
+    await expect(
+      ask?.(
+        'sys',
+        [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x' } }],
+        10
+      )
+    ).rejects.toThrow(ComposeRefusal)
+    const params = (create.mock.calls[0] as unknown as [Record<PropertyKey, unknown>])[0]
+    expect(params[IMAGES_REQUIRED]).toBe(true)
+    expect(params.model).toBe('chat-m')
+  })
+
+  it('does not mark a text-only call', async () => {
+    const create = vi.fn(async () => ({ content: [{ type: 'text', text: 'hi' }] }))
+    vi.mocked(getAiClient).mockResolvedValue({ messages: { create } } as never)
+    const ask = await composeAsk('chat')
+    expect(await ask?.('sys', 'plain', 10)).toBe('hi')
+    const params = (create.mock.calls[0] as unknown as [Record<PropertyKey, unknown>])[0]
+    expect(params[IMAGES_REQUIRED]).toBeUndefined()
   })
 })

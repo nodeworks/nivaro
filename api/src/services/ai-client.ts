@@ -426,10 +426,98 @@ function textOf(content: string | Block[] | undefined | null): string {
     .join('\n')
 }
 
+/**
+ * A call whose answer depends on its pictures (AI form from a picture,
+ * #2669): when the gateway refuses image parts it fails with
+ * AiImagesUnsupportedError instead of retrying with the pictures left out.
+ * A symbol key, so it rides every params spread and never reaches a wire.
+ */
+export const IMAGES_REQUIRED: unique symbol = Symbol.for('nivaro.ai.imagesRequired')
+
+export class AiImagesUnsupportedError extends Error {
+  statusCode = 422
+  constructor(detail?: string | null) {
+    super(
+      `The configured AI cannot read pictures${detail ? ` (${detail.slice(0, 120)})` : ''}. Choose one that can under Settings → AI Features, or upload a PDF, Word or Excel file instead.`
+    )
+    this.name = 'AiImagesUnsupportedError'
+  }
+}
+
+/** Does any user turn carry a base64 picture (sent as an image_url part)? */
+export function hasImageParts(params: MessageParams): boolean {
+  return params.messages.some(
+    (m) =>
+      m.role === 'user' &&
+      Array.isArray(m.content) &&
+      (m.content as Block[]).some((b) => b.type === 'image' && b.source.type === 'base64')
+  )
+}
+
+/** A gateway refusing the image parts (a model without vision), as opposed to any other 4xx. */
+export function isImageRefusal(status: number, detail: string): boolean {
+  return (
+    [400, 415, 422].includes(status) && /image|content|unsupported|vision|multimodal/i.test(detail)
+  )
+}
+
+let imageFallbackLogged = false
+/** Calls that retried without their pictures since boot (the gateway model has no vision). */
+let imageFallbacks = 0
+export function imageFallbacksSinceBoot(): number {
+  return imageFallbacks
+}
+function noteImageFallback(detail: string) {
+  imageFallbacks++
+  if (imageFallbackLogged) return
+  imageFallbackLogged = true
+  // biome-ignore lint/suspicious/noConsole: once per process — the gateway model cannot read pictures
+  console.warn(
+    `[ai] gateway refused image parts (${detail.slice(0, 120)}) — retrying without pictures ("[image omitted]")`
+  )
+}
+
+/**
+ * Retry rule for image parts on the OpenAI-compatible gateway: run with the
+ * pictures; a refusal of the pictures retries ONCE with them left out as
+ * "[image omitted]" (how every caller was served before), unless the call
+ * marked IMAGES_REQUIRED — then it fails with AiImagesUnsupportedError.
+ * `run(images)` throws GatewayHttpError for a non-2xx answer.
+ */
+export async function withImageFallback<T>(
+  params: MessageParams,
+  run: (images: boolean) => Promise<T>
+): Promise<T> {
+  if (!hasImageParts(params)) return run(true)
+  try {
+    return await run(true)
+  } catch (err) {
+    if (!(err instanceof GatewayHttpError) || !isImageRefusal(err.status, err.detail)) throw err
+    if ((params as { [IMAGES_REQUIRED]?: boolean })[IMAGES_REQUIRED])
+      throw new AiImagesUnsupportedError(err.detail)
+    noteImageFallback(err.detail)
+    return run(false)
+  }
+}
+
+/** A non-2xx gateway answer; the message keeps the historic "AI gateway <status>: …" shape. */
+export class GatewayHttpError extends Error {
+  status: number
+  detail: string
+  constructor(status: number, detail: string) {
+    super(`AI gateway ${status}: ${detail}`)
+    this.name = 'GatewayHttpError'
+    this.status = status
+    this.detail = detail
+  }
+}
+
 export function toOpenAi(
   params: MessageParams,
   model: string,
-  stream = false
+  stream = false,
+  /** false = pictures go as "[image omitted]" (the gateway refused image parts). */
+  opts: { images?: boolean } = {}
 ): Record<string, unknown> {
   const messages: Array<Record<string, unknown>> = []
   const system =
@@ -483,7 +571,7 @@ export function toOpenAi(
       else if (b.type === 'image') {
         // A base64 picture rides as an image_url part (data URL) on a user turn
         // (AI form from a picture, #2669); anything else is still left out.
-        if (m.role === 'user' && b.source.type === 'base64')
+        if (m.role === 'user' && b.source.type === 'base64' && opts.images !== false)
           images.push({
             type: 'image_url',
             image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` }
@@ -593,7 +681,7 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
   const url = `${api.base_url}/openai/v1/chat/completions`
   const create = async (raw: MessageParams): Promise<Anthropic.Message> => {
     const params = caching ? withPromptCaching(raw) : raw
-    const attempt = async (retryOn401: boolean): Promise<Anthropic.Message> => {
+    const attempt = async (retryOn401: boolean, images: boolean): Promise<Anthropic.Message> => {
       const bearer = await gatewayBearer(api)
       const res = await fetch(url, {
         method: 'POST',
@@ -601,11 +689,11 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
           'Content-Type': 'application/json',
           Authorization: `Bearer ${bearer}`
         },
-        body: JSON.stringify(toOpenAi(params, model))
+        body: JSON.stringify(toOpenAi(params, model, false, { images }))
       })
       if (res.status === 401 && retryOn401) {
         bustGatewayBearer()
-        return attempt(false)
+        return attempt(false, images)
       }
       const text = await res.text()
       let body: OpenAiResponse = {}
@@ -616,11 +704,11 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
       }
       if (!res.ok) {
         const detail = typeof body.error === 'string' ? body.error : body.error?.message
-        throw new Error(`AI gateway ${res.status}: ${detail ?? text.slice(0, 300)}`)
+        throw new GatewayHttpError(res.status, detail ?? text.slice(0, 300))
       }
       return fromOpenAi(body, model)
     }
-    return attempt(true)
+    return withImageFallback(params, (images) => attempt(true, images))
   }
   /** Open the streamed request: the SSE body becomes Anthropic events. A
    *  non-2xx answer throws BEFORE any event (so the model fallback still
@@ -635,7 +723,7 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
       if (opts.signal.aborted) controller.abort()
       else opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
     }
-    const attempt = async (retryOn401: boolean): Promise<Response> => {
+    const attempt = async (retryOn401: boolean, images: boolean): Promise<Response> => {
       const bearer = await gatewayBearer(api)
       const res = await fetch(url, {
         method: 'POST',
@@ -644,12 +732,12 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
           Accept: 'text/event-stream',
           Authorization: `Bearer ${bearer}`
         },
-        body: JSON.stringify(toOpenAi(params, model, true)),
+        body: JSON.stringify(toOpenAi(params, model, true, { images })),
         signal: controller.signal
       })
       if (res.status === 401 && retryOn401) {
         bustGatewayBearer()
-        return attempt(false)
+        return attempt(false, images)
       }
       if (!res.ok) {
         const text = await res.text()
@@ -660,12 +748,12 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
         } catch {
           /* non-JSON error body */
         }
-        throw new Error(`AI gateway ${res.status}: ${detail ?? text.slice(0, 300)}`)
+        throw new GatewayHttpError(res.status, detail ?? text.slice(0, 300))
       }
       if (!res.body) throw new Error('AI gateway answered without a body')
       return res
     }
-    const res = await attempt(true)
+    const res = await withImageFallback(params, (images) => attempt(true, images))
     const body = res.body as ReadableStream<Uint8Array>
     const events = (async function* (): AsyncGenerator<AiStreamEvent> {
       const state = openAiStreamState(model)
