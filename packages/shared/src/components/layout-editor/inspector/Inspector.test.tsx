@@ -949,6 +949,38 @@ describe('Inspector', () => {
     })
   })
 
+  describe('a JSON box that goes away while focused', () => {
+    const box = () =>
+      host.querySelector('[data-setting="field.overrides_raw"] textarea') as HTMLTextAreaElement
+    it('saves valid JSON typed into it (a canvas click selects without a blur)', async () => {
+      const { apply } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      await typeInto(box(), '{"label": "Subject"}')
+      expect(apply).not.toHaveBeenCalled()
+      await act(async () => root.render(null))
+      expect(apply).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify(apply.mock.calls[0][0])).toContain('Subject')
+    })
+
+    it('drops invalid JSON, as a blur would', async () => {
+      const { apply } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      await typeInto(box(), '{"label": "Sub')
+      await act(async () => root.render(null))
+      expect(apply).not.toHaveBeenCalled()
+    })
+
+    it('saves nothing again after a blur already did', async () => {
+      const { apply } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      await typeInto(box(), '{"label": "Subject"}')
+      await leave(box())
+      expect(apply).toHaveBeenCalledTimes(1)
+      await act(async () => root.render(null))
+      expect(apply).toHaveBeenCalledTimes(1)
+    })
+  })
+
   describe('every-form changes wait together', () => {
     const fmtButton = (label: string) =>
       [...host.querySelectorAll('[data-setting="field.format"] button')].find(

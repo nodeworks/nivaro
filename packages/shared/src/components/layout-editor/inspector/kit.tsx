@@ -531,9 +531,9 @@ export function Choice({
 }
 
 /**
- * JSON for settings with no editor yet. Kept as typed; saved on blur only when
- * it parses (and `validate` passes) — a typo never deletes what is stored.
- * Empty saves "not set".
+ * JSON for settings with no editor yet. Kept as typed; saved on blur (or when
+ * the box unmounts while focused) only when it parses (and `validate` passes)
+ * — a typo never deletes what is stored. Empty saves "not set".
  */
 export function JsonInput({
   value,
@@ -560,23 +560,37 @@ export function JsonInput({
     setText(stored)
     setError(null)
   }, [stored])
-  const commit = () => {
-    const t = text.trim()
-    if (!t) {
-      setError(null)
-      if (value != null) onCommit(undefined)
-      return
-    }
+  // What to send for `raw`: { send } when it saves something, else the error to show.
+  const outcome = (raw: string): { send: unknown } | { error: string | null } => {
+    const t = raw.trim()
+    if (!t) return value != null ? { send: undefined } : { error: null }
     try {
       const parsed = JSON.parse(t) as unknown
       const problem = validate?.(parsed) ?? null
-      if (problem) return setError(problem)
-      setError(null)
-      if (JSON.stringify(parsed) !== JSON.stringify(value)) onCommit(parsed)
+      if (problem) return { error: problem }
+      return JSON.stringify(parsed) !== JSON.stringify(value) ? { send: parsed } : { error: null }
     } catch {
-      setError('Not valid JSON — nothing saved')
+      return { error: 'Not valid JSON — nothing saved' }
     }
   }
+  const commit = () => {
+    const r = outcome(text)
+    if ('send' in r) {
+      setError(null)
+      onCommit(r.send)
+    } else setError(r.error)
+  }
+  // Clicking the canvas selects without blurring the box (the canvas swallows
+  // the mousedown), and the inspector remounts per selection, where Firefox
+  // and Safari fire no blur: valid JSON typed and not yet saved is saved as
+  // the box goes away. Invalid text is dropped, as it would be on blur.
+  const onUnmount = useRef(() => {})
+  onUnmount.current = () => {
+    if (!focused.current) return
+    const r = outcome(text)
+    if ('send' in r) onCommit(r.send)
+  }
+  useEffect(() => () => onUnmount.current(), [])
   return (
     <div className='space-y-1'>
       <textarea
