@@ -7,7 +7,8 @@ import {
   maskArgs,
   ownerOf,
   sanitizeDockerValue,
-  setDockerFetchForTests
+  setDockerFetchForTests,
+  stripUrlCredentials
 } from './docker-source.js'
 
 const saved = { ...process.env }
@@ -199,6 +200,30 @@ describe('sanitizeDockerValue', () => {
     expect(v.Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit).toBe(5)
     expect(v.Swarm.Cluster.TLSInfo.TrustRoot).toContain('CERTIFICATE')
     expect(JSON.stringify(v)).not.toMatch(/SWMTKN|SWMKEY/)
+  })
+
+  it('masks URL credentials anywhere and secret log-driver options', () => {
+    const v = sanitizeDockerValue({
+      Config: {
+        Labels: {
+          'org.opencontainers.image.source':
+            'https://gitlab-ci-token:glcbt-abc@gitlab.example/x/y.git'
+        },
+        Image: 'registry.example/x:1'
+      },
+      HostConfig: {
+        LogConfig: { Type: 'splunk', Config: { 'splunk-token': 'tok1', 'max-size': '10m' } }
+      },
+      Status: 'Up 2 hours'
+    }) as any
+    expect(v.Config.Labels['org.opencontainers.image.source']).toBe(
+      'https://***@gitlab.example/x/y.git'
+    )
+    expect(v.HostConfig.LogConfig.Config).toEqual({ 'splunk-token': '***', 'max-size': '10m' })
+    expect(v.Status).toBe('Up 2 hours')
+    expect(stripUrlCredentials('see http://a.example/x and redis://:pw@cache:6379')).toBe(
+      'see http://a.example/x and redis://***@cache:6379'
+    )
   })
 
   it('masks secret flags in a one-line container summary Command', () => {

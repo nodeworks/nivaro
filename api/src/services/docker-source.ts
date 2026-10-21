@@ -98,6 +98,10 @@ export function maskArgs(args: string[]): string[] {
   return out
 }
 
+/** `https://user:token@host/…` → `https://***@host/…` (CI often bakes a job token into URLs). */
+export const stripUrlCredentials = (s: string): string =>
+  s.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1***@')
+
 /** A one-line command (container summary `Command`): masked word by word. */
 export function maskCommandLine(cmd: string): string {
   return maskArgs(cmd.split(/\s+/).filter(Boolean)).join(' ')
@@ -105,8 +109,9 @@ export function maskCommandLine(cmd: string): string {
 
 /**
  * Deep copy of an Engine answer without what must never leave the API: `Env` anywhere, swarm
- * `JoinTokens` / `UnlockKey`, `Spec.Data` (config / secret contents), credential-looking label
- * values (key kept, value masked) and secret flag values in commands.
+ * `JoinTokens` / `UnlockKey`, `Spec.Data` (config / secret contents), credential-looking label and
+ * log-driver option values (key kept, value masked), secret flag values in commands, and the
+ * user:password part of any URL.
  */
 export function sanitizeDockerValue(value: unknown, parentKey = ''): unknown {
   if (Array.isArray(value)) {
@@ -114,7 +119,8 @@ export function sanitizeDockerValue(value: unknown, parentKey = ''): unknown {
       return maskArgs(value as string[])
     return value.map((v) => sanitizeDockerValue(v, parentKey))
   }
-  if (typeof value === 'string' && parentKey === 'Command') return maskCommandLine(value)
+  if (typeof value === 'string')
+    return stripUrlCredentials(parentKey === 'Command' ? maskCommandLine(value) : value)
   if (!value || typeof value !== 'object') return value
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
@@ -123,8 +129,21 @@ export function sanitizeDockerValue(value: unknown, parentKey = ''): unknown {
     if (k === 'Labels' && v && typeof v === 'object' && !Array.isArray(v)) {
       const labels: Record<string, unknown> = {}
       for (const [lk, lv] of Object.entries(v as Record<string, unknown>))
-        labels[lk] = SECRETISH.test(lk) ? MASK : lv
+        labels[lk] = SECRETISH.test(lk) ? MASK : sanitizeDockerValue(lv, lk)
       out[k] = labels
+      continue
+    }
+    // Log driver options carry credentials for remote drivers (splunk-token, awslogs keys…).
+    if (k === 'LogConfig' && v && typeof v === 'object' && !Array.isArray(v)) {
+      const lc = sanitizeDockerValue(v, k) as Record<string, unknown>
+      if (lc.Config && typeof lc.Config === 'object' && !Array.isArray(lc.Config))
+        lc.Config = Object.fromEntries(
+          Object.entries(lc.Config as Record<string, unknown>).map(([ck, cv]) => [
+            ck,
+            SECRETISH.test(ck) ? MASK : cv
+          ])
+        )
+      out[k] = lc
       continue
     }
     out[k] = sanitizeDockerValue(v, k)
