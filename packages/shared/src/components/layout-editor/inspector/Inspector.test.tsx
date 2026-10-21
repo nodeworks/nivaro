@@ -720,6 +720,43 @@ describe('Inspector', () => {
     expect(openLayout).toHaveBeenCalledWith(3)
   })
 
+  it('an override of the parent gets Reset to parent (#2635)', async () => {
+    const base = makeBundle({ parent_layout_id: 3 })
+    const bundle: LayoutBundle = {
+      ...base,
+      groups: [...base.groups, group('shipping', 'section', null)],
+      placements: [...base.placements, place('region', 'shipping', { col_span: 4 })]
+    }
+    const { apply } = await mount(field('region', 'shipping'), { bundle })
+    await settle()
+    expect(host.textContent).toContain('overrides Base order')
+    await click(host.querySelector('[data-reset-to-parent]'))
+    expect(apply).toHaveBeenCalledWith(
+      [{ op: 'remove', at: { field: 'region', group_key: 'shipping' } }],
+      { label: 'Reset Region to Base order' }
+    )
+    // The layout's own fields have nothing to reset.
+    await mount(field('title'), { bundle })
+    expect(host.querySelector('[data-reset-to-parent]')).toBeNull()
+  })
+
+  it('Reset to parent on a section drops it and the fields the parent places', async () => {
+    const base = makeBundle({ parent_layout_id: 3 })
+    const bundle: LayoutBundle = {
+      ...base,
+      groups: [...base.groups, group('shipping', 'section', null)],
+      placements: [...base.placements, place('region', 'shipping')]
+    }
+    const { apply } = await mount({ kind: 'group', key: 'shipping' }, { bundle })
+    await settle()
+    await click(host.querySelector('[data-reset-to-parent]'))
+    const [ops] = apply.mock.calls[0]
+    expect(ops).toEqual([
+      { op: 'remove', at: { field: 'region', group_key: 'shipping' } },
+      { op: 'group_remove', key: 'shipping', placements: 'ungroup' }
+    ])
+  })
+
   it("Override here copies the parent as its own editor last saved it (the draft's bundle key)", async () => {
     // The parent's editor saved a new width a moment ago: its draft wrote the
     // bundle under the shared key. The inspector must read that, not a copy.

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, BarChart3, LayoutGrid, Plus, Table2 } from 'lucide-react'
+import { AlertTriangle, BarChart3, Grid3x3, LayoutGrid, Plus, Table2, Users } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -33,12 +33,15 @@ import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { noteKey, notesOf } from './editor-notes'
 import { FormMapButton } from './FormMapButton'
 import { useLayoutEditorHost } from './host'
+import { overriddenTargets, overrideMark } from './inheritance'
 import { BulkInspector } from './inspector/BulkInspector'
 import { FormSettings, Inspector } from './inspector-slot'
 import { ARROW_DIRS, altArrowMove } from './keyboard-move'
 import { LayoutsRail } from './LayoutsRail'
 import { LintButton, LintPanel } from './lint/LintPanel'
 import { useLayoutLint } from './lint/lint-api'
+import { FieldStateMatrix } from './matrix/FieldStateMatrix'
+import { RoleSectionMatrix } from './matrix/RoleSectionMatrix'
 import type { DescribeField, Segment } from './overview/describe-conditions'
 import {
   useApproxRecordCount,
@@ -362,6 +365,19 @@ function Canvas({
   const liveDnd = useLayoutDnd()
   const dnd = noDnd ? NO_DND : liveDnd
   const canvas = useMemo(() => bundleToActiveLayout(bundle, parent), [bundle, parent])
+  // What this layout overrides of its parent's (#2635): a tag beside the node.
+  const overrides = useMemo(
+    () => (parent ? overriddenTargets(bundle, parent) : null),
+    [bundle, parent]
+  )
+  const allMarks = useMemo(() => {
+    if (!overrides?.size) return marks
+    return (t: DesignTarget) => {
+      const name = overrides.get(targetKey(t))
+      const own = marks?.(t) ?? []
+      return name ? [...own, overrideMark(name)] : own
+    }
+  }, [overrides, marks])
   const layout = useMemo(
     () => previewForRole(canvas.active, roleId, showHidden),
     [canvas.active, roleId, showHidden]
@@ -383,7 +399,7 @@ function Canvas({
       inheritedFrom: (t) => canvas.inherited.get(targetKey(t)) ?? null,
       dnd,
       roleMark,
-      marks,
+      marks: allMarks,
       overlay,
       fillRate,
       note: (t) => {
@@ -399,7 +415,7 @@ function Canvas({
       canvas.inherited,
       dnd,
       roleMark,
-      marks,
+      allMarks,
       overlay,
       fillRate,
       notes
@@ -474,15 +490,13 @@ function EditingBanner({
   )
 }
 
-/** Canvas | Table: the form itself, or every placement as an editable row (#2602). */
-function ViewToggle({
-  view,
-  onView
-}: {
-  view: 'canvas' | 'table'
-  onView: (v: 'canvas' | 'table') => void
-}) {
-  const opt = (v: 'canvas' | 'table', label: string, Icon: typeof LayoutGrid, tip: string) => (
+/** Canvas | Table | States | Roles: the form itself, every placement as an
+ *  editable row (#2602), or one of the matrices (#2644 field × state, #2645
+ *  role × section). */
+type EditorView = 'canvas' | 'table' | 'states' | 'roles'
+
+function ViewToggle({ view, onView }: { view: EditorView; onView: (v: EditorView) => void }) {
+  const opt = (v: EditorView, label: string, Icon: typeof LayoutGrid, tip: string) => (
     <button
       type='button'
       aria-pressed={view === v}
@@ -507,6 +521,13 @@ function ViewToggle({
     >
       {opt('canvas', 'Canvas', LayoutGrid, 'The form as people see it')}
       {opt('table', 'Table', Table2, 'Every field as a row: label, section, width, rules')}
+      {opt(
+        'states',
+        'States',
+        Grid3x3,
+        'Every field by workflow state: editable, read-only, required'
+      )}
+      {opt('roles', 'Roles', Users, 'Every section by role: can edit, read-only, hidden')}
     </fieldset>
   )
 }
@@ -541,7 +562,7 @@ export function LayoutEditor({
   // Several fields can be selected (Shift / ⌘-click); the last one is `selected`.
   const [selection, setSelection] = useState<DesignTarget[]>([])
   const selected = selection.length > 0 ? selection[selection.length - 1] : null
-  const [view, setView] = useState<'canvas' | 'table'>('canvas')
+  const [view, setView] = useState<EditorView>('canvas')
   const [showHidden, setShowHidden] = useState(false)
   // Fill-rate hints on the canvas (#2588): on unless turned off in the Usage tab.
   const [showFill, setShowFill] = useShowFillRates()
@@ -877,7 +898,22 @@ export function LayoutEditor({
             </div>
           </aside>
           <main className='min-w-0 flex-1 overflow-y-auto'>
-            {bundle && arrangeable && view === 'table' ? (
+            {bundle && arrangeable && view === 'states' ? (
+              <FieldStateMatrix
+                bundle={bundle}
+                parent={parent}
+                collection={collection}
+                apply={draft.apply}
+                onSelect={onSelect}
+              />
+            ) : bundle && arrangeable && view === 'roles' ? (
+              <RoleSectionMatrix
+                bundle={bundle}
+                parent={parent}
+                apply={draft.apply}
+                onSelect={onSelect}
+              />
+            ) : bundle && arrangeable && view === 'table' ? (
               <PlacementsTable
                 bundle={bundle}
                 collection={collection}

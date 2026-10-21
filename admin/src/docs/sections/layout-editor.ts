@@ -171,6 +171,16 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Canvas | Table in the top bar switches the centre to a table of every field on the form, grouped by section: the label on this form, section, width, Required, Read-only and Hidden, all editable in place. Shift- or ⌘-click rows (or tick their boxes) to select several and change them together in the inspector. Fields that come from a parent layout are not listed. Table and PDF layouts keep their own canvases.'
     },
+    { type: 'h3', id: 'layout-editor-state-matrix', text: 'Fields by state' },
+    {
+      type: 'p',
+      text: "States in the top bar shows every field against the states of the collection's pipeline (a switcher picks one when several run on it), with an Every state column first. Click a cell to set the field to Editable, Read-only, Required or Hidden. Every state writes the field's own Read-only, Required and Hidden on this form. Read-only in one state adds that state to the field's Read-only when. Required in one state makes the moves that leave the state ask for the value (a record-fields requirement on those moves); that is saved to the pipeline at once, for every form, and its toast has Undo. A field cannot be hidden in one state only, and a state nothing leaves cannot require anything: those choices stay greyed with the reason. A dot on a cell marks a field that is read-only but required, which nobody could fill in."
+    },
+    { type: 'h3', id: 'layout-editor-role-matrix', text: 'Sections by role' },
+    {
+      type: 'p',
+      text: "Roles in the top bar shows every section and tab against every role. Click a cell to make the section Can edit, Read-only or Hidden for that role (the section's Hidden for and Read-only for). Each cell is one change to save. Administrator roles are greyed: they always see and edit everything. Field permissions still apply inside a section."
+    },
     { type: 'h3', id: 'layout-editor-saving', text: 'Saving, undo and conflicts' },
     {
       type: 'p',
@@ -241,6 +251,10 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: 'A layout that inherits from a parent shows the parent\'s placements on its canvas marked "from <parent>" and locked (an inherited step or tab gets a small dot instead, with the parent\'s name in its tip). The inspector offers Override here (copies the placement into this layout as the parent last saved it, then editable) and Edit in <parent>.'
+    },
+    {
+      type: 'p',
+      text: "What this layout changes of the parent's is tagged \"Overrides parent\". Select it and the inspector offers Reset to parent: this layout's copy goes and the parent's shows again, as one Undo step. Resetting a section also resets the fields in it that the parent places; fields only this layout places move to Ungrouped. The States and Roles views mark rows the same way, with Reset or Override beside the name."
     },
 
     { type: 'h2', id: 'layout-editor-other-kinds', text: 'Table and PDF layouts' },
