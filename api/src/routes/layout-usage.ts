@@ -113,14 +113,20 @@ export async function layoutUsageRoutes(app: FastifyInstance) {
       const readable = await readableItemRefs(user, accepted)
       for (const ev of accepted) {
         if (ev.item != null && !readable.has(`${ev.collection}\u0000${ev.item}`)) continue
+        // A session in an A/B test (#2614) also counts for that test's half. The arm is
+        // best-effort: a failed lookup still stores the plain usage row.
+        let arm: ReturnType<typeof abArmOf> = null
         try {
-          // A session in an A/B test (#2614) also counts for that test's half.
-          const arm = abArmOf(
+          arm = abArmOf(
             await abTestsForCollection(ev.collection),
             ev.layout_id,
             user,
             !!req.isAdmin
           )
+        } catch (err) {
+          req.log.warn({ err, layout_id: ev.layout_id }, 'layout usage A/B arm lookup failed')
+        }
+        try {
           await recordUsage(ev, user.id ?? null, arm)
         } catch (err) {
           req.log.warn({ err, layout_id: ev.layout_id }, 'layout usage beacon not stored')

@@ -40,6 +40,10 @@ vi.mock('../../../services/layout-usage.js', async (orig) => {
   }
 })
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+vi.mock('../../../services/layout-ab.js', () => ({
+  abTestsForCollection: vi.fn(async () => []),
+  abArmOf: vi.fn(() => null)
+}))
 
 const { layoutUsageRoutes } = await import('../../../routes/layout-usage.js')
 const { resetWindowedMemory } = await import('../../../services/windowed-limit.js')
