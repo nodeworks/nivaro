@@ -1,20 +1,14 @@
 import { ErrorSurface } from '@nivaro/shared'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { lazy, Suspense, useEffect, useRef } from 'react'
-import {
-  BrowserRouter,
-  Navigate,
-  Route,
-  Routes,
-  useLocation,
-  useNavigate,
-  useParams
-} from 'react-router'
+import { Suspense, useEffect, useRef } from 'react'
+import { BrowserRouter, Navigate, Route, useLocation, useNavigate, useParams } from 'react-router'
 import { Toaster } from 'sonner'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { I18nProvider } from '@/lib/i18n'
+// #2448 — lazy that remembers its loader, so nav hover can preload a screen's chunk
+import { lazy, PreloadRoutes } from '@/lib/route-preload'
 import { ThemeProvider, useTheme } from '@/lib/theme'
 import { RecordAliasRedirect, SlugResolverPage } from '@/pages/SlugResolver'
 
@@ -493,7 +487,7 @@ export default function App() {
           <AuthProvider>
             <BrowserRouter>
               <PostLoginRedirect />
-              <Routes>
+              <PreloadRoutes>
                 <Route
                   path='/login'
                   element={
@@ -726,7 +720,7 @@ export default function App() {
                   />
                   <Route path='*' element={<NotFoundPage />} />
                 </Route>
-              </Routes>
+              </PreloadRoutes>
             </BrowserRouter>
             <ThemedToaster />
           </AuthProvider>

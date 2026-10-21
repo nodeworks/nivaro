@@ -140,6 +140,7 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { cn } from '../lib/utils'
+import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { RechartsGate } from './charts/RechartsGate'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { TipLayer } from './TipLayer'
@@ -688,7 +689,24 @@ export function QueryWidgetBody({
     onStatus?.({ isFetching, refetch: () => void refetch() })
   }, [isFetching]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (isLoading) return <p className='px-1 text-[12px] text-slate-300'>Loading…</p>
+  if (isLoading)
+    return (
+      <div className='flex flex-col gap-2 px-1'>
+        <p className='text-[12px] text-slate-300'>Loading…</p>
+        {/* #2759 — a known-slow query can run on the server while the person moves on */}
+        <BackgroundRunOffer
+          pending
+          request={{
+            method: 'POST',
+            url: `/custom-queries/${cfg.slug}/execute`,
+            body: { params }
+          }}
+          label={`Query ${cfg.slug}`}
+          queryKey={['nivaro-report-query', cfg.slug, params]}
+          select={(b) => (b as { data?: unknown[] } | null)?.data ?? []}
+        />
+      </div>
+    )
   if (error) {
     const msg =
       (error as { response?: { data?: { error?: string } } }).response?.data?.error ??
@@ -2084,7 +2102,23 @@ const WidgetCard = memo(function WidgetCard({
     )
   } else if (widget.type === 'query') {
     body = <p className='px-1 text-[12px] text-slate-400'>No query configured.</p>
-  } else if (isLoading) body = <p className='px-1 text-[12px] text-slate-300'>Loading…</p>
+  } else if (isLoading)
+    body = (
+      <div className='flex flex-col gap-2 px-1'>
+        <p className='text-[12px] text-slate-300'>Loading…</p>
+        <BackgroundRunOffer
+          pending
+          request={{
+            method: 'POST',
+            url: `/report-studio/${reportId}/widgets/${widget.id}/data`,
+            body: { date_range: dateRange, entity_filters: entityFilters }
+          }}
+          label={widget.title || 'Report widget'}
+          queryKey={['nivaro-report-widget', reportId, widget.id, dateRange, entityFilters]}
+          select={(b) => (b as { data?: unknown } | null)?.data}
+        />
+      </div>
+    )
   else if (error) {
     const msg =
       (error as { response?: { data?: { error?: string } } }).response?.data?.error ??

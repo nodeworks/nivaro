@@ -35,10 +35,26 @@ export const collabLiveProgress: DocSection = {
           '`POST /pdf-templates/:id/render-async` — renders as the caller (record and child rows read with their access) and saves the PDF to the file library.'
         ],
         [
+          'Slow query or widget',
+          '"Run in background" on a custom query, report widget, page widget or dashboard widget that is known to be slow — see below.'
+        ],
+        [
           'Anything else started with a user',
           'Any job run started with a user and not by the scheduler.'
         ]
       ]
+    },
+    { type: 'h3', id: 'live-progress-background-runs', text: 'Slow reads in the background' },
+    {
+      type: 'p',
+      text: 'When a custom query, report widget, page widget or dashboard widget has been loading for a few seconds and is known to be slow (its usual run is 4 seconds or more; anything still loading after 8 seconds counts too), the loading area offers "Run in background". The server then runs the same request as you, on its background connection pool, so your permissions and User Scopes apply exactly as they would on the page, and a cached query or widget stores the result under its usual key. The page shows how long it has been running against how long it usually takes; you can leave, and the Jobs tray says when it is ready and links back. Back on the page, the result appears without asking again. Anyone can use it, not only administrators; each person may have 3 runs going at once, and asking the same question twice joins the first run.'
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/background-runs/estimate?method=POST&url=/custom-queries/:slug/execute
+POST /api/background-runs   {method, url, body?, label?, href?}  → 202 {data: run}
+GET  /api/background-runs/:id          → your run (another person's id is 404)
+GET  /api/background-runs/:id/result   → the response, kept 30 minutes`
     },
     { type: 'h3', id: 'live-progress-import-queue', text: 'Import queue position' },
     {

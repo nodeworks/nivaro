@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
+import { noteReadDuration } from '../services/background-runs.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
@@ -41,6 +42,7 @@ import { atRiskRoutes } from './at-risk.js'
 import { attributesRoutes } from './attributes.js'
 import { authRoutes } from './auth.js'
 import { automationTestRoutes } from './automation-tests.js'
+import { backgroundRunsRoutes } from './background-runs.js'
 import { backupsRoutes } from './backups.js'
 import { blackoutDatesRoutes } from './blackout-dates.js'
 import { blueprintsRoutes } from './blueprints.js'
@@ -266,6 +268,9 @@ import { workspacesRoutes } from './workspaces.js'
 import { zapierRoutes } from './zapier.js'
 
 export async function registerRoutes(app: FastifyInstance) {
+  // #2759 — how long a cache-missing custom query / widget read takes, so a known-slow one can
+  // offer "Run in background" (services/background-runs.ts).
+  app.addHook('onResponse', noteReadDuration(app))
   // Maintenance mode: instance-wide write freeze (admins exempt, reads fine).
   // Auth stays open so admins can get in to turn it off.
   app.addHook('preHandler', async (req, reply) => {
@@ -402,6 +407,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(configConformanceRecordRoutes, { prefix: '/config-conformance' })
   await app.register(announcementRoutes, { prefix: '/announcements' })
   await app.register(myJobsRoutes, { prefix: '/my-jobs' })
+  await app.register(backgroundRunsRoutes, { prefix: '/background-runs' })
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })
   await app.register(coverageGapsRoutes)
   await app.register(inactiveUserLinkRoutes, { prefix: '/inactive-user-links' })

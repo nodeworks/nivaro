@@ -65,6 +65,7 @@ export type {
   MetricAlertSubscription,
   MetricDefinition
 } from './components/alerts/types'
+export { BackgroundRunOffer } from './components/BackgroundRunOffer'
 export type { BaseMapBubble, BaseMapPin } from './components/BaseMap'
 export { BaseMap } from './components/BaseMap'
 export * from './components/BroadcastView'
@@ -503,6 +504,7 @@ export {
   startAutofillRun,
   useAutofillRuns
 } from './lib/autofill-runs'
+export * from './lib/background-runs'
 export * from './lib/bulk-progress'
 export * from './lib/catalog-item-open'
 export {
@@ -612,6 +614,7 @@ export {
   pageContextHeaders,
   pagePattern
 } from './lib/page-context'
+export * from './lib/prefetch'
 export {
   applySignal,
   expirePeers,

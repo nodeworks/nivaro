@@ -12,6 +12,7 @@ import {
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigation, useOptionalNivaroClient } from '../context'
+import { clock } from '../lib/background-runs'
 import { get } from '../lib/commands'
 import {
   applyJobUpdate,
@@ -142,7 +143,12 @@ function JobRow({ job, onOpen }: { job: TrayJob; onOpen: (href: string) => void 
       ? job.error
       : done
         ? job.outcome
-        : [phase, pct != null ? `${count} of ${total}` : null].filter(Boolean).join(' · ') || null
+        : job.kind === 'background-run'
+          ? // #2759 — a slow read the server is finishing: say how long it usually takes.
+            Number(prog.expected_ms) >= 1000
+            ? `Usually takes about ${clock(Number(prog.expected_ms))}`
+            : 'Running on the server'
+          : [phase, pct != null ? `${count} of ${total}` : null].filter(Boolean).join(' · ') || null
   return (
     <li
       data-job={job.key}

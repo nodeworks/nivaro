@@ -74,6 +74,7 @@ import {
 } from '../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
+import { prefetchRecord, useIdleNextPage } from '../lib/prefetch'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import {
@@ -4683,6 +4684,31 @@ export function CollectionBrowserView({
     .filter((k) => !k.includes('.') && !k.startsWith('__'))
     .sort()
     .join(',')
+  const itemsPageKey = (p: number) => [
+    'cbv-items',
+    collection,
+    appliedSearch,
+    sort,
+    groupBy ? 'grouped' : p,
+    groupBy ? 500 : effPageSize,
+    conditionsParam,
+    aggParam
+  ]
+  const fetchItemsPage = (p: number) =>
+    client.request<{
+      data: Array<Record<string, unknown>>
+      total: number
+      aggregates?: Record<string, number>
+    }>(
+      get(`/items/${collection}`, {
+        limit: groupBy ? 500 : effPageSize,
+        page: groupBy ? 1 : p,
+        ...(appliedSearch ? { search: appliedSearch } : {}),
+        ...(sort ? { sort } : {}),
+        ...(conditionsParam ? { conditions: conditionsParam } : {}),
+        ...(aggParam ? { agg: aggParam } : {})
+      })
+    )
   const {
     data: itemsRes,
     isLoading,
@@ -4691,34 +4717,25 @@ export function CollectionBrowserView({
     refetch,
     error
   } = useQuery({
-    queryKey: [
-      'cbv-items',
-      collection,
-      appliedSearch,
-      sort,
-      groupBy ? 'grouped' : page,
-      groupBy ? 500 : effPageSize,
-      conditionsParam,
-      aggParam
-    ],
-    queryFn: () =>
-      client.request<{
-        data: Array<Record<string, unknown>>
-        total: number
-        aggregates?: Record<string, number>
-      }>(
-        get(`/items/${collection}`, {
-          limit: groupBy ? 500 : effPageSize,
-          page: groupBy ? 1 : page,
-          ...(appliedSearch ? { search: appliedSearch } : {}),
-          ...(sort ? { sort } : {}),
-          ...(conditionsParam ? { conditions: conditionsParam } : {}),
-          ...(aggParam ? { agg: aggParam } : {})
-        })
-      ),
+    queryKey: itemsPageKey(page),
+    queryFn: () => fetchItemsPage(page),
     enabled: !!collection && scopeGateOpen,
     placeholderData: (prev) => prev,
     retry: false
+  })
+  // #2448 — idle next page: once this page is in and another exists, fetch it while the
+  // browser is idle so paging forward paints at once (the normal refetch replaces it).
+  useIdleNextPage({
+    qc,
+    enabled:
+      !!collection &&
+      scopeGateOpen &&
+      !groupBy &&
+      !isFetching &&
+      !!itemsRes &&
+      page * effPageSize < (itemsRes.total ?? 0),
+    queryKey: itemsPageKey(page + 1),
+    queryFn: () => fetchItemsPage(page + 1)
   })
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
@@ -5946,21 +5963,14 @@ export function CollectionBrowserView({
     }
   }
 
-  // Hover prefetch (#210): warm ItemEditForm's record query so opening the
-  // row paints instantly. 250ms debounce so sweeping the cursor down the
-  // table doesn't fire a request per row.
+  // Hover prefetch (#210, #2448): warm the record page's readOne AND its layout so opening
+  // the row paints instantly. 250ms debounce so sweeping the cursor down the table doesn't
+  // fire a request per row; the shared per-minute budget caps the rest.
   const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const prefetchRecord = (id: unknown) => {
+  const prefetchRow = (id: unknown) => {
     if (prefetchTimer.current) clearTimeout(prefetchTimer.current)
     prefetchTimer.current = setTimeout(() => {
-      void qc.prefetchQuery({
-        queryKey: ['item', collection, String(id)],
-        queryFn: () =>
-          client
-            .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
-            .then((r) => r.data),
-        staleTime: 30_000
-      })
+      prefetchRecord(qc, client, collection, String(id))
     }, 250)
   }
   const openRow = (id: string | number) => {
@@ -8268,7 +8278,7 @@ export function CollectionBrowserView({
                           key={String(id)}
                           {...askDrag({ collection, id: String(id) })}
                           onClick={() => openRow(id)}
-                          onMouseEnter={() => prefetchRecord(id)}
+                          onMouseEnter={() => prefetchRow(id)}
                           data-row-key={String(id)}
                           title={
                             rowChanges.titleFor(String(id)) ??

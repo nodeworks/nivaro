@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { listRuns, trayEvent } from '../services/background-runs.js'
 import type { JobProgressEvent } from '../services/live-progress.js'
 
 /**
@@ -115,6 +116,12 @@ export async function myJobsRoutes(app: FastifyInstance): Promise<void> {
         href: `/imports?run=${i.id}`,
         at: new Date(String(i.updated_at ?? i.created_at ?? Date.now())).toISOString()
       })
+    }
+    // #2759 — slow reads the caller sent to the background.
+    for (const r of await listRuns(app.redis ?? null, me).catch(() => [])) {
+      const at = r.finished_at ?? r.started_at
+      if (r.status !== 'running' && Date.parse(at) < since.getTime()) continue
+      out.push({ ...trayEvent(r), at: new Date(at).toISOString() })
     }
     return { data: out.sort((a, b) => b.at.localeCompare(a.at)) }
   })
