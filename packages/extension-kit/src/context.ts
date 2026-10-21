@@ -48,6 +48,7 @@ import type {
   TrafficLensDef,
   TrafficNodeDef
 } from './signals.js'
+import type { ChatMessageActionDef, ExtensionAiMembers, ExtensionMcpMembers } from './tools.js'
 
 export type ExtensionSettingValue = string | number | boolean | null
 
@@ -203,6 +204,12 @@ export interface ExtensionContext {
      *  text into the room as the person, and/or `reply` to show them a private
      *  line. Runs AS the person: read data through `readItems`, not raw SQL. */
     registerCommand(def: ChatCommandDef): void
+    /** Add an item to a message's menu (#2763) — "Log to record", "Open in
+     *  partner system". `when` limits it to room kinds or message shapes; the
+     *  handler runs AS the person clicking, in a room they can see, and any
+     *  text it returns to post goes through the normal send path. Returns
+     *  false for a bad id or label. Optional — an older API does not provide it. */
+    registerMessageAction?(def: ChatMessageActionDef): boolean
   }
   /** Hook helpers scoped to this extension — hooks are tagged and can be
    *  disabled / removed with it. */
@@ -379,6 +386,14 @@ export interface ExtensionContext {
   }
   /** Tools the AI chat bot may call, run as the asking user. */
   chatBot: { registerTool(def: BotToolDef): void }
+  /** MCP tools (#2465): the hosted /api/mcp endpoint lists them by name and
+   *  the npm server reaches them through `call_instance_tool`. The handler
+   *  runs AS the MCP client's user. Optional — an older API does not provide it. */
+  mcp?: ExtensionMcpMembers
+  /** Ask AI tools (#2735): offered to Ask AI while it answers, run AS the
+   *  asker. An answer that used one stays the asker's unless the tool is
+   *  read-only AND declared replayable. Optional — an older API does not provide it. */
+  ai?: ExtensionAiMembers
   /** Auth middleware — use as Fastify `onRequest` / `preHandler` handlers. */
   auth: {
     authenticate: (req: FastifyRequest, reply: FastifyReply) => Promise<void>

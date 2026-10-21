@@ -120,7 +120,9 @@ describe('createNivaroMcpServer', () => {
       // a saved query may call a procedure that writes
       'run_custom_query',
       // stores a proposal (never the layout itself)
-      'propose_layout_ops'
+      'propose_layout_ops',
+      // an instance tool may write
+      'call_instance_tool'
     ])
     for (const tool of tools) {
       const a = tool.annotations

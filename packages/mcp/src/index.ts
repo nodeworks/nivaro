@@ -13,12 +13,13 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { createNivaro, type NivaroClient, readMe } from '@nivaro/sdk'
+import { createNivaro, type InstanceToolEntry, type NivaroClient, readMe } from '@nivaro/sdk'
 import { identifyingFetch, tagToolCalls } from './identify.js'
 import { registerResources } from './resources.js'
 import { registerAccountTools } from './tools/account.js'
 import { registerAdminTools } from './tools/admin.js'
 import { registerCollectionTools } from './tools/collections.js'
+import { registerInstanceTools, registerNamedInstanceTools } from './tools/instance.js'
 import { registerItemTools } from './tools/items.js'
 import { registerLayoutTools } from './tools/layouts.js'
 import { registerLookupTools } from './tools/lookup.js'
@@ -44,6 +45,12 @@ export interface NivaroMcpOptions {
    * true only for an administrator's key — the API refuses them to anyone else anyway.
    */
   adminTools?: boolean
+  /**
+   * The instance's own tools (GET /api/mcp-tools as this user) to list under
+   * their own names (#2464, #2465). The hosted endpoint passes them; the stdio
+   * server reaches the same tools through list_instance_tools / call_instance_tool.
+   */
+  instanceTools?: InstanceToolEntry[]
 }
 
 export interface NivaroMcp {
@@ -81,7 +88,9 @@ export const TOOL_NAMES = [
   'search',
   'find_people',
   'list_custom_queries',
-  'run_custom_query'
+  'run_custom_query',
+  'list_instance_tools',
+  'call_instance_tool'
 ] as const
 
 /** The read-only admin/ops tools, registered only with `adminTools: true`. */
@@ -163,10 +172,14 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   registerWorkTools(server, client)
   registerRecordTools(server, client)
   registerLookupTools(server, client)
+  registerInstanceTools(server, client)
   if (options.adminTools === true) {
     registerAdminTools(server, client)
     registerLayoutTools(server, client)
   }
+  // After every built-in, so a built-in name always wins.
+  if (options.instanceTools?.length)
+    registerNamedInstanceTools(server, client, options.instanceTools)
   registerResources(server, client)
 
   return { server, client }
@@ -184,6 +197,7 @@ export { describeFailure, maskToken } from './result.js'
 export { registerAdminTools, summarizeTraffic } from './tools/admin.js'
 export type { CollectionSchema, CollectionSummary, FieldSummary } from './tools/collections.js'
 export { summarizeCollection, summarizeSchema } from './tools/collections.js'
+export { registerInstanceTools, registerNamedInstanceTools, zodShapeOf } from './tools/instance.js'
 export { registerLayoutTools } from './tools/layouts.js'
 export type { PipelineStateView } from './tools/pipeline.js'
 export { buildPipelineView } from './tools/pipeline.js'

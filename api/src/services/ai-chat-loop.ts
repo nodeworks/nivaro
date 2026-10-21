@@ -11,6 +11,7 @@ import {
 } from './ai-memory.js'
 import { hashToolResult } from './ai-result-hash.js'
 import { consumeText, isAbortError, streamMessage } from './ai-stream.js'
+import { isReplayableExtensionTool, withExtensionAiTools } from './extension-tools.js'
 
 /**
  * The Ask AI tool loop (#688 moved it out of the route so it can stream).
@@ -71,7 +72,8 @@ export interface ChatLoopResult {
 }
 
 /** A read-only (replay) run may call only the replayable read tools; every other tool is refused. */
-export const readOnlyAllows = (tool: string): boolean => REPLAYABLE_TOOLS.has(tool)
+export const readOnlyAllows = (tool: string): boolean =>
+  REPLAYABLE_TOOLS.has(tool) || isReplayableExtensionTool(tool)
 
 export interface ChatLoopOptions extends ChatLoopCallbacks {
   client: Anthropic
@@ -166,7 +168,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   const plans: Array<Record<string, unknown>> = []
   const choices: Array<Record<string, unknown>> = []
   const memorySuggestions: AiMemorySuggestion[] = []
-  const tools = opts.memorySuggestions ? [...CHAT_TOOLS, SUGGEST_MEMORY_TOOL] : CHAT_TOOLS
+  // #2735 — plus every enabled extension's ctx.ai tools whose name is free.
+  const tools = await withExtensionAiTools(
+    opts.memorySuggestions ? [...CHAT_TOOLS, SUGGEST_MEMORY_TOOL] : CHAT_TOOLS
+  )
   const done = (r: Omit<ChatLoopResult, 'memorySuggestions'>): ChatLoopResult => ({
     ...r,
     memorySuggestions

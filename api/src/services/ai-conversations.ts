@@ -5,6 +5,7 @@ import { csvCell } from '../lib/csv-cell.js'
 import type { User } from '../types.js'
 import type { ChatTraceEntry } from './ai-chat-loop.js'
 import { hashToolResult } from './ai-result-hash.js'
+import { isReplayableExtensionTool } from './extension-tools.js'
 
 /**
  * Ask AI conversations (#1833 history, #1809 sharing, #1883 branches, #1851
@@ -71,6 +72,8 @@ export type ConversationAccess = 'owner' | 'shared' | 'room'
  *  - page_context (#1835): not a tool but a trace entry the chat route adds
  *    when the page's record, list, report or documents rode the question —
  *    that context never replays, so such an answer stays its author's.
+ * An extension's ctx.ai tool (#2735) replays only when it declared itself
+ * read_only AND replayable (isReplayableExtensionTool).
  */
 export const REPLAYABLE_TOOLS = new Set([
   'list_collections',
@@ -215,7 +218,7 @@ export function shareableTrace(trace: ChatTraceEntry[]): boolean {
     (e) =>
       !!e &&
       typeof e.tool === 'string' &&
-      REPLAYABLE_TOOLS.has(e.tool) &&
+      (REPLAYABLE_TOOLS.has(e.tool) || isReplayableExtensionTool(e.tool)) &&
       typeof e.result_hash === 'string' &&
       !(typeof e.summary === 'string' && e.summary.startsWith('error:'))
   )
