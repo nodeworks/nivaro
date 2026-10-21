@@ -31,6 +31,9 @@ import { del, patch, post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
+import { DependencyDiagram } from '../ops/DependencyDiagram'
+import { downloadLayout, requestsByLayout, useChangeRequests } from '../ops/ops-api'
+import { PromotePanel } from '../ops/PromotePanel'
 import {
   type ChoiceLabels,
   type DescribeField,
@@ -138,7 +141,8 @@ function RowMenu({
   onOpen,
   onRename,
   onDelete,
-  onDone
+  onDone,
+  onPanel
 }: {
   row: OverviewRow
   only: boolean
@@ -146,6 +150,8 @@ function RowMenu({
   onRename: () => void
   onDelete: () => void
   onDone: () => void
+  /** #2613 / #2593 — open an inline panel under the row. */
+  onPanel: (panel: 'deps' | 'compare') => void
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -258,6 +264,45 @@ function RowMenu({
           <button
             type='button'
             role='menuitem'
+            className={item}
+            data-row-action='deps'
+            onClick={() => {
+              setOpen(false)
+              onPanel('deps')
+            }}
+          >
+            What relies on this…
+          </button>
+          <button
+            type='button'
+            role='menuitem'
+            className={item}
+            data-row-action='compare'
+            onClick={() => {
+              setOpen(false)
+              onPanel('compare')
+            }}
+          >
+            Compare with another environment…
+          </button>
+          <button
+            type='button'
+            role='menuitem'
+            className={item}
+            data-row-action='download'
+            onClick={() => {
+              setOpen(false)
+              void downloadLayout(client, row.layout_id, row.name).catch((err) =>
+                toast.error(apiFailure(err, 'Could not download').message)
+              )
+            }}
+          >
+            Download this layout
+          </button>
+          <div className='my-1 h-px bg-slate-100 dark:bg-border' />
+          <button
+            type='button'
+            role='menuitem'
             disabled={only}
             data-tip={only ? ONLY_LAYOUT_REASON : undefined}
             className={cn(
@@ -324,6 +369,9 @@ function DeleteConfirm({
             ) : (
               <p className='font-semibold'>Delete “{row.name}”?</p>
             )}
+            {!blocked && (
+              <DependencyDiagram layoutId={row.layout_id} change='delete' className='mt-2' />
+            )}
             {refs.length ? (
               <>
                 <p className='mt-1 text-slate-600 dark:text-muted-foreground'>
@@ -371,6 +419,8 @@ interface RowProps {
   tested: boolean
   /** The collection's only layout: it is the fallback for every record. */
   only: boolean
+  /** Open form change suggestions naming this layout (#2609). */
+  requests?: number
   onOpen: (id: number) => void
   onChanged: () => void
   drag?: {
@@ -381,9 +431,20 @@ interface RowProps {
   }
 }
 
-function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }: RowProps) {
+function RowView({
+  row,
+  fields,
+  choices,
+  tested,
+  only,
+  requests,
+  onOpen,
+  onChanged,
+  drag
+}: RowProps) {
   const client = useNivaroClient()
   const [renaming, setRenaming] = useState(false)
+  const [panel, setPanel] = useState<'deps' | 'compare' | null>(null)
   const [draftName, setDraftName] = useState(row.name)
   const [confirmDelete, setConfirmDelete] = useState(false)
   // Enter and Escape unmount the focused input, and the browser then fires blur
@@ -472,6 +533,17 @@ function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }
                 {row.new_menu && !row.new_menu.hidden ? 'link or New menu' : 'link only'}
               </Pill>
             )}
+            {requests ? (
+              <button
+                type='button'
+                data-row-requests={requests}
+                data-tip='Open the form to read them (Form settings → Tools)'
+                onClick={() => onOpen(row.layout_id)}
+                className='rounded-full bg-nvr-cyan/10 px-2 py-px text-[11px] font-semibold text-nvr-navy hover:bg-nvr-cyan/15 dark:text-nvr-cyan'
+              >
+                {requests} {requests === 1 ? 'suggestion' : 'suggestions'}
+              </button>
+            ) : null}
             {tested && (
               <span className='inline-flex items-center gap-1 text-[11.5px] font-semibold text-[#0089ad] dark:text-nvr-cyan'>
                 <Check className='h-3 w-3' />
@@ -519,9 +591,42 @@ function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }
             }}
             onDelete={() => setConfirmDelete(true)}
             onDone={onChanged}
+            onPanel={(p) => setPanel((cur) => (cur === p ? null : p))}
           />
         </td>
       </tr>
+      {(panel || (renaming && row.references.length > 0)) && (
+        <tr data-row-panel={renaming ? 'rename' : panel}>
+          <td
+            colSpan={4}
+            className='border-b border-slate-100 bg-slate-50 px-3.5 py-3 dark:border-border/60 dark:bg-background'
+          >
+            <div className='flex items-start gap-3'>
+              <div className='min-w-0 flex-1'>
+                {renaming || panel === 'deps' ? (
+                  <DependencyDiagram layoutId={row.layout_id} change={renaming ? 'rename' : null} />
+                ) : (
+                  <PromotePanel
+                    layoutId={row.layout_id}
+                    layoutName={row.name}
+                    onApplied={onChanged}
+                  />
+                )}
+              </div>
+              {!renaming && (
+                <button
+                  type='button'
+                  aria-label='Close'
+                  onClick={() => setPanel(null)}
+                  className='rounded p-1 text-slate-400 hover:bg-muted hover:text-slate-700 dark:hover:text-foreground'
+                >
+                  <X className='h-3.5 w-3.5' />
+                </button>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
       {confirmDelete && (
         <DeleteConfirm
           row={row}
@@ -727,6 +832,10 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
   // Optimistic order for Other views while the sort PATCHes land.
   const [otherOrder, setOtherOrder] = useState<number[] | null>(null)
   const rows = useMemo(() => data?.rows ?? [], [data])
+  // #2609 — open form change suggestions, per layout (0 = they name no form).
+  const { data: requestList } = useChangeRequests(collection)
+  const requestCounts = useMemo(() => requestsByLayout(requestList), [requestList])
+  const requestTotal = requestList?.length ?? 0
   const choices = useRuleChoiceLabels(collection, fields, rows)
   // biome-ignore lint/correctness/useExhaustiveDependencies: a fresh server read resets the local order
   useEffect(() => setOtherOrder(null), [data])
@@ -806,6 +915,7 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
       choices,
       tested: explain?.layout_id === row.layout_id,
       only: rows.length === 1,
+      requests: requestCounts.get(row.layout_id) ?? 0,
       onOpen,
       onChanged: invalidate
     }
@@ -826,6 +936,15 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
           Read top to bottom: records are matched the same way.
         </p>
       </div>
+      {requestTotal > 0 && (
+        <span
+          data-overview-requests={requestTotal}
+          data-tip='Suggestions people sent from record pages; open a form to read its own'
+          className='rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11.5px] font-semibold text-nvr-navy dark:text-nvr-cyan'
+        >
+          {requestTotal} form {requestTotal === 1 ? 'suggestion' : 'suggestions'}
+        </span>
+      )}
       {rows.length > 0 && <TestRecordButton collection={collection} onResult={setExplain} />}
       <NewFormButton collection={collection} onCreated={created} />
     </header>

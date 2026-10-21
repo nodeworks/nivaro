@@ -743,6 +743,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     cache: {
       registerWarm: (name, fn, opts) => registered.cacheWarmers.push({ name, fn, opts })
     },
+    layouts: { dependsOn: () => {} },
     seeds: { register: (d) => registered.seeds.push(d) },
     schema: { step: (id, d) => registered.schemaSteps.push({ id, ...d }) },
     helpVideos: {

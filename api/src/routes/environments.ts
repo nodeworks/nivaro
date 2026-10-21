@@ -68,7 +68,7 @@ function resolveSecret(incoming: unknown, stored: string | null): string | null 
   return v === MASK ? stored : v
 }
 
-async function fetchJson(
+export async function fetchJson(
   url: string,
   headers: Record<string, string>,
   timeoutMs = 8000
@@ -95,7 +95,7 @@ async function fetchJson(
  * revoked, or the account behind it lost admin) — not that the host is down.
  * Returns the sentence the Environments page shows, or null for any other answer.
  */
-function tokenRefusal(res: { status: number; body: unknown }): string | null {
+export function tokenRefusal(res: { status: number; body: unknown }): string | null {
   if (res.status !== 401 && res.status !== 403) return null
   const b = (res.body && typeof res.body === 'object' ? res.body : {}) as {
     code?: string

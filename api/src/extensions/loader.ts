@@ -67,6 +67,10 @@ import {
   watchDeprecatedMembers
 } from '@nivaro/extension-kit'
 import { registerCacheWarmer } from '../services/cache-warmers.js'
+import {
+  forgetLayoutDependencies,
+  registerLayoutDependency
+} from '../services/layout-dependencies.js'
 import { runLongSql } from '../services/run-long.js'
 import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
 
@@ -871,6 +875,21 @@ export function registrationMembers(
           own('cache_warmers', id)
         } catch (err) {
           console.warn(`[extensions] ${extId}: cache warmer skipped —`, (err as Error).message)
+        }
+      }
+    },
+    // #2613 — layouts the extension's code opens, for the layout dependency diagram.
+    layouts: {
+      dependsOn: (dep) => {
+        note('layouts')
+        try {
+          const d = registerLayoutDependency(extId, dep)
+          own(
+            'layout_dependencies',
+            `${d.collection} · ${d.slug ?? `#${d.layout_id}`} · ${d.label}`
+          )
+        } catch (err) {
+          console.warn(`[extensions] ${extId}: layout dependency skipped —`, (err as Error).message)
         }
       }
     },
@@ -1736,6 +1755,7 @@ export function removeExtension(id: string): boolean {
   extensionRegistry.delete(id)
   hooks.removeExtensionHooks(id)
   unregisterExtensionLenses(id)
+  forgetLayoutDependencies(id)
   void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(id))
 
   const config = readConfig()

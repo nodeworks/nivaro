@@ -117,7 +117,6 @@ export async function loadLayoutBundle(
     | Record<string, unknown>
     | undefined
   if (!raw) return null
-  const layout = parseLayoutRow({ ...raw }) as LayoutRow
   const groupRows = (await q('nivaro_field_groups')
     .where({ layout_id: layoutId })
     .orderBy([{ column: 'sort' }, { column: 'id' }])) as Array<Record<string, unknown>>
@@ -125,6 +124,22 @@ export async function loadLayoutBundle(
     .where({ layout_id: layoutId })
     .orderBy([{ column: 'sort' }, { column: 'id' }])) as Array<Record<string, unknown>>
 
+  const rev = (await layoutStateHash(layoutId, q)) ?? ''
+  return bundleFromRows(raw, groupRows, asgRows, rev)
+}
+
+/**
+ * The editor's bundle from stored rows (a layout row, its nivaro_field_groups
+ * and nivaro_layout_field_assignments rows) — the database read above, and a
+ * config snapshot's rows when one layout is compared with another environment.
+ */
+export function bundleFromRows(
+  raw: Record<string, unknown>,
+  groupRows: Array<Record<string, unknown>>,
+  asgRows: Array<Record<string, unknown>>,
+  rev: string
+): LayoutBundle {
+  const layout = parseLayoutRow({ ...raw }) as LayoutRow
   const keyById = new Map(groupRows.map((g) => [Number(g.id), String(g.key)]))
   const groups: GroupRow[] = groupRows.map((g) => ({
     id: Number(g.id),
@@ -188,7 +203,6 @@ export async function loadLayoutBundle(
     )
   )
 
-  const rev = (await layoutStateHash(layoutId, q)) ?? ''
   return { layout, ...sortBundleRows({ groups, placements }), rev }
 }
 

@@ -6,6 +6,7 @@ import { get } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { HistoryPanel } from '../HistoryPanel'
 import { useLayoutEditorHost } from '../host'
+import { LayoutOpsBlocks } from '../ops/LayoutOpsBlocks'
 import { useRoleNames } from '../overview/overview-api'
 import { labelText, tintCard } from '../panel-style'
 import { RelationPicker } from '../pickers/relation-picker'
@@ -32,6 +33,11 @@ export function ToolsSection(props: ToolsSectionProps) {
       <SlotSetting k='tool.ai_review' layoutId={id} />
       <HistorySetting layoutId={id} />
       <DriftSetting layoutId={id} />
+      <LayoutOpsBlocks
+        collection={props.collection}
+        layoutId={id}
+        name={String(props.layout.name ?? '')}
+      />
     </>
   )
 }

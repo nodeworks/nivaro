@@ -214,7 +214,7 @@ async function ownFilesOf(req: FastifyRequest, raw: unknown): Promise<string[]> 
  * by POST /tickets and POST /report-problem (#1390). Columns from migration
  * 425 (replay, issue link) are written only once it has run.
  */
-async function raiseTicket(
+export async function raiseTicket(
   app: FastifyInstance,
   req: FastifyRequest,
   f: {

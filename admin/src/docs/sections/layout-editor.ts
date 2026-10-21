@@ -171,6 +171,38 @@ export const layoutEditor: DocSection = {
       text: 'Edits are the same operations, saving and History as in the Layout tab. People who are not administrators never see the button and never download the editor: it is a separate chunk, loaded only when an admin turns the mode on (efp-new loads it through the `@nivaro/react/layout-editor` subpath export).'
     },
 
+    { type: 'h2', id: 'layout-editor-ops', text: 'Suggestions, dependencies and environments' },
+    { type: 'h3', id: 'layout-editor-suggestions', text: 'Suggestions from people' },
+    {
+      type: 'p',
+      text: "People who are not administrators get Suggest a form change in a record's More menu. They say what should change and can name a field. The suggestion becomes a Form change support request, so they follow it under My requests and it also shows on the Support desk. The overview shows how many suggestions are open, per form. In the editor, Form settings → Tools → Suggestions from people lists them; Accept marks the request done and Decline cancels it, each with an optional note the person is told about. To turn suggestions off, deactivate the Form change type under Support → Request types."
+    },
+    { type: 'h3', id: 'layout-editor-dependencies', text: 'What relies on a layout' },
+    {
+      type: 'p',
+      text: 'A diagram shows everything that opens a layout: other layouts, queues, grids and drill-downs, share links and public forms, generated files and extension code. Each box says whether it finds the layout by its id or its link name. Before you delete a layout, change its link name or change its kind, the diagram turns red for what that change would break. Renaming keeps every link working. Open it from the row menu (What relies on this…) or Form settings → Tools.'
+    },
+    {
+      type: 'p',
+      text: 'Extension code cannot be read for layout names, so extensions declare what they open with `ctx.layouts?.dependsOn({ collection, slug | layout_id, label })` in register(). The diagram says so when no extension declares anything, rather than claiming nothing uses the layout.'
+    },
+    { type: 'h3', id: 'layout-editor-promote', text: 'Compare with another environment' },
+    {
+      type: 'p',
+      text: "Row menu → Compare with another environment (or Form settings → Tools) reads another environment's copy of this layout and lists what would change here: settings, sections and tabs, fields and order. The other copy comes from an API in the Environments registry (read by this server with that component's token), or from an uploaded file: Download this layout on the other side, or a Config Diff snapshot. The copy is matched by link name, then by name, and you can pick another. Apply here saves a version of this layout first, so History → Restore undoes it. Which layout is the default and its place in the list stay as they are here. Settings that cannot be carried (a template or layout this environment does not have, a name already taken, a value this instance refuses) are listed and left alone. Nothing is ever sent from here to the other environment."
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/collection-layouts/:id/dependencies        (admin) → { layout, groups, nodes, extensions }
+GET  /api/collection-layouts/promote/sources         (admin) → other environments' APIs
+GET  /api/collection-layouts/:id/export              (admin) → layout file
+POST /api/collection-layouts/:id/promote/preview     (admin) { component_id | file, remote_layout_id? }
+POST /api/collection-layouts/:id/promote/apply       (admin) { …same, base_rev }  409 = changed since
+POST /api/layout-change-requests                     { collection, item, layout_id?, field?, message }
+GET  /api/layout-change-requests?collection=&status= (admin)
+POST /api/layout-change-requests/:id/resolve         (admin) { decision: 'accept' | 'decline', note? }`
+    },
+
     { type: 'h2', id: 'layout-editor-warning', text: 'Instances whose layouts are replaced' },
     {
       type: 'p',
