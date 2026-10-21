@@ -21,6 +21,9 @@ import { utcNow } from '../dialect.js'
  *     rang_at       datetime NULL  invitees were rung at the start (the claim)
  *     created_at    datetime
  *
+ *   Indexes: (status, starts_at) due scan, (room, starts_at) room list,
+ *   (created_by, created_at) the per-organizer quota.
+ *
  * Guarded and additive. RUNTIME data — never copied between instances.
  */
 export async function up(knex: Knex): Promise<void> {
@@ -44,6 +47,8 @@ export async function up(knex: Knex): Promise<void> {
     t.dateTime('created_at').notNullable().defaultTo(utcNow(knex))
     t.index(['status', 'starts_at'], 'ix_huddle_sched_due')
     t.index(['room', 'starts_at'], 'ix_huddle_sched_room')
+    // The per-organizer quota counts a person's recent schedules (huddle-schedule-quota.ts).
+    t.index(['created_by', 'created_at'], 'ix_huddle_sched_creator')
   })
 }
 
