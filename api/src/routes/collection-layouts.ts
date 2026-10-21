@@ -49,6 +49,7 @@ import { registerLayoutAnalysisRoutes } from './layout-analysis.js'
 import { layoutBulkRoutes } from './layout-bulk.js'
 import { registerLayoutCrossformRoutes } from './layout-crossform.js'
 import { layoutHistoryRoutes } from './layout-history.js'
+import { registerLayoutOutputRoutes } from './layout-output.js'
 import { applyTemplateToNewLayout, layoutReuseRoutes, loadFormTemplate } from './layout-reuse.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, roleAllows, slugify }
@@ -102,6 +103,7 @@ export async function nextFreeSlug(
  *  Retired settings nothing reads (summary_show_all, allow_clone,
  *  addendum_lock_fields) are not copied: their columns stay, unwritten. */
 const CLONE_CARRIED_COLUMNS = [
+  'email_summary_group',
   'parent_layout_id',
   'disable_comments',
   'disable_tasks',
@@ -2261,4 +2263,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // Named versions, version bundles, section last-changed, scheduled changes.
   await layoutHistoryRoutes(app)
+
+  // Form-shaped outputs: spreadsheet template / export, blank printable form, help text sheet.
+  await registerLayoutOutputRoutes(app)
 }

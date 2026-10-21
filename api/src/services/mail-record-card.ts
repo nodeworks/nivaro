@@ -1,5 +1,6 @@
-import { recordLink } from './app-links.js'
 import { db } from '../db/index.js'
+import { recordLink } from './app-links.js'
+import { emailSummaryFields } from './layout-email-section.js'
 import { getLabels, resolvePathValues } from './queues.js'
 
 /**
@@ -125,7 +126,11 @@ export async function buildRecordCard(
 
   const fields: RecordCardField[] = []
   try {
-    const assignments = await headerAssignments(collection)
+    // The layout's chosen email section (#2725), cut to the recipient's
+    // access; else the header strip the form shows.
+    const assignments =
+      (await emailSummaryFields(collection, itemId, opts.recipientUserId).catch(() => [])) ??
+      (await headerAssignments(collection))
     if (assignments.length > 0) {
       const fieldMeta = (await db('nivaro_fields')
         .where({ collection })

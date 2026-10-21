@@ -189,6 +189,19 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "Find and replace (Tools) searches this form's field labels, section names, text blocks and help text, for example Oracle to Fusion. Where the form sets no label or help text of its own, the collection's is searched too; replacing it gives this form its own. Every match is listed with its before and after and a tick box; Replace changes the ticked ones as one Undo step."
     },
+    { type: 'h3', id: 'layout-editor-outputs', text: 'Spreadsheets, paper and email' },
+    {
+      type: 'p',
+      text: "The Outputs button (Tools) turns the saved form into files. Excel import template gives one column per field in the form's order: choice fields are dropdowns, number and date columns are checked, and required columns are amber. A Fields sheet explains every column. Export records to Excel writes up to 5,000 records in the same columns, limited to what you may read; pointers to other records show their names. Blank printable form is a PDF with a ruled line, checkboxes or lines for every field, for people filling it in on paper."
+    },
+    {
+      type: 'p',
+      text: "Download as a sheet writes every label, help text and placeholder on the form, with your unsaved edits, to Excel. Edit the amber columns and upload the file back: the editor lists every difference with a tick box, and Apply changes the ticked ones as one Undo step. Clearing a cell removes the text this form set, so the field's own text shows again. Rows for fields or sections that were removed are left out."
+    },
+    {
+      type: 'p',
+      text: "Section for notification emails (Form settings, Tools) picks the section whose fields notification emails show as the record summary, in place of the header strip. Each email is cut to the person it goes to: a section hidden for their role, a field their role may not read, or a record they cannot open adds nothing. None keeps the header strip. It needs migration 493, and only the default form's choice counts."
+    },
     { type: 'h3', id: 'layout-editor-inherited', text: 'Inherited layouts' },
     {
       type: 'p',

@@ -44,10 +44,13 @@ export type StructurePlan =
     }
   | { ok: false; reason: string }
 
-const refuse = (reason: string): StructurePlan => ({ ok: false, reason })
+export const refuse = (reason: string): StructurePlan => ({ ok: false, reason })
 
 /** The plan, or a refusal naming what the save would refuse. */
-function checked(bundle: LayoutBundle, plan: Extract<StructurePlan, { ok: true }>): StructurePlan {
+export function checked(
+  bundle: LayoutBundle,
+  plan: Extract<StructurePlan, { ok: true }>
+): StructurePlan {
   if (plan.ops.length === 0) return refuse('Nothing would change')
   try {
     applyLayoutOps(bundle, plan.ops)
@@ -656,7 +659,7 @@ export function findHits(
 }
 
 // Every group in page order (holders, then their tabs), the Ungrouped zone left out.
-function groupsInPageOrder(b: LayoutBundle): GroupRow[] {
+export function groupsInPageOrder(b: LayoutBundle): GroupRow[] {
   const top = b.groups
     .filter((g) => g.parent_key === null && g.key !== UNGROUPED_KEY)
     .sort((a, c) => a.sort - c.sort)

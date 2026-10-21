@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { changeNoteColumnReady, normalizeChangeNote } from './layout-change-note.js'
+import { emailSectionColumnReady, normalizeEmailSection } from './layout-email-section.js'
 
 /**
  * Layout settings — the parsers, validators and the PATCH body → column
@@ -204,6 +205,7 @@ export type LayoutPatchBody = Partial<{
   header_fields: string[] | null
   hide_empty: boolean
   change_note: string | null
+  email_summary_group: string | null
 }>
 
 /** A layout row as the API returns it: JSON settings parsed, flags as booleans. */
@@ -406,6 +408,14 @@ export async function normalizeLayoutPatch(
     if (!(await changeNoteColumnReady(q)))
       return { status: 400, error: 'Change notes need migration 462 to run first' }
     patch.change_note = res.value
+  }
+  // A section as an email body (#2725): the column comes with migration 493.
+  if (body.email_summary_group !== undefined) {
+    const res = normalizeEmailSection(body.email_summary_group)
+    if ('error' in res) return { status: 400, error: res.error }
+    if (!(await emailSectionColumnReady(q)))
+      return { status: 400, error: 'The email section needs migration 493 to run first' }
+    patch.email_summary_group = res.value
   }
 
   // Settings the renderers read that this route used to drop.

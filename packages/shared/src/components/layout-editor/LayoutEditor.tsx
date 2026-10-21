@@ -73,6 +73,7 @@ import type { OpenSource } from './explain/field-sources'
 import type { RuleDep } from './explain/rule-graph'
 import { useCanvasExplain, useDefaultGhosts } from './explain/use-explain'
 import { FindReplaceButton } from './FindReplace'
+import { OutputsButton } from './outputs/OutputsButton'
 import { FormMapButton } from './FormMapButton'
 import { useSectionChanges } from './history-api'
 import { useLayoutEditorHost } from './host'
@@ -1075,6 +1076,9 @@ export function LayoutEditor({
             {bundle && <FindTool find={nav.find} />}
             {bundle && arrangeable && (
               <FindReplaceButton bundle={bundle} apply={draft.apply} collection={collection} />
+            )}
+            {bundle && arrangeable && (
+              <OutputsButton bundle={bundle} apply={draft.apply} collection={collection} />
             )}
             <MenuSeparator />
             {bundle && (
