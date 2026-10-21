@@ -69,8 +69,16 @@ export type VersionRow = Record<string, unknown> & {
   rendered_file: string | null
   rendered_hash: string | null
 }
+/**
+ * Where a video shows: a collection (optionally per pipeline step), a page,
+ * or (#2615) one field / one form section of a collection — `key` is then the
+ * collection and `state_key` the field name or the section's group key.
+ */
+export type ContextKind = 'collection' | 'page' | 'field' | 'section'
+export const TARGET_KINDS: ReadonlySet<string> = new Set(['field', 'section'])
+
 export interface ContextInput {
-  kind: 'collection' | 'page'
+  kind: ContextKind
   key: string
   state_key: string | null
 }
@@ -137,7 +145,7 @@ export interface HelpVideoDto {
   poster_url: string | null
   stream_url: string | null
   captions_url: string | null
-  contexts: Array<{ kind: 'collection' | 'page'; key: string; state_key: string | null }>
+  contexts: Array<{ kind: ContextKind; key: string; state_key: string | null }>
   required: boolean
   published: VersionDto | null
   // author-only
@@ -384,18 +392,24 @@ export function validateContexts(input: unknown): ContextInput[] {
   for (const raw of input as Array<Record<string, unknown>>) {
     const kind = raw?.kind
     const key = String(raw?.key ?? '')
-    if (kind !== 'collection' && kind !== 'page') {
+    if (kind !== 'collection' && kind !== 'page' && !TARGET_KINDS.has(String(kind))) {
       throw fail(400, 'HELP_VIDEO_CONTEXTS', `Unknown context kind: ${String(kind)}`)
     }
     if (!KEY_RE.test(key)) throw fail(400, 'HELP_VIDEO_CONTEXTS', `Invalid key: ${key}`)
-    const stateRaw = kind === 'collection' && raw.state_key ? String(raw.state_key) : null
+    const target = TARGET_KINDS.has(String(kind))
+    const stateRaw =
+      (kind === 'collection' || target) && raw.state_key ? String(raw.state_key) : null
     if (stateRaw !== null && !KEY_RE.test(stateRaw)) {
       throw fail(400, 'HELP_VIDEO_CONTEXTS', `Invalid state: ${stateRaw}`)
+    }
+    // A field or section names the one it is on; without it the row means nothing.
+    if (target && stateRaw === null) {
+      throw fail(400, 'HELP_VIDEO_CONTEXTS', `A ${String(kind)} context needs its name`)
     }
     const sig = `${kind}|${key}|${stateRaw ?? ''}`
     if (seen.has(sig)) continue
     seen.add(sig)
-    out.push({ kind, key, state_key: stateRaw })
+    out.push({ kind: kind as ContextKind, key, state_key: stateRaw })
   }
   return out
 }
@@ -1736,4 +1750,64 @@ export async function listPages(): Promise<
   Array<{ key: string; label: string; app: string | null }>
 > {
   return db('nivaro_help_video_pages').orderBy('label', 'asc').select('key', 'label', 'app')
+}
+
+/**
+ * #2615 — the help videos attached to single fields and sections of one
+ * collection's form, for the record page's small play buttons beside field
+ * and section labels. Same rule as a screen's videos: published, and only
+ * those this viewer's role may see.
+ */
+export async function videosForForm(
+  req: FastifyRequest,
+  collection: string
+): Promise<{
+  fields: Record<string, HelpVideoDto[]>
+  sections: Record<string, HelpVideoDto[]>
+}> {
+  const empty = { fields: {}, sections: {} }
+  if (!KEY_RE.test(collection)) return empty
+  const rows = (await db('nivaro_help_video_contexts')
+    .whereIn('kind', [...TARGET_KINDS])
+    .where({ key: collection })
+    .select('video_id', 'kind', 'state_key')) as Array<{
+    video_id: string
+    kind: string
+    state_key: string | null
+  }>
+  if (!rows.length) return empty
+  const ids = [...new Set(rows.map((r) => up(r.video_id)))]
+  const videos = (await db('nivaro_help_videos').whereIn('id', ids)) as VideoRow[]
+  const shown = videos.filter(
+    (v) => v.status === 'published' && viewerMaySee(v, req.user!.role, false)
+  )
+  if (!shown.length) return empty
+  const author = await isAuthor(req.user!, !!req.isAdmin)
+  const dtos = new Map<string, HelpVideoDto>()
+  await Promise.all(
+    shown.map(async (v) =>
+      dtos.set(
+        up(v.id),
+        await serializeVideo(v, {
+          author,
+          userId: req.user!.id,
+          role: req.user!.role ?? null,
+          sidTag: sessionTag(req)
+        })
+      )
+    )
+  )
+  const fields: Record<string, HelpVideoDto[]> = {}
+  const sections: Record<string, HelpVideoDto[]> = {}
+  for (const r of rows) {
+    const dto = dtos.get(up(r.video_id))
+    if (!dto || !r.state_key) continue
+    const into = r.kind === 'field' ? fields : sections
+    into[r.state_key] ??= []
+    const list = into[r.state_key]
+    if (!list.some((d) => d.id === dto.id)) list.push(dto)
+  }
+  for (const list of [...Object.values(fields), ...Object.values(sections)])
+    list.sort((a, b) => a.title.localeCompare(b.title))
+  return { fields, sections }
 }

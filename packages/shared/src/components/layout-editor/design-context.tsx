@@ -1,6 +1,7 @@
 import { type CSSProperties, createContext, useContext } from 'react'
 import type { ActiveLayoutData } from '../item-edit/types'
 import type { RefusedWrite } from './design-canvas'
+import type { EditorNote } from './editor-notes'
 
 export type DesignTarget =
   | { kind: 'field'; field: string; group_key: string | null }
@@ -18,6 +19,8 @@ export interface LayoutDesign {
   /** "Preview as role": what that role's field permissions do to the node
    *  (hidden: faint with a tag, still selectable; read-only: a lock tag). */
   roleMark?(t: DesignTarget): RoleMark | null
+  /** #2608: the editor note pinned to the node, shown as a marker on the canvas. */
+  note?(t: DesignTarget): EditorNote | null
 }
 
 export interface RoleMark {

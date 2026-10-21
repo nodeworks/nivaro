@@ -19,6 +19,8 @@ import { type DesignTarget, type LayoutDesign, targetKey } from './design-contex
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
+import { noteKey, notesOf } from './editor-notes'
+import { FormMapButton } from './FormMapButton'
 import { useLayoutEditorHost } from './host'
 import { FormSettings, Inspector } from './inspector-slot'
 import { LayoutsRail } from './LayoutsRail'
@@ -235,6 +237,8 @@ function Canvas({
     () => (preview.roleId ? roleMarker(rolePreview) : undefined),
     [preview.roleId, rolePreview]
   )
+  // #2608: notes pinned to fields and sections show as markers on the canvas.
+  const notes = useMemo(() => notesOf(bundle), [bundle])
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
@@ -242,9 +246,13 @@ function Canvas({
       showHidden,
       inheritedFrom: (t) => canvas.inherited.get(targetKey(t)) ?? null,
       dnd,
-      roleMark
+      roleMark,
+      note: (t) => {
+        const k = noteKey(t)
+        return k ? (notes.get(k) ?? null) : null
+      }
     }),
-    [selected, onSelect, showHidden, canvas.inherited, dnd, roleMark]
+    [selected, onSelect, showHidden, canvas.inherited, dnd, roleMark, notes]
   )
   return (
     <EditorCanvas
@@ -434,6 +442,7 @@ export function LayoutEditor({
         onShowHidden={setShowHidden}
         onBack={leave}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
+        tools={<FormMapButton bundle={bundle} collection={collection} />}
       />
       {overlay && (
         <EditingBanner

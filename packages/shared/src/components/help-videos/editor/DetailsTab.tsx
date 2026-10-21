@@ -389,6 +389,33 @@ export function DetailsTab({ video }: { video: HelpVideoDto }) {
               ))}
           </div>
         )}
+        {/* #2615: single fields and sections, attached from the layout editor. */}
+        {contexts.some((c) => c.kind === 'field' || c.kind === 'section') && (
+          <div className='flex flex-wrap gap-1.5'>
+            {contexts
+              .filter((c) => c.kind === 'field' || c.kind === 'section')
+              .map((t) => {
+                const name = `${t.kind === 'field' ? 'Field' : 'Section'} ${t.state_key} on ${t.key}`
+                return (
+                  <RemovableChip
+                    key={`${t.kind}|${t.key}|${t.state_key}`}
+                    removeLabel={`Remove ${name}`}
+                    onRemove={() =>
+                      saveContexts(
+                        contexts.filter(
+                          (x) =>
+                            !(x.kind === t.kind && x.key === t.key && x.state_key === t.state_key)
+                        )
+                      )
+                    }
+                    data-hv-context-target={`${t.kind}:${t.key}:${t.state_key}`}
+                  >
+                    {name}
+                  </RemovableChip>
+                )
+              })}
+          </div>
+        )}
         {contexts.length === 0 && (
           <p className='text-[12px] text-muted-foreground'>
             Not shown anywhere yet. Add a record form or a page to publish.

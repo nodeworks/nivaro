@@ -217,7 +217,9 @@ export interface CursorEdits {
 
 export type Visibility = { mode: 'everyone' | 'roles'; role_ids: string[] }
 export type HelpVideoContext = {
-  kind: 'collection' | 'page'
+  /** field / section (#2615): `key` is the collection, `state_key` the field
+   *  name or the section's group key. */
+  kind: 'collection' | 'page' | 'field' | 'section'
   key: string
   state_key: string | null
 }

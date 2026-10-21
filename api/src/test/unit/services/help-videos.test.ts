@@ -105,6 +105,21 @@ describe('validateContexts', () => {
     expect(() => validateContexts([{ kind: 'url', key: '/x' }])).toThrow()
     expect(() => validateContexts([{ kind: 'page', key: 'a b;drop' }])).toThrow()
   })
+  it('accepts a field or section of a collection, and needs its name (#2615)', () => {
+    expect(
+      validateContexts([
+        { kind: 'field', key: 'workflows', state_key: 'vendor.name' },
+        { kind: 'section', key: 'workflows', state_key: 'budget' }
+      ])
+    ).toEqual([
+      { kind: 'field', key: 'workflows', state_key: 'vendor.name' },
+      { kind: 'section', key: 'workflows', state_key: 'budget' }
+    ])
+    expect(() => validateContexts([{ kind: 'field', key: 'workflows' }])).toThrow()
+    expect(() =>
+      validateContexts([{ kind: 'section', key: 'workflows', state_key: 'a b' }])
+    ).toThrow()
+  })
   it('refuses more than 50 contexts', () =>
     expect(() =>
       validateContexts(Array.from({ length: 51 }, (_, i) => ({ kind: 'page', key: `p${i}` })))

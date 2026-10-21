@@ -31,6 +31,7 @@ import {
   usePresenceSoftLock
 } from './FieldAffordances'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
+import { FormHelpVideoButton } from './FormHelpVideoButton'
 import {
   buildCascadeFilter,
   CascadeEffectController,
@@ -964,8 +965,14 @@ export function FieldRow({
               </Tooltip>
             </TooltipProvider>
           )}
+          <FormHelpVideoButton
+            collection={collection}
+            kind='field'
+            name={field.field}
+            label={label}
+          />
           {(locked || field.readonly) && lockReason ? (
-            <LockReasonBadge reason={lockReason} />
+            <LockReasonBadge reason={lockReason} onHover={affordances?.onLockHover} />
           ) : locked ? (
             <TooltipProvider delayDuration={200}>
               <Tooltip>
@@ -1031,6 +1038,9 @@ export function FieldRow({
         <div
           className={cn(locked && !isFileField && 'cursor-not-allowed')}
           data-tip={(locked || field.readonly) && lockReason ? lockReason : undefined}
+          onPointerEnter={
+            (locked || field.readonly) && lockReason ? affordances?.onLockHover : undefined
+          }
         >
           <div
             key={autoFillTick ?? 0}

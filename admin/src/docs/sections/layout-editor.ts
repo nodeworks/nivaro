@@ -171,6 +171,24 @@ export const layoutEditor: DocSection = {
       text: 'Edits are the same operations, saving and History as in the Layout tab. People who are not administrators never see the button and never download the editor: it is a separate chunk, loaded only when an admin turns the mode on (efp-new loads it through the `@nivaro/react/layout-editor` subpath export).'
     },
 
+    { type: 'h2', id: 'layout-editor-help', text: 'Help, notes and the form map' },
+    {
+      type: 'ul',
+      items: [
+        "Help videos on a field or section: a field's Help tab, or the bottom of a section's inspector, attaches a published help video. The record page then shows a small play button beside that field's label or on that section's header, to the roles the video is visible to. The attachment belongs to the video (it appears in its Where list), so it shows for that field or section on every form of the collection.",
+        'Notes for editors: pin a short note to a field (Help tab) or a section (bottom of its inspector), such as "Finance asked for this in Q3". A sticky-note marker shows on the canvas with the note, its author and date. Notes save, undo and version like any other layout change, and record pages never receive them.',
+        "Form map (top bar): a clean printable map of the form: its steps or tabs, sections and fields in order, each field's width, required and read-only marks, and the rules that hide or lock things, in plain words. Print / Save as PDF prints it on a light page whatever the app theme.",
+        'Why can\'t I edit this? On a record, pointing at a locked field names the exact rule behind it: the role or pipeline step a lock rule lists, the section locked for the role and the form it is on, or the role\'s field permissions. Admins also see a "N fields hidden by rules" note above the form that lists each hidden field and the rule that hides it (step rules, sections hidden from roles, fields turned off on the form).'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET /api/help-videos/for-form?collection=   → { data: { fields: { <field>: [video] }, sections: { <group key>: [video] } } }
+GET /api/collection-layouts/why?collection=&item=
+     → { data: { layout: { id, name, why }, role, record_lock, locks: { <field>: { kind, text } }, hidden? } }
+     // as the viewer; 404 when they cannot read the record; \`hidden\` for administrators only`
+    },
+
     { type: 'h2', id: 'layout-editor-warning', text: 'Instances whose layouts are replaced' },
     {
       type: 'p',

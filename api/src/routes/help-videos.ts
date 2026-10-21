@@ -151,6 +151,7 @@ import {
   validateContexts,
   verifyMediaTicket,
   videosForContext,
+  videosForForm,
   viewerMaySee,
   walkStepsFor
 } from '../services/help-videos.js'
@@ -336,6 +337,11 @@ export async function helpVideosRoutes(app: FastifyInstance) {
   app.get('/for', async (req, reply) => {
     const q = req.query as { collection?: string; item?: string; state?: string; page?: string }
     return reply.send(await videosForContext(req, q))
+  })
+  // #2615: videos attached to single fields / sections of a collection's form.
+  app.get('/for-form', async (req, reply) => {
+    const q = req.query as { collection?: string }
+    return reply.send({ data: await videosForForm(req, String(q.collection ?? '')) })
   })
   app.get('/pages', async (_req, reply) => reply.send({ data: await listPages() }))
   // `labels` (optional): the click targets the client saw on the page, for
