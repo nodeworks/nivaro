@@ -1,10 +1,35 @@
 import { describe, expect, it, vi } from 'vitest'
 
-// Pure helpers only: the db is never reached.
-vi.mock('../../../db/index.js', () => ({ db: {} }))
+// Pure helpers, plus a two-table stand-in (users, roles) for the scheduler check.
+const fake = vi.hoisted(() => {
+  const tables: Record<string, Array<Record<string, unknown>>> = {
+    nivaro_users: [],
+    nivaro_roles: []
+  }
+  const db = (table: string) => {
+    const conds: Array<Record<string, unknown>> = []
+    const api = {
+      where(c: Record<string, unknown>) {
+        conds.push(c)
+        return api
+      },
+      async first() {
+        return (tables[table] ?? []).find((r) =>
+          conds.every((c) => Object.entries(c).every(([k, v]) => r[k] === v))
+        )
+      }
+    }
+    return api
+  }
+  return { tables, db }
+})
+vi.mock('../../../db/index.js', () => ({ db: fake.db }))
 
 const { down, up } = await import('../../../db/migrations/457_layout_named_versions_schedules.js')
-const { foldScheduled, parseRunAt } = await import('../../../services/layout-schedules.js')
+const { foldScheduled, parseRunAt, SCHEDULER_NOT_ADMIN, schedulerRefusal } = await import(
+  '../../../services/layout-schedules.js'
+)
+const { isActiveAdmin } = await import('../../../middleware/authenticate.js')
 const { snapshotToBundle } = await import('../../../services/layout-ops.js')
 const { cleanVersionName, sectionChangesFrom, sectionSignatures } = await import(
   '../../../services/layout-versions.js'
@@ -195,5 +220,44 @@ describe('migration 457', () => {
     const { knex, calls } = fakeKnex({ table: true, column: true, schedules: true })
     await down(knex)
     expect(calls).toEqual(['drop nivaro_layout_schedules', 'alter nivaro_layout_versions'])
+  })
+})
+
+describe('scheduled changes re-check their scheduler at run time', () => {
+  fake.tables.nivaro_roles = [
+    { id: 'r-admin', admin_access: true },
+    { id: 'r-user', admin_access: false }
+  ]
+  fake.tables.nivaro_users = [
+    { id: 'u-admin', status: 'active', role: 'r-admin', is_redacted: false },
+    { id: 'u-suspended', status: 'suspended', role: 'r-admin', is_redacted: false },
+    { id: 'u-redacted', status: 'active', role: 'r-admin', is_redacted: true },
+    { id: 'u-demoted', status: 'active', role: 'r-user', is_redacted: false },
+    { id: 'u-norole', status: 'active', role: null, is_redacted: false }
+  ]
+
+  it('a creator who is still an active administrator may apply', async () => {
+    expect(await isActiveAdmin('u-admin')).toBe(true)
+    expect(await schedulerRefusal('u-admin')).toBeNull()
+  })
+
+  it('an inactive creator (suspended, redacted, gone) is refused', async () => {
+    for (const id of ['u-suspended', 'u-redacted', 'u-missing']) {
+      expect(await isActiveAdmin(id)).toBe(false)
+      expect(await schedulerRefusal(id)).toBe(SCHEDULER_NOT_ADMIN)
+    }
+  })
+
+  it('a creator no longer an administrator is refused', async () => {
+    for (const id of ['u-demoted', 'u-norole']) {
+      expect(await isActiveAdmin(id)).toBe(false)
+      expect(await schedulerRefusal(id)).toBe(SCHEDULER_NOT_ADMIN)
+    }
+  })
+
+  it('a row with no creator is refused without asking', async () => {
+    const check = vi.fn(async () => true)
+    expect(await schedulerRefusal(null, check)).toBe(SCHEDULER_NOT_ADMIN)
+    expect(check).not.toHaveBeenCalled()
   })
 })

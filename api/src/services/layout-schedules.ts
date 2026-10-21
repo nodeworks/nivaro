@@ -1,5 +1,6 @@
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
+import { isActiveAdmin } from '../middleware/authenticate.js'
 import { logActivity } from './activity.js'
 import { clearMetadataCache } from './collections.js'
 import { announceConfigChanged } from './config-live.js'
@@ -254,6 +255,21 @@ export async function rescheduleSchedule(
   return view ?? null
 }
 
+export const SCHEDULER_NOT_ADMIN = 'Scheduled by someone who can no longer edit layouts'
+
+/**
+ * A scheduled change runs in its scheduler's name, so it runs only while that
+ * person could still make it themselves: an active administrator (the same
+ * test requireAdmin makes). null = they still can; otherwise why not.
+ */
+export async function schedulerRefusal(
+  createdBy: string | null | undefined,
+  isAdmin: (userId: string) => Promise<boolean> = isActiveAdmin
+): Promise<string | null> {
+  if (!createdBy) return SCHEDULER_NOT_ADMIN
+  return (await isAdmin(createdBy)) ? null : SCHEDULER_NOT_ADMIN
+}
+
 /** A layout write made outside a request: what the config-write hook does for routes. */
 function announceLayoutChanged(collection: string) {
   clearMetadataCache()
@@ -269,7 +285,8 @@ function announceLayoutChanged(collection: string) {
 async function failSchedule(
   row: Record<string, unknown>,
   reason: string,
-  layoutName: string | null
+  layoutName: string | null,
+  opts: { notify?: boolean } = {}
 ): Promise<void> {
   const id = Number(row.id)
   await db(TABLE)
@@ -283,6 +300,9 @@ async function failSchedule(
     comment: `scheduled change ${id} not applied: ${reason}`.slice(0, 500),
     origin: 'machine'
   })
+  // Nobody is told when the scheduler may no longer edit layouts: the overview
+  // shows the failed row, and any administrator can schedule it again.
+  if (opts.notify === false) return
   const app = getApp()
   const to = row.created_by ? String(row.created_by) : null
   if (!app || !to) return
@@ -341,6 +361,14 @@ export async function runDueSchedules(
     if (Number(claimed) !== 1) continue
     const layoutId = Number(row.layout_id)
     try {
+      // Re-checked at run time: a scheduler suspended, redacted or no longer an
+      // administrator since scheduling does not get the change made anyway.
+      const refused = await schedulerRefusal(row.created_by as string | null)
+      if (refused) {
+        await failSchedule(row, refused, null, { notify: false })
+        failed++
+        continue
+      }
       const bundle = await loadLayoutBundle(db, layoutId)
       if (!bundle) {
         await failSchedule(row, 'the layout no longer exists', null)

@@ -120,6 +120,11 @@ function touchLastAccess(userId: string) {
     .catch(() => undefined)
 }
 
+/** The administrator test every request makes (req.isAdmin): the role grants admin access. */
+function roleIsAdmin(role: Pick<Role, 'admin_access'> | null | undefined): boolean {
+  return role?.admin_access ?? false
+}
+
 async function hydrateRole(req: FastifyRequest, user: User, opts?: { touch?: boolean }) {
   req.user = user
   setTraceUser(String(user.id))
@@ -127,7 +132,7 @@ async function hydrateRole(req: FastifyRequest, user: User, opts?: { touch?: boo
   if (user.role) {
     const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
     req.userRole = role ?? null
-    req.isAdmin = role?.admin_access ?? false
+    req.isAdmin = roleIsAdmin(role)
   } else {
     req.userRole = null
     req.isAdmin = false
@@ -492,6 +497,26 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
 
 export async function requireAuth(req: FastifyRequest, reply: FastifyReply) {
   await authenticate(req, reply)
+}
+
+/**
+ * requireAdmin's test for a person outside a request (work done later in
+ * their name, e.g. a scheduled layout change): an active, unredacted account
+ * whose role grants admin access — what signing in and requireAdmin would
+ * decide for them now.
+ */
+export async function isActiveAdmin(userId: string | null | undefined): Promise<boolean> {
+  if (!userId) return false
+  const user = (await db('nivaro_users')
+    .where({ id: userId, status: 'active' })
+    .first('id', 'role', 'is_redacted')) as
+    | { id: string; role: string | null; is_redacted?: boolean | number | null }
+    | undefined
+  if (!user || user.is_redacted || !user.role) return false
+  const role = (await db('nivaro_roles').where({ id: user.role }).first('admin_access')) as
+    | Pick<Role, 'admin_access'>
+    | undefined
+  return roleIsAdmin(role)
 }
 
 export async function requireAdmin(req: FastifyRequest, reply: FastifyReply) {
