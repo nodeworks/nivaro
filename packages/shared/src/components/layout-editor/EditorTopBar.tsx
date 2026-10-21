@@ -6,14 +6,15 @@ import { useRelationOptions } from '../../hooks/useRelationOptions'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { AiChangeCheck } from './ai/ChangeCheck'
 import { CommandPalette } from './commands/CommandPalette'
 import { HistoryPanel } from './HistoryPanel'
 import type { DescribeField } from './overview/describe-conditions'
 import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overview/overview-api'
 import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
-import { unsavedText } from './UnsavedConfirm'
 import type { PreviewDevice } from './preview/preview-model'
+import { unsavedText } from './UnsavedConfirm'
 import type { LayoutDraft } from './useLayoutDraft'
 
 // The editor's top bar: which layout this is and when it is used, Preview as,
@@ -303,7 +304,12 @@ export function EditorTopBar({
     | 'bundle'
     | 'apply'
   > &
-    Partial<Pick<LayoutDraft, 'autosave' | 'setAutosave' | 'unsavedCount' | 'save' | 'discard'>>
+    Partial<
+      Pick<
+        LayoutDraft,
+        'autosave' | 'setAutosave' | 'unsavedCount' | 'save' | 'discard' | 'unsavedOps'
+      >
+    >
   preview: PreviewAs
   onPreview: (v: PreviewAs) => void
   showHidden: boolean
@@ -433,6 +439,7 @@ export function EditorTopBar({
         />
       )}
       <StatusChip draft={draft} />
+      <AiChangeCheck layoutId={layoutId} draft={draft} />
       {draft.save && !draft.autosave && (
         <button
           type='button'

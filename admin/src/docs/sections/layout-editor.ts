@@ -274,6 +274,21 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Required is set per form, not per role: "make Zone required for Finance" makes it required on this form and says so when the form is not limited to Finance (give Finance its own form to require it only there). Text the palette cannot read can go to the AI (admins, when AI is set up): it answers in the same commands, shown in the same preview before anything changes. Without AI the typed commands still work.'
     },
+    { type: 'h3', id: 'layout-editor-ai-assists', text: 'AI assists (admins)' },
+    {
+      type: 'p',
+      text: 'When AI is set up, administrators get five helpers. Each one only proposes: a change lands through the draft as one undo step, and nothing is applied without Apply. The AI reads field names, labels, help text, roles and the workflow — never record values.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'AI check beside Save: after a Save the AI reads what changed next to the roles and the workflow and warns about likely mistakes, such as hiding Amount from Finance, who must fill it before Approve. It never blocks or delays the save; warnings open beside the button and Undo reverses a saved change. Check asks before saving. A change that only renames, rewrites help text or reorders inside a section is not sent.',
+        'Help text that contradicts the form (Form settings → Tools → Review this layout): help text that says "optional" while a workflow move needs the field, or names a role that cannot edit it, is flagged with a rewrite. Use the rewrite changes only the help text on this form.',
+        'Fields that mean the same thing (same review): two fields with different labels that hold the same information, such as Vendor and Supplier. Identical labels are a separate finding.',
+        'Natural entry order: an order inside each section that follows how people fill the form in (who, what, when, cost), with fields that filter or show other fields first. Apply one section or Apply all — one undo step either way.',
+        "Personal and financial fields: fields that look personal or financial and are seen on this form by a broad role (one holding a fifth of active people, or roles that together hold half). The suggestion hides the field's section from those roles, leaving out roles that edit the field or need it for a workflow move, and says which other fields go with it. This is advice, not a security control: the API still returns a field to every role whose permissions read it."
+      ]
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
@@ -506,6 +521,14 @@ POST /api/collection-layouts/bulk/undo  { collection, items: [{ layout_id, versi
 GET  /api/collection-layouts/macros              // your own macros
 POST /api/collection-layouts/macros  { id?, name, collection, steps, source_layout_id? }
 POST /api/collection-layouts/macros/:id/delete
+
+POST /api/ai-design/layouts/:id/check-changes  { before?, after }   // administrators; 503 without AI
+     → { data: { status: 'skipped', reason, changes } | { status: 'checked', changes,
+                 warnings: [{ message, field, field_label, section, section_label, roles }], dropped } }
+POST /api/ai-design/layouts/:id/entry-order  { bundle? }   // the draft; proposals only
+     → { data: { change_sets: [{ title, steps, ops, group_key, why }], dropped, checked } }
+POST /api/ai-design/layouts/:id/sensitive  { bundle? }
+     → { data: { findings: [{ field, class, seen_by, broad, suggest, section, change_set }], note } }
 
 GET  /api/widgets-internal/:id/placements
      → { data: [{ layout_id, name, collection }] }   // every layout placing the widget`

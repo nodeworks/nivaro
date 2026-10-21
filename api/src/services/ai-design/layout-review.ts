@@ -79,6 +79,8 @@ export type FindingKind =
   | 'duplicate_label'
   | 'confusing_label'
   | 'empty_section'
+  | 'same_meaning'
+  | 'help_conflict'
 
 export interface LayoutFinding {
   id: string

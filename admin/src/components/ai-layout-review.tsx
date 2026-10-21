@@ -1,4 +1,4 @@
-import type { LayoutReviewContext } from '@nivaro/shared'
+import { type LayoutReviewContext, rebaseAssistOps } from '@nivaro/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Sparkles, Undo2 } from 'lucide-react'
 import { useState } from 'react'
@@ -15,6 +15,10 @@ import { cn } from '@/lib/utils'
  * Restructure change sets (#2587): a crowded step or section also carries a
  * whole split (several new steps + the moves) previewed as a list and applied
  * through the editor's draft as ONE batch — one undo step in the top bar.
+ *
+ * Meaning pass (#2686 #2687): help text that disagrees with what the form
+ * does carries a one-op rewrite change set (merged into the placement's
+ * overrides as the draft has them now); same-meaning fields are flagged.
  */
 
 type LayoutFix =
@@ -27,11 +31,10 @@ type LayoutFix =
 type LayoutOp = Parameters<LayoutReviewContext['apply']>[0][number]
 
 interface LayoutChangeSet {
-  kind: 'split'
+  kind: 'split' | 'help_rewrite'
   title: string
   steps: string[]
   ops: LayoutOp[]
-  parts: number
   source: 'rules' | 'ai'
 }
 
@@ -90,13 +93,19 @@ export function LayoutReviewSection({
 
   const applyChangeSet = (f: LayoutFinding, cs: LayoutChangeSet) => {
     if (!ctx) return
-    const problem = ctx.check(cs.ops)
+    const ops = cs.kind === 'help_rewrite' ? rebaseAssistOps(cs.ops, ctx.bundle) : cs.ops
+    const problem = ctx.check(ops)
     if (problem) {
       toast.error(`The form changed since the review (${problem}) — review again`)
       return
     }
     const where = f.group?.label ? `"${f.group.label}"` : 'the section'
-    ctx.apply(cs.ops, { label: `${cs.title.replace(/^Split/, `Split ${where}`)}` })
+    ctx.apply(ops, {
+      label:
+        cs.kind === 'split'
+          ? cs.title.replace(/^Split/, `Split ${where}`)
+          : `Rewrite the help text of "${f.field_label ?? f.field}"`
+    })
     setAppliedSets((s) => new Set(s).add(f.id))
     setOpenSet(null)
     toast.success(`${cs.title} — Undo in the top bar reverses the whole change`)
@@ -184,7 +193,8 @@ export function LayoutReviewSection({
         <div className='mt-2 space-y-2' data-ai-layout-review>
           <p className='text-[10.5px] text-slate-500'>
             Checks step and section size, required fields that are hidden or collapsed, missing help
-            text and unclear labels. Every applied fix can be undone here or from Version history.
+            text, unclear labels, help text that disagrees with the form and fields that mean the
+            same thing. Every applied fix can be undone here or from Version history.
           </p>
           <div className='flex gap-1.5'>
             <button
