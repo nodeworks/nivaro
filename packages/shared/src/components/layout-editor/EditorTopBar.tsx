@@ -278,7 +278,8 @@ export function EditorTopBar({
   onBack,
   backLabel = 'Layouts',
   tools,
-  previewExtra
+  previewExtra,
+  checks
 }: {
   collection: string
   layoutId: number
@@ -303,6 +304,8 @@ export function EditorTopBar({
   tools?: ReactNode
   /** More preview modes inside the Preview as popover. */
   previewExtra?: ReactNode
+  /** The Checks (lint) button, beside History. */
+  checks?: ReactNode
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const unsaved = draft.unsavedCount ?? 0
@@ -375,6 +378,7 @@ export function EditorTopBar({
         on={showHidden}
         onChange={onShowHidden}
       />
+      {checks}
       <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
         <PopoverTrigger asChild>
           <button type='button' className={btn} aria-label='History'>

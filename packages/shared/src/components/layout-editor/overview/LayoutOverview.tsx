@@ -32,6 +32,15 @@ import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
 import {
+  AnalysisButtons,
+  AnalysisProvider,
+  CoverageNote,
+  CoverageStrip,
+  HealthChip,
+  sortWorstFirst,
+  useOverviewAnalysis
+} from './analysis'
+import {
   type ChoiceLabels,
   type DescribeField,
   describeReason,
@@ -462,6 +471,7 @@ function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }
                 {row.name}
               </button>
             )}
+            <HealthChip layoutId={row.layout_id} />
             {row.section === 'forms' && row.is_default && <Pill tone='default'>default</Pill>}
             {row.section === 'forms' && row.reason.kind === 'record_rule' && (
               <Pill tone='rule'>rule</Pill>
@@ -491,6 +501,7 @@ function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }
               {w}
             </div>
           ))}
+          <CoverageNote row={row} />
         </td>
         <td className={cn(cell, 'w-[22%] text-[12.5px] text-slate-500 dark:text-muted-foreground')}>
           {row.section === 'unused' ? (
@@ -728,6 +739,7 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
   const [otherOrder, setOtherOrder] = useState<number[] | null>(null)
   const rows = useMemo(() => data?.rows ?? [], [data])
   const choices = useRuleChoiceLabels(collection, fields, rows)
+  const analysis = useOverviewAnalysis(collection, rows.length > 0)
   // biome-ignore lint/correctness/useExhaustiveDependencies: a fresh server read resets the local order
   useEffect(() => setOtherOrder(null), [data])
   // biome-ignore lint/correctness/useExhaustiveDependencies: a test result belongs to one collection
@@ -777,8 +789,10 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
         [...others].sort((a, b) => (pos.get(a.layout_id) ?? 0) - (pos.get(b.layout_id) ?? 0))
       )
     }
+    if (analysis.worstFirst)
+      for (const [k, list] of m) m.set(k, sortWorstFirst(list, analysis.value.health))
     return m
-  }, [rows, otherOrder])
+  }, [rows, otherOrder, analysis.worstFirst, analysis.value.health])
 
   const reorder = async (next: OverviewRow[], moved: OverviewRow) => {
     setOtherOrder(next.map((r) => r.layout_id))
@@ -823,9 +837,20 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
           Which form does each record get?
         </h2>
         <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-          Read top to bottom: records are matched the same way.
+          {analysis.worstFirst
+            ? 'Sorted by health, worst first. Turn it off to see the order records are matched in.'
+            : 'Read top to bottom: records are matched the same way.'}
         </p>
       </div>
+      {rows.length > 0 && (
+        <AnalysisButtons
+          hasCoverage={!!analysis.value.coverage}
+          checking={analysis.checking}
+          onCheck={() => void analysis.check(false)}
+          worstFirst={analysis.worstFirst}
+          onWorstFirst={analysis.setWorstFirst}
+        />
+      )}
       {rows.length > 0 && <TestRecordButton collection={collection} onResult={setExplain} />}
       <NewFormButton collection={collection} onCreated={created} />
     </header>
@@ -946,19 +971,26 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
   }
 
   return (
-    <div className='flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-background'>
-      {header}
-      {banner}
-      {explain && (
-        <ExplainStrip
-          result={explain}
+    <AnalysisProvider value={analysis.value}>
+      <div className='flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-background'>
+        {header}
+        {banner}
+        <CoverageStrip
           rows={rows}
-          fields={fields}
-          choices={choices}
-          onClear={() => setExplain(null)}
+          checking={analysis.checking}
+          onRecheck={() => void analysis.check(true)}
         />
-      )}
-      <div className='min-h-0 flex-1 overflow-y-auto'>{body}</div>
-    </div>
+        {explain && (
+          <ExplainStrip
+            result={explain}
+            rows={rows}
+            fields={fields}
+            choices={choices}
+            onClear={() => setExplain(null)}
+          />
+        )}
+        <div className='min-h-0 flex-1 overflow-y-auto'>{body}</div>
+      </div>
+    </AnalysisProvider>
   )
 }

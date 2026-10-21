@@ -56,6 +56,16 @@ export const layoutEditor: DocSection = {
       text: 'Test a record… picks a saved record and lights up the row it resolves to, with the reason in words, and says for every other form why it was passed over ("Its record rules do not match", "A form with record rules matched first", "Restricted to other roles"). Optionally test as a role. The test runs the live `/active` resolution itself — there is no separate preview logic — so the answer is what that person would get.'
     },
 
+    { type: 'h3', id: 'layout-editor-coverage', text: 'Check coverage and health' },
+    {
+      type: 'p',
+      text: 'Check coverage runs the 500 newest records through the same matching the record page uses (as an administrator sees them) and says, under each form, how many of them open with it. A form nobody gets, and record rules that match none of the records, are flagged. Forms chosen by role are not counted. Check again samples afresh.'
+    },
+    {
+      type: 'p',
+      text: 'Each form carries a health score from 0 to 100. It loses points for many fields, many steps, fields nobody sees and the problems the Checks panel finds; hover the score to see what cost it points. Worst first sorts each section by score — turn it off to read the matching order again.'
+    },
+
     { type: 'h2', id: 'layout-editor-editor', text: 'The editor' },
     {
       type: 'p',
@@ -182,6 +192,25 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Changes go to the server as small operations against the revision the editor last saw. If another admin (or you in another tab) saved in between: with Save, your changes are laid on top of theirs and kept for you to Save again; if one no longer fits (they removed what it changed), a banner offers Reload, which discards your changes and shows their version. With Autosave, the editor reloads the layout, clears Undo and the chip reads "Reloaded — someone else saved". Nothing is silently overwritten. A refused Save keeps your changes and says why. Restoring a version from History drops unsaved changes.'
     },
+    { type: 'h3', id: 'layout-editor-checks', text: 'Checks' },
+    {
+      type: 'p',
+      text: 'The Checks button in the top bar counts the problems and warnings on the form as you edit it; it opens a panel listing them, worst first. Click one to select it on the canvas. Many come with a fix that is one undo step.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A required field the form hides, or one in a section hidden or locked for a role that can edit the record — or that must fill it to make a transition.',
+        'A picker that narrows its choices by a field that is not on the form.',
+        'Empty sections, steps and tabs holders.',
+        'Steps and sections no record reaches (their show-when rules can never hold, or contradict the record rules of the form, or every role but administrators is hidden from them), and fields that sit only there or are hidden everywhere they are placed.',
+        'Accessibility: fields without a label, a required field whose label (and so its required mark) is hidden, a half-width field that sits after a wider one although it would fit beside the field above it, and a chosen colour that reads below 3:1 on the light or dark background.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'These checks are counted, never guessed. The AI review in Form settings → Tools also reads labels and help text.'
+    },
     { type: 'h3', id: 'layout-editor-history', text: 'History' },
     {
       type: 'p',
@@ -265,6 +294,13 @@ LAYOUT_EDIT_WARNING=Layouts here are replaced every night from development. Make
 
 GET  /api/collection-layouts/explain?collection=orders&item=42[&role_id=<uuid>][&slug=x]
      → { data: { layout_id, reason, checked: [{ layout_id, matched, why }] } }
+
+GET  /api/collection-layouts/lint-context?collection=orders
+     → { data: { fields, roles, requirements } }   // what the Checks panel reads
+GET  /api/collection-layouts/health?collection=orders
+     → { data: { rows: [{ layout_id, score, costs, counts, unreachable_fields }] } }
+GET  /api/collection-layouts/coverage?collection=orders[&fresh=1]
+     → { data: { sampled, limit, no_form, rule_error, rows: [{ layout_id, records, rule_matches }] } }
 
 POST /api/collection-layouts  { collection, name, layout_type?, slug?, seed_fields?: true }
      // seed_fields: one section "Main" holding every visible field ("Create first form")

@@ -40,6 +40,7 @@ import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layo
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
+import { registerLayoutAnalysisRoutes } from './layout-analysis.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, slugify }
 
@@ -673,6 +674,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         checked: res.checked
       }
     })
+  })
+
+  // Lint context, health per form and record coverage (#2581 #2592 #2612):
+  // coverage runs the live resolver as an administrator (no role preference).
+  registerLayoutAnalysisRoutes(app, {
+    pick: (layouts, record) => pickBestLayoutTraced(layouts, null, record, true).row,
+    rulesOf: (layout) => parseRecordConditions(layout.record_conditions),
+    matches: (rules, record) => matchesRecordConditions(rules as RecordConditionRule[], record)
   })
 
   // GET /collection-layouts/active?collection=x — MUST be before /:id

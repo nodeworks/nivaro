@@ -35,6 +35,8 @@ import { BulkInspector } from './inspector/BulkInspector'
 import { FormSettings, Inspector } from './inspector-slot'
 import { ARROW_DIRS, altArrowMove } from './keyboard-move'
 import { LayoutsRail } from './LayoutsRail'
+import { LintButton, LintPanel } from './lint/LintPanel'
+import { useLayoutLint } from './lint/lint-api'
 import type { DescribeField, Segment } from './overview/describe-conditions'
 import {
   useApproxRecordCount,
@@ -513,7 +515,7 @@ export function LayoutEditor({
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add' | 'usage'>('layouts')
-  const [panel, setPanel] = useState<'inspector' | 'settings'>('inspector')
+  const [panel, setPanel] = useState<'inspector' | 'settings' | 'checks'>('inspector')
   // Several fields can be selected (Shift / ⌘-click); the last one is `selected`.
   const [selection, setSelection] = useState<DesignTarget[]>([])
   const selected = selection.length > 0 ? selection[selection.length - 1] : null
@@ -546,6 +548,7 @@ export function LayoutEditor({
     () => (bundle ? bundleToActiveLayout(bundle, parent).active : null),
     [bundle, parent]
   )
+  const lint = useLayoutLint(collection, bundle, parent)
 
   useUndoKeys(draft)
   useLeaveGuard(draft)
@@ -706,6 +709,15 @@ export function LayoutEditor({
             layout={canvasLayout}
             fields={fields}
           />
+        }
+        checks={
+          bundle && (
+            <LintButton
+              findings={lint.findings}
+              active={panel === 'checks'}
+              onClick={() => setPanel((p) => (p === 'checks' ? 'inspector' : 'checks'))}
+            />
+          )
         }
       />
       {overlay && (
@@ -879,7 +891,16 @@ export function LayoutEditor({
             className='flex w-[344px] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white dark:border-border dark:bg-card'
           >
             {bundle &&
-              (panel === 'settings' ? (
+              (panel === 'checks' ? (
+                <LintPanel
+                  findings={lint.findings}
+                  health={lint.health}
+                  ready={lint.ready}
+                  onSelect={(t) => setSelection([t])}
+                  apply={draft.apply}
+                  onOpenAiReview={host.aiReviewSlot ? () => setPanel('settings') : undefined}
+                />
+              ) : panel === 'settings' ? (
                 <FormSettings
                   bundle={bundle}
                   apply={draft.apply}
