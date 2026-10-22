@@ -1,9 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router'
+import { ChevronLeft } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatRelative } from '@/lib/utils'
 import { type ChaosRun, chaosKeys, fetchRuns, STATUS_LABEL, VERDICT_TONE } from './api'
 import { RunDetail } from './RunDetail'
+
+export const RUN_KIND_LABEL: Record<ChaosRun['kind'], string> = {
+  drill: 'Drill',
+  monkey: 'Chaos Monkey',
+  gameday: 'Game day',
+  ci: 'CI'
+}
 
 /**
  * Runs (#2843): the list of every run (running first) and, on the right, the selected run — the
@@ -39,9 +47,13 @@ export function RunsTab() {
 
   return (
     <div className='flex flex-1 min-h-0 overflow-hidden'>
+      {/* Narrow screens show the list OR the selected run, with a way back. */}
       <aside
         aria-label='Runs'
-        className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-card'
+        className={cn(
+          'w-full shrink-0 overflow-y-auto border-slate-200 bg-white md:block md:w-[272px] md:border-r dark:border-border dark:bg-card',
+          selected && 'hidden'
+        )}
       >
         {isLoading ? (
           <div className='space-y-3 p-3'>
@@ -60,8 +72,15 @@ export function RunsTab() {
           <div className='p-4 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
             <p className='font-medium text-slate-700 dark:text-foreground'>No runs yet</p>
             <p className='mt-1'>
-              Start one from the Faults tab. Every run lands here with its verdict.
+              Arm a fault from the catalog; its run lands here with a live cockpit, then its
+              verdict.
             </p>
+            <Link
+              to='/chaos'
+              className='mt-3 inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground'
+            >
+              Open the fault catalog
+            </Link>
           </div>
         ) : (
           <ul className='divide-y divide-slate-100 dark:divide-border/60'>
@@ -91,7 +110,7 @@ export function RunsTab() {
                       <RunChip run={r} />
                     </div>
                     <div className='mt-0.5 flex items-center gap-2 text-[11px] text-slate-500 dark:text-muted-foreground'>
-                      <span className='capitalize'>{r.kind}</span>
+                      <span>{RUN_KIND_LABEL[r.kind] ?? r.kind}</span>
                       <span aria-hidden>·</span>
                       <span className='tabular-nums'>
                         {formatRelative(r.started_at ?? r.created_at)}
@@ -110,17 +129,34 @@ export function RunsTab() {
           </ul>
         )}
       </aside>
-      <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+      <div
+        className={cn(
+          'min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background',
+          !selected && 'hidden md:block'
+        )}
+      >
         {selected ? (
-          <RunDetail id={selected} />
+          <>
+            <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-2 py-1.5 md:hidden dark:border-border dark:bg-card'>
+              <button
+                type='button'
+                onClick={() => select(null)}
+                className='inline-flex h-8 items-center gap-1 rounded-md px-2 text-[12.5px] font-medium text-slate-700 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-foreground'
+              >
+                <ChevronLeft className='h-4 w-4' aria-hidden />
+                All runs
+              </button>
+            </div>
+            <RunDetail id={selected} />
+          </>
         ) : (
-          <div className='flex h-full items-center justify-center p-8'>
-            <p className='max-w-[44ch] text-center text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              {ordered.length
-                ? 'Pick a run on the left. A running one opens its cockpit.'
-                : 'Runs appear here as soon as a fault is armed.'}
-            </p>
-          </div>
+          ordered.length > 0 && (
+            <div className='flex h-full items-center justify-center p-8'>
+              <p className='max-w-[44ch] text-center text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+                Pick a run on the left. A running one opens its cockpit.
+              </p>
+            </div>
+          )
         )}
       </div>
     </div>
@@ -145,7 +181,9 @@ export function RunChip({ run }: { run: ChaosRun }) {
         'rounded px-1.5 py-0.5 text-[10.5px] font-medium',
         run.status === 'running'
           ? 'bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300'
-          : 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
+          : run.status === 'refused'
+            ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+            : 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
       )}
     >
       {STATUS_LABEL[run.status]}

@@ -144,7 +144,10 @@ export function MonkeyTab() {
             className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
           >
             {attempt.isPending ? (
-              <Loader2 className='h-3.5 w-3.5 animate-spin' aria-hidden />
+              <Loader2
+                className='h-3.5 w-3.5 animate-spin motion-reduce:animate-none'
+                aria-hidden
+              />
             ) : (
               <Dices className='h-3.5 w-3.5' aria-hidden />
             )}

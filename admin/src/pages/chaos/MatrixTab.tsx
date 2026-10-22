@@ -195,10 +195,10 @@ function MatrixGrid({
   const byKey = new Map(matrix.cells.map((c) => [`${c.dependency}|${c.kind}`, c]))
   return (
     <div className='overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-      <table className='w-full min-w-[640px] border-separate border-spacing-0 text-[12.5px]'>
+      <table className='w-full min-w-[560px] border-separate border-spacing-0 text-[12.5px]'>
         <thead>
           <tr>
-            <th className='w-[200px] border-b border-slate-200 px-3 py-2 text-left text-[11.5px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
+            <th className='sticky left-0 z-[1] w-[132px] border-b border-slate-200 bg-white px-3 py-2 text-left text-[11.5px] font-medium text-slate-500 sm:w-[200px] dark:border-border dark:bg-card dark:text-muted-foreground'>
               Dependency
             </th>
             {matrix.kinds.map((k) => (
@@ -219,8 +219,9 @@ function MatrixGrid({
               <th
                 scope='row'
                 className={cn(
-                  'border-b border-slate-100 px-3 py-1.5 text-left font-medium text-slate-900 dark:border-border/60 dark:text-foreground',
-                  row.partner && 'pl-7 font-normal text-slate-700 dark:text-foreground/90'
+                  // Pinned while the cells scroll sideways on a narrow screen; opaque so cells never show through.
+                  'sticky left-0 z-[1] border-b border-slate-100 bg-white px-3 py-1.5 text-left font-medium text-slate-900 dark:border-border/60 dark:bg-card dark:text-foreground',
+                  row.partner && 'pl-5 font-normal text-slate-700 sm:pl-7 dark:text-foreground/90'
                 )}
               >
                 {row.label}
@@ -417,6 +418,10 @@ function ClaimsSection() {
       ) : isError || !data ? (
         <p className='rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-[12.5px] text-slate-500 dark:border-border dark:bg-card dark:text-muted-foreground'>
           The claims did not load.
+        </p>
+      ) : claims.length === 0 ? (
+        <p className='rounded-lg border border-slate-200 bg-white px-4 py-6 text-[12.5px] text-slate-500 dark:border-border dark:bg-card dark:text-muted-foreground'>
+          No claims are registered on this instance yet. Fault areas add the claims they prove.
         </p>
       ) : (
         <ul className='divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border/60 dark:border-border dark:bg-card'>

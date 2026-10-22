@@ -59,7 +59,7 @@ export function ChaosPage() {
         <div className='flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-nvr-cyan/15'>
           <Siren className='h-4.5 w-4.5 text-nvr-navy dark:text-nvr-cyan' />
         </div>
-        <div className='min-w-0 flex-1'>
+        <div className='min-w-0 flex-1 basis-[220px]'>
           <h1 className='text-base font-semibold'>Chaos</h1>
           <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
             Arm a fault for a few minutes, watch what should stay true hold, stop it from here.
@@ -135,7 +135,13 @@ function StopAll({ status }: { status: ChaosStatus }) {
         onClick={() => m.mutate()}
         disabled={m.isPending || !armed}
         data-tip={armed ? 'Clears every fault on every replica' : 'No fault is armed'}
-        className='inline-flex h-8 items-center gap-1.5 rounded-md bg-red-600 px-3 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-card'
+        className={cn(
+          'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12.5px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none dark:focus-visible:ring-offset-card',
+          // Red only while there is something to stop; at rest it is a quiet outline.
+          armed
+            ? 'bg-red-600 text-white hover:bg-red-700 focus-visible:ring-red-400 disabled:opacity-60'
+            : 'border border-slate-200 text-slate-400 dark:border-border dark:text-muted-foreground/70'
+        )}
       >
         <OctagonX className='h-3.5 w-3.5' aria-hidden />
         Stop all
