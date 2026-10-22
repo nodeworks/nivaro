@@ -345,12 +345,30 @@ async function notifyImmediateSubscribers(
     delivery_email: boolean
     email: string | null
   }>
-  if (!subs.length) return
 
   const subject = `Alert: ${rule.name}`
   const message = `${rule.def_name} is now ${fmtValue(value, rule.def_unit)} (threshold: ${
     OPERATOR_LABELS[rule.operator] ?? rule.operator
   } ${fmtValue(threshold, rule.def_unit)})`
+  // #2847 — during a chaos drill the alert is tagged (never silenced) and its people told too.
+  const { drillAlert, tellDrillParticipants, withDrillNote } = await import(
+    './chaos/drill-alerts.js'
+  )
+  const drill = await drillAlert({ source: 'metric_alert', key: String(rule.id), label: rule.name })
+  if (drill)
+    await tellDrillParticipants(
+      app,
+      drill,
+      {
+        subject,
+        category: 'alerts',
+        message,
+        collection: 'nivaro_metric_alert_log',
+        item: String(logId)
+      },
+      subs.filter((s) => s.delivery_in_app).map((s) => s.user)
+    )
+  if (!subs.length) return
   const now = new Date()
 
   for (const sub of subs) {
@@ -358,7 +376,7 @@ async function notifyImmediateSubscribers(
       await notifyUser(app, sub.user, {
         subject,
         category: 'alerts',
-        message,
+        message: withDrillNote(message, drill),
         collection: 'nivaro_metric_alert_log',
         item: String(logId)
       }).catch(() => undefined)
@@ -513,3 +531,6 @@ export async function runMetricAlertDigest(
 
   return { notified }
 }
+
+/** Tests only (#2847): the immediate-subscriber delivery a new firing takes. */
+export const notifyImmediateSubscribersForTests = notifyImmediateSubscribers

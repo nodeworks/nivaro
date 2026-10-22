@@ -4,6 +4,7 @@ import type { JobRunHandle } from '../job-runs.js'
 import { emitToTenant } from '../record-events.js'
 import { currentTenantKey, tenantScopedRoom } from '../tenant-rooms.js'
 import { anyHidden, insiderViews, publicArmed } from './armed-visibility.js'
+import { enforceChaosCaps } from './caps.js'
 import {
   type ArmedFault,
   clampSeconds,
@@ -219,11 +220,19 @@ function sanitizeHypothesis(raw: unknown): HypothesisRule[] {
 }
 
 export async function startDrill(
-  input: StartDrillInput
+  request: StartDrillInput
 ): Promise<{ run: ChaosRun; fault: ArmedFault }> {
   assertChaosAllowed()
-  const def = getFault(input.fault_key)
-  if (!def) throw new ChaosError(`unknown fault ${input.fault_key}`, 400, 'CHAOS_UNKNOWN_FAULT')
+  const def = getFault(request.fault_key)
+  if (!def) throw new ChaosError(`unknown fault ${request.fault_key}`, 400, 'CHAOS_UNKNOWN_FAULT')
+  // #2862 — this environment's caps, whatever the caller sent (clamped or refused, CHAOS_CAP).
+  const capped = await enforceChaosCaps(def, request)
+  const input: StartDrillInput = {
+    ...request,
+    target: capped.target,
+    params: capped.params,
+    seconds: capped.seconds
+  }
   const seconds = clampSeconds(def, input.seconds)
   const hypothesis =
     input.hypothesis == null
@@ -243,6 +252,7 @@ export async function startDrill(
       node: CHAOS_NODE,
       override: input.override ?? null,
       seconds,
+      caps: capped.applied.length ? capped.applied : undefined,
       abort_after: Math.min(10, Math.max(1, Math.round(Number(input.abort_after)) || 3))
     } as Record<string, unknown>
   }
@@ -299,12 +309,17 @@ export async function startDrill(
     throw err
   }
 
+  // #2862 — a capped share sampled on top of the target shows in the run's params too.
+  const runParams =
+    fault.target.sample_pct != null
+      ? { ...fault.params, sample_pct: fault.target.sample_pct }
+      : fault.params
   const stored = (await updateRun(run.id, {
     target: fault.target,
-    params: fault.params,
+    params: runParams,
     ends_at: new Date(fault.ends_at).toISOString(),
     meta: { ...run.meta, fault_id: fault.id }
-  })) ?? { ...run, target: fault.target, params: fault.params }
+  })) ?? { ...run, target: fault.target, params: runParams }
   await addRunEvent(
     run.id,
     'armed',
@@ -312,7 +327,7 @@ export async function startDrill(
       fault_id: fault.id,
       fault_key: fault.fault_key,
       target: describeTarget(fault.target),
-      params: fault.params,
+      params: runParams,
       seconds
     },
     input.by.id

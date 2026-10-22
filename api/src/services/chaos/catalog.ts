@@ -9,7 +9,7 @@ import { ChaosError } from './gate.js'
  */
 
 /** Who a fault reaches. `all` = everything passing its points on this instance. */
-export type FaultTarget =
+export type FaultTarget = (
   | { kind: 'all' }
   /** A route pattern: a path prefix, or a glob with `*` (`/api/items/*`). */
   | { kind: 'route'; pattern: string }
@@ -21,6 +21,13 @@ export type FaultTarget =
   | { kind: 'node'; node: string }
   /** A socket room (socket drills, #2463). */
   | { kind: 'room'; room: string }
+) & {
+  /**
+   * #2862 — a share cap sampled ON TOP of the target match (0–100, stable hash of the context
+   * key), set by the caps on every non-share target so a wide pattern cannot reach everything.
+   */
+  sample_pct?: number
+}
 
 export type TargetKind = FaultTarget['kind']
 
@@ -184,8 +191,16 @@ const TABLE_RE = /^[\w.]{1,128}$/
 const NODE_RE = /^[\w .·:-]{1,120}$/
 const ROOM_RE = /^[\w.:@/-]{1,200}$/
 
-/** A checked target the fault accepts (throws ChaosError). */
+/** A checked target the fault accepts (throws ChaosError), keeping a valid `sample_pct`. */
 export function validateTarget(def: FaultDefinition, raw: unknown): FaultTarget {
+  const t = validateTargetKind(def, raw)
+  const sample = Number((raw as { sample_pct?: unknown } | null)?.sample_pct)
+  if (t.kind !== 'share' && Number.isFinite(sample) && sample > 0 && sample < 100)
+    return { ...t, sample_pct: sample }
+  return t
+}
+
+function validateTargetKind(def: FaultDefinition, raw: unknown): FaultTarget {
   const t = (raw && typeof raw === 'object' ? raw : { kind: 'all' }) as Record<string, unknown>
   const kind = String(t.kind ?? 'all') as TargetKind
   if (!def.targets.includes(kind))
@@ -235,6 +250,11 @@ export function validateTarget(def: FaultDefinition, raw: unknown): FaultTarget 
 
 /** A target as the banner may show it: never a person id or a raw pattern. */
 export function describeTarget(t: FaultTarget): string {
+  const base = describeTargetKind(t)
+  return t.sample_pct != null && t.kind !== 'share' ? `${t.sample_pct}% of ${base}` : base
+}
+
+function describeTargetKind(t: FaultTarget): string {
   switch (t.kind) {
     case 'all':
       return 'everything'

@@ -10,6 +10,7 @@ import { useId, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth } from '../../../context'
 import { cn, titleCase } from '../../../lib/utils'
 import { ExplainButton } from '../../ai/ExplainButton'
+import { DrillTag, useDrillWindows } from '../../chaos/DrillTag'
 import { useDismissRows, useSignalAction, useSnooze } from './api'
 import { canDrill, RowDrill } from './drill'
 import { DismissButton, SnoozeMenu } from './SnoozeMenu'
@@ -54,6 +55,12 @@ export function SignalCard({
   const tone = critical ? 'negative' : 'warning'
   const Mark = critical ? AlertOctagon : AlertTriangle
   const oldest = oldestSeen(signal)
+  // #2847 — a signal whose newest row appeared during a chaos drill reads "Drill".
+  const drills = useDrillWindows()
+  const newest = signal.rows.reduce<string | null>(
+    (best, r) => (!best || r.first_seen > best ? r.first_seen : best),
+    null
+  )
   const top = signal.rows[0]
   const [showSnoozed, setShowSnoozed] = useState(false)
   const bodyId = `ic-signal-body-${signal.id.replace(/[^a-z0-9]/gi, '-')}`
@@ -83,6 +90,7 @@ export function SignalCard({
         <span className='min-w-0 flex-1'>
           <span className='flex flex-wrap items-baseline gap-x-2 gap-y-0.5'>
             <span className='text-[13.5px] font-semibold text-foreground'>{signal.label}</span>
+            {newest && <DrillTag windows={drills} at={newest} className='self-center' />}
             {signal.error ? (
               <span className={cn('text-[12px] font-medium', TONE_TEXT.negative)}>
                 Couldn't evaluate

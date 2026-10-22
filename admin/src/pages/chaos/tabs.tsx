@@ -2,7 +2,9 @@ import type { ComponentType } from 'react'
 import { FaultsTab } from './FaultsTab'
 import { GameDaysTab } from './GameDaysTab'
 import { MatrixTab } from './MatrixTab'
+import { MonkeyTab } from './MonkeyTab'
 import { RunsTab } from './RunsTab'
+import { SettingsTab } from './SettingsTab'
 import { TrendsTab } from './TrendsTab'
 
 /**
@@ -21,5 +23,7 @@ export const CHAOS_TABS: ChaosTab[] = [
   { id: 'runs', label: 'Runs', component: RunsTab },
   { id: 'matrix', label: 'Matrix', component: MatrixTab },
   { id: 'trends', label: 'Trends', component: TrendsTab },
-  { id: 'gamedays', label: 'Game days', component: GameDaysTab }
+  { id: 'gamedays', label: 'Game days', component: GameDaysTab },
+  { id: 'monkey', label: 'Monkey', component: MonkeyTab },
+  { id: 'settings', label: 'Settings', component: SettingsTab }
 ]

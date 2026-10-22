@@ -317,6 +317,15 @@ async function raiseIssue(
       })
     }
     if (app) {
+      // #2847 — during a chaos drill the alert is tagged (never silenced) and its people told too.
+      const { drillAlert, tellDrillParticipants, withDrillNote } = await import(
+        './chaos/drill-alerts.js'
+      )
+      const drill = await drillAlert({
+        source: 'monitor',
+        key: String(monitor.id),
+        label: monitor.name
+      })
       const subscribers = await db('nivaro_monitor_subscribers')
         .where({ monitor_id: monitor.id })
         .pluck('user')
@@ -326,9 +335,16 @@ async function raiseIssue(
       for (const userId of recipients) {
         await notifyUser(app, userId, {
           subject: `Monitor failing: ${monitor.name}`,
-          message: detail.slice(0, 500)
+          message: withDrillNote(detail.slice(0, 500), drill)
         }).catch(() => {})
       }
+      if (drill)
+        await tellDrillParticipants(
+          app,
+          drill,
+          { subject: `Monitor failing: ${monitor.name}`, message: detail.slice(0, 500) },
+          recipients
+        )
     }
   } catch (err) {
     console.warn('ops-monitor issue write failed:', err)
@@ -571,3 +587,6 @@ export async function evaluateAllMonitors(app: FastifyInstance | null): Promise<
   }
   return `${monitors.length} monitor(s) evaluated, ${failing} failing`
 }
+
+/** Tests only (#2847): the raise path a failing monitor takes. */
+export const raiseIssueForTests = raiseIssue

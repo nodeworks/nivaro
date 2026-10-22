@@ -127,6 +127,13 @@ export {
   useArmedFaults
 } from './components/chaos/DrillBanner'
 export {
+  DRILL_WINDOWS_KEY,
+  DrillTag,
+  type DrillWindow,
+  drillAt,
+  useDrillWindows
+} from './components/chaos/DrillTag'
+export {
   ACTIVE_GAMEDAYS_KEY,
   type ActiveGameday,
   GameDayStrip,

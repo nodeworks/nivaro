@@ -53,6 +53,7 @@ import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { chaosRoutes } from './chaos.js'
 import { chaosGamedayRoutes } from './chaos-gameday.js'
+import { chaosOpsRoutes } from './chaos-ops.js'
 import { chaosReportRoutes } from './chaos-report.js'
 import { chatPushReplyRoutes, chatRoutes } from './chat.js'
 import { chatAdminRoutes } from './chat-admin.js'
@@ -297,6 +298,8 @@ export async function registerRoutes(app: FastifyInstance) {
       url.startsWith('/api/auth') ||
       url.startsWith('/api/settings') ||
       url.startsWith('/api/rum') ||
+      // Chaos Stop all (#2861) must work during maintenance (operators, and the phone push).
+      url.startsWith('/api/chaos/stop-all') ||
       // Batches of reads (#1304, people cards) are POSTs only because they carry a body.
       url.startsWith('/api/items/batch-read') ||
       url.startsWith('/api/users/cards') ||
@@ -510,6 +513,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // Chaos engineering (#333 → #2827) — always registered; services/chaos/gate.ts refuses with
   // a reason in cloud mode and on an unflagged production box.
   await app.register(chaosRoutes, { prefix: '/chaos' })
+  await app.register(chaosOpsRoutes, { prefix: '/chaos' }) // #2862 #2847 #2829 #2861
   await app.register(chaosReportRoutes, { prefix: '/chaos' })
   await app.register(chaosGamedayRoutes, { prefix: '/chaos' })
   await app.register(collectionsRoutes, { prefix: '/collections' })
