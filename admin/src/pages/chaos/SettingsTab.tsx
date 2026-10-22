@@ -183,10 +183,9 @@ function SettingsForm() {
             }
           >
             <div className='space-y-2.5'>
-              <div
-                role='group'
+              <fieldset
                 aria-label='Faults allowed'
-                className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'
+                className='m-0 inline-flex min-w-0 rounded-md border border-slate-200 p-0.5 dark:border-border'
               >
                 {[
                   { on: !onlySome, label: 'Every fault', value: '*' as const },
@@ -211,7 +210,7 @@ function SettingsForm() {
                     {o.label}
                   </button>
                 ))}
-              </div>
+              </fieldset>
               {onlySome && (
                 <FaultChecklist
                   candidates={data.candidates}
