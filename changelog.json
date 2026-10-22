@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-22T22:54:36.371Z",
+  "generated_at": "2026-10-22T23:09:47.511Z",
   "releases": [
+    {
+      "version": "0.3.7",
+      "tag": "v0.3.7",
+      "date": "2026-10-22T19:09:29-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "record tabs",
+              "text": "a hidden tab's gate no longer strands the visible form",
+              "hash": "c0151adb9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.6",
       "tag": "v0.3.6",
-      "date": "2026-10-22T18:54:15-04:00",
+      "date": "2026-10-22T18:54:36-04:00",
       "sections": [
         {
           "label": "Added",
