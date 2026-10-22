@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
+import { appNow } from '../services/chaos/clock.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { mcpOAuthEnabled, oauthAudienceRefusal, oauthScopeRefusal } from '../services/mcp-config.js'
 import { resolveAccessToken } from '../services/oauth-store.js'
@@ -285,7 +286,7 @@ async function applyApiKey(
     throw httpError(401, 'This API key has been switched off', 'API_KEY_REVOKED')
   }
 
-  if (key.expires_at && new Date(key.expires_at).getTime() < Date.now()) {
+  if (key.expires_at && new Date(key.expires_at).getTime() < appNow()) {
     throw httpError(
       401,
       `This API key expired on ${new Date(key.expires_at).toISOString().slice(0, 10)}`,
@@ -506,7 +507,8 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
     '../services/session-policy.js'
   )
   const policy = await getSessionPolicy()
-  const now = Date.now()
+  // #2835 — the application clock (a clock-skew drill moves it on one replica).
+  const now = appNow()
   if (policy) {
     const verdict = judgeSession(
       limitsFor(policy, user.role as string | null),
