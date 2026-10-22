@@ -76,6 +76,23 @@ export interface Actor {
   id: string | null
   name: string | null
   operator: boolean
+  /** An administrator — the only one who may plan a day led by someone else (F5). */
+  admin?: boolean
+}
+
+/**
+ * F5: an operator may only name THEMSELVES as the lead; naming someone else is an
+ * administrator's call (announcements and faults run as the planner, but the lead sees blind
+ * faults and gets the drill pushes).
+ */
+function assertMayNameLead(plan: GamedayPlan, by: Actor): void {
+  if (by.admin) return
+  if (!by.id || lc(plan.lead) !== lc(by.id))
+    throw new ChaosError(
+      'Only an administrator can plan a game day led by someone else — name yourself as the lead',
+      403,
+      'CHAOS_LEAD_NOT_SELF'
+    )
 }
 
 const BOT = { user: null, senderId: null, senderName: 'Nivaro', system: true, skipVisibility: true }
@@ -168,7 +185,7 @@ async function createChannel(run: ChaosRun, plan: GamedayPlan): Promise<string |
       key,
       name: `Game day: ${plan.title}`.slice(0, 100),
       visibility: 'private',
-      created_by: plan.lead
+      created_by: run.started_by ?? plan.lead
     })
     clearChatCaches()
     const room = `ch:${key}`
@@ -182,7 +199,7 @@ async function createChannel(run: ChaosRun, plan: GamedayPlan): Promise<string |
     const { logActivity } = await import('../activity.js')
     await logActivity({
       action: 'chat-channel-create',
-      user: plan.lead,
+      user: run.started_by ?? plan.lead,
       collection: 'nivaro_chat_channels',
       item: key,
       comment: 'game day channel'
@@ -238,6 +255,7 @@ export async function getGameday(id: string): Promise<ChaosRun> {
 export async function createGameday(raw: unknown, by: Actor, app?: FastifyInstance | null) {
   const now = Date.now()
   const { plan, warnings } = validatePlan(raw, { faultExists, now })
+  assertMayNameLead(plan, by)
   const start = Date.parse(plan.starts_at)
   // Reminders whose moment already passed are covered by the invitation itself.
   const reminders_sent = plan.reminders_min.filter((m) => now >= start - m * 60_000)
@@ -283,8 +301,16 @@ export async function updateGameday(
     throw new ChaosError('Only the lead or a chaos operator can edit it', 403, 'CHAOS_NOT_LEAD')
   if (run.status !== 'planned')
     throw new ChaosError('Only a planned game day can be edited', 409, 'CHAOS_NOT_PLANNED')
+  // F5: announcements run as the planner, so only the planner (or an administrator) rewrites them.
+  if (!by.admin && lc(run.started_by) !== lc(by.id))
+    throw new ChaosError(
+      'Only the person who planned this day or an administrator can edit it',
+      403,
+      'CHAOS_NOT_PLANNER'
+    )
   const now = Date.now()
   const { plan, warnings } = validatePlan(raw, { faultExists, now })
+  assertMayNameLead(plan, by)
   const before = gamedayMeta(run)
   const start = Date.parse(plan.starts_at)
   const moved = plan.starts_at !== before.plan.starts_at
@@ -351,7 +377,8 @@ async function planSuccessor(run: ChaosRun, app: FastifyInstance | null): Promis
   try {
     const { run: next } = await createGameday(
       { ...meta.plan, starts_at: nextMonthlyStart(meta.plan.starts_at) },
-      { id: run.started_by, name: meta.started_by_name ?? null, operator: true },
+      // The plan was accepted when it was made; next month repeats it as is.
+      { id: run.started_by, name: meta.started_by_name ?? null, operator: true, admin: true },
       app
     )
     const fresh = (await getRun(run.id)) ?? run
@@ -384,7 +411,9 @@ export async function startGameday(
     await openBlindWindow({
       id: run.id,
       kind: 'gameday',
-      lead: plan.lead,
+      // Faults are armed as the planner (F5); the lead and the planner are both insiders.
+      lead: run.started_by ?? plan.lead,
+      insiders: [plan.lead],
       until: endsAt + 5 * 60_000
     })
   const next = await updateRun(
@@ -495,16 +524,10 @@ export async function fireDue(id: string, app?: FastifyInstance | null): Promise
   return fired
 }
 
-async function leadActor(plan: GamedayPlan): Promise<{ id: string; name: string | null }> {
-  try {
-    const u = (await db('nivaro_users')
-      .where({ id: plan.lead })
-      .first('first_name', 'last_name', 'email')) as Record<string, string | null> | undefined
-    const name = u ? [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email : null
-    return { id: plan.lead, name: name ?? null }
-  } catch {
-    return { id: plan.lead, name: null }
-  }
+/** Who injected faults run as: the person who planned the day (F5), never the named lead. */
+function plannerActor(run: ChaosRun): { id: string | null; name: string | null } {
+  const name = gamedayMeta(run).started_by_name
+  return { id: run.started_by, name: typeof name === 'string' && !name.includes('@') ? name : null }
 }
 
 /**
@@ -534,9 +557,13 @@ export async function fireInject(
     const room = gamedayMeta(run).channel_room
     if (room && app && inj.text) {
       try {
-        const user = await db('nivaro_users').where({ id: plan.lead }).first()
+        // F5: the planner's own words, as the planner — never put in another person's mouth.
+        const user = run.started_by
+          ? await db('nivaro_users').where({ id: run.started_by }).first()
+          : null
+        if (!user) throw new Error('no planner')
         const { postChatMessage } = await import('../chat-send.js')
-        // User text: the lead's own message through the normal send path, never a system line.
+        // User text: through the normal send path, never a system line.
         await postChatMessage(app, { user, isAdmin: false }, { room, message: inj.text })
       } catch {
         outcome = 'announce_failed'
@@ -575,7 +602,7 @@ export async function fireInject(
       return null
     }
   }
-  const lead = await leadActor(plan)
+  const planner = plannerActor(run)
   try {
     const { run: child, fault } = await startDrill({
       fault_key: def.key,
@@ -586,7 +613,7 @@ export async function fireInject(
       gameday_id: run.id,
       preset_id: inj.preset_id ?? null,
       note: `Game day inject ${inj.id}${stepper?.name ? ` (stepped by ${stepper.name})` : ''}`,
-      by: lead
+      by: planner
     })
     if (plan.blind) await bindBlindRun(run.id, child.id)
     const seconds = Math.round((fault.ends_at - fault.started_at) / 1000)
@@ -791,11 +818,35 @@ export async function declareIncident(by: Actor): Promise<number> {
       if (day?.status === 'running') homes.set(day.id, day)
     } else if (windowOfRun(r.id)) homes.set(r.id, r)
   }
+  const since = Date.now() - DECLARE_REPEAT_MS
   for (const home of homes.values()) {
+    // F8: one declared mark per person per run per minute — a repeat adds nothing.
+    const recent = (await listRunEvents(home.id, { kinds: ['note'], limit: 3000 })).some(
+      (e) => e.data?.mark === 'declared' && lc(e.actor) === lc(by.id) && Date.parse(e.at) >= since
+    )
+    if (recent) continue
     await addRunEvent(home.id, 'note', { mark: 'declared', text: null, by_name: by.name }, by.id)
     n++
   }
   return n
+}
+
+const DECLARE_REPEAT_MS = 60_000
+
+// ─── Per-person rate limits (F8) ──────────────────────────────────────────────
+
+const tries = new Map<string, number[]>()
+
+/**
+ * True when `key` has used up `max` tries in the last `windowMs` (this try counted). Process
+ * local, like the phone-push limiter — a replica each still bounds a loop to a trickle.
+ */
+export function chaosRateLimited(key: string, max: number, windowMs: number, now = Date.now()) {
+  const list = (tries.get(key) ?? []).filter((t) => now - t < windowMs)
+  list.push(now)
+  tries.set(key, list)
+  if (tries.size > 5000) tries.clear()
+  return list.length > max
 }
 
 // ─── The scheduler (cron `chaos-gamedays`, every minute, leader only) ────────
@@ -835,7 +886,7 @@ export async function runGamedayTick(app?: FastifyInstance | null): Promise<{
       try {
         await startGameday(
           run.id,
-          { id: meta.plan.lead, name: null, operator: false },
+          { id: run.started_by, name: meta.started_by_name ?? null, operator: false },
           { auto: true, app: a }
         )
         started++
@@ -868,7 +919,7 @@ export async function gamedayDetail(id: string) {
       .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, string | null>>
     people = rows.map((u) => ({
       id: lc(u.id),
-      name: [u.first_name, u.last_name].filter(Boolean).join(' ') || String(u.email ?? 'Someone')
+      name: [u.first_name, u.last_name].filter(Boolean).join(' ') || 'Someone'
     }))
   } catch {
     /* names are decoration */
@@ -904,6 +955,7 @@ export function fmtEastern(iso: string): string {
 
 /** Tests only. */
 export function _resetGamedayForTests(): void {
+  tries.clear()
   for (const id of [...timers.keys()]) clearInjectTimers(id)
   localClaims.clear()
 }

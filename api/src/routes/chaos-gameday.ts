@@ -17,6 +17,7 @@ import {
   type Actor,
   addNote,
   cancelGameday,
+  chaosRateLimited,
   createGameday,
   declareIncident,
   endGameday,
@@ -79,8 +80,10 @@ async function who(req: FastifyRequest): Promise<Actor> {
     | undefined
   return {
     id: u?.id ?? null,
-    name: u ? [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || null : null,
-    operator: await isChaosOperator(req.user, !!req.isAdmin)
+    // A display name only — never the email (it lands in run meta and postmortems).
+    name: u ? [u.first_name, u.last_name].filter(Boolean).join(' ') || null : null,
+    operator: await isChaosOperator(req.user, !!req.isAdmin),
+    admin: !!req.isAdmin
   }
 }
 
@@ -179,6 +182,11 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
       async (req, reply) => {
         const refused = gated(reply)
         if (refused) return refused
+        // F8: 30 notes a minute per person is far above any real scribe.
+        if (chaosRateLimited(`notes:${req.user?.id ?? req.ip}`, 30, 60_000))
+          return reply
+            .code(429)
+            .send({ error: 'Too many notes — wait a moment', code: 'CHAOS_RATE' })
         try {
           const ev = await addNote(
             String(req.params.id),
@@ -195,7 +203,8 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
 
     // Always the same answer: a blind responder must not learn it was a drill from the button.
     pub.post('/declare', async (req) => {
-      if (!chaosRefusal()) {
+      // F8: one declare per person per 10 s is recorded; extra presses get the same answer.
+      if (!chaosRefusal() && !chaosRateLimited(`declare:${req.user?.id ?? req.ip}`, 1, 10_000)) {
         try {
           await declareIncident(await who(req))
         } catch (err) {
@@ -367,7 +376,8 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
           params: b.params,
           seconds: b.seconds,
           hypothesis: b.hypothesis ?? null,
-          override: b.override ?? null,
+          // F6: the working-hours override is an administrator's call, as on POST /runs.
+          override: req.isAdmin ? (b.override ?? null) : null,
           note: b.note ?? null,
           by: { id: me.id, name: me.name }
         })

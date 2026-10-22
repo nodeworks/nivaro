@@ -4,12 +4,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const ADMIN = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RESP = '33333333-3333-4333-8333-333333333333'
 const OUTSIDER = '44444444-4444-4444-8444-444444444444'
+/** A chaos operator by role, not an administrator (#2862). */
+const OPER = '66666666-6666-4666-8666-666666666666'
+// Its role (77777777-…) is the operator role the settings mock names.
 
 // The caller is chosen per request: `x-as: <user id>`; only ADMIN is an administrator.
 vi.mock('../middleware/authenticate.js', () => {
   const sign = (req: { headers: Record<string, string>; user?: unknown; isAdmin?: boolean }) => {
     const id = req.headers['x-as'] || 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-    req.user = { id, first_name: id.slice(0, 4), email: `${id}@x` }
+    req.user = {
+      id,
+      first_name: id.slice(0, 4),
+      email: `${id}@x`,
+      role:
+        id === '66666666-6666-4666-8666-666666666666'
+          ? '77777777-7777-4777-8777-777777777777'
+          : null
+    }
     req.isAdmin = id === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
     return req
   }
@@ -38,6 +49,16 @@ vi.mock('../services/job-runs.js', () => ({
   })
 }))
 vi.mock('../services/notification-channels.js', () => ({ notifyUser: vi.fn(async () => ({})) }))
+vi.mock('../services/chaos/settings.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/chaos/settings.js')>()
+  return {
+    ...actual,
+    getChaosSettings: async () => ({
+      ...(await actual.getChaosSettings()),
+      operator_roles: ['77777777-7777-4777-8777-777777777777']
+    })
+  }
+})
 
 import { _resetBlindForTests } from '../services/chaos/blind.js'
 import { _resetDrillForTests } from '../services/chaos/drill.js'
@@ -202,6 +223,99 @@ describe('game day routes (#2852, #2853)', () => {
     expect(refused.json().code).toBe('CHAOS_GATE')
     const end = await app.inject({ method: 'POST', url: `/gamedays/${id}/end`, payload: {} })
     expect(end.statusCode).toBe(200)
+    await app.close()
+  })
+})
+
+describe('security fixes (F5, F6, F8)', () => {
+  const planFor = (lead: string) => ({
+    title: 'Sec day',
+    starts_at: new Date(Date.now() + 3600_000).toISOString(),
+    duration_min: 30,
+    lead,
+    responders: [RESP],
+    channel: false,
+    injects: [{ id: 'a', at_s: 0, kind: 'checkpoint', label: 'Start' }]
+  })
+
+  it('F5: an operator who is not an administrator must lead their own day', async () => {
+    const app = await build()
+    const other = await app.inject({
+      method: 'POST',
+      url: '/gamedays',
+      headers: as(OPER),
+      payload: planFor(ADMIN)
+    })
+    expect(other.statusCode).toBe(403)
+    expect(other.json().code).toBe('CHAOS_LEAD_NOT_SELF')
+    const own = await app.inject({
+      method: 'POST',
+      url: '/gamedays',
+      headers: as(OPER),
+      payload: planFor(OPER)
+    })
+    expect(own.statusCode).toBe(201)
+    // Administrators may plan a day led by someone else.
+    const admin = await app.inject({ method: 'POST', url: '/gamedays', payload: planFor(OPER) })
+    expect(admin.statusCode).toBe(201)
+    await app.close()
+  })
+
+  it('F6: /blind/runs drops the working-hours override for a non-admin operator', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // Sunday 3 AM Eastern — outside working hours.
+    vi.setSystemTime(new Date('2026-10-25T07:00:00Z'))
+    try {
+      const app = await build()
+      const body = { fault_key: 'slow_requests', seconds: 30, override: { working_hours: true } }
+      const oper = await app.inject({
+        method: 'POST',
+        url: '/blind/runs',
+        headers: as(OPER),
+        payload: body
+      })
+      // Either pre-flight refuses it (working hours not overridden) or it runs with no override.
+      if (oper.statusCode === 409) expect(oper.json().code).toBe('CHAOS_PREFLIGHT')
+      else {
+        expect(oper.statusCode).toBe(201)
+        expect(oper.json().data.run.meta.override).toBeNull()
+      }
+      await app.inject({ method: 'POST', url: '/stop-all' })
+      const admin = await app.inject({ method: 'POST', url: '/blind/runs', payload: body })
+      expect(admin.statusCode).toBe(201)
+      expect(admin.json().data.run.meta.override).toEqual({ working_hours: true })
+      await app.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('F8: notes are rate limited per person; repeat declares record once', async () => {
+    const app = await build()
+    const created = await app.inject({ method: 'POST', url: '/gamedays', payload: planFor(ADMIN) })
+    const id = created.json().data.run.id
+    await app.inject({ method: 'POST', url: `/gamedays/${id}/start` })
+    const codes: number[] = []
+    for (let i = 0; i < 31; i++) {
+      const r = await app.inject({
+        method: 'POST',
+        url: `/runs/${id}/notes`,
+        headers: as(RESP),
+        payload: { text: `n${i}` }
+      })
+      codes.push(r.statusCode)
+    }
+    expect(codes.slice(0, 30).every((c) => c === 201)).toBe(true)
+    expect(codes[30]).toBe(429)
+    for (let i = 0; i < 5; i++) {
+      const d = await app.inject({ method: 'POST', url: '/declare', headers: as(OUTSIDER) })
+      expect(d.json().data.ok).toBe(true)
+    }
+    const notes = await app.inject({ method: 'GET', url: `/runs/${id}/notes` })
+    const declared = notes
+      .json()
+      .data.notes.filter((n: { data: { mark?: string } }) => n.data.mark === 'declared')
+    expect(declared).toHaveLength(1)
     await app.close()
   })
 })
