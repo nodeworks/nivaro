@@ -48,4 +48,4 @@ release-chain.config.json
 .runbook-runs/
 
 # Chaos CI result files and error gallery (#2857)
-reports/
+/reports/
