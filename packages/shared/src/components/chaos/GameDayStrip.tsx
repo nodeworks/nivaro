@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { CalendarClock } from 'lucide-react'
 import { useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { DeclareIncidentButton } from './DeclareIncidentButton'
@@ -41,9 +42,9 @@ export function useActiveGamedays(enabled = true): ActiveGameday[] {
 }
 
 const ROLE: Record<ActiveGameday['role'], string> = {
-  lead: 'you lead it',
-  scribe: 'you are the scribe',
-  responder: 'you are a responder'
+  lead: 'You lead it',
+  scribe: 'You are the scribe',
+  responder: 'You are a responder'
 }
 
 export function GameDayStrip({ enabled = true }: { enabled?: boolean }) {
@@ -57,8 +58,14 @@ export function GameDayStrip({ enabled = true }: { enabled?: boolean }) {
       data-nvr-recording-hide
       className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-200 bg-slate-50 px-4 py-1.5 text-[12.5px] text-slate-800 dark:border-border dark:bg-muted/40 dark:text-foreground'
     >
-      <span className='min-w-0 font-medium'>Game day in progress: {day.title}</span>
-      <span className='min-w-0 text-slate-500 dark:text-muted-foreground'>
+      <span className='flex min-w-0 items-center gap-2 font-medium'>
+        <CalendarClock
+          className='h-3.5 w-3.5 shrink-0 text-nvr-navy dark:text-nvr-cyan'
+          aria-hidden
+        />
+        <span className='min-w-0'>Game day in progress: {day.title}</span>
+      </span>
+      <span className='min-w-0 text-slate-600 dark:text-muted-foreground'>
         {ROLE[day.role]}
         {running.length > 1 ? ` · ${running.length - 1} more running` : ''}
       </span>

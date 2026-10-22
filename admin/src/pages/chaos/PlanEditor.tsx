@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Flag, Megaphone, Plus, X, Zap } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { AlertTriangle, Flag, Megaphone, Plus, X, Zap } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
@@ -30,6 +30,31 @@ import {
 const inputCls =
   'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-900 placeholder:text-slate-500 focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-muted-foreground'
 const labelCls = 'block text-[11.5px] font-medium text-slate-600 dark:text-muted-foreground'
+const invalidCls = 'border-amber-400 focus:border-amber-500 dark:border-amber-600'
+const invalidRing = 'rounded-md ring-1 ring-amber-400 dark:ring-amber-600'
+
+/** Which fields the error list names (server and local wording), so they can be marked. */
+function badFields(errors: string[]): Set<string> {
+  const out = new Set<string>()
+  for (const e of errors) {
+    const inj = /^Inject (\d+)/.exec(e)
+    if (inj) {
+      const n = inj[1]
+      out.add(`inject:${n}`)
+      if (/time|\bend|mm:ss/i.test(e)) out.add(`inject:${n}:at`)
+      else if (/announcement|text/i.test(e)) out.add(`inject:${n}:text`)
+      else if (/seconds|lasts/i.test(e)) out.add(`inject:${n}:seconds`)
+      continue
+    }
+    if (/title/i.test(e)) out.add('title')
+    if (/date|time|starts_at|start/i.test(e)) out.add('when')
+    if (/lasts|minutes|length/i.test(e)) out.add('duration')
+    if (/\blead\b/i.test(e)) out.add('lead')
+    if (/scribe/i.test(e)) out.add('scribe')
+    if (/responder/i.test(e)) out.add('responders')
+  }
+  return out
+}
 
 const KIND_OPTIONS = [
   { value: 'fault', label: 'Arm a fault' },
@@ -64,6 +89,15 @@ export function PlanEditor({
     Object.fromEntries(initial.injects.map((i) => [i.id, fmtOffset(i.at_s)]))
   )
   const [errors, setErrors] = useState<string[]>([])
+  const errorsRef = useRef<HTMLDivElement>(null)
+  const bad = useMemo(() => badFields(errors), [errors])
+  const invalid = (k: string) => (bad.has(k) ? true : undefined)
+  // A failed save brings its list into view and moves focus there, so the fixes are read first.
+  useEffect(() => {
+    if (!errors.length) return
+    errorsRef.current?.scrollIntoView({ block: 'nearest' })
+    errorsRef.current?.focus({ preventScroll: true })
+  }, [errors])
   const set = <K extends keyof GamedayPlan>(k: K, v: GamedayPlan[K]) =>
     setPlan((p) => ({ ...p, [k]: v }))
 
@@ -137,7 +171,7 @@ export function PlanEditor({
   const responders = plan.responders
   return (
     <form
-      className='space-y-6 p-6'
+      className='space-y-6 px-4 pt-6 sm:px-6'
       onSubmit={(e) => {
         e.preventDefault()
         save.mutate()
@@ -156,15 +190,22 @@ export function PlanEditor({
 
       {errors.length > 0 && (
         <div
+          ref={errorsRef}
           role='alert'
-          className='rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300'
+          tabIndex={-1}
+          className='flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12.5px] text-amber-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200'
         >
-          <p className='font-medium'>The plan needs a few fixes</p>
-          <ul className='mt-1 list-disc pl-5'>
-            {errors.map((er) => (
-              <li key={er}>{er}</li>
-            ))}
-          </ul>
+          <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
+          <div className='min-w-0'>
+            <p className='font-medium'>
+              The plan needs {errors.length === 1 ? 'one fix' : `${errors.length} fixes`}
+            </p>
+            <ul className='mt-1 list-disc space-y-0.5 pl-4'>
+              {errors.map((er) => (
+                <li key={er}>{er}</li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
 
@@ -172,18 +213,24 @@ export function PlanEditor({
         <label className='space-y-1'>
           <span className={labelCls}>Title</span>
           <input
-            className={inputCls}
+            className={cn(inputCls, bad.has('title') && invalidCls)}
+            aria-invalid={invalid('title')}
             value={plan.title}
             maxLength={120}
             onChange={(e) => set('title', e.target.value)}
-            placeholder='Monthly staging game day'
+            placeholder='e.g. November staging game day'
           />
         </label>
         <label className='space-y-1'>
           <span className={labelCls}>Date</span>
           <input
             type='date'
-            className={cn(inputCls, 'tabular-nums dark:[color-scheme:dark]')}
+            className={cn(
+              inputCls,
+              'tabular-nums dark:[color-scheme:dark]',
+              bad.has('when') && invalidCls
+            )}
+            aria-invalid={invalid('when')}
             value={date}
             onChange={(e) => setDate(e.target.value)}
           />
@@ -192,7 +239,12 @@ export function PlanEditor({
           <span className={labelCls}>Start (Eastern time)</span>
           <input
             type='time'
-            className={cn(inputCls, 'tabular-nums dark:[color-scheme:dark]')}
+            className={cn(
+              inputCls,
+              'tabular-nums dark:[color-scheme:dark]',
+              bad.has('when') && invalidCls
+            )}
+            aria-invalid={invalid('when')}
             value={time}
             onChange={(e) => setTime(e.target.value)}
           />
@@ -203,7 +255,8 @@ export function PlanEditor({
             type='number'
             min={15}
             max={480}
-            className={cn(inputCls, 'tabular-nums')}
+            className={cn(inputCls, 'tabular-nums', bad.has('duration') && invalidCls)}
+            aria-invalid={invalid('duration')}
             value={plan.duration_min}
             onChange={(e) => set('duration_min', Number(e.target.value) || 0)}
           />
@@ -215,36 +268,42 @@ export function PlanEditor({
         <div className='grid gap-4 md:grid-cols-3'>
           <div className='space-y-1'>
             <span className={labelCls}>Lead</span>
-            <UserCombobox
-              value={plan.lead || null}
-              onChange={(v) => set('lead', v ?? '')}
-              placeholder='Who runs the day'
-              noneLabel='Nobody yet'
-            />
+            <div className={cn(bad.has('lead') && invalidRing)}>
+              <UserCombobox
+                value={plan.lead || null}
+                onChange={(v) => set('lead', v ?? '')}
+                placeholder='Who runs the day'
+                noneLabel='Nobody yet'
+              />
+            </div>
             <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
               Faults are armed as the lead; in blind mode only the lead sees the banner.
             </p>
           </div>
           <div className='space-y-1'>
             <span className={labelCls}>Scribe</span>
-            <UserCombobox
-              value={plan.scribe}
-              onChange={(v) => set('scribe', v)}
-              placeholder='Who keeps the notes'
-              noneLabel='No scribe'
-            />
+            <div className={cn(bad.has('scribe') && invalidRing)}>
+              <UserCombobox
+                value={plan.scribe}
+                onChange={(v) => set('scribe', v)}
+                placeholder='Who keeps the notes'
+                noneLabel='No scribe'
+              />
+            </div>
           </div>
           <div className='space-y-1'>
             <span className={labelCls}>Responders</span>
-            <UserCombobox
-              value={null}
-              onChange={(v) => {
-                if (v && !responders.includes(v) && v !== plan.lead)
-                  set('responders', [...responders, v])
-              }}
-              placeholder='Add a responder'
-              noneLabel='—'
-            />
+            <div className={cn(bad.has('responders') && invalidRing)}>
+              <UserCombobox
+                value={null}
+                onChange={(v) => {
+                  if (v && !responders.includes(v) && v !== plan.lead)
+                    set('responders', [...responders, v])
+                }}
+                placeholder='Add a responder'
+                noneLabel='—'
+              />
+            </div>
             {responders.length > 0 ? (
               <ul className='flex flex-wrap gap-1.5 pt-1'>
                 {responders.map((r) => (
@@ -339,19 +398,34 @@ export function PlanEditor({
               const Icon = KIND_ICON[inj.kind]
               const def = catalog?.faults.find((f) => f.key === inj.fault?.fault_key)
               return (
-                <li key={inj.id} className='flex flex-wrap items-center gap-2 px-3 py-2'>
+                <li
+                  key={inj.id}
+                  className={cn(
+                    'flex flex-wrap items-center gap-2 px-3 py-2',
+                    bad.has(`inject:${n + 1}`) && 'bg-amber-50/70 dark:bg-amber-950/25'
+                  )}
+                >
                   <span className='w-5 text-right text-[11px] tabular-nums text-slate-400 dark:text-muted-foreground'>
                     {n + 1}
                   </span>
-                  <label className='flex items-center gap-1'>
-                    <span className='sr-only'>Time after the start</span>
-                    <span className='font-mono text-[12px] text-slate-500 dark:text-muted-foreground'>
+                  <label className='relative flex items-center'>
+                    <span className='sr-only'>Time after the start, as minutes:seconds</span>
+                    <span
+                      className='pointer-events-none absolute left-2 font-mono text-[12px] text-slate-400 dark:text-muted-foreground'
+                      aria-hidden
+                    >
                       +
                     </span>
                     <input
                       value={offsets[inj.id] ?? ''}
                       onChange={(e) => setOffsets((o) => ({ ...o, [inj.id]: e.target.value }))}
-                      className={cn(inputCls, 'w-[68px] font-mono text-[12px]')}
+                      inputMode='numeric'
+                      className={cn(
+                        inputCls,
+                        'w-[72px] pl-5 font-mono text-[12px] tabular-nums',
+                        bad.has(`inject:${n + 1}:at`) && invalidCls
+                      )}
+                      aria-invalid={invalid(`inject:${n + 1}:at`)}
                       placeholder='mm:ss'
                     />
                   </label>
@@ -418,7 +492,12 @@ export function PlanEditor({
                               }
                             })
                           }
-                          className={cn(inputCls, 'w-[72px] tabular-nums')}
+                          className={cn(
+                            inputCls,
+                            'w-[72px] tabular-nums',
+                            bad.has(`inject:${n + 1}:seconds`) && invalidCls
+                          )}
+                          aria-invalid={invalid(`inject:${n + 1}:seconds`)}
                           aria-label='Seconds'
                         />
                         s
@@ -432,7 +511,12 @@ export function PlanEditor({
                       onChange={(e) => patchInject(inj.id, { text: e.target.value })}
                       placeholder='Posted to the channel as the lead'
                       aria-label='Announcement'
-                      className={cn(inputCls, 'min-w-[200px] flex-1')}
+                      aria-invalid={invalid(`inject:${n + 1}:text`)}
+                      className={cn(
+                        inputCls,
+                        'min-w-[200px] flex-1',
+                        bad.has(`inject:${n + 1}:text`) && invalidCls
+                      )}
                     />
                   ) : (
                     <input
@@ -481,7 +565,7 @@ export function PlanEditor({
         </div>
       </section>
 
-      <div className='flex items-center gap-2 border-t border-slate-200 pt-4 dark:border-border'>
+      <div className='sticky bottom-0 z-10 -mx-4 flex items-center gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:-mx-6 sm:px-6 dark:border-border dark:bg-background'>
         <button
           type='submit'
           disabled={save.isPending}
