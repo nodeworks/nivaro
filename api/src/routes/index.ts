@@ -505,10 +505,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(recordViewersRoutes, { prefix: '/presence' })
   await app.register(geocodeRoutes)
   await app.register(recordMetaRoutes)
-  // Chaos drills (#333) — only when explicitly enabled; never by default.
-  if (process.env.CHAOS_ENABLED === 'true') {
-    await app.register(chaosRoutes, { prefix: '/chaos' })
-  }
+  // Chaos engineering (#333 → #2827) — always registered; services/chaos/gate.ts refuses with
+  // a reason in cloud mode and on an unflagged production box.
+  await app.register(chaosRoutes, { prefix: '/chaos' })
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })

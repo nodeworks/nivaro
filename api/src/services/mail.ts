@@ -619,11 +619,11 @@ export interface MailResult {
 }
 
 export async function sendMail(opts: MailOptions): Promise<MailResult> {
-  // Chaos drill (#333): a mail_down fault makes sends fail like a dead SMTP
+  // Chaos drill (#333 → registry #2827): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
   {
-    const { chaosMailDown } = await import('../routes/chaos.js')
-    if (chaosMailDown()) throw new Error('chaos: mail transport down (drill)')
+    const { chaosPoint } = await import('./chaos/registry.js')
+    if (chaosPoint('mail.send')) throw new Error('chaos: mail transport down (drill)')
   }
 
   const smtp = await getSmtpConfig()
@@ -772,11 +772,11 @@ export async function sendRawMail(opts: {
   workspace_id?: string | null
   record?: { collection: string; id: string | number } | null
 }): Promise<MailResult> {
-  // Chaos drill (#333): a mail_down fault makes sends fail like a dead SMTP
+  // Chaos drill (#333 → registry #2827): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
   {
-    const { chaosMailDown } = await import('../routes/chaos.js')
-    if (chaosMailDown()) throw new Error('chaos: mail transport down (drill)')
+    const { chaosPoint } = await import('./chaos/registry.js')
+    if (chaosPoint('mail.send')) throw new Error('chaos: mail transport down (drill)')
   }
 
   const smtp = await getSmtpConfig()

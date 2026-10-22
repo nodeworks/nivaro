@@ -589,6 +589,13 @@ export const navCategories: NavCategory[] = [
       },
       { icon: Radio, label: 'Realtime', to: '/realtime', section: 'Health', keywords: 'sockets' },
       {
+        icon: Siren,
+        label: 'Chaos',
+        to: '/chaos',
+        section: 'Health',
+        keywords: 'chaos drill fault injection resilience game day stop all'
+      },
+      {
         icon: Activity,
         label: 'Background Jobs',
         to: '/background-jobs',
