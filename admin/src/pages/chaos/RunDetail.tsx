@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import { Link } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime } from '@/lib/utils'
 import { type ChaosRun, type ChaosRunEvent, chaosKeys, describeTarget, fetchRun } from './api'
@@ -60,9 +61,18 @@ function RunSummary({ run, events }: { run: ChaosRun; events: ChaosRunEvent[] })
             {typeof run.meta.note === 'string' && run.meta.note ? ` · ${run.meta.note}` : ''}
           </p>
         </div>
-        <span className='font-mono text-[11px] text-slate-400 dark:text-muted-foreground/70'>
-          {run.id}
-        </span>
+        <div className='flex items-center gap-3'>
+          <span className='font-mono text-[11px] text-slate-400 dark:text-muted-foreground/70'>
+            {run.id}
+          </span>
+          {/* #2849 — the full report: charts, timings, errors people saw, postmortem export */}
+          <Link
+            to={`/chaos/runs/${run.id}`}
+            className='inline-flex h-7 items-center rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+          >
+            Full report
+          </Link>
+        </div>
       </div>
 
       <VerdictLine run={run} />

@@ -13,6 +13,7 @@ export * from './sections/ai-panel.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
+export * from './sections/chaos-report.js'
 export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
 export * from './sections/config-review.js'
@@ -102,6 +103,7 @@ import {
 } from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
+import { chaosReportDocs } from './sections/chaos-report.js'
 import {
   collabApprovals,
   collabChat,
@@ -929,6 +931,11 @@ export const navSections: NavGroup[] = [
       infrastructureEdgeDocs,
       infrastructureHostGuide
     ]
+  },
+  {
+    id: 'chaos',
+    label: 'Chaos engineering',
+    items: [chaosReportDocs]
   },
   {
     id: 'data-model',

@@ -1,6 +1,8 @@
 import type { ComponentType } from 'react'
 import { FaultsTab } from './FaultsTab'
+import { MatrixTab } from './MatrixTab'
 import { RunsTab } from './RunsTab'
+import { TrendsTab } from './TrendsTab'
 
 /**
  * Chaos console tabs (#2827), in display order. Each chaos area adds ONE entry here and its own
@@ -15,5 +17,7 @@ export interface ChaosTab {
 
 export const CHAOS_TABS: ChaosTab[] = [
   { id: 'faults', label: 'Faults', component: FaultsTab },
-  { id: 'runs', label: 'Runs', component: RunsTab }
+  { id: 'runs', label: 'Runs', component: RunsTab },
+  { id: 'matrix', label: 'Matrix', component: MatrixTab },
+  { id: 'trends', label: 'Trends', component: TrendsTab }
 ]
