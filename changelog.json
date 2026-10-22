@@ -1,10 +1,188 @@
 {
-  "generated_at": "2026-10-22T15:40:04.558Z",
+  "generated_at": "2026-10-22T16:13:58.187Z",
   "releases": [
+    {
+      "version": "0.3.2",
+      "tag": "v0.3.2",
+      "date": "2026-10-22T12:13:43-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "dev",
+              "text": "run Mailpit as part of pnpm dev",
+              "hash": "7db467033"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "ship the Mailpit kit as a Docker Swarm stack service",
+              "hash": "b0d14017d"
+            },
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "Mailpit kit for staging mail with manual release through the relay",
+              "hash": "7b00be275"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "run the staging Mailpit kit as its own efp_mail stack",
+              "hash": "da9aeaf11"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "block customer subdomains in the example blocked-recipients regex",
+              "hash": "569ee4620"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "make the relay recipient regexes case-insensitive",
+              "hash": "887e45fc0"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "make Mailpit relaying an optional stack overlay",
+              "hash": "7085a8f86"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "show optional auto-relay as the MP_SMTP_RELAY_MATCHING env var, not a YAML key",
+              "hash": "65cc2c133"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "keep Mailpit recipient regexes in the relay secret and fix relay-off steps",
+              "hash": "caf43c8e3"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "name the shared traefik_swarm SMTP exposure in the staging mail runbook",
+              "hash": "bc6c07801"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "gate MAIL_TEST_MODE removal on the smtp_host check",
+              "hash": "f4ed597bd"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "fix optional relay matching guidance in staging mail kit",
+              "hash": "635156e7d"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "say host-mode publish needs a test edit; fix relay env wording",
+              "hash": "e4478d707"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "use one deploy model for the staging Mailpit kit",
+              "hash": "6f0c2ff05"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "tighten staging mail runbook test-mode and secret-name guidance",
+              "hash": "f1e86ddc7"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "drop stale recipient-variable notes from the relay example",
+              "hash": "f36d72cfb"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "say the service-update relay stop is temporary until stack.yml drops it",
+              "hash": "0084c945d"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs/",
+              "hash": "f69d88049"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fail the kit test on any live ports entry on the mailpit service",
+              "hash": "bd9933513"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fail the kit test when blocked-recipients misses customer subdomains",
+              "hash": "716d387c9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "parse the Mailpit stack YAML to check ports and secret mounts",
+              "hash": "e0b92108b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fail the kit test on host networking and an unpinned Mailpit image",
+              "hash": "04e212bec"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "check the recipient regexes release our domains and block customers and probed admins",
+              "hash": "b09ced624"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fail the kit test when MAILPIT_VERSION in .env.example is latest",
+              "hash": "52f5b4f72"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "match the multi-line matching note in the relay example",
+              "hash": "56473d7bb"
+            }
+          ]
+        }
+      ],
+      "count": 25
+    },
     {
       "version": "0.3.1",
       "tag": "v0.3.1",
-      "date": "2026-10-22T11:39:43-04:00",
+      "date": "2026-10-22T11:40:04-04:00",
       "sections": [
         {
           "label": "Added",
