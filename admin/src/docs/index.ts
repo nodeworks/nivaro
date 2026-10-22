@@ -102,6 +102,7 @@ import {
 } from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
+import { chaosCiDocs } from './sections/chaos-ci.js'
 import {
   collabApprovals,
   collabChat,
@@ -901,6 +902,7 @@ export const navSections: NavGroup[] = [
       obsHealthDashboard,
       obsRealtimePipeline,
       realtimeLoadTest,
+      chaosCiDocs,
       dbHealthDocs,
       dbTuning,
       sqlChecksDocs,
