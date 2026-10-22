@@ -4,7 +4,7 @@ import { useNavigation, useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useLiveAvailable, useLiveEvent } from '../../lib/live'
 import { DeclareIncidentButton } from './DeclareIncidentButton'
-import { GameDayStrip } from './GameDayStrip'
+import { GameDayStrip, useActiveGamedays } from './GameDayStrip'
 
 /**
  * "Drill running" banner (#2846): while any chaos fault is armed on this instance, every app
@@ -75,6 +75,16 @@ export function drillCountdown(endsAt: number, now = Date.now()): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
+/**
+ * Whether the drill banner (or its game-day strip) is showing — both carry Declare incident, so a
+ * page with its own copy (the Ops Console header) hides it meanwhile. Same reads as the banner.
+ */
+export function useDrillBannerShowing(): boolean {
+  const { armed, allowed } = useArmedFaults()
+  const days = useActiveGamedays(allowed)
+  return armed.some((f) => f.ends_at > Date.now()) || days.some((d) => d.status === 'running')
+}
+
 export interface DrillBannerProps {
   /** Where Stop sends operators (the chaos console). Default `/chaos`. */
   stopHref?: string
@@ -110,23 +120,32 @@ export function DrillBanner({ stopHref = '/chaos', canStop = false }: DrillBanne
         aria-hidden
         className='pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-[repeating-linear-gradient(135deg,rgb(239_68_68)_0_8px,transparent_8px_16px)] opacity-70 dark:bg-[repeating-linear-gradient(135deg,rgb(248_113_113)_0_8px,transparent_8px_16px)]'
       />
-      <span className='relative flex h-2 w-2 shrink-0' aria-hidden>
-        <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75 motion-reduce:animate-none' />
-        <span className='relative inline-flex h-2 w-2 rounded-full bg-red-500' />
-      </span>
-      <span className='min-w-0 font-medium'>
-        Drill running: {first.label}
-        <span className='font-normal'> on {first.target}</span>
-        {live.length > 1 && (
-          <span className='font-normal'>
-            {' '}
-            and {live.length - 1} more fault{live.length > 2 ? 's' : ''}
-          </span>
-        )}
+      {/* The dot rides the first line of the title, so a narrow screen never strands it alone. */}
+      <span className='flex min-w-0 items-start gap-2 font-medium'>
+        <span className='relative mt-[5px] flex h-2 w-2 shrink-0' aria-hidden>
+          <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75 motion-reduce:animate-none' />
+          <span className='relative inline-flex h-2 w-2 rounded-full bg-red-500' />
+        </span>
+        <span className='min-w-0'>
+          Drill running: {first.label}
+          <span className='font-normal'> on {first.target}</span>
+          {live.length > 1 && (
+            <span
+              className='font-normal underline decoration-red-300 decoration-dotted underline-offset-2 dark:decoration-red-700'
+              data-tip={live
+                .slice(1)
+                .map((f) => `${f.label} on ${f.target}`)
+                .join(' · ')}
+            >
+              {' '}
+              and {live.length - 1} more fault{live.length > 2 ? 's' : ''}
+            </span>
+          )}
+        </span>
       </span>
       <span className='min-w-0 text-red-800/80 dark:text-red-300/80'>
         {first.started_by_name ? `started by ${first.started_by_name} · ` : ''}
-        ends in <span className='font-mono tabular-nums'>{drillCountdown(soonest, now)}</span>
+        ends in <span className='tabular-nums'>{drillCountdown(soonest, now)}</span>
         {' · '}this is a planned test, not an outage
       </span>
       <DeclareIncidentButton className='ml-auto' />
@@ -138,7 +157,8 @@ export function DrillBanner({ stopHref = '/chaos', canStop = false }: DrillBanne
             e.preventDefault()
             navigate(href)
           }}
-          className='shrink-0 rounded px-2 py-0.5 font-medium text-red-800 underline decoration-dotted underline-offset-2 hover:bg-red-100 hover:text-red-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:text-red-200 dark:hover:bg-red-950/70'
+          data-tip='Open the chaos console to stop it'
+          className='inline-flex h-7 shrink-0 items-center rounded-md border border-red-300 bg-white px-2.5 text-[12px] font-medium text-red-700 transition-colors duration-150 hover:border-red-400 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:border-red-800 dark:bg-red-950/60 dark:text-red-200 dark:hover:border-red-700 dark:hover:bg-red-900/50'
         >
           Stop
         </a>

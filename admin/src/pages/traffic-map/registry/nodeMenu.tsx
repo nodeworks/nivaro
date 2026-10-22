@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { type NavigateFunction, useInRouterContext, useNavigate } from 'react-router'
 import { cn } from '@/lib/utils'
@@ -16,6 +16,12 @@ export interface NodeMenuEntry {
   label: string
   /** A short line under the label. */
   hint?: string
+  /**
+   * Entries that share a group (one provider's several faults, say) sit under one heading,
+   * with `groupHint` once beneath it, instead of repeating the same words on every row.
+   */
+  group?: string
+  groupHint?: string
   tone?: 'danger'
   run(ctx: NodeMenuContext): void
 }
@@ -121,31 +127,52 @@ function MenuBody({ state, onClose, onSelect, nav }: MenuProps & { nav: Navigate
       className='traffic-map fixed z-50 min-w-[200px] max-w-[300px] rounded-md border border-[var(--tm-line)] bg-[var(--tm-card)] p-1 shadow-[0_4px_16px_rgba(0,0,0,0.10),0_1px_4px_rgba(0,0,0,0.06)]'
       style={pos}
     >
-      {state.entries.map((e) => (
-        <button
-          key={e.key}
-          type='button'
-          role='menuitem'
-          data-tm-node-menu-item={e.key}
-          className={ITEM}
-          onClick={() => {
-            onClose()
-            e.run({ navigate: nav, select: onSelect })
-          }}
-        >
-          <span
-            className={cn(
-              'font-medium',
-              e.tone === 'danger' ? 'text-[var(--tm-error-ink)]' : 'text-[var(--tm-fg)]'
-            )}
-          >
-            {e.label}
-          </span>
-          {e.hint ? (
-            <span className='text-[11px] leading-snug text-[var(--tm-fg-2)]'>{e.hint}</span>
-          ) : null}
-        </button>
-      ))}
+      {state.entries.map((e, i) => {
+        const prev = state.entries[i - 1]
+        const opensGroup = !!e.group && e.group !== prev?.group
+        return (
+          <Fragment key={e.key}>
+            {opensGroup ? (
+              <div
+                role='presentation'
+                className={cn(
+                  'px-2 pb-1 pt-1.5',
+                  i > 0 && 'mt-1 border-t border-[var(--tm-line)] pt-2'
+                )}
+              >
+                {/* a quiet label, not a row: only the entries under it act */}
+                <p className='text-[11px] font-medium text-[var(--tm-fg-2)]'>{e.group}</p>
+                {e.groupHint ? (
+                  <p className='text-[11px] leading-snug text-[var(--tm-muted)]'>{e.groupHint}</p>
+                ) : null}
+              </div>
+            ) : null}
+            <button
+              type='button'
+              role='menuitem'
+              data-tm-node-menu-item={e.key}
+              aria-label={e.group ? `${e.group}: ${e.label}` : undefined}
+              className={ITEM}
+              onClick={() => {
+                onClose()
+                e.run({ navigate: nav, select: onSelect })
+              }}
+            >
+              <span
+                className={cn(
+                  'font-medium',
+                  e.tone === 'danger' ? 'text-[var(--tm-error-ink)]' : 'text-[var(--tm-fg)]'
+                )}
+              >
+                {e.label}
+              </span>
+              {e.hint ? (
+                <span className='text-[11px] leading-snug text-[var(--tm-fg-2)]'>{e.hint}</span>
+              ) : null}
+            </button>
+          </Fragment>
+        )
+      })}
     </div>,
     document.body
   )

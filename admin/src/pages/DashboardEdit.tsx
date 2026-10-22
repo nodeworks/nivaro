@@ -1250,6 +1250,15 @@ export function DashboardEditPage() {
     queryFn: () => api.get<{ data: Dashboard }>(`/dashboards/${id}`).then((r) => r.data.data),
     enabled: !!id
   })
+  // #2858 — Pretend down names collections by their display name (same read as Add widget).
+  const { data: collectionList } = useQuery({
+    queryKey: ['collections'],
+    queryFn: () => api.get<{ data: Collection[] }>('/collections').then((r) => r.data.data)
+  })
+  const collectionLabels = useMemo(
+    () => Object.fromEntries((collectionList ?? []).map((c) => [c.collection, c.display_name])),
+    [collectionList]
+  )
 
   const updateDashboard = useMutation({
     mutationFn: (body: { name?: string; is_shared?: boolean }) =>
@@ -1313,7 +1322,7 @@ export function DashboardEditPage() {
   }
 
   const widgets = data.widgets ?? []
-  const pretendOptions = dashboardPretendDownOptions(widgets)
+  const pretendOptions = dashboardPretendDownOptions(widgets, collectionLabels)
 
   // Sort widgets by row then col
   const sorted = [...widgets].sort((a, b) => a.row - b.row || a.col - b.col)

@@ -147,10 +147,20 @@ describe('Pretend down (#2858)', () => {
       { id: 'b', type: 'sum', collection: 'orders' },
       { id: 'c', type: 'ai_query' }
     ])
-    expect(opts[0]).toMatchObject({ label: 'orders data', hint: '2 widgets' })
+    expect(opts[0]).toMatchObject({ label: 'Orders data', hint: '2 widgets' })
     expect(opts[0].patterns[0].test('/dashboards/widgets/b/data')).toBe(true)
     expect(opts[0].patterns[0].test('/dashboards/widgets/c/data')).toBe(false)
     expect(opts[1].label).toBe('Ask AI charts')
+    // the host's display name wins over the title-cased key
+    expect(
+      dashboardPretendDownOptions([{ id: 'a', type: 'count', collection: 'inventory_request' }], {
+        inventory_request: 'Inventory requests'
+      })[0].label
+    ).toBe('Inventory requests data')
+    expect(
+      dashboardPretendDownOptions([{ id: 'a', type: 'count', collection: 'inventory_request' }])[0]
+        .label
+    ).toBe('Inventory Request data')
   })
 
   it('a switch pretends one down; leaving the surface turns it back on', async () => {

@@ -8,7 +8,7 @@ import {
   type PretendDownDependency,
   setPretendDown
 } from '../lib/client-chaos'
-import { cn } from '../lib/utils'
+import { cn, titleCase } from '../lib/utils'
 import {
   type ClientChaosUser,
   useClientChaosGate,
@@ -332,7 +332,8 @@ export function layoutPretendDownOptions(
 /**
  * The dependencies a dashboard uses, grouped by source: each collection its widgets read, Ask AI
  * charts, report presets and pipeline flow widgets — every widget reads through
- * `/dashboards/widgets/<id>/data`, so each option names the widgets it feeds.
+ * `/dashboards/widgets/<id>/data`, so each option names the widgets it feeds. Collections are
+ * named by `labels` (collection key → display name) when the host has them, else title-cased.
  */
 export function dashboardPretendDownOptions(
   widgets: Array<{
@@ -340,7 +341,8 @@ export function dashboardPretendDownOptions(
     type: string
     collection?: string | null
     field?: string | null
-  }>
+  }>,
+  labels: Record<string, string | null | undefined> = {}
 ): PretendDownOption[] {
   const groups = new Map<
     string,
@@ -366,7 +368,13 @@ export function dashboardPretendDownOptions(
         /^\/custom-queries(\/|$)/
       ])
     else if (w.type === 'cumulative_flow') add('flow', 'Pipeline flow', 'data', w.id)
-    else if (w.collection) add(`c:${w.collection}`, w.collection, 'data', w.id)
+    else if (w.collection)
+      add(
+        `c:${w.collection}`,
+        labels[w.collection]?.trim() || titleCase(w.collection),
+        'data',
+        w.id
+      )
   }
   const out: PretendDownOption[] = []
   for (const [key, g] of groups) {
