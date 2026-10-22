@@ -158,7 +158,7 @@ export function FaultChecklist({
                   onChange(v ? [...value, c.key] : value.filter((k) => k !== c.key))
                 }
               />
-              <span className='min-w-0 flex-1 truncate text-[12.5px] text-slate-800 dark:text-foreground'>
+              <span className='min-w-0 truncate text-[12.5px] text-slate-800 dark:text-foreground'>
                 {c.label}
               </span>
               {c.danger ? (

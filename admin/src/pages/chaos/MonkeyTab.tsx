@@ -7,7 +7,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { cn, formatRelative } from '@/lib/utils'
 import { errText } from './api'
-import { FaultChecklist, inputCls, NumberBox, Row, SaveBar, Section } from './ops-controls'
 import {
   type ChaosSettingsView,
   fetchChaosSettings,
@@ -23,6 +22,7 @@ import {
   tzLabel,
   WEEKDAYS
 } from './ops-api'
+import { FaultChecklist, inputCls, NumberBox, Row, SaveBar, Section } from './ops-controls'
 import { RunChip } from './RunsTab'
 
 /**
@@ -124,11 +124,11 @@ export function MonkeyTab() {
         </div>
         <p
           id='monkey-why'
-          className='min-w-0 flex-1 text-[12.5px] text-slate-600 dark:text-muted-foreground'
+          className='order-last min-w-0 basis-full text-[12.5px] text-slate-600 md:order-none md:basis-0 md:flex-1 dark:text-muted-foreground'
         >
           {verdictSentence(data)}
         </p>
-        <span className='text-[12px] tabular-nums text-slate-500 dark:text-muted-foreground'>
+        <span className='ml-auto text-[12px] tabular-nums text-slate-500 md:ml-0 dark:text-muted-foreground'>
           {data.this_week} of {m.max_per_week} this week
         </span>
         {admin && (
@@ -341,7 +341,9 @@ export function MonkeyTab() {
                       <RunChip run={r} />
                     </div>
                     <p className='mt-0.5 truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-                      <span className='tabular-nums'>{formatRelative(r.started_at ?? r.created_at)}</span>
+                      <span className='tabular-nums'>
+                        {formatRelative(r.started_at ?? r.created_at)}
+                      </span>
                       {r.status === 'refused' && refusalWhy(r) && <> · {refusalWhy(r)}</>}
                     </p>
                   </Link>

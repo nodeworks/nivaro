@@ -14,7 +14,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { errText } from './api'
-import { FaultChecklist, NumberBox, Row, SaveBar, Section } from './ops-controls'
 import {
   type ChaosEnvCaps,
   type ChaosSettingsView,
@@ -24,6 +23,7 @@ import {
   opsKeys,
   patchChaosSettings
 } from './ops-api'
+import { FaultChecklist, NumberBox, Row, SaveBar, Section } from './ops-controls'
 
 /**
  * Settings (#2862): who may run faults besides administrators, and how far a run may reach on
@@ -184,7 +184,7 @@ function SettingsForm() {
           >
             <div className='space-y-2.5'>
               <div
-                role='radiogroup'
+                role='group'
                 aria-label='Faults allowed'
                 className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'
               >
@@ -199,8 +199,7 @@ function SettingsForm() {
                   <button
                     key={o.label}
                     type='button'
-                    role='radio'
-                    aria-checked={o.on}
+                    aria-pressed={o.on}
                     onClick={() => !o.on && setCaps({ allowed_faults: o.value })}
                     className={cn(
                       'h-7 rounded px-3 text-[12.5px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',

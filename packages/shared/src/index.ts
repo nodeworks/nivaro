@@ -125,6 +125,13 @@ export {
   type PublicArmedFault,
   useArmedFaults
 } from './components/chaos/DrillBanner'
+export {
+  DRILL_WINDOWS_KEY,
+  DrillTag,
+  type DrillWindow,
+  drillAt,
+  useDrillWindows
+} from './components/chaos/DrillTag'
 export type { CumulativeFlowData } from './components/charts/CumulativeFlowChart'
 export { CumulativeFlowChart } from './components/charts/CumulativeFlowChart'
 export { ChatAnalyticsView } from './components/chat/ChatAnalyticsView'
@@ -227,13 +234,6 @@ export type {
   ImportStats
 } from './components/imports/types'
 export * from './components/integrations/console'
-export {
-  DRILL_WINDOWS_KEY,
-  DrillTag,
-  type DrillWindow,
-  drillAt,
-  useDrillWindows
-} from './components/chaos/DrillTag'
 export {
   InboundRequestDetail,
   type InboundRequestInfo,

@@ -107,6 +107,7 @@ import { chaosDocs } from './sections/chaos.js'
 import { chaosCiDocs } from './sections/chaos-ci.js'
 import { chaosClientDocs } from './sections/chaos-client.js'
 import { chaosTrafficMapDocs } from './sections/chaos-map.js'
+import { chaosOpsDocs } from './sections/chaos-ops.js'
 import {
   collabApprovals,
   collabChat,
@@ -938,7 +939,7 @@ export const navSections: NavGroup[] = [
   {
     id: 'chaos',
     label: 'Chaos engineering',
-    items: [chaosDocs, chaosClientDocs, chaosTrafficMapDocs, chaosCiDocs]
+    items: [chaosDocs, chaosClientDocs, chaosTrafficMapDocs, chaosCiDocs, chaosOpsDocs]
   },
   {
     id: 'data-model',
