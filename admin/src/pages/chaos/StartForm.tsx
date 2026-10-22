@@ -26,7 +26,7 @@ import { PreflightPanel } from './PreflightPanel'
  */
 
 const inputCls =
-  'h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[12.5px] tabular-nums text-slate-900 placeholder:text-slate-400 focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-background dark:text-foreground'
+  'h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[12.5px] tabular-nums text-slate-900 placeholder:text-slate-500 focus:border-nvr-cyan focus:outline-none dark:placeholder:text-muted-foreground dark:border-border dark:bg-background dark:text-foreground'
 const labelCls = 'text-[11.5px] font-medium text-slate-600 dark:text-muted-foreground'
 
 const TARGET_LABEL: Record<FaultTarget['kind'], string> = {
@@ -143,7 +143,7 @@ export function StartForm({ fault, onClose }: { fault: CatalogFault; onClose: ()
     (preflightOk !== false || (override && overridable))
 
   return (
-    <div className='grid gap-5 border-t border-slate-200 bg-slate-50 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_300px] dark:border-border dark:bg-muted/30'>
+    <div className='grid items-start gap-5 border-t border-slate-200 bg-slate-50 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_300px] dark:border-border dark:bg-muted/30'>
       <form
         className='min-w-0 space-y-4'
         onSubmit={(e) => {
@@ -219,7 +219,7 @@ export function StartForm({ fault, onClose }: { fault: CatalogFault; onClose: ()
                 <span className={labelCls}>
                   {spec.label}
                   {spec.type === 'number' && (
-                    <span className='ml-1 font-normal text-slate-400 dark:text-muted-foreground/70'>
+                    <span className='ml-1 font-normal text-slate-500 dark:text-muted-foreground'>
                       {spec.min}–{spec.max}
                       {spec.unit ? ` ${spec.unit}` : ''}
                     </span>
@@ -270,7 +270,7 @@ export function StartForm({ fault, onClose }: { fault: CatalogFault; onClose: ()
           <label className='block space-y-1'>
             <span className={labelCls}>
               Duration
-              <span className='ml-1 font-normal text-slate-400 dark:text-muted-foreground/70'>
+              <span className='ml-1 font-normal text-slate-500 dark:text-muted-foreground'>
                 5–{fault.max_seconds} s
               </span>
             </span>
@@ -351,10 +351,11 @@ export function StartForm({ fault, onClose }: { fault: CatalogFault; onClose: ()
               <button
                 type='button'
                 aria-label='Remove this limit'
+                data-tip='Remove this limit'
                 onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))}
-                className='rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-foreground'
+                className='rounded p-1 text-slate-500 transition-colors duration-150 hover:bg-slate-200 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
               >
-                <X className='h-3.5 w-3.5' />
+                <X className='h-3.5 w-3.5' aria-hidden />
               </button>
             </div>
           ))}
@@ -366,9 +367,9 @@ export function StartForm({ fault, onClose }: { fault: CatalogFault; onClose: ()
                 { sampler: 'http.p95_ms', op: '<', limit: 2000, tolerance: 200 }
               ])
             }
-            className='inline-flex items-center gap-1 text-[12px] font-medium text-slate-600 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
+            className='inline-flex items-center gap-1 rounded text-[12px] font-medium text-slate-600 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:text-foreground'
           >
-            <Plus className='h-3.5 w-3.5' /> Add a limit
+            <Plus className='h-3.5 w-3.5' aria-hidden /> Add a limit
           </button>
         </fieldset>
 
@@ -384,10 +385,17 @@ export function StartForm({ fault, onClose }: { fault: CatalogFault; onClose: ()
           <button
             type='button'
             onClick={onClose}
-            className='inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-700 hover:bg-muted dark:border-border dark:text-foreground'
+            className='inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground'
           >
             Cancel
           </button>
+          {preflightOk === false && !(override && overridable) && (
+            <span role='status' className='text-[12px] text-amber-800 dark:text-amber-300'>
+              {overridable
+                ? 'Outside working hours: tick the override to run.'
+                : 'Pre-flight is blocking this run.'}
+            </span>
+          )}
           {overridable && (
             <label className='ml-auto flex items-center gap-2 text-[12px] text-slate-600 dark:text-muted-foreground'>
               <input

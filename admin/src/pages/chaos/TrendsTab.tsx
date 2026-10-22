@@ -130,6 +130,7 @@ function TrendsBody({ data, grain, months }: { data: Trends; grain: Grain; month
           label='Did not recover while watched'
           value={String(r.not_recovered)}
           warn={r.not_recovered > 0}
+          className='col-span-2 xl:col-span-1'
         />
       </div>
       {data.pending > 0 && (
@@ -168,9 +169,19 @@ function TrendsBody({ data, grain, months }: { data: Trends; grain: Grain; month
   )
 }
 
-function Stat({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+function Stat({
+  label,
+  value,
+  warn,
+  className
+}: {
+  label: string
+  value: string
+  warn?: boolean
+  className?: string
+}) {
   return (
-    <div className='min-w-0 bg-white px-3 py-2.5 dark:bg-card'>
+    <div className={cn('min-w-0 bg-white px-3 py-2.5 dark:bg-card', className)}>
       <div className='truncate text-[11.5px] font-medium text-slate-500 dark:text-muted-foreground'>
         {label}
       </div>

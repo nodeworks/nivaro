@@ -166,7 +166,7 @@ export function FaultChecklist({
                   className={cn(
                     'shrink-0 text-[11px]',
                     c.danger === 'high'
-                      ? 'text-red-700 dark:text-red-300'
+                      ? 'text-orange-700 dark:text-orange-300'
                       : c.danger === 'medium'
                         ? 'text-amber-700 dark:text-amber-300'
                         : 'text-slate-500 dark:text-muted-foreground'
@@ -217,7 +217,7 @@ export function SaveBar({
         type='button'
         onClick={onDiscard}
         disabled={saving}
-        className='h-8 rounded-md px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-muted-foreground dark:hover:bg-muted'
+        className='h-8 rounded-md px-3 text-[12.5px] font-medium text-slate-600 transition-colors duration-150 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-50 dark:text-muted-foreground dark:hover:bg-muted'
       >
         Discard
       </button>
@@ -225,9 +225,11 @@ export function SaveBar({
         type='button'
         onClick={onSave}
         disabled={saving || !dirty}
-        className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-medium text-nvr-navy hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:opacity-50 dark:focus-visible:ring-offset-background'
+        className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:opacity-50 dark:focus-visible:ring-offset-background'
       >
-        {saving && <Loader2 className='h-3.5 w-3.5 animate-spin' aria-hidden />}
+        {saving && (
+          <Loader2 className='h-3.5 w-3.5 animate-spin motion-reduce:animate-none' aria-hidden />
+        )}
         Save changes
       </button>
     </div>

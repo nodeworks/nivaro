@@ -30,7 +30,11 @@ const DANGER: Record<CatalogFault['danger'], { label: string; cls: string }> = {
     label: 'Medium blast',
     cls: 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
   },
-  high: { label: 'High blast', cls: 'bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300' }
+  // Orange, not red: red on this page means "armed now" and Stop all.
+  high: {
+    label: 'High blast',
+    cls: 'bg-orange-50 text-orange-800 dark:bg-orange-950/50 dark:text-orange-300'
+  }
 }
 
 export function FaultsTab() {
@@ -70,13 +74,11 @@ export function FaultsTab() {
         {data && (
           <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
             {data.faults.length} faults · runs stored in{' '}
-            <span className='font-mono text-[11px]'>
-              {data.store === 'db'
-                ? 'the database'
-                : data.store === 'redis'
-                  ? 'Redis (7 days)'
-                  : 'memory'}
-            </span>
+            {data.store === 'db'
+              ? 'the database'
+              : data.store === 'redis'
+                ? 'Redis (7 days)'
+                : 'memory only'}
           </span>
         )}
       </div>
@@ -113,7 +115,7 @@ export function FaultsTab() {
                       <span className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
                         {f.label}
                       </span>
-                      <span className='font-mono text-[11px] text-slate-400 dark:text-muted-foreground/70'>
+                      <span className='font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
                         {f.key}
                       </span>
                       <span
@@ -129,7 +131,7 @@ export function FaultsTab() {
                           to={
                             armed.run_id ? `/chaos?tab=runs&run=${armed.run_id}` : '/chaos?tab=runs'
                           }
-                          className='rounded bg-red-50 px-1.5 py-0.5 text-[10.5px] font-medium text-red-800 hover:bg-red-100 dark:bg-red-950/50 dark:text-red-300 dark:hover:bg-red-950/70'
+                          className='rounded bg-red-50 px-1.5 py-0.5 text-[10.5px] font-medium text-red-800 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:bg-red-950/50 dark:text-red-300 dark:hover:bg-red-950/70'
                         >
                           Armed now
                         </Link>
@@ -139,7 +141,7 @@ export function FaultsTab() {
                       {f.proves}
                     </p>
                     {f.points.length > 0 && (
-                      <p className='mt-1 text-[11px] text-slate-400 dark:text-muted-foreground/70'>
+                      <p className='mt-1 text-[11px] text-slate-500 dark:text-muted-foreground'>
                         acts at <span className='font-mono'>{f.points.join(', ')}</span> · up to{' '}
                         {f.max_seconds}s
                       </p>
@@ -150,32 +152,35 @@ export function FaultsTab() {
                     {f.console_href ? (
                       <Link
                         to={f.console_href}
-                        className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-700 hover:bg-muted dark:border-border dark:text-foreground'
+                        className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground'
                       >
                         Open drills
                         <ExternalLink className='h-3.5 w-3.5' aria-hidden />
                       </Link>
                     ) : (
-                      <button
-                        type='button'
-                        disabled={!allowed}
-                        aria-expanded={expanded}
-                        onClick={() => setOpen(expanded ? null : f.key)}
-                        data-tip={allowed ? undefined : (status?.reason ?? 'Refused here')}
-                        className={cn(
-                          'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12.5px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-card',
-                          expanded
-                            ? 'border border-slate-200 text-slate-700 hover:bg-muted dark:border-border dark:text-foreground'
-                            : 'bg-nvr-cyan text-white hover:bg-[#00b8e0]'
-                        )}
-                      >
-                        {expanded ? (
-                          <ChevronDown className='h-3.5 w-3.5' aria-hidden />
-                        ) : (
-                          <Play className='h-3.5 w-3.5' aria-hidden />
-                        )}
-                        {expanded ? 'Close' : 'Run'}
-                      </button>
+                      // The wrapper carries the refusal tip: a disabled button gets no pointer events.
+                      <span data-tip={allowed ? undefined : (status?.reason ?? 'Refused here')}>
+                        <button
+                          type='button'
+                          disabled={!allowed}
+                          aria-expanded={expanded}
+                          onClick={() => setOpen(expanded ? null : f.key)}
+                          className={cn(
+                            'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-[12.5px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-card',
+                            // One solid accent per screen: the form's own Run button.
+                            expanded
+                              ? 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-muted dark:border-border dark:bg-muted dark:text-foreground'
+                              : 'border-slate-200 bg-white text-slate-800 hover:border-nvr-cyan/60 hover:bg-nvr-cyan/10 dark:border-border dark:bg-card dark:text-foreground dark:hover:border-nvr-cyan/50'
+                          )}
+                        >
+                          {expanded ? (
+                            <ChevronDown className='h-3.5 w-3.5' aria-hidden />
+                          ) : (
+                            <Play className='h-3.5 w-3.5' aria-hidden />
+                          )}
+                          {expanded ? 'Close' : 'Run'}
+                        </button>
+                      </span>
                     )}
                   </div>
                 </div>
@@ -193,12 +198,13 @@ function LastRun({ f }: { f: CatalogFault }) {
   const r = f.last_run
   if (!r)
     return (
-      <span className='text-[11.5px] text-slate-400 dark:text-muted-foreground/70'>Never run</span>
+      <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>Never run</span>
     )
   return (
     <Link
       to={`/chaos?tab=runs&run=${r.id}`}
-      className='flex items-center gap-2 rounded px-1 py-0.5 text-[11.5px] text-slate-500 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
+      data-tip='Open this run'
+      className='flex items-center gap-2 rounded px-1 py-0.5 text-[11.5px] text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted'
     >
       {r.verdict ? (
         <span
