@@ -584,6 +584,7 @@
           <a class="docs-nav-item" data-section="issue-log" href="#issue-log">Issue Log</a>
           <a class="docs-nav-item" data-section="error-tracking" href="#error-tracking">Error Tracking</a>
           <a class="docs-nav-item" data-section="backups" href="#backups">Backups</a>
+          <a class="docs-nav-item" data-section="disaster-recovery" href="#disaster-recovery">Disaster recovery</a>
           <a class="docs-nav-item" data-section="content-promotion" href="#content-promotion">Content Promotion</a>
           <a class="docs-nav-item" data-section="file-usage" href="#file-usage">File Usage</a>
           <a class="docs-nav-item" data-section="permission-simulator" href="#permission-simulator">Permission Simulator</a>
@@ -18996,6 +18997,17 @@ GET /api/backups/manifest?include_system=true  (admin — what would be exported
           </ul>
           <div class="doc-note">Export only. Restore into a live instance is intentionally not offered through the API.</div>
           <!-- /SYNC:backups -->
+        </div>
+
+        <div class="doc-section" id="s-disaster-recovery" data-toc='[{"id":"disaster-recovery","label":"Disaster recovery"},{"id":"restore-drill","label":"Restore drill"},{"id":"recovery-settings","label":"Targets, runbook and settings"}]'>
+          <!-- SYNC:disaster-recovery -->
+          <h1 class="doc-h1" id="disaster-recovery">Disaster recovery</h1>
+          <p class="doc-p">Telemetry → Disaster recovery judges the newest database backup, the uploads backup, the nightly restore drill, its measured restore time and chaos drills' recovery against the stated RPO and RTO.</p>
+          <h2 class="doc-h2" id="restore-drill">Restore drill</h2>
+          <p class="doc-p">The restore-drill job restores the newest full (plus differential) backup into a nivaro_restore_drill_ scratch database, checks it, records the restore time and always drops the copy. Off by default (RESTORE_DRILL=on).</p>
+          <h2 class="doc-h2" id="recovery-settings">Targets, runbook and settings</h2>
+          <p class="doc-p">RESTORE_DRILL, RESTORE_DRILL_DB, RECOVERY_RPO_MINUTES, RECOVERY_RTO_MINUTES, DR_RUNBOOK_URL.</p>
+          <!-- /SYNC:disaster-recovery -->
         </div>
 
         <div class="doc-section" id="s-content-promotion" data-toc='[{"id":"content-promotion","label":"Content Promotion"}]'>

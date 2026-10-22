@@ -62,7 +62,7 @@ export interface Trends {
     months: Array<{ period: string; held: number; broke: number; aborted: number }>
   }>
   never_proven: Array<{ key: string; statement: string; area: string; provable: boolean }>
-  /** The RTO/RPO feed (#2802 has no panel yet; GET /api/chaos/trends serves it). */
+  /** The RTO/RPO feed: GET /api/chaos/trends serves it; the Telemetry page's Recovery panel (#2802, services/recovery/status.ts) judges it against the RTO. */
   recovery: {
     window_days: number
     ttr_median_s: number | null
