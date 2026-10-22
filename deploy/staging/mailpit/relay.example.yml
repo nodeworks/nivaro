@@ -10,11 +10,10 @@ username: RELAY_USERNAME
 password: RELAY_PASSWORD
 return-path: staging-mail@nivaro.dev
 
-# Manual releases may only reach these domains (our own). Keep equal to MAILPIT_ALLOWED_RECIPIENTS.
+# Manual releases may only reach these domains (our own).
 allowed-recipients: '@(nivaro\.dev|team-domain-one\.example|team-domain-two\.example)$'
 
 # Never mail these, in every relay mode: customer domains and the admins the help-video probes mailed.
-# Keep equal to MAILPIT_BLOCKED_RECIPIENTS.
 blocked-recipients: '@(customer-one\.example|customer-two\.example)$|^(probed-admin-one|probed-admin-two)@'
 
 # Optional: auto-relay mail for one narrow test mailbox. This is the MP_SMTP_RELAY_MATCHING
