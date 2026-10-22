@@ -1,6 +1,7 @@
 import { CHAOS_NODE, onRegistryChange, type RegistryEvent } from './registry.js'
 import { type Band, baselineBand, insideBand } from './report.js'
 import type { ChaosRun } from './runs.js'
+import { sampleMany } from './steady-state.js'
 
 /**
  * The recovery watch (#2849): time to recover needs samples AFTER the fault ends, and the
@@ -22,18 +23,9 @@ export interface RecoveryIo {
   event(runId: string, data: Record<string, unknown>): Promise<unknown>
 }
 
-/** Sampler keys of the steady-state module; a variable specifier keeps this file free of a
- *  compile-time edge to it, so the watch degrades to "no samples" where it is not loaded. */
-const STEADY_STATE = './steady-state.js'
-
 const defaultIo: RecoveryIo = {
   getRun: async (id) => (await import('./runs.js')).getRun(id),
-  sample: async (keys) => {
-    const mod = (await import(STEADY_STATE)) as {
-      sampleMany?: (k: Iterable<string>) => Promise<Record<string, number | null>>
-    }
-    return mod.sampleMany ? mod.sampleMany(keys) : {}
-  },
+  sample: (keys) => sampleMany(keys),
   event: async (runId, data) => (await import('./drill.js')).addRunEvent(runId, 'sample', data)
 }
 
