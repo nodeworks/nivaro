@@ -8,7 +8,7 @@
 #
 # Two runners (#2789): `runner` (the default, last stage) renders PDFs and
 # videos itself; `runner-slim` has no Chromium or ffmpeg and hands that work
-# to a full process over RENDER_URL. Both run as uid 1000 under tini, with a
+# to a full process over RENDER_URL. Both step down to uid 1000 under tini, with a
 # HEALTHCHECK, and write only /app/uploads, /app/work and /tmp.
 
 # ─── Stage 1: base ───────────────────────────────────────────────────────────
@@ -179,8 +179,9 @@ RUN echo "apk refresh ${APK_WEEK}" && apk upgrade --no-cache
 # is PID 1 (#2788): it forwards SIGTERM to the API, whose drain then runs,
 # and reaps the orphaned Chromium and ffmpeg children a crash leaves behind
 # (node as PID 1 does neither: it ignores signals it has no handler for and
-# never waits on orphans, which pile up as zombies).
-RUN apk add --no-cache libc6-compat ca-certificates tini
+# never waits on orphans, which pile up as zombies). su-exec is the
+# entrypoint's step-down from root to node (#2786), like postgres and redis.
+RUN apk add --no-cache libc6-compat ca-certificates tini su-exec
 RUN corepack enable pnpm
 
 # The full image adds what renders: system chromium for puppeteer (PDFs,
@@ -201,13 +202,18 @@ FROM os-slim AS runner-slim
 WORKDIR /app
 COPY --from=prod-deps /app /app
 COPY --from=app-files /app /app
-# Runs as `node` (uid 1000, #2786), never root. The ONLY paths it writes
-# (#2790 — a read-only root filesystem works): /app/uploads (files; mount a
-# volume), /app/work (TMPDIR = scratch, help-video work, heap snapshots,
-# Chromium's profile; HOME = font and browser caches; a volume or tmpfs) and
-# /tmp. Owned by node here, so a NEW named volume mounted on them copies that
-# ownership; a bind mount, NFS share or a volume created by an older (root)
-# image must be made writable for uid 1000 once.
+# Runs as `node` (uid 1000, #2786). No USER: the entrypoint starts as root,
+# hands /app/work (and an empty or top-level-only /app/uploads) to node and
+# steps down with su-exec; it stays root, saying so in one line, when
+# /app/uploads holds files node cannot write (a volume an older root image
+# filled; NFS root_squash) or when the step-down is refused (cap_drop ALL),
+# so an upgrade never breaks writes. A deployment's own `user:` wins.
+# The ONLY paths it writes (#2790 — a read-only root filesystem works):
+# /app/uploads (files; mount a volume), /app/work (TMPDIR = scratch,
+# help-video work, heap snapshots, Chromium's profile; HOME = font and
+# browser caches; a volume or tmpfs) and /tmp. Owned by node here, so a NEW
+# named volume mounted on them copies that ownership (and `user: 1000:1000`
+# works on it).
 RUN mkdir -p /app/uploads /app/work/tmp /app/work/home \
   && chown -R node:node /app/uploads /app/work \
   && chmod 0755 /app/docker-entrypoint.sh /app/healthcheck.sh
@@ -216,7 +222,6 @@ ENV TMPDIR=/app/work/tmp \
     NIVARO_IMAGE_VARIANT=slim
 LABEL org.opencontainers.image.title="Nivaro (slim)" \
       org.opencontainers.image.source="https://github.com/nodeworks/nivaro"
-USER node
 EXPOSE 3055
 # Liveness only (#2787): the process answers HTTP. start-period covers boot
 # migrations (EFP measures them at up to ~2 minutes), during which failures
@@ -243,7 +248,6 @@ ENV TMPDIR=/app/work/tmp \
     NIVARO_IMAGE_VARIANT=full
 LABEL org.opencontainers.image.title="Nivaro" \
       org.opencontainers.image.source="https://github.com/nodeworks/nivaro"
-USER node
 EXPOSE 3055
 HEALTHCHECK --interval=30s --timeout=5s --start-period=150s --retries=3 CMD ["/app/healthcheck.sh"]
 ENTRYPOINT ["/sbin/tini", "--", "/app/docker-entrypoint.sh"]

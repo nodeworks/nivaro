@@ -1,31 +1,44 @@
 #!/bin/sh
-# Release image entrypoint (#2788/#2792/#2790). Runs under tini (PID 1), does
-# the per-start setup a Dockerfile cannot, then exec's the command, so
+# Release image entrypoint (#2786/#2788/#2790/#2792). Runs under tini (PID 1),
+# does the per-start setup a Dockerfile cannot, then exec's the command, so
 # whatever CMD or `command:` the deployment gives (node api/dist/index.js, or
 # a `sh -c "...; exec ..."` wrapper) becomes tini's child and gets SIGTERM.
 #
-# 1. Writable dirs. A read-only root filesystem leaves /app/uploads,
+# 1. Node heap from the container memory limit. V8 sizes its heap from the
+#    cgroup limit at start (Node 22: about half of it) and cannot change it
+#    later, so this sets --max-old-space-size to 75% of the limit in
+#    NODE_OPTIONS — exported BEFORE any step-down, so the node started below
+#    (by su-exec, sh -c or another wrapper) inherits it. Skipped when
+#    NODE_OPTIONS already names a heap size, when there is no limit, or with
+#    NIVARO_HEAP_FROM_CGROUP=off.
+# 2. Who runs it (postgres/redis style). The image has no USER: it starts as
+#    root, prepares /app/work (TMPDIR, HOME) and /app/uploads for uid 1000,
+#    then steps down with `su-exec node`. Two cases stay root, each with one
+#    line in the log, so an upgrade never breaks writes:
+#      - /app/uploads holds files uid 1000 cannot write (a volume an older
+#        image wrote as root; NFS with root_squash). It is never chown -R'd
+#        here: that can take hours on a big share and root_squash refuses it.
+#      - the step-down itself fails (cap_drop ALL removes CAP_SETUID/SETGID).
+#    NIVARO_RUN_AS=root skips the step-down on purpose. A deployment that sets
+#    `user:` (non-root) gets none of this: dirs are created, a non-writable
+#    /app/uploads is reported, and the command runs as given.
+# 3. Writable dirs. A read-only root filesystem leaves /app/uploads,
 #    /app/work and /tmp writable; /app/work is often an EMPTY tmpfs or a new
 #    volume, so TMPDIR (/app/work/tmp) and HOME (/app/work/home) may not exist.
-# 2. Node heap from the container memory limit. V8 sizes its heap from the
-#    cgroup limit at start (Node 22: about half of it) and cannot change it
-#    later, so this sets --max-old-space-size to 75% of the limit in NODE_OPTIONS
-#    (exported: a node started further down, by sh -c or another wrapper,
-#    inherits it). Skipped when NODE_OPTIONS already names a heap size, when
-#    there is no limit, or with NIVARO_HEAP_FROM_CGROUP=off.
+#    Root without capabilities cannot write uid 1000's dirs: then TMPDIR and
+#    HOME move under /tmp.
 #
-# NIVARO_CGROUP_ROOT / NIVARO_MEMINFO move the files read (tests only).
+# NIVARO_CGROUP_ROOT / NIVARO_MEMINFO move the files read, and
+# `docker-entrypoint.sh --uploads-plan <dir>` (with NIVARO_APP_UID) prints the
+# uploads decision — tests only.
 set -e
 
-for d in "${TMPDIR:-}" "${HOME:-}"; do
-  [ -n "$d" ] && mkdir -p "$d" 2>/dev/null || true
-done
-# A volume created by an image that ran as root (before #2786) keeps root's
-# ownership: say so once, plainly, instead of failing on the first upload.
-if [ -d /app/uploads ] && [ ! -w /app/uploads ]; then
-  echo "nivaro: /app/uploads is not writable by uid $(id -u) — uploads will fail." \
-    "Fix once: docker run --rm -v <volume>:/app/uploads alpine chown -R 1000:1000 /app/uploads" >&2
-fi
+APP_UID="${NIVARO_APP_UID:-1000}"
+APP_GID="${NIVARO_APP_GID:-1000}"
+
+say() { echo "nivaro: $*" >&2; }
+
+# ── 1. heap ────────────────────────────────────────────────────────────────
 
 # The memory limit in bytes, or nothing: cgroup v2 first, then v1.
 cgroup_limit() {
@@ -63,20 +76,150 @@ heap_mb_for() {
   echo $((mb * 3 / 4))
 }
 
-case "${NIVARO_HEAP_FROM_CGROUP:-on}" in
-  off | false | 0 | no) ;;
-  *)
-    case " ${NODE_OPTIONS:-} " in
-      *--max-old-space-size* | *--max_old_space_size*) ;;
-      *)
-        heap=$(heap_mb_for "$(cgroup_limit)")
-        if [ -n "$heap" ]; then
-          NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$heap"
-          export NODE_OPTIONS
-        fi
-        ;;
-    esac
-    ;;
+size_heap() {
+  case "${NIVARO_HEAP_FROM_CGROUP:-on}" in
+    off | false | 0 | no) return 0 ;;
+  esac
+  case " ${NODE_OPTIONS:-} " in
+    *--max-old-space-size* | *--max_old_space_size*) return 0 ;;
+  esac
+  heap=$(heap_mb_for "$(cgroup_limit)")
+  if [ -n "$heap" ]; then
+    NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$heap"
+    export NODE_OPTIONS
+  fi
+}
+
+# ── 2. uploads ─────────────────────────────────────────────────────────────
+
+# May uid APP_UID write this path? By mode bits, as root cannot ask access()
+# (`ls -ldn`: busybox and BSD agree on it, `stat -c` they do not).
+owner_of() {
+  set -- $(ls -ldn "$1" 2>/dev/null)
+  echo "${3:-}"
+}
+app_can_write() {
+  set -- $(ls -ldn "$1" 2>/dev/null)
+  perms="${1:-----------}"
+  if [ "${3:-}" = "$APP_UID" ]; then
+    [ "$(printf '%s' "$perms" | cut -c3)" = w ]
+    return
+  fi
+  if [ "${4:-}" = "$APP_GID" ]; then
+    [ "$(printf '%s' "$perms" | cut -c6)" = w ]
+    return
+  fi
+  [ "$(printf '%s' "$perms" | cut -c9)" = w ]
+}
+
+# What to do with an uploads dir: `ok` (uid APP_UID can write it), `chown`
+# (empty, or only its top dir is someone else's: chown that one dir) or `stay`
+# (holds entries uid APP_UID cannot write: stay root). The first 50 entries
+# stand for the rest: a full scan of a big share at every start is too slow.
+uploads_plan() {
+  dir="$1"
+  [ -d "$dir" ] || { echo ok; return; }
+  first=$(ls -A "$dir" 2>/dev/null | head -n 50)
+  if [ -n "$first" ]; then
+    printf '%s\n' "$first" | while IFS= read -r e; do
+      app_can_write "$dir/$e" || { echo stay; break; }
+    done | grep -q stay && { echo stay; return; }
+  fi
+  if app_can_write "$dir"; then echo ok; else echo chown; fi
+}
+
+if [ "${1:-}" = "--uploads-plan" ]; then
+  uploads_plan "$2"
+  exit 0
+fi
+
+# Can THIS process write the dir? Tried for real: root without
+# CAP_DAC_OVERRIDE cannot write uid 1000's dirs, whatever `test -w` says.
+can_write_here() {
+  probe="$1/.nivaro-write-probe.$$"
+  if (: > "$probe") 2>/dev/null; then
+    rm -f "$probe"
+    return 0
+  fi
+  return 1
+}
+
+ensure_dirs() {
+  for d in "${TMPDIR:-}" "${HOME:-}"; do
+    [ -n "$d" ] && mkdir -p "$d" 2>/dev/null || true
+  done
+}
+
+# Root that could not step down: keep TMPDIR and HOME writable (under /tmp
+# when uid 1000's dirs refuse us) and say whether uploads can be written.
+root_dirs() {
+  ensure_dirs
+  if [ -n "${TMPDIR:-}" ] && ! can_write_here "$TMPDIR"; then
+    TMPDIR=/tmp/nivaro-tmp
+    mkdir -p "$TMPDIR"
+    export TMPDIR
+    say "TMPDIR is not writable here — using $TMPDIR"
+  fi
+  if [ -n "${HOME:-}" ] && ! can_write_here "$HOME"; then
+    HOME=/tmp/nivaro-home
+    mkdir -p "$HOME"
+    export HOME
+  fi
+  if [ -d /app/uploads ] && ! can_write_here /app/uploads; then
+    say "/app/uploads is not writable by this process (uid 0 without capabilities, owned by uid $(owner_of /app/uploads)) — uploads will fail. Give it back its capabilities, or set user: 1000:1000."
+  fi
+}
+
+size_heap
+
+uid=$(id -u)
+
+if [ "$uid" != 0 ]; then
+  # The deployment chose the user (`user:` / --user).
+  ensure_dirs
+  if [ -d /app/uploads ] && ! can_write_here /app/uploads; then
+    say "/app/uploads is not writable by uid $uid — uploads will fail." \
+      "Fix once: docker run --rm -v <volume>:/app/uploads alpine chown -R $uid /app/uploads"
+  fi
+  exec "$@"
+fi
+
+if [ "${NIVARO_RUN_AS:-}" = root ]; then
+  root_dirs
+  exec "$@"
+fi
+
+# Root, stepping down: /app/work and its dirs belong to uid 1000 (a chown -R
+# only when something in it does not: a scratch volume a root run wrote).
+ensure_dirs
+mkdir -p /app/work 2>/dev/null || true
+for d in /app/work "${TMPDIR:-}" "${HOME:-}"; do
+  [ -n "$d" ] && [ -d "$d" ] || continue
+  if [ -n "$(find "$d" -xdev ! -user "$APP_UID" -print 2>/dev/null | head -n 1)" ]; then
+    chown -R "$APP_UID:$APP_GID" "$d" 2>/dev/null || true
+  fi
+done
+
+stay=''
+case "$(uploads_plan /app/uploads)" in
+  chown) chown "$APP_UID:$APP_GID" /app/uploads 2>/dev/null || stay=chown ;;
+  stay) stay=files ;;
 esac
 
+if [ -n "$stay" ]; then
+  if [ "$stay" = files ]; then
+    why="holds files uid $APP_UID cannot write"
+  else
+    why="belongs to uid $(owner_of /app/uploads) and could not be handed to uid $APP_UID"
+  fi
+  say "/app/uploads $why — RUNNING AS ROOT so uploads keep working." \
+    "Fix once: chown -R $APP_UID:$APP_GID on that volume" \
+    "(docker run --rm -v <volume>:/app/uploads alpine chown -R $APP_UID:$APP_GID /app/uploads), or set user: $APP_UID:$APP_GID."
+elif su-exec node true 2>/dev/null; then
+  # su-exec resets HOME from /etc/passwd (/home/node, read-only): keep ours.
+  exec su-exec node env HOME="$HOME" "$@"
+else
+  say "could not switch to uid $APP_UID (no CAP_SETUID/CAP_SETGID, e.g. cap_drop: ALL) — running as root."
+fi
+root_dirs
 exec "$@"

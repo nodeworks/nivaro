@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -92,5 +92,58 @@ describe('docker-entrypoint heap from the cgroup limit', () => {
       }
     ).toString()
     expect(out.trim()).toBe('ok arg')
+  })
+})
+
+// #2786 — the step-down from root: what the entrypoint does with /app/uploads.
+// `ok` = uid 1000 can write it, `chown` = empty (or only the top dir is
+// someone else's): hand that one dir over, `stay` = holds entries uid 1000
+// cannot write: stay root (never chown -R). Decided by mode bits, run here
+// with NIVARO_APP_UID standing in for 1000.
+describe('docker-entrypoint uploads plan', () => {
+  const me = String(process.getuid?.() ?? 1000)
+  const plan = (dir: string, appUid = me) =>
+    execFileSync('sh', [SCRIPT, '--uploads-plan', dir], {
+      env: {
+        PATH: process.env.PATH ?? '/usr/bin:/bin',
+        NIVARO_APP_UID: appUid,
+        NIVARO_APP_GID: '424242'
+      }
+    })
+      .toString()
+      .trim()
+  const fresh = () => mkdtempSync(join(tmpdir(), 'uploads-'))
+
+  it('a dir the app user owns and can write is ok, with or without files', () => {
+    const d = fresh()
+    chmodSync(d, 0o755)
+    expect(plan(d)).toBe('ok')
+    writeFileSync(join(d, 'a.bin'), 'x')
+    mkdirSync(join(d, 'sub'))
+    expect(plan(d)).toBe('ok')
+  })
+
+  it('an empty dir someone else owns gets its top dir handed over', () => {
+    const d = fresh()
+    chmodSync(d, 0o755)
+    expect(plan(d, '4242')).toBe('chown')
+  })
+
+  it('files the app user cannot write keep it root (old root-owned volume)', () => {
+    const d = fresh()
+    chmodSync(d, 0o755)
+    writeFileSync(join(d, 'old.bin'), 'x')
+    expect(plan(d, '4242')).toBe('stay')
+    const ro = fresh()
+    writeFileSync(join(ro, 'locked.bin'), 'x')
+    chmodSync(join(ro, 'locked.bin'), 0o444)
+    expect(plan(ro)).toBe('stay')
+  })
+
+  it('a world-writable dir is ok for anyone; a missing one needs nothing', () => {
+    const d = fresh()
+    chmodSync(d, 0o777)
+    expect(plan(d, '4242')).toBe('ok')
+    expect(plan(join(d, 'missing'))).toBe('ok')
   })
 })

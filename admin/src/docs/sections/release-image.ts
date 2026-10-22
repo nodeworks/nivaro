@@ -28,11 +28,31 @@ export const releaseImageDocs: DocSection = {
     { type: 'h2', id: 'release-image-user', text: 'Runs as uid 1000, not root' },
     {
       type: 'p',
-      text: 'The API, Chromium and ffmpeg run as the `node` user (uid 1000, gid 1000). The image owns `/app/uploads` and `/app/work` as that user, so a new named volume mounted on them gets the right owner the first time.'
+      text: 'The API, Chromium and ffmpeg run as the `node` user (uid 1000, gid 1000). The container starts as root, like the postgres and redis images: the entrypoint hands `/app/work` to uid 1000 (and `/app/uploads` when it is empty), then switches to `node` with su-exec. tini stays process 1. The image owns `/app/uploads` and `/app/work` as uid 1000, so a new named volume gets the right owner the first time.'
+    },
+    {
+      type: 'table',
+      head: ['Situation', 'What happens'],
+      rows: [
+        ['New or empty volume on `/app/uploads`', 'Handed to uid 1000; the API runs as `node`.'],
+        [
+          'Volume with files uid 1000 cannot write (made by an image older than 0.3.5, or NFS with root_squash)',
+          'Nothing is changed and the API keeps running as root, so uploads keep working. One line in the log names the fix.'
+        ],
+        [
+          'The switch is refused (`cap_drop: ALL` removes CAP_SETUID and CAP_SETGID)',
+          "The API keeps running as root with one warning line. TMPDIR and HOME move under `/tmp` when root may not write uid 1000's folders."
+        ],
+        [
+          'The deployment sets `user:` (for example `user: 1000:1000`)',
+          'That user is used as is; the entrypoint only creates TMPDIR and HOME and warns when `/app/uploads` is not writable.'
+        ],
+        ['`NIVARO_RUN_AS=root`', 'Stays root on purpose.']
+      ]
     },
     {
       type: 'warn',
-      text: 'A volume made by an image older than 0.3.5 (which ran as root), a bind mount or an NFS share keeps its owner. Make it writable for uid 1000 once, for example `docker run --rm -v nivaro_uploads:/app/uploads alpine chown -R 1000:1000 /app/uploads`. Until then the container logs "/app/uploads is not writable by uid 1000" at start and uploads fail.'
+      text: 'To finish the move to uid 1000 on an old volume, change its owner once, for example `docker run --rm -v nivaro_uploads:/app/uploads alpine chown -R 1000:1000 /app/uploads`. The entrypoint never runs `chown -R` itself: on a large share it can take hours, and NFS with root_squash refuses it. It decides from the top folder and its first 50 entries.'
     },
     { type: 'h2', id: 'release-image-paths', text: 'What it writes (read-only root filesystem)' },
     {
