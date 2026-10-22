@@ -9,9 +9,8 @@ services:
       MP_DATABASE: /data/mailpit.db
       MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-5000}
       MP_UI_AUTH_FILE: /run/secrets/mailpit-ui-auth
-      MP_SMTP_RELAY_CONFIG: /run/secrets/mailpit-relay.yml
-      # allowed-/blocked-recipients live in the relay YAML secret only. MP_SMTP_RELAY_* env vars other than
-      # MP_SMTP_RELAY_CONFIG are ignored by Mailpit unless MP_SMTP_RELAY_HOST is set too, so never use them.
+      # Relaying is optional: this file alone only catches. Add stack.relay.yml to enable Release
+      # (docker stack deploy -c stack.yml -c stack.relay.yml). Never set MP_SMTP_RELAY_* here.
       # Optional auto-relay of one test mailbox: add MP_SMTP_RELAY_MATCHING with a narrow regex (docs/STAGING-MAIL.md).
       # Accept the API's SMTP auth (inbound side only; 1025 is never published).
       MP_SMTP_AUTH_ACCEPT_ANY: "true"
@@ -21,8 +20,6 @@ services:
     secrets:
       - source: mailpit_ui_auth
         target: mailpit-ui-auth
-      - source: mailpit_relay
-        target: mailpit-relay.yml
     # No `ports:`. SMTP is reached as mailpit:1025 on the stack's overlay network. The UI (8025) is
     # reached through the stack's private reverse proxy, never the ingress (it ignores host IPs).
     # To publish it instead, use host mode and firewall it (docs/STAGING-MAIL.md):
@@ -44,9 +41,6 @@ secrets:
   mailpit_ui_auth:
     external: true
     name: ${MAILPIT_UI_AUTH_SECRET:?name of the htpasswd Swarm secret}
-  mailpit_relay:
-    external: true
-    name: ${MAILPIT_RELAY_SECRET:?name of the relay config Swarm secret}
 
 volumes:
   mailpit-data:

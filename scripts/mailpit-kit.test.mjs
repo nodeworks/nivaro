@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs'
 
 const dir = new URL('../deploy/staging/mailpit/', import.meta.url)
 const read = (f) => readFileSync(new URL(f, dir), 'utf8')
-const compose = read('stack.yml')
+const base = read('stack.yml')
+const overlay = read('stack.relay.yml')
+const compose = base + '\n' + overlay
 const relay = read('relay.example.yml')
 const env = read('.env.example')
 const live = (s) => s.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
@@ -104,4 +106,10 @@ test('inbound auth is accepted and SMTP env is documented for the API', () => {
   assert.match(env, /SMTP_HOST=mailpit/)
   assert.match(env, /SMTP_PORT=1025/)
   assert.match(env, /SMTP_SECURE=false/)
+})
+
+test('relaying is optional: stack.yml alone has no relay config or secret', () => {
+  const b = live(base)
+  assert.doesNotMatch(b, /mailpit_relay|MP_SMTP_RELAY|MAILPIT_RELAY_SECRET/)
+  assert.match(live(overlay), /MP_SMTP_RELAY_CONFIG: \/run\/secrets\//)
 })

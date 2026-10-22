@@ -6,11 +6,11 @@ app change: the API reads `smtp_host` / `SMTP_HOST` as always
 (`api/src/services/mail.ts` `getSmtpConfig`). **Production is unchanged** and
 keeps sending through the corporate relay directly.
 
-The kit is in `deploy/staging/mailpit/` (`stack.yml`, `relay.example.yml`,
+The kit is in `deploy/staging/mailpit/` (`stack.yml`, `stack.relay.yml`, `relay.example.yml`,
 `.env.example`); the staging deploy files live in `efp-nivaro/.docker` (see
 [RELEASING.md](RELEASING.md)), so copy the kit there. Staging runs on Docker
 Swarm: merge the `mailpit` service, `secrets` and `volumes` of `stack.yml` into
-the staging stack and deploy with `docker stack deploy` (source the `.env` first,
+the staging stack and deploy with `docker stack deploy -c stack.yml -c stack.relay.yml` (`stack.relay.yml` is the optional relay overlay; see "Turn relaying off"; source the `.env` first,
 so the `${MAILPIT_*}` values are substituted). The API reaches it by service
 name on the stack overlay network: `SMTP_HOST=mailpit`, `SMTP_PORT=1025`,
 `SMTP_SECURE=false`. Port 1025 is never published. Label the node that holds
@@ -76,11 +76,16 @@ not set it). **Warning:** `allowed-recipients` does not apply to auto-relay
 Without a relay config Mailpit still catches every message; Release is simply
 unavailable.
 
-**Persistent way:** remove the `MP_SMTP_RELAY_CONFIG` line, the `mailpit_relay`
-secret entries (service and top-level) and the `MAILPIT_RELAY_SECRET` name from
-`stack.yml`, then redeploy with `docker stack deploy`. (`MAILPIT_RELAY_SECRET`
-is required by `stack.yml` while the secret entries remain, so unsetting it
-alone makes `docker stack deploy` fail.)
+**Persistent way:** relaying is an optional overlay. Deploy `stack.yml` without
+`stack.relay.yml`:
+
+```
+docker stack deploy -c stack.yml <stack>
+```
+
+Because `stack.relay.yml` is the only file that sets `MP_SMTP_RELAY_CONFIG` and
+the `mailpit_relay` secret, the redeploy removes both (and `MAILPIT_RELAY_SECRET`
+need not be set). To turn it back on, add `-c stack.relay.yml` again.
 
 **Temporary stop only:** on the running stack
 
@@ -88,9 +93,7 @@ alone makes `docker stack deploy` fail.)
 docker service update --env-rm MP_SMTP_RELAY_CONFIG --secret-rm mailpit_relay_v1 <stack>_mailpit
 ```
 
-This does not last: the next `docker stack deploy` re-applies `stack.yml`,
-which still sets `MP_SMTP_RELAY_CONFIG` and the `mailpit_relay` secret, so
-relaying comes back unless the stack file was edited as above.
+The next `docker stack deploy` that includes `stack.relay.yml` brings relaying back.
 
 Mailpit env and relay key names were checked by the operator's lead against
 Mailpit's docs and source, not against the pinned image here.
