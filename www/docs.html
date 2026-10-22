@@ -613,6 +613,7 @@
         </button>
         <div class="docs-nav-items" id="group-chaos">
           <a class="docs-nav-item" data-section="chaos" href="#chaos">Chaos engineering</a>
+          <a class="docs-nav-item" data-section="chaos-builder" href="#chaos-builder">Experiment builder, presets &amp; &quot;what if&quot;</a>
           <a class="docs-nav-item" data-section="chaos-faults-db" href="#chaos-faults-db">Database, partner, storage &amp; process faults</a>
           <a class="docs-nav-item" data-section="chaos-faults-redis" href="#chaos-faults-redis">Redis, scheduler, partition &amp; outbound faults</a>
           <a class="docs-nav-item" data-section="chaos-report" href="#chaos-report">Chaos results</a>
@@ -19204,6 +19205,47 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <h2 class="doc-h2" id="chaos-banner">The “Drill running” banner</h2>
           <p class="doc-p">While any fault is armed on this instance, every app — the admin and headless frontends built on @nivaro/react — shows a striped red strip at the top: which fault, on what, who started it, when it ends, and the note “this is a planned test, not an outage”. Administrators get a Stop link to the console. The strip shows labels and names only, never the targeted people or the parameters, and it asks the server nothing more once the gate has said chaos is refused here.</p>
           <!-- /SYNC:chaos -->
+        </div>
+
+        <div class="doc-section" id="s-chaos-builder" data-toc='[{"id":"chaos-builder","label":"Experiment builder, presets and \"what if\""},{"id":"chaos-presets","label":"Presets"},{"id":"chaos-what-if","label":"Ask “what if X died?”"}]'>
+          <!-- SYNC:chaos-builder -->
+          <h1 class="doc-h1" id="chaos-builder">Experiment builder, presets and "what if"</h1>
+          <p class="doc-p">The experiment builder is how a drill is set up on the Chaos page. It opens under a fault when you press Run on the Faults tab, and at full width on the Builder tab. It walks through eight steps and keeps a summary beside them that reads the run back in plain words.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Step</th><th>What you choose</th></tr></thead>
+            <tbody><tr><tr><td>Fault</td><td>Which fault to arm, with the claim it proves and how far it can reach.</td></tr>
+              <tr><td>Target</td><td>Everything, a route pattern (picked from the Traffic Map’s last 15 minutes or typed, such as <code class="doc-code">/api/items/*</code>), one table, one person, a share of traffic or one replica.</td></tr>
+              <tr><td>Strength</td><td>The fault’s settings, such as the added delay. Sliders stop at the caps.</td></tr>
+              <tr><td>Duration</td><td>How long it stays armed. It ends by itself when the time is up.</td></tr>
+              <tr><td>What stays true</td><td>The steady state: lines such as “server errors &lt; 1 %”, each checked every 5 seconds.</td></tr>
+              <tr><td>Abort limits</td><td>The tolerance on each line. Past it for three samples in a row (about 15 seconds) the run aborts on every replica.</td></tr>
+              <tr><td>Blast radius</td><td>An estimate from the last 24 hours of traffic of what would stop or slow down if the fault’s dependency went fully down. Faults that take no whole dependency down show “no estimate”.</td></tr>
+              <tr><td>Pre-flight</td><td>The checks that must pass before Run, re-run by the server at the start.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Run takes two clicks: Run, then a red “Confirm — arms &lt;fault&gt; on &lt;target&gt; for &lt;n&gt;s”. The confirm button goes back to Run after a few seconds if you do not press it. The server checks the target, the strength and the duration again whatever the page sends, including the per-environment caps when chaos settings set them.</p>
+          <div class="doc-note">Link straight into the builder with /chaos?tab=builder&amp;fault=&lt;fault key&gt;, &amp;preset=&lt;preset key&gt;, or &amp;spec=&lt;JSON&gt; carrying fault_key, target, params, seconds and hypothesis. The Traffic Map’s “Inject fault here” and Ask AI’s drafts use these links.</div>
+          <h2 class="doc-h2" id="chaos-presets">Presets</h2>
+          <p class="doc-p">A preset is a saved experiment: fault, target, strength, duration and what stays true, with a sentence on what it proves and the claims it tests. The Presets tab lists the shipped presets (one for each common claim, such as “Redis outage fails open”) and the ones saved on this instance. Run opens the preset in the builder to check and confirm; nothing arms from the list.</p>
+          <ul class="doc-ul">
+            <li>Save as preset in the builder stores the current draft under a name and key. Opened from a preset, it can also update that preset.</li>
+            <li>Editing a shipped preset saves your own copy under the same key. Deleting that copy brings the shipped one back; shipped presets themselves cannot be deleted.</li>
+            <li>Saved presets are configuration (<code class="doc-code">nivaro_chaos_presets</code>) and move between instances with config promotion and show up in Environment Config diffs.</li>
+            <li>A preset whose fault this instance does not have is listed as “Fault not on this instance” and cannot run.</li>
+            <li>Runs started from a preset record its key, so the run history shows where it came from.</li>
+          </ul>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>GET /api/chaos/presets</td><td>Shipped and saved presets, each with whether its fault is installed.</td></tr>
+              <tr><td>POST /api/chaos/presets</td><td>Save a preset {key, label, proves, claim_keys, spec}.</td></tr>
+              <tr><td>PATCH /api/chaos/presets/:key</td><td>Edit a preset (a shipped key becomes a saved copy).</td></tr>
+              <tr><td>DELETE /api/chaos/presets/:key</td><td>Delete a saved preset.</td></tr>
+              <tr><td>POST /api/chaos/presets/:key/run</td><td>Start a drill from the preset; the body may override target, params, seconds and hypothesis.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="chaos-what-if">Ask “what if X died?”</h2>
+          <p class="doc-p">Administrators can ask Ask AI, the Telemetry page’s Ask, or a connected MCP client what happens if a dependency dies: the database, Redis, the file share, email, the AI provider, the sign-in provider, partner APIs, sockets or one replica. The answer lists the claims about it and when each was last proven by a drill, the routes, screens and jobs the blast-radius estimate expects to fail or slow down, the last drills against it, and a draft experiment.</p>
+          <div class="doc-note doc-warn">The answer never starts a drill. Its draft is a link that opens the builder pre-filled, where a person still checks pre-flight and presses Run and Confirm.</div>
+          <p class="doc-p">The same answer is <code class="doc-code">GET /api/chaos/what-if?dependency=redis</code> (administrators). The MCP tool is <code class="doc-code">chaos_what_if</code>, offered to administrator connections only.</p>
+          <!-- /SYNC:chaos-builder -->
         </div>
 
         <div class="doc-section" id="s-chaos-faults-db" data-toc='[{"id":"chaos-faults-db","label":"Chaos: database, partner, storage and process faults"},{"id":"chaos-faults-db-list","label":"The faults"},{"id":"chaos-faults-db-record","label":"What a run records"}]'>

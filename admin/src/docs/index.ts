@@ -112,6 +112,7 @@ import {
 import { attributesGuide } from './sections/attributes.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
 import { chaosDocs } from './sections/chaos.js'
+import { chaosBuilderDocs } from './sections/chaos-builder.js'
 import { chaosCiDocs } from './sections/chaos-ci.js'
 import { chaosClientDocs } from './sections/chaos-client.js'
 import { chaosFaultsDbDocs } from './sections/chaos-faults-db.js'
@@ -953,6 +954,7 @@ export const navSections: NavGroup[] = [
     label: 'Chaos engineering',
     items: [
       chaosDocs,
+      chaosBuilderDocs,
       chaosFaultsDbDocs,
       chaosFaultsRedisDocs,
       chaosReportDocs,

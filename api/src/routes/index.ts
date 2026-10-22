@@ -55,7 +55,9 @@ import { chaosRoutes } from './chaos.js'
 import { chaosFredisRoutes } from './chaos-fredis.js'
 import { chaosGamedayRoutes } from './chaos-gameday.js'
 import { chaosOpsRoutes } from './chaos-ops.js'
+import { chaosPresetRoutes } from './chaos-presets.js'
 import { chaosReportRoutes } from './chaos-report.js'
+import { chaosWhatIfRoutes } from './chaos-what-if.js'
 import { chatPushReplyRoutes, chatRoutes } from './chat.js'
 import { chatAdminRoutes } from './chat-admin.js'
 import { chatHuddleRoutes } from './chat-huddle.js'
@@ -518,6 +520,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(chaosFredisRoutes, { prefix: '/chaos' }) // #2832 #2833 #2838 checks
   await app.register(chaosReportRoutes, { prefix: '/chaos' })
   await app.register(chaosGamedayRoutes, { prefix: '/chaos' })
+  await app.register(chaosPresetRoutes, { prefix: '/chaos/presets' }) // #2855
+  await app.register(chaosWhatIfRoutes, { prefix: '/chaos/what-if' }) // #2860
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })

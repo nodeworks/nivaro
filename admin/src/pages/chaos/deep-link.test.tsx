@@ -67,8 +67,10 @@ describe('chaos console deep link', () => {
         </MemoryRouter>
       </QueryClientProvider>
     )
-    await screen.findByText('Slow requests')
-    await waitFor(() => expect(screen.getByDisplayValue('/api/items/orders*')).toBeTruthy())
+    await screen.findAllByText('Slow requests')
+    // #2844 the builder opens on its Target step with the linked route picked.
+    await waitFor(() => expect(screen.getAllByText('/api/items/orders*').length).toBeGreaterThan(0))
+    expect(screen.getByRole('radio', { name: /Routes/ })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText('Close')).toBeTruthy()
   })
 })

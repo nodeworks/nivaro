@@ -27,6 +27,7 @@ import { registerAccessTools } from './tools/access.js'
 import { registerAccountTools } from './tools/account.js'
 import { registerAdminTools } from './tools/admin.js'
 import { registerApprovalTools } from './tools/approvals.js'
+import { registerChaosTools } from './tools/chaos.js'
 import { type ChatAccess, registerChatTools } from './tools/chat.js'
 import { registerCollectionTools } from './tools/collections.js'
 import { registerDashboardTools } from './tools/dashboards.js'
@@ -148,7 +149,8 @@ export const ADMIN_TOOL_NAMES = [
   'list_cron_jobs',
   'list_job_runs',
   'cpu_profile',
-  'explain_access'
+  'explain_access',
+  'chaos_what_if' // #2860 tools/chaos.ts — read-only, drafts an experiment, never arms
 ] as const
 
 /**
@@ -250,6 +252,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
     registerAccessTools(server, client)
     registerLayoutTools(server, client)
     registerInfrastructureTools(server, client)
+    registerChaosTools(server, client)
   }
   // After every built-in, so a built-in name always wins.
   if (options.instanceTools?.length)
