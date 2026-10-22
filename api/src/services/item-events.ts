@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import { pubsub, topics } from '../graphql/pubsub.js'
+import { chaosRedisSubscriber } from './chaos/redis-hook.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -110,6 +111,7 @@ export async function initItemEvents(redis: Redis): Promise<void> {
   try {
     const conn = redis.duplicate()
     conn.on('error', () => {})
+    chaosRedisSubscriber(conn) // #2838 — a partition drill swallows what it hears
     await conn.subscribe(CHANNEL)
     conn.on('message', (_channel, raw) => {
       try {

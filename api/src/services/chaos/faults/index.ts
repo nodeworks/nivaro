@@ -4,3 +4,7 @@
  */
 import './http.js'
 import './socket.js'
+import './redis.js'
+import './cron.js'
+import './partition.js'
+import './outbound.js'
