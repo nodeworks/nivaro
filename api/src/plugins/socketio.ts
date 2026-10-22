@@ -458,6 +458,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
   const pubClient = new Redis(app.redis.options)
   const subClient = new Redis(app.redis.options)
+  // Without listeners ioredis prints "missing 'error' handler" on every reconnect attempt
+  // while Redis is away (seen during a staging deploy); log once a minute per client.
+  for (const [name, client] of [
+    ['pub', pubClient],
+    ['sub', subClient]
+  ] as const) {
+    let lastLog = 0
+    client.on('error', (err: Error) => {
+      if (Date.now() - lastLog < 60_000) return
+      lastLog = Date.now()
+      app.log.warn({ err, client: name }, 'Socket.io Redis adapter client error')
+    })
+  }
 
   // Redis pub/sub channels ignore the db index, so two APIs on one Redis
   // (pnpm dev:db beside the dev API) would deliver each other's room events.
