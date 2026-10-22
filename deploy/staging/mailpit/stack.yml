@@ -1,7 +1,10 @@
-# Staging mail catcher, a service for the staging Docker Swarm stack.
-# Add this file as an extra `-c` file to the full staging stack deploy (see docs/STAGING-MAIL.md):
-# docker stack deploy -c <staging stack files> -c mailpit/stack.yml [-c mailpit/stack.relay.yml] <stack>. Catches every message; a real email only leaves when released by hand.
-# Variables are substituted from the shell that runs `docker stack deploy` (source .env first).
+# Staging mail catcher: its own Swarm stack, "efp_mail", beside the "efp" stack (see docs/STAGING-MAIL.md).
+# Never add it to the efp stack: .docker/deploy-swarm.sh deploys efp from docker-stack.yml alone with
+# --prune, which would remove a service added by hand, and that stack file is shared with production.
+# Deploy on the staging manager, after the efp stack exists (it owns the efp_internal network):
+#   set -a; . .docker/mailpit/.env; set +a
+#   docker stack deploy -c .docker/mailpit/stack.yml [-c .docker/mailpit/stack.relay.yml] efp_mail
+# Catches every message; a real email only leaves when released by hand.
 services:
   mailpit:
     image: axllent/mailpit:${MAILPIT_VERSION:?set MAILPIT_VERSION to a pinned tag, e.g. v1.21.8}
@@ -9,27 +12,26 @@ services:
       MP_DATABASE: /data/mailpit.db
       MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-5000}
       MP_UI_AUTH_FILE: /run/secrets/mailpit-ui-auth
-      # Relaying is optional: this file alone only catches. Add stack.relay.yml to enable Release
-      # (add -c mailpit/stack.relay.yml to the full stack deploy). Never set MP_SMTP_RELAY_* here
-      # (the optional matching var included; see docs/STAGING-MAIL.md).
+      # UI and API live under /mailpit/ so Traefik can route a path on the staging host.
+      MP_WEBROOT: mailpit
+      # Relaying is optional: this file alone only catches. Add stack.relay.yml to enable Release.
+      # The kit sets no other MP_SMTP_RELAY_* variable (see docs/STAGING-MAIL.md).
       # Accept the API's SMTP auth (inbound side only; 1025 is never published).
       MP_SMTP_AUTH_ACCEPT_ANY: "true"
       MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    networks:
+      # The API (efp_web, efp_worker) reaches SMTP as mailpit:1025 on efp's internal overlay.
+      efp_internal:
+        aliases: [mailpit]
+      # Traefik v3 (staging, [providers.swarm]) routes the UI over this overlay.
+      traefik_swarm: {}
     volumes:
       - mailpit-data:/data
     secrets:
       - source: mailpit_ui_auth
         target: mailpit-ui-auth
-    # No `ports:`. SMTP is reached as mailpit:1025 on the stack's overlay network. The UI (8025) is
-    # reached through the stack's private reverse proxy, never the ingress (it ignores host IPs).
-    # To publish it instead, use host mode and firewall it (docs/STAGING-MAIL.md).
-    # The kit test fails on any live `ports:` entry, so enabling this means editing
-    # scripts/mailpit-kit.test.mjs on purpose:
-    #   ports:
-    #     - target: 8025
-    #       published: 8025
-    #       protocol: tcp
-    #       mode: host
+    # No `ports:`. The UI (8025) is reached only through Traefik (labels below), never the ingress
+    # (it ignores host IPs). The kit test fails on any live `ports:` entry.
     deploy:
       replicas: 1
       placement:
@@ -38,6 +40,21 @@ services:
       restart_policy:
         condition: any
         delay: 5s
+      labels:
+        traefik.enable: "true"
+        traefik.http.routers.efp-mailpit.rule: Host(`${MAILPIT_UI_HOST:?the staging API hostname}`) && PathPrefix(`/mailpit`)
+        traefik.http.routers.efp-mailpit.entrypoints: websecure
+        traefik.http.routers.efp-mailpit.tls: "true"
+        # Above efp-api's priority (3 on staging), so /mailpit never falls through to the API.
+        traefik.http.routers.efp-mailpit.priority: "10"
+        traefik.http.routers.efp-mailpit.service: efp-mailpit
+        traefik.http.services.efp-mailpit.loadbalancer.server.port: "8025"
+
+networks:
+  efp_internal:
+    external: true
+  traefik_swarm:
+    external: true
 
 secrets:
   mailpit_ui_auth:

@@ -175,3 +175,40 @@ test('relaying is optional: stack.yml alone has no relay config or secret', () =
   assert.doesNotMatch(b, /mailpit_relay|MP_SMTP_RELAY|MAILPIT_RELAY_SECRET/)
   assert.match(live(overlay), /MP_SMTP_RELAY_CONFIG: \/run\/secrets\//)
 })
+
+test('mailpit is its own stack on efp_internal (alias mailpit) and traefik_swarm, never part of efp', () => {
+  const s = svc(stacks.base)
+  assert.deepEqual(s.networks.efp_internal, { aliases: ['mailpit'] })
+  assert.ok('traefik_swarm' in s.networks)
+  assert.equal(stacks.base.networks.efp_internal.external, true)
+  assert.equal(stacks.base.networks.traefik_swarm.external, true)
+  // deploy-swarm.sh deploys efp with --prune: a mailpit added to that stack would be removed
+  const docs = readFileSync(new URL('../docs/STAGING-MAIL.md', import.meta.url), 'utf8')
+  for (const t of [base, overlay, docs]) {
+    for (const m of t.matchAll(/docker stack deploy -c[^\n`]*/g)) assert.match(m[0], / efp_mail$/, m[0])
+  }
+})
+
+test('the UI is routed by Traefik on /mailpit to port 8025, above the API router', () => {
+  const s = svc(stacks.base)
+  const l = s.deploy.labels
+  assert.equal(s.environment.MP_WEBROOT, 'mailpit')
+  assert.match(l['traefik.http.routers.efp-mailpit.rule'], /^Host\(`\$\{MAILPIT_UI_HOST:\?[^}]*\}`\) && PathPrefix\(`\/mailpit`\)$/)
+  assert.equal(l['traefik.http.routers.efp-mailpit.tls'], 'true')
+  assert.ok(Number(l['traefik.http.routers.efp-mailpit.priority']) > 3)
+  assert.equal(l['traefik.http.services.efp-mailpit.loadbalancer.server.port'], '8025')
+  assert.match(env, /^MAILPIT_UI_HOST=\S+$/m)
+})
+
+test('the documented settings override pins staging SMTP to mailpit and test mode off', () => {
+  const line = env.match(/^#\s+NIVARO_SETTINGS_OVERRIDES=(.*)$/m)[1]
+  assert.deepEqual(JSON.parse(line), {
+    smtp_host: 'mailpit',
+    smtp_port: 1025,
+    smtp_secure: false,
+    smtp_user: null,
+    smtp_pass: null,
+    mail_test_mode: false
+  })
+  assert.doesNotMatch(live(env), /MAIL_TEST_MODE=/)
+})
