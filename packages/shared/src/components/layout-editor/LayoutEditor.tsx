@@ -25,6 +25,12 @@ import {
 import { activeFreeze, dayWords, type LayoutFreeze } from '../../lib/layout-resolve'
 import { useMyUserId } from '../../lib/presence-signals'
 import { cn } from '../../lib/utils'
+import {
+  LAYOUT_PRETEND_SCOPE,
+  layoutPretendDownOptions,
+  PretendDownSection,
+  usePretendDownScope
+} from '../PretendDown'
 import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
@@ -727,6 +733,9 @@ export function LayoutEditor({
     () => (bundle ? bundleToActiveLayout(bundle, parent).active : null),
     [bundle, parent]
   )
+  // #2858 — what this form depends on, for Preview → Pretend down (cleared when the editor closes).
+  usePretendDownScope(LAYOUT_PRETEND_SCOPE)
+  const pretendOptions = useMemo(() => layoutPretendDownOptions(canvasLayout), [canvasLayout])
   const lint = useLayoutLint(collection, bundle, parent)
   // History compare / Review changes on the canvas (#2591); who changed each section (#2611).
   const { data: savedBundle } = useLayoutBundle(currentId)
@@ -1275,13 +1284,16 @@ export function LayoutEditor({
           ) : null
         }
         previewExtra={
-          <PreviewModes
-            collection={collection}
-            value={preview}
-            onChange={setPreview}
-            layout={canvasLayout}
-            fields={fields}
-          />
+          <>
+            <PreviewModes
+              collection={collection}
+              value={preview}
+              onChange={setPreview}
+              layout={canvasLayout}
+              fields={fields}
+            />
+            <PretendDownSection scope={LAYOUT_PRETEND_SCOPE} options={pretendOptions} />
+          </>
         }
         problems={
           bundle && (

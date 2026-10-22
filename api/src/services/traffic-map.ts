@@ -602,7 +602,23 @@ function noStore(): boolean {
   return currentStoreId() === NO_STORE
 }
 
+/** Cheap listeners on every noted request (the chaos steady-state ring, #2828). Sync, never throw. */
+const requestTaps = new Set<(ev: TrafficRequestEvent) => void>()
+export function onRequestNoted(fn: (ev: TrafficRequestEvent) => void): () => void {
+  requestTaps.add(fn)
+  return () => {
+    requestTaps.delete(fn)
+  }
+}
+
 export function noteRequest(ev: TrafficRequestEvent & { errorCode?: string | null }): void {
+  for (const fn of requestTaps) {
+    try {
+      fn(ev)
+    } catch {
+      /* a tap never affects the request */
+    }
+  }
   const sid = storeForRequest(ev.req)
   if (sid === NO_STORE) return
   const t0 = process.hrtime.bigint()

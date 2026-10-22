@@ -1,0 +1,68 @@
+name: Chaos CI
+
+# Resilience tests (#2842): the API behind toxiproxy (latency, resets, timeouts,
+# outages on the MSSQL, Redis and API links). Runs only when a pull request
+# touches the boot path, the database layer, plugins or realtime.
+on:
+  pull_request:
+    paths:
+      - 'api/src/db/**'
+      - 'api/src/plugins/**'
+      - 'api/src/server.ts'
+      - 'api/src/index.ts'
+      - 'api/src/services/boot-dependencies.ts'
+      - 'api/src/services/boot-phases.ts'
+      - 'packages/shared/src/**/realtime*'
+      - 'api/src/plugins/socketio.ts'
+      - 'deploy/chaos-ci/**'
+      - 'scripts/chaos/**'
+      - '.github/workflows/chaos-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: chaos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  toxiproxy:
+    name: Toxiproxy suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the API image
+        run: docker compose -f deploy/chaos-ci/docker-compose.yml build api
+
+      - name: Start MSSQL, Redis and toxiproxy
+        run: docker compose -f deploy/chaos-ci/docker-compose.yml up -d --wait mssql redis toxiproxy
+
+      - name: Socket client for the runner
+        run: npm install --no-save --no-package-lock --prefix scripts/chaos socket.io-client@4.8.3
+
+      - name: Run the suite
+        run: node scripts/chaos/toxiproxy-suite.mjs --mode compose --out reports/chaos/toxiproxy.json
+
+      - name: API log on failure
+        if: failure()
+        run: docker compose -f deploy/chaos-ci/docker-compose.yml logs --no-color api mssql | tail -300
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaos-ci-result
+          path: reports/chaos/
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f deploy/chaos-ci/docker-compose.yml down -v

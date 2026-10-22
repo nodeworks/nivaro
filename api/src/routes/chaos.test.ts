@@ -74,6 +74,25 @@ describe('chaos routes', () => {
     await app.close()
   })
 
+  it('answers the pre-flight checklist', async () => {
+    const app = await build()
+    const r = await app.inject({ method: 'GET', url: '/preflight' })
+    expect(r.statusCode).toBe(200)
+    expect(typeof r.json().data.ok).toBe('boolean')
+    expect(r.json().data.checks.map((c: { key: string }) => c.key)).toEqual(
+      expect.arrayContaining([
+        'gate',
+        'deploy',
+        'maintenance',
+        'incident',
+        'working_hours',
+        'health',
+        'armed'
+      ])
+    )
+    await app.close()
+  })
+
   it('starts a drill, arms the fault, lists it, stops it and closes the run', async () => {
     const app = await build()
     const start = await app.inject({

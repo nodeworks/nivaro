@@ -5,7 +5,7 @@ import { config } from '../config.js'
 import { attachConfigEpoch } from './config-epoch.js'
 import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
-import { isMigrationLockedError } from './migration-lock.js'
+import { migrateFreeingStaleLock } from './migration-lock.js'
 import { inBackgroundPool } from './pool-context.js'
 import { getTenantDb } from './tenant-context.js'
 
@@ -350,27 +350,11 @@ export async function runMigrationsSafely(): Promise<[number, string[]]> {
  * (hasTable / IF NOT EXISTS), so a second runner re-applies nothing.
  */
 async function migrateLatestFreeingStaleLock(): Promise<[number, string[]]> {
-  const started = Date.now()
-  const budget = config.MIGRATION_LOCK_STALE_MS
-  for (;;) {
-    try {
-      return (await db.migrate.latest()) as [number, string[]]
-    } catch (err) {
-      if (!isMigrationLockedError(err)) throw err
-      const waited = Date.now() - started
-      if (waited >= budget) {
-        console.warn(
-          `Migration table locked for ${Math.round(waited / 1000)}s with no migration finishing — a prior process died mid-migration. Freeing the stale lock and running pending migrations.`
-        )
-        await db.migrate.forceFreeMigrationsLock()
-        return (await db.migrate.latest()) as [number, string[]]
-      }
-      console.warn(
-        `Migration table is locked — another instance may be migrating; retrying in 5s (${Math.round((budget - waited) / 1000)}s before the lock is treated as stale)`
-      )
-      await new Promise((r) => setTimeout(r, 5000))
-    }
-  }
+  return (await migrateFreeingStaleLock({
+    latest: () => db.migrate.latest(),
+    forceFree: () => db.migrate.forceFreeMigrationsLock(),
+    budgetMs: config.MIGRATION_LOCK_STALE_MS
+  })) as [number, string[]]
 }
 
 export type Database = typeof db

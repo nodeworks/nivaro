@@ -46,3 +46,6 @@ nivaro-cloud-plan.html
 release-chain.config.json
 .release-runs/
 .runbook-runs/
+
+# Chaos CI result files and error gallery (#2857)
+/reports/

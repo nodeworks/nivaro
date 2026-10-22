@@ -1,0 +1,5 @@
+[
+  { "name": "mssql", "listen": "0.0.0.0:1433", "upstream": "mssql:1433", "enabled": true },
+  { "name": "redis", "listen": "0.0.0.0:6379", "upstream": "redis:6379", "enabled": true },
+  { "name": "api", "listen": "0.0.0.0:3055", "upstream": "api:3055", "enabled": true }
+]

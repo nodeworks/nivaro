@@ -13,6 +13,7 @@ import {
   stopRun
 } from './api'
 import { Timeline } from './RunDetail'
+import { SamplerCharts } from './SamplerCharts'
 
 /**
  * The live cockpit (#2845) while a run is armed: countdown ring, Stop (this run) and Stop all,
@@ -100,6 +101,18 @@ export function RunCockpit({ run, events }: { run: ChaosRun; events: ChaosRunEve
           </button>
         </div>
       </div>
+
+      <section>
+        <h3 className='mb-2 text-[12.5px] font-semibold text-slate-900 dark:text-foreground'>
+          What should stay true
+          {typeof run.meta.node === 'string' && (
+            <span className='ml-2 font-mono text-[10.5px] font-normal text-slate-400 dark:text-muted-foreground/70'>
+              sampled on {run.meta.node}
+            </span>
+          )}
+        </h3>
+        <SamplerCharts run={run} events={events} />
+      </section>
 
       <Timeline events={events} compact />
     </div>
