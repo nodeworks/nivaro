@@ -24,6 +24,7 @@ import {
   type ParamValue,
   paramRange,
   SAMPLE_EVERY_S,
+  shareCapNarrowsAll,
   TARGET_LABEL
 } from './model'
 import { ChoiceCombobox, RouteCombobox, TableCombobox } from './pickers'
@@ -263,6 +264,9 @@ export function TargetStep({ fault, draft, set, caps, nodes }: StepProps & { nod
     enabled: t.kind === 'user'
   })
   const setTarget = (next: FaultTarget) => set((d) => ({ ...d, target: next }))
+  const narrowsAll = shareCapNarrowsAll(fault, caps)
+  const replicaCap =
+    caps?.max_replicas != null && nodes.length > caps.max_replicas && t.kind !== 'node'
   return (
     <div>
       <StepHeading title='Who it reaches'>
@@ -275,6 +279,7 @@ export function TargetStep({ fault, draft, set, caps, nodes }: StepProps & { nod
       >
         {fault.targets.map((k) => {
           const on = t.kind === k
+          const capped = k === 'all' && narrowsAll
           return (
             // biome-ignore lint/a11y/useSemanticElements: a segmented control of buttons, same pattern as SecurityCenter
             <button
@@ -282,9 +287,10 @@ export function TargetStep({ fault, draft, set, caps, nodes }: StepProps & { nod
               type='button'
               role='radio'
               aria-checked={on}
+              disabled={capped}
               onClick={() => !on && setTarget(emptyTarget(k, nodes))}
               className={cn(
-                'rounded-md border px-3 py-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                'rounded-md border px-3 py-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-50',
                 on
                   ? 'border-nvr-cyan bg-nvr-cyan/5 dark:bg-nvr-cyan/10'
                   : 'border-slate-200 bg-white hover:border-slate-300 dark:border-border dark:bg-card dark:hover:border-slate-600'
@@ -294,13 +300,21 @@ export function TargetStep({ fault, draft, set, caps, nodes }: StepProps & { nod
                 {TARGET_LABEL[k]}
               </span>
               <span className='mt-0.5 block text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
-                {TARGET_HINT[k]}
+                {capped
+                  ? `This environment caps a run at ${maxShare(caps)}% of traffic.`
+                  : TARGET_HINT[k]}
               </span>
             </button>
           )
         })}
       </div>
 
+      {replicaCap && (
+        <p className={cn(hintCls, 'mt-3 max-w-[70ch]')}>
+          This environment lets one run reach {caps?.max_replicas} of {nodes.length} replicas: the
+          server narrows a wider run to the replica that starts it, or refuses it.
+        </p>
+      )}
       <div className='mt-4 max-w-md'>
         {t.kind === 'route' && (
           <div className='space-y-1'>

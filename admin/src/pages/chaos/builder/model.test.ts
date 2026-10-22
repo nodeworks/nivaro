@@ -61,14 +61,22 @@ describe('experiment builder model (#2844)', () => {
     const d = initialDraft(slow, [{ params: { delay_ms: 99_999 }, seconds: 9999 }])
     expect(d.params.delay_ms).toBe(5000)
     expect(d.seconds).toBe(300)
-    const capped = clampDraft(
-      { ...d, target: { kind: 'share', share_pct: 80 } },
-      slow,
-      { max_latency_ms: 2000, max_seconds: 120, max_share_pct: 10 }
-    )
+    const capped = clampDraft({ ...d, target: { kind: 'share', share_pct: 80 } }, slow, {
+      max_latency_ms: 2000,
+      max_seconds: 120,
+      max_share_pct: 10
+    })
     expect(capped.params.delay_ms).toBe(2000)
     expect(capped.seconds).toBe(120)
     expect(capped.target).toEqual({ kind: 'share', share_pct: 10 })
+    // like the server's applyCaps: a run on everything becomes the capped share
+    expect(clampDraft(initialDraft(slow, []), slow, { max_share_pct: 20 }).target).toEqual({
+      kind: 'share',
+      share_pct: 20
+    })
+    expect(clampDraft(initialDraft(slow, []), slow, { max_share_pct: null }).target).toEqual({
+      kind: 'all'
+    })
     expect(faultAllowed(slow, { allowed_faults: ['mail_down'] })).toBe(false)
     expect(faultAllowed(slow, { allowed_faults: '*' })).toBe(true)
     expect(faultAllowed(slow, null)).toBe(true)
@@ -77,7 +85,9 @@ describe('experiment builder model (#2844)', () => {
   it('names what is missing per step', () => {
     const d = initialDraft(slow, [{ target: { kind: 'route', pattern: '' } }])
     expect(draftIssues(d, slow, null).target).toMatch(/route/)
-    expect(draftIssues({ ...d, target: { kind: 'route', pattern: '/api/x/*' } }, slow, null)).toEqual({})
+    expect(
+      draftIssues({ ...d, target: { kind: 'route', pattern: '/api/x/*' } }, slow, null)
+    ).toEqual({})
     expect(
       draftIssues({ ...d, hypothesis: [{ sampler: '', op: '<', limit: 1 }] }, slow, null).hypothesis
     ).toBeTruthy()
@@ -94,7 +104,9 @@ describe('experiment builder model (#2844)', () => {
     expect(mapNodeFor(slow, {})).toBeNull()
     expect(mapNodeFor({ ...slow, key: 'redis_pause' }, {})).toBe('redis')
     expect(mapNodeFor({ ...slow, key: 'db_latency', area: 'db' }, {})).toBe('db')
-    expect(mapNodeFor({ ...slow, key: 'partner_500', area: 'partner' }, { api_id: 7 })).toBe('ext:7')
+    expect(mapNodeFor({ ...slow, key: 'partner_500', area: 'partner' }, { api_id: 7 })).toBe(
+      'ext:7'
+    )
     expect(mapNodeFor({ ...slow, key: 'ai_timeout', area: 'outbound' }, {})).toBe('ai')
   })
 

@@ -91,13 +91,12 @@ async function optional<T>(load: () => Promise<T>): Promise<T | null> {
   }
 }
 
-/** The environment's caps (#2862) when the server has them. */
+/** The environment's effective caps (#2862, GET /chaos/settings) when the server has them. */
 export const fetchCaps = () =>
   optional(() =>
-    api.get('/chaos/ops/caps').then((r) => {
-      const d = r.data.data as { caps?: ChaosCaps } | ChaosCaps
-      return ((d as { caps?: ChaosCaps }).caps ?? d) as ChaosCaps
-    })
+    api
+      .get('/chaos/settings')
+      .then((r) => (r.data.data?.effective_caps ?? null) as ChaosCaps | null)
   )
 
 /** Samplers the hypothesis can name (#2828) when the server lists them. */

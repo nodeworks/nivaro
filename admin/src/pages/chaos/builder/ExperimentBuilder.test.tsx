@@ -41,8 +41,8 @@ function answers(url: string) {
       ok: preflightOk,
       checks: [{ key: 'deploy', label: 'No deploy running', ok: preflightOk, why: 'deploying' }]
     })
-  if (url === '/chaos/ops/caps')
-    return caps ? ok({ caps }) : Promise.reject({ response: { status: 404 } })
+  if (url === '/chaos/settings')
+    return caps ? ok({ effective_caps: caps }) : Promise.reject({ response: { status: 404 } })
   if (url === '/chaos/samplers') return Promise.reject({ response: { status: 404 } })
   return ok([])
 }
@@ -122,6 +122,8 @@ describe('ExperimentBuilder (#2844)', () => {
   it('says "no estimate" for a fault that takes no dependency down', async () => {
     mount()
     fireEvent.click(await step(/^Blast radius/))
-    expect(await screen.findByText(/No estimate: this fault does not take a whole dependency down/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/No estimate: this fault does not take a whole dependency down/)
+    ).toBeInTheDocument()
   })
 })

@@ -23,13 +23,22 @@ export interface DraftSpec {
   note: string
 }
 
-/** Per-environment caps (#2862). Every field optional: missing = the catalog's own cap. */
+/**
+ * Per-environment caps (#2862, `effective_caps` of GET /chaos/settings). null or missing = no
+ * cap beyond the catalog's. The server applies the same caps (services/chaos/caps.ts applyCaps)
+ * whatever the builder sends; the builder only keeps its sliders inside them.
+ */
 export interface ChaosCaps {
   allowed_faults?: string[] | '*'
-  max_share_pct?: number
-  max_latency_ms?: number
-  max_seconds?: number
-  max_replicas?: number
+  max_share_pct?: number | null
+  max_latency_ms?: number | null
+  max_seconds?: number | null
+  max_replicas?: number | null
+}
+
+/** Whether the share cap turns a run on everything into a share (the server does the same). */
+export function shareCapNarrowsAll(fault: CatalogFault, caps: ChaosCaps | null): boolean {
+  return caps?.max_share_pct != null && caps.max_share_pct < 100 && fault.targets.includes('share')
 }
 
 export const TARGET_LABEL: Record<FaultTarget['kind'], string> = {
@@ -72,8 +81,6 @@ export function paramRange(spec: ParamSpec, caps: ChaosCaps | null): [number, nu
   let max = spec.max
   if (caps?.max_latency_ms != null && isLatencyParam(spec))
     max = Math.max(spec.min, Math.min(max, caps.max_latency_ms))
-  if (caps?.max_share_pct != null && spec.unit === '%')
-    max = Math.max(spec.min, Math.min(max, caps.max_share_pct))
   return [spec.min, max]
 }
 
@@ -172,10 +179,12 @@ export function clampDraft(d: DraftSpec, fault: CatalogFault, caps: ChaosCaps | 
     const n = Number(params[k])
     params[k] = Number.isFinite(n) ? clampN(n, lo, hi) : s.default
   }
-  const target =
+  const target: FaultTarget =
     d.target.kind === 'share'
       ? { ...d.target, share_pct: clampN(Number(d.target.share_pct) || 1, 1, maxShare(caps)) }
-      : d.target
+      : d.target.kind === 'all' && shareCapNarrowsAll(fault, caps)
+        ? { kind: 'share', share_pct: maxShare(caps) }
+        : d.target
   return {
     ...d,
     target,
