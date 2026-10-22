@@ -130,6 +130,8 @@ export async function openBlindWindow(input: {
   id: string
   kind: BlindWindow['kind']
   lead: string
+  /** More people who see the window's faults (a game day's named lead, besides its planner). */
+  insiders?: string[]
   until: number
   run_ids?: string[]
 }): Promise<BlindWindow> {
@@ -137,7 +139,7 @@ export async function openBlindWindow(input: {
     id: lc(input.id),
     kind: input.kind,
     lead: lc(input.lead),
-    insiders: [lc(input.lead)],
+    insiders: [...new Set([input.lead, ...(input.insiders ?? [])].map(lc))],
     run_ids: (input.run_ids ?? []).map(lc),
     opened_at: Date.now(),
     until: input.until,
