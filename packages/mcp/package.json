@@ -1,6 +1,6 @@
 {
   "name": "@nivaro/mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Model Context Protocol server for Nivaro CMS — lets Claude Code, Claude Desktop and Cursor read and write an instance through the typed SDK under an API key.",
   "type": "module",
   "main": "./dist/index.js",
