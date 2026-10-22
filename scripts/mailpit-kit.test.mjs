@@ -56,6 +56,7 @@ test('SMTP 1025 and the UI 8025 are never published through the ingress', () => 
   const c = live(compose)
   assert.doesNotMatch(c, /^\s*ports:/m, 'no active ports: key (host mode is a commented option)')
   assert.doesNotMatch(c, /0\.0\.0\.0/)
+  assert.doesNotMatch(c, /network_mode:/, 'host networking would expose 1025 and 8025 on every interface')
   // a host-mode publish, if someone enables it, must be 8025 only and mode: host
   const commented = compose.match(/^#\s+ports:[\s\S]*?mode: host/m)?.[0] ?? ''
   assert.doesNotMatch(commented, /1025/)
@@ -92,6 +93,7 @@ test('image is axllent/mailpit with a pinned tag, never latest', () => {
   assert.ok(m, 'axllent/mailpit image required')
   assert.notEqual(m[1], 'latest')
   assert.doesNotMatch(m[1], /latest/)
+  assert.match(m[1], /^(v\d+\.\d+\.\d+|\$\{MAILPIT_VERSION:\?)/, 'a literal semver tag or a required MAILPIT_VERSION')
   assert.match(env, /^MAILPIT_VERSION=/m)
 })
 
