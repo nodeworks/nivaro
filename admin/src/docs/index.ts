@@ -14,6 +14,7 @@ export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
 export * from './sections/chaos.js'
+export * from './sections/chaos-faults-db.js'
 export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
 export * from './sections/config-review.js'
@@ -106,6 +107,7 @@ import { bulkActionsGuide } from './sections/bulk-actions.js'
 import { chaosDocs } from './sections/chaos.js'
 import { chaosCiDocs } from './sections/chaos-ci.js'
 import { chaosClientDocs } from './sections/chaos-client.js'
+import { chaosFaultsDbDocs } from './sections/chaos-faults-db.js'
 import { chaosTrafficMapDocs } from './sections/chaos-map.js'
 import {
   collabApprovals,
@@ -938,7 +940,7 @@ export const navSections: NavGroup[] = [
   {
     id: 'chaos',
     label: 'Chaos engineering',
-    items: [chaosDocs, chaosClientDocs, chaosTrafficMapDocs, chaosCiDocs]
+    items: [chaosDocs, chaosFaultsDbDocs, chaosClientDocs, chaosTrafficMapDocs, chaosCiDocs]
   },
   {
     id: 'data-model',

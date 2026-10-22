@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { storageChaos } from './chaos/faults/storage.js'
 import { cronTicksEnabled } from './cron-ticks.js'
 import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { deleteFile, getFile, type StoredFile, uploadFileFromPath } from './files.js'
@@ -265,6 +266,9 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
   }
   let encoderNote = ''
   try {
+    // #1773 — the render scratch directory is a storage write a chaos fault can fail or slow.
+    const hit = storageChaos('write')
+    if (hit) await hit
     await mkdir(dir, { recursive: true })
     const edits: VideoEdits = normalizeEdits(
       JSON.parse(String(v.edits)),

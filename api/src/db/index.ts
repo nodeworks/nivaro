@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import knex from 'knex'
 import { config } from '../config.js'
+import { attachChaosSeam } from './chaos-seam.js'
 import { attachConfigEpoch } from './config-epoch.js'
 import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
@@ -147,6 +148,8 @@ function activeStaticDb(): typeof _staticDb {
   return _backgroundDb && inBackgroundPool() ? _backgroundDb : _staticDb
 }
 
+// #1773 — the database fault point (chaos drills); first, so cached config reads skip it.
+if (!cloudMode) attachChaosSeam(_staticDb)
 // Configuration reads (relations, fields, rules, layouts, column lists) are
 // answered from a short-lived cache at the driver seam — see the module.
 // (It patches the driver prototype, so the background pool is covered too.)
