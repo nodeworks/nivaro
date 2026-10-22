@@ -5,6 +5,7 @@
 import {
   type KeyboardEvent,
   type MouseEvent,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -60,6 +61,7 @@ import {
   sideBadgeFor,
   sideBadges
 } from './registry/canvasLayers'
+import { NodeMenu, type NodeMenuState, nodeMenuEntries } from './registry/nodeMenu'
 import { makeColorParser, type RGBA } from './render/color'
 import { GlMapRenderer, webgl2Supported } from './render/glRenderer'
 import { buildGlScene, particleRects } from './render/glScene'
@@ -620,6 +622,8 @@ export function MapCanvas({
   const particles = useRef<Particle[]>([])
   const spawned = useRef(new WeakSet<TrafficEventWire>())
   const [hover, setHover] = useState<Selection | null>(null)
+  const [nodeMenu, setNodeMenu] = useState<NodeMenuState | null>(null)
+  const closeNodeMenu = useCallback(() => setNodeMenu(null), [])
   const [width, setWidth] = useState(0)
   const [themeV, setThemeV] = useState(0)
   const [reduced, setReduced] = useState(
@@ -1874,6 +1878,14 @@ export function MapCanvas({
               }}
               onMouseLeave={() => setHover(null)}
               onClick={(e) => pick(pointer(e))}
+              onContextMenu={(e) => {
+                // #2851 node actions (registry/nodeMenu); the browser menu everywhere else
+                const h = pointer(e)
+                const entries = h ? nodeMenuEntries(h) : []
+                if (!h || !entries.length) return
+                e.preventDefault()
+                setNodeMenu({ sel: h, x: e.clientX, y: e.clientY, entries })
+              }}
             />
           </div>
         </div>
@@ -1893,6 +1905,7 @@ export function MapCanvas({
           </div>
         )}
         <span ref={monoRef} aria-hidden='true' className='hidden font-mono' />
+        {nodeMenu && <NodeMenu state={nodeMenu} onClose={closeNodeMenu} onSelect={onSelect} />}
         <LegendGuide ready={data.loaded} />
       </div>
       <div className='flex flex-wrap justify-between gap-2.5 border-t border-[var(--tm-line-2)] px-3.5 py-1.5 text-[11px] text-[var(--tm-muted)]'>

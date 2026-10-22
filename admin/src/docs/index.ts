@@ -102,6 +102,7 @@ import {
 } from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
+import { chaosTrafficMapDocs } from './sections/chaos-map.js'
 import {
   collabApprovals,
   collabChat,
@@ -888,6 +889,7 @@ export const navSections: NavGroup[] = [
       obsTrafficMap,
       obsTrafficMapInvestigate,
       obsTrafficMapAct,
+      chaosTrafficMapDocs,
       obsTrafficMapLenses,
       obsTrafficMapPlatform,
       realtimeTransport,
