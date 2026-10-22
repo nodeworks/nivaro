@@ -43,6 +43,9 @@ import {
  *   POST /run               the #333 alias {fault, seconds, delay_ms}
  */
 
+/** `metrics` / `meta` on a record-only run are stored as sent — never more than this. */
+const RECORD_JSON_MAX = 16 * 1024
+
 function fail(reply: FastifyReply, err: unknown) {
   if (err instanceof ChaosError)
     return reply
@@ -288,6 +291,18 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
       if (refused) return refused
       const b = req.body ?? {}
       try {
+        // Stored whole, so capped; the game-day id is trusted like on POST /runs.
+        for (const [name, v] of [
+          ['metrics', b.metrics],
+          ['meta', b.meta]
+        ] as const) {
+          if (v != null && JSON.stringify(v).length > RECORD_JSON_MAX)
+            throw new ChaosError(`${name} is too large (max ${RECORD_JSON_MAX / 1024} KB)`)
+        }
+        const day = await trustedGamedayId(b.gameday_id, {
+          id: req.user?.id ?? null,
+          isAdmin: !!req.isAdmin
+        })
         const run = await recordRun(
           {
             kind: b.kind as 'ci' | 'gameday',
@@ -297,8 +312,8 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
             metrics: b.metrics ?? null,
             started_at: b.started_at ?? null,
             ended_at: b.ended_at ?? null,
-            meta: b.meta ?? null,
-            gameday_id: b.gameday_id ?? null
+            meta: day.note ? { ...(b.meta ?? {}), gameday_note: day.note } : (b.meta ?? null),
+            gameday_id: day.gameday_id
           },
           who(req)
         )

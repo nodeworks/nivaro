@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { getApp } from '../io-holder.js'
 import type { FaultParams, FaultTarget, HypothesisRule } from './catalog.js'
+import { CHAOS_KEY_PREFIX } from './registry.js'
 
 /**
  * The chaos run store (#2827): every drill, monkey pick, game-day step and CI run as a row with
@@ -68,8 +69,8 @@ export type RunStoreMode = 'db' | 'redis' | 'memory'
 
 const RUNS_TABLE = 'nivaro_chaos_runs'
 const EVENTS_TABLE = 'nivaro_chaos_run_events'
-const RUN_KEY = 'nvr:chaos:run:'
-const RUNS_LIST = 'nvr:chaos:runs'
+const RUN_KEY = `${CHAOS_KEY_PREFIX}run:`
+const RUNS_LIST = `${CHAOS_KEY_PREFIX}runs`
 const RUN_TTL_S = 7 * 86_400
 const RUNS_KEEP = 200
 const EVENTS_KEEP = 3000

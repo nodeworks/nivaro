@@ -27,6 +27,7 @@ import {
   validatePlan
 } from './gameday-plan.js'
 import { assertChaosAllowed, ChaosError } from './gate.js'
+import { CHAOS_KEY_PREFIX } from './registry.js'
 import {
   type ChaosRun,
   type ChaosRunEvent,
@@ -452,7 +453,7 @@ async function claim(key: string): Promise<boolean> {
   const redis = (getApp() as { redis?: { set(...a: unknown[]): Promise<unknown> } } | null)?.redis
   if (redis) {
     try {
-      const ok = await redis.set(`nvr:chaos:gd:${key}`, '1', 'EX', CLAIM_TTL_S, 'NX')
+      const ok = await redis.set(`${CHAOS_KEY_PREFIX}gd:${key}`, '1', 'EX', CLAIM_TTL_S, 'NX')
       return ok === 'OK'
     } catch {
       /* fall through: this process decides */

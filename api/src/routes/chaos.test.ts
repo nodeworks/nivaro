@@ -240,6 +240,32 @@ describe('chaos routes', () => {
     await app.close()
   })
 
+  it('record-only runs cap metrics/meta and trust gameday_id like POST /runs', async () => {
+    const app = await build()
+    const big = await app.inject({
+      method: 'POST',
+      url: '/runs/record',
+      payload: { kind: 'ci', label: 'x', verdict: 'held', metrics: { blob: 'y'.repeat(17 * 1024) } }
+    })
+    expect(big.statusCode).toBe(400)
+    expect(big.json().error).toMatch(/metrics is too large/)
+    const r = await app.inject({
+      method: 'POST',
+      url: '/runs/record',
+      payload: {
+        kind: 'gameday',
+        label: 'step',
+        verdict: 'held',
+        gameday_id: 'gd-missing',
+        meta: { a: 1 }
+      }
+    })
+    expect(r.statusCode).toBe(201)
+    expect(r.json().data.gameday_id).toBeNull()
+    expect(r.json().data.meta.gameday_note).toMatch(/ignored/)
+    await app.close()
+  })
+
   it('keeps the #333 alias working and names the faults on a bad one', async () => {
     const app = await build()
     const r = await app.inject({

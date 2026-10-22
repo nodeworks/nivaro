@@ -1,4 +1,4 @@
-import { CHAOS_CHANNEL, chaosNumber, chaosPoint } from './registry.js'
+import { CHAOS_CHANNEL, CHAOS_KEY_PREFIX, chaosNumber, chaosPoint } from './registry.js'
 
 /**
  * The Redis fault seam (#2832, #2838): one `sendCommand` wrapper on the app's command clients
@@ -97,7 +97,7 @@ export function refusedAsReadonly(name: string, args: unknown[] | undefined): bo
         ? keyText(args?.[2])
         : ''
       : keyText(args?.[0])
-  return !first.startsWith('nvr:chaos:')
+  return !first.startsWith(CHAOS_KEY_PREFIX)
 }
 
 /** Is this a publish the partition drops (every channel but the chaos channel)? Pure. */

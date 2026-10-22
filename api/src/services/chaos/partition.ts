@@ -10,7 +10,7 @@ import {
   partitionDeliveries
 } from './partition-point.js'
 import { redisChaosStats } from './redis-hook.js'
-import { CHAOS_NODE } from './registry.js'
+import { CHAOS_KEY_PREFIX, CHAOS_NODE } from './registry.js'
 
 /**
  * The partition probe (#2838): proof that a replica cut off from Redis pub/sub loses nothing
@@ -23,7 +23,7 @@ import { CHAOS_NODE } from './registry.js'
  */
 
 const EXPECTED_TTL_S = 3600
-const expectedKey = (id: string) => `nvr:chaos:partition:${id}`
+const expectedKey = (id: string) => `${CHAOS_KEY_PREFIX}partition:${id}`
 const expectedHere = new Map<string, { at: number; seqs: number[]; done: boolean }>()
 
 export interface ProbeStart {

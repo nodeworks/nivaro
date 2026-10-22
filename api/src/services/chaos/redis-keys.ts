@@ -1,4 +1,4 @@
-import { shareBucket } from './registry.js'
+import { CHAOS_KEY_PREFIX, shareBucket } from './registry.js'
 
 /**
  * Key-loss and eviction drills on the app's own Redis database (#2832). Only this instance's
@@ -36,7 +36,7 @@ export const KEY_FAMILIES: KeyFamily[] = [
   { key: 'nvr', label: 'Every nvr:* key', prefix: 'nvr:' }
 ]
 
-const PROTECTED_PREFIX = 'nvr:chaos:'
+const PROTECTED_PREFIX = CHAOS_KEY_PREFIX
 
 export function keyFamily(key: string): KeyFamily | null {
   return KEY_FAMILIES.find((f) => f.key === key) ?? null
