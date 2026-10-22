@@ -117,11 +117,12 @@ export function NumberBox({
   )
 }
 
-/** Same chips as the Faults tab: low is quiet, medium a pale amber, high a solid orange. */
+/** Same chips as the Faults tab: low is quiet, medium a pale amber, high an orange tint with a ring
+ *  (badges stay tints; hue + ring keep high apart from medium without shouting at rest). */
 export const DANGER_CHIP: Record<string, string> = {
   low: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground',
   medium: 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300',
-  high: 'bg-orange-700 text-white dark:bg-orange-400 dark:text-orange-950'
+  high: 'bg-orange-100 text-orange-900 ring-1 ring-inset ring-orange-300 dark:bg-orange-950/60 dark:text-orange-200 dark:ring-orange-800'
 }
 
 const DANGER_LABEL: Record<string, string> = {

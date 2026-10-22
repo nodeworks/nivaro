@@ -22,7 +22,7 @@ import { StartForm } from './StartForm'
  * drill row links to the Realtime page's own drill form instead of repeating it.
  */
 
-// Shared with the Monkey and Settings checklists. High is solid orange, not red: red on this page
+// Shared with the Monkey and Settings checklists. High is an orange tint, not red: red on this page
 // means "armed now" and Stop all.
 const DANGER: Record<CatalogFault['danger'], { label: string; cls: string }> = {
   low: { label: 'Low blast', cls: DANGER_CHIP.low },
