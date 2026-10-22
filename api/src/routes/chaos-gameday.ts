@@ -39,7 +39,7 @@ import {
 } from '../services/chaos/gameday-plan.js'
 import { ChaosError, chaosRefusal } from '../services/chaos/gate.js'
 import { requireChaosOperator } from '../services/chaos/operator.js'
-import { getRun, listRunEvents, listRuns } from '../services/chaos/runs.js'
+import { getRun, listRunEvents, listRuns, updateRun } from '../services/chaos/runs.js'
 
 /**
  * Game days (#2816, #2852), scribe marks (#2853) and blind mode (#2854) under /api/chaos.
@@ -369,6 +369,8 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
           by: { id: me.id, name: me.name }
         })
         await bindBlindRun(windowId, out.run.id)
+        // Read by drill-alert routing (#2847): drill tags go to the lead + operators only.
+        await updateRun(out.run.id, { meta: { ...out.run.meta, blind: true, lead: me.id } })
         await logActivity({
           action: 'chaos-run',
           user: req.user?.id,
@@ -393,6 +395,8 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
         }
       }
       await revealBlindWindow(w.id)
+      const run = await getRun(String(req.params.id))
+      if (run) await updateRun(run.id, { meta: { ...run.meta, blind: false } })
       return { data: { revealed: true } }
     })
   })

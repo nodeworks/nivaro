@@ -205,6 +205,20 @@ async function addMembers(room: string | null | undefined, ids: string[]): Promi
 
 // ─── Planning ────────────────────────────────────────────────────────────────
 
+/**
+ * Denormalised for the other chaos areas (drill-alert routing #2847, phone Stop push #2861,
+ * POST /runs gameday_id trust): who takes part, in which role, and whether the day is blind.
+ * `meta.plan` stays the source of truth.
+ */
+export function rolesMeta(plan: GamedayPlan) {
+  return {
+    lead: plan.lead,
+    participants: participantsOf(plan),
+    roles: { lead: plan.lead, scribe: plan.scribe, responders: plan.responders },
+    blind: plan.blind
+  }
+}
+
 function faultExists(key: string): boolean {
   return getFault(key) != null
 }
@@ -233,7 +247,13 @@ export async function createGameday(raw: unknown, by: Actor, app?: FastifyInstan
     label: plan.title,
     started_by: by.id,
     ends_at: new Date(start + plan.duration_min * 60_000).toISOString(),
-    meta: { plan, warnings, started_by_name: by.name, reminders_sent } as Record<string, unknown>
+    meta: {
+      plan,
+      warnings,
+      started_by_name: by.name,
+      reminders_sent,
+      ...rolesMeta(plan)
+    } as Record<string, unknown>
   })
   if (plan.channel) {
     const room = await createChannel(run, plan)
@@ -277,7 +297,7 @@ export async function updateGameday(
     {
       label: plan.title,
       ends_at: new Date(start + plan.duration_min * 60_000).toISOString(),
-      meta: { ...run.meta, plan, warnings, reminders_sent }
+      meta: { ...run.meta, plan, warnings, reminders_sent, ...rolesMeta(plan) }
     },
     { ifStatus: ['planned'] }
   )
@@ -698,8 +718,9 @@ export async function revealGameday(id: string, by: Actor, app?: FastifyInstance
   const w = await revealBlindWindow(run.id)
   if (!w) throw new ChaosError('This game day is not blind', 409, 'CHAOS_NOT_BLIND')
   const next =
-    (await updateRun(run.id, { meta: { ...run.meta, revealed_at: new Date().toISOString() } })) ??
-    run
+    (await updateRun(run.id, {
+      meta: { ...run.meta, revealed_at: new Date().toISOString(), blind: false }
+    })) ?? run
   await addRunEvent(run.id, 'step', { phase: 'revealed' }, by.id)
   await botLine(
     appRef(app),

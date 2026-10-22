@@ -39,11 +39,11 @@ export interface GamedayPlan {
   injects: GamedayInject[]
 }
 
-export type NoteMark = 'noticed' | 'cause' | 'fixed' | 'declared'
+export type NoteMark = 'noticed' | 'found_cause' | 'fixed' | 'declared'
 
 export const MARK_LABEL: Record<NoteMark, string> = {
   noticed: 'Noticed',
-  cause: 'Found cause',
+  found_cause: 'Found cause',
   fixed: 'Fixed',
   declared: 'Declared incident'
 }

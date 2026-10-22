@@ -241,12 +241,12 @@ export function dueReminders(
 
 // ─── Scribe marks (#2853) ─────────────────────────────────────────────────────
 
-export const NOTE_MARKS = ['noticed', 'cause', 'fixed', 'declared'] as const
+export const NOTE_MARKS = ['noticed', 'found_cause', 'fixed', 'declared'] as const
 export type NoteMark = (typeof NOTE_MARKS)[number]
 
 export const MARK_LABEL: Record<NoteMark, string> = {
   noticed: 'Noticed',
-  cause: 'Found cause',
+  found_cause: 'Found cause',
   fixed: 'Fixed',
   declared: 'Declared incident'
 }
@@ -296,7 +296,7 @@ export function notePoints(events: TimelineEvent[]): NotePoints {
   return {
     first_fault_at: new Date(t0).toISOString(),
     ttd_s: after(['noticed', 'declared']),
-    ttc_s: after(['cause']),
+    ttc_s: after(['found_cause']),
     ttf_s: after(['fixed']),
     notes
   }
@@ -404,7 +404,7 @@ export function stagingTemplate(startsAt: string, lead: string): Record<string, 
         at_s: 1500,
         kind: 'fault',
         label: 'Block the file share',
-        fault: { fault_key: TEMPLATE_KEYS.share, seconds: 180 }
+        fault: { fault_key: TEMPLATE_KEYS.share, params: { mode: 'read_only' }, seconds: 180 }
       },
       {
         id: 'db-slow',
@@ -422,4 +422,4 @@ export function stagingTemplate(startsAt: string, lead: string): Record<string, 
  * Fault keys of the other chaos areas the template names (c-fdb storage + database faults).
  * Unknown keys are plan warnings and skipped injects, never errors.
  */
-export const TEMPLATE_KEYS = { share: 'storage_readonly', db_slow: 'db_latency' }
+export const TEMPLATE_KEYS = { share: 'storage_faults', db_slow: 'db_latency' }

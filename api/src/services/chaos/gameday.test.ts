@@ -112,6 +112,12 @@ describe('game days (#2852)', () => {
     const { run } = await createGameday(plan(), op)
     expect(run.kind).toBe('gameday')
     expect(run.status).toBe('planned')
+    expect(run.meta).toMatchObject({
+      lead: LEAD,
+      participants: [LEAD, SCRIBE, RESP],
+      roles: { lead: LEAD, scribe: SCRIBE, responders: [RESP] },
+      blind: false
+    })
     expect(await steps(run.id)).toEqual([{ phase: 'planned' }])
     expect(notified.map((n) => n.user).sort()).toEqual([LEAD, SCRIBE, RESP].sort())
     expect(notified.every((n) => n.category === 'chaos')).toBe(true)
@@ -248,11 +254,11 @@ describe('scribe marks (#2853) and declare (#2854)', () => {
     const childId = String((await steps(run.id)).find((d) => d.inject_id === 'a')?.child_run_id)
     const ev = await addNote(
       childId,
-      { mark: 'cause', text: 'redis' },
+      { mark: 'found_cause', text: 'redis' },
       { id: SCRIBE, name: 'S', operator: false }
     )
     expect(ev?.run_id).toBe(run.id)
-    expect(ev?.data).toMatchObject({ mark: 'cause', text: 'redis', on_run: childId })
+    expect(ev?.data).toMatchObject({ mark: 'found_cause', text: 'redis', on_run: childId })
     await expect(
       addNote(run.id, { mark: 'noticed' }, { id: OUTSIDER, name: 'O', operator: false })
     ).rejects.toMatchObject({ code: 'CHAOS_NOT_PARTICIPANT' })

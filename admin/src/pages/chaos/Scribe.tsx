@@ -28,7 +28,7 @@ export function useRunNotes(runId: string | null | undefined, live = false) {
 
 const PRESETS: Array<{ mark: Exclude<NoteMark, 'declared'>; icon: typeof Eye }> = [
   { mark: 'noticed', icon: Eye },
-  { mark: 'cause', icon: Search },
+  { mark: 'found_cause', icon: Search },
   { mark: 'fixed', icon: Wrench }
 ]
 
@@ -103,7 +103,7 @@ export function ScribeBar({ runId, className }: { runId: string; className?: str
 
 const MARK_TONE: Record<NoteMark, string> = {
   noticed: 'bg-sky-500',
-  cause: 'bg-amber-500',
+  found_cause: 'bg-amber-500',
   fixed: 'bg-emerald-500',
   declared: 'bg-red-500'
 }

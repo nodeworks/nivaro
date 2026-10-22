@@ -97,7 +97,7 @@ describe('validatePlan (#2852)', () => {
     expect(plan.injects.filter((i) => i.kind === 'fault').map((i) => i.fault?.fault_key)).toEqual([
       'kill_web_task',
       'redis_pause',
-      'storage_readonly',
+      'storage_faults',
       'db_latency'
     ])
   })
@@ -150,7 +150,7 @@ describe('notePoints (#2853)', () => {
       ev('2026-10-21T14:01:00Z', 'step', { outcome: 'refused' }),
       ev('2026-10-21T14:02:00Z', 'step', { outcome: 'armed' }),
       ev('2026-10-21T14:03:30Z', 'note', { mark: 'declared' }),
-      ev('2026-10-21T14:05:00Z', 'note', { mark: 'cause' }),
+      ev('2026-10-21T14:05:00Z', 'note', { mark: 'found_cause' }),
       ev('2026-10-21T14:09:00Z', 'note', { mark: 'fixed' }),
       ev('2026-10-21T14:10:00Z', 'note', { text: 'all good' })
     ])
