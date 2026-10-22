@@ -1,10 +1,134 @@
 {
-  "generated_at": "2026-10-22T18:32:34.043Z",
+  "generated_at": "2026-10-22T21:44:29.971Z",
   "releases": [
+    {
+      "version": "0.3.5",
+      "tag": "v0.3.5",
+      "date": "2026-10-22T17:44:12-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "config",
+              "text": "restore points before migrations and deploys, one-click config restore (#2803)",
+              "hash": "b5627704a"
+            },
+            {
+              "section": "Added",
+              "scope": "recovery",
+              "text": "nightly restore drill and RPO/RTO panel (#2801, #2802)",
+              "hash": "77fe7bc19"
+            },
+            {
+              "section": "Added",
+              "scope": "render",
+              "text": "render peer for the slim image (RENDER_URL / RENDER_TOKEN)",
+              "hash": "d5f19c527"
+            },
+            {
+              "section": "Added",
+              "scope": "infra",
+              "text": "stack drift detector (#2798)",
+              "hash": "2808c162b"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "design pass on config restore points",
+              "hash": "3a0360cd4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "design pass on stack drift and disaster recovery",
+              "hash": "f6e1203d1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "config",
+              "text": "close the security/DB review findings on config restore (#2803)",
+              "hash": "cf945bced"
+            },
+            {
+              "section": "Fixed",
+              "scope": "render",
+              "text": "security review of the release image and render peer",
+              "hash": "455053087"
+            },
+            {
+              "section": "Fixed",
+              "scope": "recovery",
+              "text": "ownership claims, safe cleanup and review fixes (#2801, #2802)",
+              "hash": "2581530bf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "infra",
+              "text": "harden the stack drift detector after review",
+              "hash": "c245efb42"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync the infrastructure, release image and recovery sections",
+              "hash": "fc44be73f"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "release image section (uid 1000, tini, heap, slim + render peer, cosign)",
+              "hash": "14b3858fb"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "release",
+              "text": "pin the slim image digest and harden the staging Mailpit kit",
+              "hash": "d0f592d35"
+            },
+            {
+              "section": "Other",
+              "scope": "image",
+              "text": "/app/work is 1777 so uid 1000 can use a root-owned tmpfs",
+              "hash": "8e2114149"
+            },
+            {
+              "section": "Other",
+              "scope": "image",
+              "text": "step down from root with su-exec instead of USER node",
+              "hash": "7beded16c"
+            },
+            {
+              "section": "Other",
+              "scope": "image",
+              "text": "non-root, tini, healthcheck, heap sizing, slim target, signing",
+              "hash": "8fb6fe845"
+            }
+          ]
+        }
+      ],
+      "count": 16
+    },
     {
       "version": "0.3.4",
       "tag": "v0.3.4",
-      "date": "2026-10-22T14:32:21-04:00",
+      "date": "2026-10-22T14:32:34-04:00",
       "sections": [
         {
           "label": "Added",
