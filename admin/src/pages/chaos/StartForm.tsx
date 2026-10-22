@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Play, Plus, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { cn } from '@/lib/utils'
@@ -41,6 +41,19 @@ const TARGET_LABEL: Record<FaultTarget['kind'], string> = {
 
 const OPS: HypothesisRule['op'][] = ['<', '<=', '>', '>=']
 
+/** `route:/api/items/orders*` → {kind, value}; null when the fault cannot take that kind. */
+export function linkedTarget(
+  raw: string | null,
+  fault: Pick<CatalogFault, 'targets'>
+): { kind: FaultTarget['kind']; value: string } | null {
+  if (!raw) return null
+  const cut = raw.indexOf(':')
+  const kind = (cut < 0 ? raw : raw.slice(0, cut)) as FaultTarget['kind']
+  const value = cut < 0 ? '' : raw.slice(cut + 1, cut + 301)
+  if (!fault.targets.includes(kind) || (kind !== 'all' && !value)) return null
+  return { kind, value }
+}
+
 export function StartForm({ fault, onClose }: { fault: CatalogFault; onClose: () => void }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -48,8 +61,12 @@ export function StartForm({ fault, onClose }: { fault: CatalogFault; onClose: ()
     queryKey: chaosKeys.status,
     queryFn: fetchStatus
   })
-  const [kind, setKind] = useState<FaultTarget['kind']>(fault.targets[0] ?? 'all')
-  const [targetValue, setTargetValue] = useState('')
+  // #2851 ?fault=<key>&target=<kind>[:<value>] (Traffic Map "Inject fault here") aims the form.
+  const [search] = useSearchParams()
+  const linked =
+    search.get('fault') === fault.key ? linkedTarget(search.get('target'), fault) : null
+  const [kind, setKind] = useState<FaultTarget['kind']>(linked?.kind ?? fault.targets[0] ?? 'all')
+  const [targetValue, setTargetValue] = useState(linked?.value ?? '')
   const [params, setParams] = useState<Record<string, string | boolean>>(() =>
     Object.fromEntries(
       Object.entries(fault.params).map(([k, s]) => [

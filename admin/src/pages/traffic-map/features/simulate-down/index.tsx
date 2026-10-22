@@ -25,6 +25,7 @@ import { downLabel } from '../../nodeKinds'
 import { canvasLayers, requestCanvasRepaint } from '../../registry/canvasLayers'
 import { inspectorActions } from '../../registry/inspectorActions'
 import { inspectorPanels } from '../../registry/inspectorPanels'
+import { nodeMenuProviders } from '../../registry/nodeMenu'
 import { register } from '../../registry/registry'
 import { toolbarItems } from '../../registry/toolbarItems'
 import type { Selection } from '../../types'
@@ -763,6 +764,27 @@ register(toolbarItems, {
   slot: 'actions',
   order: 15,
   Component: inPage(SimulateControl)
+})
+register(nodeMenuProviders, {
+  id: 'simulate-down',
+  order: 10,
+  entries: (sel) => {
+    if (sel.kind !== 'down' || !isDependency(sel.id)) return []
+    const sim = simulation.get()
+    if (sim?.node === sel.id)
+      return [{ key: 'simulate-down', label: 'Stop simulating', run: () => stopSimulation() }]
+    return [
+      {
+        key: 'simulate-down',
+        label: 'Simulate down',
+        hint: 'Shade what would break, from recorded traffic',
+        run: ({ select }) => {
+          startSimulation(sel.id, sim?.window ?? '24h')
+          select(sel)
+        }
+      }
+    ]
+  }
 })
 register(inspectorActions, {
   id: 'simulate-down',
