@@ -81,6 +81,12 @@ describe('event readers', () => {
     expect(baselineBand({ s: { a: 5 } }, 'a')).toEqual({ lo: 5, hi: 5, mean: 5 })
     expect(baselineBand(null, 'a', [2, 4])).toEqual({ lo: 2, hi: 4, mean: 3 })
     expect(baselineBand(null, 'a')).toBeNull()
+    // The steady-state watcher's own shape: one figure per sampler.
+    expect(baselineBand({ samplers: { a: { value: 200 } } }, 'a')).toEqual({
+      lo: 200,
+      hi: 200,
+      mean: 200
+    })
   })
 
   it('judges inside the band with slack', () => {
@@ -88,6 +94,9 @@ describe('event readers', () => {
     expect(insideBand(0.25, band)).toBe(true) // slack 0.1 (10% of scale 1)
     expect(insideBand(0.5, band)).toBe(false)
     expect(insideBand(0.5, band, 0.5)).toBe(true)
+    const point = { lo: 200, hi: 200, mean: 200 }
+    expect(insideBand(245, point)).toBe(true) // 25% slack around a single figure
+    expect(insideBand(260, point)).toBe(false)
   })
 })
 

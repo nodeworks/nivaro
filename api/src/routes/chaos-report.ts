@@ -6,6 +6,7 @@ import { claimStatuses, claimsReadiness } from '../services/chaos/claims.js'
 import { chaosRefusal } from '../services/chaos/gate.js'
 import { buildMatrix } from '../services/chaos/matrix.js'
 import { postmortemMarkdown } from '../services/chaos/postmortem.js'
+import { wireRecoveryWatch } from '../services/chaos/recovery.js'
 import { buildRunReport } from '../services/chaos/report.js'
 import { errorsSeen, figuresFor, listPartners, userNames } from '../services/chaos/report-data.js'
 import { getRun, listRunEvents, listRuns } from '../services/chaos/runs.js'
@@ -68,6 +69,10 @@ async function loadReport(id: string) {
 
 export async function chaosReportRoutes(app: FastifyInstance): Promise<void> {
   registerClaimsReadiness()
+  // Time to recover needs samples after the fault ends (services/chaos/recovery.ts).
+  app.addHook('onReady', async () => {
+    if (!chaosRefusal()) wireRecoveryWatch()
+  })
   app.addHook('preHandler', requireAdmin)
 
   app.get<{ Params: { id: string } }>('/runs/:id/report', async (req, reply) => {

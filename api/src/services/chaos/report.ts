@@ -10,9 +10,11 @@ import type { ChaosRun, ChaosRunEvent, Verdict } from './runs.js'
  *
  * Event shapes are read tolerantly: the steady-state watcher (#2828) writes
  * `sample {s: {key: value}, breach?: {sampler, value, op, limit}}` (flat breach fields are
- * read too), the scribe (#2853) writes `note {text?, mark?}` with marks noticed / found_cause /
- * fixed / declared (blind mode's Declare incident, #2854), alert tagging (#2847) writes
- * `alert {label|title|rule, source?, severity?}`, readiness snapshots (#1773) write
+ * read too) and stores the baseline as `{samplers: {key: {value}}}`; the recovery watch
+ * (recovery.ts) adds `sample {s, phase: 'after'}` once the fault ends; the scribe (#2853)
+ * writes `note {text?, mark?}` with marks noticed / found_cause / fixed / declared (blind
+ * mode's Declare incident, #2854); alert tagging (#2847) writes
+ * `alert {label|title|rule, source?, severity?}`; readiness snapshots (#1773) write
  * `readiness {status|verdict, score?, failing?}`.
  */
 
@@ -211,7 +213,7 @@ export function baselineBand(
     if (n != null) return { lo: n, hi: n, mean: n }
     if (typeof raw !== 'object') continue
     const o = raw as Record<string, unknown>
-    const mean = num(o.mean) ?? num(o.avg) ?? num(o.median) ?? num(o.p50)
+    const mean = num(o.mean) ?? num(o.avg) ?? num(o.median) ?? num(o.p50) ?? num(o.value)
     const sd = num(o.sd) ?? num(o.stdev) ?? num(o.stddev)
     let lo = num(o.min) ?? num(o.lo) ?? num(o.p5)
     let hi = num(o.max) ?? num(o.hi) ?? num(o.p95)
@@ -231,10 +233,14 @@ export function baselineBand(
   return null
 }
 
-/** Inside the band, with slack: the rule's tolerance or 10% of the band's scale, whichever is larger. */
+/**
+ * Inside the band, with slack: the rule's tolerance or a share of the band's scale, whichever is
+ * larger — 10% for a range, 25% for a single-figure baseline (the watcher's `{value}` shape),
+ * where ordinary noise alone would otherwise read as "not recovered".
+ */
 export function insideBand(v: number, band: Band, tolerance = 0): boolean {
   const scale = Math.max(Math.abs(band.hi), Math.abs(band.lo), 1)
-  const slack = Math.max(tolerance, 0.1 * scale)
+  const slack = Math.max(tolerance, (band.hi === band.lo ? 0.25 : 0.1) * scale)
   return v >= band.lo - slack && v <= band.hi + slack
 }
 
