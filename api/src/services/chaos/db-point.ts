@@ -21,8 +21,17 @@ export interface DbChaos {
   error: Error | null
 }
 
-/** The drill's own bookkeeping never fails or slows: run store, run events, job runs. */
-const OWN_TABLES = /nivaro_chaos_|nivaro_job_runs/i
+/**
+ * Never failed or slowed: the drill's own bookkeeping (run store, run events, job runs) and the
+ * reads that authenticate a person (users, roles, API keys, the chaos settings row) — a DB
+ * drill must never stop an operator signing in to press Stop (F4).
+ */
+const OWN_TABLES =
+  /nivaro_chaos_|nivaro_job_runs|\bnivaro_(?:users|roles|api_keys|settings_overrides)\b/i
+
+/** The Stop paths run untouched end to end, so a DB drill can always be stopped (F4). */
+const STOP_ROUTES =
+  /^\/api\/chaos\/(?:stop-all(?:\/push)?|runs\/[^/]+\/stop|gamedays\/[^/]+\/end)\/?$/
 
 const TABLE_RE =
   /\b(?:from|update|into)\s+((?:\[[^\]]+\]|"[^"]+"|`[^`]+`|[\w#@$]+)(?:\.(?:\[[^\]]+\]|"[^"]+"|`[^`]+`|[\w#@$]+))*)/i
@@ -106,6 +115,8 @@ export function dbChaos(sql: string): DbChaos | null {
   const failing = pick('db.error', 'db_errors', background)
   if (!slow && !failing) return null
   if (OWN_TABLES.test(sql)) return null
+  const route = ctx.route
+  if (route && STOP_ROUTES.test(route)) return null
   let delay = slow ? Number(slow.params.delay_ms) || 0 : 0
   let error: Error | null = null
   if (failing) {

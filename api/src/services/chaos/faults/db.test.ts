@@ -179,3 +179,37 @@ describe('driver seam', () => {
     expect(Client.prototype._query).toBe(patched)
   })
 })
+
+describe('Stop paths and sign-in reads stay untouched (F4)', () => {
+  it('never fails or slows auth tables', async () => {
+    await armFault({ fault_key: 'db_errors', params: { rate_pct: 100, wait_ms: 15000 } })
+    await armFault({ fault_key: 'db_latency', params: { delay_ms: 2000 } })
+    for (const sql of [
+      'select top (@p0) * from [nivaro_users] where [id] = @p1',
+      'select * from [nivaro_roles] where [id] = @p0',
+      'select * from [nivaro_api_keys] where [token_hash] = @p0',
+      'select [id], [data] from [nivaro_settings_overrides] where [instance_key] = @p0'
+    ]) {
+      expect(dbChaos(sql)).toBeNull()
+    }
+    // A look-alike name is not exempt.
+    expect(dbChaos('select * from [nivaro_users_archive]')).not.toBeNull()
+  })
+
+  it('never touches a statement run for a Stop route', async () => {
+    await armFault({ fault_key: 'db_errors', params: { rate_pct: 100 } })
+    for (const url of [
+      '/api/chaos/stop-all',
+      '/api/chaos/stop-all/push',
+      '/api/chaos/runs/3f1c/stop',
+      '/api/chaos/gamedays/9/end'
+    ]) {
+      const hit = await runInTrace(url, null, async () => dbChaos('select * from [orders]'))
+      expect(hit).toBeNull()
+    }
+    const other = await runInTrace('/api/chaos/runs', null, async () =>
+      dbChaos('select * from [orders]')
+    )
+    expect(other?.error).toBeTruthy()
+  })
+})
