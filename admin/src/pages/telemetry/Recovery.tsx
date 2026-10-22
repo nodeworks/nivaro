@@ -204,41 +204,46 @@ function History({ runs }: { runs: RecoveryStatus['drill']['history'] }) {
   const shown = [...runs].reverse().slice(-14)
   if (!shown.length) return null
   return (
-    <ul
-      className='m-0 flex list-none flex-wrap items-center gap-1 p-0'
-      aria-label='Recent restore drills'
-    >
-      {shown.map((h) => {
-        const running = h.status === 'running'
-        const tone: Tone = running
-          ? 'off'
-          : h.verdict
-            ? VERDICT_TONE[h.verdict]
-            : h.status === 'error'
-              ? 'bad'
-              : 'off'
-        const what = running
-          ? 'running'
-          : h.verdict
-            ? VERDICT_LABEL[h.verdict].toLowerCase()
-            : h.status
-        return (
-          <li
-            key={h.id}
-            data-tip={`${formatDateTime(h.started_at)} · ${what}${h.restore_ms != null ? ` · restore ${fmtSpan(h.restore_ms / 1000)}` : ''}`}
-            className={cn(
-              'inline-block h-3 w-3 rounded-sm',
-              TONE[tone].dot,
-              running && 'animate-pulse'
-            )}
-          >
-            <span className='sr-only'>
-              {formatDateTime(h.started_at)} {what}
-            </span>
-          </li>
-        )
-      })}
-    </ul>
+    <div className='flex items-center gap-1.5'>
+      <span className='text-[11.5px] text-muted-foreground' aria-hidden='true'>
+        Recent drills
+      </span>
+      <ul
+        className='m-0 flex list-none flex-wrap items-center gap-1 p-0'
+        aria-label='Recent restore drills'
+      >
+        {shown.map((h) => {
+          const running = h.status === 'running'
+          const tone: Tone = running
+            ? 'off'
+            : h.verdict
+              ? VERDICT_TONE[h.verdict]
+              : h.status === 'error'
+                ? 'bad'
+                : 'off'
+          const what = running
+            ? 'running'
+            : h.verdict
+              ? VERDICT_LABEL[h.verdict].toLowerCase()
+              : h.status
+          return (
+            <li
+              key={h.id}
+              data-tip={`${formatDateTime(h.started_at)} · ${what}${h.restore_ms != null ? ` · restore ${fmtSpan(h.restore_ms / 1000)}` : ''}`}
+              className={cn(
+                'inline-block h-3 w-3 rounded-sm',
+                TONE[tone].dot,
+                running && 'animate-pulse'
+              )}
+            >
+              <span className='sr-only'>
+                {formatDateTime(h.started_at)} {what}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 
@@ -556,7 +561,15 @@ export function RecoveryPanel() {
 
   const s = q.data
   if (q.isLoading)
-    return <Skeleton className='h-[320px] rounded-lg' role='status' aria-label='Loading recovery' />
+    return (
+      <Card title='Disaster recovery' icon={LifeBuoy}>
+        <div className='space-y-3' role='status' aria-label='Loading recovery'>
+          {['db', 'uploads', 'drill', 'rto'].map((k) => (
+            <Skeleton key={k} className='h-10 w-full' />
+          ))}
+        </div>
+      </Card>
+    )
   if (!s)
     return (
       <Card title='Disaster recovery' icon={LifeBuoy}>
@@ -581,7 +594,7 @@ export function RecoveryPanel() {
     <Card
       title='Disaster recovery'
       icon={LifeBuoy}
-      aside={`${bad ? `${bad} red · ` : warn ? `${warn} amber · ` : ''}RPO ${fmtSpan(s.targets.rpo_minutes * 60)} · RTO ${fmtSpan(s.targets.rto_minutes * 60)}`}
+      aside={`${bad ? `${bad} ${bad === 1 ? 'problem' : 'problems'} · ` : warn ? `${warn} ${warn === 1 ? 'needs' : 'need'} attention · ` : ''}RPO ${fmtSpan(s.targets.rpo_minutes * 60)} · RTO ${fmtSpan(s.targets.rto_minutes * 60)}`}
       asideTone={s.tone === 'ok' ? 'off' : s.tone}
     >
       <ul className='m-0 -mt-2 list-none divide-y divide-slate-100 p-0 dark:divide-border'>

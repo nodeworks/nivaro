@@ -220,7 +220,10 @@ export function DbHealthPage() {
     queryFn: () =>
       api
         .get<{
-          data?: { tone?: string; rows?: Array<{ tone: string; label: string; reason: string }> }
+          data?: {
+            tone?: string
+            rows?: Array<{ tone: string; label: string; value: string; reason: string }>
+          }
         }>('/telemetry/recovery')
         .then((r) => r.data.data),
     staleTime: 60_000
@@ -440,10 +443,18 @@ export function DbHealthPage() {
           <Link
             to='/telemetry'
             data-recovery-strip-link
-            className='mb-5 block rounded border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15'
+            data-tip={recoveryBad.reason}
+            className='mb-5 flex items-baseline gap-1.5 rounded border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15'
           >
-            Disaster recovery · {recoveryBad.label}: {recoveryBad.reason}{' '}
-            <span aria-hidden='true'>→</span> Telemetry
+            <span className='min-w-0 font-medium'>
+              Disaster recovery · {recoveryBad.label}: {recoveryBad.value}
+            </span>
+            <span className='hidden min-w-0 flex-1 truncate opacity-80 sm:block'>
+              {recoveryBad.reason}
+            </span>
+            <span className='ml-auto shrink-0'>
+              <span aria-hidden='true'>→</span> Telemetry
+            </span>
           </Link>
         )}
         <div className='grid gap-5 xl:grid-cols-2'>

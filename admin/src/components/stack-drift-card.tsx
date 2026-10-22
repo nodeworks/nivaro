@@ -94,7 +94,7 @@ function Chip({
     <span
       data-tip={tip}
       className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium',
+        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium',
         CHIP[tone]
       )}
     >
@@ -310,8 +310,8 @@ export function StackDriftCard() {
 
       {d && d.stacks.length === 0 && (
         <p className='mt-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
-          No baseline yet — the deploy script stores one after every converged deploy (POST
-          /api/infrastructure/drift/baseline).
+          No baseline yet. The deploy script saves one after each deploy that finishes cleanly (POST
+          /api/infrastructure/drift/baseline), and the next check compares against it.
         </p>
       )}
 
@@ -349,25 +349,19 @@ export function StackDriftCard() {
                     {s.stack}
                   </span>
                   <StackState s={s} sourceNote={d.source_note} />
-                  <span className='ml-auto flex flex-wrap items-center gap-x-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-                    <span>
-                      Baseline
-                      {s.baseline.version ? ` ${s.baseline.version}` : ''}
-                      {s.baseline.release ? ` · release ${s.baseline.release}` : ''} ·{' '}
-                      {s.baseline.services} service{s.baseline.services === 1 ? '' : 's'} ·{' '}
-                      {s.baseline.source === 'live' ? 'read live' : 'from the deploy'}{' '}
-                      {formatRelative(s.baseline.at)}
-                    </span>
-                    <span className='text-slate-300 dark:text-slate-600'>·</span>
-                    <span>
-                      {s.last_check.at
+                  <span className='ml-auto min-w-0 text-[11.5px] text-slate-500 [overflow-wrap:anywhere] dark:text-muted-foreground'>
+                    {[
+                      `Baseline${s.baseline.version ? ` ${s.baseline.version}` : ''}${s.baseline.release ? ` (${s.baseline.release})` : ''}`,
+                      `${s.baseline.services} service${s.baseline.services === 1 ? '' : 's'}`,
+                      `${s.baseline.source === 'live' ? 'taken from the running stack' : 'saved by the deploy'} ${formatRelative(s.baseline.at)}`,
+                      s.last_check.at
                         ? `checked ${formatRelative(s.last_check.at)}${s.live_host ? ` on ${s.live_host}` : ''}`
-                        : (s.live_note ?? 'not checked yet')}
-                    </span>
+                        : (s.live_note ?? 'not checked yet')
+                    ].join(' · ')}
                   </span>
                 </button>
                 {s.last_check.status === 'error' && s.last_check.message && (
-                  <p className='px-9 pb-2 text-[12px] text-rose-600 dark:text-rose-400'>
+                  <p className='px-9 pb-2 text-[12px] text-red-700 [overflow-wrap:anywhere] dark:text-red-400'>
                     {s.last_check.message}
                   </p>
                 )}
@@ -391,24 +385,38 @@ export function StackDriftSummary() {
   const d = q.data
   if (!d?.available || d.cloud || d.stacks.length === 0) return null
   const drifted = d.stacks.filter((s) => s.drift > 0)
+  // Never "matches" for a stack nothing was compared against (no live source, failed or no check).
+  const unchecked = d.stacks.filter(
+    (s) => !s.live_host || s.last_check.status === 'error' || !s.last_check.at
+  ).length
   return (
     <div
       data-drift-summary
       className='mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] dark:border-border dark:bg-card'
     >
       <span className='font-medium text-slate-800 dark:text-slate-200'>Stack drift</span>
-      {drifted.length === 0 ? (
+      {!d.docker_configured ? (
         <span className='text-slate-500 dark:text-muted-foreground'>
-          {d.docker_configured
-            ? 'every stack with a baseline matches its last deploy'
-            : 'no live source — set DOCKER_HOSTS'}
+          Nothing compared: no live source. Set DOCKER_HOSTS.
+        </span>
+      ) : drifted.length === 0 && unchecked === 0 ? (
+        <span className='text-slate-500 dark:text-muted-foreground'>
+          Every stack matches its last deploy.
         </span>
       ) : (
-        drifted.map((s) => (
-          <Chip key={`${s.stack}:${s.environment}`} tone='warn'>
-            {s.environment} · {s.stack}: {s.drift} field{s.drift === 1 ? '' : 's'}
-          </Chip>
-        ))
+        <>
+          {drifted.map((s) => (
+            <Chip key={`${s.stack}:${s.environment}`} tone='warn'>
+              {s.environment} · {s.stack}: {s.drift} drifted field{s.drift === 1 ? '' : 's'}
+            </Chip>
+          ))}
+          {drifted.length === 0 && (
+            <span className='text-slate-500 dark:text-muted-foreground'>
+              No drift in the stacks checked.
+            </span>
+          )}
+          {unchecked > 0 && <Chip tone='muted'>{unchecked} not compared</Chip>}
+        </>
       )}
       <Link
         to={
