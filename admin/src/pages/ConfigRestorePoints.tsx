@@ -134,6 +134,19 @@ function short(v: unknown): string {
   return s.length > 160 ? `${s.slice(0, 160)}…` : s
 }
 
+const MASK = '••••••'
+
+/** A changed secret reads the same masked on both sides — say so, so it isn't read as "no change". */
+function Value({ v, className }: { v: unknown; className: string }) {
+  if (v === MASK)
+    return (
+      <span className={cn(className, 'text-muted-foreground')}>
+        {MASK} <span className='italic'>secret, not shown</span>
+      </span>
+    )
+  return <span className={className}>{short(v)}</span>
+}
+
 function errText(e: unknown, fallback: string): string {
   return (
     (e as { response?: { data?: { error?: string } } }).response?.data?.error ??
@@ -181,16 +194,26 @@ function PlanTableRow({
               'min-w-0 flex-1 truncate font-mono text-[12px]',
               !included && 'text-muted-foreground line-through'
             )}
+            data-tip={plan.table}
           >
             {plan.table}
           </span>
-          <span className='w-14 shrink-0 text-right text-[12px] tabular-nums text-green-600 dark:text-green-400'>
+          <span
+            className='shrink-0 text-right text-[12px] tabular-nums text-green-600 sm:w-14 dark:text-green-400'
+            data-tip={plan.inserts ? `${plan.inserts} to add back` : undefined}
+          >
             {plan.inserts ? `+${plan.inserts}` : ''}
           </span>
-          <span className='w-14 shrink-0 text-right text-[12px] tabular-nums text-amber-600 dark:text-amber-400'>
+          <span
+            className='shrink-0 text-right text-[12px] tabular-nums text-amber-600 sm:w-14 dark:text-amber-400'
+            data-tip={plan.updates ? `${plan.updates} to change back` : undefined}
+          >
             {plan.updates ? `~${plan.updates}` : ''}
           </span>
-          <span className='w-14 shrink-0 text-right text-[12px] tabular-nums text-red-600 dark:text-red-400'>
+          <span
+            className='shrink-0 text-right text-[12px] tabular-nums text-red-600 sm:w-14 dark:text-red-400'
+            data-tip={plan.deletes ? `${plan.deletes} to remove` : undefined}
+          >
             {plan.deletes ? `−${plan.deletes}` : ''}
           </span>
           <span className='hidden w-24 shrink-0 text-right text-[11px] text-muted-foreground sm:block'>
@@ -226,24 +249,35 @@ function PlanTableRow({
                 {row.label && <span className='truncate'>{row.label}</span>}
               </p>
               {row.fields.length > 0 && (
-                <div className='grid grid-cols-[minmax(90px,140px)_1fr_1fr] gap-x-2 gap-y-0.5'>
-                  <span className='text-[10px] uppercase tracking-wide text-muted-foreground'>
+                <div className='grid grid-cols-1 gap-x-2 gap-y-0.5 sm:grid-cols-[minmax(90px,140px)_1fr_1fr]'>
+                  <span className='hidden text-[10px] uppercase tracking-wide text-muted-foreground sm:block'>
                     Field
                   </span>
-                  <span className='text-[10px] uppercase tracking-wide text-muted-foreground'>
+                  <span className='hidden text-[10px] uppercase tracking-wide text-muted-foreground sm:block'>
                     Now
                   </span>
-                  <span className='text-[10px] uppercase tracking-wide text-muted-foreground'>
+                  <span className='hidden text-[10px] uppercase tracking-wide text-muted-foreground sm:block'>
                     After restore
                   </span>
                   {row.fields.map((f) => (
-                    <div key={f.field} className='contents'>
-                      <span className='truncate font-mono text-[10.5px]'>{f.field}</span>
-                      <span className='break-all text-[10.5px] text-slate-600 dark:text-slate-300'>
-                        {short(f.now)}
+                    <div
+                      key={f.field}
+                      className='mt-1 border-t border-slate-100 pt-1 first:mt-0 sm:contents dark:border-border'
+                    >
+                      <span className='block truncate font-mono text-[10.5px]' data-tip={f.field}>
+                        {f.field}
                       </span>
-                      <span className='break-all text-[10.5px] text-slate-900 dark:text-slate-100'>
-                        {short(f.was)}
+                      <span className='block break-all text-[10.5px]'>
+                        <span className='mr-1 text-[10px] uppercase tracking-wide text-muted-foreground sm:hidden'>
+                          Now
+                        </span>
+                        <Value v={f.now} className='text-slate-600 dark:text-slate-300' />
+                      </span>
+                      <span className='block break-all text-[10.5px]'>
+                        <span className='mr-1 text-[10px] uppercase tracking-wide text-muted-foreground sm:hidden'>
+                          After restore
+                        </span>
+                        <Value v={f.was} className='text-slate-900 dark:text-slate-100' />
                       </span>
                     </div>
                   ))}
@@ -447,13 +481,13 @@ function RestorePanel({
               <div className='overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
                 <div className='flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-border dark:bg-background'>
                   <span className='flex-1 pl-6 text-[11px] font-medium'>Table</span>
-                  <span className='w-14 text-right text-[10px] uppercase tracking-wide text-muted-foreground'>
+                  <span className='hidden w-14 text-right text-[10px] uppercase tracking-wide text-muted-foreground sm:block'>
                     add
                   </span>
-                  <span className='w-14 text-right text-[10px] uppercase tracking-wide text-muted-foreground'>
+                  <span className='hidden w-14 text-right text-[10px] uppercase tracking-wide text-muted-foreground sm:block'>
                     change
                   </span>
-                  <span className='w-14 text-right text-[10px] uppercase tracking-wide text-muted-foreground'>
+                  <span className='hidden w-14 text-right text-[10px] uppercase tracking-wide text-muted-foreground sm:block'>
                     remove
                   </span>
                   <span className='hidden w-24 sm:block' />
@@ -606,6 +640,11 @@ function RestorePanel({
                     </button>
                   </span>
                 )}
+                {!selectionChanged && !confirming && cascadeBlocks && (
+                  <span className='text-[11.5px] text-muted-foreground' data-config-restore-blocked>
+                    Tick “Also delete or clear those rows” above to restore.
+                  </span>
+                )}
                 {selectionChanged && (
                   <span className='text-[11.5px] text-muted-foreground'>
                     The restore is bound to the preview — preview the narrower set before restoring.
@@ -651,6 +690,7 @@ function ResultPanel({
           onClick={onClose}
           className='rounded p-1 text-muted-foreground hover:bg-muted'
           aria-label='Close'
+          data-tip='Close'
         >
           <X className='h-4 w-4' />
         </button>
@@ -671,11 +711,11 @@ function ResultPanel({
         <Button
           size='sm'
           variant='outline'
-          className='mt-3 h-8 gap-1.5 text-[12px]'
+          className='mt-3 h-auto min-h-8 gap-1.5 whitespace-normal py-1.5 text-left text-[12px]'
           onClick={() => onUndo(result.pre_restore_id as number)}
           data-config-restore-undo
         >
-          <Undo2 className='h-3.5 w-3.5' />
+          <Undo2 className='h-3.5 w-3.5 shrink-0' />
           Undo this restore (restore point #{result.pre_restore_id})
         </Button>
       )}
@@ -731,10 +771,10 @@ export function RestorePointsPanel() {
             <thead>
               <tr className='border-b border-slate-200 bg-slate-50 text-left text-[10.5px] uppercase tracking-wide text-muted-foreground dark:border-border dark:bg-background'>
                 <th className='px-3 py-1.5 font-medium'>Taken</th>
-                <th className='px-3 py-1.5 font-medium'>Kind</th>
-                <th className='px-3 py-1.5 font-medium'>Version</th>
-                <th className='px-3 py-1.5 font-medium'>Why</th>
-                <th className='px-3 py-1.5 text-right font-medium'>Size</th>
+                <th className='hidden px-3 py-1.5 font-medium sm:table-cell'>Kind</th>
+                <th className='hidden px-3 py-1.5 font-medium md:table-cell'>Version</th>
+                <th className='hidden px-3 py-1.5 font-medium md:table-cell'>Why</th>
+                <th className='hidden px-3 py-1.5 text-right font-medium md:table-cell'>Size</th>
                 <th className='px-3 py-1.5' />
               </tr>
             </thead>
@@ -751,14 +791,22 @@ export function RestorePointsPanel() {
                   <td className='whitespace-nowrap px-3 py-1.5 tabular-nums'>
                     {when(h.taken_at)}
                     <span className='ml-1.5 text-[10.5px] text-muted-foreground'>#{h.id}</span>
+                    <div className='mt-1 sm:hidden'>
+                      <TriggerBadge trigger={h.trigger} />
+                    </div>
+                    {h.note && (
+                      <p className='mt-0.5 line-clamp-2 whitespace-normal text-[11px] text-muted-foreground md:hidden'>
+                        {h.note}
+                      </p>
+                    )}
                   </td>
-                  <td className='px-3 py-1.5'>
+                  <td className='hidden px-3 py-1.5 sm:table-cell'>
                     <TriggerBadge trigger={h.trigger} />
                   </td>
-                  <td className='whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-muted-foreground'>
+                  <td className='hidden whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-muted-foreground md:table-cell'>
                     {h.version ?? '—'}
                   </td>
-                  <td className='max-w-[420px] px-3 py-1.5'>
+                  <td className='hidden max-w-[420px] px-3 py-1.5 md:table-cell'>
                     <span
                       className='line-clamp-1 text-muted-foreground'
                       data-tip={h.note ?? undefined}
@@ -767,12 +815,12 @@ export function RestorePointsPanel() {
                     </span>
                   </td>
                   <td
-                    className='whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-muted-foreground'
+                    className='hidden whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-muted-foreground md:table-cell'
                     data-tip={`${h.tables} tables · ${h.rows.toLocaleString()} rows`}
                   >
                     {h.tables} tables · {formatFileSize(h.bytes)}
                   </td>
-                  <td className='whitespace-nowrap px-3 py-1.5 text-right'>
+                  <td className='whitespace-nowrap px-3 py-1.5 text-right align-top sm:align-middle'>
                     <button
                       type='button'
                       onClick={() => {
@@ -782,7 +830,14 @@ export function RestorePointsPanel() {
                       className='rounded-md border border-slate-300 px-2 py-0.5 text-[11.5px] font-medium hover:bg-muted dark:border-border'
                       data-config-restore-open={h.id}
                     >
-                      {h.id === openId ? 'Close' : 'Restore config to this point'}
+                      {h.id === openId ? (
+                        'Close'
+                      ) : (
+                        <>
+                          <span className='sm:hidden'>Restore…</span>
+                          <span className='hidden sm:inline'>Restore config to this point</span>
+                        </>
+                      )}
                     </button>
                   </td>
                 </tr>
