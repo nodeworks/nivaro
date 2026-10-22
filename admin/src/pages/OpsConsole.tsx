@@ -3,6 +3,7 @@ import { Check, ChevronsUpDown, RefreshCw, TerminalSquare } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { DrillTag, useAdminDrillWindows } from '@/components/chaos-drill-tag'
 import { ChatHealthCard } from '@/components/chat-health-card'
 import { InflightRequestsCard } from '@/components/inflight-requests-card'
 import {
@@ -136,6 +137,8 @@ export function OpsConsolePage() {
         .then((r) => r.data.data),
     staleTime: 5 * 60_000
   })
+  // #2847 — a rule that last matched during a chaos drill reads "Drill".
+  const drills = useAdminDrillWindows()
   const { data: rules } = useQuery({
     queryKey: ['ops-log-rules'],
     queryFn: () =>
@@ -423,6 +426,9 @@ export function OpsConsolePage() {
                         <span className='ml-1.5 text-[11px] text-amber-600'>
                           last match {new Date(r.last_matched_at).toLocaleString()}
                         </span>
+                      )}
+                      {r.last_matched_at && (
+                        <DrillTag windows={drills} at={r.last_matched_at} className='ml-1.5' />
                       )}
                     </span>
                     <button

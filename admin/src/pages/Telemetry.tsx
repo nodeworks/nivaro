@@ -16,6 +16,7 @@ import {
   XCircle
 } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { DrillTag, useAdminDrillWindows } from '@/components/chaos-drill-tag'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
@@ -378,6 +379,8 @@ function Alerts({
   grafanaUrl: string | null
 }) {
   const critical = part.items.filter((a) => a.severity === 'critical').length
+  // #2847 — firing while a chaos drill runs reads "Drill".
+  const drills = useAdminDrillWindows()
   return (
     <Card
       title='Firing alerts'
@@ -411,6 +414,7 @@ function Alerts({
               {a.severity}
             </span>
             <Clip text={a.name} className='font-medium' />
+            <DrillTag windows={drills} />
             {a.subject && (
               <Clip text={a.subject} className='font-mono text-[11.5px] text-muted-foreground' />
             )}

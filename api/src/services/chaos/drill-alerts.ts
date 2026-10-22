@@ -28,7 +28,8 @@ function ids(raw: unknown): string[] {
 /**
  * Who takes part in a run: whoever started it plus the game day's people (`meta.participants`,
  * `meta.roles.{lead, scribe, responders}` on the run or on its game-day row). Blind runs
- * (#2854, `meta.blind`) leave the responders out — they are being tested.
+ * (#2854, `meta.blind`) leave the responders out — they are being tested. A monkey run's people
+ * are administrators and chaos operators.
  */
 export async function runParticipants(run: ChaosRun): Promise<string[]> {
   const out = new Set<string>(ids(run.started_by))
@@ -46,6 +47,12 @@ export async function runParticipants(run: ChaosRun): Promise<string[]> {
     for (const id of ids(r.meta?.participants)) out.add(id)
     for (const id of ids(roles.scribe)) out.add(id)
     for (const id of ids(roles.responders)) out.add(id)
+  }
+  // Chaos Monkey (#2829) starts runs with nobody behind them: its people are the ones it tells
+  // when it starts — administrators and chaos operators.
+  if (run.kind === 'monkey' && out.size === 0) {
+    const { monkeyAudience } = await import('./monkey.js')
+    for (const id of ids(await monkeyAudience())) out.add(id)
   }
   return [...out]
 }

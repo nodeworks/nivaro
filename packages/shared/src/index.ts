@@ -204,6 +204,13 @@ export type {
 } from './components/imports/types'
 export * from './components/integrations/console'
 export {
+  DRILL_WINDOWS_KEY,
+  DrillTag,
+  type DrillWindow,
+  drillAt,
+  useDrillWindows
+} from './components/chaos/DrillTag'
+export {
   InboundRequestDetail,
   type InboundRequestInfo,
   InboundRequestPopover
