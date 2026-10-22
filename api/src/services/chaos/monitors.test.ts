@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { noteAlertFired } from '../alert-fired.js'
 import { registerFault } from './catalog.js'
 import {
   _resetMonitorsForTests,
@@ -79,6 +80,8 @@ describe('run monitors', () => {
   it('records nothing for a fault without a run', async () => {
     await armFault({ fault_key: 'mon_test' })
     await vi.advanceTimersByTimeAsync(0)
+    noteAlertFired({ source: 'log_rule', key: '1', label: 'x' })
+    await vi.advanceTimersByTimeAsync(0)
     expect(events).toEqual([])
   })
 
@@ -105,6 +108,24 @@ describe('run monitors', () => {
     await stopAll('test')
     await vi.advanceTimersByTimeAsync(60_000)
     expect(events.map((e) => e.data.phase)).toEqual(['arm', 'end'])
+  })
+
+  it('records an alert that fires during a run once a minute', async () => {
+    await armFault({ fault_key: 'mon_test', run_id: 'r3', seconds: 120 })
+    await vi.advanceTimersByTimeAsync(0)
+    noteAlertFired({ source: 'metric_alert', key: '9', label: 'Error rate', severity: 'high' })
+    noteAlertFired({ source: 'metric_alert', key: '9', label: 'Error rate', severity: 'high' })
+    await vi.advanceTimersByTimeAsync(0)
+    const alerts = events.filter((e) => e.kind === 'alert')
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toMatchObject({
+      runId: 'r3',
+      data: { source: 'metric_alert', key: '9', label: 'Error rate', severity: 'high' }
+    })
+    await vi.advanceTimersByTimeAsync(61_000)
+    noteAlertFired({ source: 'metric_alert', key: '9', label: 'Error rate' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(events.filter((e) => e.kind === 'alert')).toHaveLength(2)
   })
 
   it('notes an unavailable scorecard instead of failing', async () => {

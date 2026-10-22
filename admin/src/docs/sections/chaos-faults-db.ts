@@ -73,7 +73,7 @@ export const chaosFaultsDbDocs: DocSection = {
       type: 'ul',
       items: [
         'Readiness: the replica that started the run takes the readiness scorecard at the start, at the midpoint (windows of 30 s or more) and at the end. Each reading is a readiness event on the run with the score, the failing and warning checks, and what changed since the start.',
-        'Alerts: log alert rules, metric alerts (Traffic Map alerts included), monitors and integration signals that fire while a fault is armed add an alert event to the run, tagged as a drill.',
+        'Alerts: log alert rules, metric alerts (Traffic Map alerts included) and monitors that turn failing while a fault is armed add an alert event to the run, once per alert per minute.',
         'Synthetic partner answers carry the header x-nivaro-chaos: 1 in the call log, so they can be told apart from real failures.'
       ]
     },
