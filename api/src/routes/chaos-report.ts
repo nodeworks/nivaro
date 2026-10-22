@@ -59,11 +59,6 @@ async function loadReport(id: string) {
   const run = await getRun(id)
   if (!run) return null
   const events = await listRunEvents(run.id, { limit: 3000 })
-  // A game day's notes land on the day (#2853); the ones stamped on this child run come back here.
-  if (run.gameday_id) {
-    const day = await listRunEvents(run.gameday_id, { kinds: ['note'], limit: 3000 })
-    events.push(...day.filter((e) => e.data?.on_run === run.id))
-  }
   const report = buildRunReport(run, events)
   const from = report.armed_at ? new Date(report.armed_at).getTime() : null
   const to = report.disarmed_at ? new Date(report.disarmed_at).getTime() : Date.now()

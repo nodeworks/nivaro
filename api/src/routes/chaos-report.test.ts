@@ -88,27 +88,6 @@ describe('chaos report routes', () => {
     await app.close()
   })
 
-  it("a game day's child run report picks up the day's notes stamped on it", async () => {
-    const app = await build()
-    const day = await createRun({ kind: 'gameday', status: 'completed', label: 'Day' })
-    const child = await createRun({
-      kind: 'drill',
-      status: 'completed',
-      fault_key: 'redis_pause',
-      label: 'Redis unreachable',
-      verdict: 'held',
-      gameday_id: day.id,
-      started_at: new Date(Date.now() - 120_000).toISOString(),
-      ended_at: new Date(Date.now() - 60_000).toISOString()
-    })
-    await appendRunEvent(child.id, 'armed', {})
-    await appendRunEvent(day.id, 'note', { mark: 'fixed', text: 'restarted', on_run: child.id })
-    await appendRunEvent(day.id, 'note', { mark: 'noticed', text: 'other run', on_run: 'x' })
-    const d = (await app.inject({ method: 'GET', url: `/runs/${child.id}/report` })).json().data
-    expect(d.report.notes.map((n: { text: string }) => n.text)).toEqual(['restarted'])
-    await app.close()
-  })
-
   it('serves claims, matrix and trends — and reads still answer where the gate refuses', async () => {
     process.env.CLOUD_META_DB_URL = 'postgres://x'
     const app = await build()
