@@ -110,12 +110,14 @@ export function startMediaExtras(user: User, input: MediaExtrasInput): void {
 /** The media worker's runner (media-handoff.ts): build a handed-off
  *  upload's extras here, as the user who finalized it. */
 export async function runMediaExtrasHere(userId: string, input: MediaExtrasInput): Promise<void> {
-  await buildMediaExtras({ id: userId } as User, input)
+  await buildMediaExtras({ id: userId }, input)
 }
 
 /** Exported for tests; production goes through startMediaExtras. */
 export async function buildMediaExtras(
-  user: User,
+  // Only the id is read (the sprite file's uploaded_by, discards): a hand-off
+  // carries the id alone, and the type keeps it that way.
+  user: Pick<User, 'id'>,
   input: MediaExtrasInput
 ): Promise<{ sprite: SpriteSheet | null; peaks: number[] | null } | null> {
   if (!(await extrasMigrated())) return null
@@ -159,8 +161,9 @@ export async function buildMediaExtras(
               }
             )
             if ((await stat(sheet)).size > 0) {
+              // uploadFileFromPath reads user.id only (uploaded_by).
               const stored = await uploadFileFromPath(
-                user,
+                user as User,
                 sheet,
                 `sprite-${input.uploadId.toLowerCase()}.jpg`,
                 'image/jpeg'

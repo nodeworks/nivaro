@@ -188,7 +188,7 @@ export const releaseImageDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'The media worker is a full process that ticks crons and is not `NIVARO_ROLE=web` (the worker of a web + worker stack), or any full process with `MEDIA_WORKER=on`; `MEDIA_WORKER=off` keeps a process out. It checks in every 30 seconds (Redis key `nvr:media-worker`, 90 s) and drains one job of each kind at a time. Jobs wait on `nvr:media-handoff:<kind>` (with `REDIS_CHANNEL_PREFIX` in front) while it restarts; one older than a day is dropped, and at most 500 of a kind wait (past that, 503 RENDER_BUSY). Cloud mode never hands off: run the full image there. A full process always does its own work, even when `RENDER_URL` is set.'
+      text: 'The media worker is a full process that ticks crons and is not `NIVARO_ROLE=web` (the worker of a web + worker stack), or any full process with `MEDIA_WORKER=on`; `MEDIA_WORKER=off` keeps a process out. It checks in every 30 seconds (Redis key `nvr:media-worker:<database>`, 90 s) and drains one job of each kind at a time on the background database pool. Keys carry the database name (and `REDIS_CHANNEL_PREFIX` in front), so two instances on one Redis never take jobs meant for the other. A slim process hands work off only while a worker has checked in; with none, the request is refused at once with a 503 that says so. Queued jobs wait on `nvr:media-handoff:<database>:<kind>` while the worker restarts; at most 500 of a kind wait (past that, 503 RENDER_BUSY), and at most 5 replay videos per person (429). A queued replay video is recorded until it has run: if it is dropped (older than a day, unreadable, lost in a crash, or it could not start), the requester gets a notification and Background Jobs shows a failed run. When it runs, the worker checks again that the requester is still an active administrator and that the recording still exists. Cloud mode never hands off: run the full image there. A full process always does its own work, even when `RENDER_URL` is set.'
     },
     {
       type: 'p',
@@ -207,7 +207,9 @@ export const releaseImageDocs: DocSection = {
     {
       type: 'pre',
       code: `cosign verify nodeworks/nivaro@sha256:<digest> \\
-  --certificate-identity-regexp '^https://github.com/nodeworks/nivaro/.github/workflows/docker-hub.yml@refs/tags/' \\
+--certificate - identity - regexp
+;('^https://github.com/nodeworks/nivaro/.github/workflows/docker-hub.yml@refs/tags/')
+\\
   --certificate-oidc-issuer https://token.actions.githubusercontent.com`
     },
     {

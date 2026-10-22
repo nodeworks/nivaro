@@ -280,6 +280,9 @@ export interface WebmDeps {
   workDir: () => string
   /** Runs `work` in the cron heavy slot when the app has one. */
   heavySlot: (label: string, work: () => Promise<void>) => Promise<void>
+  /** Is the requester still an active administrator? Checked again when the
+   *  job runs (it may have waited on the media worker). Absent = yes. */
+  requesterAllowed?: (userId: string) => Promise<boolean>
 }
 
 export interface JobRunLike {
@@ -309,6 +312,8 @@ export function friendlyExportError(err: unknown): string {
     return 'that part of the recording cannot be replayed'
   if (/timed? ?out|timeout|aborted|cancel/i.test(msg)) return 'capturing the replay took too long'
   if (/gone|not found/i.test(msg)) return 'the recording is gone'
+  if (/no longer an active administrator/i.test(msg))
+    return 'you are no longer an administrator, so the export was not made'
   return 'the video could not be made'
 }
 
@@ -335,6 +340,8 @@ export async function runWebmExport(
   try {
     const header = await deps.loadHeader(job.recordingId)
     if (!header) throw new Error('The recording is gone')
+    if (deps.requesterAllowed && !(await deps.requesterAllowed(job.userId)))
+      throw new Error('The requester is no longer an active administrator')
     if (!(await deps.hasFfmpeg()))
       throw new Error(
         'Exporting a recording as video needs ffmpeg and Chromium on this server (the slim image has neither)'
@@ -478,7 +485,9 @@ async function productionDeps(): Promise<WebmDeps> {
       const app = getApp()
       if (app?.cron?.withHeavySlot) await app.cron.withHeavySlot(label, work)
       else await work()
-    }
+    },
+    requesterAllowed: async (userId) =>
+      (await import('../middleware/authenticate.js')).isActiveAdmin(userId)
   }
 }
 
@@ -505,12 +514,41 @@ export async function webmExportPlacement(): Promise<'here' | 'worker'> {
 export async function enqueueWebmExport(job: WebmJob): Promise<'here' | 'worker'> {
   const placement = await webmExportPlacement()
   if (placement === 'worker') {
+    // The hand-off keeps a record of the queued export until it has run: a
+    // job dropped on the way still ends as a failed run and a notification
+    // (failQueuedWebmExport). At most a few per person (429 past it).
     const { handOff } = await import('./media-handoff.js')
-    await handOff('replay-webm', { ...job })
+    await handOff('replay-webm', { ...job }, { user: job.userId })
     return placement
   }
   void runWebmExportHere(job)
   return placement
+}
+
+/** A queued export that will not be made (dropped by the media worker: too
+ *  old, unreadable, lost, or it could not start): a failed run in Background
+ *  Jobs and a notification to the requester, through the core notify path. */
+export async function failQueuedWebmExport(
+  userId: string,
+  recordingId: string | null,
+  why: string
+): Promise<void> {
+  const deps = depsOverride ?? (await productionDeps())
+  const key = (recordingId ?? 'unknown').toLowerCase()
+  const run = await deps.jobRun(
+    'Export a session recording as WebM',
+    `session-replay-webm:${key}`,
+    userId
+  )
+  await run.fail(new Error(`Not made: ${why}`))
+  await deps
+    .notify(userId, {
+      ok: false,
+      subject: 'Recording export failed',
+      message: `The WebM export could not be made: ${why}.`,
+      recordingId: recordingId ?? ''
+    })
+    .catch(() => null)
 }
 
 /** Makes one export through this process's queue (the media worker's runner,

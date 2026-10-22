@@ -42,6 +42,7 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 import { sessionReplayExportRoutes } from '../../../routes/session-replay-export.js'
 import { cutReplayWindow, type RrwebEvent } from '../../../services/session-replay-events.js'
 import {
+  failQueuedWebmExport,
   runWebmExport,
   setWebmDepsForTests,
   type WebmDeps,
@@ -275,6 +276,48 @@ describe('POST /session-recordings/:id/export — webm', () => {
     expect(calls.capture).toHaveLength(0)
     expect(calls.notified[0]).toMatchObject({ ok: false, subject: 'Recording export failed' })
     expect(calls.run[0]).toMatch(/^fail/)
+  })
+
+  it('re-checks the requester when the job runs: no longer an admin = failed + told, no capture', async () => {
+    const { deps, calls } = fakeDeps({ requesterAllowed: async () => false })
+    const out = await runWebmExport(
+      { recordingId: REC, fromMs: null, toMs: null, userId: ADMIN },
+      deps
+    )
+    expect(out).toEqual({
+      ok: false,
+      error: 'you are no longer an administrator, so the export was not made'
+    })
+    expect(calls.capture).toHaveLength(0)
+    expect(calls.notified[0]).toMatchObject({ userId: ADMIN, ok: false })
+  })
+
+  it('a recording deleted while the job waited: failed + told, no capture', async () => {
+    const { deps, calls } = fakeDeps({ loadHeader: async () => null })
+    const out = await runWebmExport(
+      { recordingId: REC, fromMs: null, toMs: null, userId: ADMIN },
+      deps
+    )
+    expect(out).toEqual({ ok: false, error: 'the recording is gone' })
+    expect(calls.capture).toHaveLength(0)
+    expect(calls.notified[0]).toMatchObject({ ok: false, subject: 'Recording export failed' })
+  })
+
+  it('a queued export the media worker dropped ends as a failed run and a notification', async () => {
+    const { deps, calls } = fakeDeps()
+    setWebmDepsForTests(deps)
+    await failQueuedWebmExport(ADMIN, REC, 'it waited too long for the media worker')
+    expect(calls.run).toEqual([
+      expect.stringMatching(/^fail .*Not made: it waited too long for the media worker/)
+    ])
+    expect(calls.notified).toEqual([
+      expect.objectContaining({
+        userId: ADMIN,
+        ok: false,
+        subject: 'Recording export failed',
+        message: 'The WebM export could not be made: it waited too long for the media worker.'
+      })
+    ])
   })
 
   it('caps the frame width and keeps dimensions even', async () => {

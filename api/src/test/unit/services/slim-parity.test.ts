@@ -112,10 +112,26 @@ afterEach(() => {
   process.env = { ...saved }
 })
 
+/** The media worker's heartbeat (a full worker with Chromium). */
+const putBeat = () =>
+  redis.set(
+    handoff.mediaWorkerKey(),
+    JSON.stringify({
+      instance: 'w1',
+      name: 'worker',
+      version: '9.9.9',
+      ffmpeg: true,
+      chromium: true,
+      at: new Date().toISOString()
+    })
+  )
+
 const queued = async (kind: (typeof handoff.HANDOFF_KINDS)[number]) =>
   (redis.lists.get(handoff.handoffKey(kind)) ?? []).map((raw) => JSON.parse(raw).payload)
 
 describe('slim image: every media feature works', () => {
+  beforeEach(() => putBeat())
+
   it('captions: the job is queued and handed to the media worker', async () => {
     const job = await startCaptionJob(
       { id: ID },
@@ -158,8 +174,10 @@ describe('slim image: every media feature works', () => {
     })
     expect(res.statusCode).toBe(202)
     expect(await queued('replay-webm')).toEqual([
-      { recordingId: ID, fromMs: 0, toMs: 5000, userId: ADMIN }
+      expect.objectContaining({ recordingId: ID, fromMs: 0, toMs: 5000, userId: ADMIN })
     ])
+    // Recorded until it has run, so it can never vanish unreported.
+    expect(redis.hashes.get(handoff.handoffRecordsKey('replay-webm'))?.size).toBe(1)
   })
 
   it('the encoder report comes from the render server', async () => {
@@ -170,17 +188,6 @@ describe('slim image: every media feature works', () => {
   })
 
   it('readiness passes with a render server and a media worker', async () => {
-    await redis.set(
-      handoff.mediaWorkerKey(),
-      JSON.stringify({
-        instance: 'w1',
-        name: 'worker',
-        version: '9.9.9',
-        ffmpeg: true,
-        chromium: true,
-        at: new Date().toISOString()
-      })
-    )
     expect(await st.checks.get('render-peer')!.run()).toMatchObject({ status: 'pass' })
     expect(await st.checks.get('media-worker')!.run()).toMatchObject({ status: 'pass' })
   })
@@ -206,6 +213,25 @@ describe('slim image misconfigured: the deploy gate fails, people never see it',
     const r = await st.checks.get('media-worker')!.run()
     expect(r.status).toBe('fail')
     expect(r.detail).toMatch(/No media worker has checked in/)
+  })
+
+  it('no media worker: the work is refused at once (503), not queued for nobody', async () => {
+    await expect(
+      startCaptionJob({ id: ID }, FILE, null, {
+        ...defaultDeps,
+        provider: async () => ({ kind: 'gateway', model: 'whisper-1' })
+      })
+    ).rejects.toMatchObject({ statusCode: 503, code: 'HELP_VIDEO_CAPTIONS_NO_FFMPEG' })
+    const app = Fastify()
+    await app.register(sessionReplayExportRoutes, { prefix: '/api/session-recordings' })
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/session-recordings/${ID}/export`,
+      payload: { format: 'webm' }
+    })
+    expect(res.statusCode).toBe(503)
+    expect(res.json().error).toMatch(/no media worker has checked in/)
+    expect(await queued('replay-webm')).toEqual([])
   })
 
   it('without Redis the features still answer readably (503), never crash', async () => {

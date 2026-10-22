@@ -436,10 +436,22 @@ describe('the slim image (no ffmpeg): clips are made by the media worker', () =>
   it('queues the row, hands the id over, never claims it; the worker makes it', async () => {
     const redis = fakeHandoffRedis()
     slim.app = { redis }
+    const handoff = await import('../../../services/media-handoff.js')
+    await redis.set(
+      handoff.mediaWorkerKey(),
+      JSON.stringify({
+        instance: 'w',
+        name: null,
+        version: '1',
+        ffmpeg: true,
+        chromium: true,
+        at: new Date().toISOString()
+      })
+    )
     st.ffmpeg = false
     const row = await clips.createClip(video, user, { kind: 'mp4', start_ms: 1000, end_ms: 4000 })
     expect(row.status).toBe('queued')
-    const list = redis.lists.get('nvr:media-handoff:clip') ?? []
+    const list = redis.lists.get(handoff.handoffKey('clip')) ?? []
     expect(list.map((raw) => JSON.parse(raw).payload)).toEqual([{ id: row.id }])
     // A slim process that somehow reaches renderClip leaves the row queued.
     expect(await clips.renderClip(String(row.id))).toBe('skipped')
