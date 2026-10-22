@@ -68,7 +68,7 @@ registerFault({
   area: 'storage',
   proves:
     'Storage trouble is contained: a slow driver shows as slow uploads and downloads (not timeouts elsewhere), a full disk or read-only volume fails the upload with a clear message, records still save, and reads of existing files keep working.',
-  claim_keys: ['storage.failures_contained'],
+  claim_keys: ['files.share_503'],
   targets: ['all', 'share'],
   params: {
     mode: {

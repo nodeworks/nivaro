@@ -21,7 +21,7 @@ registerFault({
   area: 'db',
   proves:
     'A slow database stays honest: requests slow down but answer, heavy reads queue at the read gate instead of piling onto the pool, the slow-request traces name the statements, and nothing times out silently.',
-  claim_keys: ['db.slow_honest'],
+  claim_keys: ['db.transient_retry', 'readgate.fails_open'],
   targets: ['all', 'table', 'route', 'user', 'share'],
   params: {
     delay_ms: {
@@ -47,7 +47,7 @@ registerFault({
   area: 'db',
   proves:
     'A failing statement fails one request, not the process: the caller gets a clear error (or a retry where one exists), transactions roll back, the error tracker and DB Health see it, and the next statement works.',
-  claim_keys: ['db.errors_contained'],
+  claim_keys: ['db.transient_retry'],
   targets: ['all', 'table', 'route', 'user', 'share'],
   params: {
     error: {

@@ -165,7 +165,7 @@ registerFault({
   area: 'outbound',
   proves:
     'A failing partner is contained: inline retries recover what they may, a 429 waits as Retry-After says, a 200 that says ERROR is not taken as success, unreadable answers and TLS failures land as clear errors in the call log and the Integrations console, and the record that triggered the call stays saved.',
-  claim_keys: ['partner.failures_contained'],
+  claim_keys: ['partners.breaker_retry'],
   targets: ['all', 'share'],
   params: {
     api: {

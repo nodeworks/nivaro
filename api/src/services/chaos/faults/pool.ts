@@ -116,7 +116,7 @@ registerFault({
   area: 'db',
   proves:
     'The two connection pools stay apart: holding the background pool starves crons, imports and warms while requests stay fast; holding the main pool slows requests while background work carries on; pool pressure and DB Health raise the alarm within a minute.',
-  claim_keys: ['db.pool_split'],
+  claim_keys: ['pools.isolated', 'readgate.fails_open'],
   targets: ['all', 'node'],
   params: {
     pool: { type: 'enum', label: 'Pool', options: ['background', 'main'], default: 'background' },
