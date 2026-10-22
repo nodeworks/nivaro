@@ -287,6 +287,9 @@ export function eventText(e: ChaosRunEvent): string {
       return `${String(d.reason ?? 'stopped')} · verdict ${String(d.verdict ?? '')}`
     case 'disarmed':
       return `${String(d.reason ?? 'window ended')} · verdict ${String(d.verdict ?? '')}`
+    case 'alert':
+    case 'readiness':
+      return String(d.label ?? d.title ?? d.text ?? JSON.stringify(d))
     case 'note':
       return String(d.text ?? d.refusal ?? d.apply_failed ?? JSON.stringify(d))
     default:
