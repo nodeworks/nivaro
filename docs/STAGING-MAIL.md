@@ -180,3 +180,12 @@ brings relaying back.
    that check is done, leave test mode on (release then goes to the test
    recipient). See "Test mode".
 3. **Release sends real email.** That is why the UI is private and needs a login.
+4. **SMTP 1025 is reachable from every service on `traefik_swarm`, not only
+   from the API.** Mailpit joins that shared overlay so Traefik can route the
+   UI, and `MP_SMTP_AUTH_ACCEPT_ANY` accepts any login, so another service there
+   could drop mail into the inbox. Accepted for staging: caught mail goes nowhere
+   until someone signed in presses Release, and a release only reaches
+   `allowed-recipients`. Read an unexpected message before releasing it. Closing
+   this needs a dedicated overlay between Traefik and Mailpit (a change to the
+   host-only proxy files) or real SMTP auth (`MP_SMTP_AUTH_FILE`, with an SMTP
+   password secret added to the `efp` stack).
