@@ -38,7 +38,7 @@ import {
   stagingTemplate
 } from '../services/chaos/gameday-plan.js'
 import { ChaosError, chaosRefusal } from '../services/chaos/gate.js'
-import { requireChaosOperator } from '../services/chaos/operator.js'
+import { isChaosOperator, requireChaosOperator } from '../services/chaos/operator.js'
 import { getRun, listRunEvents, listRuns, updateRun } from '../services/chaos/runs.js'
 
 /**
@@ -72,14 +72,15 @@ function fail(reply: FastifyReply, err: unknown) {
   throw err
 }
 
-function who(req: FastifyRequest): Actor {
+/** The caller. `operator` = administrators plus the chaos operator roles (#2862). */
+async function who(req: FastifyRequest): Promise<Actor> {
   const u = req.user as
     | { id?: string; first_name?: string | null; last_name?: string | null; email?: string }
     | undefined
   return {
     id: u?.id ?? null,
     name: u ? [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || null : null,
-    operator: !!req.isAdmin
+    operator: await isChaosOperator(req.user, !!req.isAdmin)
   }
 }
 
@@ -182,7 +183,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
           const ev = await addNote(
             String(req.params.id),
             { mark: parseMark(req.body?.mark), text: req.body?.text ?? null },
-            who(req),
+            await who(req),
             app
           )
           return reply.code(201).send({ data: ev })
@@ -196,7 +197,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
     pub.post('/declare', async (req) => {
       if (!chaosRefusal()) {
         try {
-          await declareIncident(who(req))
+          await declareIncident(await who(req))
         } catch (err) {
           req.log.warn({ err }, 'chaos: declare incident not recorded')
         }
@@ -240,7 +241,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
       const refused = gated(reply)
       if (refused) return refused
       try {
-        const out = await createGameday(req.body ?? {}, who(req), app)
+        const out = await createGameday(req.body ?? {}, await who(req), app)
         await logActivity({
           action: 'chaos-gameday-plan',
           user: req.user?.id,
@@ -259,7 +260,9 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
         const refused = gated(reply)
         if (refused) return refused
         try {
-          return { data: await updateGameday(String(req.params.id), req.body ?? {}, who(req), app) }
+          return {
+            data: await updateGameday(String(req.params.id), req.body ?? {}, await who(req), app)
+          }
         } catch (err) {
           return fail(reply, err)
         }
@@ -270,7 +273,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
       const refused = gated(reply)
       if (refused) return refused
       try {
-        const run = await startGameday(String(req.params.id), who(req), { app })
+        const run = await startGameday(String(req.params.id), await who(req), { app })
         await logActivity({
           action: 'chaos-gameday-start',
           user: req.user?.id,
@@ -292,7 +295,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
           const ev = await stepGameday(
             String(req.params.id),
             String(req.body?.inject_id ?? ''),
-            who(req),
+            await who(req),
             app
           )
           return { data: ev }
@@ -308,7 +311,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
       async (req, reply) => {
         try {
           const how = req.body?.how === 'aborted' ? 'aborted' : 'completed'
-          const run = await endGameday(String(req.params.id), how, who(req), {
+          const run = await endGameday(String(req.params.id), how, await who(req), {
             reason: req.body?.reason ? String(req.body.reason).slice(0, 200) : undefined,
             app
           })
@@ -328,7 +331,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
 
     ops.post<{ Params: { id: string } }>('/gamedays/:id/cancel', async (req, reply) => {
       try {
-        return { data: await cancelGameday(String(req.params.id), who(req), app) }
+        return { data: await cancelGameday(String(req.params.id), await who(req), app) }
       } catch (err) {
         return fail(reply, err)
       }
@@ -336,7 +339,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
 
     ops.post<{ Params: { id: string } }>('/gamedays/:id/reveal', async (req, reply) => {
       try {
-        return { data: await revealGameday(String(req.params.id), who(req), app) }
+        return { data: await revealGameday(String(req.params.id), await who(req), app) }
       } catch (err) {
         return fail(reply, err)
       }
@@ -347,7 +350,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
       const refused = gated(reply)
       if (refused) return refused
       const b = req.body ?? {}
-      const me = who(req)
+      const me = await who(req)
       if (!me.id) return reply.code(401).send({ error: 'Sign in' })
       const seconds = Math.max(5, Math.min(3600, Number(b.seconds) || 60))
       const windowId = randomUUID()
@@ -389,7 +392,7 @@ export async function chaosGamedayRoutes(app: FastifyInstance): Promise<void> {
       if (!w) return reply.code(404).send({ error: 'That run is not blind' })
       if (w.kind === 'gameday') {
         try {
-          return { data: await revealGameday(w.id, who(req), app) }
+          return { data: await revealGameday(w.id, await who(req), app) }
         } catch (err) {
           return fail(reply, err)
         }

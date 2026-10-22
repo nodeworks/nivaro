@@ -14,7 +14,7 @@ import {
   trustedGamedayId
 } from '../services/chaos/drill.js'
 import { ChaosError, chaosRefusal } from '../services/chaos/gate.js'
-import { requireChaosOperator } from '../services/chaos/operator.js'
+import { isChaosOperator, requireChaosOperator } from '../services/chaos/operator.js'
 import { armedFaults, setChaosApp, startChaosCluster } from '../services/chaos/registry.js'
 import {
   getRun,
@@ -91,7 +91,10 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
     pub.get('/armed', async (req) => {
       const why = chaosRefusal()
       // Blind drills (#2854) stay hidden from responders: insiders + operators only.
-      const viewer = { id: req.user?.id ?? null, operator: !!req.isAdmin }
+      const viewer = {
+        id: req.user?.id ?? null,
+        operator: why ? false : await isChaosOperator(req.user, !!req.isAdmin)
+      }
       const armed = why ? [] : visibleArmedFor(viewer, armedFaults()).map(publicArmedView)
       return { data: { allowed: !why, armed } }
     })

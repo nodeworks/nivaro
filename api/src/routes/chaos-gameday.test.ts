@@ -14,6 +14,10 @@ vi.mock('../middleware/authenticate.js', () => {
     return req
   }
   return {
+    // requireChaosOperator (#2862) authenticates, then checks administrator / operator role.
+    authenticate: async (req: never) => {
+      sign(req)
+    },
     requireAuth: async (req: never) => {
       sign(req)
     },
