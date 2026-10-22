@@ -95,6 +95,13 @@ export { PushBulkButtons, PushResultList } from './components/bulk/PushBulkButto
 export type { CacheInfo, CustomQueryEnvelope } from './components/CacheStamp'
 export { CacheStamp, cacheStampTip } from './components/CacheStamp'
 export { CellCopyLayer } from './components/CellCopyLayer'
+export {
+  CLIENT_CHAOS_SHORTCUT,
+  ClientChaosToolbar,
+  type ClientChaosToolbarProps,
+  clientChaosSummary,
+  openClientChaosToolbar
+} from './components/ClientChaosToolbar'
 export type {
   CollectionBrowserColumn,
   CollectionBrowserViewProps
@@ -110,6 +117,21 @@ export {
   formatStatusExpiry
 } from './components/CustomStatusEditor'
 export { DeclareIncidentButton } from './components/chaos/DeclareIncidentButton'
+export {
+  ARMED_FAULTS_KEY,
+  type ArmedFaultsState,
+  DrillBanner,
+  type DrillBannerProps,
+  drillCountdown,
+  type PublicArmedFault,
+  useArmedFaults
+} from './components/chaos/DrillBanner'
+export {
+  ACTIVE_GAMEDAYS_KEY,
+  type ActiveGameday,
+  GameDayStrip,
+  useActiveGamedays
+} from './components/chaos/GameDayStrip'
 export type { CumulativeFlowData } from './components/charts/CumulativeFlowChart'
 export { CumulativeFlowChart } from './components/charts/CumulativeFlowChart'
 export { ChatAnalyticsView } from './components/chat/ChatAnalyticsView'
@@ -134,6 +156,14 @@ export {
   huddleHolds,
   releaseHeld
 } from './components/chat/huddle/huddle-hold'
+export {
+  CLIENT_CHAOS_STATUS_KEY,
+  type ClientChaosGate,
+  type ClientChaosUser,
+  useClientChaos,
+  useClientChaosGate,
+  usePretendDownVersion
+} from './components/client-chaos-gate'
 export { CommandCenterView } from './components/command-center/CommandCenterView'
 export * from './components/DataTable'
 export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDisturb'
@@ -284,6 +314,7 @@ export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { LiveRowMark } from './components/LiveRowMark'
+export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
@@ -380,6 +411,19 @@ export type {
   QueryWidgetConfig
 } from './components/PageRenderer'
 export { PageRenderer, QueryWidgetView, RecordGridWidgetBody } from './components/PageRenderer'
+export {
+  commonPretendDownOptions,
+  dashboardPretendDownOptions,
+  layoutPretendDownOptions,
+  PretendDownButton,
+  type PretendDownKind,
+  PretendDownList,
+  type PretendDownOption,
+  PretendDownSection,
+  usePretendDownIds,
+  usePretendDownScope,
+  usePretendDownToggle
+} from './components/PretendDown'
 export {
   DelegationCard,
   DisplayPrefsCard,
@@ -530,6 +574,7 @@ export {
 export * from './lib/background-runs'
 export * from './lib/bulk-progress'
 export * from './lib/catalog-item-open'
+export * from './lib/client-chaos'
 export {
   buildClientCrashBody,
   type ClientCrashBody,
@@ -591,6 +636,7 @@ export * from './lib/live-list'
 export * from './lib/live-ops'
 export * from './lib/live-queries'
 export * from './lib/live-widgets'
+export { loadErrorStatus, loadErrorText, serverErrorText } from './lib/load-error'
 export {
   createIdbMetadataStore,
   isMetadataKey,

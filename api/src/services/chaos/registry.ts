@@ -103,22 +103,33 @@ export function shareBucket(key: string, faultId: string): number {
   return (h.readUInt32BE(0) % 10_000) / 100
 }
 
-const patternCache = new Map<string, RegExp>()
-function routeMatches(pattern: string, route: string): boolean {
-  if (!pattern.includes('*'))
-    return route === pattern || route.startsWith(`${pattern}/`) || route.startsWith(`${pattern}?`)
-  let re = patternCache.get(pattern)
-  if (!re) {
-    re = new RegExp(
-      `^${pattern
-        .split('*')
-        .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-        .join('.*')}$`
-    )
-    if (patternCache.size > 200) patternCache.clear()
-    patternCache.set(pattern, re)
+const ROUTE_SUBJECT_MAX = 2048
+
+/**
+ * Linear-time glob match: `*` spans anything, segments are found with indexOf in order (no
+ * RegExp — a crafted URL against a pattern with several stars must not backtrack on the hot
+ * path). A pattern without `*` matches the path itself or anything under it.
+ */
+export function routeMatches(pattern: string, rawRoute: string): boolean {
+  const route =
+    rawRoute.length > ROUTE_SUBJECT_MAX ? rawRoute.slice(0, ROUTE_SUBJECT_MAX) : rawRoute
+  if (!pattern.includes('*')) return route === pattern || route.startsWith(`${pattern}/`)
+  const parts = pattern.split('*')
+  let pos = 0
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i]
+    if (seg === '') continue
+    if (i === 0) {
+      if (!route.startsWith(seg)) return false
+      pos = seg.length
+      continue
+    }
+    if (i === parts.length - 1) return route.length - pos >= seg.length && route.endsWith(seg)
+    const at = route.indexOf(seg, pos)
+    if (at < 0) return false
+    pos = at + seg.length
   }
-  return re.test(route)
+  return true
 }
 
 /** Does this fault reach what the caller describes (pure)? */
@@ -450,5 +461,4 @@ export async function _resetRegistryForTests(): Promise<void> {
   bus = null
   subscribed = false
   appRef = null
-  patternCache.clear()
 }

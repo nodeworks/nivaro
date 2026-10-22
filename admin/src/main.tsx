@@ -1,3 +1,5 @@
+// First: every later import may create an SDK client over window.fetch (#2840).
+import './lib/client-chaos-boot'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import React, { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'

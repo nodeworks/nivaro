@@ -74,6 +74,9 @@ export async function issuesRoutes(app: FastifyInstance) {
       recording_offset_ms?: number
     }
     if (!body.message?.trim()) return reply.code(400).send({ error: 'message is required' })
+    // #2840 — a crash in a tab running browser chaos mode was provoked on purpose (the client
+    // marks its error reports while chaos is on): not a bug to file.
+    if (req.headers['x-nivaro-client-chaos']) return reply.code(204).send()
     // The replay link is caller-supplied — accept only a uuid-shaped id, and
     // only one that exists AND belongs to the reporting user, or a client
     // could attach someone else's recording to an issue.

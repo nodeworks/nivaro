@@ -4,6 +4,7 @@
  * `storage` tap — and changes nothing else: arguments, results and errors pass through as they
  * were, and `this` stays the real provider.
  */
+import { storageChaos } from '../chaos/faults/storage.js'
 import {
   isMissingObject,
   noteStorageCall,
@@ -35,6 +36,9 @@ export function instrumentStorage<T extends object>(target: T, driver: string): 
       return async (...args: unknown[]) => {
         const t0 = performance.now()
         try {
+          // #1773 — a storage chaos fault (slow driver, disk full, read-only) acts here.
+          const hit = storageChaos(op)
+          if (hit) await hit
           const result = await value.apply(t, args)
           noteStorageCall({
             driver,

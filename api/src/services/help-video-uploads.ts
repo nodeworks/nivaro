@@ -4,6 +4,7 @@ import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { storageChaos } from './chaos/faults/storage.js'
 import {
   hasFfmpeg,
   lockedInputArgs,
@@ -326,6 +327,9 @@ export async function appendPart(
       throw fail(422, 'UPLOAD_NOT_VIDEO', 'That does not look like a WebM or MP4 recording')
     }
     const path = partPath(String(row.id))
+    // #1773 — upload parts land in the video work directory: a storage chaos fault acts here.
+    const hit = storageChaos('write')
+    if (hit) await hit
     await appendFile(path, body)
     const updated = await db('nivaro_help_video_uploads')
       .where({ id: row.id, next_part: n })

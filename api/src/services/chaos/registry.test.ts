@@ -14,6 +14,7 @@ import {
   loadArmedFromBus,
   onRegistryChange,
   onStopAll,
+  routeMatches,
   startChaosCluster,
   stopAll,
   targetMatches
@@ -157,6 +158,28 @@ describe('chaosPoint', () => {
     const node = await armFault({ fault_key: 'slow', target: { kind: 'node', node: CHAOS_NODE } })
     expect(chaosPoint('http.request')?.id).toBe(node.id)
     expect(chaosPoint('http.request', { node: 'other' })).toBeNull()
+  })
+
+  it('matches globs in linear time, even against a crafted URL', async () => {
+    const f = await armFault({
+      fault_key: 'slow',
+      target: { kind: 'route', pattern: '/api/*/x*y*z' }
+    })
+    expect(chaosPoint('http.request', { route: '/api/items/xaybz' })?.id).toBe(f.id)
+    expect(chaosPoint('http.request', { route: '/api/items/xaybz?q=1' })?.id).toBe(f.id)
+    expect(chaosPoint('http.request', { route: '/api/items/xayb' })).toBeNull()
+    const evil = `/api/${'x'.repeat(20_000)}`
+    const t0 = Date.now()
+    for (let i = 0; i < 200; i++) chaosPoint('http.request', { route: evil })
+    expect(Date.now() - t0).toBeLessThan(500)
+    expect(routeMatches('/api/items', '/api/items/1')).toBe(true)
+    expect(routeMatches('/api/items', '/api/itemsx')).toBe(false)
+    expect(routeMatches('*/end', '/a/b/end')).toBe(true)
+    expect(routeMatches('/a*', '/a')).toBe(true)
+    await disarm(f.id)
+    await expect(
+      armFault({ fault_key: 'slow', target: { kind: 'route', pattern: '/*/*/*/*/*/x' } })
+    ).rejects.toThrow(/at most four/)
   })
 
   it('refuses unknown faults, wrong targets and the gate', async () => {

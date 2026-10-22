@@ -1,6 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type ReactNode, useEffect } from 'react'
+import { Link } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
+import { adminRealtime } from '@/lib/socket'
 import { cn, formatDateTime } from '@/lib/utils'
 import { type ChaosRun, type ChaosRunEvent, chaosKeys, describeTarget, fetchRun } from './api'
 import { RunCockpit } from './RunCockpit'
@@ -11,11 +13,37 @@ import { RunChip } from './RunsTab'
  * armed on what, how it ended, the timeline. The full report page is #2849.
  */
 export function RunDetail({ id }: { id: string }) {
+  const qc = useQueryClient()
   const { data, isLoading, isError } = useQuery<{ run: ChaosRun; events: ChaosRunEvent[] }>({
     queryKey: chaosKeys.run(id),
     queryFn: () => fetchRun(id),
     refetchInterval: (q) => (q.state.data?.run.status === 'running' ? 5_000 : false)
   })
+  // Live: events and run changes land straight in the cache; the 5 s poll is the net under it.
+  useEffect(() => {
+    const key = chaosKeys.run(id)
+    const offEvent = adminRealtime.on(
+      'chaos:event',
+      (p: { run_id?: string; event?: ChaosRunEvent }) => {
+        if (p?.run_id !== id || !p.event) return
+        qc.setQueryData<{ run: ChaosRun; events: ChaosRunEvent[] }>(key, (prev) =>
+          !prev || prev.events.some((e) => e.id === p.event!.id)
+            ? prev
+            : { ...prev, events: [...prev.events, p.event!] }
+        )
+      }
+    )
+    const offRun = adminRealtime.on('chaos:run', (p: { run?: ChaosRun }) => {
+      if (p?.run?.id !== id) return
+      qc.setQueryData<{ run: ChaosRun; events: ChaosRunEvent[] }>(key, (prev) =>
+        prev ? { ...prev, run: p.run! } : prev
+      )
+    })
+    return () => {
+      offEvent()
+      offRun()
+    }
+  }, [id, qc])
   if (isLoading)
     return (
       <div className='space-y-4 p-6'>
@@ -60,9 +88,18 @@ function RunSummary({ run, events }: { run: ChaosRun; events: ChaosRunEvent[] })
             {typeof run.meta.note === 'string' && run.meta.note ? ` · ${run.meta.note}` : ''}
           </p>
         </div>
-        <span className='font-mono text-[11px] text-slate-400 dark:text-muted-foreground/70'>
-          {run.id}
-        </span>
+        <div className='flex items-center gap-3'>
+          <span className='font-mono text-[11px] text-slate-400 dark:text-muted-foreground/70'>
+            {run.id}
+          </span>
+          {/* #2849 — the full report: charts, timings, errors people saw, postmortem export */}
+          <Link
+            to={`/chaos/runs/${run.id}`}
+            className='inline-flex h-7 items-center rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+          >
+            Full report
+          </Link>
+        </div>
       </div>
 
       <VerdictLine run={run} />
@@ -260,6 +297,9 @@ export function eventText(e: ChaosRunEvent): string {
       return `${String(d.reason ?? 'stopped')} · verdict ${String(d.verdict ?? '')}`
     case 'disarmed':
       return `${String(d.reason ?? 'window ended')} · verdict ${String(d.verdict ?? '')}`
+    case 'alert':
+    case 'readiness':
+      return String(d.label ?? d.title ?? d.text ?? JSON.stringify(d))
     case 'note':
       return String(d.text ?? d.refusal ?? d.apply_failed ?? JSON.stringify(d))
     default:

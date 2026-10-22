@@ -1,0 +1,113 @@
+# Resilience tests in CI (#2842). The API reaches MSSQL and Redis only through
+# toxiproxy, and the test runner reaches the API through it too, so
+# scripts/chaos/toxiproxy-suite.mjs can add latency, resets, timeouts and
+# outages on any of the three links.
+#
+#   docker compose -f deploy/chaos-ci/docker-compose.yml up -d --build --wait api
+#   node scripts/chaos/toxiproxy-suite.mjs
+#   docker compose -f deploy/chaos-ci/docker-compose.yml down -v
+#
+# Host ports are deliberately off the dev defaults (3055 / 1433 / 6379 / 8474)
+# so this can run beside a normal dev stack. Override with the CHAOS_CI_*_PORT
+# variables. Throwaway credentials only; nothing here ever touches a real database.
+name: nivaro-chaos-ci
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: 'Y'
+      MSSQL_SA_PASSWORD: Chaos_Ci_Passw0rd!
+      MSSQL_MEMORY_LIMIT_MB: '2048'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "select 1" -b
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # An empty database for the API's boot migrations to fill.
+  mssql-init:
+    image: mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04
+    platform: linux/amd64
+    depends_on:
+      mssql:
+        condition: service_healthy
+    restart: 'no'
+    entrypoint:
+      - /opt/mssql-tools18/bin/sqlcmd
+      - -C
+      - -S
+      - mssql
+      - -U
+      - sa
+      - -P
+      - Chaos_Ci_Passw0rd!
+      - -b
+      - -Q
+      - IF DB_ID('nivaro_chaos') IS NULL CREATE DATABASE nivaro_chaos
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ['-host=0.0.0.0', '-config=/config/toxiproxy.json']
+    volumes:
+      - ./toxiproxy.json:/config/toxiproxy.json:ro
+    # --mode host only: the api proxy upstream is the checkout's API on the host (Linux needs host-gateway)
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '127.0.0.1:${CHAOS_CI_TOXI_PORT:-18474}:8474'
+      - '127.0.0.1:${CHAOS_CI_MSSQL_PORT:-11433}:1433'
+      - '127.0.0.1:${CHAOS_CI_REDIS_PORT:-16379}:6379'
+      - '127.0.0.1:${CHAOS_CI_API_PORT:-13055}:3055'
+
+  # The API as released (Dockerfile.release), DB and Redis through the proxy.
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.release
+    depends_on:
+      mssql-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: '3055'
+      DB_HOST: toxiproxy
+      DB_PORT: '1433'
+      DB_DATABASE: nivaro_chaos
+      DB_USER: sa
+      DB_PASSWORD: Chaos_Ci_Passw0rd!
+      DB_ENCRYPT: 'false'
+      DB_TRUST_SERVER_CERT: 'true'
+      REDIS_URL: redis://toxiproxy:6379
+      SESSION_SECRET: chaos-ci-session-secret-0123456789abcdef
+      COOKIE_SECURE: 'false'
+      OIDC_ENABLED: 'false'
+      PUBLIC_URL: http://localhost:13055
+      ADMIN_URL: http://localhost:13055
+      CRON_TICKS: 'off'
+      CACHE_WARM: 'off'
+      BOOT_DEPS_WAIT_MS: '120000'
+      HEAVY_READ_CONCURRENCY: '2'
+      HEAVY_READ_MAX_WAIT_MS: '4000'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3055/api/ready >/dev/null || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 120
+      start_period: 30s

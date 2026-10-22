@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, Play } from 'lucide-react'
-import { useState } from 'react'
-import { Link } from 'react-router'
+import { useEffect, useState } from 'react'
+import { Link, useSearchParams } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatRelative } from '@/lib/utils'
 import {
@@ -42,7 +42,18 @@ export function FaultsTab() {
     queryKey: chaosKeys.status,
     queryFn: fetchStatus
   })
-  const [open, setOpen] = useState<string | null>(null)
+  // #2851 deep link: ?fault=<key>&target=… (the Traffic Map's "Inject fault here") opens that
+  // fault's start form, aimed at the target, and scrolls it into view.
+  const [search] = useSearchParams()
+  const linked = search.get('fault')
+  const [open, setOpen] = useState<string | null>(linked)
+  useEffect(() => {
+    if (!linked || !data) return
+    setOpen(linked)
+    document
+      .querySelector(`[data-chaos-fault="${CSS.escape(linked)}"]`)
+      ?.scrollIntoView?.({ block: 'nearest' })
+  }, [linked, data])
   const allowed = status?.allowed ?? true
   const armedByFault = new Map((status?.armed ?? []).map((a) => [a.fault_key, a]))
 
@@ -95,7 +106,7 @@ export function FaultsTab() {
             const armed = armedByFault.get(f.key)
             const expanded = open === f.key
             return (
-              <li key={f.key}>
+              <li key={f.key} data-chaos-fault={f.key}>
                 <div className='flex flex-wrap items-start gap-x-4 gap-y-2 px-4 py-3.5'>
                   <div className='min-w-0 flex-1 basis-64'>
                     <div className='flex flex-wrap items-center gap-2'>
