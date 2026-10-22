@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-22T16:38:54.503Z",
+  "generated_at": "2026-10-22T18:32:34.043Z",
   "releases": [
+    {
+      "version": "0.3.4",
+      "tag": "v0.3.4",
+      "date": "2026-10-22T14:32:21-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "search",
+              "text": "synonyms for searches that find nothing (#1581)",
+              "hash": "a06526406"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "huddle",
+              "text": "one seat per person, reliable calls, current-tab share",
+              "hash": "aec045fa8"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.3",
       "tag": "v0.3.3",
-      "date": "2026-10-22T12:38:40-04:00",
+      "date": "2026-10-22T12:38:54-04:00",
       "sections": [
         {
           "label": "Added",
