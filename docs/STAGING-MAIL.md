@@ -59,7 +59,11 @@ A `null` in the override drops a saved value back to the env var.
 ## Test mode
 
 Staging used to run with `MAIL_TEST_MODE=true` in `../.env` as its safety net.
-With Mailpit catching everything, remove that line (and `MAIL_TEST_RECIPIENT`):
+Turn it off only after confirming that `smtp_host` in `nivaro_settings`
+(Settings → Mail) is empty or `mailpit`, and check it again after every prod
+database restore: a restored prod DB with test mode off mails real people
+through the corporate relay. Until that check is done, leave test mode on
+(release then goes to the test recipient).
 
 - Test mode is on when **either** `MAIL_TEST_MODE` or Settings → Mail test mode
   is on, so the Settings switch cannot turn it off while the env line is there.
@@ -70,8 +74,10 @@ With Mailpit catching everything, remove that line (and `MAIL_TEST_RECIPIENT`):
   set it is **dropped** and never reaches Mailpit at all.
 
 Order: set the `NIVARO_SETTINGS_OVERRIDES` line first, release, and check that
-a test mail lands in Mailpit; only then remove `MAIL_TEST_MODE` and release
-again. Never remove `MAIL_TEST_MODE` while the override is missing.
+a test mail lands in Mailpit; then confirm `smtp_host` in Settings → Mail is
+empty or `mailpit`; only then remove `MAIL_TEST_MODE` (and
+`MAIL_TEST_RECIPIENT`) and release again. Never remove `MAIL_TEST_MODE` while
+the override is missing or before the `smtp_host` check.
 
 ## Create and rotate the secrets
 
@@ -168,5 +174,9 @@ brings relaying back.
    `NIVARO_SETTINGS_OVERRIDES` line pins them for staging; if it is ever
    removed, check Settings → Mail after every prod database restore.
 2. **`MAIL_TEST_MODE` in the env forces test mode on**, whatever Settings says,
-   and test mode drops or redirects mail before Mailpit sees it. See "Test mode".
+   and test mode drops or redirects mail before Mailpit sees it. Turn it off
+   only after confirming `smtp_host` in `nivaro_settings` (Settings → Mail) is
+   empty or `mailpit`, and re-check after every prod database restore. Until
+   that check is done, leave test mode on (release then goes to the test
+   recipient). See "Test mode".
 3. **Release sends real email.** That is why the UI is private and needs a login.

@@ -212,3 +212,13 @@ test('the documented settings override pins staging SMTP to mailpit and test mod
   })
   assert.doesNotMatch(live(env), /MAIL_TEST_MODE=/)
 })
+
+test('runbook gates removing MAIL_TEST_MODE on the smtp_host check and names no literal secret in the temporary stop', () => {
+  const docs = readFileSync(new URL('../docs/STAGING-MAIL.md', import.meta.url), 'utf8')
+  assert.match(docs, /only after confirming[\s\S]{0,80}`smtp_host`[\s\S]{0,200}empty or `mailpit`/)
+  assert.match(docs, /re-?check[\s\S]{0,80}prod\s+(DB|database) restore/i)
+  assert.match(docs, /leave test mode on/)
+  assert.doesNotMatch(docs, /--secret-rm mailpit_/)
+  assert.match(docs, /--secret-rm <relay secret name>/)
+  assert.doesNotMatch(docs, /checked by the operator/)
+})
