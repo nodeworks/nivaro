@@ -2143,6 +2143,12 @@ export async function buildServer() {
         registerAiQualityCrons(app)
       }
 
+      // Chaos Monkey (#2829): opt-in random small drills inside the configured hours.
+      {
+        const { registerChaosMonkeyCron } = await import('./services/chaos/monkey.js')
+        registerChaosMonkeyCron(app)
+      }
+
       // Huddle TURN probe + session sweep/prune (#2849, #2850).
       {
         const { registerHuddleCrons } = await import('./services/huddle-crons.js')

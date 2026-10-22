@@ -82,6 +82,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Every 20 seconds — delivers due reminders ("remind me Friday 9am") as a notification and, when set from chat, a message from the assistant in that chat. Records only failed ticks.',
   'chat-scheduled-send':
     'Every 20 seconds — sends chat messages people scheduled for later, through the normal send path (room access re-checked at send time). Records only failed ticks.',
+  'chaos-monkey':
+    'Every 15 minutes — Chaos Monkey (#2829): when switched on in Chaos → Monkey, inside its weekday hours and under its weekly cap, sometimes starts one small, short drill from the approved faults (pre-flight still judges it) and tells administrators and chaos operators. Never on production. Records only failed ticks; each drill is its own job run.',
   'huddle-schedules':
     'Every minute — reminds the invitees of a scheduled huddle five minutes before it and rings them at the start, through the normal notification path. Records only failed ticks.',
   'chat-dm-email-fallback':

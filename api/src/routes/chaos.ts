@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { listFaults } from '../services/chaos/catalog.js'
 import {
@@ -87,9 +87,9 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
     })
   })
 
-  // Administrators: read the state.
+  // Administrators and chaos operators (#2862): read the state.
   await app.register(async (adm) => {
-    adm.addHook('preHandler', requireAdmin)
+    adm.addHook('preHandler', requireChaosOperator)
 
     adm.get('/status', async () => ({ data: await chaosStatus() }))
 
@@ -166,7 +166,8 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
           params: b.params,
           seconds: b.seconds,
           hypothesis: b.hypothesis ?? null,
-          override: b.override ?? null,
+          // The working-hours override is an administrator's call, not an operator's (#2862).
+          override: req.isAdmin ? (b.override ?? null) : null,
           note: b.note ?? null,
           kind: b.kind === 'monkey' || b.kind === 'gameday' ? b.kind : 'drill',
           preset_id: b.preset_id ?? null,

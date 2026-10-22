@@ -149,6 +149,11 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
     help: 'Someone calls you in a huddle or adds you to one, and reminders for huddles you were invited to. Push is what rings a closed tab.'
   },
   {
+    key: 'chaos',
+    label: 'Chaos drills',
+    help: 'Chaos Monkey drills starting and ending, and pushes about drills you started or take part in (with a Stop button). Only administrators and chaos operators get these.'
+  },
+  {
     key: 'system',
     label: 'System & digests',
     help: 'Maintenance windows, failing monitors, import results, and the daily action summary itself. Maintenance and monitor failures always email immediately.'

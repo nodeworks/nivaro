@@ -3,6 +3,7 @@ import { getIo } from '../io-holder.js'
 import type { JobRunHandle } from '../job-runs.js'
 import { emitToTenant } from '../record-events.js'
 import { currentTenantKey, tenantScopedRoom } from '../tenant-rooms.js'
+import { enforceChaosCaps } from './caps.js'
 import {
   type ArmedFault,
   clampSeconds,
@@ -194,11 +195,19 @@ function sanitizeHypothesis(raw: unknown): HypothesisRule[] {
 }
 
 export async function startDrill(
-  input: StartDrillInput
+  request: StartDrillInput
 ): Promise<{ run: ChaosRun; fault: ArmedFault }> {
   assertChaosAllowed()
-  const def = getFault(input.fault_key)
-  if (!def) throw new ChaosError(`unknown fault ${input.fault_key}`, 400, 'CHAOS_UNKNOWN_FAULT')
+  const def = getFault(request.fault_key)
+  if (!def) throw new ChaosError(`unknown fault ${request.fault_key}`, 400, 'CHAOS_UNKNOWN_FAULT')
+  // #2862 — this environment's caps, whatever the caller sent (clamped or refused, CHAOS_CAP).
+  const capped = await enforceChaosCaps(def, request)
+  const input: StartDrillInput = {
+    ...request,
+    target: capped.target,
+    params: capped.params,
+    seconds: capped.seconds
+  }
   const seconds = clampSeconds(def, input.seconds)
   const hypothesis =
     input.hypothesis == null
@@ -217,7 +226,8 @@ export async function startDrill(
       note: input.note ? String(input.note).slice(0, 500) : null,
       node: CHAOS_NODE,
       override: input.override ?? null,
-      seconds
+      seconds,
+      caps: capped.applied.length ? capped.applied : undefined
     } as Record<string, unknown>
   }
 

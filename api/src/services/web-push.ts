@@ -83,6 +83,9 @@ export interface PushPayload {
   /** Chat: one-time token that lets the notification's inline Reply post
    *  into the room as the recipient (#956). */
   reply_token?: string | null
+  /** Chaos (#2861): one-time token behind the notification's Stop action, which ends every
+   *  fault on the instance (`POST /api/chaos/stop-all/push`). */
+  stop_token?: string | null
 }
 
 /**
@@ -102,7 +105,12 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
       noteChannelRedirect('push')
       userId = routed.userId
       // A redirected push must not carry a chat reply token for someone else.
-      payload = { ...payload, title: `${routed.prefix}${payload.title}`, reply_token: undefined }
+      payload = {
+        ...payload,
+        title: `${routed.prefix}${payload.title}`,
+        reply_token: undefined,
+        stop_token: undefined
+      }
     }
     const subs = (await db('nivaro_push_subscriptions').where({ user: userId })) as Array<{
       id: number
@@ -119,7 +127,8 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
       url: payload.url ?? null,
       tag: payload.tag ?? null,
       room: payload.room ?? null,
-      reply_token: payload.reply_token ?? null
+      reply_token: payload.reply_token ?? null,
+      stop_token: payload.stop_token ?? null
     })
 
     let sent = 0

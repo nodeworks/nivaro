@@ -321,7 +321,28 @@ async function deliver(summary: CycleSummary): Promise<void> {
     // is only stamped alerted once SOMEONE actually heard about it, so a
     // total failure retries on the next cycle instead of going quiet forever.
     let delivered = 0
-    for (const userId of recipients) {
+    // #2847 — during a chaos drill only the drill's participants are told.
+    const { drillAlert, tellDrillParticipants } = await import('./chaos/drill-alerts.js')
+    const drill = await drillAlert({
+      source: 'integration-signal',
+      key: def.id,
+      label: def.label,
+      severity: settings.severity
+    })
+    if (drill)
+      delivered = await tellDrillParticipants(app, drill, {
+        subject,
+        message,
+        category: 'integrations',
+        why: WHY,
+        target: {
+          kind: 'integration',
+          query: `tab=firefight&signal=${encodeURIComponent(def.id)}`,
+          action: 'review'
+        },
+        source: { kind: 'integration-signal', label: def.label, id: def.id }
+      })
+    for (const userId of drill ? [] : recipients) {
       try {
         const result = await notifyUser(app, userId, {
           subject,

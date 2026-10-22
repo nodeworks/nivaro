@@ -339,12 +339,25 @@ async function notifyImmediateSubscribers(
     delivery_email: boolean
     email: string | null
   }>
-  if (!subs.length) return
 
   const subject = `Alert: ${rule.name}`
   const message = `${rule.def_name} is now ${fmtValue(value, rule.def_unit)} (threshold: ${
     OPERATOR_LABELS[rule.operator] ?? rule.operator
   } ${fmtValue(threshold, rule.def_unit)})`
+  // #2847 — during a chaos drill only the drill's participants are told (no email).
+  const { drillAlert, tellDrillParticipants } = await import('./chaos/drill-alerts.js')
+  const drill = await drillAlert({ source: 'metric-alert', key: String(rule.id), label: rule.name })
+  if (drill) {
+    await tellDrillParticipants(app, drill, {
+      subject,
+      category: 'alerts',
+      message,
+      collection: 'nivaro_metric_alert_log',
+      item: String(logId)
+    })
+    return
+  }
+  if (!subs.length) return
   const now = new Date()
 
   for (const sub of subs) {

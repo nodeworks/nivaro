@@ -12,15 +12,22 @@ self.addEventListener('push', (event) => {
 
 async function show(data) {
   const title = data.title || 'Nivaro'
-  const url = data.url || (data.room ? `/chat?room=${encodeURIComponent(data.room)}` : '/notifications')
+  const url =
+    data.url || (data.room ? `/chat?room=${encodeURIComponent(data.room)}` : '/notifications')
   if (!data.room) {
-    return self.registration.showNotification(title, {
+    const options = {
       body: data.body || '',
       tag: data.tag || undefined,
       icon: '/favicon.svg',
       badge: '/favicon.svg',
-      data: { url }
-    })
+      data: { url, stop_token: data.stop_token || null }
+    }
+    // Chaos drills (#2861): Stop ends every fault on the instance, no sign-in needed.
+    if (data.stop_token) {
+      options.actions = [{ action: 'chaos-stop', title: 'Stop all faults' }]
+      options.requireInteraction = true
+    }
+    return self.registration.showNotification(title, options)
   }
   // Chat (#967): one notification per room. A second message replaces the
   // first and says how many are waiting, instead of stacking a pile.
@@ -49,6 +56,41 @@ async function show(data) {
 
 self.addEventListener('notificationclick', (event) => {
   const d = event.notification.data || {}
+  if (event.action === 'chaos-stop' && d.stop_token) {
+    event.notification.close()
+    event.waitUntil(
+      fetch('/api/chaos/stop-all/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: d.stop_token })
+      })
+        .then((res) =>
+          res.json().then(
+            (b) => ({ ok: res.ok, b }),
+            () => ({ ok: res.ok, b: {} })
+          )
+        )
+        .then(({ ok, b }) =>
+          self.registration.showNotification(ok ? 'Faults stopped' : 'Stop did not go through', {
+            body: ok
+              ? `${(b.data && b.data.stopped && b.data.stopped.length) || 0} fault(s) stopped on this instance.`
+              : (b && b.error) || 'Open the chaos console to stop them.',
+            tag: 'chaos-stop-result',
+            icon: '/favicon.svg',
+            data: { url: '/chaos' }
+          })
+        )
+        .catch(() =>
+          self.registration.showNotification('Stop did not go through', {
+            body: 'Open the chaos console to stop them.',
+            tag: 'chaos-stop-result',
+            icon: '/favicon.svg',
+            data: { url: '/chaos' }
+          })
+        )
+    )
+    return
+  }
   if (event.action === 'reply' && d.reply_token) {
     const text = (event.reply || '').trim()
     event.notification.close()

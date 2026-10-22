@@ -315,7 +315,20 @@ async function raiseIssue(
         updated_at: new Date()
       })
     }
-    if (app) {
+    // #2847 — during a chaos drill only the drill's participants are told.
+    const { drillAlert, tellDrillParticipants } = await import('./chaos/drill-alerts.js')
+    const drill = await drillAlert({
+      source: 'ops-monitor',
+      key: String(monitor.id),
+      label: monitor.name,
+      severity: monitor.type === 'synthetic' || monitor.type === 'journey' ? 'error' : 'warning'
+    })
+    if (app && drill) {
+      await tellDrillParticipants(app, drill, {
+        subject: `Monitor failing: ${monitor.name}`,
+        message: detail.slice(0, 500)
+      })
+    } else if (app) {
       const subscribers = await db('nivaro_monitor_subscribers')
         .where({ monitor_id: monitor.id })
         .pluck('user')

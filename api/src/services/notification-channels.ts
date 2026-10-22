@@ -176,6 +176,7 @@ export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'integrations',
   'system',
   'huddle',
+  'chaos',
   'other'
 ]
 
@@ -191,6 +192,7 @@ export const NOTIFY_CATEGORY_LABELS: Record<NotifyCategory, string> = {
   integrations: 'Integrations',
   system: 'System',
   huddle: 'Huddles and calls',
+  chaos: 'Chaos drills',
   other: 'Everything else'
 }
 
