@@ -1,10 +1,9 @@
-import { type AlertFired, onAlertFired } from '../alert-fired.js'
 import type { ArmedFault } from './catalog.js'
-import { armedFaults, onRegistryChange, type RegistryEvent } from './registry.js'
+import { onRegistryChange, type RegistryEvent } from './registry.js'
 import type { RunEventKind } from './runs.js'
 
 /**
- * What the readiness checks and the monitors said during each run (#1773).
+ * What the readiness checks said during each run (#1773).
  *
  * Readiness: the replica that armed a run's fault takes the scorecard live at arm, at the
  * window's midpoint (windows of 30 s or more) and at the end, and appends a `readiness` event
@@ -12,9 +11,8 @@ import type { RunEventKind } from './runs.js'
  * arm. Live runs are single-flight per process and reuse an evaluation finished in the last
  * few seconds (READINESS_FRESH_REUSE_MS), so three per drill stay cheap.
  *
- * Alerts: every alert that fires in this process (log alert rules, metric and Traffic Map
- * alerts, monitors — services/alert-fired.ts) becomes an `alert` event on every run whose
- * fault is armed here, on any replica (the run store is shared), once per alert per minute.
+ * Alerts that fire during a run are recorded by the drill alert hook (#2847,
+ * services/chaos/alert-hook.ts + drill-alerts.ts), not here, so each lands once.
  */
 
 export interface ReadinessSnapshot {
@@ -31,7 +29,6 @@ export interface MonitorDeps {
 
 const LIST_CAP = 20
 const SNAPSHOT_TIMEOUT_MS = 60_000
-const ALERT_DEDUPE_MS = 60_000
 
 export function summarizeReadiness(report: {
   score: number | null
@@ -75,7 +72,6 @@ interface Watch {
 }
 
 const watches = new Map<string, Watch>()
-const alertSeen = new Map<string, number>()
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return new Promise((resolve) => {
@@ -156,34 +152,12 @@ function onRegistry(ev: RegistryEvent): void {
   else if (ev.type === 'stop-all') for (const f of ev.faults) end(f.run_id)
 }
 
-function onAlert(a: AlertFired): void {
-  const runs = new Set<string>()
-  for (const f of armedFaults()) if (f.run_id) runs.add(f.run_id)
-  if (runs.size === 0) return
-  const now = Date.now()
-  for (const runId of runs) {
-    const k = `${runId}|${a.source}|${a.key}`
-    if (now - (alertSeen.get(k) ?? 0) < ALERT_DEDUPE_MS) continue
-    alertSeen.set(k, now)
-    if (alertSeen.size > 2000) alertSeen.clear()
-    void deps
-      .addEvent(runId, 'alert', {
-        source: a.source,
-        key: a.key,
-        label: a.label.slice(0, 200),
-        severity: a.severity ?? null,
-        fired_at: new Date(a.at).toISOString()
-      })
-      .catch(() => {})
-  }
-}
-
 let unsubs: Array<() => void> = []
 
 /** Start recording (idempotent; the catalog load calls it). */
 export function wireRunMonitors(): void {
   if (unsubs.length) return
-  unsubs = [onRegistryChange(onRegistry), onAlertFired(onAlert)]
+  unsubs = [onRegistryChange(onRegistry)]
 }
 
 /** Tests only. */
@@ -192,7 +166,6 @@ export function _resetMonitorsForTests(): void {
   unsubs = []
   for (const w of watches.values()) if (w.midTimer) clearTimeout(w.midTimer)
   watches.clear()
-  alertSeen.clear()
 }
 
 wireRunMonitors()

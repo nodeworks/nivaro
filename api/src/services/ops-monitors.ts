@@ -3,7 +3,6 @@ import tls from 'node:tls'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
-import { noteAlertFired } from './alert-fired.js'
 import { startJobRun } from './job-runs.js'
 import { notifyUser } from './notification-channels.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
@@ -503,7 +502,6 @@ export async function evaluateMonitor(
     })
     .catch(() => {})
   if (flippedToFailing) {
-    noteAlertFired({ source: 'monitor', key: String(monitor.id), label: monitor.name })
     await raiseIssue(monitor, result.detail, app)
     // #1371 — people on the pages this monitor watches record what they see.
     const paths = [
