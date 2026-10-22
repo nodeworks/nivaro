@@ -20,17 +20,13 @@ const svc = (st) => st.services.mailpit
 const attached = (st) =>
   (svc(st).secrets ?? []).map((x) => (typeof x === 'string' ? { source: x, target: x } : { source: x.source, target: x.target ?? x.source }))
 
-// structural checks on a parsed stack: ports must be absent or one host-mode publish of 8025
+// structural checks on a parsed stack: the service publishes no port at all. The UI is reached
+// through the private reverse proxy; host mode is a commented-out alternative (editing this test on purpose)
 const portProblems = (st) => {
   const out = []
   const s = svc(st)
   if (s.network_mode) out.push('network_mode')
-  for (const p of s.ports ?? []) {
-    if (typeof p === 'string') { out.push(`short syntax ${p}`); continue }
-    if (p.mode !== 'host') out.push('not host mode')
-    if (Number(p.target) !== 8025) out.push(`target ${p.target}`)
-    if (Number(p.published) === 1025) out.push('1025 published')
-  }
+  for (const p of s.ports ?? []) out.push(`published port ${typeof p === 'string' ? p : JSON.stringify(p)}`)
   return out
 }
 
@@ -93,12 +89,14 @@ test('SMTP 1025 and the UI 8025 are never published through the ingress', () => 
   assert.doesNotMatch(commented, /1025/)
 })
 
-test('port check catches quoted-key and ingress publishes (regression)', () => {
+test('port check catches any live publish, ingress or host mode, with or without an address (regression)', () => {
   const bad = (txt) => portProblems(yaml.load(txt))
   assert.ok(bad('services:\n  mailpit:\n    "ports": ["8025:8025"]').length)
   assert.ok(bad('services:\n  mailpit:\n    "ports":\n      - {"target": 8025, "published": 8025}').length)
   assert.ok(bad('services:\n  mailpit:\n    ports:\n      - {target: 1025, published: 1025, mode: host}').length)
-  assert.deepEqual(bad('services:\n  mailpit:\n    ports:\n      - {target: 8025, published: 8025, mode: host}'), [])
+  assert.ok(bad('services:\n  mailpit:\n    ports:\n      - {target: 8025, published: 8025, mode: host}').length)
+  assert.ok(bad('services:\n  mailpit:\n    ports:\n      - {target: 8025, published: 8025, mode: host, host_ip: 10.0.0.5}').length)
+  assert.deepEqual(bad('services:\n  mailpit:\n    environment: {}'), [])
 })
 
 test('secret check catches a service with no attached secret (regression)', () => {
