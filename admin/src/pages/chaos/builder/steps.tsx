@@ -799,7 +799,7 @@ function AbortAfterControl({ value, onChange }: { value: number; onChange: (n: n
           max={ABORT_AFTER_MAX}
           step={1}
           aria-describedby={hintId}
-          className={cn(inputCls, 'w-16 text-right')}
+          className={cn(inputCls, 'w-20 text-right')}
           value={text}
           onChange={(e) => commit(e.target.value)}
           onBlur={() => {

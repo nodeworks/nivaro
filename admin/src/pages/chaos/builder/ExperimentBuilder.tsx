@@ -382,7 +382,7 @@ export function ExperimentBuilder({
       {/* The run in words, the note, Save as preset and Run. */}
       <aside
         aria-label='This run'
-        className='min-w-0 border-t border-slate-200 px-4 py-4 lg:border-l lg:border-t-0 dark:border-border'
+        className='min-w-0 border-t border-slate-200 px-4 pt-4 pb-16 lg:pb-4 lg:border-l lg:border-t-0 dark:border-border'
       >
         <div className='mb-2 flex items-center justify-between gap-2'>
           <h3 className='shrink-0 whitespace-nowrap text-[13px] font-semibold text-slate-900 dark:text-foreground'>
