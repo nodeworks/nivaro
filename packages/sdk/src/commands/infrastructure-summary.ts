@@ -2,7 +2,7 @@
  * Infrastructure summaries (admin, read-only): the compact answers behind Ask AI's infra_*
  * tools — stacks, container restarts, rolling updates, swarm nodes, disk use, log growth,
  * reboot survivability, host health, proxy routers, container throttling, secret usage by
- * name, GitLab. Secret values are never returned.
+ * name, GitLab, stack drift. Secret values are never returned.
  */
 import { type Command, cmd } from '../command.js'
 
@@ -19,6 +19,7 @@ export type InfrastructureSummaryTool =
   | 'infra_resources'
   | 'infra_secrets'
   | 'infra_gitlab'
+  | 'infra_drift'
 
 /** One summary. `host` limits it to a Docker host, `limit` caps the rows, `window` is 24h or 7d (resources). */
 export function readInfrastructureSummary(

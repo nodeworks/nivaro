@@ -20,10 +20,12 @@ const m = vi.hoisted(() => ({
   resourcesAvailable: vi.fn(),
   loadContainerResources: vi.fn(),
   gitlabTarget: vi.fn(),
-  loadGitlabHealth: vi.fn()
+  loadGitlabHealth: vi.fn(),
+  driftStatus: vi.fn()
 }))
 
 vi.mock('../../../services/docker-source.js', () => ({ dockerHosts: () => hosts.list }))
+vi.mock('../../../services/infra-drift/store.js', () => ({ driftStatus: m.driftStatus }))
 vi.mock('../../../services/infra-swarm/stacks.js', () => ({ loadStacks: m.loadStacks }))
 vi.mock('../../../services/docker-inventory.js', () => ({
   loadContainers: m.loadContainers,
@@ -118,7 +120,7 @@ describe('infrastructure tool definitions', () => {
       expect(t.input_schema.type).toBe('object')
       expect(t.description?.length).toBeGreaterThan(40)
     }
-    expect(INFRA_TOOL_NAMES.size).toBe(12)
+    expect(INFRA_TOOL_NAMES.size).toBe(13)
   })
   it('rejects an unknown tool', async () => {
     await expect(executeInfraTool('infra_exec', {})).rejects.toThrow(InfraToolError)
@@ -622,5 +624,70 @@ describe('proxy, resources, gitlab', () => {
     expect(out.health.failing_checks).toEqual([{ name: 'db', status: 'failed' }])
     expect(out.runners.flagged[0].name).toBe('r1')
     expect(out.pending_jobs.unavailable).toMatch(/No token/)
+  })
+})
+
+describe('infra_drift', () => {
+  it('lists drift without any env value, secret or not', async () => {
+    m.driftStatus.mockResolvedValue({
+      available: true,
+      cloud: false,
+      docker_configured: true,
+      source_note: null,
+      stacks: [
+        {
+          stack: 'efp',
+          environment: 'production',
+          baseline: { version: '0.3.4', release: 'r1', source: 'posted', services: 2, at: 'x' },
+          last_check: { at: 'y', status: 'drift', message: null },
+          live_note: null,
+          drift: 3,
+          findings: [
+            {
+              service: 'efp_api',
+              field: 'env.LOG_LEVEL',
+              kind: 'changed',
+              expected: 'info',
+              actual: 'debug',
+              secret: false,
+              origin: 'hand-run',
+              first_seen: 'z'
+            },
+            {
+              service: 'efp_api',
+              field: 'env.DB_PASSWORD',
+              kind: 'changed',
+              expected: 'set',
+              actual: 'set',
+              secret: true,
+              origin: 'hand-run',
+              first_seen: 'z'
+            },
+            {
+              service: 'efp_worker',
+              field: 'replicas',
+              kind: 'changed',
+              expected: '1',
+              actual: '3',
+              secret: false,
+              origin: 'hand-run',
+              first_seen: 'z'
+            }
+          ]
+        }
+      ]
+    })
+    const out: any = await executeInfraTool('infra_drift', {})
+    expect(out.configured).toBe(true)
+    const f = out.stacks[0].findings
+    expect(f[0]).not.toHaveProperty('actual')
+    expect(f[1]).not.toHaveProperty('expected')
+    expect(f[2]).toMatchObject({ expected: '1', actual: '3', origin: 'hand-run' })
+    expect(JSON.stringify(out)).not.toContain('debug')
+  })
+
+  it('says when drift is not set up', async () => {
+    m.driftStatus.mockResolvedValue({ available: false, stacks: [] })
+    await expect(executeInfraTool('infra_drift', {})).resolves.toMatchObject({ configured: false })
   })
 })

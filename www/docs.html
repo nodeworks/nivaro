@@ -602,6 +602,7 @@
           <a class="docs-nav-item" data-section="infrastructure-inventory" href="#infrastructure-inventory">Containers, volumes &amp; images</a>
           <a class="docs-nav-item" data-section="infrastructure-edge" href="#infrastructure-edge">Proxy, resources &amp; GitLab</a>
           <a class="docs-nav-item" data-section="infrastructure-host" href="#infrastructure-host">Host health, reboot &amp; logs</a>
+          <a class="docs-nav-item" data-section="infrastructure-drift" href="#infrastructure-drift">Stack drift</a>
         </div>
       </div>
 
@@ -19108,7 +19109,8 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
               <tr><td>Which routers have no healthy backend?</td><td>infra_proxy.</td></tr>
               <tr><td>Which containers are throttled?</td><td>infra_resources (CPU throttling, memory headroom, out-of-memory kills).</td></tr>
               <tr><td>When do swarm certificates expire? Is any secret unused?</td><td>infra_swarm and infra_secrets.</td></tr>
-              <tr><td>Is CI healthy?</td><td>infra_gitlab.</td></tr></tr></tbody>
+              <tr><td>Is CI healthy?</td><td>infra_gitlab.</td></tr>
+              <tr><td>Did anyone change a running service by hand?</td><td>infra_drift (see Stack drift).</td></tr></tr></tbody>
           </table></div>
           <p class="doc-p">The same figures are offered to connected apps (Claude, ChatGPT, Codex) as MCP tools with the same names, for administrators only. Each one reads GET /api/infrastructure/summary/&lt;tool&gt;, which accepts host, limit and (for infra_resources) window = 24h or 7d. A connection that is not an administrator does not see the tools, and the API refuses the route to anyone else.</p>
           <!-- /SYNC:infrastructure -->
@@ -19175,6 +19177,49 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <h2 class="doc-h2" id="infrastructure-logs-tab">Logs tab</h2>
           <p class="doc-p">For each container: its log driver, its rotation (max-size and max-file), the size of its log file and how much it grew in the last day. A json-file log without max-size is flagged, because it grows until the disk is full. Each host shows the total, the daily growth and, from the free space on the filesystem that holds the Docker root, about how many days until it fills.</p>
           <!-- /SYNC:infrastructure-host -->
+        </div>
+
+        <div class="doc-section" id="s-infrastructure-drift" data-toc='[{"id":"infrastructure-drift","label":"Stack drift"},{"id":"infrastructure-drift-compared","label":"What is compared"},{"id":"infrastructure-drift-baseline","label":"Storing a baseline"},{"id":"infrastructure-drift-check","label":"The nightly check"},{"id":"infrastructure-drift-where","label":"Where it shows"}]'>
+          <!-- SYNC:infrastructure-drift -->
+          <h1 class="doc-h1" id="infrastructure-drift">Stack drift</h1>
+          <p class="doc-p">Someone runs docker service update by hand on a server to fix something quickly. The next deploy quietly undoes it, or quietly keeps it, and nobody decided which. Stack drift catches this: after every deploy the deploy script stores what each service looked like (the baseline), and every night Nivaro compares the running services with it. Differences show on the Environments page and administrators get one notification per new difference.</p>
+          <h2 class="doc-h2" id="infrastructure-drift-compared">What is compared</h2>
+          <ul class="doc-ul">
+            <li>Image: repository and digest. A different tag on the same digest is the same image.</li>
+            <li>Environment variables, one by one. Only a short list of settings that never hold a secret keeps its value in clear (NODE_ENV, NIVARO_ROLE, LOG_LEVEL, CRON_TICKS, PUBLIC_URL, ADMIN_URL and the like, plus number-only sizing settings such as DB_POOL_MAX or WEB_REPLICAS); every other value, and any value carrying password=, token=, key=, secret=, sig= or user:password@ in a URL, is kept only as a keyed hash. The page says “Value changed (not shown)” for those, never the value.</li>
+            <li>Mounts (type, source, target, read-only), secrets and configs (name and target), mode and replicas, CPU and memory limits and reservations, placement constraints and preferences.</li>
+            <li>User, read-only root filesystem, added and dropped capabilities, healthcheck, command and arguments, update, rollback and restart settings (values equal to the swarm default are ignored, so a docker service inspect and a plain Engine read compare equal).</li>
+            <li>Service and container labels, traefik labels included. Only the labels a stack deploy writes itself (com.docker.stack.namespace, com.docker.stack.image) and swarm labels are ignored.</li>
+            <li>A service in the baseline that is not running is "missing"; a service in the stack that is not in the baseline is "extra".</li>
+          </ul>
+          <p class="doc-p">Version numbers, timestamps, the update status and assigned ports are never compared. When the service spec version moved after the baseline, the difference is marked "Hand-run update" (and, when swarm kept the deployed spec as the previous one, "one docker service update after the deploy"). A new service id is marked "Recreated".</p>
+          <h2 class="doc-h2" id="infrastructure-drift-baseline">Storing a baseline</h2>
+          <p class="doc-p">The deploy script calls this after a deploy has converged, with an administrator token. It answers 200 with what it stored; the deploy must not fail if it does not.</p>
+          <pre class="doc-pre"><code>POST /api/infrastructure/drift/baseline
+{
+  "stack": "efp",
+  "environment": "production",
+  "version": "0.3.4",
+  "release": "efp-2026.10.22-1",
+  "services": [ …docker service inspect output… ]
+}</code></pre>
+          <ul class="doc-ul">
+            <li>services is the array docker service inspect prints for the stack's services (at most 200, 8 MB). Services of another stack are left out and listed in the answer as ignored. Only the compared fields are stored.</li>
+            <li>Leave services out and Nivaro reads the stack itself from the Docker host named like the environment in DOCKER_HOSTS (or the only host, or the one named in "host").</li>
+            <li>A new baseline replaces the previous one for that stack and environment (the last 10 are kept) and closes its open differences.</li>
+          </ul>
+          <h2 class="doc-h2" id="infrastructure-drift-check">The nightly check</h2>
+          <p class="doc-p">The infra-drift-check job runs at 03:15 on instances that tick scheduled jobs and have a Docker host configured. It reads each stack through the read-only Docker proxy, never the Docker socket. Check now on the Environments card runs it at once (POST /api/infrastructure/drift/check, optionally with stack and environment).</p>
+          <p class="doc-p">Without a Docker host the card says "No live source — set DOCKER_HOSTS" instead of claiming there is no drift: nothing was compared. The hashes are keyed with the instance's SESSION_SECRET: without one, baselines are refused (503) and checks fail rather than hash with a fixed key; if it changes, hashed values can no longer be compared until the next baseline, and the check says so. One check per stack and environment runs at a time across replicas (a Redis lease), so the nightly job and Check now never record or alert the same difference twice.</p>
+          <h2 class="doc-h2" id="infrastructure-drift-where">Where it shows</h2>
+          <ul class="doc-ul">
+            <li>Environments → Stack drift: one row per environment and stack with the baseline (version, release, when), the last check and the number of drifted fields. Open a row for deployed versus running values per field.</li>
+            <li>Infrastructure → Stacks: a one-line summary that links to Environments.</li>
+            <li>Ask AI and connected apps: the infra_drift tool (GET /api/infrastructure/summary/infra_drift) lists drifted fields; it names environment variables but never returns their values.</li>
+            <li>Notifications: administrators are told once per new difference, with a link to the row. A difference nobody could be told about is offered again on the next check.</li>
+          </ul>
+          <div class="doc-note">Administrators only, and not available in cloud mode. GET /api/infrastructure/drift returns the stored status for the page.</div>
+          <!-- /SYNC:infrastructure-drift -->
         </div>
 
         <div class="doc-section" id="s-chaos" data-toc='[{"id":"chaos","label":"Chaos engineering"},{"id":"chaos-gate","label":"The gate and CHAOS_ENABLED"},{"id":"chaos-faults","label":"Faults"},{"id":"chaos-runs","label":"Runs and verdicts"},{"id":"chaos-hypothesis","label":"Steady-state hypothesis and auto-abort"},{"id":"chaos-preflight","label":"Pre-flight checklist"},{"id":"chaos-console","label":"The console"},{"id":"chaos-cockpit","label":"Live run cockpit"},{"id":"chaos-banner","label":"The “Drill running” banner"}]'>

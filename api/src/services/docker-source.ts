@@ -17,6 +17,8 @@
  * mode: a tenant never sees the operator's hosts.
  */
 
+import { createHash, createHmac } from 'node:crypto'
+
 export interface DockerHost {
   name: string
   url: string
@@ -151,6 +153,129 @@ export function sanitizeDockerValue(value: unknown, parentKey = ''): unknown {
   return out
 }
 
+// ── Environment digests (#2798 stack drift) ──────────────────────────────────
+//
+// The drift detector must notice an env change without ever holding a secret. `digestEnv` turns
+// a service's `Env` array into a KEY → value map that is DEFAULT-DENY: every value is replaced by
+// a keyed hash unless its key is on the short plain allowlist below (settings that are never
+// secret and that people want to read in a diff), and even then a value carrying credentials
+// (`password=`, `token=`, `user:pass@host`…) is hashed. The hash key is this deployment's
+// SESSION_SECRET, so a stored hash cannot be brute-forced offline from the database alone;
+// without one, digest mode refuses. Only the drift paths ask for this (`env: 'digest'` on a
+// /services read, or `sanitizeServiceSpec` on a posted inspect object); everything else still
+// drops `Env` outright.
+
+/**
+ * Env keys whose value may be kept in clear: deployment shape, never credentials. Add a key only
+ * when its value can never hold a secret.
+ */
+const ENV_PLAIN_KEYS = new Set([
+  'NODE_ENV',
+  'NIVARO_ROLE',
+  'NIVARO_INSTANCE',
+  'NIVARO_VERSION',
+  'LOG_LEVEL',
+  'TZ',
+  'PORT',
+  'CRON_TICKS',
+  'CACHE_WARM',
+  'SQL_CHECKS',
+  'VIDEO_RENDER',
+  'EARLY_HINTS',
+  'COOKIE_SECURE',
+  'MIGRATION_SAFE_MODE',
+  'SKIP_BOOT_MIGRATIONS',
+  'PUBLIC_URL',
+  'ADMIN_URL',
+  'MCP_PUBLIC_URL',
+  'TELEMETRY_STORE_ENV'
+])
+/** Numeric sizing / timing settings (DB_POOL_MAX, WEB_REPLICAS, *_TIMEOUT_MS…) — plain only when the value is a bare number. */
+const ENV_PLAIN_NUMERIC_KEY =
+  /^(DB_POOL_MAX|DB_POOL_BACKGROUND_MAX|[A-Z0-9_]*_(REPLICAS|CONCURRENCY|TIMEOUT_MS|DELAY_MS|WAIT_MS|TTL_MS|TTL_S))$/
+/** A value carrying a credential is hashed whatever its key (ADO strings, query strings, URLs). */
+const ENV_CREDENTIAL_VALUE = /password=|pwd=|secret=|token=|sig=|key=/i
+const URL_CREDENTIALS = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@]+@/i
+export const ENV_HASH_PREFIX = 'hmac:'
+
+export class EnvDigestUnavailableError extends Error {
+  constructor() {
+    super(
+      'Env digests need SESSION_SECRET on this instance (nothing is hashed with a constant key)'
+    )
+    this.name = 'EnvDigestUnavailableError'
+  }
+}
+
+function envHashKey(): string {
+  const key = process.env.SESSION_SECRET
+  if (!key) throw new EnvDigestUnavailableError()
+  return key
+}
+
+/** Which hash key the digests were made with (a short fingerprint, never the key). */
+export function envDigestKeyId(): string {
+  return createHash('sha256').update(envHashKey()).digest('hex').slice(0, 8)
+}
+
+/** True when this env value is kept only as a hash (everything not explicitly plain). */
+export function envValueIsSecret(key: string, value: string): boolean {
+  if (ENV_CREDENTIAL_VALUE.test(value) || URL_CREDENTIALS.test(value)) return true
+  if (ENV_PLAIN_KEYS.has(key)) return false
+  if (ENV_PLAIN_NUMERIC_KEY.test(key) && /^\d{1,12}$/.test(value)) return false
+  return true
+}
+
+/** `['LOG_LEVEL=info', 'DB_PW=x']` → `{ LOG_LEVEL: 'info', DB_PW: 'hmac:…' }` (later duplicates win). */
+export function digestEnv(env: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!Array.isArray(env)) return out
+  const hashKey = envHashKey()
+  for (const raw of env) {
+    if (typeof raw !== 'string') continue
+    const eq = raw.indexOf('=')
+    const key = (eq < 0 ? raw : raw.slice(0, eq)).trim()
+    if (!key || key.length > 200) continue
+    const value = eq < 0 ? '' : raw.slice(eq + 1)
+    out[key] = envValueIsSecret(key, value)
+      ? `${ENV_HASH_PREFIX}${createHmac('sha256', hashKey).update(value).digest('hex').slice(0, 32)}`
+      : value.slice(0, 2000)
+  }
+  return out
+}
+
+/**
+ * One service object (a `docker service inspect` entry, from the Engine or posted by a deploy
+ * script) through the central sanitizer, with each `Env` block replaced by its digest map under
+ * `EnvDigest` (secret values hashed). The rest is exactly what `sanitizeDockerValue` returns.
+ */
+export function sanitizeServiceSpec(value: unknown): unknown {
+  return digestEnvBlocks(value, '')
+}
+
+const SPEC_CONTAINERS = new Set(['Spec', 'PreviousSpec', 'TaskTemplate', 'ContainerSpec'])
+
+function digestEnvBlocks(value: unknown, parentKey: string): unknown {
+  if (Array.isArray(value)) return value.map((v) => digestEnvBlocks(v, parentKey))
+  if (!value || typeof value !== 'object') return sanitizeDockerValue(value, parentKey)
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (k === 'Env') {
+      out.EnvDigest = digestEnv(v)
+      continue
+    }
+    if (SPEC_CONTAINERS.has(k)) {
+      out[k] = digestEnvBlocks(v, k)
+      continue
+    }
+    // Every other key goes through the sanitizer exactly as a plain read would (dropped keys
+    // stay dropped; labels, log config and arguments keep their masking).
+    const one = sanitizeDockerValue({ [k]: v }, parentKey) as Record<string, unknown>
+    if (k in one) out[k] = one[k]
+  }
+  return out
+}
+
 function cleanUrl(raw: string): string | null {
   const url = raw.trim().replace(/\/+$/, '')
   return /^https?:\/\/[^\s]+$/i.test(url) ? url : null
@@ -203,6 +328,11 @@ export interface DockerGetOptions {
   query?: Record<string, string | number | boolean | object | undefined>
   /** How long a result is reused (default 15 s; 0 = always fresh). */
   cacheMs?: number
+  /**
+   * 'digest' (only on /services) keeps each service's env as a KEY → value map with secret
+   * values hashed (`EnvDigest`, see digestEnv) — for the drift detector. Default: Env dropped.
+   */
+  env?: 'drop' | 'digest'
 }
 
 function buildPath(path: string, query?: DockerGetOptions['query']): string {
@@ -223,8 +353,13 @@ export async function dockerGet<T = unknown>(
   opts: DockerGetOptions = {}
 ): Promise<T> {
   if (!allowedPath(path)) throw new DockerUnavailableError(`Path not allowed: ${path}`, host.name)
+  const digest = opts.env === 'digest'
+  if (digest && !(path === '/services' || path.startsWith('/services/')))
+    throw new DockerUnavailableError(`Env digests are only read from /services`, host.name)
+  if (digest && !process.env.SESSION_SECRET)
+    throw new DockerUnavailableError(new EnvDigestUnavailableError().message, host.name)
   const full = buildPath(path, opts.query)
-  const key = `${host.name}|${full}`
+  const key = `${host.name}|${digest ? 'env:' : ''}${full}`
   const ttl = opts.cacheMs ?? DEFAULT_CACHE_MS
   const hit = cache.get(key)
   if (ttl > 0 && hit && Date.now() - hit.at < ttl) return hit.value as T
@@ -257,7 +392,8 @@ export async function dockerGet<T = unknown>(
       )
     }
     // Sanitized BEFORE the cache, so no cached copy ever holds what was stripped.
-    const value = sanitizeDockerValue(await res.json()) as T
+    const body = await res.json()
+    const value = (digest ? sanitizeServiceSpec(body) : sanitizeDockerValue(body)) as T
     cache.set(key, { at: Date.now(), value })
     if (cache.size > 2000) cache.delete(cache.keys().next().value as string)
     return value

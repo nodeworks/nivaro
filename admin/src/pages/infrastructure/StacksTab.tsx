@@ -1,5 +1,6 @@
 import { ChevronRight } from 'lucide-react'
 import { Fragment, useState } from 'react'
+import { StackDriftSummary } from '@/components/stack-drift-card'
 import { cn } from '@/lib/utils'
 import {
   Ago,
@@ -90,38 +91,41 @@ export function StacksTab() {
   const [q, setQ] = useState('')
   const [failingOnly, setFailingOnly] = useState(false)
   return (
-    <InfraHostsView<HostStacks>
-      query={query}
-      aside={(d) =>
-        d && (
-          <>
-            <span className='tabular-nums'>
-              {d.swarm === 'manager' ? `${d.counts.services} services · ` : ''}
-              {d.counts.containers} containers
-            </span>
-            {d.counts.failing + d.counts.containers_failing > 0 ? (
-              <Chip tone='bad' icon>
-                {d.counts.failing + d.counts.containers_failing} failing
-              </Chip>
-            ) : (
-              <Chip tone='ok' icon>
-                All running
-              </Chip>
-            )}
-          </>
-        )
-      }
-      toolbar={
-        <div className='flex flex-wrap items-center gap-2'>
-          <SearchBox value={q} onChange={setQ} placeholder='Filter stacks, services, images' />
-          <FilterChip on={failingOnly} onToggle={() => setFailingOnly((v) => !v)}>
-            Failing only
-          </FilterChip>
-        </div>
-      }
-    >
-      {(data) => <HostStacksView data={data} q={q} failingOnly={failingOnly} />}
-    </InfraHostsView>
+    <>
+      <StackDriftSummary />
+      <InfraHostsView<HostStacks>
+        query={query}
+        aside={(d) =>
+          d && (
+            <>
+              <span className='tabular-nums'>
+                {d.swarm === 'manager' ? `${d.counts.services} services · ` : ''}
+                {d.counts.containers} containers
+              </span>
+              {d.counts.failing + d.counts.containers_failing > 0 ? (
+                <Chip tone='bad' icon>
+                  {d.counts.failing + d.counts.containers_failing} failing
+                </Chip>
+              ) : (
+                <Chip tone='ok' icon>
+                  All running
+                </Chip>
+              )}
+            </>
+          )
+        }
+        toolbar={
+          <div className='flex flex-wrap items-center gap-2'>
+            <SearchBox value={q} onChange={setQ} placeholder='Filter stacks, services, images' />
+            <FilterChip on={failingOnly} onToggle={() => setFailingOnly((v) => !v)}>
+              Failing only
+            </FilterChip>
+          </div>
+        }
+      >
+        {(data) => <HostStacksView data={data} q={q} failingOnly={failingOnly} />}
+      </InfraHostsView>
+    </>
   )
 }
 

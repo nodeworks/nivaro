@@ -1,0 +1,288 @@
+[
+    {
+        "ID": "sgl091jx05v82fb1g04p0pbcg",
+        "Version": {
+            "Index": 64
+        },
+        "CreatedAt": "2026-10-22T19:48:06.320125636Z",
+        "UpdatedAt": "2026-10-22T19:48:41.360771055Z",
+        "Spec": {
+            "Name": "efp_api",
+            "Labels": {
+                "com.docker.stack.image": "traefik/whoami:v1.10.3",
+                "com.docker.stack.namespace": "efp",
+                "traefik.enable": "true",
+                "traefik.http.routers.api.rule": "Host(`efp.example.test`)"
+            },
+            "TaskTemplate": {
+                "ContainerSpec": {
+                    "Image": "traefik/whoami:v1.10.3@sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c",
+                    "Labels": {
+                        "com.docker.stack.namespace": "efp"
+                    },
+                    "Env": [
+                        "DB_PASSWORD=hunter2-very-secret",
+                        "LOG_LEVEL=info",
+                        "PUBLIC_URL=https://efp.example.test"
+                    ],
+                    "Privileges": {
+                        "CredentialSpec": null,
+                        "SELinuxContext": null,
+                        "NoNewPrivileges": false
+                    },
+                    "ReadOnly": true,
+                    "Mounts": [
+                        {
+                            "Type": "volume",
+                            "Source": "efp_data",
+                            "Target": "/data",
+                            "VolumeOptions": {
+                                "Labels": {
+                                    "com.docker.stack.namespace": "efp"
+                                }
+                            }
+                        },
+                        {
+                            "Type": "bind",
+                            "Source": "/tmp",
+                            "Target": "/host-tmp",
+                            "ReadOnly": true
+                        }
+                    ],
+                    "StopGracePeriod": 10000000000,
+                    "Healthcheck": {
+                        "Test": [
+                            "CMD",
+                            "/whoami",
+                            "--help"
+                        ],
+                        "Interval": 30000000000,
+                        "Timeout": 5000000000,
+                        "Retries": 3
+                    },
+                    "DNSConfig": {},
+                    "Secrets": [
+                        {
+                            "File": {
+                                "Name": "db_password",
+                                "UID": "0",
+                                "GID": "0",
+                                "Mode": 292
+                            },
+                            "SecretID": "gbi041rv2cghnhn4jke3psewc",
+                            "SecretName": "efp_db_pass"
+                        }
+                    ],
+                    "Isolation": "default",
+                    "CapabilityDrop": [
+                        "ALL"
+                    ]
+                },
+                "Resources": {
+                    "Limits": {
+                        "NanoCPUs": 500000000,
+                        "MemoryBytes": 134217728
+                    },
+                    "Reservations": {
+                        "MemoryBytes": 33554432
+                    }
+                },
+                "RestartPolicy": {
+                    "Condition": "any",
+                    "Delay": 5000000000,
+                    "MaxAttempts": 0
+                },
+                "Placement": {
+                    "Constraints": [
+                        "node.role == manager"
+                    ],
+                    "Platforms": [
+                        {
+                            "Architecture": "amd64",
+                            "OS": "linux"
+                        },
+                        {
+                            "Architecture": "arm64",
+                            "OS": "linux"
+                        },
+                        {
+                            "OS": "linux"
+                        }
+                    ]
+                },
+                "Networks": [
+                    {
+                        "Target": "3byj8p3ch4b9trm5r7o2k610n",
+                        "Aliases": [
+                            "api"
+                        ]
+                    }
+                ],
+                "ForceUpdate": 0,
+                "Runtime": "container"
+            },
+            "Mode": {
+                "Replicated": {
+                    "Replicas": 2
+                }
+            },
+            "UpdateConfig": {
+                "Parallelism": 1,
+                "FailureAction": "pause",
+                "Monitor": 5000000000,
+                "MaxFailureRatio": 0,
+                "Order": "start-first"
+            },
+            "RollbackConfig": {
+                "Parallelism": 1,
+                "FailureAction": "pause",
+                "Monitor": 5000000000,
+                "MaxFailureRatio": 0,
+                "Order": "stop-first"
+            },
+            "EndpointSpec": {
+                "Mode": "vip"
+            }
+        },
+        "PreviousSpec": {
+            "Name": "efp_api",
+            "Labels": {
+                "com.docker.stack.image": "traefik/whoami:v1.10.3",
+                "com.docker.stack.namespace": "efp",
+                "traefik.enable": "true",
+                "traefik.http.routers.api.rule": "Host(`efp.example.test`)"
+            },
+            "TaskTemplate": {
+                "ContainerSpec": {
+                    "Image": "traefik/whoami:v1.10.3@sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c",
+                    "Labels": {
+                        "com.docker.stack.namespace": "efp"
+                    },
+                    "Env": [
+                        "DB_PASSWORD=rotated-by-hand",
+                        "LOG_LEVEL=debug",
+                        "PUBLIC_URL=https://efp.example.test"
+                    ],
+                    "Privileges": {
+                        "CredentialSpec": null,
+                        "SELinuxContext": null,
+                        "NoNewPrivileges": false
+                    },
+                    "ReadOnly": true,
+                    "Mounts": [
+                        {
+                            "Type": "bind",
+                            "Source": "/tmp",
+                            "Target": "/host-tmp",
+                            "ReadOnly": true
+                        },
+                        {
+                            "Type": "volume",
+                            "Source": "efp_data",
+                            "Target": "/data",
+                            "VolumeOptions": {
+                                "Labels": {
+                                    "com.docker.stack.namespace": "efp"
+                                }
+                            }
+                        }
+                    ],
+                    "Healthcheck": {
+                        "Test": [
+                            "CMD",
+                            "/whoami",
+                            "--help"
+                        ],
+                        "Interval": 30000000000,
+                        "Timeout": 5000000000,
+                        "Retries": 3
+                    },
+                    "Secrets": [
+                        {
+                            "File": {
+                                "Name": "db_password",
+                                "UID": "0",
+                                "GID": "0",
+                                "Mode": 292
+                            },
+                            "SecretID": "gbi041rv2cghnhn4jke3psewc",
+                            "SecretName": "efp_db_pass"
+                        }
+                    ],
+                    "Isolation": "default",
+                    "CapabilityDrop": [
+                        "ALL"
+                    ]
+                },
+                "Resources": {
+                    "Limits": {
+                        "NanoCPUs": 500000000,
+                        "MemoryBytes": 268435456
+                    },
+                    "Reservations": {
+                        "MemoryBytes": 33554432
+                    }
+                },
+                "Placement": {
+                    "Constraints": [
+                        "node.role == manager"
+                    ],
+                    "Platforms": [
+                        {
+                            "Architecture": "amd64",
+                            "OS": "linux"
+                        },
+                        {
+                            "Architecture": "arm64",
+                            "OS": "linux"
+                        },
+                        {
+                            "OS": "linux"
+                        }
+                    ]
+                },
+                "Networks": [
+                    {
+                        "Target": "3byj8p3ch4b9trm5r7o2k610n",
+                        "Aliases": [
+                            "api"
+                        ]
+                    }
+                ],
+                "ForceUpdate": 0,
+                "Runtime": "container"
+            },
+            "Mode": {
+                "Replicated": {
+                    "Replicas": 2
+                }
+            },
+            "UpdateConfig": {
+                "Parallelism": 1,
+                "FailureAction": "pause",
+                "MaxFailureRatio": 0,
+                "Order": "start-first"
+            },
+            "EndpointSpec": {
+                "Mode": "vip"
+            }
+        },
+        "Endpoint": {
+            "Spec": {
+                "Mode": "vip"
+            },
+            "VirtualIPs": [
+                {
+                    "NetworkID": "3byj8p3ch4b9trm5r7o2k610n",
+                    "Addr": "10.0.1.2/24"
+                }
+            ]
+        },
+        "UpdateStatus": {
+            "State": "completed",
+            "StartedAt": "2026-10-22T19:48:36.357930428Z",
+            "CompletedAt": "2026-10-22T19:48:41.360756055Z",
+            "Message": "update completed"
+        }
+    }
+]

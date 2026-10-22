@@ -115,6 +115,13 @@ const SPECS: InfraToolSpec[] = [
     description:
       "The self-hosted GitLab: health checks, version, CI runners (online / offline / stale), pending job queue and the GitLab container's resources. Admin only.",
     inputs: []
+  },
+  {
+    name: 'infra_drift',
+    title: 'Stack drift',
+    description:
+      'Per stack and environment: the last deploy baseline (version, release, when), the last nightly check, and each service field whose live spec no longer matches it (image, env variable names, mounts, secrets, replicas, limits, placement, healthcheck, update config, labels), marked hand-run when a docker service update changed it after the deploy. Env values are never returned. Admin only.',
+    inputs: ['limit']
   }
 ]
 

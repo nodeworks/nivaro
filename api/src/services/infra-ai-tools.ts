@@ -183,6 +183,20 @@ export const INFRA_TOOLS: Anthropic.Tool[] = [
     description:
       'The self-hosted GitLab: health checks, version, CI runners (online / offline / stale), pending job queue and the GitLab container\'s resources. Use for "is CI healthy?".',
     input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'infra_drift',
+    description:
+      'Stack drift: per stack and environment, the last deploy baseline (version, release, when), the last nightly check, and each service field whose live spec no longer matches it (image, env variable NAMES, mounts, secrets, replicas, limits, placement, healthcheck, update config, labels), marked hand-run when a docker service update changed it after the deploy. Env values are never returned. Use for "did anyone change production by hand?".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'integer',
+          description: `How many findings to list per stack, ${DEFAULT_LIMIT} by default, up to ${MAX_LIMIT}.`
+        }
+      }
+    }
   }
 ]
 
@@ -687,6 +701,48 @@ async function secretsTool(input: Record<string, unknown>) {
   })
 }
 
+/**
+ * #2798 — stored drift findings (no live read: the nightly check and Check now do that). Env
+ * fields name the variable only; no value of any env field is returned, secret or not.
+ */
+async function driftTool(input: Record<string, unknown>) {
+  const n = limitOf(input)
+  const { driftStatus } = await import('./infra-drift/store.js')
+  const st = await driftStatus()
+  if (!st.available)
+    return notConfigured('Stack drift is not set up on this database (migration 500 not run).')
+  if (st.stacks.length === 0)
+    return {
+      configured: true,
+      note: `No baseline stored yet — the deploy script posts one after each deploy.${st.source_note ? ` ${st.source_note}` : ''}`,
+      stacks: []
+    }
+  return {
+    configured: true,
+    live_source: st.docker_configured,
+    note: st.source_note,
+    stacks: st.stacks.map((s) => ({
+      stack: s.stack,
+      environment: s.environment,
+      baseline: s.baseline,
+      last_check: { ...s.last_check, message: txt(s.last_check.message, 240) },
+      live_note: s.live_note,
+      drift: s.drift,
+      findings: s.findings.slice(0, n).map((f) => {
+        const hide = f.secret || f.field.startsWith('env.')
+        return {
+          service: f.service,
+          field: f.field,
+          kind: f.kind,
+          ...(hide ? {} : { expected: txt(f.expected, 160), actual: txt(f.actual, 160) }),
+          origin: f.origin,
+          first_seen: f.first_seen
+        }
+      })
+    }))
+  }
+}
+
 async function gitlabTool() {
   const target = await gitlabTarget()
   if (!target)
@@ -768,6 +824,8 @@ export async function executeInfraTool(
       return secretsTool(input)
     case 'infra_gitlab':
       return gitlabTool()
+    case 'infra_drift':
+      return driftTool(input)
     default:
       throw new InfraToolError(`Unknown infrastructure tool ${name}`)
   }
@@ -785,4 +843,5 @@ export const INFRA_PROMPT = `Infrastructure tools (infra_*) read the Docker host
 - "which routers have no healthy backend": infra_proxy.
 - "which containers are throttled / short on memory": infra_resources.
 - swarm nodes, manager reachability and certificate expiry: infra_swarm; secrets or configs unused or stale: infra_secrets (names only); CI health: infra_gitlab.
+- "did anyone change a running service by hand / does production match the last deploy": infra_drift.
 A tool that answers "configured: false" means that source is not set up on this instance: say so and do not guess. Never ask for or repeat secret values.`

@@ -29,11 +29,11 @@ describe('infrastructure tools (#2842)', () => {
   describe('with adminTools', () => {
     beforeEach(() => setup(true))
 
-    it('lists twelve read-only tools with plain descriptions', async () => {
+    it('lists thirteen read-only tools with plain descriptions', async () => {
       const tools = (await mcp.listTools()).tools.filter((t) =>
         INFRA_TOOL_NAMES.includes(t.name as never)
       )
-      expect(tools).toHaveLength(12)
+      expect(tools).toHaveLength(13)
       for (const t of tools) {
         expect(t.annotations?.readOnlyHint).toBe(true)
         expect(t.description).toMatch(/Admin only/)
