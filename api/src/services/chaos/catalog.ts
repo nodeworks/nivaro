@@ -212,6 +212,8 @@ function validateTargetKind(def: FaultDefinition, raw: unknown): FaultTarget {
       const pattern = String(t.pattern ?? '').trim()
       if (!ROUTE_RE.test(pattern))
         throw new ChaosError('target.pattern must be a path like /api/items/*')
+      if (pattern.split('*').length > 5)
+        throw new ChaosError('target.pattern may hold at most four *')
       return { kind: 'route', pattern }
     }
     case 'table': {

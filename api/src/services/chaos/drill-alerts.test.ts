@@ -11,8 +11,11 @@ vi.mock('../job-runs.js', () => ({
 }))
 const notify = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 1, decision: { dropped: false } }))
 vi.mock('../notification-channels.js', () => ({ notifyUser: notify }))
+const mail = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+vi.mock('../mail.js', () => ({ sendMail: mail, sendRawMail: vi.fn() }))
 
 import { db } from '../../db/index.js'
+import { notifyImmediateSubscribersForTests } from '../metric-alerts.js'
 import { raiseIssueForTests } from '../ops-monitors.js'
 import type { ArmedFault } from './catalog.js'
 import { _resetDrillForTests, startDrill, stopDrill } from './drill.js'
@@ -116,6 +119,47 @@ describe('alerts tagged as drill (#2847)', () => {
     ])
     // The drill's starter is told too, marked.
     expect(calls.find((c) => c[0] === STARTER)?.[1]).toBe('[Drill] Monitor failing: Budget sync')
+  })
+
+  it('during an unrelated drill a metric alert still emails and notifies its subscriber', async () => {
+    const { run } = await startDrill({ fault_key: 'mail_down', by: { id: STARTER, name: 'Ada' } })
+    const original = vi.mocked(db).getMockImplementation()
+    vi.mocked(db).mockImplementation((() => {
+      const chain: Record<string, unknown> = {}
+      for (const m of ['join', 'where', 'whereIn']) chain[m] = () => chain
+      chain.select = async () => [
+        { id: 1, user: SUBSCRIBER, delivery_in_app: true, delivery_email: true, email: 's@x' }
+      ]
+      chain.update = async () => 1
+      return chain
+    }) as never)
+    mail.mockClear()
+    await notifyImmediateSubscribersForTests(
+      app,
+      {
+        id: 5,
+        name: 'Budget over plan',
+        def_name: 'Budget',
+        def_unit: '',
+        operator: 'gt'
+      } as never,
+      12,
+      10,
+      77
+    )
+    if (original) vi.mocked(db).mockImplementation(original)
+    expect(mail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 's@x', subject: 'Alert: Budget over plan' })
+    )
+    const toSub = notify.mock.calls.find((c) => c[1] === SUBSCRIBER)
+    expect(toSub?.[2].message).toContain(
+      `Fired during the chaos drill “Mail transport down” (run ${run.id}).`
+    )
+    // The drill's starter hears about it too, in-app only.
+    expect(notify.mock.calls.find((c) => c[1] === STARTER)?.[2]).toMatchObject({
+      subject: '[Drill] Alert: Budget over plan',
+      channels: { inapp: true }
+    })
   })
 
   it('a related alert says it may be caused by the drill; the starter is not told twice', async () => {

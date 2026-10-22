@@ -213,12 +213,13 @@ describe('caps in the run start path (#2862)', () => {
     _setChaosSettingsForTests(
       normalizeChaosSettings({ environments: { default: { max_share_pct: 10 } } })
     )
-    const { fault } = await startDrill({
+    const { fault, run } = await startDrill({
       fault_key: 'slow_requests',
       target: { kind: 'route', pattern: '/api/items/*' },
       by: { id: null, name: 'test' }
     })
     expect(fault.target).toMatchObject({ kind: 'route', sample_pct: 10 })
+    expect(run.params.sample_pct).toBe(10)
     let hit = 0
     for (let i = 0; i < 2000; i++)
       if (chaosPoint('http.request', { route: '/api/items/x', key: `r${i}` })) hit++

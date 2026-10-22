@@ -312,8 +312,6 @@ async function lastFreshRun(scope: string): Promise<FreshRun | null> {
 /** In flight per scope + check: a fresh run joins a background refresh's
  *  evaluation of the same check instead of starting a second one. */
 const inflight = new Map<string, Promise<CachedReadinessResult>>()
-/** The status each check last evaluated to here, so only a turn to fail counts as firing. */
-const lastStatus = new Map<string, string>()
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -354,13 +352,6 @@ function evaluate(check: ReadinessCheck, scope: string): Promise<CachedReadiness
         duration_ms: Date.now() - began,
         computed_at: Date.now()
       }
-    }
-    // #2847 — a check turning to fail is an alert firing (chaos drill tagging, run monitor).
-    const before = lastStatus.get(key)
-    lastStatus.set(key, v.status)
-    if (v.status === 'fail' && before !== 'fail') {
-      const { noteAlertFired } = await import('./alert-fired.js')
-      noteAlertFired({ source: 'readiness', key: check.id, label: check.label ?? check.id })
     }
     await writeEntry(scope, check.id, v)
     return v
@@ -599,7 +590,6 @@ export function _resetReadinessForTests(): void {
   registry.clear()
   memory.clear()
   inflight.clear()
-  lastStatus.clear()
   refreshing.clear()
   freshFlights.clear()
   freshRuns.clear()

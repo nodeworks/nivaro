@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appNow } from '../services/chaos/clock.js'
 import { computeWidgetData } from '../services/dashboard-widgets.js'
 import type { User } from '../types.js'
 
@@ -138,7 +139,7 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
       | LinkRow
       | undefined
     if (!link || !link.is_active) return reply.code(404).send({ error: 'Not found' })
-    if (link.expires_at && new Date(link.expires_at).getTime() < Date.now()) {
+    if (link.expires_at && new Date(link.expires_at).getTime() < appNow()) {
       return reply.code(410).send({ error: 'This link has expired' })
     }
 

@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { FastifyReply } from 'fastify'
+import { storageChaos } from './chaos/faults/storage.js'
 import { getStorage } from './storage/index.js'
 import { LocalStorage } from './storage/local.js'
 import { getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
@@ -68,6 +69,8 @@ async function localPath(key: string): Promise<string | null> {
 export async function openStoredObject(key: string, rangeHeader?: string): Promise<OpenedObject> {
   const path = await localPath(key)
   if (path) {
+    const hit = storageChaos('read')
+    if (hit) await hit
     const { size } = await stat(path)
     const r = parseRange(rangeHeader, size)
     if (r === 'unsatisfiable')
@@ -96,6 +99,9 @@ export async function putStoredObjectFromFile(
   const active = await getActiveStorageDriver()
   const storage = getStorage()
   if (active.name === 'local' && storage instanceof LocalStorage) {
+    // #1773 — the streaming path skips the driver wrapper, so it asks the storage fault itself.
+    const hit = storageChaos('write')
+    if (hit) await hit
     const dest = storage.resolveKey(key)
     await mkdir(dirname(dest), { recursive: true })
     await pipeline(createReadStream(path), createWriteStream(dest))

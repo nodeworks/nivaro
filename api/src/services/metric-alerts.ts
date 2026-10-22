@@ -531,3 +531,6 @@ export async function runMetricAlertDigest(
 
   return { notified }
 }
+
+/** Tests only (#2847): the immediate-subscriber delivery a new firing takes. */
+export const notifyImmediateSubscribersForTests = notifyImmediateSubscribers

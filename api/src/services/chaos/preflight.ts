@@ -21,6 +21,8 @@ export interface PreflightContext {
   env: NodeJS.ProcessEnv
   now: Date
   override: { working_hours?: boolean } | null
+  /** A game-day step (#2816): faults of the same game day may already be armed. */
+  gameday_id: string | null
 }
 
 export interface PreflightCheckDef {
@@ -64,7 +66,8 @@ export async function runPreflight(
   const ctx: PreflightContext = {
     env: opts.env ?? process.env,
     now: opts.now ?? new Date(),
-    override: opts.override ?? null
+    override: opts.override ?? null,
+    gameday_id: opts.gameday_id ?? null
   }
   const out: PreflightCheck[] = []
   const overridden: string[] = []
@@ -105,7 +108,8 @@ export interface PreflightDeps {
   openIncident(): Promise<string | null>
   poolHealth(): Promise<{ wait_p95_ms: number; saturated_pct: number }>
   loopLagMs(): Promise<number>
-  armedCount(): number
+  /** Armed faults not belonging to `gamedayId` (every armed fault when null). */
+  armedCount(gamedayId: string | null): Promise<number>
 }
 
 const defaultDeps: PreflightDeps = {
@@ -190,7 +194,17 @@ const defaultDeps: PreflightDeps = {
     const { runtimeStats } = await import('../runtime-monitor.js')
     return runtimeStats().event_loop_lag_ms.max_1m
   },
-  armedCount: () => armedFaults().length
+  async armedCount(gamedayId) {
+    const faults = armedFaults()
+    if (!gamedayId) return faults.length
+    const { getRun } = await import('./runs.js')
+    let n = 0
+    for (const f of faults) {
+      const run = f.run_id ? await getRun(f.run_id) : null
+      if (!run || run.gameday_id !== gamedayId) n++
+    }
+    return n
+  }
 }
 
 /** The data sources the built-ins read; `runPreflight` sets it per call (tests inject fakes). */
@@ -282,8 +296,8 @@ export function registerBuiltInPreflight(): void {
   registerPreflightCheck({
     key: 'armed',
     label: 'No other drill armed',
-    run: () => {
-      const n = deps.armedCount()
+    run: async ({ gameday_id }) => {
+      const n = await deps.armedCount(gameday_id)
       return n ? `${n} fault${n === 1 ? ' is' : 's are'} armed — one drill at a time` : true
     }
   })

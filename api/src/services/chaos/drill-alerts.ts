@@ -46,6 +46,7 @@ export async function runParticipants(run: ChaosRun): Promise<string[]> {
     const roles = (r.meta?.roles ?? {}) as Record<string, unknown>
     for (const id of ids(r.started_by)) out.add(id)
     for (const id of ids(roles.lead)) out.add(id)
+    for (const id of ids(r.meta?.lead)) out.add(id)
     if (blind) continue
     for (const id of ids(r.meta?.participants)) out.add(id)
     for (const id of ids(roles.scribe)) out.add(id)

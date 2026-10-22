@@ -2,6 +2,7 @@ import { createHash, createHmac } from 'node:crypto'
 import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
+import { partnerChaosFetch, partnerFault, readChaosResponse } from './chaos/faults/partner.js'
 import {
   type CallDetail,
   mockRecordOn,
@@ -631,8 +632,20 @@ export async function callExternalApi(
   const mock = mockConfigFor(row)
   if (mock) {
     const mockPath = path ? (path.startsWith('/') ? path : `/${path}`) : '/'
-    const picked = pickMockRule(mock, method, mockPath)
+    let picked: {
+      status: number
+      body: unknown
+      delay_ms: number
+      headers?: Record<string, string>
+    } = pickMockRule(mock, method, mockPath)
     const t0 = Date.now()
+    // #1773 — a partner chaos fault answers in place of the canned rule (latency: waits first).
+    const chaos = partnerFault(row)
+    const chaosRes = chaos ? await partnerChaosFetch(chaos, null) : null
+    if (chaosRes) {
+      const c = await readChaosResponse(chaosRes)
+      picked = { status: c.status, body: c.body, delay_ms: 0, headers: c.headers }
+    }
     if (picked.delay_ms > 0)
       await new Promise((r) => setTimeout(r, Math.min(10_000, picked.delay_ms)))
     const durationMs = Date.now() - t0
@@ -674,7 +687,7 @@ export async function callExternalApi(
     }
     return {
       status: picked.status,
-      headers: { 'x-nivaro-mock': '1' },
+      headers: { ...picked.headers, 'x-nivaro-mock': '1' },
       body: picked.body,
       mock: true
     }
@@ -750,7 +763,11 @@ export async function callExternalApi(
     res = null
     fetchError = null
     try {
-      res = await fetch(url.toString(), init)
+      // #1773 — a partner chaos fault answers instead of the network (decided per attempt).
+      const chaos = partnerFault(row)
+      res = chaos
+        ? await partnerChaosFetch(chaos, () => fetch(url.toString(), init), ctl.signal)
+        : await fetch(url.toString(), init)
     } catch (err) {
       fetchError =
         err instanceof Error
