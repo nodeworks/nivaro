@@ -30,6 +30,7 @@ export * from './sections/data-safety.js'
 export * from './sections/db-tuning.js'
 export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
+export * from './sections/disaster-recovery.js'
 export * from './sections/ext-assistant-tools.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
@@ -202,6 +203,7 @@ import {
   devexWebhookDeliveries,
   devexWebhookSigning
 } from './sections/devex.js'
+import { disasterRecoveryDocs } from './sections/disaster-recovery.js'
 import { extAssistantTools } from './sections/ext-assistant-tools.js'
 import {
   extContext,
@@ -935,6 +937,7 @@ export const navSections: NavGroup[] = [
       obsIssueLog,
       opsErrorTracking,
       opsBackups,
+      disasterRecoveryDocs,
       opsContentPromotion,
       opsFileUsage,
       opsPermissionSimulator,

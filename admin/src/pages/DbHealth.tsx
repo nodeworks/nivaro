@@ -214,6 +214,19 @@ export function DbHealthPage() {
     staleTime: 60_000
   })
   const criticalSql = sqlChecks.data?.counts?.open?.critical ?? 0
+  // #2802 — red while the newest restore drill failed or a backup is past the RPO.
+  const recovery = useQuery({
+    queryKey: ['telemetry', 'recovery', 'strip'],
+    queryFn: () =>
+      api
+        .get<{
+          data?: { tone?: string; rows?: Array<{ tone: string; label: string; reason: string }> }
+        }>('/telemetry/recovery')
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const recoveryBad =
+    recovery.data?.tone === 'bad' ? recovery.data.rows?.find((r) => r.tone === 'bad') : undefined
   const runtime = useOps<Record<string, unknown>>('/ops-runtime/runtime')
   const roster = useOps<Array<Record<string, unknown>>>('/ops-runtime/roster')
   const caches = useOps<Array<{ name: string; description: string }>>('/ops-runtime/caches')
@@ -421,6 +434,16 @@ export function DbHealthPage() {
           >
             {criticalSql} critical SQL {criticalSql === 1 ? 'finding' : 'findings'} open{' '}
             <span aria-hidden='true'>→</span> SQL checks
+          </Link>
+        )}
+        {recoveryBad && (
+          <Link
+            to='/telemetry'
+            data-recovery-strip-link
+            className='mb-5 block rounded border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15'
+          >
+            Disaster recovery · {recoveryBad.label}: {recoveryBad.reason}{' '}
+            <span aria-hidden='true'>→</span> Telemetry
           </Link>
         )}
         <div className='grid gap-5 xl:grid-cols-2'>
