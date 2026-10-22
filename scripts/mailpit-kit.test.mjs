@@ -68,6 +68,17 @@ test('allowed/blocked recipients exist, as settings not hard-coded in compose', 
   assert.doesNotMatch(live(compose), /RECIPIENTS|MATCHING/)
 })
 
+test('recipient regexes release our domains and block customers and probed admins', () => {
+  const regex = (key) => new RegExp(relay.match(new RegExp(`^${key}: '(.*)'$`, 'm'))[1])
+  const allowed = regex('allowed-recipients')
+  const blocked = regex('blocked-recipients')
+  assert.match('ana@nivaro.dev', allowed)
+  assert.doesNotMatch('ana@evil.example', allowed)
+  assert.match('ana@customer-one.example', blocked)
+  assert.match('probed-admin-one@nivaro.dev', blocked)
+  assert.doesNotMatch('ana@nivaro.dev', blocked)
+})
+
 test('only MP_SMTP_RELAY_CONFIG is set as an MP_SMTP_RELAY_* env var in the stack file', () => {
   const names = [...live(compose).matchAll(/MP_SMTP_RELAY_\w+/g)].map((m) => m[0])
   assert.ok(names.includes('MP_SMTP_RELAY_CONFIG'))
