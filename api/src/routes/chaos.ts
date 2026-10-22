@@ -74,6 +74,8 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
     await import('../services/chaos/faults/index.js')
     const { wireDrillListeners } = await import('../services/chaos/drill.js')
     wireDrillListeners()
+    const { wireSteadyState } = await import('../services/chaos/steady-state.js')
+    await wireSteadyState()
     setChaosApp(app)
     await startChaosCluster(chaosRefusal() ? null : (app.redis ?? null))
   })
