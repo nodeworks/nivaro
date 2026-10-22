@@ -1,10 +1,494 @@
 {
-  "generated_at": "2026-10-22T00:06:03.093Z",
+  "generated_at": "2026-10-22T15:40:04.558Z",
   "releases": [
+    {
+      "version": "0.3.1",
+      "tag": "v0.3.1",
+      "date": "2026-10-22T11:39:43-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "traffic-map",
+              "text": "chaos layer + node menu (#2851)",
+              "hash": "7e47214c5"
+            },
+            {
+              "section": "Added",
+              "scope": "chaos",
+              "text": "browser chaos mode, personal chaos toolbar, pretend down (#2840 #2856 #2858)",
+              "hash": "9815abd2d"
+            },
+            {
+              "section": "Added",
+              "scope": "traffic-map",
+              "text": "simulate a dependency down (#2841)",
+              "hash": "aea9750f0"
+            },
+            {
+              "section": "Added",
+              "scope": "chaos",
+              "text": "boot drills, toxiproxy CI suite, error-state gallery, deploy-under-load (#2839 #2842 #2857 #2836)",
+              "hash": "bd0464d47"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "chaos-ci",
+              "text": "publish compose ports on loopback only (#2842)",
+              "hash": "c4b30b212"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "chaos engineering group order, www sync markers, README line",
+              "hash": "6573e8376"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "chaos database, partner, storage and process faults (#1773 #2831 #2835 #2837)",
+              "hash": "d2c9015ce"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos pool-hold fault: mark its intentional connection holds for lint:traps",
+              "hash": "84d3ddd5c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos builder: wider abort box, room for the bug button on phones",
+              "hash": "30dbcd94b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos builder follow-ups: operator caps, per-run abort limit, presets for every claim",
+              "hash": "e08ad8ab9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos builder: empty pickers show their placeholder; wider summary labels",
+              "hash": "b63367bea"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass (revise): chaos builder sliders, units, popover, rail",
+              "hash": "e43454b58"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: chaos builder start-form polish after the console merge",
+              "hash": "7e261cfe3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: chaos builder and presets",
+              "hash": "722578b08"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos security fixes: F6, F10 (presets)",
+              "hash": "5c65c6859"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: high-blast chip is a tinted badge",
+              "hash": "565041331"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: chaos console tabs, reviewer round",
+              "hash": "610abbb56"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: chaos game days — keep the confirm pair together",
+              "hash": "ab5069162"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass (revise): chaos header wrap, labels, Declare, slider",
+              "hash": "93a91e09f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: chaos game days (review round)",
+              "hash": "a7211558f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: chaos game days",
+              "hash": "97a125aa3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: chaos banner, toolbar and Traffic Map layer",
+              "hash": "2acdda609"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: chaos console tabs",
+              "hash": "409de5c38"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass revise: chaos cockpit and report",
+              "hash": "a90f62ce6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: chaos cockpit and report",
+              "hash": "a76eab517"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of client: socket and replay tests mock the client chaos hooks",
+              "hash": "c79a31f91"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos security fixes: F1, F7, F9, F10",
+              "hash": "44abe65fe"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos security fixes: F5, F6, F8",
+              "hash": "a27d40da4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos security fixes: F2",
+              "hash": "30713363d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos security fixes: F3 F4",
+              "hash": "a7d8e5c52"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of fredis: check-route test mocks authenticate",
+              "hash": "cc5103fe3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Read timeout is opt-in on the SDK; admin hosts pass 90 s (#2857)",
+              "hash": "400e8929a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Failed and hung reads show an error state instead of blank or empty (#2857)",
+              "hash": "a8e7fc1dd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of fdb: traffic map history test mocks INSTANCE_ID",
+              "hash": "72163f755"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of ops: chaos operator roles count as operators on game days and the banner",
+              "hash": "789fe93fc"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of ops: drill alerts read blind windows; game-day notes count once",
+              "hash": "bcaeddba1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos report: leave the game-day note pull to c-gameday (#2849 #2853)",
+              "hash": "b4f9b66be"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos game days: scribe in the cockpit, Declare in the drill banner (#2853, #2854)",
+              "hash": "4b0445980"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Revert \"Chaos: leave alert recording to the drill alert hook (#1773 #2847)\"",
+              "hash": "7ef9afe19"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos ops: drill alerts never silenced; share cap samples every target (#2847 #2862)",
+              "hash": "2864a574e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos claims and matrix: c-fredis fault keys (#2830 #2850)",
+              "hash": "5b623b2c0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos report: game-day shapes (#2849 #2852 #2853)",
+              "hash": "d23ea6bd3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "scorecard claim keys on the Redis, lease, partition and outbound faults (#2832 #2833 #2838 #2834)",
+              "hash": "03a921b8e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Redis drill samplers and docs (#2832 #2833 #2838 #2834)",
+              "hash": "ddb137d80"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos game days: shared shapes for report, alert routing, fault keys (#2852-#2854)",
+              "hash": "e35731aac"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "leave alert recording to the drill alert hook (#1773 #2847)",
+              "hash": "4ff408dd0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos settings: faults-allowed toggle in a fieldset (#2862)",
+              "hash": "91a4f0101"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of report: static steady-state import in the recovery watch",
+              "hash": "fc40b6b22"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Redis, scheduler lease, partition and outbound faults (#2832 #2833 #2838 #2834)",
+              "hash": "35917c045"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos console: Game days tab, scribe bar, Declare incident (#2852-#2854)",
+              "hash": "93bcc8234"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos builder: read the #2862 effective caps from /chaos/settings",
+              "hash": "ecdb51c28"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos ops: docs, drill-tag test, console polish (#2862 #2847 #2829 #2861)",
+              "hash": "e4844b475"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos claims and matrix: c-fdb fault keys and process claims (#2830 #2850)",
+              "hash": "50338f697"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "alert and readiness events read their label on the timeline (#2845)",
+              "hash": "e6f4f2b1d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "recovery watch for time to recover (#2849)",
+              "hash": "468791223"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos console: run report page, Matrix and Trends tabs (#2849 #2850 #2830 #2859)",
+              "hash": "35eb465ca"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "trust a body gameday_id only for a running game day the caller leads (#2848)",
+              "hash": "6ed587b21"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos console: experiment builder and Presets tab (#2844 #2855)",
+              "hash": "8b6b881cf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos console: Settings and Monkey tabs, drill tag on alert rows (#2862 #2829 #2847)",
+              "hash": "4154a2eed"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "linear-time route globs, no email on the banner, samplers route (#2827, #2828, #2848)",
+              "hash": "49d050e2f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "scorecard claim keys for the db, pool, partner and storage faults (#1773 #2831)",
+              "hash": "f91b238a3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos game days: planner API, scheduler, scribe marks, blind mode (#2816, #2852-#2854)",
+              "hash": "412a04b08"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "event-loop block, memory pressure and clock skew faults (#2837 #2835)",
+              "hash": "916df43eb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "database, pool, partner and storage faults; run monitors (#1773 #2831)",
+              "hash": "9b9e8a6a7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos ops: operator role + caps, drill-tagged alerts, Chaos Monkey, phone Stop (#2862 #2847 #2829 #2861)",
+              "hash": "01f56b9f8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs section and nav group (#2827-#2848)",
+              "hash": "05e472926"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "\"Drill running\" banner on every app (#2846)",
+              "hash": "ac1f61d47"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "live run cockpit (#2845, #2843)",
+              "hash": "808873dba"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "pre-flight route test (#2848)",
+              "hash": "fdf27a570"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fault presets and \"what if X died?\" (#2855 #2860)",
+              "hash": "3d2eda2c3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chaos results API: run report, claims scorecard, matrix, trends (#2849 #2830 #2850 #2859)",
+              "hash": "2c34f864f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "pre-flight checklist before a run (#2848)",
+              "hash": "a9c246c9d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "steady-state hypothesis with auto-abort (#2828)",
+              "hash": "1ddde3325"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fault registry, gate, run store, console shell (#2827)",
+              "hash": "1f2bebdc6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of ci: anchor reports/ ignore to the repo root",
+              "hash": "4f360258d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Redis outages no longer crash a serving API process",
+              "hash": "d54dc9765"
+            }
+          ]
+        }
+      ],
+      "count": 76
+    },
     {
       "version": "0.3.0",
       "tag": "v0.3.0",
-      "date": "2026-10-21T20:05:48-04:00",
+      "date": "2026-10-21T20:06:03-04:00",
       "sections": [
         {
           "label": "Documentation",
