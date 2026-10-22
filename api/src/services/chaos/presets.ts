@@ -11,6 +11,7 @@ import {
 } from './catalog.js'
 import { ChaosError } from './gate.js'
 import { SHIPPED_PRESETS } from './presets-shipped.js'
+import { CHAOS_KEY_PREFIX } from './registry.js'
 
 /**
  * Fault presets (#2855): saved scenarios — a fault, its target, strength, duration and the
@@ -61,12 +62,14 @@ export interface PresetInput {
 }
 
 const TABLE = 'nivaro_chaos_presets'
-const REDIS_KEY = 'nvr:chaos:presets'
+// Channel-prefixed like every chaos key (F1): a throwaway API never shares this hash.
+const REDIS_KEY = `${CHAOS_KEY_PREFIX}presets`
 const KEY_RE = /^[a-z][a-z0-9_.-]{1,79}$/
 const CLAIM_RE = /^[a-z][a-z0-9_.-]{1,80}$/
 const SAMPLER_RE = /^[\w.-]{1,60}$/
 const OPS = new Set(['<', '<=', '>', '>='])
-const MAX_SAVED = 500
+/** Saved presets per instance — counted on write (F10), not only capped on the listing. */
+export const MAX_SAVED = 500
 
 // ─── Backing selection ────────────────────────────────────────────────────────
 
@@ -91,6 +94,7 @@ interface RedisHash {
   hgetall(k: string): Promise<Record<string, string>>
   hset(k: string, f: string, v: string): Promise<unknown>
   hdel(k: string, f: string): Promise<unknown>
+  hlen(k: string): Promise<number>
 }
 
 function redis(): RedisHash | null {
@@ -313,6 +317,27 @@ async function listSaved(): Promise<ChaosPreset[]> {
   return [...mem.values()]
 }
 
+/** How many saved presets this instance holds (the whole backing, not the capped listing). */
+async function savedCount(): Promise<number> {
+  if (await hasTable()) {
+    try {
+      const row = (await db(TABLE).count({ n: '*' }).first()) as { n?: number | string } | undefined
+      return Number(row?.n ?? 0)
+    } catch {
+      /* the next backing */
+    }
+  }
+  const r = redis()
+  if (r) {
+    try {
+      return Number(await r.hlen(REDIS_KEY))
+    } catch {
+      /* memory */
+    }
+  }
+  return mem.size
+}
+
 async function writeSaved(p: ChaosPreset, isNew: boolean): Promise<void> {
   if (await hasTable()) {
     if (isNew) await db(TABLE).insert(toRow(p))
@@ -364,6 +389,12 @@ export async function savePreset(
   const saved = (await listSaved()).find((p) => p.key === key) ?? null
   if (saved && opts.mustBeNew)
     throw new ChaosError(`a preset with key ${key} already exists`, 409, 'CHAOS_PRESET_EXISTS')
+  if (!saved && (await savedCount()) >= MAX_SAVED)
+    throw new ChaosError(
+      `This instance already holds ${MAX_SAVED} saved presets — delete one first`,
+      409,
+      'CHAOS_PRESET_LIMIT'
+    )
   const base = saved ?? shipped().find((p) => p.key === key) ?? null
   const v = validateInput(input, base)
   const preset: ChaosPreset = {

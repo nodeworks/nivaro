@@ -44,14 +44,15 @@ function fail(reply: FastifyReply, err: unknown) {
   throw err
 }
 
+/** The caller. The display name never falls back to the email (it lands on run meta). */
 function who(req: FastifyRequest): { id: string | null; name: string | null } {
   const u = req.user as
-    | { id?: string; first_name?: string | null; last_name?: string | null; email?: string }
+    | { id?: string; first_name?: string | null; last_name?: string | null }
     | undefined
   if (!u) return { id: null, name: null }
   return {
     id: u.id ?? null,
-    name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || null
+    name: [u.first_name, u.last_name].filter(Boolean).join(' ') || null
   }
 }
 
@@ -166,7 +167,8 @@ export async function chaosPresetRoutes(app: FastifyInstance): Promise<void> {
           params: b.params ?? p.spec.params,
           seconds: b.seconds ?? p.spec.seconds,
           hypothesis: (Array.isArray(b.hypothesis) ? b.hypothesis : p.spec.hypothesis) ?? null,
-          override: b.override ?? null,
+          // The working-hours override is an administrator's call, not an operator's (#2862, F6).
+          override: req.isAdmin ? (b.override ?? null) : null,
           note: b.note ?? p.spec.note ?? null,
           // The run column is a uuid: shipped presets (no id) ride meta.preset_key only.
           preset_id: p.id && UUID_RE.test(p.id) ? p.id : null,
