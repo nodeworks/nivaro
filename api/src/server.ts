@@ -334,10 +334,10 @@ export async function buildServer() {
       }
     })
 
-    // Chaos slow-request fault (#333) — zero cost unless a drill is active.
-    const { chaosSlowDelayMs } = await import('./routes/chaos.js')
-    app.addHook('onRequest', async () => {
-      const delay = chaosSlowDelayMs()
+    // Chaos slow-request fault (#333 → registry #2827) — one map lookup unless a drill is armed.
+    const { chaosNumber } = await import('./services/chaos/registry.js')
+    app.addHook('onRequest', async (req) => {
+      const delay = chaosNumber('http.request', 'delay_ms', { route: req.url, key: req.id })
       if (delay > 0) await new Promise((r) => setTimeout(r, delay))
     })
 

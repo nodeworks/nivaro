@@ -383,7 +383,9 @@ const WATCH_ROOMS = new Set([
   'imports',
   // #2016 — incident mode on/off (payload-free; the banner re-reads the admin route)
   'ops',
-  'ai-calls'
+  'ai-calls',
+  // #2827 — chaos runs and their events (the console's cockpit)
+  'chaos'
 ])
 
 /**
