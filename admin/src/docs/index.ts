@@ -65,6 +65,7 @@ export * from './sections/quality-checks.js'
 export * from './sections/queues.js'
 export * from './sections/record-insights.js'
 export * from './sections/record-integrations.js'
+export * from './sections/release-image.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
@@ -393,6 +394,7 @@ import { realtimeLoadTest } from './sections/realtime-load-test.js'
 import { realtimeTransport } from './sections/realtime-transport.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
+import { releaseImageDocs } from './sections/release-image.js'
 import {
   apiCollections,
   apiFiles,
@@ -946,7 +948,8 @@ export const navSections: NavGroup[] = [
       infrastructureDocs,
       infrastructureInventory,
       infrastructureEdgeDocs,
-      infrastructureHostGuide
+      infrastructureHostGuide,
+      releaseImageDocs
     ]
   },
   {

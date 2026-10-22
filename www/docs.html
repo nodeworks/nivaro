@@ -602,6 +602,7 @@
           <a class="docs-nav-item" data-section="infrastructure-inventory" href="#infrastructure-inventory">Containers, volumes &amp; images</a>
           <a class="docs-nav-item" data-section="infrastructure-edge" href="#infrastructure-edge">Proxy, resources &amp; GitLab</a>
           <a class="docs-nav-item" data-section="infrastructure-host" href="#infrastructure-host">Host health, reboot &amp; logs</a>
+          <a class="docs-nav-item" data-section="release-image" href="#release-image">Release image</a>
         </div>
       </div>
 
@@ -19175,6 +19176,13 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <h2 class="doc-h2" id="infrastructure-logs-tab">Logs tab</h2>
           <p class="doc-p">For each container: its log driver, its rotation (max-size and max-file), the size of its log file and how much it grew in the last day. A json-file log without max-size is flagged, because it grows until the disk is full. Each host shows the total, the daily growth and, from the free space on the filesystem that holds the Docker root, about how many days until it fills.</p>
           <!-- /SYNC:infrastructure-host -->
+        </div>
+
+        <div class="doc-section" id="s-release-image" data-toc='[{"id":"release-image","label":"Release image"},{"id":"release-image-user","label":"Runs as uid 1000, not root"},{"id":"release-image-paths","label":"What it writes (read-only root filesystem)"},{"id":"release-image-tini","label":"tini as PID 1"},{"id":"release-image-health","label":"Health check"},{"id":"release-image-heap","label":"Node heap from the memory limit"},{"id":"release-image-slim","label":"The slim image and the render server"},{"id":"release-image-verify","label":"Verify the signature"}]'>
+          <!-- SYNC:release-image -->
+          <h1 class="doc-h1" id="release-image">Release image</h1>
+          <p class="doc-p">Nivaro ships as one Docker image that holds the API and the admin app, <code>nodeworks/nivaro:&lt;version&gt;</code>, and a smaller <code>-slim</code> image without Chromium and ffmpeg. Both run as uid 1000 under tini, have a health check and are signed with cosign.</p>
+          <!-- /SYNC:release-image -->
         </div>
 
         <div class="doc-section" id="s-chaos" data-toc='[{"id":"chaos","label":"Chaos engineering"},{"id":"chaos-gate","label":"The gate and CHAOS_ENABLED"},{"id":"chaos-faults","label":"Faults"},{"id":"chaos-runs","label":"Runs and verdicts"},{"id":"chaos-hypothesis","label":"Steady-state hypothesis and auto-abort"},{"id":"chaos-preflight","label":"Pre-flight checklist"},{"id":"chaos-console","label":"The console"},{"id":"chaos-cockpit","label":"Live run cockpit"},{"id":"chaos-banner","label":"The “Drill running” banner"}]'>

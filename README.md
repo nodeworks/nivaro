@@ -258,9 +258,11 @@ pnpm release 2.3.0     # exact version
 GitHub Actions builds `Dockerfile.release` and pushes to Docker Hub:
 
 ```
-nodeworks/nivaro:2.3.0
-nodeworks/nivaro:latest
+nodeworks/nivaro:2.3.0        nodeworks/nivaro:2.3.0-slim
+nodeworks/nivaro:latest       nodeworks/nivaro:latest-slim
 ```
+
+Both images are multi-arch and signed with cosign (keyless, GitHub OIDC).
 
 ### SDK (`@sdk-*` → npm)
 
@@ -331,6 +333,19 @@ volumes:
 ```
 
 See `examples/my-project/` for a full working example with a custom extension.
+
+The image runs as uid 1000 (`node`) under tini, has a HEALTHCHECK on `/api/version`, sizes the
+Node heap to 75% of the container memory limit (`NIVARO_HEAP_FROM_CGROUP=off` to opt out) and
+writes only `/app/uploads`, `/app/work` and `/tmp`, so a read-only root filesystem works. A volume
+made by an older (root) image needs `chown -R 1000:1000` once. The `-slim` image has no Chromium
+or ffmpeg: point `RENDER_URL` + `RENDER_TOKEN` at a full process to make PDFs and convert videos.
+Verify a pulled image:
+
+```bash
+cosign verify nodeworks/nivaro@sha256:<digest> \
+  --certificate-identity-regexp '^https://github.com/nodeworks/nivaro/.github/workflows/docker-hub.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 ---
 
