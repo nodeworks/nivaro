@@ -45,6 +45,7 @@ interface TablePlan {
   unchanged: number
   skipped_keyless: number
   untracked_only: number
+  skipped_inactive_user: number
   dropped_columns: string[]
   rows: RowChange[]
   more: number
@@ -62,9 +63,18 @@ interface RestorePreview {
   plan_hash: string
   tables: TablePlan[]
   refused: Array<{ table: string; reason: string }>
-  totals: { inserts: number; updates: number; deletes: number; tables: number }
+  totals: {
+    inserts: number
+    updates: number
+    deletes: number
+    tables: number
+    skipped_inactive_user: number
+  }
+  cascade: Array<{ table: string; child: string; column: string; action: string; rows: number }>
+  allow_cascade: boolean
   warnings: string[]
   over_cap: boolean
+  cap: number
 }
 
 interface RestoreResult {
@@ -192,8 +202,11 @@ function PlanTableRow({
         <div className='space-y-2 bg-slate-50 px-3 py-3 dark:bg-background'>
           {(plan.skipped_keyless > 0 ||
             plan.untracked_only > 0 ||
+            plan.skipped_inactive_user > 0 ||
             plan.dropped_columns.length > 0) && (
             <p className='text-[11px] text-muted-foreground'>
+              {plan.skipped_inactive_user > 0 &&
+                `${plan.skipped_inactive_user} grant(s) are not restored — the person is suspended, redacted or no longer here. `}
               {plan.skipped_keyless > 0 &&
                 `${plan.skipped_keyless} row(s) without an id are left as they are. `}
               {plan.untracked_only > 0 &&
@@ -269,6 +282,8 @@ function RestorePanel({
 }) {
   // null = every table the preview plans; otherwise the tables the person kept ticked.
   const [scope, setScope] = useState<string[] | null>(null)
+  // Part of the plan (and its hash): flipping it previews again.
+  const [allowCascade, setAllowCascade] = useState(false)
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -278,11 +293,12 @@ function RestorePanel({
   const [showRefused, setShowRefused] = useState(false)
 
   const q = useQuery<RestorePreview>({
-    queryKey: ['config-restore-preview', point.id, scope],
+    queryKey: ['config-restore-preview', point.id, scope, allowCascade],
     queryFn: () =>
       api
         .post<{ data: RestorePreview }>(`/config-diff/history/${point.id}/restore`, {
           mode: 'preview',
+          allow_cascade: allowCascade,
           ...(scope ? { tables: scope } : {})
         })
         .then((r) => r.data.data),
@@ -295,6 +311,7 @@ function RestorePanel({
     ? preview.totals.inserts + preview.totals.updates + preview.totals.deletes
     : 0
   const selectionChanged = excluded.size > 0
+  const cascadeBlocks = !!preview && preview.cascade.length > 0 && !preview.allow_cascade
 
   async function apply() {
     if (!preview) return
@@ -307,6 +324,7 @@ function RestorePanel({
         {
           mode: 'apply',
           plan_hash: preview.plan_hash,
+          allow_cascade: allowCascade,
           ...(scope ? { tables: scope } : {})
         }
       )
@@ -486,9 +504,53 @@ function RestorePanel({
               </div>
             )}
 
+            {preview.totals.skipped_inactive_user > 0 && (
+              <p className='text-[12px] text-muted-foreground' data-config-restore-skipped>
+                {formatNumber(preview.totals.skipped_inactive_user)} User Scope / team / owner
+                grant(s) are left out: the person is suspended, redacted or no longer here.
+              </p>
+            )}
+
+            {preview.cascade.length > 0 && (
+              <div
+                className='rounded-md border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300'
+                data-config-restore-cascade
+              >
+                <p className='font-medium'>Removing rows here also changes rows in other tables</p>
+                <ul className='mt-1 space-y-0.5'>
+                  {preview.cascade.map((c) => (
+                    <li key={`${c.table}>${c.child}.${c.column}`}>
+                      <span className='font-mono'>{c.table}</span> →{' '}
+                      <span className='font-mono'>{c.child}</span>: {formatNumber(c.rows)} row
+                      {c.rows === 1 ? '' : 's'}{' '}
+                      {c.action === 'CASCADE' ? 'deleted with them' : 'cleared'}
+                    </li>
+                  ))}
+                </ul>
+                <label
+                  htmlFor={`allow-cascade-${point.id}`}
+                  className='mt-2 flex items-center gap-2'
+                >
+                  <Checkbox
+                    id={`allow-cascade-${point.id}`}
+                    checked={allowCascade}
+                    onCheckedChange={(v) => {
+                      setConfirming(false)
+                      setFresh(null)
+                      setStale(false)
+                      setAllowCascade(v === true)
+                    }}
+                    data-config-restore-allow-cascade
+                  />
+                  Also delete or clear those rows
+                </label>
+              </div>
+            )}
+
             {preview.over_cap && (
               <p className='text-[12px] text-red-600 dark:text-red-400'>
-                Too many rows would change in one restore — untick tables and preview again.
+                More than {formatNumber(preview.cap)} rows would change in one restore — untick
+                tables and preview again.
               </p>
             )}
             {err && <p className='text-[12px] text-red-600 dark:text-red-400'>{err}</p>}
@@ -511,7 +573,7 @@ function RestorePanel({
                   <Button
                     size='sm'
                     className='h-8 gap-1.5 bg-nvr-cyan text-[12px] text-white hover:opacity-90'
-                    disabled={preview.over_cap || planned === 0}
+                    disabled={preview.over_cap || planned === 0 || cascadeBlocks}
                     onClick={() => setConfirming(true)}
                     data-config-restore-apply
                   >

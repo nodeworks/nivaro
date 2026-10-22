@@ -17,6 +17,7 @@
  */
 import { createHash } from 'node:crypto'
 import { gunzipSync, gzipSync } from 'node:zlib'
+import type { Knex } from 'knex'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
@@ -24,8 +25,10 @@ import {
   buildConfigSnapshot,
   type ConfigSnapshot,
   diffSnapshots,
+  redactSnapshot,
   type SnapshotDiff
 } from './config-inventory.js'
+import { chunkArray } from './db-batch.js'
 
 export type SnapshotTrigger = 'cron' | 'manual' | 'pre-migration' | 'pre-deploy' | 'pre-restore'
 
@@ -115,6 +118,22 @@ export async function takeConfigSnapshot(
   // A time-boxed snapshot that ran out of time must not land late (after the migrations it
   // was meant to precede have run) — it would be a restore point of the wrong state.
   if (opts.signal?.aborted) throw new Error('config snapshot aborted')
+  const stored = await storeConfigSnapshot(snap, trigger, opts)
+  await afterSnapshotStored(stored, opts)
+  return stored
+}
+
+/**
+ * Store an already built snapshot. `database` may be the caller's transaction (a config restore
+ * stores its pre-restore point from the rows it locked, and that row rolls back with it).
+ * Call afterSnapshotStored once the row is committed.
+ */
+export async function storeConfigSnapshot(
+  snap: ConfigSnapshot,
+  trigger: SnapshotTrigger,
+  opts: TakeSnapshotOptions = {},
+  database: Knex = db as unknown as Knex
+): Promise<StoredSnapshotMeta> {
   if (trigger !== 'cron' && trigger !== 'manual') {
     snap.restore_point = {
       trigger,
@@ -129,7 +148,7 @@ export async function takeConfigSnapshot(
   const gz = gzipSync(Buffer.from(json, 'utf8')).toString('base64')
   const rows = Object.values(snap.tables).reduce((a, t) => a + Object.keys(t).length, 0)
   const taken = new Date()
-  const inserted = (await db('nivaro_config_snapshots')
+  const inserted = (await database('nivaro_config_snapshots')
     .insert({
       taken_at: taken,
       version: NIVARO_VERSION,
@@ -146,12 +165,32 @@ export async function takeConfigSnapshot(
   const first = inserted[0] as { id?: number } | number | undefined
   let id = typeof first === 'object' && first ? Number(first.id) : Number(first)
   if (!Number.isFinite(id) || id <= 0) {
-    const row = (await db('nivaro_config_snapshots')
+    const row = (await database('nivaro_config_snapshots')
       .where({ content_hash: hash })
       .orderBy('id', 'desc')
       .first('id')) as { id: number }
     id = row.id
   }
+  return {
+    id,
+    taken_at: taken.toISOString(),
+    version: NIVARO_VERSION,
+    environment: config.NODE_ENV,
+    tables: Object.keys(snap.tables).length,
+    rows,
+    content_hash: hash,
+    bytes: gz.length,
+    trigger,
+    same_as_previous: false,
+    note: opts.note ?? null
+  }
+}
+
+/** The note's activity row and retention, once the snapshot row is committed. */
+export async function afterSnapshotStored(
+  stored: StoredSnapshotMeta,
+  opts: TakeSnapshotOptions = {}
+): Promise<void> {
   // The note rides an activity row keyed by the snapshot id: the list reads it without
   // unzipping every snapshot (the snapshot JSON carries it too, as restore_point).
   if (opts.note) {
@@ -160,28 +199,18 @@ export async function takeConfigSnapshot(
       action: 'config-snapshot-store',
       user: opts.userId ?? null,
       collection: 'nivaro_config_snapshots',
-      item: String(id),
+      item: String(stored.id),
       comment: opts.note.slice(0, 900),
       origin: opts.userId ? 'person' : 'machine'
     })
   }
-  await pruneConfigSnapshots().catch(() => {})
-  const list = await listConfigSnapshots(2)
-  return (
-    list.find((m) => m.id === id) ?? {
-      id,
-      taken_at: taken.toISOString(),
-      version: NIVARO_VERSION,
-      environment: config.NODE_ENV,
-      tables: Object.keys(snap.tables).length,
-      rows,
-      content_hash: hash,
-      bytes: gz.length,
-      trigger,
-      same_as_previous: false,
-      note: opts.note ?? null
-    }
-  )
+  try {
+    await pruneConfigSnapshots()
+  } catch (err) {
+    console.warn(
+      `[config-snapshot] retention failed: ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
 }
 
 async function pruneConfigSnapshots(): Promise<void> {
@@ -190,7 +219,9 @@ async function pruneConfigSnapshots(): Promise<void> {
     trigger: string | null
   }>
   const drop = idsToPrune(rows)
-  if (drop.length) await db('nivaro_config_snapshots').whereIn('id', drop).del()
+  // Chunked: a backlog (retention changed, a long-dead cron) must not hit the parameter cap.
+  for (const ids of chunkArray(drop, 500))
+    await db('nivaro_config_snapshots').whereIn('id', ids).del()
 }
 
 export async function listConfigSnapshots(limit = LIST_LIMIT): Promise<StoredSnapshotMeta[]> {
@@ -242,9 +273,13 @@ export async function loadConfigSnapshot(id: number): Promise<ConfigSnapshot | n
     | { snapshot_gz: string }
     | undefined
   if (!row) return null
-  return JSON.parse(
-    gunzipSync(Buffer.from(row.snapshot_gz, 'base64')).toString('utf8')
-  ) as ConfigSnapshot
+  // Today's redaction over a snapshot stored before a column joined the list (#2803 review):
+  // its value is never shown, compared or written back.
+  return redactSnapshot(
+    JSON.parse(
+      gunzipSync(Buffer.from(row.snapshot_gz, 'base64')).toString('utf8')
+    ) as ConfigSnapshot
+  )
 }
 
 /** The stored snapshot taken at or before `at` (newest such), or the oldest when none is that old. */

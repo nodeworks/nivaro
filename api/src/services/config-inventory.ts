@@ -382,28 +382,73 @@ const REDACTED: Record<string, string[]> = {
     'anthropic_api_key',
     'vapid_private_key',
     'sms_auth_token',
-    'sms_account_sid'
+    'sms_account_sid',
+    // #2803 review — credentials the list had missed (stored in clear text, not enc:v1).
+    'ai_gateway_client_secret',
+    'storage_s3_access_key',
+    'storage_s3_secret',
+    'provision_secret',
+    'directory_password',
+    'directory_refresh_token'
   ],
   nivaro_external_apis: ['auth_config'],
+  nivaro_environment_components: ['api_token', 'git_token'],
+  nivaro_webhooks: ['secret'],
+  nivaro_sso_providers: ['client_secret'],
   nivaro_users: ['external_id', 'preferences'],
   nivaro_submission_forms: ['password_hash'],
   nivaro_widget_feeds: ['token'],
   nivaro_persisted_queries: []
 }
 
+/**
+ * Deny by name, so a credential column a later migration adds cannot slip into a snapshot
+ * before someone lists it above: any column whose name has one of these words as a whole
+ * `_`-separated part is dropped, unless SECRET_NAME_ALLOW says it is reviewed and harmless.
+ */
+export const SECRET_NAME_RE =
+  /(^|_)(secret|password|passwd|pass|pwd|token|api_key|private_key|access_key|refresh_token|client_secret|credentials?)($|_)/i
+
+/** Reviewed columns the name rule would catch that hold no credential (table.column). */
+export const SECRET_NAME_ALLOW = new Set([
+  'nivaro_settings.ai_gateway_token_url', // the token endpoint URL, not a token
+  'nivaro_activity.api_key_id', // which key made the call — an id
+  'nivaro_api_logs.api_key_id'
+])
+
 /** Whether a snapshot strips this column — a write path must never set it from a snapshot. */
 export function isRedactedColumn(table: string, column: string): boolean {
-  return (REDACTED['*'] ?? []).includes(column) || (REDACTED[table] ?? []).includes(column)
+  if ((REDACTED['*'] ?? []).includes(column) || (REDACTED[table] ?? []).includes(column)) {
+    return true
+  }
+  return SECRET_NAME_RE.test(column) && !SECRET_NAME_ALLOW.has(`${table}.${column}`)
 }
 
 export function redactRow(table: string, row: Record<string, unknown>): Record<string, unknown> {
-  const drop = new Set([...(REDACTED['*'] ?? []), ...(REDACTED[table] ?? [])])
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(row)) {
-    if (drop.has(k)) continue
+    if (isRedactedColumn(table, k)) continue
     out[k] = v
   }
   return out
+}
+
+/**
+ * A snapshot with today's redaction applied (hashes recomputed). Snapshots stored before a
+ * column joined the list still carry it; every reader of a stored or uploaded snapshot goes
+ * through this so the value is never shown, compared or written.
+ */
+export function redactSnapshot(snap: ConfigSnapshot): ConfigSnapshot {
+  const tables: ConfigSnapshot['tables'] = {}
+  for (const [table, rows] of Object.entries(snap.tables ?? {})) {
+    const out: Record<string, SnapshotRow> = {}
+    for (const [key, row] of Object.entries(rows ?? {})) {
+      const data = redactRow(table, row?.data ?? {})
+      out[key] = { hash: hashRow(data), data }
+    }
+    tables[table] = out
+  }
+  return { ...snap, tables }
 }
 
 export interface TableClassification {
@@ -500,6 +545,10 @@ export async function buildConfigSnapshot(
     concurrency?: number
     /** Stops between tables (the boot snapshot's time box): throws once aborted. */
     signal?: AbortSignal
+    /** Read WITH (UPDLOCK, HOLDLOCK) — only inside the caller's transaction, one lane. */
+    lock?: boolean
+    /** With `lock`: SET LOCK_TIMEOUT in the same batch (a SET never outlives a knex.raw call). */
+    lockTimeoutMs?: number
   },
   database: typeof defaultDb = defaultDb
 ): Promise<ConfigSnapshot> {
@@ -520,7 +569,17 @@ export async function buildConfigSnapshot(
 
   const readTable = async (table: string) => {
     try {
-      const rows = (await database(table).select('*')) as Record<string, unknown>[]
+      if (!/^nivaro_[A-Za-z0-9_]+$/.test(table)) throw new Error('not a nivaro_* table')
+      // Raw with a trailing ';' — the driver-seam metadata cache never answers it, so a
+      // snapshot is the database's rows now, not a cached read up to 30 s old. `lock` holds
+      // the rows (UPDLOCK, HOLDLOCK) for the caller's transaction (a config restore).
+      const lead =
+        opts.lock && opts.lockTimeoutMs !== undefined
+          ? `SET LOCK_TIMEOUT ${Math.max(0, Math.floor(opts.lockTimeoutMs))}; `
+          : ''
+      const rows = (await database.raw(
+        `${lead}SELECT * FROM [${table}]${opts.lock ? ' WITH (UPDLOCK, HOLDLOCK)' : ''};`
+      )) as Record<string, unknown>[]
       const byKey: Record<string, SnapshotRow> = {}
       for (const raw of rows) {
         const data = redactRow(table, raw)

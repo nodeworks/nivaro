@@ -6,17 +6,19 @@ import {
 
 function deps(over: Partial<PreMigrationDeps> = {}): PreMigrationDeps & { logs: string[] } {
   const logs: string[] = []
-  return {
+  const base: PreMigrationDeps = {
     listPending: async () => ['499_x.ts', '500_y.ts'],
     hasSnapshotTable: async () => true,
+    withLock: async (fn) => fn(),
     recentExists: async () => false,
     take: vi.fn(async () => ({ id: 42 })),
     log: (m) => logs.push(m),
-    timeoutMs: 1000,
-    logs,
-    ...over
+    timeoutMs: 1000
   }
+  return { ...base, ...over, logs }
 }
+
+const never = <T>() => new Promise<T>(() => {})
 
 describe('snapshotBeforeMigrationsWith', () => {
   it('stores a restore point naming the pending migrations', async () => {
@@ -38,9 +40,28 @@ describe('snapshotBeforeMigrationsWith', () => {
     expect(d.take).not.toHaveBeenCalled()
   })
 
-  it('takes nothing when another replica stored one moments ago', async () => {
-    const d = deps({ recentExists: async () => true })
+  it('one replica snapshots: a held lock means another replica is on it', async () => {
+    const d = deps({ withLock: async () => 'busy' })
+    expect(await snapshotBeforeMigrationsWith(d)).toBe('busy')
+    expect(d.take).not.toHaveBeenCalled()
+  })
+
+  it('checks for a recent restore point INSIDE the lock, and skips when one exists', async () => {
+    const order: string[] = []
+    const d = deps({
+      withLock: async (fn) => {
+        order.push('lock')
+        const r = await fn()
+        order.push('unlock')
+        return r
+      },
+      recentExists: async () => {
+        order.push('recent?')
+        return true
+      }
+    })
     expect(await snapshotBeforeMigrationsWith(d)).toBe('recent')
+    expect(order).toEqual(['lock', 'recent?', 'unlock'])
     expect(d.take).not.toHaveBeenCalled()
   })
 
@@ -63,13 +84,24 @@ describe('snapshotBeforeMigrationsWith', () => {
     expect(await snapshotBeforeMigrationsWith(d)).toBe('failed')
   })
 
+  it('time-boxes the whole step, not just the snapshot (a hung ledger read)', async () => {
+    const d = deps({ timeoutMs: 20, listPending: () => never<string[]>() })
+    expect(await snapshotBeforeMigrationsWith(d)).toBe('timeout')
+    expect(d.take).not.toHaveBeenCalled()
+  })
+
+  it('time-boxes a hung lock wait too', async () => {
+    const d = deps({ timeoutMs: 20, withLock: () => never() })
+    expect(await snapshotBeforeMigrationsWith(d)).toBe('timeout')
+  })
+
   it('gives up at the time box and aborts the snapshot so it can never land late', async () => {
     let signal: AbortSignal | null = null
     const d = deps({
       timeoutMs: 20,
       take: (_p, s) => {
         signal = s
-        return new Promise(() => {})
+        return never()
       }
     })
     expect(await snapshotBeforeMigrationsWith(d)).toBe('timeout')

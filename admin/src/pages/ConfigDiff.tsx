@@ -91,6 +91,8 @@ function ApplyControls({
     updates: number
     unchanged: number
     skipped_keyless: number
+    skipped_inactive_user?: number
+    plan_hash: string
   } | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -103,7 +105,12 @@ function ApplyControls({
     try {
       const r = await api.post<{
         data: Record<string, number> & { errors?: Array<{ key: string; error: string }> }
-      }>('/config-diff/apply', { snapshot, table, mode })
+      }>('/config-diff/apply', {
+        snapshot,
+        table,
+        mode,
+        ...(mode === 'apply' ? { plan_hash: preview?.plan_hash } : {})
+      })
       if (mode === 'preview') {
         setPreview(r.data.data as never)
         setConfirming(false)
@@ -119,10 +126,15 @@ function ApplyControls({
         onApplied()
       }
     } catch (e) {
-      setErr(
-        (e as { response?: { data?: { error?: string } } }).response?.data?.error ??
-          (e instanceof Error ? e.message : 'Apply failed')
-      )
+      const res = (
+        e as { response?: { data?: { error?: string; code?: string; preview?: never } } }
+      ).response
+      // Bound to the preview: the table moved since — show the new counts, apply again.
+      if (res?.data?.code === 'STALE' && res.data.preview) {
+        setPreview(res.data.preview)
+        setConfirming(false)
+      }
+      setErr(res?.data?.error ?? (e instanceof Error ? e.message : 'Apply failed'))
     } finally {
       setBusy(false)
     }
@@ -146,6 +158,9 @@ function ApplyControls({
           <span className='text-[11.5px] text-muted-foreground'>
             {preview.inserts} inserts · {preview.updates} updates · {preview.unchanged} unchanged
             {preview.skipped_keyless > 0 ? ` · ${preview.skipped_keyless} keyless skipped` : ''}
+            {(preview.skipped_inactive_user ?? 0) > 0
+              ? ` · ${preview.skipped_inactive_user} grants to inactive people skipped`
+              : ''}
           </span>
         )}
         {preview && preview.inserts + preview.updates > 0 && !confirming && (

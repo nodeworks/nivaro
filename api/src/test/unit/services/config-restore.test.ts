@@ -1,9 +1,13 @@
+import type { Knex } from 'knex'
 import { describe, expect, it } from 'vitest'
 import { hashRow, type SnapshotRow } from '../../../services/config-inventory.js'
 import {
   applyTablePlans,
   type ColumnInfo,
+  computeCascade,
   type ForeignKey,
+  grantUserIds,
+  isLockTimeout,
   isRetryableDbError,
   orderBySelfRef,
   orderTables,
@@ -271,39 +275,34 @@ describe('publicRows', () => {
   })
 })
 
-/** A knex-transaction stand-in that records what would run. */
+/** A knex-transaction stand-in: parses each raw batch into a short log line. */
 function fakeTrx(failOn?: (sql: string) => Error | null) {
   const log: string[] = []
-  const exec = (sql: string, result: unknown) => {
-    const err = failOn?.(sql)
-    log.push(sql)
-    if (err) return Promise.reject(err)
-    return Promise.resolve(result)
-  }
-  const trx = ((table: string) => {
-    let where = ''
-    const q = {
-      where: (_c: string, v: string) => {
-        where = v
-        return q
-      },
-      del: () => exec(`delete ${table} ${where}`, 1),
-      update: (patch: Record<string, unknown>) =>
-        exec(`update ${table} ${where} ${Object.keys(patch).join(',')}`, 1),
-      insert: (row: Record<string, unknown>) => exec(`insert ${table} ${row.id}`, [])
-    }
-    return q
+  const batches: string[] = []
+  const trx = (() => {
+    throw new Error('the engine writes through trx.raw only')
   }) as unknown as Parameters<typeof applyTablePlans>[0]
   ;(trx as unknown as { raw: (sql: string, b?: unknown[]) => Promise<unknown> }).raw = (
     sql: string,
-    b?: unknown[]
+    b: unknown[] = []
   ) => {
     if (/XACT_STATE/.test(sql)) return Promise.resolve([{ s: 1 }])
-    if (/XACT_ABORT/.test(sql)) return Promise.resolve([])
-    const m = sql.match(/INSERT INTO \[(\w+)\]/)
-    return exec(m ? `identity-insert ${m[1]} ${b?.[0]}` : sql, [])
+    batches.push(sql)
+    let line = sql
+    const del = sql.match(/DELETE FROM \[(\w+)\] WHERE \[id\] = \?/)
+    const upd = sql.match(/UPDATE \[(\w+)\] SET (.+) WHERE \[id\] = \?/)
+    const ins = sql.match(/INSERT INTO \[(\w+)\]/)
+    if (del) line = `delete ${del[1]} ${b[0]}`
+    else if (upd)
+      line = `update ${upd[1]} ${b[b.length - 1]} ${[...upd[2].matchAll(/\[(\w+)\]/g)].map((m) => m[1]).join(',')}`
+    else if (ins)
+      line = `${/IDENTITY_INSERT/.test(sql) ? 'identity-insert' : 'insert'} ${ins[1]} ${b[0]}`
+    const err = failOn?.(line)
+    log.push(line)
+    if (err) return Promise.reject(err)
+    return Promise.resolve(upd ? [{ n: 1 }] : [])
   }
-  return { trx, log }
+  return { trx, log, batches }
 }
 
 describe('applyTablePlans', () => {
@@ -349,7 +348,7 @@ describe('applyTablePlans', () => {
   )
 
   it('deletes child-first, then inserts and updates parent-first, ids kept via IDENTITY_INSERT', async () => {
-    const { trx, log } = fakeTrx()
+    const { trx, log, batches } = fakeTrx()
     const counts = await applyTablePlans(trx, plans, target, live, columns, fks)
     expect(log).toEqual([
       'delete nivaro_workflow_states 8',
@@ -358,6 +357,8 @@ describe('applyTablePlans', () => {
       'identity-insert nivaro_workflow_states 5',
       'update nivaro_workflow_states 6 key'
     ])
+    // Every write batch carries its own lock timeout (a SET never outlives a knex.raw call).
+    expect(batches.every((sql) => sql.startsWith('SET LOCK_TIMEOUT 10000;'))).toBe(true)
     expect(counts).toEqual([
       { table: 'nivaro_workflow_templates', inserted: 1, updated: 0, deleted: 1 },
       { table: 'nivaro_workflow_states', inserted: 1, updated: 1, deleted: 1 }
@@ -401,5 +402,192 @@ describe('idsToPrune', () => {
     // The oldest go first.
     expect(drop.has(2)).toBe(true)
     expect(drop.has(41)).toBe(false)
+  })
+})
+
+describe('grants only for people active now', () => {
+  const U1 = 'AAAAAAAA-1111-4111-8111-111111111111'
+  const U2 = 'BBBBBBBB-2222-4222-8222-222222222222'
+  const scopeCols = cols({ id: { type: 'int', identity: true }, user: {}, dimension: {} })
+  const target = rows({
+    '1': { id: 1, user: U1, dimension: 'division' },
+    '2': { id: 2, user: U2, dimension: 'division' },
+    '3': { id: 3, user: U2, dimension: 'zone' }
+  })
+  const live = rows({ '3': { id: 3, user: U2, dimension: 'project' } })
+
+  it('skips inserts and updates granting to someone not active, and counts them', () => {
+    const p = planTable('nivaro_user_scopes', target, live, scopeCols, {
+      deletes: true,
+      isActiveUser: (u) => u.toUpperCase() === U1
+    })
+    expect(p.ops.map((o) => `${o.op}:${o.key}`)).toEqual(['insert:1'])
+    expect(p.skipped_inactive_user).toBe(2)
+    expect(p.inactive_keys).toEqual(['2', '3'])
+  })
+
+  it('folds the skipped grants into the plan hash', () => {
+    const some = planTable('nivaro_user_scopes', target, live, scopeCols, {
+      deletes: true,
+      isActiveUser: (u) => u.toUpperCase() === U1
+    })
+    const all = planTable('nivaro_user_scopes', target, live, scopeCols, {
+      deletes: true,
+      isActiveUser: () => true
+    })
+    expect(planHash('s', [some])).not.toBe(planHash('s', [all]))
+  })
+
+  it('collects the people grant rows name (GUIDs only)', () => {
+    expect(
+      grantUserIds(
+        { nivaro_user_scopes: rows({ a: { id: 'a', user: U1 }, b: { id: 'b', user: 'x' } }) },
+        ['nivaro_user_scopes']
+      )
+    ).toEqual([U1])
+  })
+
+  it('leaves non-grant tables alone', () => {
+    const p = planTable(
+      'nivaro_collection_layouts',
+      rows({ '1': { id: 1, name: 'A' } }),
+      {},
+      layoutCols,
+      {
+        deletes: true,
+        isActiveUser: () => false
+      }
+    )
+    expect(p.inserts).toBe(1)
+  })
+})
+
+describe('cascade effects of planned deletes', () => {
+  const fks: ForeignKey[] = [
+    {
+      child: 'nivaro_queue_sources',
+      childCol: 'queue',
+      parent: 'nivaro_queues',
+      parentCol: 'id',
+      onDelete: 'CASCADE'
+    },
+    {
+      child: 'nivaro_queue_items',
+      childCol: 'queue',
+      parent: 'nivaro_queues',
+      parentCol: 'id',
+      onDelete: 'CASCADE'
+    },
+    {
+      child: 'nivaro_widgets',
+      childCol: 'queue',
+      parent: 'nivaro_queues',
+      parentCol: 'id',
+      onDelete: 'NO_ACTION'
+    }
+  ]
+  const queueCols = cols({ id: { type: 'int' }, name: {} })
+  const srcCols = cols({ id: { type: 'int' }, queue: { type: 'int' } })
+  // Live: queue 9 (added since) with two sources (one also deleted by the plan) and 40 queue items.
+  const fake = {
+    raw: async (sql: string) => {
+      if (sql.includes('[nivaro_queue_sources]')) return [{ id: '90' }, { id: '91' }]
+      if (sql.includes('[nivaro_queue_items]'))
+        return Array.from({ length: 40 }, (_, i) => ({ id: String(i) }))
+      throw new Error(`unexpected ${sql}`)
+    }
+  } as unknown as Knex
+
+  it('counts rows a delete takes with it beyond what the plan deletes, and hashes them', async () => {
+    const queues = planTable(
+      'nivaro_queues',
+      {},
+      rows({ '9': { id: 9, name: 'New' } }),
+      queueCols,
+      { deletes: true }
+    )
+    const sources = planTable(
+      'nivaro_queue_sources',
+      {},
+      rows({ '90': { id: 90, queue: 9 } }),
+      srcCols,
+      {
+        deletes: true
+      }
+    )
+    const effects = await computeCascade(fake, [queues, sources], fks)
+    expect(effects).toEqual([
+      {
+        table: 'nivaro_queues',
+        child: 'nivaro_queue_items',
+        column: 'queue',
+        action: 'CASCADE',
+        rows: 40
+      },
+      {
+        table: 'nivaro_queues',
+        child: 'nivaro_queue_sources',
+        column: 'queue',
+        action: 'CASCADE',
+        rows: 1
+      }
+    ])
+    const withOut = planHash('s', [queues, sources], { cascade: effects })
+    expect(withOut).not.toBe(planHash('s', [queues, sources]))
+    // Opting in is part of what was previewed.
+    expect(planHash('s', [queues, sources], { cascade: effects, allowCascade: true })).not.toBe(
+      withOut
+    )
+  })
+
+  it('reports nothing when no delete is planned', async () => {
+    const queues = planTable(
+      'nivaro_queues',
+      rows({ '9': { id: 9, name: 'A' } }),
+      rows({ '9': { id: 9, name: 'B' } }),
+      queueCols,
+      {
+        deletes: true
+      }
+    )
+    expect(await computeCascade(fake, [queues], fks)).toEqual([])
+  })
+})
+
+describe('secrets in previews', () => {
+  it('masks a secret-named column a stored snapshot still carries, both sides', () => {
+    // A row deleted since, from a live table that (wrongly) still exposes the column.
+    const c = cols({ id: { type: 'int' }, name: {}, api_token: {}, git_token: {} })
+    const live = {
+      '7': { hash: 'h', data: { id: 7, name: 'Prod', api_token: 'live-secret', git_token: 'g' } }
+    }
+    const p = planTable('nivaro_environment_components', {}, live, c, { deletes: true })
+    const out = publicRows(p, {}, live)
+    const fields = Object.fromEntries(out[0].fields.map((f) => [f.field, f.now]))
+    expect(fields.api_token).toBe('••••••')
+    expect(fields.git_token).toBe('••••••')
+    expect(fields.name).toBe('Prod')
+  })
+
+  it('never plans a write of a secret column even when a file carries it', () => {
+    const c = cols({
+      id: { type: 'int' },
+      name: {},
+      client_secret: {},
+      ai_gateway_client_secret: {}
+    })
+    const target = rows({
+      '1': { id: 1, name: 'x', client_secret: 's', ai_gateway_client_secret: 's2' }
+    })
+    const p = planTable('nivaro_settings', target, {}, c, { deletes: false })
+    expect(p.ops[0].fields.sort()).toEqual(['id', 'name'])
+  })
+})
+
+describe('isLockTimeout', () => {
+  it('reads SQL Server 1222 by number or by text', () => {
+    expect(isLockTimeout(Object.assign(new Error('x'), { number: 1222 }))).toBe(true)
+    expect(isLockTimeout(new Error('Lock request time out period exceeded.'))).toBe(true)
+    expect(isLockTimeout(new Error('deadlock'))).toBe(false)
   })
 })

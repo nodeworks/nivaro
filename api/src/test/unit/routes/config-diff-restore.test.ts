@@ -11,6 +11,11 @@ const h = vi.hoisted(() => ({
   activity: [] as Array<Record<string, unknown>>,
   previews: [] as Array<{ id: number; scope: unknown; read: boolean }>,
   applies: [] as Array<{ id: number; opts: Record<string, unknown> }>,
+  uploads: [] as Array<{
+    snap: { tables: Record<string, Record<string, { data: Record<string, unknown> }>> }
+    table: string
+    opts: Record<string, unknown>
+  }>,
   applyError: null as Error | null
 }))
 
@@ -54,8 +59,8 @@ vi.mock('../../../services/config-restore.js', async () => {
     RestoreError,
     RestoreOpError: class extends Error {},
     RESTORE_EXCLUDED: { nivaro_users: 'People accounts', nivaro_sso_providers: 'credentials' },
-    previewRestore: async (id: number, scope: unknown) => {
-      h.previews.push({ id, scope, read: false })
+    previewRestore: async (id: number, scope: unknown, allowCascade: unknown) => {
+      h.previews.push({ id, scope, read: false, allowCascade } as never)
       return { snapshot_id: id, plan_hash: 'a'.repeat(64), tables: [] }
     },
     applyRestore: async (id: number, opts: Record<string, unknown>) => {
@@ -63,11 +68,14 @@ vi.mock('../../../services/config-restore.js', async () => {
       h.applies.push({ id, opts })
       return { snapshot_id: id, pre_restore_id: 78, tables: [], totals: {} }
     },
-    afterConfigWrite: async () => {},
-    applyTablePlans: async () => [],
-    loadForeignKeys: async () => [],
-    loadLiveColumns: async () => new Map(),
-    planTable: () => ({ ops: [] })
+    applyUploadedTable: async (
+      snap: (typeof h.uploads)[number]['snap'],
+      table: string,
+      opts: Record<string, unknown>
+    ) => {
+      h.uploads.push({ snap, table, opts })
+      return { table, inserts: 1, updates: 0, plan_hash: 'c'.repeat(64) }
+    }
   }
 })
 
@@ -94,6 +102,7 @@ beforeEach(() => {
   h.activity.length = 0
   h.previews.length = 0
   h.applies.length = 0
+  h.uploads.length = 0
   h.applyError = null
 })
 
@@ -231,5 +240,75 @@ describe('POST /config-diff/history/:id/restore', () => {
     })
     expect(r.statusCode).toBe(409)
     expect(r.json()).toMatchObject({ code: 'STALE', preview: { plan_hash: 'b'.repeat(64) } })
+  })
+})
+
+describe('POST /config-diff/apply (uploaded snapshot)', () => {
+  const snapshot = {
+    format: 1,
+    generated_at: '2026-10-07T08:40:00.000Z',
+    instance: { version: '0.2.20', environment: 'production', database: 'P' },
+    classification: { config: [], derived: [], runtime: [], unclassified: [], absent: [] },
+    tables: {
+      nivaro_settings: {
+        '1': { hash: 'x', data: { id: 1, project_name: 'EFP', directory_password: 'file-secret' } }
+      }
+    },
+    errors: {}
+  }
+
+  it('strips secret columns from the file before the engine sees it', async () => {
+    const a = await app()
+    const r = await a.inject({
+      method: 'POST',
+      url: '/config-diff/apply',
+      headers: admin,
+      payload: { snapshot, table: 'nivaro_settings', mode: 'preview' }
+    })
+    expect(r.statusCode).toBe(200)
+    expect(h.uploads[0].snap.tables.nivaro_settings['1'].data).toEqual({
+      id: 1,
+      project_name: 'EFP'
+    })
+    expect(JSON.stringify(r.json())).not.toContain('file-secret')
+  })
+
+  it('needs the preview hash to apply, and passes it on', async () => {
+    const a = await app()
+    const missing = await a.inject({
+      method: 'POST',
+      url: '/config-diff/apply',
+      headers: admin,
+      payload: { snapshot, table: 'nivaro_settings', mode: 'apply' }
+    })
+    expect(missing.statusCode).toBe(400)
+    const ok = await a.inject({
+      method: 'POST',
+      url: '/config-diff/apply',
+      headers: admin,
+      payload: { snapshot, table: 'nivaro_settings', mode: 'apply', plan_hash: 'c'.repeat(64) }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(h.uploads.at(-1)?.opts).toMatchObject({ mode: 'apply', planHash: 'c'.repeat(64) })
+  })
+})
+
+describe('allow_cascade', () => {
+  it('reaches the preview and the apply', async () => {
+    const a = await app()
+    await a.inject({
+      method: 'POST',
+      url: '/config-diff/history/5/restore',
+      headers: admin,
+      payload: { mode: 'preview', allow_cascade: true }
+    })
+    expect((h.previews[0] as unknown as { allowCascade: unknown }).allowCascade).toBe(true)
+    await a.inject({
+      method: 'POST',
+      url: '/config-diff/history/5/restore',
+      headers: admin,
+      payload: { mode: 'apply', plan_hash: 'a'.repeat(64), allow_cascade: true }
+    })
+    expect(h.applies[0].opts).toMatchObject({ allowCascade: true })
   })
 })
