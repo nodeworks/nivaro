@@ -2,6 +2,11 @@ import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../middleware/authenticate.js', () => ({
+  // requireChaosOperator (#2862) authenticates, then lets administrators through.
+  authenticate: async (req: { user?: unknown; isAdmin?: boolean }) => {
+    req.user = { id: '11111111-1111-1111-1111-111111111111' }
+    req.isAdmin = true
+  },
   requireAuth: async () => {},
   requireAdmin: async (req: { user?: unknown }) => {
     req.user = { id: '11111111-1111-1111-1111-111111111111' }
