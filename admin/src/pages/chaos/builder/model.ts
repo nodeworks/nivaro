@@ -280,8 +280,10 @@ export function paramWords(fault: CatalogFault, params: Record<string, ParamValu
   const parts: string[] = []
   for (const [k, s] of Object.entries(fault.params)) {
     const v = params[k]
-    if (s.type === 'boolean') parts.push(`${s.label} ${v ? 'on' : 'off'}`)
-    else if (s.type === 'number') parts.push(`${s.label} ${v}${s.unit ? ` ${s.unit}` : ''}`)
+    // A switch reads as its label when on and drops out when off ("Add jitter", not "Add jitter on").
+    if (s.type === 'boolean') {
+      if (v) parts.push(s.label)
+    } else if (s.type === 'number') parts.push(`${s.label} ${withUnit(String(v), s.unit)}`)
     else if (v !== '' && v != null) parts.push(`${s.label} ${v}`)
   }
   return parts.join(' · ')
@@ -291,6 +293,34 @@ export function paramWords(fault: CatalogFault, params: Record<string, ParamValu
 export function abortLine(r: HypothesisRule): number {
   const tol = r.tolerance ?? 0
   return r.op === '<' || r.op === '<=' ? r.limit + tol : r.limit - tol
+}
+
+const OP_SYMBOL: Record<HypothesisRule['op'], string> = { '<': '<', '<=': '≤', '>': '>', '>=': '≥' }
+
+/** A number with its unit, the one way the builder writes them: "2500 ms", "1.5%", "1–100%". */
+export function withUnit(n: number | string, unit: string | null | undefined): string {
+  if (!unit) return String(n)
+  return unit === '%' ? `${n}%` : `${n} ${unit}`
+}
+
+/** One steady-state line in words: "Request p95 < 2500 ms". */
+export function ruleWords(r: HypothesisRule, label: string, unit: string): string {
+  return `${label} ${OP_SYMBOL[r.op] ?? r.op} ${withUnit(r.limit, unit)}`
+}
+
+/** A Traffic Map dependency node as people name it ("ext:7" → "partner #7"). */
+export function mapNodeLabel(node: string): string {
+  const names: Record<string, string> = {
+    db: 'the database',
+    redis: 'Redis',
+    mail: 'mail',
+    store: 'file storage',
+    ai: 'the AI provider',
+    signin: 'sign-in'
+  }
+  if (names[node]) return names[node]
+  const ext = /^ext:(\d+)$/.exec(node)
+  return ext ? `partner #${ext[1]}` : node
 }
 
 /** The Traffic Map dependency node simulate-down works out for this fault, if any. */

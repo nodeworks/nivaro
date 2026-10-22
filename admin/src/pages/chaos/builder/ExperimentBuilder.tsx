@@ -1,5 +1,15 @@
+import { useOverflowTip } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Play, X, Zap } from 'lucide-react'
+import {
+  AlertTriangle,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  Play,
+  X,
+  Zap
+} from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -26,7 +36,9 @@ import {
   formatSeconds,
   initialDraft,
   mapNodeFor,
+  mapNodeLabel,
   paramWords,
+  ruleWords,
   runBody,
   type SpecLike,
   STEPS,
@@ -113,6 +125,14 @@ export function ExperimentBuilder({
   const [confirming, setConfirming] = useState(false)
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const railRef = useRef<HTMLOListElement>(null)
+  // On a phone the rail scrolls sideways: fade the right edge while more steps sit past it.
+  const [railMore, setRailMore] = useState(false)
+  const measureRail = () => {
+    const el = railRef.current
+    if (el) setRailMore(el.scrollWidth - el.scrollLeft - el.clientWidth > 4)
+  }
+  const presetTipRef = useOverflowTip<HTMLSpanElement>(preset ? `from ${preset.label}` : null)
 
   // Caps (#2862) can arrive after the first render: pull the draft back inside them.
   useEffect(() => {
@@ -155,6 +175,8 @@ export function ExperimentBuilder({
   const allowed = status?.allowed ?? true
   const canRun = allowed && blocking.length === 0 && preflightOk === true
 
+  // Waiting is calm; anything that blocks Run reads amber (red stays for the armed confirm).
+  const whyBlocks = !allowed || blocking.length > 0 || preflightOk === false
   const why = !allowed
     ? (status?.reason ?? 'Faults cannot be armed on this instance.')
     : blocking[0]
@@ -162,7 +184,9 @@ export function ExperimentBuilder({
       : preflightOk === null
         ? 'Waiting for the pre-flight checks…'
         : preflightOk === false
-          ? `Pre-flight: ${failing.map((c) => c.label).join(', ')}.`
+          ? overridable
+            ? 'Outside working hours: tick the override to run.'
+            : `Pre-flight is blocking this run: ${failing.map((c) => sentence(c.why ?? c.label)).join(' ')}`
           : null
 
   const run = useMutation({
@@ -197,6 +221,20 @@ export function ExperimentBuilder({
     setStep(id)
     requestAnimationFrame(() => bodyRef.current?.focus({ preventScroll: true }))
   }
+  // On a phone the rail is a scrolling row: keep the current step in view.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run when the step changes
+  useEffect(() => {
+    const el = railRef.current?.querySelector<HTMLElement>('[aria-current="step"]')
+    el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+    measureRail()
+  }, [step])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measureRail only reads the ref
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined' || !railRef.current) return
+    const ro = new ResizeObserver(() => measureRail())
+    ro.observe(railRef.current)
+    return () => ro.disconnect()
+  }, [])
   const idx = STEPS.findIndex((s) => s.id === step)
 
   const summary = useStepSummaries(fault, draft, preflightOk, failing.length)
@@ -216,7 +254,15 @@ export function ExperimentBuilder({
         aria-label='Steps'
         className='min-w-0 border-b border-slate-200 lg:border-b-0 lg:border-r dark:border-border'
       >
-        <ol className='flex gap-1 overflow-x-auto px-3 py-2 [scrollbar-width:none] lg:flex-col lg:gap-0.5 lg:overflow-visible lg:px-2 lg:py-3 [&::-webkit-scrollbar]:hidden'>
+        <ol
+          ref={railRef}
+          onScroll={measureRail}
+          className={cn(
+            railMore &&
+              '[mask-image:linear-gradient(to_right,#000_calc(100%-40px),transparent)] lg:[mask-image:none]',
+            'flex gap-1 overflow-x-auto px-3 py-2 [scrollbar-width:none] lg:flex-col lg:gap-0.5 lg:overflow-visible lg:px-2 lg:py-3 [&::-webkit-scrollbar]:hidden'
+          )}
+        >
           {STEPS.map((s, i) => {
             const on = s.id === step
             const issue = issues[s.id]
@@ -256,6 +302,8 @@ export function ExperimentBuilder({
                     <span className='hidden max-w-[150px] truncate text-[11.5px] text-slate-500 lg:block dark:text-muted-foreground'>
                       {issue ? (
                         <span className='text-amber-700 dark:text-amber-400'>Needs a value</span>
+                      ) : s.id === 'preflight' && preflightOk === false ? (
+                        <span className='text-amber-700 dark:text-amber-400'>{summary[s.id]}</span>
                       ) : (
                         summary[s.id]
                       )}
@@ -306,7 +354,7 @@ export function ExperimentBuilder({
             type='button'
             disabled={idx === 0}
             onClick={() => go(STEPS[idx - 1].id)}
-            className='inline-flex h-8 items-center gap-1 rounded-md px-2.5 text-[12.5px] font-medium text-slate-600 hover:bg-slate-100 disabled:invisible dark:text-muted-foreground dark:hover:bg-muted'
+            className='inline-flex h-8 items-center gap-1 rounded-md px-2.5 text-[12.5px] font-medium text-slate-600 transition-colors duration-150 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:invisible dark:text-muted-foreground dark:hover:bg-muted'
           >
             <ChevronLeft className='h-3.5 w-3.5' aria-hidden />
             {idx > 0 ? STEPS[idx - 1].label : 'Back'}
@@ -315,7 +363,7 @@ export function ExperimentBuilder({
             <button
               type='button'
               onClick={() => go(STEPS[idx + 1].id)}
-              className='inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+              className='inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
             >
               {STEPS[idx + 1].label}
               <ChevronRight className='h-3.5 w-3.5' aria-hidden />
@@ -330,13 +378,13 @@ export function ExperimentBuilder({
         className='min-w-0 border-t border-slate-200 px-4 py-4 lg:border-l lg:border-t-0 dark:border-border'
       >
         <div className='mb-2 flex items-center justify-between gap-2'>
-          <h3 className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+          <h3 className='shrink-0 whitespace-nowrap text-[13px] font-semibold text-slate-900 dark:text-foreground'>
             This run
           </h3>
           {preset && (
             <span
-              className='truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'
-              data-tip={preset.key}
+              ref={presetTipRef}
+              className='min-w-0 truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'
             >
               from {preset.label}
             </span>
@@ -351,8 +399,9 @@ export function ExperimentBuilder({
                   type='button'
                   onClick={() => go(s.id)}
                   className={cn(
-                    'max-w-full text-left text-slate-800 [overflow-wrap:anywhere] hover:underline dark:text-foreground/90',
-                    issues[s.id] && 'text-amber-800 dark:text-amber-300'
+                    'max-w-full rounded-sm text-left text-slate-800 [overflow-wrap:anywhere] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-foreground/90',
+                    (issues[s.id] || (s.id === 'preflight' && preflightOk === false)) &&
+                      'text-amber-800 dark:text-amber-300'
                   )}
                 >
                   {issues[s.id] ? 'Needs a value' : summary[s.id]}
@@ -380,7 +429,7 @@ export function ExperimentBuilder({
           <label className='mt-3 flex items-start gap-2 text-[12px] text-slate-700 dark:text-foreground/90'>
             <input
               type='checkbox'
-              className='mt-0.5 h-3.5 w-3.5 accent-nvr-cyan'
+              className='mt-0.5 h-3.5 w-3.5 accent-nvr-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
               checked={override}
               onChange={(e) => setOverride(e.target.checked)}
             />
@@ -399,48 +448,73 @@ export function ExperimentBuilder({
                 onClick={() => run.mutate()}
                 className='inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 disabled:opacity-60 dark:focus-visible:ring-offset-background'
               >
-                <Zap className='h-3.5 w-3.5 shrink-0' aria-hidden />
+                {run.isPending ? (
+                  <Loader2
+                    className='h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none'
+                    aria-hidden
+                  />
+                ) : (
+                  <Zap className='h-3.5 w-3.5 shrink-0' aria-hidden />
+                )}
                 <span className='text-left'>
-                  Confirm — arms {fault.label} on {targetWords(draft.target)} for {draft.seconds}s
+                  Confirm — arms {fault.label} on {targetWords(draft.target)} for{' '}
+                  {formatSeconds(draft.seconds)}
                 </span>
               </button>
               <button
                 type='button'
                 onClick={() => setConfirming(false)}
-                className='inline-flex h-8 w-full items-center justify-center gap-1 rounded-md text-[12.5px] font-medium text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
+                className='inline-flex h-8 w-full items-center justify-center gap-1 rounded-md text-[12.5px] font-medium text-slate-600 transition-colors duration-150 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted'
               >
                 <X className='h-3.5 w-3.5' aria-hidden /> Not yet
               </button>
             </div>
           ) : (
             <div className='flex flex-wrap items-center gap-2'>
-              <button
-                type='button'
-                disabled={!canRun}
-                onClick={startConfirm}
-                className='inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-background'
-              >
-                <Play className='h-3.5 w-3.5' aria-hidden />
-                Run
-              </button>
+              {/* The wrapper carries why Run is off: a disabled button gets no pointer events. */}
+              <span data-tip={!canRun && why ? why : undefined} className='flex flex-1'>
+                <button
+                  type='button'
+                  disabled={!canRun}
+                  onClick={startConfirm}
+                  className='inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-background'
+                >
+                  <Play className='h-3.5 w-3.5' aria-hidden />
+                  Run
+                </button>
+              </span>
               <SavePresetPopover
                 fault={fault}
                 draft={draft}
                 preset={preset}
-                disabled={blocking.length > 0}
+                disabled={blocking.length > 0 || !allowed}
+                disabledWhy={
+                  !allowed
+                    ? (status?.reason ?? 'Presets cannot be saved on this instance.')
+                    : blocking[0]
+                }
               />
             </div>
           )}
           {why && !confirming && (
-            <p role='status' className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-              {why}
+            <p
+              role='status'
+              className={cn(
+                'flex items-start gap-1.5 text-[12px]',
+                whyBlocks
+                  ? 'text-amber-800 dark:text-amber-300'
+                  : 'text-slate-500 dark:text-muted-foreground'
+              )}
+            >
+              {whyBlocks && <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />}
+              <span className='min-w-0'>{why}</span>
             </p>
           )}
           {onClose && (
             <button
               type='button'
               onClick={onClose}
-              className='text-[12px] text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline dark:text-muted-foreground dark:hover:text-foreground'
+              className='rounded-sm text-[12px] text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:text-foreground'
             >
               Close the builder
             </button>
@@ -460,7 +534,7 @@ function useStepSummaries(
 ): Record<StepId, string> {
   const samplers = useSamplerChoices()
   return useMemo(() => {
-    const label = (k: string) => samplers.find((s) => s.key === k)?.label ?? k
+    const sampler = (k: string) => samplers.find((s) => s.key === k)
     const node = mapNodeFor(fault, d.params)
     return {
       fault: fault.label,
@@ -468,12 +542,16 @@ function useStepSummaries(
       strength: paramWords(fault, d.params) || 'fully on',
       duration: formatSeconds(d.seconds),
       hypothesis: d.hypothesis.length
-        ? d.hypothesis.map((r) => `${label(r.sampler)} ${r.op} ${r.limit}`).join('; ')
+        ? d.hypothesis
+            .map((r) =>
+              ruleWords(r, sampler(r.sampler)?.label ?? r.sampler, sampler(r.sampler)?.unit ?? '')
+            )
+            .join('; ')
         : 'none — records only',
       abort: d.hypothesis.length
         ? `${d.hypothesis.length} line${d.hypothesis.length === 1 ? '' : 's'}, 3 breaches in a row`
         : 'only at the end',
-      blast: node ? `estimate for ${node}` : 'no estimate',
+      blast: node ? `if ${mapNodeLabel(node)} went down` : 'no estimate',
       preflight:
         preflightOk === null
           ? 'checking…'
@@ -482,4 +560,10 @@ function useStepSummaries(
             : `${failing} check${failing === 1 ? '' : 's'} failing`
     }
   }, [fault, d, samplers, preflightOk, failing])
+}
+
+/** A check's detail as a sentence ("Incident #42 is open." not "Incident #42 is open"). */
+function sentence(t: string): string {
+  const v = t.trim()
+  return /[.!?]$/.test(v) ? v : `${v}.`
 }

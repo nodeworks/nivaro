@@ -1,13 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Play, Search, Trash2 } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { type ChaosStatus, chaosKeys, errText, fetchStatus } from './api'
 import { builderKeys, type ChaosPreset, deletePreset, fetchPresets } from './builder/api'
 import { builderHref, formatSeconds, targetWords } from './builder/model'
+import { fetchClaims, reportKeys } from './report-api'
 import { CHAOS_TABS } from './tabs'
 
 /**
@@ -17,6 +18,17 @@ import { CHAOS_TABS } from './tabs'
  */
 
 type Filter = 'all' | 'shipped' | 'saved'
+const FILTERS: Array<{ value: Filter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'shipped', label: 'Shipped' },
+  { value: 'saved', label: 'Saved here' }
+]
+
+const STORE_WORDS: Record<'db' | 'redis' | 'memory', string> = {
+  db: 'Saved presets are kept in the database and move with config promotion.',
+  redis: 'Saved presets are kept in Redis until the chaos tables exist.',
+  memory: 'Saved presets are kept in memory only and go on restart.'
+}
 
 const SOURCE: Record<string, { label: string; cls: string }> = {
   shipped: {
@@ -34,7 +46,7 @@ const SOURCE: Record<string, { label: string; cls: string }> = {
 }
 
 export function PresetsTab() {
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: builderKeys.presets,
     queryFn: fetchPresets
   })
@@ -42,39 +54,44 @@ export function PresetsTab() {
     queryKey: chaosKeys.status,
     queryFn: fetchStatus
   })
-  const [filter, setFilter] = useState<Filter>('all')
+  // Claim statements (#2830) so a preset names its claim in words; the key stays in the tip.
+  const { data: claimData } = useQuery({
+    queryKey: reportKeys.claims,
+    queryFn: fetchClaims,
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+  const statements = new Map((claimData?.claims ?? []).map((c) => [c.key, c.statement]))
+  const [params] = useSearchParams()
+  const [filter, setFilter] = useState<Filter>(() =>
+    params.get('show') === 'saved' ? 'saved' : 'all'
+  )
   const [q, setQ] = useState('')
   const presets = (data?.presets ?? []).filter((p) => {
     if (filter === 'shipped' && p.source !== 'shipped') return false
     if (filter === 'saved' && p.source !== 'saved') return false
     if (!q.trim()) return true
-    const hay = `${p.label} ${p.key} ${p.description ?? ''} ${p.proves ?? ''} ${p.claim_keys.join(' ')} ${p.fault.label}`
+    const claims = p.claim_keys.map((c) => `${c} ${statements.get(c) ?? ''}`).join(' ')
+    const hay = `${p.label} ${p.key} ${p.description ?? ''} ${p.proves ?? ''} ${claims} ${p.fault.label}`
     return hay.toLowerCase().includes(q.trim().toLowerCase())
   })
   const claimTab = CHAOS_TABS.find((t) => t.id === 'scorecard' || t.id === 'matrix')?.id ?? null
 
   return (
-    <div className='flex-1 overflow-y-auto px-4 py-5 sm:p-6'>
-      <div className='mb-4 flex flex-wrap items-end justify-between gap-3'>
+    <div className='flex-1 overflow-y-auto px-4 pb-20 pt-5 sm:p-6'>
+      <div className='mb-4'>
         <div className='min-w-0'>
           <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>Presets</h2>
           <p className='mt-0.5 max-w-[75ch] text-[12.5px] text-slate-500 dark:text-muted-foreground'>
             Ready-made experiments, one per claim worth proving. Run opens it in the builder to
             check and confirm; save your own from the builder.
           </p>
+          {data && (
+            <p className='mt-1 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              {STORE_WORDS[data.store] ?? STORE_WORDS.memory}
+            </p>
+          )}
         </div>
-        {data && (
-          <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-            saved presets kept in{' '}
-            <span className='font-mono text-[11px]'>
-              {data.store === 'db'
-                ? 'the database'
-                : data.store === 'redis'
-                  ? 'Redis (until the 497 tables exist)'
-                  : 'memory (lost on restart)'}
-            </span>
-          </span>
-        )}
       </div>
 
       <div className='mb-3 flex flex-wrap items-center gap-2'>
@@ -83,7 +100,7 @@ export function PresetsTab() {
           aria-label='Show'
           className='inline-flex gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'
         >
-          {(['all', 'shipped', 'saved'] as Filter[]).map((f) => (
+          {FILTERS.map(({ value: f, label }) => (
             // biome-ignore lint/a11y/useSemanticElements: a segmented control of buttons, same pattern as SecurityCenter
             <button
               key={f}
@@ -92,13 +109,13 @@ export function PresetsTab() {
               aria-checked={filter === f}
               onClick={() => setFilter(f)}
               className={cn(
-                'h-7 px-2.5 text-[12px] font-medium capitalize transition-colors duration-150 focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
+                'h-7 px-2.5 text-[12px] font-medium transition-colors duration-150 focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
                 filter === f
                   ? 'bg-nvr-cyan/10 text-slate-900 dark:bg-nvr-cyan/15 dark:text-foreground'
                   : 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-card dark:text-muted-foreground dark:hover:bg-muted'
               )}
             >
-              {f}
+              {label}
             </button>
           ))}
         </div>
@@ -112,7 +129,7 @@ export function PresetsTab() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder='Search presets, claims, faults'
-            className='h-7 w-full rounded-md border border-slate-200 bg-white pl-7 pr-2 text-[12.5px] placeholder:text-slate-500 focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card dark:placeholder:text-muted-foreground'
+            className='h-7 w-full rounded-md border border-slate-200 bg-white pl-7 pr-2 text-[12.5px] text-slate-900 placeholder:text-slate-500 focus:border-nvr-cyan focus:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/30 dark:border-border dark:bg-card dark:text-foreground dark:placeholder:text-muted-foreground'
           />
         </label>
       </div>
@@ -128,12 +145,45 @@ export function PresetsTab() {
           ))}
         </div>
       ) : isError || !data ? (
-        <Empty>The presets did not answer. Reload, or check /api/chaos/presets.</Empty>
+        <Empty>
+          The presets did not load (
+          <span className='font-mono text-[12px]'>/api/chaos/presets</span>).{' '}
+          <button
+            type='button'
+            onClick={() => void refetch()}
+            className='rounded-sm font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+          >
+            Try again
+          </button>
+        </Empty>
       ) : presets.length === 0 ? (
         <Empty>
-          {filter === 'saved' && !q
-            ? 'No saved presets yet. Build an experiment and press Save as preset.'
-            : 'No preset matches.'}
+          {filter === 'saved' && !q ? (
+            <>
+              No saved presets yet.{' '}
+              <Link
+                to={builderHref({})}
+                className='rounded-sm font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+              >
+                Build an experiment
+              </Link>{' '}
+              and press Save as preset.
+            </>
+          ) : (
+            <>
+              No preset matches{q.trim() ? ` “${q.trim()}”` : ''}.{' '}
+              <button
+                type='button'
+                onClick={() => {
+                  setQ('')
+                  setFilter('all')
+                }}
+                className='rounded-sm font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+              >
+                Show every preset
+              </button>
+            </>
+          )}
         </Empty>
       ) : (
         <ul className='divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
@@ -144,6 +194,7 @@ export function PresetsTab() {
               allowed={status?.allowed ?? true}
               refusal={status?.reason ?? null}
               claimTab={claimTab}
+              statements={statements}
             />
           ))}
         </ul>
@@ -164,12 +215,14 @@ function PresetRow({
   p,
   allowed,
   refusal,
-  claimTab
+  claimTab,
+  statements
 }: {
   p: ChaosPreset
   allowed: boolean
   refusal: string | null
   claimTab: string | null
+  statements: Map<string, string>
 }) {
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -230,73 +283,104 @@ function PresetRow({
             <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
               Claim{p.claim_keys.length === 1 ? '' : 's'}
             </span>
-            {p.claim_keys.map((c) =>
-              claimTab ? (
+            {p.claim_keys.map((c) => {
+              // The claim in words when the scorecard knows it; the key in mono otherwise.
+              const said = statements.get(c)
+              const cls = cn(
+                'max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 text-[11.5px] text-slate-700 dark:bg-muted dark:text-foreground/90',
+                !said && 'font-mono text-[11px]'
+              )
+              return claimTab ? (
                 <Link
                   key={c}
                   to={`/chaos?tab=${claimTab}&claim=${encodeURIComponent(c)}`}
-                  className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700 hover:bg-slate-200 dark:bg-muted dark:text-foreground/90 dark:hover:bg-muted/70'
+                  data-tip={said ? c : 'Open the claims'}
+                  className={cn(
+                    cls,
+                    'transition-colors duration-150 hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-muted/70'
+                  )}
                 >
-                  {c}
+                  {said ?? c}
                 </Link>
               ) : (
-                <span
-                  key={c}
-                  className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700 dark:bg-muted dark:text-foreground/90'
-                >
-                  {c}
+                <span key={c} data-tip={said ? c : undefined} className={cls}>
+                  {said ?? c}
                 </span>
               )
-            )}
+            })}
           </div>
         )}
       </div>
       <div className='flex shrink-0 items-center gap-2 self-center'>
         {p.source === 'saved' &&
           (confirmDelete ? (
-            <button
-              type='button'
-              disabled={del.isPending}
-              onClick={() => del.mutate()}
-              className='inline-flex h-8 items-center gap-1.5 rounded-md bg-red-600 px-3 text-[12.5px] font-medium text-white hover:bg-red-700 disabled:opacity-60'
-            >
-              {p.overrides_shipped ? 'Restore shipped' : 'Delete preset'}
-            </button>
+            <>
+              <button
+                type='button'
+                onClick={() => setConfirmDelete(false)}
+                className='inline-flex h-8 items-center rounded-md px-2.5 text-[12.5px] font-medium text-slate-600 transition-colors duration-150 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted'
+              >
+                Keep
+              </button>
+              <button
+                type='button'
+                // biome-ignore lint/a11y/noAutofocus: the control appears on an explicit click
+                autoFocus
+                disabled={del.isPending}
+                onClick={() => del.mutate()}
+                className='inline-flex h-8 items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 text-[12.5px] font-medium text-red-800 transition-colors duration-150 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:opacity-60 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-950/70'
+              >
+                <Trash2 className='h-3.5 w-3.5' aria-hidden />
+                {p.overrides_shipped ? 'Restore shipped' : 'Delete preset'}
+              </button>
+            </>
           ) : (
-            <button
-              type='button'
-              aria-label={
-                p.overrides_shipped ? `Restore the shipped ${p.label}` : `Delete ${p.label}`
-              }
+            <span
               data-tip={
-                p.overrides_shipped ? 'Drop your edits, restore the shipped preset' : 'Delete'
+                allowed
+                  ? p.overrides_shipped
+                    ? 'Drop your edits, restore the shipped preset'
+                    : 'Delete this preset'
+                  : (refusal ?? 'Refused here')
               }
-              onClick={() => {
-                setConfirmDelete(true)
-                if (timer.current) clearTimeout(timer.current)
-                timer.current = setTimeout(() => setConfirmDelete(false), 5000)
-              }}
-              className='rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
             >
-              <Trash2 className='h-3.5 w-3.5' aria-hidden />
-            </button>
+              <button
+                type='button'
+                disabled={!allowed}
+                aria-label={
+                  p.overrides_shipped ? `Restore the shipped ${p.label}` : `Delete ${p.label}`
+                }
+                onClick={() => {
+                  setConfirmDelete(true)
+                  if (timer.current) clearTimeout(timer.current)
+                  timer.current = setTimeout(() => setConfirmDelete(false), 5000)
+                }}
+                className='inline-flex rounded-md p-2 text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:pointer-events-none disabled:opacity-40 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
+              >
+                <Trash2 className='h-3.5 w-3.5' aria-hidden />
+              </button>
+            </span>
           ))}
-        <button
-          type='button'
-          disabled={!runnable}
+        {/* The wrapper carries the refusal tip: a disabled button gets no pointer events. */}
+        <span
           data-tip={
             !p.fault.installed
               ? 'This instance does not have this fault'
               : allowed
-                ? undefined
+                ? 'Open in the builder to check and confirm'
                 : (refusal ?? 'Refused here')
           }
-          onClick={() => navigate(builderHref({ preset: p.key }))}
-          className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-card'
         >
-          <Play className='h-3.5 w-3.5' aria-hidden />
-          Run
-        </button>
+          <button
+            type='button'
+            disabled={!runnable}
+            onClick={() => navigate(builderHref({ preset: p.key }))}
+            className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:border-nvr-cyan/60 hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:border-nvr-cyan/50 dark:focus-visible:ring-offset-card'
+          >
+            <Play className='h-3.5 w-3.5' aria-hidden />
+            Run
+          </button>
+        </span>
       </div>
     </li>
   )

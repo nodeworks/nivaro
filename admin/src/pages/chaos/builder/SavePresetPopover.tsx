@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bookmark } from 'lucide-react'
+import { AlertTriangle, Bookmark } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
@@ -18,12 +19,15 @@ export function SavePresetPopover({
   fault,
   draft,
   preset,
-  disabled
+  disabled,
+  disabledWhy
 }: {
   fault: CatalogFault
   draft: DraftSpec
   preset: ChaosPreset | null
   disabled?: boolean
+  /** Why the button is off, as a tip on its wrapper (a disabled button gets no pointer events). */
+  disabledWhy?: string | null
 }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -32,7 +36,7 @@ export function SavePresetPopover({
   const [key, setKey] = useState('')
   const [keyTouched, setKeyTouched] = useState(false)
   const [proves, setProves] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ text: string; limit: boolean } | null>(null)
 
   const reset = () => {
     setLabel(defaultLabel)
@@ -63,12 +67,12 @@ export function SavePresetPopover({
         spec: spec()
       }),
     onSuccess: (p) => done(p, 'Saved'),
-    onError: (e) => setError(errText(e, 'The preset was not saved'))
+    onError: (e) => setError(saveError(e, 'The preset was not saved'))
   })
   const update = useMutation({
     mutationFn: () => updatePreset(preset?.key as string, { spec: spec() }),
     onSuccess: (p) => done(p, 'Updated'),
-    onError: (e) => setError(errText(e, 'The preset was not updated'))
+    onError: (e) => setError(saveError(e, 'The preset was not updated'))
   })
   const keyOk = /^[a-z][a-z0-9_.-]{1,79}$/.test(key)
 
@@ -80,17 +84,24 @@ export function SavePresetPopover({
         setOpen(o)
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          disabled={disabled}
-          className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:pointer-events-none disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
-        >
-          <Bookmark className='h-3.5 w-3.5' aria-hidden />
-          Save as preset
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align='end' className='w-[min(360px,calc(100vw-32px))] p-0'>
+      <span data-tip={disabled ? (disabledWhy ?? undefined) : undefined} className='inline-flex'>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            disabled={disabled}
+            className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:pointer-events-none disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+          >
+            <Bookmark className='h-3.5 w-3.5' aria-hidden />
+            Save as preset
+          </button>
+        </PopoverTrigger>
+      </span>
+      <PopoverContent
+        align='end'
+        // Clear of the app's icon rail on a phone (left) as well as the screen edges.
+        collisionPadding={{ top: 16, right: 16, bottom: 16, left: 68 }}
+        className='w-[min(360px,calc(100vw-84px))] p-0'
+      >
         <form
           className='space-y-3 p-3'
           onSubmit={(e) => {
@@ -110,7 +121,7 @@ export function SavePresetPopover({
                 type='button'
                 disabled={update.isPending}
                 onClick={() => update.mutate()}
-                className='shrink-0 text-[12px] font-medium text-slate-800 underline-offset-2 hover:underline disabled:opacity-40 dark:text-foreground'
+                className='shrink-0 rounded-sm text-[12px] font-medium text-slate-800 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-40 dark:text-foreground'
               >
                 Update it
               </button>
@@ -136,20 +147,29 @@ export function SavePresetPopover({
               className={cn(
                 inputCls,
                 'w-full font-mono text-[12px]',
-                key && !keyOk && 'border-red-400 dark:border-red-500'
+                key && !keyOk && 'border-amber-400 dark:border-amber-500'
               )}
               value={key}
               maxLength={80}
+              aria-invalid={!!key && !keyOk}
+              aria-describedby='preset-key-hint'
               onChange={(e) => {
                 setKeyTouched(true)
                 setKey(e.target.value)
               }}
             />
-            {key && !keyOk && (
-              <span className='block text-[11.5px] text-red-700 dark:text-red-400'>
-                Lower-case letters, digits, dots, dashes; starts with a letter.
-              </span>
-            )}
+            <span
+              id='preset-key-hint'
+              className={cn(
+                'block text-[11.5px]',
+                key && !keyOk
+                  ? 'text-amber-800 dark:text-amber-300'
+                  : 'text-slate-500 dark:text-muted-foreground'
+              )}
+            >
+              Lower-case letters, digits, dots and dashes, starting with a letter. Saving a shipped
+              preset's key replaces it here.
+            </span>
           </label>
           <label className='block space-y-1'>
             <span className={labelCls}>What it proves</span>
@@ -160,19 +180,41 @@ export function SavePresetPopover({
               onChange={(e) => setProves(e.target.value)}
             />
           </label>
-          {error && <p className='text-[12px] text-red-700 dark:text-red-400'>{error}</p>}
+          {error && (
+            <div
+              role='alert'
+              className='flex items-start gap-2 rounded-md bg-amber-50 px-2.5 py-2 text-[12px] text-amber-900 dark:bg-amber-950/50 dark:text-amber-200'
+            >
+              <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
+              <span className='min-w-0'>
+                {/[.!?]$/.test(error.text) ? error.text : `${error.text}.`}
+                {error.limit && (
+                  <>
+                    {' '}
+                    <Link
+                      to='/chaos?tab=presets&show=saved'
+                      onClick={() => setOpen(false)}
+                      className='font-medium underline underline-offset-2'
+                    >
+                      Open saved presets
+                    </Link>
+                  </>
+                )}
+              </span>
+            </div>
+          )}
           <div className='flex justify-end gap-2'>
             <button
               type='button'
               onClick={() => setOpen(false)}
-              className='inline-flex h-8 items-center rounded-md px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
+              className='inline-flex h-8 items-center rounded-md px-3 text-[12.5px] font-medium text-slate-600 transition-colors duration-150 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted'
             >
               Cancel
             </button>
             <button
               type='submit'
               disabled={!label.trim() || !keyOk || create.isPending}
-              className='inline-flex h-8 items-center rounded-md bg-nvr-cyan px-3 text-[12.5px] font-medium text-white hover:bg-[#00b8e0] disabled:pointer-events-none disabled:opacity-40'
+              className='inline-flex h-8 items-center rounded-md bg-nvr-cyan px-3 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-40'
             >
               Save new preset
             </button>
@@ -181,4 +223,10 @@ export function SavePresetPopover({
       </PopoverContent>
     </Popover>
   )
+}
+
+/** The server's words, and whether it was the saved-preset limit (409 CHAOS_PRESET_LIMIT). */
+function saveError(e: unknown, fallback: string): { text: string; limit: boolean } {
+  const code = (e as { response?: { data?: { code?: string } } })?.response?.data?.code
+  return { text: errText(e, fallback), limit: code === 'CHAOS_PRESET_LIMIT' }
 }
