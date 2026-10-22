@@ -174,3 +174,18 @@ describe('key-loss and eviction drills (#2832)', () => {
     expect(c.store.size).toBe(atEnd)
   })
 })
+
+describe('Redis drill samplers (#2832)', () => {
+  it('hit rate is measured between samples, null when nothing was looked up', async () => {
+    const { hitPctBetween } = await import('./redis-samplers.js')
+    expect(hitPctBetween(null, { hits: 9, misses: 1 })).toBe(90)
+    expect(hitPctBetween({ hits: 9, misses: 1 }, { hits: 10, misses: 4 })).toBe(25)
+    expect(hitPctBetween({ hits: 9, misses: 1 }, { hits: 9, misses: 1 })).toBeNull()
+  })
+
+  it('the Redis faults file registers both samplers', async () => {
+    const { listSamplers } = await import('./steady-state.js')
+    const keys = listSamplers().map((s) => s.key)
+    expect(keys).toEqual(expect.arrayContaining(['redis.errors_per_min', 'cache.metadata_hit_pct']))
+  })
+})

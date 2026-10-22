@@ -10,6 +10,7 @@ import {
   restoreSnapshot,
   sessionLossRefusal
 } from '../redis-keys.js'
+import { registerRedisSamplers } from '../redis-samplers.js'
 
 /**
  * The Redis fault set (#2832), beside the original pause (`redis_pause`, faults/http.ts).
@@ -34,6 +35,8 @@ async function note(fault: ArmedFault, data: Record<string, unknown>): Promise<v
   }
 }
 
+registerRedisSamplers()
+
 registerFault({
   key: 'redis_latency',
   label: 'Slow Redis',
@@ -57,7 +60,10 @@ registerFault({
   default_seconds: 60,
   points: ['redis.latency'],
   danger: 'medium',
-  hypothesis_defaults: [{ sampler: 'http.5xx_pct', op: '<', limit: 1, tolerance: 0.5 }]
+  hypothesis_defaults: [
+    { sampler: 'http.5xx_pct', op: '<', limit: 1, tolerance: 0.5 },
+    { sampler: 'redis.errors_per_min', op: '<', limit: 5, tolerance: 5 }
+  ]
 })
 
 registerFault({
