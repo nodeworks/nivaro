@@ -74,18 +74,26 @@ not set it). **Warning:** `allowed-recipients` does not apply to auto-relay
 ## Turn relaying off
 
 Without a relay config Mailpit still catches every message; Release is simply
-unavailable. Either remove the `MP_SMTP_RELAY_CONFIG` line, the `mailpit_relay`
-secret entries (service and top-level) from `stack.yml` and redeploy, or on the
-running stack:
+unavailable.
+
+**Persistent way:** remove the `MP_SMTP_RELAY_CONFIG` line, the `mailpit_relay`
+secret entries (service and top-level) and the `MAILPIT_RELAY_SECRET` name from
+`stack.yml`, then redeploy with `docker stack deploy`. (`MAILPIT_RELAY_SECRET`
+is required by `stack.yml` while the secret entries remain, so unsetting it
+alone makes `docker stack deploy` fail.)
+
+**Temporary stop only:** on the running stack
 
 ```
 docker service update --env-rm MP_SMTP_RELAY_CONFIG --secret-rm mailpit_relay_v1 <stack>_mailpit
 ```
 
-(`MAILPIT_RELAY_SECRET` is required by `stack.yml` while the secret entries
-remain, so unsetting it alone makes `docker stack deploy` fail.) Mailpit
-env and relay key names were checked by the operator's lead against Mailpit's
-docs and source, not against the pinned image here.
+This does not last: the next `docker stack deploy` re-applies `stack.yml`,
+which still sets `MP_SMTP_RELAY_CONFIG` and the `mailpit_relay` secret, so
+relaying comes back unless the stack file was edited as above.
+
+Mailpit env and relay key names were checked by the operator's lead against
+Mailpit's docs and source, not against the pinned image here.
 
 ## Pitfalls
 
