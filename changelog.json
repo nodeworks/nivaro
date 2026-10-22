@@ -1,10 +1,298 @@
 {
-  "generated_at": "2026-10-21T23:42:18.290Z",
+  "generated_at": "2026-10-22T00:06:03.093Z",
   "releases": [
+    {
+      "version": "0.3.0",
+      "tag": "v0.3.0",
+      "date": "2026-10-21T20:05:48-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "one Infrastructure nav group, www sync, README features (#2826-#2866)",
+              "hash": "b2358af2c"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Docs sync: huddle docs after the design and security passes",
+              "hash": "2964aa3b6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: huddle analytics, settings and schedule card",
+              "hash": "d6d2d43e8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: huddle call bar",
+              "hash": "1569ff3bf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: Let AI do this settings and analytics",
+              "hash": "cde3acbef"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: Let AI do this panel",
+              "hash": "b8d4cedeb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Index scheduled huddles by organizer (#2860)",
+              "hash": "0810a99de"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "ring cooldowns, call caps and a join/leave churn guard",
+              "hash": "d4f0e3ce2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: Infrastructure docs describe the grouped tabs",
+              "hash": "48b9e871a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Design pass: Infrastructure page",
+              "hash": "a74d6d8ff"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Scheduled huddles: cap upcoming schedules and the pace per organizer",
+              "hash": "04c301d47"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "media server destinations are validated, never redirected, platform-only in cloud",
+              "hash": "2f4690b2e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "mark byte budget and immediate recipient invalidation (#2856)",
+              "hash": "57d2f3f1d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Pin the host-facts base images by tag and digest",
+              "hash": "7d1c0e5e8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Huddle features on the SFU: camera, point and draw, one quality sampler (#2858 #2856 #2848 #2849)",
+              "hash": "d23272b25"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Strip URL credentials from GitLab health base",
+              "hash": "d9fa4d2f6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Describe the infra-health-sample cron (#2828)",
+              "hash": "c24e4942e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Infrastructure tools for Ask AI and MCP (#2842)",
+              "hash": "64cca4416"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docker-source: strip URL credentials and secret log-driver options",
+              "hash": "70dc8aa82"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Let AI do this: approval recomputed, attempts capped, approvers vetted (#2866)",
+              "hash": "feb11a823"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Infrastructure Swarm/Secrets tabs: settings from /info only, configs never read (#2838, #2839)",
+              "hash": "bb9aea96d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docker-source: never read /swarm or /configs; sanitize every answer",
+              "hash": "4c7e593a1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "host-facts container: no extra capability, narrow read-only mounts (#2829 #2831 #2836 #2837)",
+              "hash": "4eeec3d99"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Huddle notes: optional-chain lint fixes (#2854)",
+              "hash": "010185420"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Huddle notes: every writer must be allowed to post; ended notes frozen (#2854)",
+              "hash": "eda5dd8f3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Scheduled huddles: card posts as the person; system lines carry fixed text",
+              "hash": "2c395deac"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of h-stage: extension test allows the live-badge subscribe on attach",
+              "hash": "478019796"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Let AI do this for tasks and support tickets (#2862–#2866)",
+              "hash": "e3dbb0fec"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "host-facts: run as a container without sudo (HOST_ROOT) (#2829 #2831 #2836 #2837)",
+              "hash": "e41cc9550"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Huddle notes post as a person; the server owns the note rev (#2854)",
+              "hash": "a3fc1e5f0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Huddle calls: DM ringing, invites, in-huddle status, scheduled huddles",
+              "hash": "2d9a1789c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Large huddles: evict stale browsers on every prune path (#2859)",
+              "hash": "3c8392e5f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix merge of h-audio: device swap reaches the SFU in large huddles",
+              "hash": "1589abadb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "host-facts: no predictable temp files when running as root (#2829 #2831 #2836 #2837)",
+              "hash": "7b9689f8f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Huddle notes and Follow me on a record (#2854 #2855)",
+              "hash": "739abaee1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Large huddles: bind the SFU room to the session and evict server-side (#2859)",
+              "hash": "4d8e488ac"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "stacks, updates, health, swarm and secrets tabs (#2826-#2828, #2838, #2839)",
+              "hash": "9a7714413"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Host facts collector and host-health views (#2829 #2831 #2836 #2837)",
+              "hash": "e22c992e9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Huddle stage: mini-player, marks, reactions, hands, camera (#2853 #2856 #2857 #2858)",
+              "hash": "0516eccf9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "speaking indicator, shortcuts, devices, connection quality",
+              "hash": "1d9539d13"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Large huddles: LiveKit SFU above the mesh size (#2859)",
+              "hash": "6243caeae"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Huddle analytics, TURN probe and live badges (#2849 #2850 #2851)",
+              "hash": "835c2a964"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Proxy, Resources and GitLab tabs (#2834, #2835, #2841)",
+              "hash": "a1a66911c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Infrastructure inventory tabs: containers, volumes, images, provenance (#2830 #2832 #2833 #2840)",
+              "hash": "fffe19db0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Infrastructure page seam: read-only Docker source and tab registry",
+              "hash": "43dc66586"
+            }
+          ]
+        }
+      ],
+      "count": 45
+    },
     {
       "version": "0.2.82",
       "tag": "v0.2.82",
-      "date": "2026-10-21T19:42:01-04:00",
+      "date": "2026-10-21T19:42:18-04:00",
       "sections": [
         {
           "label": "Other",
