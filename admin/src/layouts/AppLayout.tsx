@@ -75,6 +75,7 @@ import {
   ApiUpdateBanner,
   CLIENT_CHAOS_SHORTCUT,
   ClientChaosToolbar,
+  DrillBanner,
   defaultItemUrl,
   ErrorSurface,
   focusPopoutOpener,
@@ -564,6 +565,7 @@ export function AppLayout() {
             <AnnouncementBanner />
           </NivaroProvider>
           <IncidentBannerHost />
+          <DrillBannerHost />
           <div className='flex min-h-0 flex-1 overflow-hidden'>
             <a
               href='#main-content'
@@ -1105,6 +1107,21 @@ function UserSyncHost() {
 }
 
 /** Incident mode banner (#2016): administrators only; in the banner stack, above the outlet. */
+/** #2846 — the "Drill running" strip while a chaos fault is armed (Stop link for admins → /chaos). */
+function DrillBannerHost() {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <NavigationContext.Provider
+        value={{ navigate: (path) => navigate(path), itemUrl: defaultItemUrl }}
+      >
+        <DrillBanner stopHref='/chaos' canStop={!!user?.is_admin} />
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}
+
 function IncidentBannerHost() {
   const navigate = useNavigate()
   const { user } = useAuth()

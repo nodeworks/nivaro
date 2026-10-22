@@ -364,9 +364,12 @@ export async function listRuns(opts: ListRunsOptions = {}): Promise<ChaosRun[]> 
       /* memory */
     }
   }
+  // Newest first; insertion order breaks ties made inside one millisecond.
   return [...memRuns.values()]
-    .filter(keep)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map((run, i) => ({ run, i }))
+    .filter((x) => keep(x.run))
+    .sort((a, b) => b.run.created_at.localeCompare(a.run.created_at) || b.i - a.i)
+    .map((x) => x.run)
     .slice(0, limit)
 }
 

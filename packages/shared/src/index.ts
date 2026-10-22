@@ -116,6 +116,15 @@ export {
   CustomStatusEditor,
   formatStatusExpiry
 } from './components/CustomStatusEditor'
+export {
+  ARMED_FAULTS_KEY,
+  type ArmedFaultsState,
+  DrillBanner,
+  type DrillBannerProps,
+  drillCountdown,
+  type PublicArmedFault,
+  useArmedFaults
+} from './components/chaos/DrillBanner'
 export type { CumulativeFlowData } from './components/charts/CumulativeFlowChart'
 export { CumulativeFlowChart } from './components/charts/CumulativeFlowChart'
 export { ChatAnalyticsView } from './components/chat/ChatAnalyticsView'
