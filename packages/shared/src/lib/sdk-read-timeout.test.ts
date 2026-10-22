@@ -22,13 +22,23 @@ describe('SDK read timeout', () => {
     await assertion
   })
 
+  it('has no timeout unless asked: no signal on a GET by default', async () => {
+    let seen: RequestInit | undefined
+    const fetcher = (async (_u: string, init: RequestInit) => {
+      seen = init
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as unknown as typeof fetch
+    await createNivaro('http://x', { fetch: fetcher }).request(get)
+    expect(seen?.signal).toBeUndefined()
+  })
+
   it('does not attach a signal to writes', async () => {
     let seen: RequestInit | undefined
     const fetcher = (async (_u: string, init: RequestInit) => {
       seen = init
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
     }) as unknown as typeof fetch
-    await createNivaro('http://x', { fetch: fetcher }).request(post)
+    await createNivaro('http://x', { fetch: fetcher, timeoutMs: 1000 }).request(post)
     expect(seen?.signal).toBeUndefined()
   })
 })

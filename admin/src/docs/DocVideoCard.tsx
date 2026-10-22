@@ -20,7 +20,9 @@ import { useNavigate } from 'react-router'
 // not-found or an empty answer renders nothing, so the docs never promise a
 // video the reader cannot open.
 
-const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 type VideoNode = { id?: string; key?: string; label?: string; t_ms?: number; caption?: string }
 

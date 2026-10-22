@@ -18,7 +18,9 @@ import { useAuth } from '@/lib/auth'
 // (admins + the roles chosen under "Who can record") record and edit here.
 // ?watch=<id> opens the player (&t=<seconds> or &c=<chapter id> start it at a
 // moment), ?edit=<id> the editor.
-const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 export function HelpVideosPage() {
   const navigate = useNavigate()

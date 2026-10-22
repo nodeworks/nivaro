@@ -20,7 +20,9 @@ import {
 import { TraceNextControl } from './TraceNextControl'
 import { Code, CopyButton, Facts, Note, PanelSkeleton, Section, StatusPill, Tag } from './ui'
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
 const MATCHED: Record<string, string> = {

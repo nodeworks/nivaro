@@ -18,7 +18,9 @@ import { useAuth } from '@/lib/auth'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn, formatRelative } from '@/lib/utils'
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 interface ApiHealth {
   id: number

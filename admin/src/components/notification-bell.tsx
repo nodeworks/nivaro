@@ -38,7 +38,9 @@ const NOTIF_ROUTES: NotificationRouteMap = {
   support: (id) => (id ? `/support?ticket=${id}` : '/support')
 }
 
-const bellClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const bellClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 /**
  * The admin's bell = the shared NotificationBell (lanes, delivery chips,

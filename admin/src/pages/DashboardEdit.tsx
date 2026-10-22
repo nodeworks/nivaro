@@ -595,7 +595,7 @@ function ChartWrapper({
 
 // ─── Prebuilt widget renderer (#227): catalog presets on dashboards ─────────
 
-const presetClient = createNivaro(window.location.origin)
+const presetClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 function PresetWidgetBody({ presetId }: { presetId: string | null }) {
   const {

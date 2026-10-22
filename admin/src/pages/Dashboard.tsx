@@ -256,7 +256,7 @@ function QuickAction({
 
 // Shared FirstLoginChecklist needs a Nivaro client + navigation context; the
 // dashboard otherwise talks axios, so a small host wraps just the card.
-const checklistClient = createNivaro(window.location.origin)
+const checklistClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 function DashboardChecklistHost() {
   const navigate = useNavigate()
   return (

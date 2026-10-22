@@ -26,7 +26,9 @@ const NOTIF_ROUTES: NotificationRouteMap = {
   support: (id) => (id ? `/support?ticket=${id}` : '/support')
 }
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 /** Notifications Center — hosts the shared inbox view (lanes, delivery
  *  chips, reply actions, snooze) so the admin and the portal never drift. */

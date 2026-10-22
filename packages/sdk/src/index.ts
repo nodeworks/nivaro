@@ -1830,8 +1830,9 @@ export interface NivaroClientOptions {
   credentials?: RequestCredentials
   /**
    * How long a GET read may take before it is abandoned with a `TimeoutError` (#2857), so a
-   * request that never answers ends in an error state instead of a spinner. Default 30000;
-   * 0 turns it off. Writes and uploads are never cut short.
+   * request that never answers ends in an error state instead of a spinner. Off by default
+   * (unset or 0); set it above the slowest read you expect. Writes and uploads are never cut
+   * short.
    */
   timeoutMs?: number
 }
@@ -1910,7 +1911,7 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
         ).toString()
       : ''
 
-    const timeoutMs = options.timeoutMs ?? 30_000
+    const timeoutMs = options.timeoutMs ?? 0
     const timed = command._method === 'GET' && timeoutMs > 0
     const ctrl = timed ? new AbortController() : null
     const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null

@@ -6,7 +6,9 @@ import { useSearchParams } from 'react-router'
 // MCP connections (#2466 / #2469 / #2497): every AI assistant connected to this instance
 // across people — 14 days of tool calls, the idle review, per-connection limits, disconnect.
 // ?tab=all|idle.
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 export function McpConnectionsPage() {
   const [params, setParams] = useSearchParams()

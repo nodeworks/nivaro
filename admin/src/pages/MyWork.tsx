@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router'
 // My Work — the personal actionable inbox (records waiting on you by SLA
 // urgency, open tasks, unread notifications). The view itself is the shared
 // MyWorkView; this page is only the admin host shell.
-const client = createNivaro(window.location.origin)
+const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 export function MyWorkPage() {
   const navigate = useNavigate()

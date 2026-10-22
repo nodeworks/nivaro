@@ -9,7 +9,7 @@ import { useGoBack } from '@/lib/nav'
 // The pipeline editor lives in @nivaro/shared (PipelineEditorView) so headless
 // frontends can host it too — this page is the thin admin host, same pattern
 // as CollectionBrowserV2Page / ItemEdit.
-const client = createNivaro(window.location.origin)
+const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 export function PipelineEditPage() {
   const { id } = useParams<{ id: string }>()

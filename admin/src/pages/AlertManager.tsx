@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router'
 // Metric alert engine — catalog, user rules,
 // subscriptions, firing history, report-widget alerts, anomaly detection.
 // Distinct from /alerts (per-record threshold engine on collection writes).
-const client = createNivaro(window.location.origin)
+const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 export function AlertManager() {
   const navigate = useNavigate()

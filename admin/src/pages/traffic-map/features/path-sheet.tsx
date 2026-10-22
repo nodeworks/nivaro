@@ -14,7 +14,9 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useAuth } from '@/lib/auth'
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 export default function PathSheetHost({
   chainId,

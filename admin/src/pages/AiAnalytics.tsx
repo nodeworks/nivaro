@@ -2,7 +2,9 @@ import { createNivaro } from '@nivaro/sdk'
 import { AiAnalyticsView, NivaroProvider } from '@nivaro/shared'
 import { Sparkles } from 'lucide-react'
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 /** AI Analytics — every model call with tokens, spend and latency, the /api-analytics twin. */
 export function AiAnalyticsPage() {
