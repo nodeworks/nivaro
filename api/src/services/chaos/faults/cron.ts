@@ -16,7 +16,7 @@ registerFault({
   area: 'redis',
   proves:
     'When the scheduler lease moves in the middle of a run, another replica takes over and no job runs twice at once — or the check names every job that did and every job not safe to.',
-  claim_keys: ['cron.no_double_run'],
+  claim_keys: ['cron.lease_pause', 'cron.no_double_run'],
   targets: ['node', 'all'],
   params: {
     mode: {

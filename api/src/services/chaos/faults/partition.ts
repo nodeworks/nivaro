@@ -16,7 +16,7 @@ registerFault({
   area: 'redis',
   proves:
     'A replica cut off from Redis pub/sub loses no record event and doubles none: its stream reader catches up from its offset when the link returns, and presence and huddle rosters rebuild on the next change.',
-  claim_keys: ['realtime.partition_catch_up'],
+  claim_keys: ['sockets.reconnect_catchup', 'realtime.partition_catch_up'],
   targets: ['node'],
   params: {
     stream: {

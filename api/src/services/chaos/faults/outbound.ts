@@ -14,7 +14,7 @@ registerFault({
   area: 'outbound',
   proves:
     'When the AI gateway fails, people get the plain "AI is unavailable" answer (503), a refused model id falls back to the next model in the chain and the fallback is counted, and nothing else in Nivaro slows down.',
-  claim_keys: ['ai.fails_clean', 'ai.model_fallback'],
+  claim_keys: ['ai.unavailable_503', 'ai.model_fallback'],
   targets: ['all', 'share'],
   params: {
     mode: {
@@ -45,7 +45,7 @@ registerFault({
   area: 'outbound',
   proves:
     'With the identity provider down or slow, everyone already signed in keeps working (a session never calls the provider), and the sign-in page says the provider is not answering — no raw error, no redirect loop.',
-  claim_keys: ['auth.sessions_survive_idp', 'auth.signin_clear_error'],
+  claim_keys: ['signin.idp_down_sessions_hold', 'auth.signin_clear_error'],
   targets: ['all'],
   params: {
     mode: { type: 'enum', label: 'Failure', options: ['down', 'slow'], default: 'down' },

@@ -43,7 +43,7 @@ registerFault({
   area: 'redis',
   proves:
     'A slow Redis slows answers but breaks nothing: sessions, caches, rate limits and the scheduler lease keep working, only later.',
-  claim_keys: ['redis.latency_tolerated'],
+  claim_keys: ['redis.fails_open', 'redis.latency_tolerated'],
   targets: ['all', 'node'],
   params: {
     delay_ms: {
@@ -72,7 +72,7 @@ registerFault({
   area: 'redis',
   proves:
     'During a failover every write to Redis answers READONLY: requests still answer, sign-in fails cleanly instead of half-saving, caches serve misses, the scheduler lease stops renewing and ticks pause.',
-  claim_keys: ['redis.readonly_survived'],
+  claim_keys: ['redis.fails_open', 'redis.readonly_survived'],
   targets: ['all', 'node'],
   params: {},
   max_seconds: 120,
@@ -90,7 +90,7 @@ registerFault({
   area: 'redis',
   proves:
     'Losing one family of keys is survivable: caches rebuild, the scheduler lease is re-taken, and when old keys come back (a lagging replica after a failover) a signed-out session stays signed out. Sessions are dropped only on a Redis database other than 0 (or a deployed stack that sets REDIS_CHANNEL_PREFIX) — on a shared development Redis, db 0 holds everyone’s sign-ins.',
-  claim_keys: ['redis.key_loss_rebuilds', 'auth.logout_holds'],
+  claim_keys: ['redis.fails_open', 'redis.key_loss_rebuilds', 'auth.logout_holds'],
   targets: ['all'],
   params: {
     family: {
@@ -143,7 +143,7 @@ registerFault({
   area: 'redis',
   proves:
     'Under memory pressure Redis evicts nvr:* keys at random: every family rebuilds or fails open — a lost lease is re-taken, a lost cache recomputes, a lost lock is re-acquired.',
-  claim_keys: ['redis.eviction_tolerated'],
+  claim_keys: ['redis.fails_open', 'redis.eviction_tolerated'],
   targets: ['all'],
   params: {
     share_pct: {
