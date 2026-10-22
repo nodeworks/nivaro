@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -28,6 +29,7 @@ vi.mock('../../../services/pdf-layout.js', () => ({
 }))
 vi.mock('../../../services/ffmpeg.js', () => ({
   hasFfmpeg: async () => local.ffmpeg,
+  isLockedMime: (m: string) => ['video/webm', 'video/mp4', 'audio/mp4'].includes(m),
   probeVideoLocal: async () => local.probe,
   probeStreamsLocal: async () => ({ duration_ms: 4200, streams: [] }),
   remuxToFileLocal: async (i: string, o: string) => writeFileSync(o, readFileSync(i))
@@ -52,14 +54,17 @@ vi.mock('../../../services/help-video-music.js', () => ({
 }))
 vi.mock('../../../services/readiness.js', () => ({ registerReadinessCheck: vi.fn() }))
 
-import { internalRenderRoutes } from '../../../routes/internal-render.js'
+import { failedAuthLimiter, internalRenderRoutes, slots } from '../../../routes/internal-render.js'
 import {
   bearerMatches,
   decodeMeta,
   encodeMeta,
+  maskUrl,
   peerFileOp,
   peerHtmlToPdf,
+  plainHttpAllowed,
   probeRenderPeer,
+  renderPeerTarget,
   renderPeerToken,
   renderPeerUrl,
   renderUnavailable
@@ -153,10 +158,17 @@ describe('render peer routes', () => {
     const pdf = await peerHtmlToPdf('<p>hello</p>', {
       format: 'Letter',
       landscape: true,
-      margin: '14mm'
+      margin: '14mm',
+      allowOrigins: ['https://efp.example.com', 'not an origin', 'https://x.example.com/path']
     })
     expect(pdf.toString()).toBe('%PDF-1.7 12')
-    expect(local.pdfCalls[0].opts).toEqual({ format: 'Letter', landscape: true, margin: '14mm' })
+    // The caller's own origins ride along; anything that is not a bare origin is dropped.
+    expect(local.pdfCalls[0].opts).toEqual({
+      format: 'Letter',
+      landscape: true,
+      margin: '14mm',
+      allowOrigins: ['https://efp.example.com']
+    })
   })
 
   it('a wrong client token comes back as a readable 503', async () => {
@@ -246,5 +258,135 @@ describe('render peer routes', () => {
     const res = await bare.inject({ method: 'GET', url: '/api/internal/render/health' })
     expect(res.statusCode).toBe(404)
     await bare.close()
+  })
+
+  it('refuses to mount with a token under 32 characters', async () => {
+    process.env.RENDER_TOKEN = 'short-token'
+    const bare = Fastify()
+    await bare.register(internalRenderRoutes, { prefix: '/api' })
+    const res = await bare.inject({
+      method: 'GET',
+      url: '/api/internal/render/health',
+      headers: { authorization: 'Bearer short-token' }
+    })
+    expect(res.statusCode).toBe(404)
+    await bare.close()
+  })
+
+  it('refuses a file op whose mime does not pin a demuxer', async () => {
+    const f = join(dir, 'concat.txt')
+    writeFileSync(f, 'ffconcat version 1.0\nfile /etc/passwd\n')
+    for (const mime of ['', 'text/plain', 'application/x-mpegurl']) {
+      await expect(peerFileOp('probe-video', f, { mime })).rejects.toMatchObject({
+        statusCode: 400,
+        code: 'RENDER_BAD_REQUEST'
+      })
+    }
+  })
+
+  it('caps what the client accepts back from a peer', async () => {
+    // A "peer" that claims a 200 MB PDF.
+    const fake = createServer((_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'application/pdf',
+        'content-length': String(200 * 1024 * 1024)
+      })
+      res.write(Buffer.alloc(1024))
+      setTimeout(() => res.destroy(), 50)
+    })
+    await new Promise<void>((r) => fake.listen(0, '127.0.0.1', () => r()))
+    const port = (fake.address() as { port: number }).port
+    process.env.RENDER_URL = `http://127.0.0.1:${port}`
+    await expect(peerHtmlToPdf('<p>x</p>')).rejects.toMatchObject({ code: 'RENDER_PEER_TOO_LARGE' })
+    fake.closeAllConnections()
+    await new Promise((r) => fake.close(r))
+  })
+})
+
+describe('render peer hardening', () => {
+  it('needs https: except on networks the token never leaves', () => {
+    for (const h of [
+      'localhost',
+      '127.0.0.1',
+      '::1',
+      'nivaro_worker',
+      'worker',
+      'tasks.efp_worker',
+      'tasks.worker',
+      '10.0.3.4',
+      '172.20.0.5',
+      '192.168.1.9',
+      'fd12::1'
+    ])
+      expect(plainHttpAllowed(h), h).toBe(true)
+    for (const h of [
+      'render.example.com',
+      '8.8.8.8',
+      '172.32.0.1',
+      'tasks.a.b',
+      '169.254.169.254x.com'
+    ])
+      expect(plainHttpAllowed(h), h).toBe(false)
+    expect(renderPeerTarget({ RENDER_URL: 'http://render.example.com' })).toMatchObject({
+      error: expect.stringMatching(/https/)
+    })
+    expect(renderPeerTarget({ RENDER_URL: 'https://render.example.com/' })).toEqual({
+      url: 'https://render.example.com'
+    })
+    expect(renderPeerTarget({ RENDER_URL: 'http://u:p@nivaro_worker:3055' })).toMatchObject({
+      error: expect.stringMatching(/credentials/)
+    })
+    expect(renderPeerUrl({ RENDER_URL: 'http://render.example.com' })).toBeNull()
+  })
+
+  it('a refused RENDER_URL says why instead of "not configured"', () => {
+    process.env.RENDER_URL = 'http://render.example.com'
+    expect(renderUnavailable('pdf').message).toMatch(/must use https/)
+  })
+
+  it('masks a password in the URL it reports', async () => {
+    expect(maskUrl('http://user:secret@nivaro_worker:3055')).toBe(
+      'http://user:••••••@nivaro_worker:3055'
+    )
+    process.env.RENDER_URL = 'http://user:secret@nivaro_worker:3055'
+    const h = await probeRenderPeer()
+    expect(h.url).toBe('http://user:••••••@nivaro_worker:3055')
+    expect(JSON.stringify(h)).not.toContain('secret')
+  })
+
+  it('limits failed bearer checks per address', () => {
+    const l = failedAuthLimiter(3, 60_000)
+    expect(l.fail('1.2.3.4', 0)).toBe(true) // first in the window: logged
+    expect(l.fail('1.2.3.4', 1)).toBe(false)
+    expect(l.blocked('1.2.3.4', 2)).toBe(false)
+    expect(l.fail('1.2.3.4', 3)).toBe(true) // hits the limit: logged again
+    expect(l.blocked('1.2.3.4', 4)).toBe(true)
+    expect(l.blocked('5.6.7.8', 4)).toBe(false)
+    expect(l.blocked('1.2.3.4', 60_001)).toBe(false)
+  })
+
+  it('answers 429 after 20 wrong tokens from one address', async () => {
+    let last = 0
+    for (let i = 0; i < 21; i++) {
+      const res = await fetch(`${base}/api/internal/render/health`, {
+        headers: { authorization: `Bearer guess-${i}` }
+      })
+      last = res.status
+    }
+    expect(last).toBe(429)
+  })
+
+  it('runs work in a few slots and turns callers away past the queue', async () => {
+    const s = slots(1, 1, 50)
+    const a = await s.acquire()
+    expect(a).toBeTypeOf('function')
+    const waiting = s.acquire()
+    expect(await s.acquire()).toBeNull() // queue full
+    a?.()
+    const b = await waiting
+    expect(b).toBeTypeOf('function')
+    expect(await s.acquire()).toBeNull() // waited 50 ms, nothing freed
+    b?.()
+    expect(s.busy).toBe(0)
   })
 })

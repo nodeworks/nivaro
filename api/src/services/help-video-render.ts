@@ -7,7 +7,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { storageChaos } from './chaos/faults/storage.js'
 import { cronTicksEnabled } from './cron-ticks.js'
-import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
+import { hasFfmpeg, isLockedMime, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { deleteFile, getFile, type StoredFile, uploadFileFromPath } from './files.js'
 import { rasterizeAnnotations } from './help-video-annotations.js'
 import {
@@ -287,8 +287,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     const sourceMime = String(source.type)
     // Never let ffprobe/ffmpeg guess the format of a recording: refuse a mime
     // with no pinned demuxer before either one opens the file.
-    if (!lockedInputArgs(sourceMime).includes('-f'))
-      throw new Error(`Unsupported recording format: ${sourceMime}`)
+    if (!isLockedMime(sourceMime)) throw new Error(`Unsupported recording format: ${sourceMime}`)
     const ext = sourceMime.includes('mp4') ? '.mp4' : '.webm'
     const sourcePath = join(dir, `source${ext}`)
     const opened = await openStoredObject(String(source.filename_disk))

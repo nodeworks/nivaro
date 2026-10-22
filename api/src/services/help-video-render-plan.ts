@@ -1,5 +1,5 @@
 import { devNull } from 'node:os'
-import { lockedInputArgs } from './ffmpeg.js'
+import { isLockedMime, lockedInputArgs } from './ffmpeg.js'
 import {
   bodyDuration,
   cropOf,
@@ -322,10 +322,10 @@ export function buildRenderArgs(input: RenderInput): string[] {
  *  the caller writes `graph` there before spawning ffmpeg. */
 export function buildRenderPlan(input: RenderInput): { args: string[]; graph: string } {
   // An unmapped mime yields no pinned demuxer; refuse rather than let ffmpeg probe.
-  const sourceLock = lockedInputArgs(input.sourceMime)
-  if (!sourceLock.includes('-f')) {
+  if (!isLockedMime(input.sourceMime)) {
     throw new Error(`Unsupported recording format: ${input.sourceMime}`)
   }
+  const sourceLock = lockedInputArgs(input.sourceMime)
   const e = input.edits
   const sizes = renderSizes(input.width, input.height, e.crop)
   const work = sizes.work
@@ -449,7 +449,7 @@ export function buildRenderPlan(input: RenderInput): { args: string[]; graph: st
   // carry ticks or music.
   const ticks = rippleTickEditedTimes(e)
   const music = e.music && input.music ? { ...e.music, ...input.music } : null
-  if (music && !lockedInputArgs(music.mime).includes('-f')) {
+  if (music && !isLockedMime(music.mime)) {
     throw new Error(`Unsupported music format: ${music.mime}`)
   }
   const needsMix = ticks.length > 0 || !!music

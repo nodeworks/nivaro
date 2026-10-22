@@ -11,7 +11,7 @@ import {
   peaksFromPcm,
   spriteGeometry
 } from '../../services/help-video-extras-plan.js'
-import { runClipPlan } from './help-video-graph-file.js'
+import { probeImage, runClipPlan } from './help-video-graph-file.js'
 
 // #1560 / #1562 against the real ffmpeg: a 6-second test pattern with a tone
 // gets a sprite sheet and peaks; a clip of it comes out as an MP4 and a GIF.
@@ -54,7 +54,7 @@ describe('sprite sheet and peaks', () => {
     expect(g).toMatchObject({ tile_w: 160, tile_h: 90, interval_ms: 1000, cols: 6, rows: 1 })
     const sheet = join(dir, 'sprite.jpg')
     await runFfmpeg(buildSpriteArgs({ path: src, mime: 'video/mp4', threads: 1 }, g!, sheet))
-    const jpg = await probeVideo(sheet)
+    const jpg = await probeImage(sheet)
     expect(jpg.width).toBe(160 * 6)
     expect(jpg.height).toBe(90)
     expect(readFileSync(sheet).subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]))

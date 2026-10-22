@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
-import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
+import { hasFfmpeg, isLockedMime, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { getFile, uploadFileFromPath } from './files.js'
 import {
   buildClipPlan,
@@ -402,7 +402,7 @@ export async function renderClip(id: string): Promise<'ready' | 'failed' | 'skip
     const stored = await getFile(fileId)
     if (!stored?.filename_disk) throw new Error('Stored object not found')
     const inputMime = renderCurrent ? 'video/mp4' : String(stored.type)
-    if (!lockedInputArgs(inputMime).includes('-f')) {
+    if (!isLockedMime(inputMime)) {
       throw new Error(`Unsupported recording format: ${inputMime}`)
     }
     const cut: ClipCut = renderCurrent

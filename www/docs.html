@@ -19178,7 +19178,7 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <!-- /SYNC:infrastructure-host -->
         </div>
 
-        <div class="doc-section" id="s-release-image" data-toc='[{"id":"release-image","label":"Release image"},{"id":"release-image-user","label":"Runs as uid 1000, not root"},{"id":"release-image-paths","label":"What it writes (read-only root filesystem)"},{"id":"release-image-tini","label":"tini as PID 1"},{"id":"release-image-health","label":"Health check"},{"id":"release-image-heap","label":"Node heap from the memory limit"},{"id":"release-image-slim","label":"The slim image and the render server"},{"id":"release-image-verify","label":"Verify the signature"}]'>
+        <div class="doc-section" id="s-release-image" data-toc='[{"id":"release-image","label":"Release image"},{"id":"release-image-user","label":"Runs as uid 1000, not root"},{"id":"release-image-paths","label":"What it writes (read-only root filesystem)"},{"id":"release-image-tini","label":"tini as PID 1"},{"id":"release-image-health","label":"Health check"},{"id":"release-image-heap","label":"Node heap from the memory limit"},{"id":"release-image-slim","label":"The slim image and the render server"},{"id":"release-image-pdf-requests","label":"What a PDF may load"},{"id":"release-image-verify","label":"Verify the signature"}]'>
           <!-- SYNC:release-image -->
           <h1 class="doc-h1" id="release-image">Release image</h1>
           <p class="doc-p">Nivaro ships as one Docker image that holds the API and the admin app, <code>nodeworks/nivaro:&lt;version&gt;</code>, and a smaller <code>-slim</code> image without Chromium and ffmpeg. Both run as uid 1000 under tini, have a health check and are signed with cosign.</p>

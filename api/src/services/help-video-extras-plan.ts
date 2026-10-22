@@ -2,7 +2,7 @@
 // ffmpeg arguments and the peaks maths. Kept free of database and storage
 // imports so it can be unit-tested and run against ffmpeg alone; the job
 // that uses it lives in help-video-extras.ts.
-import { lockedInputArgs } from './ffmpeg.js'
+import { isLockedMime, lockedInputArgs } from './ffmpeg.js'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -85,8 +85,8 @@ export function buildSpriteArgs(
   g: SpriteGeometry,
   outPath: string
 ): string[] {
+  if (!isLockedMime(input.mime)) throw new Error(`Unsupported recording format: ${input.mime}`)
   const lock = lockedInputArgs(input.mime)
-  if (!lock.includes('-f')) throw new Error(`Unsupported recording format: ${input.mime}`)
   return [
     '-y',
     '-v',
@@ -113,8 +113,8 @@ export function buildSpriteArgs(
 /** ffmpeg arguments that write the sound as mono 16-bit PCM at PEAK_PCM_RATE
  *  (a 30-minute recording is about 14 MB), read back by peaksFromPcm. */
 export function buildPeaksArgs(input: { path: string; mime: string }, outPath: string): string[] {
+  if (!isLockedMime(input.mime)) throw new Error(`Unsupported recording format: ${input.mime}`)
   const lock = lockedInputArgs(input.mime)
-  if (!lock.includes('-f')) throw new Error(`Unsupported recording format: ${input.mime}`)
   return [
     '-y',
     '-v',

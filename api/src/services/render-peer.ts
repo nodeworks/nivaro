@@ -1,7 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { Readable } from 'node:stream'
+import { isIP } from 'node:net'
+import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 
@@ -26,6 +27,13 @@ export const RENDER_PDF_MAX_BYTES = 32 * 1024 * 1024
 export const RENDER_FILE_MAX_BYTES = Math.round(1.3 * 1024 * 1024 * 1024)
 /** Music uploads are capped at 40 MB before conversion. */
 export const RENDER_MUSIC_MAX_BYTES = 48 * 1024 * 1024
+/** The largest PDF the client accepts back from the peer. */
+export const RENDER_PDF_OUT_MAX_BYTES = 128 * 1024 * 1024
+/** The largest converted or remuxed file the client accepts back (ffmpeg
+ *  itself is bounded at twice the upload cap). */
+export const RENDER_FILE_OUT_MAX_BYTES = RENDER_FILE_MAX_BYTES * 2
+/** JSON answers (probes, health, refusals). */
+const RENDER_JSON_MAX_BYTES = 1024 * 1024
 
 export type RenderFileOp =
   | 'probe-video'
@@ -55,18 +63,66 @@ export function imageVariant(): 'slim' | 'full' | null {
   return v === 'slim' || v === 'full' ? v : null
 }
 
-/** RENDER_URL as an origin with no trailing slash, or null when unset or not http(s). */
-export function renderPeerUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+/**
+ * May RENDER_URL use plain http to this host? Only on a network the token
+ * never leaves: loopback, a single-label name or a swarm `tasks.<service>`
+ * alias (overlay DNS; a name with `_` is never a public DNS name either), or
+ * a private address (RFC 1918, IPv6 unique-local). Anything else needs https:,
+ * or the bearer and every document would cross the network in clear.
+ */
+export function plainHttpAllowed(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|]$/g, '')
+  if (h === 'localhost' || h === '::1') return true
+  const v = isIP(h)
+  if (v === 4) {
+    const [a, b] = h.split('.').map(Number)
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+  }
+  if (v === 6) return /^f[cd][0-9a-f]{2}:/.test(h)
+  if (!h.includes('.')) return true
+  if (h.includes('_')) return true
+  return /^tasks\.[^.]+$/.test(h)
+}
+
+/** RENDER_URL checked: `{ url }` (an origin, no trailing slash), `{ error }`
+ *  when it is set but unusable, or null when unset. */
+export function renderPeerTarget(
+  env: NodeJS.ProcessEnv = process.env
+): { url: string } | { error: string } | null {
   const raw = (env.RENDER_URL ?? '').trim()
   if (!raw) return null
+  let u: URL
   try {
-    const u = new URL(raw)
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
-    return raw.replace(/\/+$/, '')
+    u = new URL(raw)
   } catch {
-    return null
+    return { error: 'RENDER_URL is not a URL' }
   }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:')
+    return { error: 'RENDER_URL must be an http(s) URL' }
+  if (u.username || u.password)
+    return { error: 'RENDER_URL must not carry credentials (RENDER_TOKEN is the credential)' }
+  if (u.protocol === 'http:' && !plainHttpAllowed(u.hostname))
+    return {
+      error:
+        'RENDER_URL must use https: unless the host is loopback, a single-label or tasks.<service> name, or a private (RFC 1918) address'
+    }
+  return { url: raw.replace(/\/+$/, '') }
 }
+
+/** RENDER_URL when it is set and usable, else null. */
+export function renderPeerUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  const t = renderPeerTarget(env)
+  return t && 'url' in t ? t.url : null
+}
+
+/** A URL with any password in it masked (as the env viewer does). */
+export function maskUrl(raw: string | null): string | null {
+  if (!raw) return raw
+  return raw.replace(/(:\/\/[^/\s:@]*):[^@\s]*@/, '$1:••••••@').slice(0, 200)
+}
+
+/** The shortest RENDER_TOKEN a render server accepts. */
+export const RENDER_TOKEN_MIN_LENGTH = 32
 
 /** The shared secret (RENDER_TOKEN, or RENDER_TOKEN_FILE through the secrets loader). */
 export function renderPeerToken(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -92,8 +148,58 @@ function renderError(statusCode: number, code: string, message: string): RenderE
   return Object.assign(new Error(message), { statusCode, code })
 }
 
+/** Passes bytes through and fails past `max` (a body whose length is not
+ *  known up front — chunked uploads, streamed answers). `onBytes` may veto a
+ *  chunk by returning an error. */
+export function byteCap(max: number, onBytes?: (n: number) => Error | undefined): Transform {
+  let n = 0
+  return new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      n += chunk.length
+      const veto = onBytes?.(chunk.length)
+      if (veto) cb(veto)
+      else if (n > max)
+        cb(renderError(413, 'RENDER_TOO_LARGE', 'The render answer or file is too large'))
+      else cb(null, chunk)
+    }
+  })
+}
+
+function tooLarge(): RenderError {
+  return renderError(
+    502,
+    'RENDER_PEER_TOO_LARGE',
+    'The render server sent more than this server accepts'
+  )
+}
+
+/** The answer's body, refused past `max` (Content-Length first, then counted). */
+async function readCapped(res: Response, max: number): Promise<Buffer> {
+  const len = Number(res.headers.get('content-length'))
+  if (Number.isFinite(len) && len > max) {
+    await res.body?.cancel().catch(() => undefined)
+    throw tooLarge()
+  }
+  if (!res.body) return Buffer.alloc(0)
+  const chunks: Buffer[] = []
+  let n = 0
+  for await (const c of Readable.fromWeb(res.body as unknown as WebReadableStream)) {
+    const b = c as Buffer
+    n += b.length
+    if (n > max) throw tooLarge()
+    chunks.push(b)
+  }
+  return Buffer.concat(chunks)
+}
+
+async function readJson<T>(res: Response): Promise<T> {
+  return JSON.parse((await readCapped(res, RENDER_JSON_MAX_BYTES)).toString('utf8')) as T
+}
+
 /** The readable refusal when neither a local binary nor a render peer exists. */
 export function renderUnavailable(what: 'pdf' | 'ffmpeg'): RenderError {
+  const target = renderPeerTarget()
+  if (target && 'error' in target) return renderError(503, 'RENDER_UNAVAILABLE', target.error)
   const slim = imageVariant() === 'slim'
   const missing = what === 'pdf' ? 'Chromium' : 'ffmpeg'
   const job = what === 'pdf' ? 'make PDFs' : 'read or convert videos and audio'
@@ -130,7 +236,7 @@ function withTimeout(ms: number, signal?: AbortSignal): AbortSignal {
 async function peerFailure(res: Response): Promise<RenderError> {
   let body: { message?: string; error?: string; code?: string } = {}
   try {
-    body = (await res.json()) as typeof body
+    body = await readJson<typeof body>(res)
   } catch {
     /* not JSON */
   }
@@ -166,14 +272,22 @@ function networkFailure(err: unknown): RenderError {
 /** Render HTML to a PDF on the peer. Same contract as pdf-layout's htmlToPdf. */
 export async function peerHtmlToPdf(
   html: string,
-  opts: { format?: 'A4' | 'Letter'; landscape?: boolean; margin?: string } = {}
+  opts: {
+    format?: 'A4' | 'Letter'
+    landscape?: boolean
+    margin?: string
+    allowOrigins?: string[]
+  } = {}
 ): Promise<Buffer> {
   const { url, token } = peerOrThrow('pdf')
   const body = JSON.stringify({
     html,
     format: opts.format,
     landscape: opts.landscape,
-    margin: opts.margin
+    margin: opts.margin,
+    // The origins THIS instance serves (its files, logos): the peer lets the
+    // document load from them as it would here (#2789 security review).
+    allow_origins: opts.allowOrigins
   })
   if (Buffer.byteLength(body) > RENDER_PDF_MAX_BYTES)
     throw renderError(413, 'RENDER_TOO_LARGE', 'This document is too large to turn into a PDF.')
@@ -189,7 +303,12 @@ export async function peerHtmlToPdf(
     throw networkFailure(err)
   }
   if (!res.ok) throw await peerFailure(res)
-  return Buffer.from(await res.arrayBuffer())
+  try {
+    return await readCapped(res, RENDER_PDF_OUT_MAX_BYTES)
+  } catch (err) {
+    if ((err as RenderError).code === 'RENDER_PEER_TOO_LARGE') throw err
+    throw networkFailure(err)
+  }
 }
 
 /** The header a file op's JSON result rides on when the body is a file. */
@@ -246,14 +365,22 @@ export async function peerFileOp<T>(
     throw networkFailure(err)
   }
   if (!res.ok) throw await peerFailure(res)
-  if (!params.output) return (await res.json()) as T
+  if (!params.output) return readJson<T>(res)
   if (!res.body) throw renderError(502, 'RENDER_PEER_FAILED', 'The render server sent no file')
+  const outMax = op === 'convert-music' ? RENDER_MUSIC_MAX_BYTES : RENDER_FILE_OUT_MAX_BYTES
+  const len = Number(res.headers.get('content-length'))
+  if (Number.isFinite(len) && len > outMax) {
+    await res.body.cancel().catch(() => undefined)
+    throw tooLarge()
+  }
   try {
     await pipeline(
       Readable.fromWeb(res.body as unknown as WebReadableStream),
+      byteCap(outMax),
       createWriteStream(params.output)
     )
   } catch (err) {
+    if ((err as RenderError).code === 'RENDER_TOO_LARGE') throw tooLarge()
     throw networkFailure(err)
   }
   return decodeMeta<T>(res.headers.get(RENDER_META_HEADER)) as T
@@ -272,10 +399,13 @@ export interface RenderPeerHealth {
 
 /** Does the peer answer, and what can it do? Never throws. */
 export async function probeRenderPeer(): Promise<RenderPeerHealth> {
-  const url = renderPeerUrl()
-  if (!url) return { configured: false, ok: false, url: null }
+  const target = renderPeerTarget()
+  if (!target) return { configured: false, ok: false, url: null }
+  const shown = maskUrl((process.env.RENDER_URL ?? '').trim())
+  if ('error' in target) return { configured: true, ok: false, url: shown, error: target.error }
+  const { url } = target
   const token = renderPeerToken()
-  if (!token) return { configured: true, ok: false, url, error: 'RENDER_TOKEN is not set' }
+  if (!token) return { configured: true, ok: false, url: shown, error: 'RENDER_TOKEN is not set' }
   const t0 = Date.now()
   try {
     const res = await fetch(`${url}${RENDER_PEER_PREFIX}/health`, {
@@ -285,19 +415,19 @@ export async function probeRenderPeer(): Promise<RenderPeerHealth> {
     const ms = Date.now() - t0
     if (!res.ok) {
       const e = await peerFailure(res)
-      return { configured: true, ok: false, url, ms, error: e.message }
+      return { configured: true, ok: false, url: shown, ms, error: e.message }
     }
-    const j = (await res.json()) as { chromium?: boolean; ffmpeg?: boolean; version?: string }
+    const j = await readJson<{ chromium?: boolean; ffmpeg?: boolean; version?: string }>(res)
     return {
       configured: true,
       ok: true,
-      url,
+      url: shown,
       ms,
       chromium: !!j.chromium,
       ffmpeg: !!j.ffmpeg,
       version: j.version ?? null
     }
   } catch (err) {
-    return { configured: true, ok: false, url, error: networkFailure(err).message }
+    return { configured: true, ok: false, url: shown, error: networkFailure(err).message }
   }
 }

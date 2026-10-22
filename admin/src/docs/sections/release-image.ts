@@ -111,17 +111,27 @@ export const releaseImageDocs: DocSection = {
         [
           '`RENDER_URL`',
           'Slim processes',
-          'Address of a full process, with no path, for example `http://nivaro_worker:3055`. Use an internal network only.'
+          'Address of a full process, with no path, for example `http://nivaro_worker:3055`. Plain `http:` is accepted only for loopback, a single-label name, a swarm `tasks.<service>` name, a name with `_`, or a private address (10.x, 172.16-31.x, 192.168.x, IPv6 fc00::/7). Anything else must be `https:`. No user or password in the URL.'
         ],
         [
           '`RENDER_TOKEN`',
           'Both sides',
-          'Shared secret, sent as `Authorization: Bearer <token>`. On the full process it turns on the render routes; without it they do not exist. `RENDER_TOKEN_FILE` and /run/secrets work as for every secret.'
+          'Shared secret, at least 32 characters (for example `openssl rand -hex 32`), sent as `Authorization: Bearer <token>`. On the full process it turns on the render routes; without it, or when it is shorter, they do not exist (the log says why). `RENDER_TOKEN_FILE` and /run/secrets work as for every secret.'
         ],
         [
           '`RENDER_PEER_CLOUD=on`',
           'Full process, cloud mode',
-          'In cloud mode the render routes stay off unless this is also set.'
+          "In cloud mode the render routes stay off unless this is also set. The render server is tenant-agnostic: it renders for anyone holding the token, and each job's private scratch folder (mode 0700, deleted afterwards) is the only separation between jobs."
+        ],
+        [
+          '`RENDER_PEER_PDF_CONCURRENCY` / `RENDER_PEER_FILE_CONCURRENCY`',
+          'Full process',
+          'How many PDFs and how many file jobs run at once (default 2 each). Up to 16 more wait, for at most a minute; after that the caller gets 503 RENDER_BUSY.'
+        ],
+        [
+          '`RENDER_PEER_SCRATCH_MB`',
+          'Full process',
+          'Disk the file jobs may use at once in TMPDIR (default 6144). Past it: 503 RENDER_BUSY.'
         ],
         [
           '`NIVARO_IMAGE_VARIANT`',
@@ -136,7 +146,12 @@ export const releaseImageDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'The render routes are under `/api/internal/render/` and are not part of the public API. `GET /api/internal/render/health` (with the bearer) answers `{ ok, chromium, ffmpeg, version }`. A wrong or missing token gets 401. The routes are left out of the API log, the Traffic Map, the rate limit and the maintenance freeze. On a slim process, `/api/preflight` (check `render`) and the readiness check `render-peer` report whether the render server answers.'
+      text: 'The render routes are under `/api/internal/render/` and are not part of the public API. `GET /api/internal/render/health` (with the bearer) answers `{ ok, chromium, ffmpeg, version }`. A wrong or missing token gets 401, and after 20 failures in a minute that address gets 429 (each burst is logged with the address, never the token). Every file job needs a supported audio or video mime, so ffmpeg never guesses a format. The routes are left out of the API log, the Traffic Map, the rate limit and the maintenance freeze. On a slim process, `/api/preflight` (check `render`) and the readiness check `render-peer` report whether the render server answers.'
+    },
+    { type: 'h2', id: 'release-image-pdf-requests', text: 'What a PDF may load' },
+    {
+      type: 'p',
+      text: "When Chromium renders a PDF, locally or on the render server, every request the document makes is checked. Allowed: inline data (`data:`, `blob:`, `about:blank`), this instance's own addresses (PUBLIC_URL and ADMIN_URL; a slim process sends its own along), and public http(s) addresses, such as a logo on a CDN. Refused: `file:` and every other scheme, loopback, private networks, `.local`/`.internal` names and the cloud metadata address 169.254.169.254. The log names the refused origins, never the full URL."
     },
     { type: 'h2', id: 'release-image-verify', text: 'Verify the signature' },
     {
@@ -151,7 +166,7 @@ export const releaseImageDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'The signing certificate names the workflow file and the release tag (`refs/tags/@app-<version>`). Images built by a manual workflow run carry a branch ref and do not pass this check.'
+      text: 'The signing certificate names the workflow file and the release tag (`refs/tags/@app-<version>`). Every build is pushed first as `sha-<commit>` (and `sha-<commit>-slim`) and signed. Only a release tag build then passes this check and gets the version and `latest` tags, on the same digest. A manual workflow run gets only the `sha-` tags, signed for its branch, and fails this check.'
     }
   ]
 }

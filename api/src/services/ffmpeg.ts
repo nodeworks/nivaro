@@ -82,11 +82,26 @@ const INPUT_FORMATS: Record<string, string> = {
   'audio/flac': 'flac',
   'audio/webm': 'matroska,webm'
 }
+function formatOf(mime?: string): string | undefined {
+  return mime ? INPUT_FORMATS[mime.split(';')[0].trim().toLowerCase()] : undefined
+}
+
+/** A mime whose demuxer is pinned: the only inputs ffmpeg/ffprobe ever open. */
+export function isLockedMime(mime?: string): boolean {
+  return !!formatOf(mime)
+}
+
+/** The input arguments that pin the demuxer. Throws for any other mime (empty
+ *  included): auto-detection would let an ffconcat script or a playlist
+ *  posing as a video read local files. */
 export function lockedInputArgs(mime?: string): string[] {
-  const fmt = mime ? INPUT_FORMATS[mime.split(';')[0].trim().toLowerCase()] : undefined
-  const args = ['-protocol_whitelist', 'file']
-  if (fmt) args.push('-f', fmt, '-format_whitelist', fmt)
-  return args
+  const fmt = formatOf(mime)
+  if (!fmt)
+    throw Object.assign(new Error(`Unsupported media format: ${String(mime ?? '').slice(0, 80)}`), {
+      statusCode: 422,
+      code: 'MEDIA_FORMAT_UNSUPPORTED'
+    })
+  return ['-protocol_whitelist', 'file', '-f', fmt, '-format_whitelist', fmt]
 }
 
 export function hasFfmpeg(): Promise<boolean> {
