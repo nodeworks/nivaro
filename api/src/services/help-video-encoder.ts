@@ -1,6 +1,7 @@
 import { devNull } from 'node:os'
 import { ffmpegOutput, hasFfmpeg } from './ffmpeg.js'
 import type { EncoderSettings } from './help-video-settings.js'
+import { peerEncoders, renderPeerUrl } from './render-peer.js'
 
 // How a help-video render encodes its picture (#1561).
 //
@@ -236,6 +237,17 @@ export function detectHardwareEncoders(fresh = false): Promise<HardwareReport> {
     })()
   }
   return detection
+}
+
+/** The report for where renders run: this process when it has ffmpeg, else
+ *  the render server a slim process hands its work to (renders never run on
+ *  the slim image). */
+export async function renderHostEncoders(
+  fresh = false
+): Promise<HardwareReport & { source: 'here' | 'render-server' }> {
+  if ((await hasFfmpeg()) || !renderPeerUrl())
+    return { ...(await detectHardwareEncoders(fresh)), source: 'here' }
+  return { ...(await peerEncoders<HardwareReport>(fresh)), source: 'render-server' }
 }
 
 export function markHardwareFailed(kind: VideoEncoderKind): void {

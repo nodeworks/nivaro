@@ -10,6 +10,8 @@
  *    (the PDF service's browser), plays it, and captures it with puppeteer's
  *    screencast (which pipes frames to ffmpeg). The video is stored as a file
  *    owned by the requester, who is notified when it is ready (or why not).
+ *    A process without ffmpeg and Chromium (the slim image) hands the job to
+ *    the media worker (media-handoff.ts), which makes it the same way.
  *
  * The browser and ffmpeg sit behind `WebmDeps` so the job is tested with fakes.
  */
@@ -443,7 +445,8 @@ async function productionDeps(): Promise<WebmDeps> {
     loadEvents: loadRecordingEvents,
     loadHeader: loadRecordingHeader,
     capture: captureWithPuppeteer,
-    hasFfmpeg: async () => (await import('./ffmpeg.js')).hasFfmpeg(),
+    // ffmpeg AND Chromium (the screencast needs both): only where the job may run.
+    hasFfmpeg: async () => (await import('./media-handoff.js')).canRunHere('replay-webm'),
     storeFile: async (userId, path, name) => {
       const { uploadFileFromPath } = await import('./files.js')
       const f = await uploadFileFromPath({ id: userId } as never, path, name, 'video/webm')
@@ -488,8 +491,31 @@ export function setWebmDepsForTests(deps: WebmDeps | null): void {
   depsOverride = deps
 }
 
-/** Queue a WebM export; answers at once. The requester is notified when it is done. */
-export function enqueueWebmExport(job: WebmJob): void {
+/** Where a WebM export started on this process is made: here (ffmpeg and
+ *  Chromium are installed), or on the media worker (the slim image). Throws
+ *  the readable 503 (RENDER_UNAVAILABLE) when neither can. */
+export async function webmExportPlacement(): Promise<'here' | 'worker'> {
+  if (depsOverride) return 'here'
+  const { mediaPlacement } = await import('./media-handoff.js')
+  return mediaPlacement('replay-webm')
+}
+
+/** Queue a WebM export; answers at once. The requester is notified when it
+ *  is done, by whichever process makes it. */
+export async function enqueueWebmExport(job: WebmJob): Promise<'here' | 'worker'> {
+  const placement = await webmExportPlacement()
+  if (placement === 'worker') {
+    const { handOff } = await import('./media-handoff.js')
+    await handOff('replay-webm', { ...job })
+    return placement
+  }
+  void runWebmExportHere(job)
+  return placement
+}
+
+/** Makes one export through this process's queue (the media worker's runner,
+ *  media-handoff.ts, waits for it). */
+export function runWebmExportHere(job: WebmJob): Promise<unknown> {
   const run = async () => {
     const deps = depsOverride ?? (await productionDeps())
     // runWebmExport settles every failure itself (job run + notification).
@@ -498,6 +524,7 @@ export function enqueueWebmExport(job: WebmJob): void {
     })
   }
   chain = chain.then(run, run)
+  return chain
 }
 
 /** Resolves once every queued export of this process is done (tests). */

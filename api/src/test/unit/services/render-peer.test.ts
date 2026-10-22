@@ -53,6 +53,13 @@ vi.mock('../../../services/help-video-music.js', () => ({
   }
 }))
 vi.mock('../../../services/readiness.js', () => ({ registerReadinessCheck: vi.fn() }))
+vi.mock('../../../services/help-video-encoder.js', () => ({
+  detectHardwareEncoders: async (fresh: boolean) => ({
+    available: fresh ? ['vaapi'] : [],
+    failed: [],
+    checked_at: '2026-10-22T00:00:00Z'
+  })
+}))
 
 import { failedAuthLimiter, internalRenderRoutes, slots } from '../../../routes/internal-render.js'
 import {
@@ -60,6 +67,7 @@ import {
   decodeMeta,
   encodeMeta,
   maskUrl,
+  peerEncoders,
   peerFileOp,
   peerHtmlToPdf,
   plainHttpAllowed,
@@ -195,6 +203,16 @@ describe('render peer routes', () => {
     })
     const h = await probeRenderPeer()
     expect(h.ok).toBe(false)
+  })
+
+  it('reports the encoders renders can use there (#1561, a slim settings page)', async () => {
+    expect(await peerEncoders()).toMatchObject({ available: [] })
+    expect(await peerEncoders(true)).toMatchObject({ available: ['vaapi'] })
+    local.ffmpeg = false
+    await expect(peerEncoders()).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'RENDER_UNAVAILABLE'
+    })
   })
 
   it('probes a streamed file and answers JSON', async () => {

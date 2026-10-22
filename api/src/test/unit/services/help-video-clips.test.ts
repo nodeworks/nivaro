@@ -105,7 +105,8 @@ vi.mock('../../../services/help-video-uploads.js', () => ({
 vi.mock('../../../services/stored-object-stream.js', () => ({
   openStoredObject: async () => ({ stream: Readable.from([Buffer.from('video-bytes')]) })
 }))
-vi.mock('../../../services/io-holder.js', () => ({ getApp: () => null }))
+const slim = vi.hoisted(() => ({ app: null as null | { redis: unknown } }))
+vi.mock('../../../services/io-holder.js', () => ({ getApp: () => slim.app }))
 const runs = vi.hoisted(() => ({ outcomes: [] as string[], failures: 0, failed: [] as string[] }))
 vi.mock('../../../services/job-runs.js', () => ({
   startJobRun: async () => ({
@@ -122,6 +123,7 @@ vi.mock('../../../services/job-runs.js', () => ({
 }))
 
 const work = mkdtempSync(join(tmpdir(), 'nvr-clips-'))
+const { fakeHandoffRedis } = await import('../../fixtures/fake-handoff-redis.js')
 const clips = await import('../../../services/help-video-clips.js')
 const { emptyEdits, hashEdits } = await import('../../../services/help-video-edits.js')
 
@@ -150,6 +152,7 @@ beforeEach(() => {
   })
   st.migrated = true
   st.ffmpeg = true
+  slim.app = null
   st.ran = []
   st.graphs = []
   st.uploads = 0
@@ -426,5 +429,33 @@ describe('friendlyClipError', () => {
     expect(clips.friendlyClipError(new Error('/srv/work/clips/abc/input.webm: Invalid data'))).toBe(
       'The clip could not be made'
     )
+  })
+})
+
+describe('the slim image (no ffmpeg): clips are made by the media worker', () => {
+  it('queues the row, hands the id over, never claims it; the worker makes it', async () => {
+    const redis = fakeHandoffRedis()
+    slim.app = { redis }
+    st.ffmpeg = false
+    const row = await clips.createClip(video, user, { kind: 'mp4', start_ms: 1000, end_ms: 4000 })
+    expect(row.status).toBe('queued')
+    const list = redis.lists.get('nvr:media-handoff:clip') ?? []
+    expect(list.map((raw) => JSON.parse(raw).payload)).toEqual([{ id: row.id }])
+    // A slim process that somehow reaches renderClip leaves the row queued.
+    expect(await clips.renderClip(String(row.id))).toBe('skipped')
+    expect(tables.nivaro_help_video_clips[0].status).toBe('queued')
+    expect(st.ran).toHaveLength(0)
+    // The media worker's runner (full image): the same clip, made.
+    st.ffmpeg = true
+    await clips.runClipHere(String(row.id))
+    expect(tables.nivaro_help_video_clips[0]).toMatchObject({ status: 'ready', progress: 100 })
+  })
+
+  it('without ffmpeg or a media worker it is still the readable 503', async () => {
+    st.ffmpeg = false
+    await expect(
+      clips.createClip(video, user, { kind: 'mp4', start_ms: 0, end_ms: 1000 })
+    ).rejects.toMatchObject({ statusCode: 503, code: 'HELP_VIDEO_CLIP_NO_FFMPEG' })
+    expect(tables.nivaro_help_video_clips).toHaveLength(0)
   })
 })

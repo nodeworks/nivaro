@@ -224,6 +224,22 @@ export async function buildServer() {
     app.addHook('onClose', async () => {
       await closeItemEvents()
     })
+    // Slim parity: the media worker (a full-image process that ticks crons,
+    // or MEDIA_WORKER=on) drains clips, captions, upload extras and replay
+    // videos that slim processes handed off (services/media-handoff.ts).
+    {
+      const { startMediaWorker, stopMediaWorker } = await import('./services/media-handoff.js')
+      const { INSTANCE_ID } = await import('./services/instance-roster.js')
+      const { NIVARO_VERSION } = await import('./version.js')
+      void startMediaWorker({
+        redis: app.redis,
+        log: app.log,
+        instance: INSTANCE_ID,
+        name: process.env.NIVARO_INSTANCE?.trim() || null,
+        version: NIVARO_VERSION
+      }).catch((err) => app.log.warn({ err }, '[media-worker] did not start'))
+      app.addHook('onClose', async () => stopMediaWorker())
+    }
     // Realtime event pipeline: journaled events cross replicas on a Redis
     // stream (#1737); the durable journal (#1673) keeps the sequence ahead of
     // a Redis that lost its keys. Both fail open — events still flow without.

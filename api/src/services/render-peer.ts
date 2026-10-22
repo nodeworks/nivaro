@@ -43,8 +43,9 @@ export type RenderFileOp =
   | 'convert-music'
 
 /** The longest each kind of peer call may take before it is abandoned. */
-const OP_TIMEOUT_MS: Record<RenderFileOp | 'pdf' | 'health', number> = {
+const OP_TIMEOUT_MS: Record<RenderFileOp | 'pdf' | 'health' | 'encoders', number> = {
   health: 5_000,
+  encoders: 60_000,
   pdf: 120_000,
   'probe-video': 120_000,
   'probe-streams': 120_000,
@@ -53,7 +54,7 @@ const OP_TIMEOUT_MS: Record<RenderFileOp | 'pdf' | 'health', number> = {
   'convert-music': 15 * 60_000
 }
 
-export function renderOpTimeoutMs(op: RenderFileOp | 'pdf' | 'health'): number {
+export function renderOpTimeoutMs(op: RenderFileOp | 'pdf' | 'health' | 'encoders'): number {
   return OP_TIMEOUT_MS[op]
 }
 
@@ -386,6 +387,22 @@ export async function peerFileOp<T>(
   return decodeMeta<T>(res.headers.get(RENDER_META_HEADER)) as T
 }
 
+/** The peer's help-video encoder report (what renders there can use). */
+export async function peerEncoders<T>(fresh = false): Promise<T> {
+  const { url, token } = peerOrThrow('ffmpeg')
+  let res: Response
+  try {
+    res = await fetch(`${url}${RENDER_PEER_PREFIX}/encoders${fresh ? '?fresh=1' : ''}`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: withTimeout(renderOpTimeoutMs('encoders'))
+    })
+  } catch (err) {
+    throw networkFailure(err)
+  }
+  if (!res.ok) throw await peerFailure(res)
+  return (await readJson<{ hardware: T }>(res)).hardware
+}
+
 export interface RenderPeerHealth {
   configured: boolean
   ok: boolean
@@ -429,5 +446,59 @@ export async function probeRenderPeer(): Promise<RenderPeerHealth> {
     }
   } catch (err) {
     return { configured: true, ok: false, url: shown, error: networkFailure(err).message }
+  }
+}
+
+/**
+ * Does this process have somewhere for its PDFs and video work to run? The
+ * readiness check and /api/preflight share this verdict.
+ *
+ *   ok   the binaries are here, or the render server answers and has what
+ *        this process lacks;
+ *   fail this process needs the render server and it is missing, refused,
+ *        unreachable or lacks a binary — on the slim image that is a config
+ *        error people would meet as 503s, so a deploy gate must stop it
+ *        (start or update the worker before the web tasks);
+ *   warn the same gap on a process that is not the slim image (a dev box
+ *        without ffmpeg), or a RENDER_URL that is set but broken while the
+ *        binaries are here anyway.
+ */
+export function judgeRenderSetup(
+  local: { chromium: boolean; ffmpeg: boolean },
+  peer: RenderPeerHealth,
+  variant: 'slim' | 'full' | null
+): { status: 'ok' | 'warn' | 'fail'; summary: string } {
+  const needsPeer = !(local.chromium && local.ffmpeg)
+  if (!needsPeer) {
+    if (peer.configured && !peer.ok)
+      return {
+        status: 'warn',
+        summary: `Chromium and ffmpeg are installed here; RENDER_URL is set but does not answer (${peer.error}).`
+      }
+    return { status: 'ok', summary: 'Chromium and ffmpeg are installed here.' }
+  }
+  const missing = [!local.chromium && 'Chromium', !local.ffmpeg && 'ffmpeg'].filter(Boolean)
+  if (!peer.configured)
+    return {
+      status: variant === 'slim' ? 'fail' : 'warn',
+      summary: `No ${missing.join(' or ')} here and no RENDER_URL: PDFs, video uploads and music refuse with a 503. Set RENDER_URL and RENDER_TOKEN to a full-image process.`
+    }
+  if (!peer.ok)
+    return {
+      status: 'fail',
+      summary: `The render server (RENDER_URL) does not answer: ${peer.error}`
+    }
+  const lacks = [
+    !local.chromium && !peer.chromium && 'Chromium',
+    !local.ffmpeg && !peer.ffmpeg && 'ffmpeg'
+  ].filter(Boolean)
+  if (lacks.length)
+    return {
+      status: 'fail',
+      summary: `The render server answers but has no ${lacks.join(' or ')} either.`
+    }
+  return {
+    status: 'ok',
+    summary: `The render server answers in ${peer.ms} ms (version ${peer.version}).`
   }
 }

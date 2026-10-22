@@ -136,17 +136,63 @@ export const releaseImageDocs: DocSection = {
         [
           '`NIVARO_IMAGE_VARIANT`',
           'Set by the image',
-          '`slim` or `full`. A slim process never takes help-video renders from the queue.'
+          '`slim` or `full`. A slim process never takes help-video renders, clips or other media jobs.'
+        ],
+        [
+          '`MEDIA_WORKER`',
+          'Full process',
+          '`on` makes this process the media worker, `off` never. Unset: a full process that ticks crons and is not `NIVARO_ROLE=web`.'
         ]
       ]
     },
     {
-      type: 'p',
-      text: 'Some work stays with a process that has the binaries: help-video renders (VIDEO_RENDER and NIVARO_ROLE decide which process renders), clips, captions, thumbnails and waveforms, and video exports of session recordings. Run at least one full process with `VIDEO_RENDER=on` beside slim web processes. A full process renders locally even when `RENDER_URL` is set.'
+      type: 'h3',
+      id: 'release-image-slim-parity',
+      text: 'Nothing is lost on slim'
     },
     {
       type: 'p',
-      text: 'The render routes are under `/api/internal/render/` and are not part of the public API. `GET /api/internal/render/health` (with the bearer) answers `{ ok, chromium, ffmpeg, version }`. A wrong or missing token gets 401, and after 20 failures in a minute that address gets 429 (each burst is logged with the address, never the token). Every file job needs a supported audio or video mime, so ffmpeg never guesses a format. The routes are left out of the API log, the Traffic Map, the rate limit and the maintenance freeze. On a slim process, `/api/preflight` (check `render`) and the readiness check `render-peer` report whether the render server answers.'
+      text: 'Every feature works on a slim process. Work a request waits on goes to the render server (`RENDER_URL`). Work that ends in a stored file or result, made in the background, goes to the media worker: the slim process saves the job (the clip row, the caption job, the upload, the export request) and puts its id on a Redis list; the media worker picks it up within seconds, makes it exactly as it would for its own request, and the author sees it finish in the same place as always. Nothing large crosses between them: the worker reads the same storage and database.'
+    },
+    {
+      type: 'table',
+      head: ['Feature', 'Needs', 'On a slim process'],
+      rows: [
+        ['PDFs (layouts, dossiers, scheduled reports, Report Studio)', 'Chromium', 'Render server'],
+        [
+          'Help-video upload checks, recording remux, picked-file conversion',
+          'ffmpeg',
+          'Render server'
+        ],
+        [
+          'Background music conversion, music folder and package import probes',
+          'ffmpeg',
+          'Render server'
+        ],
+        [
+          'Encoder report on the help-video settings page',
+          'ffmpeg',
+          'Render server (`GET /api/internal/render/encoders`)'
+        ],
+        [
+          'Help-video renders, with cards, annotations and music',
+          'Chromium + ffmpeg',
+          'Render queue owner (`VIDEO_RENDER=on`); a slim publish kicks it at once'
+        ],
+        ['Clips and GIFs', 'ffmpeg', 'Media worker'],
+        ['Generated captions (reading the sound)', 'ffmpeg', 'Media worker'],
+        ['Upload thumbnails and waveform', 'ffmpeg', 'Media worker'],
+        ['Session-replay video (WebM) export', 'Chromium + ffmpeg', 'Media worker'],
+        ['Session-replay HTML export', 'nothing', 'Here']
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The media worker is a full process that ticks crons and is not `NIVARO_ROLE=web` (the worker of a web + worker stack), or any full process with `MEDIA_WORKER=on`; `MEDIA_WORKER=off` keeps a process out. It checks in every 30 seconds (Redis key `nvr:media-worker`, 90 s) and drains one job of each kind at a time. Jobs wait on `nvr:media-handoff:<kind>` (with `REDIS_CHANNEL_PREFIX` in front) while it restarts; one older than a day is dropped, and at most 500 of a kind wait (past that, 503 RENDER_BUSY). Cloud mode never hands off: run the full image there. A full process always does its own work, even when `RENDER_URL` is set.'
+    },
+    {
+      type: 'p',
+      text: 'A slim process with nowhere to send its work is a configuration error, and the deploy gate catches it: `/api/preflight` answers 503 and the readiness checks fail when there is no `RENDER_URL`, the render server does not answer, refuses the token or lacks a binary (check `render`, readiness `render-peer`), or no media worker has checked in (check `media-worker`, readiness `media-worker`). Start or update the worker before the slim web tasks. Until it is fixed, the features themselves answer a readable 503 (RENDER_UNAVAILABLE) instead of failing in the background.'
     },
     { type: 'h2', id: 'release-image-pdf-requests', text: 'What a PDF may load' },
     {
