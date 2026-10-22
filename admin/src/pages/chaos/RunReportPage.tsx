@@ -531,7 +531,7 @@ function NotesList({ report, names }: { report: RunReport; names: Record<string,
           <div className='min-w-0 flex-1'>
             <div className='flex flex-wrap items-center gap-1.5'>
               <span className='font-medium text-slate-900 dark:text-foreground'>
-                {n.actor ? (names[n.actor] ?? 'Someone') : 'System'}
+                {(n.actor ? names[n.actor] : null) ?? n.name ?? (n.actor ? 'Someone' : 'System')}
               </span>
               {n.mark && (
                 <span
