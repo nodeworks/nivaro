@@ -39,7 +39,8 @@ export interface CMSRelation {
   /** M2A only — the junction column naming which collection each row's `item` id
    *  belongs to (usually 'collection'); one_collection is null on those rows. */
   one_collection_field?: string | null
-  one_allowed_collections?: string | null
+  /** Array from the API, or JSON / comma text — read with parseAllowedCollections. */
+  one_allowed_collections?: string | string[] | null
 }
 
 // Staged grandchild ops for a NestedRelationEditor under saveMode='pending' on

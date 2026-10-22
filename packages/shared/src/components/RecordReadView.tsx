@@ -3,6 +3,7 @@ import { ChevronDown, Pencil } from 'lucide-react'
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DrilldownContext, useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
+import { parseAllowedCollections } from '../lib/allowed-collections'
 import { get } from '../lib/commands'
 import {
   isEmptyValue as isBlank,
@@ -98,7 +99,8 @@ interface RelationRow {
   one_field?: string | null
   junction_field?: string | null
   one_collection_field?: string | null
-  one_allowed_collections?: string | null
+  /** Array from the API, or JSON / comma text — read with parseAllowedCollections. */
+  one_allowed_collections?: string | string[] | null
 }
 
 const parseOverrides = (o: LayoutAssignment['overrides']): Record<string, unknown> => {
@@ -342,10 +344,7 @@ function M2MValue({
   const companion = (jMeta?.relations ?? []).find(
     (r) => r.many_collection === junction && r.many_field === junctionField
   )
-  const allowed = String(companion?.one_allowed_collections ?? '')
-    .split(',')
-    .map((c) => c.trim())
-    .filter(Boolean)
+  const allowed = parseAllowedCollections(companion?.one_allowed_collections)
   const isM2A =
     !!companion &&
     !companion.one_collection &&
