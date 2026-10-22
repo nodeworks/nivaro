@@ -76,6 +76,8 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
     wireDrillListeners()
     const { wireSteadyState } = await import('../services/chaos/steady-state.js')
     await wireSteadyState()
+    const { wirePreflight } = await import('../services/chaos/preflight-hook.js')
+    wirePreflight()
     setChaosApp(app)
     await startChaosCluster(chaosRefusal() ? null : (app.redis ?? null))
   })
@@ -94,6 +96,13 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
     adm.addHook('preHandler', requireAdmin)
 
     adm.get('/status', async () => ({ data: await chaosStatus() }))
+
+    // #2848 — the checklist beside the Run button; POST /runs runs it again server-side.
+    adm.get('/preflight', async () => {
+      const { runPreflight } = await import('../services/chaos/preflight.js')
+      const r = await runPreflight()
+      return { data: { ok: r.ok, checks: r.checks } }
+    })
 
     adm.get('/catalog', async () => {
       const last = await lastRunPerFault()
