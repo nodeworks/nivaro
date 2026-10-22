@@ -12,7 +12,10 @@ export function wirePreflight(): void {
   wired = true
   setDrillHooks({
     preflight: async (input) => {
-      const r = await runPreflight({ override: input.override ?? null })
+      const r = await runPreflight({
+        override: input.override ?? null,
+        gameday_id: input.gameday_id ?? null
+      })
       return { ok: r.ok, checks: r.checks }
     }
   })

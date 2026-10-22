@@ -433,7 +433,10 @@ export async function wireSteadyState(): Promise<void> {
     onArmed: async (run: ChaosRun, fault: ArmedFault) => {
       const keys = [...COCKPIT_SAMPLERS, ...run.hypothesis.map((r) => r.sampler)]
       const baseline = await takeBaseline(keys)
-      startWatch(run.id, fault.id, run.hypothesis)
+      const abortAfter = Number(run.meta.abort_after)
+      startWatch(run.id, fault.id, run.hypothesis, {
+        abortAfter: Number.isFinite(abortAfter) && abortAfter > 0 ? abortAfter : undefined
+      })
       return baseline as unknown as Record<string, unknown>
     },
     verdict: async (run, how) => verdictFor(run.id, how)

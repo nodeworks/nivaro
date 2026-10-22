@@ -54,12 +54,13 @@ function fail(reply: FastifyReply, err: unknown) {
 
 function who(req: FastifyRequest): { id: string | null; name: string | null } {
   const u = req.user as
-    | { id?: string; first_name?: string | null; last_name?: string | null; email?: string }
+    | { id?: string; first_name?: string | null; last_name?: string | null }
     | undefined
   if (!u) return { id: null, name: null }
   return {
     id: u.id ?? null,
-    name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || null
+    // Display name only — the banner shows it to everyone signed in; the email never leaves.
+    name: [u.first_name, u.last_name].filter(Boolean).join(' ') || null
   }
 }
 
@@ -96,6 +97,15 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
     adm.addHook('preHandler', requireAdmin)
 
     adm.get('/status', async () => ({ data: await chaosStatus() }))
+
+    // #2828 — the samplers a hypothesis may name (the builder's picker).
+    adm.get('/samplers', async () => {
+      const { listSamplers, registerBuiltInSamplers } = await import(
+        '../services/chaos/steady-state.js'
+      )
+      registerBuiltInSamplers()
+      return { data: listSamplers() }
+    })
 
     // #2848 — the checklist beside the Run button; POST /runs runs it again server-side.
     adm.get('/preflight', async () => {
@@ -178,6 +188,7 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
           seconds: b.seconds,
           hypothesis: b.hypothesis ?? null,
           override: b.override ?? null,
+          abort_after: b.abort_after,
           note: b.note ?? null,
           kind: b.kind === 'monkey' || b.kind === 'gameday' ? b.kind : 'drill',
           preset_id: b.preset_id ?? null,
