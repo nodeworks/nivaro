@@ -11,6 +11,19 @@ on:
 # free for public repos) — QEMU-emulating the arm64 half took 20-40 minutes
 # for what a native runner does in ~3. The merge job stitches the per-arch
 # digests into one multi-arch manifest.
+#
+# Two images per release (#2789), each multi-arch:
+#   nodeworks/nivaro:<v>        (+ latest)       target runner      — renders locally
+#   nodeworks/nivaro:<v>-slim   (+ latest-slim)  target runner-slim — no Chromium/ffmpeg
+#
+# Both are signed (#2791) keyless with cosign through GitHub's OIDC token, by
+# the multi-arch INDEX digest the tag points at (what `docker pull` records in
+# RepoDigests) and, --recursive, every per-platform manifest under it. Verify:
+#   cosign verify nodeworks/nivaro@sha256:<digest> \
+#     --certificate-identity-regexp '^https://github.com/nodeworks/nivaro/.github/workflows/docker-hub.yml@refs/tags/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+# A workflow_dispatch run signs from refs/heads/<branch> and fails that check
+# on purpose: only tag builds are release images.
 jobs:
   build:
     # The dev repo receives the same tags a minute earlier; only the public
@@ -20,10 +33,26 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
+            arch: amd64
             runner: ubuntu-latest
+            variant: full
+            target: runner
           - platform: linux/arm64
+            arch: arm64
             runner: ubuntu-24.04-arm
-    name: Build ${{ matrix.platform }}
+            variant: full
+            target: runner
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            variant: slim
+            target: runner-slim
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            variant: slim
+            target: runner-slim
+    name: Build ${{ matrix.variant }} ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -51,6 +80,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.release
+          target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=nodeworks/nivaro,push-by-digest=true,name-canonical=true,push=true
           build-args: |
@@ -62,9 +92,13 @@ jobs:
           # The GitHub Actions cache (type=gha) never hit — the repo's 10 GB
           # budget overflowed and eviction took the oldest layers first — and
           # was removed 2026-10-19. ignore-error: a cache problem never fails
-          # the build.
-          cache-from: type=registry,ref=nodeworks/nivaro:buildcache-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
-          cache-to: type=registry,ref=nodeworks/nivaro:buildcache-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
+          # the build. The slim build writes its own cache tag (the two would
+          # overwrite each other's) and reads both: every stage but the last
+          # two is shared.
+          cache-from: |
+            type=registry,ref=nodeworks/nivaro:buildcache-${{ matrix.arch }}
+            type=registry,ref=nodeworks/nivaro:buildcache-slim-${{ matrix.arch }}
+          cache-to: type=registry,ref=nodeworks/nivaro:buildcache-${{ matrix.variant == 'slim' && 'slim-' || '' }}${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
 
       - name: Export digest
         run: |
@@ -75,7 +109,7 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          name: digests-${{ matrix.variant }}-${{ matrix.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -84,15 +118,27 @@ jobs:
     # The dev repo receives the same tags a minute earlier; only the public
     # mirror publishes, or the two runs race for one version.
     if: github.repository == 'nodeworks/nivaro'
-    name: Merge manifest & tag
+    name: Merge manifests, tag & sign
     runs-on: ubuntu-latest
     needs: build
+    # id-token: cosign's keyless signing asks GitHub for an OIDC token, and
+    # Sigstore's Fulcio binds the signing certificate to this workflow + ref.
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Download digests
+      - name: Download full digests
         uses: actions/download-artifact@v4
         with:
-          path: /tmp/digests
-          pattern: digests-*
+          path: /tmp/digests/full
+          pattern: digests-full-*
+          merge-multiple: true
+
+      - name: Download slim digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests/slim
+          pattern: digests-slim-*
           merge-multiple: true
 
       - name: Extract version from tag
@@ -107,13 +153,50 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create multi-arch manifest
-        working-directory: /tmp/digests
+      - name: Create multi-arch manifest (full)
+        working-directory: /tmp/digests/full
         run: |
           docker buildx imagetools create \
             -t nodeworks/nivaro:${{ steps.meta.outputs.version }} \
             -t nodeworks/nivaro:latest \
             $(printf 'nodeworks/nivaro@sha256:%s ' *)
 
+      - name: Create multi-arch manifest (slim)
+        working-directory: /tmp/digests/slim
+        run: |
+          docker buildx imagetools create \
+            -t nodeworks/nivaro:${{ steps.meta.outputs.version }}-slim \
+            -t nodeworks/nivaro:latest-slim \
+            $(printf 'nodeworks/nivaro@sha256:%s ' *)
+
       - name: Inspect
-        run: docker buildx imagetools inspect nodeworks/nivaro:${{ steps.meta.outputs.version }}
+        id: index
+        run: |
+          V="${{ steps.meta.outputs.version }}"
+          docker buildx imagetools inspect "nodeworks/nivaro:$V"
+          docker buildx imagetools inspect "nodeworks/nivaro:$V-slim"
+          # The index digests the tags now point at — what gets signed.
+          full=$(docker buildx imagetools inspect "nodeworks/nivaro:$V" --format '{{json .Manifest}}' | jq -r .digest)
+          slim=$(docker buildx imagetools inspect "nodeworks/nivaro:$V-slim" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$full$slim" in *sha256:*sha256:*) ;; *) echo "no index digest" >&2; exit 1 ;; esac
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "slim=$slim" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless: no key to keep. The signature (and its Rekor transparency-log
+      # entry) names this workflow file and the tag ref, which is what the
+      # deploy's `cosign verify` pins. By digest, never by tag.
+      - name: Sign images
+        run: |
+          cosign sign --yes --recursive "nodeworks/nivaro@${{ steps.index.outputs.full }}"
+          cosign sign --yes --recursive "nodeworks/nivaro@${{ steps.index.outputs.slim }}"
+
+      - name: Verify signatures
+        run: |
+          for d in "${{ steps.index.outputs.full }}" "${{ steps.index.outputs.slim }}"; do
+            cosign verify "nodeworks/nivaro@$d" \
+              --certificate-identity-regexp '^https://github.com/nodeworks/nivaro/.github/workflows/docker-hub.yml@refs/tags/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          done

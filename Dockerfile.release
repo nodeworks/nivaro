@@ -3,7 +3,13 @@
 # serving the compiled admin SPA for all other routes.
 #
 # Build:  docker build -f Dockerfile.release -t nivaro:latest .
+#         docker build -f Dockerfile.release --target runner-slim -t nivaro:slim .
 # Run:    docker run -p 3055:3055 --env-file .env nivaro:latest
+#
+# Two runners (#2789): `runner` (the default, last stage) renders PDFs and
+# videos itself; `runner-slim` has no Chromium or ffmpeg and hands that work
+# to a full process over RENDER_URL. Both run as uid 1000 under tini, with a
+# HEALTHCHECK, and write only /app/uploads, /app/work and /tmp.
 
 # ─── Stage 1: base ───────────────────────────────────────────────────────────
 FROM node:22-alpine AS base
@@ -107,26 +113,19 @@ RUN pnpm --filter @nivaro/react build
 # image build only bundles.
 RUN pnpm --filter @nivaro/admin exec vite build && node scripts/precompress-dist.mjs admin/dist
 
-# ─── Stage 4: production runner ──────────────────────────────────────────────
-FROM node:22-alpine AS runner
 
-# System chromium for puppeteer (PDF generation) — the puppeteer-downloaded
-# Chrome is glibc-linked and cannot run on musl/Alpine at all.
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-WORKDIR /app
-
-# Upgrade Alpine packages to pick up security patches (busybox etc.). With
-# the layer cache this step would never run again until node:22-alpine moves;
-# APK_WEEK (the ISO week, passed by the Docker Hub workflow) reruns it — and
-# the chromium layer under it — once a week.
-ARG APK_WEEK=""
-RUN echo "apk refresh ${APK_WEEK}" && apk upgrade --no-cache
-# Required for sharp (image processing) native binaries on Alpine
-RUN apk add --no-cache libc6-compat chromium nss freetype harfbuzz ca-certificates ttf-freefont ffmpeg
+# ─── Stage 4: production dependencies ───────────────────────────────────────
+# Installed once and copied into BOTH runner variants (below), from the
+# version-blanked manifests (see the manifests stage), so this layer survives
+# a release that changed no dependency. Same musl base as the runners, so
+# native prebuilds (sharp, tree-sitter) match. No browser download: the full
+# image uses Alpine's chromium (the puppeteer-downloaded Chrome is
+# glibc-linked and cannot run on musl at all) and the slim one has none.
+FROM node:22-alpine AS prod-deps
+RUN apk add --no-cache libc6-compat
 RUN corepack enable pnpm
-
-# Install production deps only — from the version-blanked manifests (see the
-# manifests stage), so this layer survives a release that changed no dependency.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+WORKDIR /app
 COPY --from=manifests /src/pnpm-workspace.yaml /src/pnpm-lock.yaml /src/package.json ./
 COPY --from=manifests /src/api/package.json ./api/
 COPY --from=manifests /src/packages/sdk/package.json ./packages/sdk/
@@ -135,39 +134,117 @@ COPY --from=manifests /src/packages/shared/package.json ./packages/shared/
 COPY --from=manifests /src/packages/react/package.json ./packages/react/
 COPY --from=manifests /src/packages/mcp/package.json ./packages/mcp/
 RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
+
+# ─── Stage 5: the release's own files ───────────────────────────────────────
+# Everything that changes with each release, gathered in one tree so each
+# runner takes it as ONE layer on top of the dependency layer.
+FROM scratch AS app-files
 # The real manifests: the API reports its own version and the admin's
-# @nivaro/react version from them (api/src/version.ts).
-COPY package.json ./
-COPY api/package.json ./api/
-COPY packages/sdk/package.json ./packages/sdk/
-COPY packages/extension-kit/package.json ./packages/extension-kit/
-COPY packages/shared/package.json ./packages/shared/
-COPY packages/react/package.json ./packages/react/
-COPY packages/mcp/package.json ./packages/mcp/
-
+# @nivaro/react version from them (api/src/version.ts). They replace the
+# version-blanked copies the install layer carries.
+COPY package.json /app/
+COPY api/package.json /app/api/
+COPY packages/sdk/package.json /app/packages/sdk/
+COPY packages/extension-kit/package.json /app/packages/extension-kit/
+COPY packages/shared/package.json /app/packages/shared/
+COPY packages/react/package.json /app/packages/react/
+COPY packages/mcp/package.json /app/packages/mcp/
 # Compiled API + SDK
-COPY --from=build-api /app/api/dist ./api/dist
-COPY --from=build /app/packages/sdk/dist ./packages/sdk/dist
-COPY --from=build-api /app/packages/extension-kit/dist ./packages/extension-kit/dist
-COPY --from=build-api /app/packages/mcp/dist ./packages/mcp/dist
+COPY --from=build-api /app/api/dist /app/api/dist
+COPY --from=build /app/packages/sdk/dist /app/packages/sdk/dist
+COPY --from=build-api /app/packages/extension-kit/dist /app/packages/extension-kit/dist
+COPY --from=build-api /app/packages/mcp/dist /app/packages/mcp/dist
 # Cloud extensions (injected from private repo during build — dir may not exist in OSS builds)
-COPY --from=build-api /app/api/cloud-extensions ./api/cloud-extensions
-
+COPY --from=build-api /app/api/cloud-extensions /app/api/cloud-extensions
 # Admin SPA — Fastify serves this at /app/admin/dist (resolved from api/dist/server.js)
-COPY --from=build-admin /app/admin/dist ./admin/dist
-
+COPY --from=build-admin /app/admin/dist /app/admin/dist
 # Mail templates
-COPY api/templates ./api/templates
-
+COPY api/templates /app/api/templates
 # Release notes, generated from git tags at release time. Copied because the
 # container has no git repository to read them from.
-COPY changelog.json ./changelog.json
+COPY changelog.json /app/changelog.json
+# PID 1 setup (writable dirs, heap from the memory limit) and the HEALTHCHECK.
+COPY deploy/image/docker-entrypoint.sh deploy/image/healthcheck.sh /app/
 
-# Uploads directory — mount as a named volume in production
-RUN mkdir -p /app/uploads
+# ─── Stage 6: operating system layers ───────────────────────────────────────
+# Upgrade Alpine packages to pick up security patches (busybox etc.). With
+# the layer cache this step would never run again until node:22-alpine moves;
+# APK_WEEK (the ISO week, passed by the Docker Hub workflow) reruns it — and
+# the chromium layer above it — once a week. These layers sit UNDER the app
+# layers, so a release that changed no OS package ships none of them again.
+FROM node:22-alpine AS os-slim
+ARG APK_WEEK=""
+RUN echo "apk refresh ${APK_WEEK}" && apk upgrade --no-cache
+# libc6-compat for sharp's (image processing) native binaries on Alpine; tini
+# is PID 1 (#2788): it forwards SIGTERM to the API, whose drain then runs,
+# and reaps the orphaned Chromium and ffmpeg children a crash leaves behind
+# (node as PID 1 does neither: it ignores signals it has no handler for and
+# never waits on orphans, which pile up as zombies).
+RUN apk add --no-cache libc6-compat ca-certificates tini
+RUN corepack enable pnpm
 
+# The full image adds what renders: system chromium for puppeteer (PDFs,
+# help-video cards and annotations, session-replay video), fonts, and ffmpeg
+# (help-video probes, remuxes, conversions, renders). ~800 MB of the image.
+FROM os-slim AS os-full
+RUN apk add --no-cache chromium nss freetype harfbuzz ttf-freefont ffmpeg
+
+# ─── Stage 7a: slim runner — `--target runner-slim`, nodeworks/nivaro:<v>-slim
+# No Chromium, no ffmpeg (#2789). Everything that needs them goes to the
+# render peer named in RENDER_URL (a full process with RENDER_TOKEN set, see
+# api/src/services/render-peer.ts), or refuses with a 503 that says so. It
+# never takes the help-video render queue (NIVARO_IMAGE_VARIANT=slim).
+#
+# The runtime block below is the same in both runners (a stage cannot be
+# shared across two bases); change both.
+FROM os-slim AS runner-slim
+WORKDIR /app
+COPY --from=prod-deps /app /app
+COPY --from=app-files /app /app
+# Runs as `node` (uid 1000, #2786), never root. The ONLY paths it writes
+# (#2790 — a read-only root filesystem works): /app/uploads (files; mount a
+# volume), /app/work (TMPDIR = scratch, help-video work, heap snapshots,
+# Chromium's profile; HOME = font and browser caches; a volume or tmpfs) and
+# /tmp. Owned by node here, so a NEW named volume mounted on them copies that
+# ownership; a bind mount, NFS share or a volume created by an older (root)
+# image must be made writable for uid 1000 once.
+RUN mkdir -p /app/uploads /app/work/tmp /app/work/home \
+  && chown -R node:node /app/uploads /app/work \
+  && chmod 0755 /app/docker-entrypoint.sh /app/healthcheck.sh
+ENV TMPDIR=/app/work/tmp \
+    HOME=/app/work/home \
+    NIVARO_IMAGE_VARIANT=slim
+LABEL org.opencontainers.image.title="Nivaro (slim)" \
+      org.opencontainers.image.source="https://github.com/nodeworks/nivaro"
+USER node
+EXPOSE 3055
+# Liveness only (#2787): the process answers HTTP. start-period covers boot
+# migrations (EFP measures them at up to ~2 minutes), during which failures
+# do not count.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=150s --retries=3 CMD ["/app/healthcheck.sh"]
+# tini, then the entrypoint, then the command — an overridden `command:`
+# (`sh -c "...; exec node api/dist/index.js"`) still runs under both.
+ENTRYPOINT ["/sbin/tini", "--", "/app/docker-entrypoint.sh"]
+CMD ["node", "api/dist/index.js"]
+
+# ─── Stage 7b: full runner — the DEFAULT target, nodeworks/nivaro:<v> ──────────
+# What self-hosters and nivaro-cloud run: it renders locally. Kept LAST so a
+# plain `docker build -f Dockerfile.release .` still builds it.
+FROM os-full AS runner
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+WORKDIR /app
+COPY --from=prod-deps /app /app
+COPY --from=app-files /app /app
+RUN mkdir -p /app/uploads /app/work/tmp /app/work/home \
+  && chown -R node:node /app/uploads /app/work \
+  && chmod 0755 /app/docker-entrypoint.sh /app/healthcheck.sh
+ENV TMPDIR=/app/work/tmp \
+    HOME=/app/work/home \
+    NIVARO_IMAGE_VARIANT=full
 LABEL org.opencontainers.image.title="Nivaro" \
       org.opencontainers.image.source="https://github.com/nodeworks/nivaro"
-
+USER node
 EXPOSE 3055
+HEALTHCHECK --interval=30s --timeout=5s --start-period=150s --retries=3 CMD ["/app/healthcheck.sh"]
+ENTRYPOINT ["/sbin/tini", "--", "/app/docker-entrypoint.sh"]
 CMD ["node", "api/dist/index.js"]
