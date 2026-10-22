@@ -112,7 +112,11 @@ test('allowed/blocked recipients exist, as settings not hard-coded in compose', 
 })
 
 test('recipient regexes release our domains and block customers and probed admins', () => {
-  const regex = (key) => new RegExp(relay.match(new RegExp(`^${key}: '(.*)'$`, 'm'))[1])
+  // Mailpit uses Go regexp: a leading (?i) is the JS "i" flag.
+  const regex = (key) => {
+    const src = relay.match(new RegExp(`^${key}: '(.*)'$`, 'm'))[1]
+    return src.startsWith('(?i)') ? new RegExp(src.slice(4), 'i') : new RegExp(src)
+  }
   const allowed = regex('allowed-recipients')
   const blocked = regex('blocked-recipients')
   assert.match('ana@nivaro.dev', allowed)
@@ -120,6 +124,13 @@ test('recipient regexes release our domains and block customers and probed admin
   assert.match('ana@customer-one.example', blocked)
   assert.match('probed-admin-one@nivaro.dev', blocked)
   assert.doesNotMatch('ana@nivaro.dev', blocked)
+  // case-insensitive: uppercase and mixed-case addresses are still guarded
+  assert.match('ANA@CUSTOMER-ONE.EXAMPLE', blocked)
+  assert.match('ana@Customer-Two.Example', blocked)
+  assert.match('PROBED-ADMIN-ONE@NIVARO.DEV', blocked)
+  assert.match('ANA@NIVARO.DEV', allowed)
+  assert.doesNotMatch('ANA@NIVARO.DEV', blocked)
+  assert.doesNotMatch('ANA@EVIL.EXAMPLE', allowed)
 })
 
 test('only MP_SMTP_RELAY_CONFIG is set as an MP_SMTP_RELAY_* env var in the stack file', () => {
