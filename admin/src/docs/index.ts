@@ -14,9 +14,13 @@ export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
 export * from './sections/chaos.js'
+export * from './sections/chaos-ci.js'
+export * from './sections/chaos-client.js'
 export * from './sections/chaos-faults-db.js'
 export * from './sections/chaos-faults-redis.js'
 export * from './sections/chaos-gameday.js'
+export * from './sections/chaos-map.js'
+export * from './sections/chaos-ops.js'
 export * from './sections/chaos-report.js'
 export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
@@ -949,14 +953,14 @@ export const navSections: NavGroup[] = [
     label: 'Chaos engineering',
     items: [
       chaosDocs,
-      chaosReportDocs,
-      chaosGamedayDocs,
       chaosFaultsDbDocs,
       chaosFaultsRedisDocs,
+      chaosReportDocs,
+      chaosGamedayDocs,
+      chaosOpsDocs,
       chaosClientDocs,
       chaosTrafficMapDocs,
-      chaosCiDocs,
-      chaosOpsDocs
+      chaosCiDocs
     ]
   },
   {

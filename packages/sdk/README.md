@@ -50,6 +50,7 @@ const nivaro = createNivaro('https://nivaro.example.com', {
   token: 'nvk_abc123...',
   workspace: 'workspace-uuid',  // optional: workspace to target
   headers: { 'X-Custom': 'value' },  // optional: extra headers
+  timeoutMs: 90_000,  // optional: abandon a GET read that has not answered (off by default)
 })
 ```
 
