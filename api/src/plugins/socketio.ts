@@ -461,6 +461,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
   const pubClient = new Redis(app.redis.options)
   const subClient = new Redis(app.redis.options)
+  // Without listeners ioredis prints "missing 'error' handler" on every reconnect attempt
+  // while Redis is away (seen during a staging deploy); log once a minute per client.
+  for (const [name, client] of [
+    ['pub', pubClient],
+    ['sub', subClient]
+  ] as const) {
+    let lastLog = 0
+    client.on('error', (err: Error) => {
+      if (Date.now() - lastLog < 60_000) return
+      lastLog = Date.now()
+      app.log.warn({ err, client: name }, 'Socket.io Redis adapter client error')
+    })
+  }
   // #2832 / #2838 — the Redis fault seam: latency on the publisher, a partition cuts both.
   chaosRedisClient(pubClient)
   chaosRedisSubscriber(subClient)
