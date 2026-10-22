@@ -90,13 +90,10 @@ need not be set). To turn it back on, add `-c stack.relay.yml` again.
 **Temporary stop only:** on the running stack
 
 ```
-docker service update --env-rm MP_SMTP_RELAY_CONFIG --secret-rm mailpit_relay_v1 <stack>_mailpit
+docker service update --env-rm MP_SMTP_RELAY_CONFIG --secret-rm <relay secret name> <stack>_mailpit
 ```
 
 The next `docker stack deploy` that includes `stack.relay.yml` brings relaying back.
-
-Mailpit env and relay key names were checked by the operator's lead against
-Mailpit's docs and source, not against the pinned image here.
 
 ## Pitfalls
 
@@ -106,7 +103,10 @@ Mailpit's docs and source, not against the pinned image here.
    mails through the corporate relay directly.
 2. **Mail test mode rewrites recipients before Mailpit sees them**
    (`MAIL_TEST_MODE` / Settings test mode). With it on, "release to original
-   recipients" goes to the test recipient. Staging should run with test mode
-   **off** so Mailpit holds the true recipients, and the allowed/blocked regexes
-   do the protecting.
+   recipients" goes to the test recipient. Turn test mode **off** only after
+   confirming that `smtp_host` in `nivaro_settings` (Settings → Mail) is empty
+   or `mailpit`, and check it again after every prod DB restore: a restored
+   prod DB plus test mode off mails real people through the corporate relay.
+   Until that check is done, leave test mode on (release then goes to the test
+   recipient).
 3. **Release sends real email.** That is why the UI is private and needs a login.
