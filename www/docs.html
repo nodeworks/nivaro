@@ -605,6 +605,25 @@
         </div>
       </div>
 
+      <!-- Chaos engineering -->
+      <div class="docs-nav-group">
+        <button class="docs-nav-group-btn" data-group="chaos" aria-expanded="false">
+          Chaos engineering
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 2l4 4-4 4"/></svg>
+        </button>
+        <div class="docs-nav-items" id="group-chaos">
+          <a class="docs-nav-item" data-section="chaos" href="#chaos">Chaos engineering</a>
+          <a class="docs-nav-item" data-section="chaos-faults-db" href="#chaos-faults-db">Database, partner, storage &amp; process faults</a>
+          <a class="docs-nav-item" data-section="chaos-faults-redis" href="#chaos-faults-redis">Redis, scheduler, partition &amp; outbound faults</a>
+          <a class="docs-nav-item" data-section="chaos-report" href="#chaos-report">Chaos results</a>
+          <a class="docs-nav-item" data-section="chaos-gamedays" href="#chaos-gamedays">Game days</a>
+          <a class="docs-nav-item" data-section="chaos-ops" href="#chaos-ops">Operators, limits, Monkey &amp; phone Stop</a>
+          <a class="docs-nav-item" data-section="chaos-client" href="#chaos-client">Browser chaos &amp; pretend down</a>
+          <a class="docs-nav-item" data-section="chaos-traffic-map" href="#chaos-traffic-map">Chaos on the Traffic Map</a>
+          <a class="docs-nav-item" data-section="chaos-ci" href="#chaos-ci">Drills outside the app</a>
+        </div>
+      </div>
+
       <!-- Deployment -->
       <div class="docs-nav-group">
         <button class="docs-nav-group-btn" data-group="dep" aria-expanded="false">
@@ -4632,6 +4651,7 @@ const nivaro = createNivaro('https://nivaro.example.com', {
   token: 'nvk_abc123...',
   workspace: 'workspace-uuid',  // optional: workspace to target
   headers: { 'X-Custom': 'value' },  // optional: extra headers
+  timeoutMs: 90_000,  // optional: abandon a GET read that has not answered (off by default)
 })</code></pre>
           <h3 class="doc-h3">Client methods</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -17595,7 +17615,7 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <!-- /SYNC:traffic-map-investigate -->
         </div>
 
-        <div class="doc-section" id="s-traffic-map-act" data-toc='[{"id":"traffic-map-act","label":"Traffic Map: Acting from a Node"},{"id":"traffic-map-links","label":"Going to the source"},{"id":"traffic-map-chat-card","label":"Share a node to chat"},{"id":"traffic-map-actions","label":"Actions"},{"id":"traffic-map-breakers","label":"Circuit breakers"},{"id":"traffic-map-inflight","label":"In-flight requests"},{"id":"traffic-map-stack-actions","label":"Acting from a drill-down"},{"id":"traffic-map-blast-radius","label":"Blast radius"},{"id":"traffic-map-tell-affected","label":"Telling the people affected"},{"id":"traffic-map-debug-window","label":"Debugging a node for a while"},{"id":"traffic-map-temp-cache","label":"A temporary cache on a hot collection"}]'>
+        <div class="doc-section" id="s-traffic-map-act" data-toc='[{"id":"traffic-map-act","label":"Traffic Map: Acting from a Node"},{"id":"traffic-map-links","label":"Going to the source"},{"id":"traffic-map-chat-card","label":"Share a node to chat"},{"id":"traffic-map-actions","label":"Actions"},{"id":"traffic-map-breakers","label":"Circuit breakers"},{"id":"traffic-map-inflight","label":"In-flight requests"},{"id":"traffic-map-stack-actions","label":"Acting from a drill-down"},{"id":"traffic-map-blast-radius","label":"Blast radius"},{"id":"traffic-map-simulate-down","label":"Blast radius: simulating a dependency down"},{"id":"traffic-map-tell-affected","label":"Telling the people affected"},{"id":"traffic-map-debug-window","label":"Debugging a node for a while"},{"id":"traffic-map-temp-cache","label":"A temporary cache on a hot collection"}]'>
           <!-- SYNC:traffic-map-act -->
           <h1 class="doc-h1" id="traffic-map-act">Traffic Map: Acting from a Node</h1>
           <p class="doc-p">Everything that changes something asks for two clicks and writes an activity row, through the same routes the rest of the admin uses.</p>
@@ -17644,6 +17664,20 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <h2 class="doc-h2" id="traffic-map-blast-radius">Blast radius</h2>
           <p class="doc-p">On an endpoint or a partner node, Show what depends on this works out what would break if it failed, from the last 7 days of traffic: how many people used it, the screens they had open, the flows and scheduled jobs that called it or wrote its records, the partners calling it and the partners its records are pushed to. For a partner it lists the flows with a step calling it, who triggers its calls and the collections whose records go to it. It is read-only and is kept for 5 minutes.</p>
           <div class="doc-note">The request log has no screen column, so a screen is the page each person last opened before the call (within 30 minutes). The panel shows how many calls could be matched that way.</div>
+          <h2 class="doc-h2" id="traffic-map-simulate-down">Blast radius: simulating a dependency down</h2>
+          <p class="doc-p">Simulate down answers "what breaks if this goes away?" before anyone runs a drill. Pick a dependency from Simulate down in the toolbar (SQL Server, Redis, file storage, email, SMS, web push, an AI provider, a partner or the sign-in provider) or press Simulate down on a dependency node in the inspector. Nothing is switched off: the answer is worked out from recorded traffic over the last 1 hour, 6 hours, 24 hours (the default) or 7 days.</p>
+          <p class="doc-p">The map dims everything that keeps working and shades what depends on the node: a solid red outline for what calls it directly, a dashed one for what reaches it through another node (the people, keys and jobs using an affected endpoint, the partners and channels only those endpoints feed). The node itself is hatched and marked Simulated down. Stop with the × on the toolbar chip.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>In the panel</th><th>What it lists</th></tr></thead>
+            <tbody><tr><tr><td>Stops working</td><td>What the code does when the node is gone, in plain sentences (hover one to see the file that makes it true).</td></tr>
+              <tr><td>Routes</td><td>Each affected route template with its calls per minute over the window. When Redis is down only the calls signed in by a browser session fail, so a route shows that share.</td></tr>
+              <tr><td>Screens</td><td>Screens (the page header both apps send) whose calls reach an affected endpoint, from this server’s live map.</td></tr>
+              <tr><td>Scheduled jobs</td><td>Jobs that need the node directly (every job for the database; every job stops firing on the clock without Redis) or call an affected route.</td></tr>
+              <tr><td>Channels and partners</td><td>Notification channels that stop, and partners or channels fed only through affected endpoints.</td></tr>
+              <tr><td>Keeps working, degraded</td><td>What carries on worse: caches skipped, live updates on one server only, rate limits failing open.</td></tr>
+              <tr><td>Unaffected</td><td>What people often expect to break but does not.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">The sources are the request log (route, sign-in method, the job that made the call), job runs, the AI and partner call logs, minute history when it is switched on, and this server’s live map. On a rewound map or a frozen snapshot the window ends at that moment. The figures are kept for 5 minutes. Admins only, like the whole map. API: GET /api/traffic-map/blast-radius?node=redis&amp;window=24h (window 1h, 6h, 24h or 7d; until= an earlier end time).</div>
           <h2 class="doc-h2" id="traffic-map-tell-affected">Telling the people affected</h2>
           <p class="doc-p">From the blast radius, Tell affected people… opens a short message, already written, that you edit before sending. It goes through Broadcasts to the people who used this node or one of its screens in the last hour (the server works the list out; you never send to yourself). It arrives in their inbox, and as a banner for 4 hours unless you untick it. Two clicks; it writes an activity row. More than 2,000 people: send it from Broadcasts instead.</p>
           <h2 class="doc-h2" id="traffic-map-debug-window">Debugging a node for a while</h2>
@@ -19131,6 +19165,317 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <h2 class="doc-h2" id="infrastructure-logs-tab">Logs tab</h2>
           <p class="doc-p">For each container: its log driver, its rotation (max-size and max-file), the size of its log file and how much it grew in the last day. A json-file log without max-size is flagged, because it grows until the disk is full. Each host shows the total, the daily growth and, from the free space on the filesystem that holds the Docker root, about how many days until it fills.</p>
           <!-- /SYNC:infrastructure-host -->
+        </div>
+
+        <div class="doc-section" id="s-chaos" data-toc='[{"id":"chaos","label":"Chaos engineering"},{"id":"chaos-gate","label":"The gate and CHAOS_ENABLED"},{"id":"chaos-faults","label":"Faults"},{"id":"chaos-runs","label":"Runs and verdicts"},{"id":"chaos-hypothesis","label":"Steady-state hypothesis and auto-abort"},{"id":"chaos-preflight","label":"Pre-flight checklist"},{"id":"chaos-console","label":"The console"},{"id":"chaos-cockpit","label":"Live run cockpit"},{"id":"chaos-banner","label":"The “Drill running” banner"}]'>
+          <!-- SYNC:chaos -->
+          <h1 class="doc-h1" id="chaos">Chaos engineering</h1>
+          <p class="doc-p">The Chaos page at /chaos (Operations → Health, administrators) runs controlled fault drills: arm one fault for a few minutes, state what should stay true, watch the live figures, and stop everything with one button. Every fault is time-boxed and heals itself when its window ends. A run records what happened and ends with a verdict — held, broke or aborted — so a claim like “Redis fails open” is proven by a dated drill, not asserted.</p>
+          <div class="doc-note doc-warn">Chaos is dangerous by design. It never runs in cloud mode, and on a production instance only when the process was started with <code class="doc-code">CHAOS_ENABLED=true</code> on purpose. The page still opens where it is refused — the strip under the header says why — so past runs and the catalog stay readable.</div>
+          <h2 class="doc-h2" id="chaos-gate">The gate and CHAOS_ENABLED</h2>
+          <p class="doc-p">One rule decides whether a fault may run in this process: refused in cloud mode (<code class="doc-code">CLOUD_META_DB_URL</code> set), refused when <code class="doc-code">NODE_ENV=production</code> unless <code class="doc-code">CHAOS_ENABLED=true</code>, allowed everywhere else (development, test, staging). Every chaos route answers the refusal with its reason instead of a 404; the socket drills on the Realtime page and the older <code class="doc-code">POST /api/chaos/run</code> follow the same rule. Arming, stopping and recording runs needs an administrator (a chaos-operator permission is planned).</p>
+          <h2 class="doc-h2" id="chaos-faults">Faults</h2>
+          <p class="doc-p">The Faults tab lists the catalog: each fault says what it proves, where it acts (its fault points, such as <code class="doc-code">http.request</code> or <code class="doc-code">mail.send</code>), how far it can reach (everything, routes matching a pattern, one table, one person, a share of traffic, one replica, a socket room) and how long it may run at most. The server clamps every parameter and the duration to the catalog’s caps whatever the form sends.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Fault</th><th>Proves</th><th>Acts at</th><th>Cap</th></tr></thead>
+            <tbody><tr><tr><td>Slow requests</td><td>Slow answers stay honest: loading states show, traces and the Traffic Map see the latency.</td><td><code class="doc-code">http.request</code> (100–5000 ms)</td><td>300 s</td></tr>
+              <tr><td>Mail transport down</td><td>Mail fails cleanly: sends land in the mail log and the outbox retries.</td><td><code class="doc-code">mail.send</code></td><td>300 s</td></tr>
+              <tr><td>Redis unreachable</td><td>Redis fails open: requests keep answering, sessions hold, caches miss, crons pause.</td><td>disconnects this process’s Redis client</td><td>300 s</td></tr>
+              <tr><td>Socket drill</td><td>Sockets reconnect and catch up after drops, latency or forced disconnects.</td><td>the Realtime page’s own drill form (/realtime?tab=verify)</td><td>600 s</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Run opens a small form under the row: the target, the strength within the caps, the duration, the note, and the limits that should hold (pre-filled from the fault’s defaults). The pre-flight checklist sits beside it. A fault that is armed right now shows an “Armed now” mark that opens its run.</p>
+          <h2 class="doc-h2" id="chaos-runs">Runs and verdicts</h2>
+          <p class="doc-p">Every run is a row with a timeline: armed, each sample, alerts and readiness changes, notes, the stop or abort. While it runs the Runs tab shows the cockpit; afterwards a summary with the verdict, what was armed on what, how long it ran, which limits held and the timeline. Every run is also a job run (kind <code class="doc-code">chaos</code>) on the Background Jobs console. Runs made outside the registry — a CI job with toxiproxy, a game-day step measured by hand — are posted to <code class="doc-code">POST /api/chaos/runs/record</code> and appear in the same list.</p>
+          <ul class="doc-ul">
+            <li>**held** — every limit stayed inside its bound for the whole window.</li>
+            <li>**broke** — a limit was crossed while the fault ran, but not far enough or long enough to stop it.</li>
+            <li>**aborted** — a limit was crossed past its tolerance three samples in a row and the fault was stopped by itself; or an operator stopped it after a breach.</li>
+            <li>**refused** — pre-flight failed; nothing was armed and the failed checks are kept on the run.</li>
+          </ul>
+          <div class="doc-note">Runs are stored in the <code class="doc-code">nivaro_chaos_runs</code> and <code class="doc-code">nivaro_chaos_run_events</code> tables (migration 497). On a database that does not have them yet they live in Redis for 7 days, so the console works there too.</div>
+          <h2 class="doc-h2" id="chaos-hypothesis">Steady-state hypothesis and auto-abort</h2>
+          <p class="doc-p">Before a run starts it states what should stay true as a list of limits: a sampler, a comparison, a limit and a tolerance — “request p95 &lt; 2000 ms ± 200”, “server errors &lt; 1 % ± 0.5”. Samplers read figures the process already measures: request p95, server-error share, request rate and failed record saves (from the request funnel the Traffic Map uses), main and background pool wait, event-loop lag, heavy reads waiting at the read gate, socket reconnects. The baseline is the five minutes before arm. While the run is armed, the replica that started it samples every 5 seconds and writes a compact sample event; crossing a limit past its tolerance three samples in a row stops the fault by itself and the run ends aborted. A run with no limits never aborts on its own — it just records.</p>
+          <h2 class="doc-h2" id="chaos-preflight">Pre-flight checklist</h2>
+          <p class="doc-p">Green ticks gate the Run button and the server runs the same checks again when the run starts: chaos is allowed here; this is not a production instance (an environment named Production in the Environments registry with a component answering on this host); no deploy or migration is running (one API version on the instance roster, the migration table not locked); no maintenance window; no open incident on the Ops Console; inside working hours (Monday–Friday 08:00–18:00 Eastern); the main pool and event loop are healthy; no other drill is armed. Each failed tick says why. An administrator may run outside working hours by ticking the override; the run records it. No other check can be overridden.</p>
+          <h2 class="doc-h2" id="chaos-console">The console</h2>
+          <p class="doc-p">The header carries the one red control, Stop all: it clears every fault on every replica at once, socket drills included, and closes every open run. It works even when Redis is down — each process clears itself first and tells the others afterwards. The Faults tab is the catalog; the Runs tab lists every run with the running ones first and opens the selected one on the right. <code class="doc-code">?tab=runs&amp;run=&lt;id&gt;</code> deep-links a run.</p>
+          <h2 class="doc-h2" id="chaos-cockpit">Live run cockpit</h2>
+          <p class="doc-p">While a run is armed its page shows a countdown ring emptying as the window runs out, a large red Stop this run beside Stop all, one sparkline per sampler drawn against the baseline (dashed) with the abort limit (red) and its tolerance band, and the timeline of events as they happen. Hypothesis samplers come first; the others are watched for context. The page is live over the socket and polls every 5 seconds as a net.</p>
+          <h2 class="doc-h2" id="chaos-banner">The “Drill running” banner</h2>
+          <p class="doc-p">While any fault is armed on this instance, every app — the admin and headless frontends built on @nivaro/react — shows a striped red strip at the top: which fault, on what, who started it, when it ends, and the note “this is a planned test, not an outage”. Administrators get a Stop link to the console. The strip shows labels and names only, never the targeted people or the parameters, and it asks the server nothing more once the gate has said chaos is refused here.</p>
+          <!-- /SYNC:chaos -->
+        </div>
+
+        <div class="doc-section" id="s-chaos-faults-db" data-toc='[{"id":"chaos-faults-db","label":"Chaos: database, partner, storage and process faults"},{"id":"chaos-faults-db-list","label":"The faults"},{"id":"chaos-faults-db-record","label":"What a run records"}]'>
+          <!-- SYNC:chaos-faults-db -->
+          <h1 class="doc-h1" id="chaos-faults-db">Chaos: database, partner, storage and process faults</h1>
+          <p class="doc-p">These faults are started from the Chaos console like every other drill. Each one is time-boxed, ends by itself, and stops at once with Stop all. They are refused in cloud mode and on production unless CHAOS_ENABLED=true. On the shared development database keep pool and error drills small and short: the faults run in your API process, but the database server is shared.</p>
+          <h2 class="doc-h2" id="chaos-faults-db-list">The faults</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Fault</th><th>What it does</th><th>Targets</th><th>Caps</th></tr></thead>
+            <tbody><tr><tr><td>Slow database (db_latency)</td><td>Adds a delay to every statement that reaches the database. Configuration reads the metadata cache answers are not slowed.</td><td>everything, one table, a route pattern, one person, a share of statements; main pool, background pool or both</td><td>5,000 ms per statement; 5 minutes</td></tr>
+              <tr><td>Database errors (db_errors)</td><td>Fails a share of statements with a deadlock victim (1205), a request timeout (ETIMEOUT) or a connection reset (ESOCKET), shaped like the errors the SQL Server driver throws. An optional wait comes first, so a timeout can take as long as a real one. Sign-in reads (users, roles, API keys, settings) and the Stop paths are never touched, so a drill can always be stopped.</td><td>as above</td><td>100% of statements, 15 s wait; 3 minutes</td></tr>
+              <tr><td>Pool exhaustion (pool_hold)</td><td>Holds N connections of the main or the background pool for the window. No statement runs on them.</td><td>everything or one replica</td><td>5 connections and 60 s off production; 10 connections on production</td></tr>
+              <tr><td>Partner failing (partner_faults)</td><td>Answers instead of an external API: added latency, a 500, a 429 with Retry-After, a 200 whose body says ERROR, malformed JSON, or a TLS failure. Works the same whether the API is live or in mock mode; the saved API is never changed. ERP pushes go through the same call.</td><td>every API or one (name or id); everything or a share of calls</td><td>30 s added; 10 minutes</td></tr>
+              <tr><td>Storage failing (storage_faults)</td><td>A slow driver, a full disk (ENOSPC) or a read-only volume (EROFS) on file uploads, downloads and deletes, plus help-video upload parts and render scratch. A full disk still allows deletes.</td><td>everything or a share of calls</td><td>30 s added per call; 10 minutes</td></tr>
+              <tr><td>Event-loop block (event_loop_block)</td><td>Blocks the replica for N ms every M seconds.</td><td>one replica or every replica</td><td>2,000 ms per block; 3 minutes</td></tr>
+              <tr><td>Memory pressure (memory_pressure)</td><td>Grows the heap in steps toward a share of its limit, then holds it. The memory is dropped when the fault ends.</td><td>one replica or every replica</td><td>75% of the heap limit; 5 minutes</td></tr>
+              <tr><td>Clock skew (clock_skew)</td><td>Moves the application clock of one replica by minutes or hours. SLA timers, maintenance windows and the cron run slot follow it. Sign-in and expiry checks (sessions, API keys, public dashboard links, help-video media tickets, delegations) only ever get stricter: a clock set back is ignored for them, and session stamps stay on real time. Log timestamps do not move.</td><td>one replica</td><td>±24 hours; 10 minutes</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="chaos-faults-db-record">What a run records</h2>
+          <ul class="doc-ul">
+            <li>Readiness: the replica that started the run takes the readiness scorecard at the start, at the midpoint (windows of 30 s or more) and at the end. Each reading is a readiness event on the run with the score, the failing and warning checks, and what changed since the start.</li>
+            <li>Alerts: log alert rules, metric alerts (Traffic Map alerts included) and monitors that turn failing while a fault is armed add an alert event to the run, once per alert per minute.</li>
+            <li>Synthetic partner answers carry the header x-nivaro-chaos: 1 in the call log, so they can be told apart from real failures.</li>
+          </ul>
+          <div class="doc-note">The event-loop and memory drills prove what exists today: event-loop lag, request times and /api/ready. There is no event-loop watchdog or heap guard yet; when they land, the same drills prove them.</div>
+          <!-- /SYNC:chaos-faults-db -->
+        </div>
+
+        <div class="doc-section" id="s-chaos-faults-redis" data-toc='[{"id":"chaos-faults-redis","label":"Chaos: Redis, scheduler, partition and outbound faults"},{"id":"chaos-faults-redis-list","label":"The faults"},{"id":"chaos-faults-redis-checks","label":"Checking the result"},{"id":"chaos-faults-redis-test-job","label":"A safe job for the lease drill"},{"id":"chaos-faults-redis-signin","label":"Sign-in while the provider is down"}]'>
+          <!-- SYNC:chaos-faults-redis -->
+          <h1 class="doc-h1" id="chaos-faults-redis">Chaos: Redis, scheduler, partition and outbound faults</h1>
+          <p class="doc-p">These faults start from the Chaos console like every other drill. Each one is time-boxed, ends by itself and stops at once with Stop all, which reaches every replica even while Redis is the thing failing: the chaos channel and the nvr:chaos:* keys are never touched by these faults. They are refused in cloud mode and on production unless CHAOS_ENABLED=true.</p>
+          <h2 class="doc-h2" id="chaos-faults-redis-list">The faults</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Fault</th><th>What it does</th><th>Targets</th><th>Caps</th></tr></thead>
+            <tbody><tr><tr><td>Slow Redis (redis_latency)</td><td>Every Redis command waits the added delay, plus or minus the jitter, before it is sent. Commands sent together keep their order.</td><td>everything or one replica</td><td>2,000 ms; 5 minutes</td></tr>
+              <tr><td>Redis read-only (redis_readonly)</td><td>Every write answers the READONLY error a replica gives during a failover; reads still answer. Redis itself sends the error, so a group of commands sent together fails as a whole, as it would for real.</td><td>everything or one replica</td><td>2 minutes</td></tr>
+              <tr><td>Redis keys lost (redis_key_loss)</td><td>Deletes one family of keys: sessions, the custom-query cache, the shared metadata cache, the scheduler lease and job locks, the realtime journal, idempotency keys, or every nvr:* key. With "Bring old keys back" on, the keys are copied first and put back when the window ends, wherever nothing newer was written, the way a lagging replica brings old keys back after a failover.</td><td>everything (runs once, on the replica that started it)</td><td>20,000 keys; 5 minutes</td></tr>
+              <tr><td>Redis evicting keys (redis_evict)</td><td>Every few seconds, deletes a share of the nvr:* keys, the way Redis evicts keys when it runs out of memory.</td><td>everything (runs on the replica that started it)</td><td>100% and 5,000 keys per sweep; 5 minutes</td></tr>
+              <tr><td>Scheduler lease split (cron_lease_split)</td><td>The scheduler lease on the chosen replica lapses (expire), is dropped (drop), or is dropped while that replica goes on believing it leads (split). Another replica takes the lease in the middle of whatever is running.</td><td>one replica or every replica</td><td>5 minutes</td></tr>
+              <tr><td>Replica cut off from Redis pub/sub (redis_partition)</td><td>The chosen replica stops hearing and sending pub/sub messages: the socket adapter and the record-event channel. Its database connection is untouched. Its event-stream reader pauses and keeps its place, so record events written meanwhile reach its sockets when the window ends.</td><td>one replica</td><td>5 minutes</td></tr>
+              <tr><td>AI gateway failing (ai_gateway_fault)</td><td>AI calls fail with a 5xx, time out, are slow, or the pinned model is refused (the next model in the fallback chain answers).</td><td>everything or a share of calls</td><td>60 s wait; 10 minutes</td></tr>
+              <tr><td>Sign-in provider down (oidc_down)</td><td>The identity provider cannot be reached, or answers slowly, at discovery, at the token exchange or both. Discovery fails even when it was cached, as on a replica that just started.</td><td>everything</td><td>30 s wait; 10 minutes</td></tr>
+              <tr><td>Microsoft Graph down (graph_down)</td><td>Directory lookups, their token and the sign-in profile and photo cannot reach Graph, or reach it slowly. A delay past a call’s own timeout fails it the way the timeout would.</td><td>everything</td><td>30 s wait; 10 minutes</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note doc-warn">On development, Redis keys lost and Redis evicting keys run only on a Redis database other than 0: a shared development Redis keeps every instance’s sessions, caches, scheduler lease and event stream in database 0, and REDIS_CHANNEL_PREFIX separates channels, not keys. On a deployed stack with its own Redis they run on database 0 too, except the sessions family, which also needs REDIS_CHANNEL_PREFIX there. A refused run says so in its timeline.</div>
+          <h2 class="doc-h2" id="chaos-faults-redis-checks">Checking the result</h2>
+          <ul class="doc-ul">
+            <li>Sign-out holds: run Redis keys lost on the sessions family with "Bring old keys back" on, sign out during the window, and check the session is still signed out after the old keys return. The sign-out marker wins over the returned session.</li>
+            <li>Scheduler: GET /api/chaos/checks/cron-overlap?since=&lt;time&gt; lists every job that ran twice at once, runs left running past their budget, and the jobs not declared safe to run twice. A lease-split drill writes the same check into its timeline when the window ends.</li>
+            <li>Partition: before cutting a replica off, start POST /api/chaos/partition/probe on another replica with the socket id of a test client connected to the replica you will cut. Then GET /api/chaos/checks/partition?probe=&lt;id&gt; on the cut replica lists events lost and events delivered twice. The drill notes how many messages were dropped and how many stream events were caught up.</li>
+            <li>Redis counters: GET /api/chaos/checks/redis shows this replica’s fault counters, its Redis database and whether keys (and sessions) may be dropped here.</li>
+            <li>Steady state: two figures can be used in a drill’s hypothesis: Redis errors per minute (redis.errors_per_min) and the metadata cache hit rate (cache.metadata_hit_pct).</li>
+          </ul>
+          <h2 class="doc-h2" id="chaos-faults-redis-test-job">A safe job for the lease drill</h2>
+          <p class="doc-p">CHAOS_TEST_CRON=1 starts a separate test scheduler on that process with one job, chaos-test-overlap, which only sleeps (CHAOS_TEST_CRON_MS, default 12 s) every 10 seconds. It competes for its own lease key and ticks even where scheduled jobs are off, so a lease-split drill can be proven on two development replicas without any real job running. It never starts on production or where the chaos gate refuses.</p>
+          <h2 class="doc-h2" id="chaos-faults-redis-signin">Sign-in while the provider is down</h2>
+          <p class="doc-p">People already signed in keep working: a session never calls the identity provider. Someone signing in is sent back to the sign-in page, which says the provider is not answering. It never shows a raw error, and it never sends them back to the provider in a loop.</p>
+          <!-- /SYNC:chaos-faults-redis -->
+        </div>
+
+        <div class="doc-section" id="s-chaos-report" data-toc='[{"id":"chaos-report","label":"Chaos Results"},{"id":"chaos-report-run","label":"Run report"},{"id":"chaos-report-claims","label":"Claims and the matrix"},{"id":"chaos-report-trends","label":"Trends"},{"id":"chaos-report-api","label":"API"}]'>
+          <!-- SYNC:chaos-report -->
+          <h1 class="doc-h1" id="chaos-report">Chaos Results</h1>
+          <p class="doc-p">Every chaos drill ends with a report, and the reports add up to a scorecard: which claims about how Nivaro degrades are proven, which broke, and which nobody has checked lately. All of it is for administrators and stays readable on instances where drills cannot run.</p>
+          <h2 class="doc-h2" id="chaos-report-run">Run report</h2>
+          <p class="doc-p">Open a finished run from the Runs tab (Full report) or go to /chaos/runs/&lt;id&gt;. While the run is still going the same address shows the live cockpit.</p>
+          <ul class="doc-ul">
+            <li>The verdict: held, broke or aborted, and the limit that broke it.</li>
+            <li>One chart per limit, before, during and after the fault, with the normal range from before the drill, the limit line, and the alerts and notes marked where they happened.</li>
+            <li>Time to detect: from arming the fault to the first alert, the first "noticed" note or a declared incident.</li>
+            <li>Time to fix: to the first "fixed" note.</li>
+            <li>Time to recover: from the end of the fault until every limit was back inside its normal range. "Not back while watched" means the samples after the fault never returned to it.</li>
+            <li>The alerts that fired, what the readiness checks said, and the errors people actually saw: server errors by route (ids removed), client error reports and rage or dead clicks, as counts only.</li>
+            <li>The participants’ notes and the full timeline.</li>
+          </ul>
+          <p class="doc-p">Copy link gives a stable address other administrators can open. Export postmortem downloads the report as Markdown (timeline, figures and notes, never record data) to paste into a postmortem.</p>
+          <h2 class="doc-h2" id="chaos-report-claims">Claims and the matrix</h2>
+          <p class="doc-p">The Matrix tab shows every dependency (the database, Redis, the file share, each partner API, the AI gateway, sign-in, sockets and mail) against the ways it can fail: down, slow, errors and cut off. Each cell takes the colour of its newest drill and fades as that drill gets older; an outlined cell has never been proven. Click a cell to open its last report or run it again with the start form already filled in.</p>
+          <p class="doc-p">Under the matrix, Claims lists what Nivaro says about degrading (for example, "when Redis is unreachable, requests keep answering") with the drill that last proved each one. A claim is proven when its newest drill held within the last 30 days, stale when that drill is older, broke when its newest drill broke or stopped itself, and never proven when nothing has run. A fault proves a claim when it names the claim in its catalog entry.</p>
+          <div class="doc-note">The readiness check "Resilience claims are proven" warns when a claim is stale or its last drill broke. Claims never proven are listed but do not warn. It is skipped where drills cannot run (cloud, or production without CHAOS_ENABLED).</div>
+          <h2 class="doc-h2" id="chaos-report-trends">Trends</h2>
+          <p class="doc-p">The Trends tab shows median time to detect and time to recover per month or quarter, a calendar of the days drills ran (Eastern dates; an outlined day had a drill that did not hold), each dependency’s verdicts month by month, and the claims never proven. The strip on top (the last 90 days) is also served as JSON for a recovery-time panel.</p>
+          <h2 class="doc-h2" id="chaos-report-api">API</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>Returns</th></tr></thead>
+            <tbody><tr><tr><td>GET /api/chaos/runs/:id/report</td><td>The run, its report, errors people saw, actor names and the share link</td></tr>
+              <tr><td>GET /api/chaos/runs/:id/postmortem</td><td>The report as a Markdown download</td></tr>
+              <tr><td>GET /api/chaos/claims</td><td>Every claim with its status and last run</td></tr>
+              <tr><td>GET /api/chaos/matrix</td><td>Rows, fault kinds and one cell per pair with its last verdict and re-run spec</td></tr>
+              <tr><td>GET /api/chaos/trends?months=12</td><td>Monthly and quarterly timings, drills per day, verdicts per dependency, never-proven claims and the recovery feed</td></tr></tr></tbody>
+          </table></div>
+          <!-- /SYNC:chaos-report -->
+        </div>
+
+        <div class="doc-section" id="s-chaos-gamedays" data-toc='[{"id":"chaos-gamedays","label":"Chaos game days"},{"id":"gameday-planning","label":"Planning a day"},{"id":"gameday-running","label":"On the day"},{"id":"gameday-scribe","label":"Scribe marks"},{"id":"gameday-blind","label":"Blind mode"},{"id":"gameday-kill-task","label":"Killing a web task"},{"id":"gameday-api","label":"API"}]'>
+          <!-- SYNC:chaos-gamedays -->
+          <h1 class="doc-h1" id="chaos-gamedays">Chaos game days</h1>
+          <p class="doc-p">A game day is a planned drill: a date and time, the people taking part, and a timed list of things that will go wrong. It lives on the chaos console (Operations → Health → Chaos) under Game days. Chaos is refused in cloud mode and on production unless CHAOS_ENABLED=true, so game days are for staging and development.</p>
+          <h2 class="doc-h2" id="gameday-planning">Planning a day</h2>
+          <ul class="doc-ul">
+            <li>Plan a game day opens the editor. Start from a blank plan or the monthly staging template (kill a web task, drop Redis, block the file share, slow the database, with checkpoints before and after).</li>
+            <li>Times are Eastern. The length is 15 minutes to 8 hours.</li>
+            <li>People: a lead (faults are armed as the lead), an optional scribe, and responders. Everyone named gets an invitation at once and reminders 24 hours and 15 minutes before (notification category "Chaos drills and game days").</li>
+            <li>Injects run at +mm:ss after the start: arm a fault from the catalog for a number of seconds, post an announcement to the day’s channel (as the lead, through the normal chat send), or reach a checkpoint. A fault key this instance does not have is a warning when you save and is skipped on the day.</li>
+            <li>Chat channel: a private channel for the participants. A timeline bot posts each fault and checkpoint as it happens, with fixed wording only — never the plan’s own labels. Start a huddle from the channel header.</li>
+            <li>Repeat monthly: when the day ends or is cancelled, the same slot next month (same weekday, same week of the month, same Eastern time) is planned with the same people.</li>
+          </ul>
+          <h2 class="doc-h2" id="gameday-running">On the day</h2>
+          <ul class="doc-ul">
+            <li>The lead presses Start now, or the scheduler starts the day at its time when "Start automatically" is on. Each fault inject goes through the drill pre-flight; a refusal is recorded on the timeline instead of stopping the day.</li>
+            <li>Injects fire on time from the chaos-gamedays job (every minute, one server) and from a timer on the server that started the day; whichever comes first fires it, and it fires once. An inject more than ten minutes late is marked missed and never fired late.</li>
+            <li>Fire now runs a waiting inject by hand. End day closes the day, stops any fault still armed and writes the result; Abort does the same with the verdict aborted. Stop all on the console always works and ends a running day too.</li>
+            <li>The day’s verdict is the worst of its fault runs (held, broke or aborted).</li>
+          </ul>
+          <h2 class="doc-h2" id="gameday-scribe">Scribe marks</h2>
+          <p class="doc-p">While a day runs, anyone taking part can stamp what happened in one click — Noticed, Found cause, Fixed — or type a note. The marks become the day’s time to detect, time to find the cause and time to fix, measured from the first fault that went live, and show on the inject track and in the report. Notes stamped on one of the day’s fault runs land on the day itself.</p>
+          <h2 class="doc-h2" id="gameday-blind">Blind mode</h2>
+          <ul class="doc-ul">
+            <li>A blind day hides its faults from the responders: no drill banner for them, and drill-tagged alerts are not marked as a drill for them. The lead and chaos operators (administrators) still see everything.</li>
+            <li>Declare incident (Ops Console header) is open to everyone signed in. It stamps a "Declared incident" mark on every running game day and blind drill — the responders’ time to detect — and always answers the same way, so it never gives away that a drill is running.</li>
+            <li>The lead reveals the drill at any time; the faults then show on the banner for everyone and the channel gets a line saying so. A single drill can also be started blind through POST /api/chaos/blind/runs.</li>
+          </ul>
+          <h2 class="doc-h2" id="gameday-kill-task">Killing a web task</h2>
+          <p class="doc-p">The API never writes to Docker. The "Kill a web task" fault queues the host runbook chaos-kill-web-task in the Runbooks host queue; the host agent on the swarm manager runs it and swarm replaces the task. A deployment declares that runbook in its extension (runs on the host, no dry run needed, a target such as staging). Without it the fault is refused with that reason. Stopping the fault withdraws a kill still waiting in the queue.</p>
+          <h2 class="doc-h2" id="gameday-api">API</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>Who</th><th>What</th></tr></thead>
+            <tbody><tr><tr><td>GET /api/chaos/gamedays</td><td>admin</td><td>Every game day</td></tr>
+              <tr><td>GET /api/chaos/gamedays/:id</td><td>admin</td><td>Plan, timeline, fault runs, people, time to detect / fix</td></tr>
+              <tr><td>GET /api/chaos/gamedays/active</td><td>signed in</td><td>The days I take part in (titles and times only)</td></tr>
+              <tr><td>POST /api/chaos/gamedays</td><td>chaos operator</td><td>Plan a day; PATCH /:id edits it while planned</td></tr>
+              <tr><td>POST /api/chaos/gamedays/:id/start | step | end | cancel | reveal</td><td>chaos operator</td><td>Run the day; step takes {inject_id}, end takes {how}</td></tr>
+              <tr><td>GET / POST /api/chaos/runs/:id/notes</td><td>admin or participant</td><td>Scribe marks {mark, text}</td></tr>
+              <tr><td>POST /api/chaos/declare</td><td>signed in</td><td>Declare incident</td></tr>
+              <tr><td>POST /api/chaos/blind/runs</td><td>chaos operator</td><td>One drill, blind; /blind/runs/:id/reveal reveals it</td></tr></tr></tbody>
+          </table></div>
+          <!-- /SYNC:chaos-gamedays -->
+        </div>
+
+        <div class="doc-section" id="s-chaos-ops" data-toc='[{"id":"chaos-ops","label":"Operators, Limits, Monkey &amp; Phone Stop"},{"id":"chaos-ops-operators","label":"Chaos operators"},{"id":"chaos-ops-limits","label":"Limits on this instance"},{"id":"chaos-ops-drill-alerts","label":"Alerts during a drill"},{"id":"chaos-ops-monkey","label":"Chaos Monkey"},{"id":"chaos-ops-phone","label":"Stop from your phone"}]'>
+          <!-- SYNC:chaos-ops -->
+          <h1 class="doc-h1" id="chaos-ops">Operators, Limits, Monkey &amp; Phone Stop</h1>
+          <p class="doc-p">Four things keep chaos drills safe in day-to-day operations: who may run them, how far a run may reach on each instance, a Chaos Monkey that runs small drills at random times when you switch it on, and a Stop button that reaches your phone.</p>
+          <h2 class="doc-h2" id="chaos-ops-operators">Chaos operators</h2>
+          <p class="doc-p">Administrators may always run faults. In **Chaos → Settings** an administrator can name roles whose members may also start, stop and record drills (and read the chaos console). Only administrators change these settings, so an operator can never widen their own reach. API keys limited to named collections are refused. Only administrators may override the working-hours pre-flight check.</p>
+          <h2 class="doc-h2" id="chaos-ops-limits">Limits on this instance</h2>
+          <p class="doc-p">Each instance keeps its own limits, so development and staging can differ even when they share a database. The server applies them to every run started there — from the console, a game day, Chaos Monkey or a script — whatever the form sent.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Limit</th><th>What happens over it</th></tr></thead>
+            <tbody><tr><tr><td>Faults allowed</td><td>A fault off the list is refused (403 <code class="doc-code">CHAOS_CAP</code>).</td></tr>
+              <tr><td>Share of traffic</td><td>A larger share is lowered to the limit. A run aimed at everything becomes that share when the fault can take a share; any other target (some routes, a table, a person, a replica) is sampled at the limit on top. A route pattern with fewer than two fixed parts (<code class="doc-code">/*</code>, <code class="doc-code">/api/*</code>) is refused.</td></tr>
+              <tr><td>Added delay</td><td>Every delay measured in ms is lowered to the limit.</td></tr>
+              <tr><td>Run length</td><td>The window is shortened (never under 5 seconds).</td></tr>
+              <tr><td>Replicas</td><td>A run that would reach more replicas is narrowed to the one it started on, or refused when the fault cannot aim at one replica.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Whatever was lowered is recorded on the run (<code class="doc-code">meta.caps</code>). Empty means no limit beyond the fault’s own.</p>
+          <div class="doc-note">Socket drills started from the Realtime page (/realtime → Verification) are the one path outside these limits and the pre-flight: they are administrator-only, pass the same gate, and keep their own 5–600 s window and share/room/person targets. Stop all on the Chaos page ends them too. Start a socket drill from the Chaos console (fault “Socket drill”) when you want the limits, the pre-flight and a run with a verdict.</div>
+          <div class="doc-note">Stored under the <code class="doc-code">chaos</code> key of this instance’s <code class="doc-code">nivaro_settings_overrides</code> row (<code class="doc-code">GET</code>/<code class="doc-code">PATCH /api/chaos/settings</code>, administrators). No migration.</div>
+          <h2 class="doc-h2" id="chaos-ops-drill-alerts">Alerts during a drill</h2>
+          <p class="doc-p">An alert that fires while a fault is armed — log alert rules, request rules, monitors, metric alerts, integration alerts, a readiness check turning to fail — is never silenced or rerouted: everyone who normally hears about it still does, by every channel they normally get. Its message gains a line naming the run: “May be caused by the chaos drill …” when the alert is about what the fault touches (a database alert during a database fault), otherwise “Fired during the chaos drill …”. The drill’s people (whoever started it, the game day’s lead, scribe and responders; for Chaos Monkey, administrators and chaos operators) are told too, in-app, when they were not already. The Ops Console, Telemetry and the Integrations console show a **Drill** tag on alerts that fired during a run. In a blind game day the note is left out of the normal recipients’ copy; the alert itself still reaches them.</p>
+          <h2 class="doc-h2" id="chaos-ops-monkey">Chaos Monkey</h2>
+          <p class="doc-p">Off until an administrator turns it on in **Chaos → Monkey**. Every 15 minutes, inside the days and hours you set (Eastern time), it may start one drill from the faults you approved, at random moments so that about the weekly number land across the week. Each drill is small (a share of traffic, else one replica) and short, and the instance’s limits apply on top. Administrators and chaos operators are told when it starts and when it ends, with the verdict.</p>
+          <ul class="doc-ul">
+            <li>Never on an instance that looks like production (its instance key, or <code class="doc-code">NIVARO_TIER=production</code>), and never while another drill is armed.</li>
+            <li>Pre-flight still judges every drill (deploys, maintenance, open incidents…); a refusal is kept as a refused monkey run and does not count toward the week.</li>
+            <li>**Try now** runs one tick at once, skipping only the dice.</li>
+            <li>The <code class="doc-code">chaos-monkey</code> job ticks only where scheduled jobs run, on one server at a time.</li>
+          </ul>
+          <h2 class="doc-h2" id="chaos-ops-phone">Stop from your phone</h2>
+          <p class="doc-p">When a drill starts, and again if it stops itself because what should stay true broke, the person who started it and its participants get a browser notification with **Stop all faults**. Tapping it ends every fault on the instance, even when that phone is not signed in.</p>
+          <p class="doc-p">The button carries a signed token that works once, only for that person and run, and only until the drill’s window ends (five minutes after an abort). The person must still be a chaos operator. It keeps working while Redis is down and during maintenance.</p>
+          <!-- /SYNC:chaos-ops -->
+        </div>
+
+        <div class="doc-section" id="s-chaos-client" data-toc='[{"id":"chaos-client","label":"Browser Chaos &amp; Pretend Down"},{"id":"chaos-client-toolbar","label":"The chaos toolbar"},{"id":"chaos-client-pretend","label":"Pretend down in design mode"},{"id":"chaos-client-hosts","label":"In a custom front end"}]'>
+          <!-- SYNC:chaos-client -->
+          <h1 class="doc-h1" id="chaos-client">Browser Chaos &amp; Pretend Down</h1>
+          <p class="doc-p">Browser chaos mode makes **your own tab’s** requests fail or slow down for a few minutes, so you can watch how screens cope: error messages, retry buttons, autosave and the offline outbox. Nothing is injected on the server and nobody else is affected.</p>
+          <div class="doc-note">Available to administrators when the server allows chaos drills (<code class="doc-code">GET /api/chaos/status</code>). It is refused in cloud mode and, on a production server, unless <code class="doc-code">CHAOS_ENABLED=true</code>. When the server has no chaos route the controls do not appear at all.</div>
+          <h2 class="doc-h2" id="chaos-client-toolbar">The chaos toolbar</h2>
+          <p class="doc-p">Open it from your user menu → **Browser chaos**, or press **⌘ Shift .** (Ctrl Shift . on Windows) anywhere. Pick what breaks, how hard and for how long, then Start. While it runs, a pill in the bottom-right corner shows what is on and the time left; its × stops it at once.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Preset</th><th>What your tab sees</th></tr></thead>
+            <tbody><tr><tr><td>Flaky network</td><td>A share of requests (5–90%) fail as if the network dropped them; the rest arrive late.</td></tr>
+              <tr><td>API down</td><td>Every API call answers 503, as a proxy does when no API server is behind it.</td></tr>
+              <tr><td>Slow API</td><td>Every API call waits longer (0.25–10 s).</td></tr>
+              <tr><td>Offline</td><td>Requests fail as if the network is gone, and the browser reports itself offline, so the offline banner and outbox take over.</td></tr>
+              <tr><td>Socket gone</td><td>Live updates stop; at the end the tab reconnects and reloads what it missed.</td></tr>
+              <tr><td>Fail my next saves</td><td>The next N creates, edits or deletes answer 500. Reads keep working. Combines with any preset or runs on its own.</td></tr></tr></tbody>
+          </table></div>
+          <ul class="doc-ul">
+            <li>It always ends on time (1 to 30 minutes). A reload of the tab keeps it on until then; closing the tab ends it.</li>
+            <li>Signing in and out, the chaos controls themselves and the error reporter are never broken.</li>
+            <li>Crash reports sent while chaos is on are marked and not filed as issues.</li>
+            <li>With several tabs open, live updates come over one shared connection: Socket gone silences only this tab, the others keep theirs.</li>
+          </ul>
+          <h2 class="doc-h2" id="chaos-client-pretend">Pretend down in design mode</h2>
+          <p class="doc-p">While designing a dashboard or a form, you can see how it looks when something it depends on fails. On a dashboard use **Pretend down** in the header; in the layout editor (and a record page’s Edit layout) open **Preview** and use the Pretend down list at the bottom.</p>
+          <ul class="doc-ul">
+            <li>The list names what the view uses: the data behind each group of dashboard widgets, a form’s record widgets and panels (pipeline, owners, comments, tasks…), the AI gateway, partners and external APIs, and live updates.</li>
+            <li>Switch one on and the widgets that use it fail through their normal error handling, so you see exactly what a person would see.</li>
+            <li>Only your tab, only while the editor is open. Leaving the page turns everything back on.</li>
+            <li>The Preview button says how many things are pretended down, so it is never on unnoticed.</li>
+          </ul>
+          <h2 class="doc-h2" id="chaos-client-hosts">In a custom front end</h2>
+          <p class="doc-p">Headless front ends built on <code class="doc-code">@nivaro/react</code> get the same tools. Call <code class="doc-code">installClientChaosFetch()</code> first thing at boot (before anything creates an SDK client), mount <code class="doc-code">&lt;ClientChaosToolbar user={me} /&gt;</code> once, and add <code class="doc-code">clientChaosAxiosInterceptor(AxiosError)</code> to any axios instance. Sockets created through <code class="doc-code">createWorkerSocket</code> or <code class="doc-code">createSocketRealtime</code> are covered automatically; call <code class="doc-code">bindClientChaosSocket(socket)</code> for any other.</p>
+          <pre class="doc-pre"><code>import { installClientChaosFetch, ClientChaosToolbar } from '@nivaro/react'
+
+installClientChaosFetch() // before anything creates a client
+
+&lt;ClientChaosToolbar user={{ is_admin: me.is_admin }} /&gt;</code></pre>
+          <!-- /SYNC:chaos-client -->
+        </div>
+
+        <div class="doc-section" id="s-chaos-traffic-map" data-toc='[{"id":"chaos-traffic-map","label":"Chaos on the Traffic Map"},{"id":"chaos-traffic-map-armed","label":"Armed faults on the map"},{"id":"chaos-traffic-map-inject","label":"Inject fault here"}]'>
+          <!-- SYNC:chaos-traffic-map -->
+          <h1 class="doc-h1" id="chaos-traffic-map">Chaos on the Traffic Map</h1>
+          <p class="doc-p">Where chaos drills are allowed (never in cloud mode; on production only with CHAOS_ENABLED=true), the Traffic Map shows every armed fault on the nodes it acts on, so nobody reads a drill as a real outage. Where chaos is refused, nothing here appears.</p>
+          <h2 class="doc-h2" id="chaos-traffic-map-armed">Armed faults on the map</h2>
+          <p class="doc-p">A node a fault acts on is hatched in red with a dashed outline, and a label names the fault and the time it has left (the soonest to end, plus how many more). The edges into a faulted database, Redis, email or partner node are dashed. The toolbar shows the drill and links to its run; selecting a hatched node lists the drills acting on it, with Open run.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>The fault acts at</th><th>Drawn on</th></tr></thead>
+            <tbody><tr><tr><td>Every request, a share or one replica (http.request)</td><td>Every API lane</td></tr>
+              <tr><td>Routes matching a pattern</td><td>The entities whose routes match</td></tr>
+              <tr><td>One person</td><td>That person on the callers side</td></tr>
+              <tr><td>The database (db.*), or one table</td><td>SQL Server, and that table’s entity</td></tr>
+              <tr><td>Redis (redis.*)</td><td>Redis</td></tr>
+              <tr><td>Email, SMS, push (mail.*, sms.*, push.*)</td><td>That channel</td></tr>
+              <tr><td>Partner calls (external.*)</td><td>Every partner node</td></tr>
+              <tr><td>File storage, AI providers</td><td>File storage, each AI node</td></tr>
+              <tr><td>Socket drills</td><td>The Sockets lane</td></tr>
+              <tr><td>The scheduler (cron.*)</td><td>The scheduled job nodes</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="chaos-traffic-map-inject">Inject fault here</h2>
+          <p class="doc-p">Right-click a node, or use the inspector’s action row, for Inject fault here. It opens the chaos console on the Faults tab with that fault’s start form already aimed at the node: a route pattern for an endpoint or a lane, the table for a collection with a database fault, the person for a caller, everything for a data store, a channel or a partner. Nothing starts until you press Run there. Socket drills open the Realtime page’s own drill form.</p>
+          <p class="doc-p">The same right-click menu offers Simulate down on a dependency: what would break if it went away, worked out from recorded traffic, with nothing switched off (see Traffic Map: Act).</p>
+          <div class="doc-note">The console link is /chaos?tab=faults&amp;fault=&lt;fault key&gt;&amp;target=&lt;kind&gt;:&lt;value&gt;, for example target=route:/api/items/orders* or target=table:orders. A target the fault cannot take is ignored and the form opens with its usual default.</div>
+          <!-- /SYNC:chaos-traffic-map -->
+        </div>
+
+        <div class="doc-section" id="s-chaos-ci" data-toc='[{"id":"chaos-ci","label":"Chaos Drills Outside the App"},{"id":"chaos-ci-boot","label":"Boot and migration recovery"},{"id":"chaos-ci-toxiproxy","label":"Resilience tests with toxiproxy"},{"id":"chaos-ci-gallery","label":"Error-state gallery"},{"id":"chaos-ci-deploy-load","label":"Rolling deploy under load"}]'>
+          <!-- SYNC:chaos-ci -->
+          <h1 class="doc-h1" id="chaos-ci">Chaos Drills Outside the App</h1>
+          <p class="doc-p">Four scripts in <code class="doc-code">scripts/chaos/</code> prove recovery behaviour that cannot be tested from inside a running API: booting without the database, a lock left by a dead migration, links that slow down or drop, screens that meet a failing API, and a deploy that runs while people are using the system. Each one prints PASS or FAIL per check, always writes a JSON result file, and with <code class="doc-code">--record &lt;base-url&gt;</code> (and an admin token in <code class="doc-code">CHAOS_RECORD_TOKEN</code>) posts the run to the chaos console.</p>
+          <div class="doc-note doc-warn">None of these may be pointed at production or at the shared development database. They start their own throwaway API or database, or (the deploy drill) measure a staging deploy you start yourself.</div>
+          <h2 class="doc-h2" id="chaos-ci-boot">Boot and migration recovery</h2>
+          <p class="doc-p"><code class="doc-code">pnpm chaos:boot</code> starts a throwaway API twice, once with the database unreachable and once with Redis unreachable (closed local ports) and a short <code class="doc-code">BOOT_DEPS_WAIT_MS</code>. A pass means the process logged its retries with backoff and exited 1 inside the window, which is what lets the orchestrator restart it cleanly. It also runs the unit test that proves a migration lock held past <code class="doc-code">MIGRATION_LOCK_STALE_MS</code> is freed and the migrations then run.</p>
+          <p class="doc-p">With <code class="doc-code">CHAOS_SCRATCH_DB=&lt;database&gt;</code> set to a scratch database (never an EFP_ database) the script also holds knex's lock row there, boots with migrations and <code class="doc-code">MIGRATION_LOCK_STALE_MS=15000</code>, and expects the "Freeing the stale lock" line and a live API. Run it before every release that touches the boot path.</p>
+          <h2 class="doc-h2" id="chaos-ci-toxiproxy">Resilience tests with toxiproxy</h2>
+          <p class="doc-p"><code class="doc-code">deploy/chaos-ci/docker-compose.yml</code> runs SQL Server, Redis, the API image and toxiproxy; the API reaches the database and Redis through toxiproxy and the test runner reaches the API through it too. <code class="doc-code">pnpm chaos:toxiproxy</code> adds latency, resets, timeouts and outages and checks: boot under database latency, concurrent reads under latency all answer, a database outage turns <code class="doc-code">/api/ready</code> to 503 and recovers without a restart, a session survives a Redis blip, and a socket reconnects and signs in again after its connection is reset.</p>
+          <ul class="doc-ul">
+            <li>CI: <code class="doc-code">.github/workflows/chaos-ci.yml</code> runs it on pull requests that touch the database layer, plugins, <code class="doc-code">server.ts</code>, boot code or realtime.</li>
+            <li>Locally: <code class="doc-code">docker compose -f deploy/chaos-ci/docker-compose.yml up -d --build --wait api</code>, then <code class="doc-code">node scripts/chaos/toxiproxy-suite.mjs</code>. <code class="doc-code">--mode host</code> runs the API from your checkout instead of the image; <code class="doc-code">--only db-outage,socket</code> runs chosen cases.</li>
+            <li>SQL Server does not run under emulation on Apple silicon. Run the suite in CI or on an x86 host.</li>
+          </ul>
+          <h2 class="doc-h2" id="chaos-ci-gallery">Error-state gallery</h2>
+          <p class="doc-p"><code class="doc-code">pnpm chaos:gallery</code> opens admin screens in a browser at 1440 px, light and dark, while every <code class="doc-code">/api</code> call is answered by a mock: a 500 with a realistic error body, a request that never answers, or no network at all. It screenshots each one and writes <code class="doc-code">reports/error-gallery/&lt;date&gt;/index.html</code> (not committed) with a filterable grid and <code class="doc-code">summary.json</code>. <code class="doc-code">--sample 15</code> (default) picks evenly spaced routes, <code class="doc-code">--all</code> walks every route, <code class="doc-code">--routes /a,/b</code> picks some. <code class="doc-code">--start-admin</code> starts a throwaway admin dev server for you.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Flag</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>blank</td><td>The main area has no text at all.</td></tr>
+              <tr><td>raw-error</td><td>Stack, axios or "[object Object]" text is visible.</td></tr>
+              <tr><td>stuck-loading</td><td>A spinner or skeleton is still showing 10 seconds in.</td></tr>
+              <tr><td>no-error-shown</td><td>A request failed and the screen shows content or an empty state without saying so.</td></tr>
+              <tr><td>page-error</td><td>An uncaught exception reached the page.</td></tr>
+              <tr><td>error-boundary</td><td>The crash screen appeared.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">A pass is a gallery with no flags. The point is a list to work through, and a re-run per release to see it shrink.</p>
+          <h2 class="doc-h2" id="chaos-ci-deploy-load">Rolling deploy under load</h2>
+          <p class="doc-p"><code class="doc-code">pnpm chaos:deploy-load</code> measures a deploy; it never starts one. Staging only. Run it with <code class="doc-code">--target &lt;staging url&gt; --token &lt;bearer&gt; --caller &lt;k12|u&lt;uuid&gt;&gt;</code>, then start the deploy the usual way. It replays a slice of recorded traffic (<code class="doc-code">traffic:replay</code>, which keeps its own refusals) while polling <code class="doc-code">/api/version</code> and <code class="doc-code">/api/ready</code> every 250 ms, and once the version changes it keeps measuring for <code class="doc-code">--after-s</code> seconds. <code class="doc-code">--load builtin --rps 20</code> uses a simple generator instead of a recorded slice.</p>
+          <p class="doc-p">It reports "this deploy dropped N of M requests", how many more answered 5xx, how long two versions answered together, the longest stretch with nothing ready, and how long one socket took to reconnect. A pass is nothing dropped and nothing errored. <code class="doc-code">--dry-run</code> proves the counting on a throwaway API that restarts itself, so it is expected to show drops.</p>
+          <!-- /SYNC:chaos-ci -->
         </div>
 
         <div class="doc-section" id="s-ai-task-do" data-toc='[{"id":"ai-task-do","label":"Let AI do this — tasks and support tickets"},{"id":"ai-task-do-where","label":"Where the button is"},{"id":"ai-task-do-review","label":"Reviewing the plan"},{"id":"ai-task-do-after","label":"When it finishes"},{"id":"ai-task-do-settings","label":"Settings and analytics"},{"id":"ai-task-do-api","label":"API"}]'>
