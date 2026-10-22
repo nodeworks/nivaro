@@ -117,6 +117,13 @@ export function NumberBox({
   )
 }
 
+/** Same chips as the Faults tab: low is quiet, medium a pale amber, high a solid orange. */
+export const DANGER_CHIP: Record<string, string> = {
+  low: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground',
+  medium: 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300',
+  high: 'bg-orange-700 text-white dark:bg-orange-400 dark:text-orange-950'
+}
+
 const DANGER_LABEL: Record<string, string> = {
   low: 'Low blast',
   medium: 'Medium blast',
@@ -164,12 +171,8 @@ export function FaultChecklist({
               {c.danger ? (
                 <span
                   className={cn(
-                    'shrink-0 text-[11px]',
-                    c.danger === 'high'
-                      ? 'text-orange-700 dark:text-orange-300'
-                      : c.danger === 'medium'
-                        ? 'text-amber-700 dark:text-amber-300'
-                        : 'text-slate-500 dark:text-muted-foreground'
+                    'shrink-0 rounded px-1.5 py-0.5 text-[10.5px] font-medium',
+                    DANGER_CHIP[c.danger] ?? DANGER_CHIP.low
                   )}
                 >
                   {DANGER_LABEL[c.danger] ?? c.danger}
@@ -203,7 +206,8 @@ export function SaveBar({
 }) {
   if (!dirty && !error) return null
   return (
-    <div className='sticky bottom-0 z-10 -mx-4 mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 bg-white px-4 py-2.5 sm:-mx-6 sm:px-6 dark:border-border dark:bg-card'>
+    // pr-16 keeps Save clear of the floating bug-report button in the bottom-right corner.
+    <div className='sticky bottom-0 z-10 -mx-4 mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 bg-white py-2.5 pl-4 pr-16 sm:-mx-6 sm:pl-6 dark:border-border dark:bg-card'>
       <p
         role={error ? 'alert' : 'status'}
         className={cn(

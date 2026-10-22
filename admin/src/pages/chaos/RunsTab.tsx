@@ -72,8 +72,15 @@ export function RunsTab() {
           <div className='p-4 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
             <p className='font-medium text-slate-700 dark:text-foreground'>No runs yet</p>
             <p className='mt-1'>
-              Start one from the Faults tab. Every run lands here with its verdict.
+              Arm a fault from the catalog; its run lands here with a live cockpit, then its
+              verdict.
             </p>
+            <Link
+              to='/chaos'
+              className='mt-3 inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground'
+            >
+              Open the fault catalog
+            </Link>
           </div>
         ) : (
           <ul className='divide-y divide-slate-100 dark:divide-border/60'>
@@ -143,21 +150,13 @@ export function RunsTab() {
             <RunDetail id={selected} />
           </>
         ) : (
-          <div className='flex h-full flex-col items-center justify-center gap-3 p-8'>
-            <p className='max-w-[44ch] text-center text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              {ordered.length
-                ? 'Pick a run on the left. A running one opens its cockpit.'
-                : 'Arm a fault from the catalog; its run opens here with a live cockpit, then its verdict.'}
-            </p>
-            {!ordered.length && !isLoading && (
-              <Link
-                to='/chaos'
-                className='inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground'
-              >
-                Open the fault catalog
-              </Link>
-            )}
-          </div>
+          ordered.length > 0 && (
+            <div className='flex h-full items-center justify-center p-8'>
+              <p className='max-w-[44ch] text-center text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+                Pick a run on the left. A running one opens its cockpit.
+              </p>
+            </div>
+          )
         )}
       </div>
     </div>
@@ -182,7 +181,9 @@ export function RunChip({ run }: { run: ChaosRun }) {
         'rounded px-1.5 py-0.5 text-[10.5px] font-medium',
         run.status === 'running'
           ? 'bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300'
-          : 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
+          : run.status === 'refused'
+            ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+            : 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
       )}
     >
       {STATUS_LABEL[run.status]}

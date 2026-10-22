@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ExternalLink, Play } from 'lucide-react'
+import { ChevronDown, ExternalLink, Play, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -13,6 +13,7 @@ import {
   fetchStatus,
   VERDICT_TONE
 } from './api'
+import { DANGER_CHIP } from './ops-controls'
 import { StartForm } from './StartForm'
 
 /**
@@ -21,24 +22,16 @@ import { StartForm } from './StartForm'
  * drill row links to the Realtime page's own drill form instead of repeating it.
  */
 
+// Shared with the Monkey and Settings checklists. High is solid orange, not red: red on this page
+// means "armed now" and Stop all.
 const DANGER: Record<CatalogFault['danger'], { label: string; cls: string }> = {
-  low: {
-    label: 'Low blast',
-    cls: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
-  },
-  medium: {
-    label: 'Medium blast',
-    cls: 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
-  },
-  // Orange, not red: red on this page means "armed now" and Stop all.
-  high: {
-    label: 'High blast',
-    cls: 'bg-orange-50 text-orange-800 dark:bg-orange-950/50 dark:text-orange-300'
-  }
+  low: { label: 'Low blast', cls: DANGER_CHIP.low },
+  medium: { label: 'Medium blast', cls: DANGER_CHIP.medium },
+  high: { label: 'High blast', cls: DANGER_CHIP.high }
 }
 
 export function FaultsTab() {
-  const { data, isLoading, isError } = useQuery<Catalog>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<Catalog>({
     queryKey: chaosKeys.catalog,
     queryFn: fetchCatalog
   })
@@ -87,16 +80,33 @@ export function FaultsTab() {
         <div className='space-y-px overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className='flex items-center gap-4 bg-white px-4 py-3.5 dark:bg-card'>
-              <Skeleton className='h-4 w-40' />
-              <Skeleton className='h-3.5 flex-1' />
-              <Skeleton className='h-7 w-16' />
+              <div className='min-w-0 flex-1 space-y-2'>
+                <Skeleton className='h-4 w-40 max-w-full' />
+                <Skeleton className='h-3.5 w-full max-w-[60ch]' />
+              </div>
+              <Skeleton className='h-8 w-16 shrink-0' />
             </div>
           ))}
         </div>
       ) : isError || !data ? (
-        <p className='rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-[12.5px] text-slate-500 dark:border-border dark:bg-card dark:text-muted-foreground'>
-          The catalog did not answer. Reload, or check /api/chaos/catalog.
-        </p>
+        <div className='flex flex-col items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-6 text-center dark:border-border dark:bg-card'>
+          <p className='text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+            The catalog did not answer (
+            <span className='font-mono text-[11.5px]'>/api/chaos/catalog</span>).
+          </p>
+          <button
+            type='button'
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-60 dark:border-border dark:bg-card dark:text-foreground'
+          >
+            <RefreshCw
+              className={cn('h-3.5 w-3.5', isFetching && 'animate-spin motion-reduce:animate-none')}
+              aria-hidden
+            />
+            Try again
+          </button>
+        </div>
       ) : data.faults.length === 0 ? (
         <p className='rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-[12.5px] text-slate-500 dark:border-border dark:bg-card dark:text-muted-foreground'>
           No faults registered. Fault areas register themselves in{' '}

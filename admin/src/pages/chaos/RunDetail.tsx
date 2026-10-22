@@ -215,7 +215,7 @@ function Cell({ label, value }: { label: string; value: ReactNode }) {
       </div>
       <div
         data-tip={typeof value === 'string' ? value : undefined}
-        className='mt-0.5 truncate text-[12.5px] font-medium text-slate-900 dark:text-foreground'
+        className='mt-0.5 break-words text-[12.5px] font-medium text-slate-900 sm:truncate dark:text-foreground'
       >
         {value}
       </div>

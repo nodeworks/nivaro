@@ -218,6 +218,10 @@ function TimingChart({
   pick: (p: PeriodTrend) => [number | null, number]
 }) {
   const colors = useChaosColors()
+  // The accent at full strength is loud on a dark card; bars are context, not a call to action.
+  // (useChaosColors re-renders on a theme switch, so this read stays current.)
+  const dark =
+    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
   const rows = periods.map((p) => {
     const [v, n] = pick(p)
     return { period: periodLabel(p.period), v, n, runs: p.runs }
@@ -271,6 +275,7 @@ function TimingChart({
               <Bar
                 dataKey='v'
                 fill={colors.line}
+                fillOpacity={dark ? 0.6 : 0.9}
                 radius={[4, 4, 0, 0]}
                 maxBarSize={28}
                 isAnimationActive={false}
@@ -322,7 +327,10 @@ const heatStep = (n: number) => (n <= 0 ? 0 : n === 1 ? 1 : n <= 3 ? 2 : n <= 6 
 function Calendar({ days }: { days: Trends['days'] }) {
   const weeks = useMemo(() => {
     const by = new Map(days.map((d) => [d.date, d]))
+    // Anchored at noon: stepping whole days back across a DST change then stays on the same
+    // calendar date (from just after midnight, one step landed on the day before = a twice-shown day).
     const today = new Date()
+    today.setHours(12, 0, 0, 0)
     // 53 columns ending with this week; each column runs Sunday → Saturday.
     const end = new Date(today.getTime() + (6 - today.getDay()) * DAY_MS)
     const cols: Array<Array<{ date: string; runs: number; broke: number; future: boolean }>> = []
@@ -399,8 +407,9 @@ function Calendar({ days }: { days: Trends['days'] }) {
 
 // ─── Verdicts per dependency ──────────────────────────────────────────────────
 
-/** Two states, validated for colour-vision deficiency in both themes (blue held, red did not). */
-const HELD_CLS = 'bg-sky-600 dark:bg-[#3b9fd1]'
+/** Two states, the same held/broke pair as the matrix and the run chips (emerald held, red did
+ *  not); the tip and the screen-reader text carry the counts, so colour is never the only cue. */
+const HELD_CLS = 'bg-emerald-600 dark:bg-emerald-500'
 const FAILED_CLS = 'bg-red-600 dark:bg-[#e5484d]'
 
 function DependencyVerdicts({ deps }: { deps: Trends['dependencies'] }) {
