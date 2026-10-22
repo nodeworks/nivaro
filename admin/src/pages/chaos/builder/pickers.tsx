@@ -87,9 +87,7 @@ export function ChoiceCombobox({
           )}
         >
           <span className={cn('min-w-0 truncate', !value && 'text-muted-foreground')}>
-            {renderValue
-              ? renderValue(selected, value)
-              : (selected?.label ?? (value || placeholder))}
+            {(value && renderValue?.(selected, value)) || selected?.label || value || placeholder}
           </span>
           <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 opacity-50' aria-hidden />
         </Button>

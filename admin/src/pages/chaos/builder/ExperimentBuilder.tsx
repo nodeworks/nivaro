@@ -392,7 +392,7 @@ export function ExperimentBuilder({
         </div>
         <dl className='space-y-1.5 text-[12.5px]'>
           {STEPS.filter((s) => s.id !== 'fault').map((s) => (
-            <div key={s.id} className='grid grid-cols-[92px_minmax(0,1fr)] gap-2'>
+            <div key={s.id} className='grid grid-cols-[108px_minmax(0,1fr)] gap-2'>
               <dt className='text-slate-500 dark:text-muted-foreground'>{s.label}</dt>
               <dd className='min-w-0'>
                 <button
