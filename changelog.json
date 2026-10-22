@@ -1,10 +1,63 @@
 {
-  "generated_at": "2026-10-22T21:44:29.971Z",
+  "generated_at": "2026-10-22T22:54:36.371Z",
   "releases": [
+    {
+      "version": "0.3.6",
+      "tag": "v0.3.6",
+      "date": "2026-10-22T18:54:15-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "slim",
+              "text": "nothing fails on the slim image",
+              "hash": "a16d1a554"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "record form",
+              "text": "M2A allowed collections arrive as an array",
+              "hash": "b82d5c5e5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "slim",
+              "text": "harden the media hand-off after security review",
+              "hash": "78d40227c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "slim",
+              "text": "a deploy canary only warns about render and media worker",
+              "hash": "298688c14"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fold idle Environments cards, readable Telemetry links, Config Diff on phones",
+              "hash": "e093a74c1"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.5",
       "tag": "v0.3.5",
-      "date": "2026-10-22T17:44:12-04:00",
+      "date": "2026-10-22T17:44:30-04:00",
       "sections": [
         {
           "label": "Added",
