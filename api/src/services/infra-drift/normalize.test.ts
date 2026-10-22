@@ -3,7 +3,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  DockerUnavailableError,
+  digestEnv,
   dockerGet,
+  EnvDigestUnavailableError,
   envDigestKeyId,
   sanitizeServiceSpec,
   setDockerFetchForTests
@@ -64,6 +67,55 @@ describe('sanitizeServiceSpec', () => {
     expect(cs.EnvDigest.PUBLIC_URL).toBe('https://efp.example.test')
     expect(cs.EnvDigest.DB_PASSWORD).toMatch(/^hmac:[0-9a-f]{32}$/)
     expect(JSON.stringify(clean)).not.toContain('hunter2')
+  })
+
+  it('is default-deny: only allowlisted keys stay plain, credentials are hashed under any key', () => {
+    const d = digestEnv([
+      'DB_PW=abc',
+      'CONN=Server=db1;Database=efp;User Id=sa;Password=y',
+      'API_X=ab12',
+      'LOG_LEVEL=info',
+      'LOG_LEVEL_ALT=info',
+      'NODE_ENV=production',
+      'WEB_REPLICAS=3',
+      'WORKER_REPLICAS=three',
+      'PUBLIC_URL=https://efp.example.test',
+      'ADMIN_URL=https://ops:pa55@efp.example.test',
+      'NIVARO_ROLE=web;token=abc'
+    ])
+    const hashed = Object.entries(d)
+      .filter(([, v]) => v.startsWith('hmac:'))
+      .map(([k]) => k)
+    expect(hashed.sort()).toEqual(
+      [
+        'ADMIN_URL',
+        'API_X',
+        'CONN',
+        'DB_PW',
+        'LOG_LEVEL_ALT',
+        'NIVARO_ROLE',
+        'WORKER_REPLICAS'
+      ].sort()
+    )
+    expect(d).toMatchObject({
+      LOG_LEVEL: 'info',
+      NODE_ENV: 'production',
+      WEB_REPLICAS: '3',
+      PUBLIC_URL: 'https://efp.example.test'
+    })
+    const all = JSON.stringify(d)
+    for (const leak of ['abc', 'Password=y', 'ab12', 'pa55', 'token=abc'])
+      expect(all).not.toContain(leak)
+  })
+
+  it('refuses to hash without SESSION_SECRET instead of using a constant key', async () => {
+    delete process.env.SESSION_SECRET
+    expect(() => digestEnv(['A=1'])).toThrow(EnvDigestUnavailableError)
+    expect(() => envDigestKeyId()).toThrow(EnvDigestUnavailableError)
+    serve('services-hand-run.json')
+    await expect(
+      dockerGet({ name: 'h', url: 'http://p' }, '/services', { env: 'digest' })
+    ).rejects.toBeInstanceOf(DockerUnavailableError)
   })
 
   it('a plain docker-source read still drops Env entirely', async () => {

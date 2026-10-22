@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
+import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { dockerConfigured } from '../services/docker-source.js'
+import { dockerConfigured, EnvDigestUnavailableError } from '../services/docker-source.js'
 import {
   cloudMode,
   DriftInputError,
@@ -17,13 +18,22 @@ import {
  * cloud mode: a tenant never stores or sees the operator's service specs.
  */
 
-/** A stack of ~30 services is ~600 KB of inspect JSON; leave room, refuse anything silly. */
+/**
+ * A stack of ~30 services is ~600 KB of inspect JSON; leave room, refuse anything silly. No proxy
+ * body limit sits in front of the deploy script's call: it posts from inside a task via docker
+ * exec to 127.0.0.1:3055, so this route limit is the only one that applies.
+ */
 const BASELINE_BODY_LIMIT = 8 * 1024 * 1024
 
 export async function infrastructureDriftRoutes(app: FastifyInstance): Promise<void> {
-  // Hooks here are local to this plugin, so this covers exactly the drift routes.
-  app.addHook('onRequest', async (_req, reply) => {
+  // Hooks here are local to this plugin, so they cover exactly the drift routes. The admin check
+  // runs in onRequest — BEFORE the body is read — so nobody unauthenticated can make the API
+  // buffer an 8 MB baseline body only to be refused (the parent's preHandler requireAdmin runs
+  // again later; authenticate is safe to run twice). The session plugin's root onRequest hook
+  // has already loaded the session by now.
+  app.addHook('onRequest', async (req, reply) => {
     if (cloudMode()) return reply.code(404).send({ error: 'Not found' })
+    await requireAdmin(req, reply)
   })
 
   app.get('/drift', async () => ({ data: await driftStatus() }))
@@ -52,6 +62,8 @@ export async function infrastructureDriftRoutes(app: FastifyInstance): Promise<v
         return { data: r }
       } catch (err) {
         if (err instanceof DriftInputError) return reply.code(400).send({ error: err.message })
+        if (err instanceof EnvDigestUnavailableError)
+          return reply.code(503).send({ error: err.message })
         throw err
       }
     }

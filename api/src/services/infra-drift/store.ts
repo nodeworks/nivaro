@@ -9,6 +9,7 @@ import {
   envDigestKeyId,
   sanitizeServiceSpec
 } from '../docker-source.js'
+import { getApp } from '../io-holder.js'
 import {
   type DriftItem,
   diffStack,
@@ -33,6 +34,14 @@ export const MAX_SERVICES = 200
 const NAME_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/
 
 export class DriftInputError extends Error {}
+
+/** Server log (the app's pino logger once booted; the console in tests and scripts). */
+function warn(msg: string): void {
+  const log = (getApp() as { log?: { warn: (m: string) => void } } | null)?.log
+  if (log) log.warn(msg)
+  // biome-ignore lint/suspicious/noConsole: no app logger outside a running server
+  else console.warn(msg)
+}
 
 export const cloudMode = (): boolean => !!process.env.CLOUD_META_DB_URL
 
@@ -298,11 +307,24 @@ export interface CheckOutcome {
   baseline_id: number
   stack: string
   environment: string
-  status: 'ok' | 'drift' | 'no-source' | 'error'
+  /** busy = another check of this stack held the lock; nothing was recorded. */
+  status: 'ok' | 'drift' | 'no-source' | 'error' | 'busy'
   message: string | null
   drift: number
   /** Findings nobody has been told about: new this check, or open and never alerted. */
   new_findings: FindingRow[]
+}
+
+/** SQL Server 2601/2627, Postgres 23505, MySQL 1062: a unique index refused the row. */
+export function isDuplicateKey(err: unknown): boolean {
+  const e = err as { number?: number; code?: string | number; errno?: number }
+  return (
+    e?.number === 2601 ||
+    e?.number === 2627 ||
+    e?.code === '23505' ||
+    e?.errno === 1062 ||
+    e?.code === 'ER_DUP_ENTRY'
+  )
 }
 
 /**
@@ -359,7 +381,15 @@ export async function recordFindings(
       first_seen: now,
       last_seen: now
     }
-    const ins = await k(FINDINGS).insert(row, ['id'])
+    let ins: unknown
+    try {
+      ins = await k(FINDINGS).insert(row, ['id'])
+    } catch (err) {
+      // The open-row unique index (baseline_id, fingerprint WHERE resolved_at IS NULL): another
+      // check recorded this drift first — it is that check's to alert, not ours.
+      if (isDuplicateKey(err)) continue
+      throw err
+    }
     const first = (Array.isArray(ins) ? ins[0] : ins) as unknown
     const id = Number(typeof first === 'object' && first ? (first as { id: number }).id : first)
     created.push({ ...row, id, resolved_at: null, alerted_at: null } as FindingRow)
@@ -404,7 +434,18 @@ export async function checkBaseline(
       new_findings: []
     })
   }
-  const secretsComparable = !b.env_key_id || b.env_key_id === envDigestKeyId()
+  let keyId: string
+  try {
+    keyId = envDigestKeyId()
+  } catch (err) {
+    return finish({
+      status: 'error',
+      message: String((err as Error)?.message ?? err),
+      drift: 0,
+      new_findings: []
+    })
+  }
+  const secretsComparable = !b.env_key_id || b.env_key_id === keyId
   const items = diffStack(baselineServices(b), live, { secretsComparable })
   const created = await recordFindings(b, items, k, now)
   const note = secretsComparable
@@ -429,8 +470,71 @@ export interface RunOptions {
   notify?: boolean
 }
 
+// One check per stack + environment at a time, across replicas: the nightly cron and Check now
+// (or two replicas' Check now) would otherwise both record and both alert the same drift. A
+// Redis SET NX lease (like the SQL checks run lock) plus a process-local guard; Redis down =
+// the local guard and the open-row unique index still keep rows single.
+const LOCK_TTL_S = 10 * 60
+const localLocks = new Set<string>()
+const lockKey = (stack: string, environment: string) =>
+  `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:infra-drift:lock:${stack}:${environment}`
+
+type LockRedis = {
+  set: (...a: unknown[]) => Promise<unknown>
+  eval: (...a: unknown[]) => Promise<unknown>
+}
+
+async function lockRedis(): Promise<LockRedis | null> {
+  try {
+    const { getApp } = await import('../io-holder.js')
+    return (getApp()?.redis as LockRedis | undefined) ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Runs `fn` holding the stack's lock; null when another check holds it. */
+export async function withStackLock<T>(
+  stack: string,
+  environment: string,
+  fn: () => Promise<T>,
+  redisArg?: LockRedis | null
+): Promise<T | null> {
+  const key = lockKey(stack, environment)
+  if (localLocks.has(key)) return null
+  localLocks.add(key)
+  const redis = redisArg === undefined ? await lockRedis() : redisArg
+  const token = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+  let held = false
+  try {
+    if (redis) {
+      const ok = await redis.set(key, token, 'EX', LOCK_TTL_S, 'NX').catch((err) => {
+        warn(`[infra-drift] lock ${key}: Redis unavailable, local guard only (${err})`)
+        return 'OK'
+      })
+      if (ok !== 'OK') return null
+      held = true
+    }
+    return await fn()
+  } finally {
+    localLocks.delete(key)
+    // Release only our own lease (a lease that expired and was taken by another check stays).
+    if (redis && held)
+      await redis
+        .eval(
+          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+          1,
+          key,
+          token
+        )
+        .catch(() => undefined)
+  }
+}
+
 /** Checks every current baseline (or the named one); returns each outcome. */
-export async function runDriftCheck(opts: RunOptions = {}): Promise<CheckOutcome[]> {
+export async function runDriftCheck(
+  opts: RunOptions & { redis?: LockRedis | null } = {}
+): Promise<CheckOutcome[]> {
   const k = opts.knex ?? db
   if (!(await driftTablesReady(k))) return []
   const rows = (await currentBaselines(k)).filter(
@@ -439,8 +543,36 @@ export async function runDriftCheck(opts: RunOptions = {}): Promise<CheckOutcome
       (!opts.environment || b.environment === opts.environment)
   )
   const out: CheckOutcome[] = []
-  for (const b of rows) out.push(await checkBaseline(b, opts))
-  if (opts.notify !== false) await alertNewDrift(out, k, opts.alert).catch(() => undefined)
+  for (const b of rows) {
+    // Check AND alert inside the lock, so a second check never sees rows the first has not
+    // stamped yet.
+    const o = await withStackLock(
+      b.stack,
+      b.environment,
+      async () => {
+        const r = await checkBaseline(b, opts)
+        if (opts.notify !== false)
+          await alertNewDrift([r], k, opts.alert).catch((err) => {
+            warn(
+              `[infra-drift] ${b.stack}:${b.environment}: alert failed — left unstamped for the next check (${(err as Error)?.message ?? err})`
+            )
+          })
+        return r
+      },
+      opts.redis
+    )
+    out.push(
+      o ?? {
+        baseline_id: b.id,
+        stack: b.stack,
+        environment: b.environment,
+        status: 'busy',
+        message: 'Another check of this stack is running.',
+        drift: b.drift_count,
+        new_findings: []
+      }
+    )
+  }
   return out
 }
 
@@ -499,6 +631,31 @@ export function alertNote(
   }
 }
 
+/** Every active administrator (people, not machine identities), in id order, read in pages. */
+export async function activeAdminIds(k: Knex = db, pageSize = 500): Promise<string[]> {
+  const out: string[] = []
+  for (let offset = 0; ; offset += pageSize) {
+    let page: Array<{ id: string }>
+    try {
+      page = (await k('nivaro_users as u')
+        .join('nivaro_roles as r', 'r.id', 'u.role')
+        .where('r.admin_access', true)
+        .where('u.status', 'active')
+        .whereNull('u.account_kind')
+        .orderBy('u.id', 'asc')
+        .offset(offset)
+        .limit(pageSize)
+        .select('u.id')) as Array<{ id: string }>
+    } catch (err) {
+      // Logged, then thrown: the caller leaves the findings unstamped so the next check retries.
+      warn(`[infra-drift] reading administrators failed: ${(err as Error)?.message ?? err}`)
+      throw err
+    }
+    out.push(...page.map((r) => String(r.id)))
+    if (page.length < pageSize) return out
+  }
+}
+
 /** Admins are told once per new finding; the row's alerted_at is the memory. */
 export async function alertNewDrift(
   outcomes: CheckOutcome[],
@@ -525,14 +682,7 @@ export async function alertNewDrift(
       return { dropped: !!r?.decision?.dropped }
     }
   }
-  const admins = (await k('nivaro_users as u')
-    .join('nivaro_roles as r', 'r.id', 'u.role')
-    .where('r.admin_access', true)
-    .where('u.status', 'active')
-    .whereNull('u.account_kind')
-    .limit(25)
-    .select('u.id')
-    .catch(() => [])) as Array<{ id: string }>
+  const admins = await activeAdminIds(k)
   if (admins.length === 0) return 0
   const { noteAlertFired } = await import('../alert-fired.js')
   let told = 0
@@ -544,11 +694,12 @@ export async function alertNewDrift(
       label: note.subject
     })
     let delivered = 0
-    for (const a of admins) {
+    for (const id of admins) {
       try {
-        if (!(await notify(String(a.id), note)).dropped) delivered++
-      } catch {
+        if (!(await notify(id, note)).dropped) delivered++
+      } catch (err) {
         // The rest still deserve a try.
+        warn(`[infra-drift] notifying ${id} failed: ${(err as Error)?.message ?? err}`)
       }
     }
     // Nobody heard it (dropped or failed): left unstamped, so the next check retries.

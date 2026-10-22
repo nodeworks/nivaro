@@ -1,5 +1,5 @@
 import type { Knex } from 'knex'
-import { utcNow } from '../dialect.js'
+import { isMssql, utcNow } from '../dialect.js'
 
 /**
  * Stack drift detector (#2798). A baseline is what a stack's services looked like right after a
@@ -61,6 +61,15 @@ export async function up(knex: Knex): Promise<void> {
       t.index(['stack', 'environment', 'resolved_at'])
       t.index(['baseline_id'])
     })
+    // At most one OPEN row per drift: two checks racing (nightly cron + Check now, two replicas)
+    // cannot both record — and so both alert — the same difference. Filtered / partial index on
+    // SQL Server and Postgres; other dialects rely on the per-stack lock alone.
+    const client = (knex as unknown as { client?: { config?: { client?: string } } })?.client
+      ?.config?.client
+    if (isMssql(knex) || client === 'pg' || client === 'postgres' || client === 'postgresql')
+      await knex.raw(
+        'CREATE UNIQUE INDEX nivaro_infra_drift_findings_open_uq ON nivaro_infra_drift_findings (baseline_id, fingerprint) WHERE resolved_at IS NULL'
+      )
   }
 }
 

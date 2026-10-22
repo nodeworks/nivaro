@@ -4,10 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   ready: vi.fn(),
   record: vi.fn(),
-  activity: vi.fn()
+  activity: vi.fn(),
+  admin: vi.fn()
 }))
 
 vi.mock('../services/activity.js', () => ({ logActivity: m.activity }))
+// Stands in for the real requireAdmin: a request without a bearer is refused.
+vi.mock('../middleware/authenticate.js', () => ({ requireAdmin: m.admin }))
 vi.mock('../services/infra-drift/store.js', async (orig) => {
   const real = await orig<typeof import('../services/infra-drift/store.js')>()
   return {
@@ -28,12 +31,11 @@ const saved = { ...process.env }
 async function build() {
   const app = Fastify()
   app.decorateRequest('user', undefined)
-  app.addHook('onRequest', async (req) => {
-    ;(req as { user: unknown }).user = { id: 'admin-1' }
-  })
   await app.register(infrastructureDriftRoutes)
   return app
 }
+
+const ADMIN = { authorization: 'Bearer admin-token' }
 
 const svc = (name: string) => ({
   ID: name,
@@ -50,6 +52,7 @@ const svc = (name: string) => ({
 beforeEach(() => {
   delete process.env.CLOUD_META_DB_URL
   delete process.env.DOCKER_HOSTS
+  process.env.SESSION_SECRET = 'test-session-secret-0123456789abcdef'
   m.ready.mockResolvedValue(true)
   m.record.mockImplementation(async (p: any) => ({
     id: 7,
@@ -61,6 +64,11 @@ beforeEach(() => {
     resolved_findings: 0
   }))
   m.activity.mockResolvedValue(1)
+  m.admin.mockImplementation(async (req: any) => {
+    if (req.headers.authorization !== ADMIN.authorization)
+      throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    req.user = { id: 'admin-1' }
+  })
 })
 afterEach(() => {
   process.env = { ...saved }
@@ -73,6 +81,7 @@ describe('POST /drift/baseline (the deploy script contract)', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/drift/baseline',
+      headers: ADMIN,
       payload: {
         stack: 'efp',
         environment: 'production',
@@ -97,12 +106,14 @@ describe('POST /drift/baseline (the deploy script contract)', () => {
     const bad = await app.inject({
       method: 'POST',
       url: '/drift/baseline',
+      headers: ADMIN,
       payload: { stack: 'efp', environment: 'production', services: 'nope' }
     })
     expect(bad.statusCode).toBe(400)
     const noSource = await app.inject({
       method: 'POST',
       url: '/drift/baseline',
+      headers: ADMIN,
       payload: { stack: 'efp', environment: 'production' }
     })
     expect(noSource.statusCode).toBe(400)
@@ -113,12 +124,17 @@ describe('POST /drift/baseline (the deploy script contract)', () => {
   it('503s before the migration, 404s in cloud mode, 413s an oversized body', async () => {
     const app = await build()
     m.ready.mockResolvedValue(false)
-    const r1 = await app.inject({ method: 'POST', url: '/drift/baseline', payload: {} })
+    const r1 = await app.inject({
+      method: 'POST',
+      url: '/drift/baseline',
+      headers: ADMIN,
+      payload: {}
+    })
     expect(r1.statusCode).toBe(503)
     const big = await app.inject({
       method: 'POST',
       url: '/drift/baseline',
-      headers: { 'content-type': 'application/json' },
+      headers: { ...ADMIN, 'content-type': 'application/json' },
       payload: JSON.stringify({ stack: 'efp', pad: 'x'.repeat(9 * 1024 * 1024) })
     })
     expect(big.statusCode).toBe(413)
@@ -127,5 +143,21 @@ describe('POST /drift/baseline (the deploy script contract)', () => {
     expect(
       (await app.inject({ method: 'POST', url: '/drift/baseline', payload: {} })).statusCode
     ).toBe(404)
+  })
+})
+
+describe('auth runs before the body is read', () => {
+  it('refuses an anonymous 9 MB post with 401, never 413, and never parses it', async () => {
+    const app = await build()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/drift/baseline',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ stack: 'efp', pad: 'x'.repeat(9 * 1024 * 1024) })
+    })
+    expect(res.statusCode).toBe(401)
+    expect(m.ready).not.toHaveBeenCalled()
+    expect(m.record).not.toHaveBeenCalled()
+    expect((await app.inject({ method: 'GET', url: '/drift' })).statusCode).toBe(401)
   })
 })

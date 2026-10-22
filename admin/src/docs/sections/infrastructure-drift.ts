@@ -14,7 +14,7 @@ export const infrastructureDriftDocs: DocSection = {
       type: 'ul',
       items: [
         'Image: repository and digest. A different tag on the same digest is the same image.',
-        'Environment variables, one by one. Values whose name looks secret (password, token, key, secret…), that carry credentials in a URL, or that look like a long token are kept only as a keyed hash: the page says "Secret value changed", never the value.',
+        'Environment variables, one by one. Only a short list of settings that never hold a secret keeps its value in clear (NODE_ENV, NIVARO_ROLE, LOG_LEVEL, CRON_TICKS, PUBLIC_URL, ADMIN_URL and the like, plus number-only sizing settings such as DB_POOL_MAX or WEB_REPLICAS); every other value, and any value carrying password=, token=, key=, secret=, sig= or user:password@ in a URL, is kept only as a keyed hash. The page says “Value changed (not shown)” for those, never the value.',
         'Mounts (type, source, target, read-only), secrets and configs (name and target), mode and replicas, CPU and memory limits and reservations, placement constraints and preferences.',
         'User, read-only root filesystem, added and dropped capabilities, healthcheck, command and arguments, update, rollback and restart settings (values equal to the swarm default are ignored, so a docker service inspect and a plain Engine read compare equal).',
         'Service and container labels, traefik labels included. Only the labels a stack deploy writes itself (com.docker.stack.namespace, com.docker.stack.image) and swarm labels are ignored.',
@@ -49,7 +49,7 @@ export const infrastructureDriftDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Without a Docker host the card says "No live source — set DOCKER_HOSTS" instead of claiming there is no drift: nothing was compared. If the instance\'s SESSION_SECRET changes, secret values can no longer be compared until the next baseline, and the check says so.'
+      text: 'Without a Docker host the card says "No live source — set DOCKER_HOSTS" instead of claiming there is no drift: nothing was compared. The hashes are keyed with the instance\'s SESSION_SECRET: without one, baselines are refused (503) and checks fail rather than hash with a fixed key; if it changes, hashed values can no longer be compared until the next baseline, and the check says so. One check per stack and environment runs at a time across replicas (a Redis lease), so the nightly job and Check now never record or alert the same difference twice.'
     },
     { type: 'h2', id: 'infrastructure-drift-where', text: 'Where it shows' },
     {

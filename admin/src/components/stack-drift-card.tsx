@@ -12,8 +12,8 @@ import { cn, formatRelative } from '@/lib/utils'
  * #2798 Stack drift — what each stack's live service specs look like against the baseline the
  * last deploy stored (GET /api/infrastructure/drift). Environments shows the full card (one row
  * per environment + stack, expandable to expected vs actual per field); the Infrastructure Stacks
- * tab shows the one-line summary. Secret values never reach the browser: a secret field only
- * says that it changed. Renders nothing when the drift routes are not here (cloud) or the tables
+ * tab shows the one-line summary. Hashed env values (every variable not on docker-source's
+ * plain allowlist) never reach the browser: such a field only says that its value changed. Renders nothing when the drift routes are not here (cloud) or the tables
  * are not on this database.
  */
 
@@ -185,10 +185,10 @@ function FindingsTable({ findings }: { findings: DriftFinding[] }) {
                   >
                     <KeyRound className='h-3.5 w-3.5 text-amber-600 dark:text-amber-400' />
                     {f.kind === 'added'
-                      ? 'Secret value set (not in the deploy)'
+                      ? 'Value set (not shown; not in the deploy)'
                       : f.kind === 'removed'
-                        ? 'Secret value removed'
-                        : 'Secret value changed'}
+                        ? 'Value removed (not shown)'
+                        : 'Value changed (not shown)'}
                   </span>
                 </td>
               ) : (
