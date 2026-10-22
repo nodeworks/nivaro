@@ -1,6 +1,12 @@
 import { type NivaroClient, readItem, readItems, readMany } from '@nivaro/sdk'
 import { describe, expect, it, vi } from 'vitest'
-import { batchableRead, withGetCoalescing } from './request-gate'
+import {
+  batchableRead,
+  createGatedClient,
+  releaseGatedReads,
+  releaseGatedReadsOnSharedFetch,
+  withGetCoalescing
+} from './request-gate'
 
 type Cmd = { _method: string; _path: string; _params?: Record<string, unknown>; _body?: unknown }
 
@@ -134,5 +140,58 @@ describe('withGetCoalescing batchReads', () => {
     const c = withGetCoalescing(client, { batchReads: true })
     await c.request(readItems('a'))
     expect(calls.map((x) => x._path)).toEqual(['/items/a'])
+  })
+})
+
+describe('createGatedClient shared-cache release', () => {
+  const fakeClient = () => {
+    const calls: string[] = []
+    const client = {
+      request: vi.fn(async (c: { _path?: string }) => {
+        calls.push(c._path ?? '')
+        return { ok: c._path }
+      })
+    } as unknown as NivaroClient
+    return { client, calls }
+  }
+  const read = (path: string) => ({ _method: 'GET', _path: path }) as never
+
+  it('a closed gate holds reads until releaseGatedReads, then stays closed', async () => {
+    const { client, calls } = fakeClient()
+    const gated = createGatedClient(client, { open: false })
+    const held = gated.request(read('/field-config/inventory_request'))
+    await Promise.resolve()
+    expect(calls).toEqual([])
+    releaseGatedReads()
+    await expect(held).resolves.toEqual({ ok: '/field-config/inventory_request' })
+    expect(gated.open).toBe(false)
+    const later = gated.request(read('/collections/inventory_request'))
+    await Promise.resolve()
+    expect(calls).toEqual(['/field-config/inventory_request'])
+    gated.setOpen(true)
+    await later
+    expect(calls).toHaveLength(2)
+  })
+
+  it('an observer joining a fetching query releases held reads; idle queries do not', async () => {
+    const { client, calls } = fakeClient()
+    const gated = createGatedClient(client, { open: false })
+    let listener:
+      | ((e: { type: string; query: { state: { fetchStatus?: string } } }) => void)
+      | null = null
+    const cache = {
+      subscribe: (l: typeof listener) => {
+        listener = l
+        return () => {}
+      }
+    }
+    releaseGatedReadsOnSharedFetch(cache as never)
+    const held = gated.request(read('/collection-layouts/active'))
+    listener!({ type: 'observerAdded', query: { state: { fetchStatus: 'idle' } } })
+    await Promise.resolve()
+    expect(calls).toEqual([])
+    listener!({ type: 'observerAdded', query: { state: { fetchStatus: 'fetching' } } })
+    await held
+    expect(calls).toEqual(['/collection-layouts/active'])
   })
 })

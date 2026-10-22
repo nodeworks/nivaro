@@ -511,6 +511,8 @@ export {
   registerReplayCapture,
   registerRoomOpener,
   registerViewAsOpener,
+  releaseGatedReads,
+  releaseGatedReadsOnSharedFetch,
   releaseHeld,
   replayHref,
   reportClientCrash,

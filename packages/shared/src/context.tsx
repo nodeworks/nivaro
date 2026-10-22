@@ -27,7 +27,7 @@ import {
   restoreMetadata,
   startMetadataPersistence
 } from './lib/metadata-persist'
-import { isCoalesced, withGetCoalescing } from './lib/request-gate'
+import { isCoalesced, releaseGatedReadsOnSharedFetch, withGetCoalescing } from './lib/request-gate'
 
 // ─── Nivaro client context ─────────────────────────────────────────────────
 
@@ -56,6 +56,36 @@ function MetadataPersistence({ identity }: { identity: MetadataIdentity }) {
       stop()
     }
   }, [qc, userId, epoch, version])
+  return null
+}
+
+// One shared-fetch watcher per query cache, however many gated providers mount on it.
+const gateWatchers = new WeakMap<object, { count: number; stop: () => void }>()
+
+/**
+ * A host that keeps several record tabs mounted hands each hidden tab a gated client
+ * (createGatedClient) but shares one react-query cache. Without this, the visible tab
+ * can join a fetch a hidden tab's gate is holding and sit on skeletons with no error.
+ * Watch the cache while a gated client is mounted and release held reads when an
+ * observer joins an in-flight query (request-gate.ts releaseGatedReadsOnSharedFetch).
+ */
+function GatedFetchWatcher() {
+  const qc = useQueryClient()
+  useEffect(() => {
+    const cache = qc.getQueryCache()
+    const existing = gateWatchers.get(cache)
+    if (existing) existing.count++
+    else gateWatchers.set(cache, { count: 1, stop: releaseGatedReadsOnSharedFetch(cache) })
+    return () => {
+      const w = gateWatchers.get(cache)
+      if (!w) return
+      w.count--
+      if (w.count <= 0) {
+        w.stop()
+        gateWatchers.delete(cache)
+      }
+    }
+  }, [qc])
   return null
 }
 
@@ -101,6 +131,9 @@ export function NivaroProvider({
   const inner = (
     <NivaroFormContext.Provider value={{ client: coalesced }}>
       {persistMetadata ? <MetadataPersistence identity={persistMetadata} /> : null}
+      {typeof (client as { setOpen?: unknown }).setOpen === 'function' ? (
+        <GatedFetchWatcher />
+      ) : null}
       {children}
     </NivaroFormContext.Provider>
   )

@@ -833,6 +833,8 @@ export {
   forgetSettledReads,
   type GatedClient,
   isSettledRead,
+  releaseGatedReads,
+  releaseGatedReadsOnSharedFetch,
   SETTLED_READ_MS,
   withGetCoalescing
 } from './lib/request-gate'
