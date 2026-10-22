@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth'
 // Teams live in @nivaro/shared (TeamsView) so headless frontends and the
 // Owner Matrix "Manage teams" slide-over host the same surface — this page is
 // the thin admin host (CollectionBrowserV2Page pattern).
-const client = createNivaro(window.location.origin)
+const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 export function UserGroupsPage() {
   const { user } = useAuth()

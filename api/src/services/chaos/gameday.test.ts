@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const notified: Array<{ user: string; subject: string; category?: string }> = []
-const posted: Array<{ system: boolean; room: string; message: string }> = []
+const posted: Array<{ system: boolean; room: string; message: string; sender: string | null }> = []
 
 vi.mock('../notification-channels.js', () => ({
   notifyUser: vi.fn(
@@ -15,16 +15,22 @@ vi.mock('../chat-send.js', () => ({
   postChatMessage: vi.fn(
     async (
       _app: unknown,
-      actor: { system?: boolean },
+      actor: { system?: boolean; user?: { id?: string } | null },
       input: { room: string; message: string }
     ) => {
-      posted.push({ system: !!actor.system, room: input.room, message: input.message })
+      posted.push({
+        system: !!actor.system,
+        room: input.room,
+        message: input.message,
+        sender: actor.user?.id ?? null
+      })
       return {}
     }
   ),
   upsertMembership: vi.fn(async () => {})
 }))
 
+import { db } from '../../db/index.js'
 import { setAppRef } from '../io-holder.js'
 import { visibleArmedFor } from './armed-visibility.js'
 import { _resetBlindForTests, startBlindCluster } from './blind.js'
@@ -41,7 +47,8 @@ import {
   revealGameday,
   runGamedayTick,
   startGameday,
-  stepGameday
+  stepGameday,
+  updateGameday
 } from './gameday.js'
 import { _resetRegistryForTests, armedFaults } from './registry.js'
 import { buildRunReport } from './report.js'
@@ -51,7 +58,10 @@ const LEAD = '11111111-1111-4111-8111-111111111111'
 const SCRIBE = '22222222-2222-4222-8222-222222222222'
 const RESP = '33333333-3333-4333-8333-333333333333'
 const OUTSIDER = '44444444-4444-4444-8444-444444444444'
-const op = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Op', operator: true }
+const op = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Op', operator: true, admin: true }
+/** A chaos operator who is not an administrator (F5). */
+const OPER = '66666666-6666-4666-8666-666666666666'
+const oper = { id: OPER, name: 'Oper', operator: true, admin: false }
 
 const log = { warn: () => {}, info: () => {}, error: () => {} }
 
@@ -135,7 +145,8 @@ describe('game days (#2852)', () => {
     expect(s.find((d) => d.inject_id === 'a')?.outcome).toBe('armed')
     const child = await getRun(String(s.find((d) => d.inject_id === 'a')?.child_run_id))
     expect(child?.gameday_id).toBe(run.id)
-    expect(child?.started_by).toBe(LEAD)
+    // F5: faults run as the planner, never the named lead.
+    expect(child?.started_by).toBe(op.id)
     expect(armedFaults()).toHaveLength(1)
 
     // Two deliverers at +2:01 (the cron tick and the in-process timer): b and c once each.
@@ -218,10 +229,22 @@ describe('game days (#2852)', () => {
       op
     )
     await updateRun(run.id, { meta: { ...run.meta, channel_room: 'ch:gameday-x' } })
+    // The planner's user row (the db mock answers null by default).
+    const original = vi.mocked(db).getMockImplementation()
+    vi.mocked(db).mockImplementation(((table: string) => {
+      const chain: Record<string, unknown> = {}
+      for (const m of ['where', 'whereIn', 'select', 'orderBy', 'limit']) chain[m] = () => chain
+      chain.first = async () => (table === 'nivaro_users' ? { id: op.id, first_name: 'Op' } : null)
+      return chain
+    }) as never)
     await startGameday(run.id, op)
+    if (original) vi.mocked(db).mockImplementation(original)
     const system = posted.filter((p) => p.system).map((p) => p.message)
     expect(system.join('\n')).not.toMatch(/secret label|hello team/)
-    expect(posted.find((p) => !p.system)?.message).toBe('hello team')
+    const said = posted.find((p) => !p.system)
+    expect(said?.message).toBe('hello team')
+    // F5: posted as the planner, not as the named lead.
+    expect(said?.sender).toBe(op.id)
   })
 
   it('auto-start runs from the scheduler at the planned time', async () => {
@@ -292,12 +315,46 @@ describe('scribe marks (#2853) and declare (#2854)', () => {
     expect(report.notes.filter((n) => n.mark === 'found_cause')).toHaveLength(1)
   })
 
+  it('a repeat declare by the same person within a minute adds nothing (F8)', async () => {
+    const { run } = await createGameday(plan(), op)
+    await startGameday(run.id, op)
+    const who = { id: OUTSIDER, name: 'O', operator: false }
+    expect(await declareIncident(who)).toBe(1)
+    expect(await declareIncident(who)).toBe(0)
+    expect(await declareIncident({ id: RESP, name: 'R', operator: false })).toBe(1)
+    expect(await listRunEvents(run.id, { kinds: ['note'] })).toHaveLength(2)
+  })
+
   it('declare stamps a declared mark on every running day', async () => {
     const { run } = await createGameday(plan(), op)
     await startGameday(run.id, op)
     expect(await declareIncident({ id: OUTSIDER, name: 'O', operator: false })).toBe(1)
     const notes = await listRunEvents(run.id, { kinds: ['note'] })
     expect(notes[0].data.mark).toBe('declared')
+  })
+})
+
+describe('lead impersonation (F5)', () => {
+  it('an operator who is not an administrator can only name themselves as the lead', async () => {
+    await expect(createGameday(plan(), oper)).rejects.toMatchObject({
+      code: 'CHAOS_LEAD_NOT_SELF',
+      statusCode: 403
+    })
+    const { run } = await createGameday(plan({ lead: OPER }), oper)
+    expect(run.started_by).toBe(OPER)
+    // …and cannot hand the day to someone else afterwards.
+    await expect(updateGameday(run.id, plan(), oper)).rejects.toMatchObject({
+      code: 'CHAOS_LEAD_NOT_SELF'
+    })
+  })
+
+  it('only the planner or an administrator edits a day (announcements run as the planner)', async () => {
+    const { run } = await createGameday(plan(), op)
+    await expect(updateGameday(run.id, plan({ lead: OPER }), oper)).rejects.toMatchObject({
+      code: 'CHAOS_NOT_PLANNER'
+    })
+    const { run: next } = await updateGameday(run.id, plan({ title: 'Renamed' }), op)
+    expect(next.label).toBe('Renamed')
   })
 })
 
@@ -309,6 +366,7 @@ describe('blind game days (#2854)', () => {
     expect(armed).toHaveLength(1)
     expect(visibleArmedFor({ id: RESP, operator: false }, armed)).toEqual([])
     expect(visibleArmedFor({ id: LEAD, operator: false }, armed)).toHaveLength(1)
+    expect(visibleArmedFor({ id: op.id, operator: false }, armed)).toHaveLength(1)
     expect(visibleArmedFor({ id: 'x', operator: true }, armed)).toHaveLength(1)
     await revealGameday(run.id, op)
     expect(visibleArmedFor({ id: RESP, operator: false }, armed)).toHaveLength(1)

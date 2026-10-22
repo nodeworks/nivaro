@@ -419,7 +419,7 @@ export function ItemEditPage() {
     if (idx > 0) navigate(-1)
     else navigate(`/collections/${collection}`)
   }
-  const client = useMemo(() => createNivaro(window.location.origin), [])
+  const client = useMemo(() => createNivaro(window.location.origin, { timeoutMs: 90_000 }), [])
   const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
   const drillCtx = useMemo(() => ({ open: (t: DrilldownTarget) => setDrilldown(t) }), [])
   const isNew = id === 'new'

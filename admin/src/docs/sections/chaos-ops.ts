@@ -43,6 +43,10 @@ export const chaosOpsDocs: DocSection = {
     },
     {
       type: 'note',
+      text: 'Socket drills started from the Realtime page (/realtime → Verification) are the one path outside these limits and the pre-flight: they are administrator-only, pass the same gate, and keep their own 5–600 s window and share/room/person targets. Stop all on the Chaos page ends them too. Start a socket drill from the Chaos console (fault “Socket drill”) when you want the limits, the pre-flight and a run with a verdict.'
+    },
+    {
+      type: 'note',
       text: 'Stored under the `chaos` key of this instance’s `nivaro_settings_overrides` row (`GET`/`PATCH /api/chaos/settings`, administrators). No migration.'
     },
     { type: 'h2', id: 'chaos-ops-drill-alerts', text: 'Alerts during a drill' },

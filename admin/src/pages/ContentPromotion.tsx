@@ -1,3 +1,4 @@
+import { QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowRightLeft, Check, Download, FileUp, Loader2 } from 'lucide-react'
 import { useRef, useState } from 'react'
@@ -65,7 +66,13 @@ export function ContentPromotionPage() {
   const [recMode, setRecMode] = useState<'create' | 'update' | 'upsert'>('upsert')
   const recFileRef = useRef<HTMLInputElement>(null)
 
-  const { data: collections = [] } = useQuery({
+  const {
+    data: collections = [],
+    isLoading: collectionsLoading,
+    isError: collectionsFailed,
+    error: collectionsError,
+    refetch: refetchCollections
+  } = useQuery({
     queryKey: ['collections', 'tables_only'],
     queryFn: () =>
       api.get<{ data: Collection[] }>('/collections?tables_only=true').then((r) => r.data.data)
@@ -270,8 +277,19 @@ export function ContentPromotionPage() {
                   </span>
                 </button>
               ))}
-              {filtered.length === 0 && (
-                <p className='px-2.5 py-3 text-center text-[12px] text-slate-400'>No collections</p>
+              {collectionsFailed && collections.length === 0 ? (
+                <QueryErrorState
+                  error={collectionsError}
+                  what='collections'
+                  onRetry={() => void refetchCollections()}
+                  className='min-h-0 p-4'
+                />
+              ) : (
+                filtered.length === 0 && (
+                  <p className='px-2.5 py-3 text-center text-[12px] text-slate-400'>
+                    {collectionsLoading ? 'Loading…' : 'No collections'}
+                  </p>
+                )
               )}
             </div>
             <Button

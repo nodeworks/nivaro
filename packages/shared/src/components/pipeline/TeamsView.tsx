@@ -8,6 +8,7 @@ import { useLiveOps } from '../../lib/live-ops'
 import { cn, formatRelative } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { QueryErrorState } from '../QueryErrorState'
 import { Textarea } from '../ui/textarea'
 import { MemberPickerCombobox } from './OwnerMatrix'
 import { TeamScopeEditor } from './TeamScopeEditor'
@@ -769,7 +770,13 @@ export function TeamsView({
   const [creating, setCreating] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
 
-  const { data: groups = [], isLoading } = useQuery<TeamRow[]>({
+  const {
+    data: groups = [],
+    isLoading,
+    isError,
+    error,
+    refetch
+  } = useQuery<TeamRow[]>({
     queryKey: ['user-groups'],
     queryFn: () => client.request<{ data: TeamRow[] }>(get('/user-groups')).then((r) => r.data)
   })
@@ -822,6 +829,13 @@ export function TeamsView({
         <div className='min-h-0 flex-1 overflow-y-auto'>
           {isLoading ? (
             <p className='p-4 text-[12.5px] text-slate-400'>Loading…</p>
+          ) : isError && groups.length === 0 ? (
+            <QueryErrorState
+              error={error}
+              what='teams'
+              onRetry={() => void refetch()}
+              className='min-h-0 p-4'
+            />
           ) : groups.length === 0 ? (
             <p className='p-4 text-[12.5px] text-slate-400'>No teams yet.</p>
           ) : (

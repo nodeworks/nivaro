@@ -67,7 +67,9 @@ interface JobRun {
 }
 
 /** The event-path sheet reads through the SDK client (shared component). */
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 const KINDS = ['', 'cron', 'remediation', 'backfill', 'recalc', 'monitor'] as const
 

@@ -1828,6 +1828,13 @@ export interface NivaroClientOptions {
    * CORS, and Bearer auth needs no cookies.
    */
   credentials?: RequestCredentials
+  /**
+   * How long a GET read may take before it is abandoned with a `TimeoutError` (#2857), so a
+   * request that never answers ends in an error state instead of a spinner. Off by default
+   * (unset or 0); set it above the slowest read you expect. Writes and uploads are never cut
+   * short.
+   */
+  timeoutMs?: number
 }
 
 export interface FileUploadResult {
@@ -1904,12 +1911,28 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
         ).toString()
       : ''
 
-    const res = await fetcher(`${baseUrl}/api${command._path}${qs}`, {
-      method: command._method,
-      headers: authHeaders(),
-      credentials: credentialsMode(),
-      body: command._body != null ? JSON.stringify(command._body) : undefined
-    })
+    const timeoutMs = options.timeoutMs ?? 0
+    const timed = command._method === 'GET' && timeoutMs > 0
+    const ctrl = timed ? new AbortController() : null
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null
+    let res: Response
+    try {
+      res = await fetcher(`${baseUrl}/api${command._path}${qs}`, {
+        method: command._method,
+        headers: authHeaders(),
+        credentials: credentialsMode(),
+        body: command._body != null ? JSON.stringify(command._body) : undefined,
+        ...(ctrl ? { signal: ctrl.signal } : {})
+      })
+    } catch (e) {
+      if (ctrl?.signal.aborted)
+        throw Object.assign(new Error(`Request timed out after ${timeoutMs / 1000}s`), {
+          name: 'TimeoutError'
+        })
+      throw e
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
 
     if (command._method === 'DELETE' && res.status === 204) {
       return undefined as T

@@ -384,7 +384,7 @@ const CHART_COLORS = ['#00ceff', '#172940', '#10b981', '#f59e0b', '#8b5cf6', '#e
 
 // Query widgets render through the SAME shared component headless hosts use;
 // the shared tree needs a Nivaro client context (admin is same-origin).
-const nivaroClient = createNivaro(window.location.origin)
+const nivaroClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 const toSharedRange = (r: { preset: string; start?: string; end?: string } | null | '') =>
   r && r.preset ? ({ preset: r.preset, start: r.start, end: r.end } as never) : null
 const TILE_COLORS = ['#00ceff', '#10b981', '#172940', '#f59e0b', '#8b5cf6', '#ef4444']

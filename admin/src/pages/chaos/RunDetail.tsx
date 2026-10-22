@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { type ReactNode, useEffect } from 'react'
+import { type ReactNode, useEffect, useLayoutEffect, useRef } from 'react'
 import { Link } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { adminRealtime } from '@/lib/socket'
@@ -7,6 +7,7 @@ import { cn, formatDateTime } from '@/lib/utils'
 import { type ChaosRun, type ChaosRunEvent, chaosKeys, describeTarget, fetchRun } from './api'
 import { RunCockpit } from './RunCockpit'
 import { RUN_KIND_LABEL, RunChip } from './RunsTab'
+import { SAMPLER_LABELS } from './SamplerCharts'
 
 /**
  * One run (#2843): the cockpit while it runs (#2845), otherwise a summary — verdict, what was
@@ -242,8 +243,19 @@ export function Timeline({
   events: ChaosRunEvent[]
   compact?: boolean
 }) {
-  const shown = events.filter((e) => e.kind !== 'sample' || e.data.breach)
+  // Live events append as they arrive; sort so a late alert lands where it happened.
+  const shown = events
+    .filter((e) => e.kind !== 'sample' || e.data.breach)
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id - b.id)
   const hidden = events.length - shown.length
+  // Live (compact): follow the newest event, unless the reader has scrolled up to look back.
+  const listRef = useRef<HTMLOListElement>(null)
+  const pinned = useRef(true)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run when a row lands
+  useLayoutEffect(() => {
+    const el = listRef.current
+    if (compact && el && pinned.current) el.scrollTop = el.scrollHeight
+  }, [compact, shown.length])
   return (
     <section>
       <h3 className='mb-2 flex items-baseline gap-2 text-[12.5px] font-semibold text-slate-900 dark:text-foreground'>
@@ -260,25 +272,46 @@ export function Timeline({
         </p>
       ) : (
         <ol
+          ref={listRef}
+          onScroll={(ev) => {
+            const el = ev.currentTarget
+            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+          }}
           className={cn(
             'divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border/60 dark:border-border dark:bg-card',
-            compact && 'max-h-72 overflow-y-auto'
+            // Phones get the whole list in the page scroll; a nested scroller there hides rows.
+            compact && 'sm:max-h-72 sm:overflow-y-auto sm:overscroll-contain'
           )}
         >
           {shown.map((e) => (
             <li
               key={e.id}
-              className='flex flex-wrap items-start gap-x-3 gap-y-0.5 px-3 py-1.5 text-[12px] sm:flex-nowrap'
+              className='flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-1.5 text-[12px] sm:flex-nowrap'
             >
-              <time className='w-[72px] shrink-0 font-mono text-[11px] tabular-nums text-slate-500 dark:text-muted-foreground'>
+              <time
+                dateTime={e.at}
+                className='w-[84px] shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-slate-500 dark:text-muted-foreground'
+              >
                 {new Date(e.at).toLocaleTimeString([], {
                   hour: 'numeric',
                   minute: '2-digit',
                   second: '2-digit'
                 })}
               </time>
-              <span className={cn('w-16 shrink-0 font-medium', EVENT_TONE[e.kind])}>{e.kind}</span>
-              <span className='min-w-0 basis-full break-words text-slate-700 sm:basis-auto sm:flex-1 dark:text-foreground'>
+              <span
+                className={cn(
+                  'shrink-0 font-medium sm:w-16',
+                  e.kind === 'sample'
+                    ? 'text-red-700 dark:text-red-300'
+                    : // Red marks a fault that is armed now; afterwards "armed" is just history.
+                      e.kind === 'armed' && !compact
+                      ? 'text-slate-700 dark:text-foreground'
+                      : EVENT_TONE[e.kind]
+                )}
+              >
+                {e.kind === 'sample' ? 'crossed' : e.kind}
+              </span>
+              <span className='min-w-0 basis-full break-words text-slate-700 sm:flex-1 sm:basis-auto dark:text-foreground'>
                 {eventText(e)}
               </span>
             </li>
@@ -294,10 +327,11 @@ export function eventText(e: ChaosRunEvent): string {
   switch (e.kind) {
     case 'armed':
       return `${String(d.fault_key ?? '')} on ${String(d.target ?? 'everything')} for ${String(d.seconds ?? '?')}s`
-    case 'sample':
-      return d.breach
-        ? `${String(d.sampler)} = ${String(d.value)} crossed ${String(d.op)} ${String(d.limit)}`
-        : 'sample'
+    case 'sample': {
+      if (!d.breach) return 'sample'
+      const meta = SAMPLER_LABELS[String(d.sampler)]
+      return `${meta?.label ?? String(d.sampler)} at ${String(d.value)}${meta?.unit ? ` ${meta.unit}` : ''}, limit ${String(d.op)} ${String(d.limit)}`
+    }
     case 'abort':
       return `aborted: ${String(d.reason ?? '')}`
     case 'stop':

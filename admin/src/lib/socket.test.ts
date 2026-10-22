@@ -13,6 +13,9 @@ const fakeSocket = {
 vi.mock('socket.io-client', () => ({ io: vi.fn(() => fakeSocket) }))
 const sink: { current: (event: string, payload: unknown) => void } = { current: () => {} }
 vi.mock('@nivaro/shared', () => ({
+  // #2840 — browser chaos is exercised in packages/shared (client-chaos.test.ts).
+  bindClientChaosSocket: () => {},
+  clientChaosAxiosInterceptor: () => (config: unknown) => config,
   // #2462 — the room gap tracker is exercised in packages/shared (room-gaps.test.ts).
   createRoomGapTracker: () => ({
     observe: () => {},

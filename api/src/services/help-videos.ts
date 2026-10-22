@@ -5,7 +5,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import type { InstanceIdentity } from './branch-instances.js'
-import { appNow } from './chaos/clock.js'
+import { appNowForAuth } from './chaos/clock.js'
 import {
   cleanVersionNote,
   firstChange,
@@ -593,7 +593,7 @@ export function mediaTicket(
 export function verifyMediaTicket(
   ticket: string,
   videoId: string,
-  now = appNow()
+  now = appNowForAuth()
 ): { userId: string; scope: 'p' | 'd'; tag?: string } | null {
   const parts = String(ticket ?? '').split('.')
   if (parts.length !== 4 && parts.length !== 5) return null

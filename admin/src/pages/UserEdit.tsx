@@ -18,7 +18,7 @@ import { useGoBack } from '@/lib/nav'
 // (ProfileView → PersonProfile): the admin sees the Access / Activity /
 // Admin tools tabs, a non-admin the slim colleague view. The page itself only
 // adds the admin chrome — breadcrumb, back, revision history.
-const client = createNivaro(window.location.origin)
+const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 const TABS = new Set(['overview', 'access', 'activity', 'tools'])
 

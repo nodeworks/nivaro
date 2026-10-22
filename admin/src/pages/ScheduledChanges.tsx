@@ -1,3 +1,4 @@
+import { QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, Check, ChevronsUpDown, Play, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
@@ -286,7 +287,13 @@ export default function ScheduledChangesPage() {
     queryFn: () => api.get<{ data: Collection[] }>('/collections').then((r) => r.data.data)
   })
 
-  const { data: changes = [], isLoading } = useQuery<ScheduledChange[]>({
+  const {
+    data: changes = [],
+    isLoading,
+    isError,
+    error,
+    refetch
+  } = useQuery<ScheduledChange[]>({
     queryKey: ['scheduled-changes', statusFilter, collectionFilter],
     queryFn: () => {
       const params: Record<string, string> = {}
@@ -391,6 +398,8 @@ export default function ScheduledChangesPage() {
               <Skeleton key={i} className='h-12 w-full rounded-lg' />
             ))}
           </div>
+        ) : isError && changes.length === 0 ? (
+          <QueryErrorState error={error} what='scheduled changes' onRetry={() => void refetch()} />
         ) : changes.length === 0 ? (
           <div className='flex flex-col items-center justify-center py-24 text-center'>
             <CalendarClock className='h-10 w-10 text-muted-foreground/40 mb-3' />

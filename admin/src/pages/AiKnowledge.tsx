@@ -8,7 +8,9 @@ import { useAuth } from '@/lib/auth'
 // shared glossary (everyone reads it; term links from answers land here with
 // ?term=<slug>), per-collection data guides, drafted suggestions and the docs
 // gaps report (admins). ?tab=glossary|guides|suggestions|gaps|conflicts|topics|index|checklists.
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 type Tab =
   | 'glossary'

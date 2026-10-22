@@ -144,3 +144,26 @@ describe('clock_skew', () => {
     expect(clockSkewMs()).toBe(0)
   })
 })
+
+describe('appNowForAuth (F3)', () => {
+  it('ignores a clock set back and follows a clock set forward', async () => {
+    const { appNowForAuth } = await import('../clock.js')
+    setClockSkew(-24 * 3_600_000)
+    expect(appNowForAuth()).toBe(Date.now())
+    expect(appNow()).toBe(Date.now() - 24 * 3_600_000)
+    setClockSkew(30 * 60_000)
+    expect(appNowForAuth()).toBe(Date.now() + 30 * 60_000)
+  })
+
+  it('a negative skew drill never revives an expired API key, session or link', async () => {
+    const { appNowForAuth } = await import('../clock.js')
+    const expiredYesterday = Date.now() - 12 * 3_600_000
+    await armFault({
+      fault_key: 'clock_skew',
+      target: { kind: 'node', node: CHAOS_NODE },
+      params: { offset_minutes: -1440 }
+    })
+    expect(appNow()).toBeLessThan(expiredYesterday)
+    expect(expiredYesterday < appNowForAuth()).toBe(true)
+  })
+})

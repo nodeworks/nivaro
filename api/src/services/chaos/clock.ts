@@ -18,6 +18,15 @@ export function appNow(): number {
   return offsetMs === 0 ? Date.now() : Date.now() + offsetMs
 }
 
+/**
+ * Now for authentication and expiry checks (API keys, sessions, share links, delegations, media
+ * tickets): the skew may only make them stricter. A clock set back must never accept what real
+ * time rejects, so a negative skew is ignored here (F3).
+ */
+export function appNowForAuth(): number {
+  return offsetMs > 0 ? Date.now() + offsetMs : Date.now()
+}
+
 /** `new Date()` as the application sees it. */
 export function appDate(): Date {
   return new Date(appNow())

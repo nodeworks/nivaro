@@ -2052,7 +2052,7 @@ function LiveFormTab() {
   const [result, setResult] = useState<{ ok: boolean; data: unknown } | null>(null)
   const [showCode, setShowCode] = useState(false)
 
-  const client = useMemo(() => createNivaro(window.location.origin), [])
+  const client = useMemo(() => createNivaro(window.location.origin, { timeoutMs: 90_000 }), [])
 
   const { data: colData } = useQuery({
     queryKey: ['collections'],
@@ -2403,7 +2403,7 @@ function LiveQueueTab() {
   const [active, setActive] = useState<string | null>(searchParams.get('lq_id'))
   const [showCode, setShowCode] = useState(false)
 
-  const client = useMemo(() => createNivaro(window.location.origin), [])
+  const client = useMemo(() => createNivaro(window.location.origin, { timeoutMs: 90_000 }), [])
 
   function startResize(e: React.MouseEvent) {
     e.preventDefault()
@@ -2594,7 +2594,7 @@ function LivePageTab() {
   const [active, setActive] = useState<string | null>(searchParams.get('lp_slug'))
   const [showCode, setShowCode] = useState(false)
 
-  const client = useMemo(() => createNivaro(window.location.origin), [])
+  const client = useMemo(() => createNivaro(window.location.origin, { timeoutMs: 90_000 }), [])
 
   const { data: pages = [] } = useQuery({
     queryKey: ['pages'],

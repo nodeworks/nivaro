@@ -1,3 +1,4 @@
+import { QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CalendarClock,
@@ -488,7 +489,7 @@ export function FilesPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const limit = 50
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['files', page, scope, tagFilter],
     queryFn: () =>
       api
@@ -765,6 +766,8 @@ export function FilesPage() {
               ))}
             </div>
           )
+        ) : isError && !data ? (
+          <QueryErrorState error={error} what='files' onRetry={() => void refetch()} />
         ) : total === 0 ? (
           <button
             type='button'

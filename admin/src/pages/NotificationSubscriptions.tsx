@@ -3,7 +3,9 @@ import { NavigationContext, NivaroProvider, NotificationSubscriptionsView } from
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router'
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 /** My Subscriptions — hosts the shared view (the same rows and editor the
  *  profile's Notifications & alerts card renders), so the two never drift. */

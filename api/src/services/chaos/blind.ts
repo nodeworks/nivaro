@@ -1,6 +1,6 @@
 import { setArmedVisibility } from './armed-visibility.js'
 import type { ArmedFault } from './catalog.js'
-import { onRegistryChange } from './registry.js'
+import { CHAOS_CHANNEL, CHAOS_KEY_PREFIX, onRegistryChange } from './registry.js'
 
 /**
  * Blind mode (#2854). The lead starts a drill or game day without telling the responders: while
@@ -29,9 +29,8 @@ export interface BlindWindow {
   revealed_at: number | null
 }
 
-const PREFIX = process.env.REDIS_CHANNEL_PREFIX ?? ''
-export const BLIND_CHANNEL = `${PREFIX}nvr:chaos:blind`
-export const BLIND_KEY = 'nvr:chaos:blind'
+export const BLIND_CHANNEL = `${CHAOS_CHANNEL}:blind`
+export const BLIND_KEY = `${CHAOS_KEY_PREFIX}blind`
 /** A fault armed this long before the window opened still counts (clock spread). */
 const OPEN_SLACK_MS = 2000
 
@@ -130,6 +129,8 @@ export async function openBlindWindow(input: {
   id: string
   kind: BlindWindow['kind']
   lead: string
+  /** More people who see the window's faults (a game day's named lead, besides its planner). */
+  insiders?: string[]
   until: number
   run_ids?: string[]
 }): Promise<BlindWindow> {
@@ -137,7 +138,7 @@ export async function openBlindWindow(input: {
     id: lc(input.id),
     kind: input.kind,
     lead: lc(input.lead),
-    insiders: [lc(input.lead)],
+    insiders: [...new Set([input.lead, ...(input.insiders ?? [])].map(lc))],
     run_ids: (input.run_ids ?? []).map(lc),
     opened_at: Date.now(),
     until: input.until,

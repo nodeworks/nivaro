@@ -36,7 +36,9 @@ import { onCollectionUpdate, subscribeChatRooms } from '@/lib/socket'
  * the slide-over ChatPanel, the presence heartbeat and the unread chirp.
  */
 
-const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 export interface ChatRoomType {
   id: number

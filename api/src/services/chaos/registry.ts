@@ -30,7 +30,13 @@ export const CHAOS_NODE = `${instanceKey()}·${INSTANCE_ID}`
 
 const PREFIX = process.env.REDIS_CHANNEL_PREFIX ?? ''
 export const CHAOS_CHANNEL = `${PREFIX}nvr:chaos`
-export const ARMED_KEY = 'nvr:chaos:armed'
+/**
+ * Every chaos Redis KEY lives under this prefix, like the channel: a throwaway API sharing
+ * Rob's Redis with REDIS_CHANNEL_PREFIX set must never arm his process through the armed hash
+ * or land its runs in his console. The READONLY / key-loss faults protect this prefix too.
+ */
+export const CHAOS_KEY_PREFIX = `${PREFIX}nvr:chaos:`
+export const ARMED_KEY = `${CHAOS_KEY_PREFIX}armed`
 /** The hash outlives the longest fault by this much, so a late reader still sees it expire. */
 const ARMED_KEY_GRACE_S = 600
 
@@ -134,6 +140,15 @@ export function routeMatches(pattern: string, rawRoute: string): boolean {
 
 /** Does this fault reach what the caller describes (pure)? */
 export function targetMatches(fault: ArmedFault, ctx: ChaosPointContext | undefined): boolean {
+  try {
+    return targetMatchesUnsafe(fault, ctx)
+  } catch {
+    // A malformed target must never take the request hot path down with it.
+    return false
+  }
+}
+
+function targetMatchesUnsafe(fault: ArmedFault, ctx: ChaosPointContext | undefined): boolean {
   if (!targetKindMatches(fault, ctx)) return false
   // #2862 — a capped share sampled on top of the match.
   const pct = fault.target.sample_pct
@@ -264,8 +279,50 @@ async function runApply(def: FaultDefinition, entry: Entry, origin: boolean): Pr
   }
 }
 
+/**
+ * A fault from the bus or the hash (another process wrote it): re-checked against the catalog —
+ * target and params validated, the window clamped to the fault's cap — or dropped. Never trust
+ * a remote row on the request hot path.
+ */
+export function sanitizeRemoteFault(raw: unknown, now = Date.now()): ArmedFault | null {
+  const f = (raw && typeof raw === 'object' ? raw : null) as ArmedFault | null
+  if (!f || typeof f.id !== 'string' || !/^[\w-]{1,80}$/.test(f.id)) return null
+  const def = getFault(String(f.fault_key ?? ''))
+  if (!def) return null
+  try {
+    const target = validateTarget(def, f.target)
+    const samplePct = Number((f.target as { sample_pct?: unknown } | null)?.sample_pct)
+    if (Number.isFinite(samplePct) && samplePct > 0 && samplePct < 100)
+      (target as { sample_pct?: number }).sample_pct = samplePct
+    const params = validateParams(def, f.params)
+    const started = Number(f.started_at)
+    const ends = Number(f.ends_at)
+    if (!Number.isFinite(ends)) return null
+    const started_at = Number.isFinite(started) ? Math.min(started, now) : now
+    const cap = Math.max(started_at, now) + def.max_seconds * 1000
+    return {
+      id: f.id,
+      fault_key: def.key,
+      label: def.label,
+      target,
+      params,
+      started_at,
+      ends_at: Math.min(ends, cap),
+      started_by: typeof f.started_by === 'string' ? f.started_by : null,
+      started_by_name:
+        typeof f.started_by_name === 'string' ? f.started_by_name.slice(0, 120) : null,
+      run_id: typeof f.run_id === 'string' ? f.run_id.slice(0, 80) : null,
+      node: typeof f.node === 'string' ? f.node.slice(0, 120) : 'remote'
+    }
+  } catch {
+    return null
+  }
+}
+
 /** Arm in this process only (the bus calls it for remote arms). */
-async function armLocal(fault: ArmedFault, origin: boolean): Promise<Entry | null> {
+async function armLocal(rawFault: ArmedFault, origin: boolean): Promise<Entry | null> {
+  const fault = origin ? rawFault : sanitizeRemoteFault(rawFault)
+  if (!fault) return null
   if (armed.has(fault.id)) return armed.get(fault.id) ?? null
   const def = getFault(fault.fault_key)
   if (!def) return null

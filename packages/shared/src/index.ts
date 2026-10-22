@@ -475,6 +475,7 @@ export {
   usePersonProfile
 } from './components/profile/types'
 export { QualityRulesView } from './components/QualityRulesView'
+export { QueryErrorState } from './components/QueryErrorState'
 export type { QueryWidgetStat } from './components/QueryStatStrip'
 export { QueryStatStrip } from './components/QueryStatStrip'
 export type { QueryTableColumn, QueryTableConfig } from './components/QueryTable'

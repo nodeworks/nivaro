@@ -302,7 +302,71 @@ describe('cluster', () => {
     expect(chaosNumber('http.request', 'delay_ms')).toBe(300)
     expect(hash.has('dead')).toBe(false)
     expect(await loadArmedFromBus()).toBe(0) // already armed: idempotent
-    expect(ARMED_KEY).toBe('nvr:chaos:armed')
+    expect(ARMED_KEY).toBe(`${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:chaos:armed`)
+  })
+
+  it('re-validates remote arms: bad targets dropped, params capped, window clamped', async () => {
+    const { bus, deliver } = fakeBus()
+    await startChaosCluster(bus)
+    const now = Date.now()
+    const base = {
+      fault_key: 'slow',
+      label: 'Slow',
+      started_at: now,
+      started_by: null,
+      started_by_name: null,
+      run_id: null,
+      node: 'o'
+    }
+    // A route target without a pattern used to throw inside chaosPoint on every request.
+    deliver({
+      node: 'o',
+      action: 'arm',
+      fault: {
+        ...base,
+        id: 'bad-target',
+        target: { kind: 'route' },
+        params: { delay_ms: 500 },
+        ends_at: now + 60_000
+      }
+    })
+    await Promise.resolve()
+    expect(chaosPoint('http.request', { route: '/api/x' })).toBeNull()
+    expect(armedFaults()).toEqual([])
+    // Params over the cap and a window past max_seconds are clamped, not trusted.
+    deliver({
+      node: 'o',
+      action: 'arm',
+      fault: {
+        ...base,
+        id: 'loud',
+        target: { kind: 'all' },
+        params: { delay_ms: 99_999 },
+        ends_at: now + 86_400_000
+      }
+    })
+    await Promise.resolve()
+    const f = armedFaults()[0]
+    expect(f?.id).toBe('loud')
+    expect(f.params.delay_ms).toBe(5000)
+    expect(f.ends_at).toBeLessThanOrEqual(now + 300_000 + 5)
+    // A fault key the catalog does not know is dropped.
+    deliver({
+      node: 'o',
+      action: 'arm',
+      fault: {
+        ...base,
+        id: 'nope',
+        fault_key: 'ghost',
+        target: { kind: 'all' },
+        params: {},
+        ends_at: now + 9000
+      }
+    })
+    await Promise.resolve()
+    expect(armedFaults().map((x) => x.id)).toEqual(['loud'])
+    // targetMatches never throws on a malformed target.
+    expect(targetMatches({ ...f, target: { kind: 'route' } as never }, { route: '/x' })).toBe(false)
   })
 
   it('ignores broadcasts when the gate refuses here', async () => {

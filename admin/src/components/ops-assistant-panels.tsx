@@ -16,7 +16,9 @@ import { cn } from '@/lib/utils'
  * incident threads open in (#2016).
  */
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 const errorOf = (e: unknown, fallback: string) =>
   (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? fallback

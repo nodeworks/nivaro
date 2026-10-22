@@ -125,17 +125,22 @@ function Sparkline({ s, notes }: { s: SamplerSeries; notes: ChaosRunEvent[] }) {
   lo -= span * 0.05
   hi += span * 0.05
   const y = (v: number) => padY + (H - padY * 2) * (1 - (v - lo) / (hi - lo))
-  const n = Math.max(1, s.points.length - 1)
-  const x = (i: number) => padX + ((W - padX * 2) * i) / n
+  // x is time, not index, so the scribe marks below line up with the samples they sit beside.
+  const t0 = s.points[0]?.at ?? 0
+  const t1 = s.points[s.points.length - 1]?.at ?? t0
+  const tSpan = Math.max(1, t1 - t0)
+  const xFrac = (at: number) => (s.points.length > 1 ? (at - t0) / tSpan : 1)
+  const x = (at: number) => padX + (W - padX * 2) * xFrac(at)
   const path = s.points
     .map((p, i) =>
       p.value == null
         ? null
-        : `${i === 0 || s.points[i - 1].value == null ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`
+        : `${i === 0 || s.points[i - 1].value == null ? 'M' : 'L'}${x(p.at).toFixed(1)},${y(p.value).toFixed(1)}`
     )
     .filter(Boolean)
     .join(' ')
   const limitY = s.rule ? y(s.rule.limit) : null
+  const lastPoint = [...s.points].reverse().find((p) => p.value != null)
   return (
     <figure
       className={cn(
@@ -164,7 +169,8 @@ function Sparkline({ s, notes }: { s: SamplerSeries; notes: ChaosRunEvent[] }) {
       <div className='relative mt-1'>
         <svg
           viewBox={`0 0 ${W} ${H}`}
-          className='h-16 w-full'
+          preserveAspectRatio='none'
+          className='block h-16 w-full overflow-visible'
           role='img'
           aria-label={`${s.label}: now ${fmt(last, s.unit)}, baseline ${fmt(s.baseline, s.unit)}${s.rule ? `, limit ${s.rule.op} ${s.rule.limit}` : ''}`}
         >
@@ -185,6 +191,7 @@ function Sparkline({ s, notes }: { s: SamplerSeries; notes: ChaosRunEvent[] }) {
               y2={limitY}
               className='stroke-red-500'
               strokeWidth={1}
+              vectorEffect='non-scaling-stroke'
             />
           )}
           {s.baseline != null && (
@@ -196,6 +203,7 @@ function Sparkline({ s, notes }: { s: SamplerSeries; notes: ChaosRunEvent[] }) {
               className='stroke-slate-400 dark:stroke-slate-500'
               strokeWidth={1}
               strokeDasharray='3 3'
+              vectorEffect='non-scaling-stroke'
             />
           )}
           {path && (
@@ -206,20 +214,30 @@ function Sparkline({ s, notes }: { s: SamplerSeries; notes: ChaosRunEvent[] }) {
               strokeWidth={1.5}
               strokeLinejoin='round'
               strokeLinecap='round'
-            />
-          )}
-          {last != null && s.points.length > 0 && (
-            <circle
-              cx={x(s.points.length - 1)}
-              cy={y(last)}
-              r={2.5}
-              className={cn(s.breached ? 'fill-red-600 dark:fill-red-400' : 'fill-nvr-cyan')}
+              vectorEffect='non-scaling-stroke'
             />
           )}
         </svg>
+        {lastPoint?.value != null && (
+          // The newest sample, drawn in HTML so it stays round on the stretched plot.
+          <span
+            aria-hidden
+            className={cn(
+              'pointer-events-none absolute h-[7px] w-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-white dark:ring-card',
+              s.breached ? 'bg-red-600 dark:bg-red-400' : 'bg-nvr-cyan'
+            )}
+            style={{
+              left: `${(x(lastPoint.at) / W) * 100}%`,
+              top: `${(y(lastPoint.value) / H) * 100}%`
+            }}
+          />
+        )}
         {s.points.length > 1 && (
-          // Samples are evenly spaced (5 s), so time maps onto the index axis.
-          <NoteMarkers notes={notes} from={s.points[0].at} to={s.points[s.points.length - 1].at} />
+          <NoteMarkers
+            notes={notes}
+            from={t0 - (padX / (W - padX * 2)) * tSpan}
+            to={t1 + (padX / (W - padX * 2)) * tSpan}
+          />
         )}
       </div>
       <div className='mt-1 flex flex-wrap items-center gap-x-3 text-[10.5px] text-slate-500 dark:text-muted-foreground'>

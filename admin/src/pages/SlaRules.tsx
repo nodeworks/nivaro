@@ -4,7 +4,7 @@ import { Clock } from 'lucide-react'
 
 // SLA rules — shared view (packages/shared SlaRulesView) hosted here; a headless
 // frontend can mount the same component. Routes are requireAdmin.
-const client = createNivaro(window.location.origin)
+const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 export function SlaRulesPage() {
   return (

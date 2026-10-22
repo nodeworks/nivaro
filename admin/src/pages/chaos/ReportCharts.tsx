@@ -19,6 +19,7 @@ import {
   type SamplerSeries,
   useChaosColors
 } from './report-api'
+import { SAMPLER_LABELS } from './SamplerCharts'
 
 /**
  * Before / during / after charts (#2849): one small chart per sampler, x = time relative to the
@@ -100,8 +101,13 @@ function SeriesChart({
   return (
     <section className='min-w-0 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
       <header className='mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
-        <h3 className='font-mono text-[12px] font-medium text-slate-900 dark:text-foreground'>
-          {series.key}
+        <h3 className='min-w-0 text-[12.5px] font-medium text-slate-900 dark:text-foreground'>
+          {SAMPLER_LABELS[series.key]?.label ?? series.key}
+          {SAMPLER_LABELS[series.key] && (
+            <span className='ml-1.5 font-mono text-[11px] font-normal text-slate-500 dark:text-muted-foreground'>
+              {series.key}
+            </span>
+          )}
         </h3>
         <div className='flex items-center gap-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
           {series.rule && (
@@ -191,7 +197,7 @@ function SeriesChart({
                   const phase = p?.[0]?.payload?.phase as keyof typeof PHASE_WORD | undefined
                   return `${rel(Number(x))}${phase ? ` · ${PHASE_WORD[phase]}` : ''}`
                 }}
-                formatter={(v) => [v as number, series.key]}
+                formatter={(v) => [v as number, SAMPLER_LABELS[series.key]?.label ?? series.key]}
               />
               <Line
                 type='monotone'
@@ -231,7 +237,7 @@ export function ChartKey() {
       <span className={item}>
         <span
           aria-hidden
-          className='w-4 border-t-[1.5px] border-dashed'
+          className='w-4 border-t-2 border-dashed'
           style={{ borderColor: colors.broke }}
         />
         Limit
@@ -239,7 +245,7 @@ export function ChartKey() {
       <span className={item}>
         <span
           aria-hidden
-          className='h-3 border-l border-dashed'
+          className='h-3.5 border-l-2 border-dashed'
           style={{ borderColor: colors.aborted }}
         />
         Alert
@@ -247,7 +253,7 @@ export function ChartKey() {
       <span className={item}>
         <span
           aria-hidden
-          className='h-3 border-l border-dashed'
+          className='h-3.5 border-l-2 border-dashed'
           style={{ borderColor: colors.info }}
         />
         Note

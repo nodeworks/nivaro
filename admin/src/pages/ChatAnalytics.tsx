@@ -2,7 +2,9 @@ import { createNivaro } from '@nivaro/sdk'
 import { ChatAnalyticsView, NivaroProvider } from '@nivaro/shared'
 import { MessagesSquare } from 'lucide-react'
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 /** Chat Analytics — usage and reply times, plus the admin message log (#955). */
 export function ChatAnalyticsPage() {

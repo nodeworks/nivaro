@@ -11,7 +11,9 @@ import { useAuth } from '@/lib/auth'
 
 // Shared-component host client (team-chat.tsx precedent — cookie session
 // rides the same-origin requests).
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 /**
  * /profile — the OWN profile on the shared ProfileView (identity, out of

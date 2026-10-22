@@ -2,7 +2,9 @@ import { createNivaro } from '@nivaro/sdk'
 import { NivaroProvider, OpsTasksView } from '@nivaro/shared'
 import { toast } from 'sonner'
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 /** Operational tasks (#827) — repairs, backfills and migrations registered by
  *  core or an extension, run from here: dry run by default, one at a time. */

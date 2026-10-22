@@ -48,7 +48,7 @@ export function QueueDetailPage() {
   const qc = useQueryClient()
   const { user } = useAuth()
 
-  const client = useMemo(() => createNivaro(window.location.origin), [])
+  const client = useMemo(() => createNivaro(window.location.origin, { timeoutMs: 90_000 }), [])
   const realtime = useMemo(
     () => createSocketRealtime(user?.static_token ?? null),
     [user?.static_token]

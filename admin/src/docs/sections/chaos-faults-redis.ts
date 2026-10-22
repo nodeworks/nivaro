@@ -76,7 +76,7 @@ export const chaosFaultsRedisDocs: DocSection = {
     },
     {
       type: 'warn',
-      text: 'Sessions are only dropped on a Redis database other than 0, or on a deployed stack that sets REDIS_CHANNEL_PREFIX. On a shared development Redis, database 0 holds everyone’s sign-ins, and the channel prefix separates channels, not keys. A refused run says so in its timeline.'
+      text: 'On development, Redis keys lost and Redis evicting keys run only on a Redis database other than 0: a shared development Redis keeps every instance’s sessions, caches, scheduler lease and event stream in database 0, and REDIS_CHANNEL_PREFIX separates channels, not keys. On a deployed stack with its own Redis they run on database 0 too, except the sessions family, which also needs REDIS_CHANNEL_PREFIX there. A refused run says so in its timeline.'
     },
     { type: 'h2', id: 'chaos-faults-redis-checks', text: 'Checking the result' },
     {
@@ -85,7 +85,7 @@ export const chaosFaultsRedisDocs: DocSection = {
         'Sign-out holds: run Redis keys lost on the sessions family with "Bring old keys back" on, sign out during the window, and check the session is still signed out after the old keys return. The sign-out marker wins over the returned session.',
         'Scheduler: GET /api/chaos/checks/cron-overlap?since=<time> lists every job that ran twice at once, runs left running past their budget, and the jobs not declared safe to run twice. A lease-split drill writes the same check into its timeline when the window ends.',
         'Partition: before cutting a replica off, start POST /api/chaos/partition/probe on another replica with the socket id of a test client connected to the replica you will cut. Then GET /api/chaos/checks/partition?probe=<id> on the cut replica lists events lost and events delivered twice. The drill notes how many messages were dropped and how many stream events were caught up.',
-        'Redis counters: GET /api/chaos/checks/redis shows this replica’s fault counters, its Redis database and whether the sessions family may be dropped here.',
+        'Redis counters: GET /api/chaos/checks/redis shows this replica’s fault counters, its Redis database and whether keys (and sessions) may be dropped here.',
         'Steady state: two figures can be used in a drill’s hypothesis: Redis errors per minute (redis.errors_per_min) and the metadata cache hit rate (cache.metadata_hit_pct).'
       ]
     },

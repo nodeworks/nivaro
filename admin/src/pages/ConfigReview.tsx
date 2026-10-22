@@ -1,3 +1,4 @@
+import { QueryErrorState } from '@nivaro/shared'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ClipboardCheck } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -178,7 +179,7 @@ export default function ConfigReview() {
     onError: (e) => toast.error(errText(e, 'Could not save the thresholds'))
   })
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['config-review', family, status],
     queryFn: () =>
       api.get<ReviewResponse>('/config-review', { params: { family, status } }).then((r) => r.data),
@@ -366,7 +367,10 @@ export default function ConfigReview() {
         )}
 
         {isLoading && <p className='text-[12px] text-slate-400'>Loading…</p>}
-        {!isLoading && rows.length === 0 && (
+        {isError && !data && (
+          <QueryErrorState error={error} what='the review' onRetry={() => void refetch()} />
+        )}
+        {!isLoading && !isError && rows.length === 0 && (
           <div className='rounded-lg border border-dashed border-slate-300 p-8 text-center dark:border-border'>
             <p className='text-[13px] font-medium text-slate-500 dark:text-muted-foreground'>
               {status === 'open'

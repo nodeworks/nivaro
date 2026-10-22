@@ -2,7 +2,9 @@ import { createNivaro } from '@nivaro/sdk'
 import { DbTuningView, NivaroProvider } from '@nivaro/shared'
 import { toast } from 'sonner'
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 /** Database tuning (#996) — the propose-only tuning loop: proposals with proofs, Apply, watch, rollback. */
 export default function DbTuning() {
