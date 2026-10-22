@@ -64,10 +64,13 @@ test('allowed/blocked recipients exist, as settings not hard-coded in compose', 
   assert.match(live(relay), /^blocked-recipients:/m)
   assert.match(relay, /^# matching:/m)
   assert.match(relay, /allowed-recipients does NOT apply to auto-relay/)
-  assert.match(compose, /MP_SMTP_RELAY_ALLOWED_RECIPIENTS: \$\{MAILPIT_ALLOWED_RECIPIENTS/)
-  assert.match(compose, /MP_SMTP_RELAY_BLOCKED_RECIPIENTS: \$\{MAILPIT_BLOCKED_RECIPIENTS/)
-  assert.match(env, /^MAILPIT_ALLOWED_RECIPIENTS=/m)
-  assert.match(env, /^MAILPIT_BLOCKED_RECIPIENTS=/m)
+  assert.doesNotMatch(live(compose), /RECIPIENTS|MATCHING/)
+})
+
+test('only MP_SMTP_RELAY_CONFIG is set as an MP_SMTP_RELAY_* env var in the stack file', () => {
+  const names = [...live(compose).matchAll(/MP_SMTP_RELAY_\w+/g)].map((m) => m[0])
+  assert.ok(names.includes('MP_SMTP_RELAY_CONFIG'))
+  assert.deepEqual(names.filter((n) => n !== 'MP_SMTP_RELAY_CONFIG'), [])
 })
 
 test('image is axllent/mailpit with a pinned tag, never latest', () => {

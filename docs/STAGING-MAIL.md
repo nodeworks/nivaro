@@ -57,20 +57,35 @@ matching `blocked-recipients`.
 | Setting | Place |
 | --- | --- |
 | Relay host, port, STARTTLS, auth, username, password, return-path | the `mailpit_relay` Swarm secret (a filled copy of `relay.example.yml`) |
-| `allowed-recipients` (our domains) | `MAILPIT_ALLOWED_RECIPIENTS` in the deploy `.env`; keep the relay secret file equal |
-| `blocked-recipients` (customer domains, probed admins; every relay mode) | `MAILPIT_BLOCKED_RECIPIENTS`; keep the relay secret file equal |
-| Optional auto-relay of one test mailbox | `MAILPIT_RELAY_MATCHING` (`matching` in the secret file) |
+| `allowed-recipients` (our domains) | the same relay YAML secret, `allowed-recipients:` |
+| `blocked-recipients` (customer domains, probed admins; every relay mode) | the same relay YAML secret, `blocked-recipients:` |
+| Optional auto-relay of one test mailbox | `MP_SMTP_RELAY_MATCHING` env var on the service (not a YAML key); unset by default |
 
-Change a variable and redeploy the stack; change the secret file by rotating the secret. Credentials
-never go in a CLI flag, `stack.yml` or the repo. `--smtp-relay-all` is never
-set: catching everything is the default. **Warning:** `allowed-recipients` does
-not apply to auto-relay (matching); only `blocked-recipients` does, so keep the
-matching regex to one exact mailbox.
+Mailpit ignores `MP_SMTP_RELAY_*` env settings unless `MP_SMTP_RELAY_HOST` is set
+too, so the recipient regexes are kept in the YAML secret only; `stack.yml` sets
+no `MP_SMTP_RELAY_*` variable except `MP_SMTP_RELAY_CONFIG`. To change any of
+them, edit the file and rotate the secret. Credentials never go in a CLI flag,
+`stack.yml` or the repo. `--smtp-relay-all` is never set: catching everything is
+the default. To enable the optional matching, add `MP_SMTP_RELAY_MATCHING` with
+a regex to the service only when you have one (an empty value is ignored, but do
+not set it). **Warning:** `allowed-recipients` does not apply to auto-relay
+(matching); only `blocked-recipients` does, so keep the regex to one exact mailbox.
 
 ## Turn relaying off
 
-Remove the `mailpit_relay` secret and `MP_SMTP_RELAY_CONFIG` from the service (and unset
-`MAILPIT_RELAY_MATCHING`), then redeploy. Catching keeps working; nothing can be released.
+Without a relay config Mailpit still catches every message; Release is simply
+unavailable. Either remove the `MP_SMTP_RELAY_CONFIG` line, the `mailpit_relay`
+secret entries (service and top-level) from `stack.yml` and redeploy, or on the
+running stack:
+
+```
+docker service update --env-rm MP_SMTP_RELAY_CONFIG --secret-rm mailpit_relay_v1 <stack>_mailpit
+```
+
+(`MAILPIT_RELAY_SECRET` is required by `stack.yml` while the secret entries
+remain, so unsetting it alone makes `docker stack deploy` fail.) Mailpit
+env and relay key names were checked by the operator's lead against Mailpit's
+docs and source, not against the pinned image here.
 
 ## Pitfalls
 
