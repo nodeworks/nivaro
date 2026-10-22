@@ -40,7 +40,9 @@ not work. Reach it through the stack's reverse proxy on the private network/VPN
 route), then sign in with the htpasswd login. The login is required either way.
 Alternative: publish with `mode: host` (see the comment in `stack.yml`); then
 the port is open on that node's interfaces, so a firewall rule must allow 8025
-only from the VPN/private range and drop the rest.
+only from the VPN/private range and drop the rest. The kit test fails on any live
+`ports:` entry on the mailpit service, so turning this on means editing
+`scripts/mailpit-kit.test.mjs` on purpose.
 
 ## Release a message
 
@@ -65,7 +67,8 @@ matching `blocked-recipients`.
 
 Mailpit ignores `MP_SMTP_RELAY_*` env settings unless `MP_SMTP_RELAY_HOST` is set
 too, so the recipient regexes are kept in the YAML secret only; `stack.yml` sets
-no `MP_SMTP_RELAY_*` variable except `MP_SMTP_RELAY_CONFIG`. To change any of
+no `MP_SMTP_RELAY_*` variable at all (`MP_SMTP_RELAY_CONFIG` is set in
+`stack.relay.yml`). To change any of
 them, edit the file and rotate the secret. Credentials never go in a CLI flag,
 `stack.yml` or the repo. `--smtp-relay-all` is never set: catching everything is
 the default. To enable the optional matching, add `MP_SMTP_RELAY_MATCHING` with

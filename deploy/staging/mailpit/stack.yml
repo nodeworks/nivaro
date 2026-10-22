@@ -22,7 +22,9 @@ services:
         target: mailpit-ui-auth
     # No `ports:`. SMTP is reached as mailpit:1025 on the stack's overlay network. The UI (8025) is
     # reached through the stack's private reverse proxy, never the ingress (it ignores host IPs).
-    # To publish it instead, use host mode and firewall it (docs/STAGING-MAIL.md):
+    # To publish it instead, use host mode and firewall it (docs/STAGING-MAIL.md).
+    # The kit test fails on any live `ports:` entry, so enabling this means editing
+    # scripts/mailpit-kit.test.mjs on purpose:
     #   ports:
     #     - target: 8025
     #       published: 8025
