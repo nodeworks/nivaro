@@ -23,7 +23,13 @@ const sock = vi.hoisted(() => {
   }
 })
 vi.mock('@/lib/socket', () => ({ getSocket: () => sock }))
-vi.mock('@nivaro/shared', () => ({ canOpenChatRoom: () => false, openChatRoom: vi.fn() }))
+vi.mock('@nivaro/shared', () => ({
+  canOpenChatRoom: () => false,
+  openChatRoom: vi.fn(),
+  // #2840 — browser chaos hooks the socket + axios client this file imports.
+  bindClientChaosSocket: () => {},
+  clientChaosAxiosInterceptor: () => (config: unknown) => config
+}))
 
 import type { ReplayControls } from './controls'
 import { WatchTogetherBar } from './WatchTogether'

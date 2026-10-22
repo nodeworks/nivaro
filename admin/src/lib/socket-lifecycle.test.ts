@@ -27,6 +27,9 @@ const { stopMasquerade, setServerClockOffset, readMasquerade } = vi.hoisted(() =
 vi.mock('@/lib/masquerade', () => ({ readMasquerade, stopMasquerade }))
 vi.mock('@/lib/page-context', () => ({ clientVersion: () => ({}) }))
 vi.mock('@nivaro/shared', () => ({
+  // #2840 — browser chaos is exercised in packages/shared (client-chaos.test.ts).
+  bindClientChaosSocket: () => {},
+  clientChaosAxiosInterceptor: () => (config: unknown) => config,
   // #2462 — the room gap tracker is exercised in packages/shared (room-gaps.test.ts).
   createRoomGapTracker: () => ({
     observe: () => {},
