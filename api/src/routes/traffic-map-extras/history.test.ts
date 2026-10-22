@@ -32,7 +32,10 @@ vi.mock('../../services/traffic-minutes.js', () => {
     writePushedMinutes: vi.fn()
   }
 })
-vi.mock('../../services/instance-roster.js', () => ({ listInstances: vi.fn(async () => []) }))
+vi.mock('../../services/instance-roster.js', () => ({
+  INSTANCE_ID: 'test0001',
+  listInstances: vi.fn(async () => [])
+}))
 vi.mock('../../services/settings-overrides.js', () => ({ instanceKey: () => 'test-node' }))
 vi.mock('../../services/traffic-taps/capacity.js', () => ({
   logMinutes: () => null,
