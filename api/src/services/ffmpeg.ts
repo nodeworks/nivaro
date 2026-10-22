@@ -1,8 +1,16 @@
 import { spawn } from 'node:child_process'
 import { setPriority } from 'node:os'
+import { peerFileOp, renderPeerUrl, renderUnavailable } from './render-peer.js'
 
 // ffmpeg/ffprobe wrappers. Always argument arrays, never a shell string.
 // FFMPEG_PATH / FFPROBE_PATH override the binaries on PATH.
+//
+// The slim release image has no ffmpeg (#2789). There probeVideo,
+// probeStreams and remuxToFile go to the render peer (RENDER_URL) with the
+// file streamed both ways, so callers gate on canUseFfmpeg() instead of
+// hasFfmpeg(). runFfmpeg (arbitrary graphs over several local files) never
+// leaves this process: renders, clips, captions and extras stay with a
+// process that has the binaries.
 
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
 const FFPROBE = process.env.FFPROBE_PATH || 'ffprobe'
@@ -74,11 +82,26 @@ const INPUT_FORMATS: Record<string, string> = {
   'audio/flac': 'flac',
   'audio/webm': 'matroska,webm'
 }
+function formatOf(mime?: string): string | undefined {
+  return mime ? INPUT_FORMATS[mime.split(';')[0].trim().toLowerCase()] : undefined
+}
+
+/** A mime whose demuxer is pinned: the only inputs ffmpeg/ffprobe ever open. */
+export function isLockedMime(mime?: string): boolean {
+  return !!formatOf(mime)
+}
+
+/** The input arguments that pin the demuxer. Throws for any other mime (empty
+ *  included): auto-detection would let an ffconcat script or a playlist
+ *  posing as a video read local files. */
 export function lockedInputArgs(mime?: string): string[] {
-  const fmt = mime ? INPUT_FORMATS[mime.split(';')[0].trim().toLowerCase()] : undefined
-  const args = ['-protocol_whitelist', 'file']
-  if (fmt) args.push('-f', fmt, '-format_whitelist', fmt)
-  return args
+  const fmt = formatOf(mime)
+  if (!fmt)
+    throw Object.assign(new Error(`Unsupported media format: ${String(mime ?? '').slice(0, 80)}`), {
+      statusCode: 422,
+      code: 'MEDIA_FORMAT_UNSUPPORTED'
+    })
+  return ['-protocol_whitelist', 'file', '-f', fmt, '-format_whitelist', fmt]
 }
 
 export function hasFfmpeg(): Promise<boolean> {
@@ -90,6 +113,18 @@ export function hasFfmpeg(): Promise<boolean> {
   return available
 }
 
+/** ffmpeg work can be done for this process: locally, or by the render peer
+ *  (probes, remux and the fixed conversions in render-peer ops only). */
+export async function canUseFfmpeg(): Promise<boolean> {
+  return (await hasFfmpeg()) || !!renderPeerUrl()
+}
+
+async function delegate(): Promise<boolean> {
+  if (await hasFfmpeg()) return false
+  if (renderPeerUrl()) return true
+  throw renderUnavailable('ffmpeg')
+}
+
 /** Run ffmpeg with our own fixed arguments and hand back what it printed
  *  (encoder lists, a trial encode). Rejects on a non-zero exit or the timeout. */
 export async function ffmpegOutput(args: string[], timeoutMs = 15_000): Promise<string> {
@@ -98,6 +133,19 @@ export async function ffmpegOutput(args: string[], timeoutMs = 15_000): Promise<
 }
 
 export async function probeVideo(
+  path: string,
+  mime?: string
+): Promise<{
+  duration_ms: number | null
+  width: number | null
+  height: number | null
+  has_audio: boolean
+}> {
+  if (await delegate()) return peerFileOp('probe-video', path, { mime })
+  return probeVideoLocal(path, mime)
+}
+
+export async function probeVideoLocal(
   path: string,
   mime?: string
 ): Promise<{
@@ -148,6 +196,14 @@ export async function probeStreams(
     attached_pic?: boolean
   }>
 }> {
+  if (await delegate()) return peerFileOp('probe-streams', path, { mime })
+  return probeStreamsLocal(path, mime)
+}
+
+export async function probeStreamsLocal(
+  path: string,
+  mime: string
+): Promise<Awaited<ReturnType<typeof probeStreams>>> {
   const { stdout } = await run(FFPROBE, [
     '-v',
     'error',
@@ -190,6 +246,30 @@ export async function probeStreams(
 /** Rewrite the container without re-encoding: a MediaRecorder WebM gains its
  *  duration and cue index, which is what makes browser seeking work. */
 export async function remuxToFile(input: string, output: string, mime?: string): Promise<void> {
+  if (await delegate()) {
+    await peerFileOp('remux', input, { mime, output })
+    return
+  }
+  await remuxToFileLocal(input, output, mime)
+}
+
+/** Remux, then probe the result: on the render peer that is ONE round trip
+ *  (the probe rides back with the file) instead of sending the file twice. */
+export async function remuxAndProbe(
+  input: string,
+  output: string,
+  mime?: string
+): Promise<Awaited<ReturnType<typeof probeVideoLocal>>> {
+  if (await delegate()) return peerFileOp('remux', input, { mime, output })
+  await remuxToFileLocal(input, output, mime)
+  return probeVideoLocal(output, mime)
+}
+
+export async function remuxToFileLocal(
+  input: string,
+  output: string,
+  mime?: string
+): Promise<void> {
   await run(FFMPEG, [
     '-y',
     '-v',

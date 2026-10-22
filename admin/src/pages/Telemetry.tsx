@@ -22,14 +22,16 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn, formatDate, formatNumber, formatRelative } from '@/lib/utils'
 import { AskTelemetry } from './telemetry/AskTelemetry'
+import { RecoveryPanel } from './telemetry/Recovery'
 import { SlowestRequests } from './telemetry/SlowestRequests'
-import { PartError, TONE, type Tone } from './telemetry/ui'
+import { Card, Dot, PartError, TONE, type Tone } from './telemetry/ui'
 
 /**
  * Telemetry (#2544) — the monitoring stack that runs beside this instance, seen from Nivaro:
  * what this process sends (request log lines, traces), what actually arrived in the stores, the
  * stack's own health (alerts, uptime checks, collected sources, backups, disk and share space)
- * and how this instance is configured. GET /api/telemetry/status, administrators only.
+ * and how this instance is configured. GET /api/telemetry/status, administrators only. The
+ * Disaster recovery panel (#2801 / #2802, ./telemetry/Recovery) reads GET /api/telemetry/recovery.
  */
 
 interface StackPart<T> {
@@ -113,15 +115,6 @@ function fmtAge(seconds: number): string {
   return `${Math.round(seconds / 86_400)} d`
 }
 
-function Dot({ tone }: { tone: Tone }) {
-  return (
-    <span
-      aria-hidden='true'
-      className={cn('inline-block h-2 w-2 shrink-0 rounded-full', TONE[tone].dot)}
-    />
-  )
-}
-
 /** Truncated text that shows its full value on hover when it is cut off. */
 function Clip({ text, className }: { text: string; className?: string }) {
   const ref = useOverflowTip<HTMLSpanElement>(text)
@@ -129,40 +122,6 @@ function Clip({ text, className }: { text: string; className?: string }) {
     <span ref={ref} className={cn('block min-w-0 truncate', className)}>
       {text}
     </span>
-  )
-}
-
-function Card({
-  title,
-  icon: Icon,
-  aside,
-  asideTone = 'off',
-  children
-}: {
-  title: string
-  icon: typeof Telescope
-  aside?: ReactNode
-  asideTone?: Tone
-  children: ReactNode
-}) {
-  return (
-    <section className='min-w-0 rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-      <header className='flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-border'>
-        <Icon className='h-4 w-4 shrink-0 text-muted-foreground' aria-hidden='true' />
-        <h2 className='m-0 text-[13px] font-semibold'>{title}</h2>
-        {aside && (
-          <div
-            className={cn(
-              'ml-auto min-w-0 truncate text-[11.5px]',
-              asideTone === 'off' ? 'text-muted-foreground' : TONE[asideTone].text
-            )}
-          >
-            {aside}
-          </div>
-        )}
-      </header>
-      <div className='p-4'>{children}</div>
-    </section>
   )
 }
 
@@ -531,7 +490,11 @@ function Targets({ part }: { part: TelemetryStatus['stack']['targets'] }) {
 
 function Backups({ part }: { part: TelemetryStatus['stack']['backups'] }) {
   return (
-    <Card title='Backups to the file share' icon={Database} aside='Expected daily'>
+    <Card
+      title='Monitoring-stack backups'
+      icon={Database}
+      aside='Metrics and logs stores · expected daily'
+    >
       <PartError error={part.error} />
       {!part.error && part.items.length === 0 && <Empty>No backup has reported yet.</Empty>}
       <div className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
@@ -783,6 +746,8 @@ export function TelemetryPage() {
               <Alerts part={s.stack.alerts} grafanaUrl={s.settings.grafana_url} />
               <Uptime part={s.stack.uptime} />
             </div>
+
+            <RecoveryPanel />
 
             {s.settings.store.configured && <SlowestRequests grafanaUrl={s.settings.grafana_url} />}
 

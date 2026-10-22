@@ -51,7 +51,7 @@ function envOverrides(): Record<string, unknown> | null {
  * owns (Traffic Map detector settings, #2223). Never overlaid onto a settings row, never shown or
  * written by Settings → Instance (which keeps them when it saves).
  */
-export const INSTANCE_RESERVED_KEYS = ['traffic_detectors', 'huddle', 'chaos'] as const
+export const INSTANCE_RESERVED_KEYS = ['traffic_detectors', 'huddle', 'chaos', 'recovery'] as const
 
 export function withoutReservedKeys(map: Record<string, unknown>): Record<string, unknown> {
   const out = { ...map }

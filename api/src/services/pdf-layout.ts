@@ -1,12 +1,16 @@
 // api/src/services/pdf-layout.ts
+import { existsSync } from 'node:fs'
 import type { Browser } from 'puppeteer'
 import puppeteer from 'puppeteer'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { assertSafeUrl } from '../lib/ssrf.js'
 import { resolveDisplayValue } from './display-value.js'
 import { isEmptyValue, isFolded, shapePdfFields } from './form-structure.js'
 import type { PdfLayoutData } from './pdf-layout-themes.js'
 import { classicTheme, escHtml, executiveTheme, minimalTheme } from './pdf-layout-themes.js'
 import { resolvePlacementText, type TextContext, textRulesOf } from './placement-behaviour.js'
+import { peerHtmlToPdf, renderPeerUrl, renderUnavailable } from './render-peer.js'
 
 // Allowlist-based HTML sanitizer for richtext fields rendered in PDF.
 // Strips all tags not on the allowlist (keeps inner text), drops block-removed tags
@@ -376,9 +380,31 @@ async function enrichRelationValues(
 }
 
 let browser: Browser | null = null
+let localChromium: Promise<boolean> | null = null
+
+/** Whether this process can start a browser itself: the system Chromium the
+ *  full image names in PUPPETEER_EXECUTABLE_PATH, or one puppeteer downloaded.
+ *  The slim image has neither (#2789). Checked once per process. */
+export function hasLocalChromium(): Promise<boolean> {
+  if (!localChromium) {
+    localChromium = (async () => {
+      try {
+        const path =
+          process.env.PUPPETEER_EXECUTABLE_PATH?.trim() || (await puppeteer.executablePath())
+        return !!path && existsSync(path)
+      } catch {
+        return false
+      }
+    })()
+  }
+  return localChromium
+}
 
 export async function getBrowser(): Promise<Browser> {
   if (browser?.connected) return browser
+  // Help-video cards and session-replay exports need a browser of their own;
+  // only PDFs (htmlToPdf) can go to the render peer.
+  if (!(await hasLocalChromium())) throw renderUnavailable('pdf')
   browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
     headless: true
@@ -780,15 +806,90 @@ export async function generatePdfFromLayout(params: {
   })
 }
 
-/** Render an HTML string to a PDF buffer (JS disabled, backgrounds on). */
-export async function htmlToPdf(
-  html: string,
-  opts: { format?: 'A4' | 'Letter'; landscape?: boolean; margin?: string } = {}
-): Promise<Buffer> {
+export interface PdfOptions {
+  format?: 'A4' | 'Letter'
+  landscape?: boolean
+  margin?: string
+  /** Origins besides PUBLIC_URL / ADMIN_URL the document may load from. */
+  allowOrigins?: string[]
+}
+
+/** The origins this instance serves itself (PUBLIC_URL, ADMIN_URL) plus any
+ *  given: a PDF may load its logos, files and fonts from them. */
+export function pdfOwnOrigins(extra: string[] = []): string[] {
+  const out = new Set<string>()
+  for (const raw of [config.PUBLIC_URL, config.ADMIN_URL, ...extra]) {
+    try {
+      const u = new URL(String(raw))
+      if (u.protocol === 'http:' || u.protocol === 'https:') out.add(u.origin)
+    } catch {
+      /* not a URL */
+    }
+  }
+  return [...out]
+}
+
+/**
+ * May the PDF's browser load this URL? (Security review of #2789.) Inline
+ * data (data:, blob:, about:blank) yes; http(s) to this instance's own
+ * origins yes; any other http(s) URL only when it is public — assertSafeUrl,
+ * the outbound-fetch guard (no loopback, link-local metadata, private or
+ * .internal hosts, DNS checked). Everything else (file:, ftp:, ws:,
+ * chrome:...) is refused, so a document can never read the server's disk or
+ * reach the cloud metadata endpoint through the renderer.
+ */
+export async function pdfRequestAllowed(url: string, own: string[]): Promise<boolean> {
+  if (url === 'about:blank' || url.startsWith('data:') || url.startsWith('blob:')) return true
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return false
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
+  if (own.includes(u.origin)) return true
+  try {
+    await assertSafeUrl(url)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Render an HTML string to a PDF buffer (JS disabled, backgrounds on).
+ *  Locally when this process has Chromium; otherwise on the render peer
+ *  (RENDER_URL, #2789) — the same Buffer either way; otherwise a 503 that
+ *  says why. */
+export async function htmlToPdf(html: string, opts: PdfOptions = {}): Promise<Buffer> {
+  if (!(await hasLocalChromium())) {
+    if (renderPeerUrl())
+      return peerHtmlToPdf(html, { ...opts, allowOrigins: pdfOwnOrigins(opts.allowOrigins) })
+    throw renderUnavailable('pdf')
+  }
+  return htmlToPdfLocal(html, opts)
+}
+
+/** The local render, also what the render peer's own route calls. Every
+ *  request the document makes goes through pdfRequestAllowed. */
+export async function htmlToPdfLocal(html: string, opts: PdfOptions = {}): Promise<Buffer> {
+  const own = pdfOwnOrigins(opts.allowOrigins)
   const b = await getBrowser()
   const page = await b.newPage()
+  const blocked = new Set<string>()
   try {
     await page.setJavaScriptEnabled(false)
+    await page.setRequestInterception(true)
+    page.on('request', (req) => {
+      if (req.isInterceptResolutionHandled()) return
+      const url = req.url()
+      void pdfRequestAllowed(url, own)
+        .then((ok) => {
+          if (ok) return req.continue()
+          blocked.add(url.startsWith('file:') ? 'file:' : safeOrigin(url))
+          return req.abort('blockedbyclient')
+        })
+        .catch(() => req.abort('blockedbyclient').catch(() => undefined))
+    })
     await page.setContent(html, { waitUntil: 'domcontentloaded' })
     const pdfBuf = await page.pdf({
       format: opts.format ?? 'A4',
@@ -803,6 +904,20 @@ export async function htmlToPdf(
     })
     return Buffer.from(pdfBuf)
   } finally {
+    // Origins only, never the full URL (it may carry a token or an id).
+    if (blocked.size)
+      console.warn(
+        `[pdf] blocked ${blocked.size} request(s) to: ${[...blocked].slice(0, 5).join(', ')}`
+      )
     await page.close()
+  }
+}
+
+function safeOrigin(url: string): string {
+  try {
+    const u = new URL(url)
+    return u.origin === 'null' ? `${u.protocol}` : u.origin
+  } catch {
+    return 'invalid URL'
   }
 }

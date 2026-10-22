@@ -53,6 +53,7 @@ const st = vi.hoisted(() => ({
 vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: async () => st.migrated }))
 vi.mock('../../../services/ffmpeg.js', () => ({
   hasFfmpeg: async () => st.ffmpeg,
+  isLockedMime: () => true,
   lockedInputArgs: (mime: string) => ['-f', mime],
   runFfmpeg: async (args: string[]) => {
     st.ran.push(args)

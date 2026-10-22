@@ -30,6 +30,7 @@ export * from './sections/data-safety.js'
 export * from './sections/db-tuning.js'
 export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
+export * from './sections/disaster-recovery.js'
 export * from './sections/ext-assistant-tools.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
@@ -40,6 +41,7 @@ export * from './sections/help-videos.js'
 export * from './sections/ideas.js'
 export * from './sections/import-templates.js'
 export * from './sections/infrastructure.js'
+export * from './sections/infrastructure-drift.js'
 export * from './sections/infrastructure-edge.js'
 export * from './sections/infrastructure-host.js'
 export * from './sections/infrastructure-inventory.js'
@@ -65,6 +67,7 @@ export * from './sections/quality-checks.js'
 export * from './sections/queues.js'
 export * from './sections/record-insights.js'
 export * from './sections/record-integrations.js'
+export * from './sections/release-image.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
@@ -201,6 +204,7 @@ import {
   devexWebhookDeliveries,
   devexWebhookSigning
 } from './sections/devex.js'
+import { disasterRecoveryDocs } from './sections/disaster-recovery.js'
 import { extAssistantTools } from './sections/ext-assistant-tools.js'
 import {
   extContext,
@@ -265,6 +269,7 @@ import { helpVideosApi, helpVideosGuide, sdkHelpVideos } from './sections/help-v
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
 import { infrastructureDocs } from './sections/infrastructure.js'
+import { infrastructureDriftDocs } from './sections/infrastructure-drift.js'
 import { infrastructureEdgeDocs } from './sections/infrastructure-edge.js'
 import { infrastructureHostGuide } from './sections/infrastructure-host.js'
 import { infrastructureInventory } from './sections/infrastructure-inventory.js'
@@ -393,6 +398,7 @@ import { realtimeLoadTest } from './sections/realtime-load-test.js'
 import { realtimeTransport } from './sections/realtime-transport.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
+import { releaseImageDocs } from './sections/release-image.js'
 import {
   apiCollections,
   apiFiles,
@@ -933,6 +939,7 @@ export const navSections: NavGroup[] = [
       obsIssueLog,
       opsErrorTracking,
       opsBackups,
+      disasterRecoveryDocs,
       opsContentPromotion,
       opsFileUsage,
       opsPermissionSimulator,
@@ -946,7 +953,9 @@ export const navSections: NavGroup[] = [
       infrastructureDocs,
       infrastructureInventory,
       infrastructureEdgeDocs,
-      infrastructureHostGuide
+      infrastructureHostGuide,
+      infrastructureDriftDocs,
+      releaseImageDocs
     ]
   },
   {

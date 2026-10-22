@@ -75,6 +75,7 @@ const st = vi.hoisted(() => ({
 vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: async () => st.migrated }))
 vi.mock('../../../services/ffmpeg.js', () => ({
   hasFfmpeg: async () => st.ffmpeg,
+  isLockedMime: (mime: string) => mime === 'video/mp4' || mime === 'video/webm',
   lockedInputArgs: (mime: string) =>
     mime === 'video/mp4' || mime === 'video/webm' ? ['-f', mime] : ['-protocol_whitelist', 'file'],
   probeVideo: async () => ({ duration_ms: 60_000, width: 1920, height: 1080, has_audio: true }),

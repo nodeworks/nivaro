@@ -4,7 +4,8 @@
  * "what did the database look like at the peak?".
  *
  * Seven READ-ONLY tools over the stores (request log lines, request traces, metrics, container
- * logs, the stack's status). Every tool takes typed, validated fields and builds its own query
+ * logs, the stack's status), plus `recovery_status` (#2802: backups, restore drill, RPO / RTO —
+ * read from msdb and nivaro_job_runs, so it answers without the store). Every tool takes typed, validated fields and builds its own query
  * — LogsQL values quoted with `lq()`, metrics from a fixed list of expressions — so nothing the
  * model writes is ever run as query text. Results are capped and scrubbed (scrubText) before
  * they reach the provider; request lines carry ids, routes, status and timings only, as stored.
@@ -254,6 +255,12 @@ export const TELEMETRY_TOOLS: Anthropic.Tool[] = [
     name: 'telemetry_status',
     description:
       'The monitoring stack right now: firing alerts, failing uptime checks, collected sources that stopped answering, backup age, disk and file share space, and whether traces and request lines are arriving. Start here for "is anything wrong?".',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'recovery_status',
+    description:
+      'Disaster recovery right now, judged against the stated RPO / RTO targets: age of the newest database backup (full / differential / log, from msdb), the newest uploads backup, the newest restore drill (passed / failed / could not run, with its reason) and its measured restore time, and chaos drills\' time to recover. Use for "could we recover?", "when was the last backup?", "did the restore drill pass?".',
     input_schema: { type: 'object', properties: {} }
   },
   {
@@ -539,6 +546,11 @@ export async function executeTelemetryTool(
   if (INFRA_TOOL_NAMES.has(name)) return executeInfraTool(name, input, ctx)
   // #2860 — "what if X died?" reads the chaos scorecard and the Traffic Map, not the store.
   if (CHAOS_TOOL_NAMES.has(name)) return executeChaosTool(name, input)
+  // #2802 — msdb, the drill's job rows and the chaos feed; the store only adds the uploads age.
+  if (name === 'recovery_status') {
+    const { recoveryForAi } = await import('./recovery/status.js')
+    return recoveryForAi()
+  }
   if (!storeConfig())
     throw new TelemetryToolError('The telemetry store is not configured on this instance')
   switch (name) {
@@ -573,6 +585,7 @@ export const TELEMETRY_PROMPT = `You answer operations questions about this Niva
 
 Rules:
 - Every claim comes from a tool result. If the tools cannot show it, say what you checked and what is missing. Never guess numbers.
+- Backups, restore drills, RPO / RTO and "could we recover?" questions: recovery_status.
 - Start broad (telemetry_status, request_stats) and narrow down (find_requests, slow_traces, get_trace, metric_series, search_logs). Compare a problem window with a normal one when it helps.
 - Times are UTC; write them as ISO times or "14:05 UTC".
 - Cite evidence: trace ids in backticks (\`trace 4b66…\` with the full id), routes in backticks.

@@ -324,7 +324,8 @@ export async function buildServer() {
     // DB outage posture (#329): probe loop + fast honest 503s while down.
     const { startDbHealthProbe, isDbHealthy } = await import('./services/db-health.js')
     startDbHealthProbe()
-    const DB_EXEMPT = /^\/api\/(version|health|changelog)/
+    // The render peer (#2789) never reads the database.
+    const DB_EXEMPT = /^\/api\/(version|health|changelog|internal\/render\/)/
     app.addHook('onRequest', async (req, reply) => {
       if (!isDbHealthy() && /^\/api([/?]|$)/.test(req.url) && !DB_EXEMPT.test(req.url)) {
         return reply.code(503).send({
@@ -2292,6 +2293,40 @@ export async function buildServer() {
           idempotent: 'safe',
           description:
             "Nightly 03:30 — reads every procedure, function, view and trigger definition (plus import definitions' stored procedure bodies and custom queries), checks them for NULL-unsafe MERGE keys (with live NULL and duplicate counts), writes without WHERE, transactions without XACT_ABORT, local-time clocks, NOT IN over nullable columns and SELECT * on wide tables, optionally lints them through the SQLFluff sidecar (SQL_LINT_URL), and records findings on SQL checks. Reads only. Runs when SQL checks are turned on (setting, or SQL_CHECKS=on)."
+        }
+      )
+      // #2801 — nightly restore drill: restores the newest database backup into a scratch
+      // database, smoke-checks it, records the restore time, drops the copy. Off by default.
+      app.cron.schedule(
+        'restore-drill',
+        '30 2 * * *',
+        async () => {
+          const [{ restoreDrillTick }, { effectiveRecovery, getRecoverySettings }] =
+            await Promise.all([
+              import('./services/recovery/drill.js'),
+              import('./services/recovery/settings.js')
+            ])
+          const r = await restoreDrillTick(effectiveRecovery(await getRecoverySettings()))
+          if (r) app.log.info(`restore-drill: ${r.verdict} — ${r.reason}`)
+        },
+        {
+          heavy: true,
+          idempotent: 'unsafe',
+          watchdogMs: 4 * 3_600_000,
+          description:
+            'Nightly 02:30 — restores the newest full (plus differential) backup of this database from msdb into the scratch database nivaro_restore_drill_…, checks key tables exist and hold rows, records the restore time on Telemetry → Recovery, and always drops the copy. Needs CREATE ANY DATABASE and disk for a full copy. Runs only when the drill is on (setting, or RESTORE_DRILL=on); never on cloud instances. Dry run reads msdb and RESTORE FILELISTONLY only.',
+          dryRun: async () => {
+            const [{ jobRunLedger, runRestoreDrill }, { effectiveRecovery, getRecoverySettings }] =
+              await Promise.all([
+                import('./services/recovery/drill.js'),
+                import('./services/recovery/settings.js')
+              ])
+            return runRestoreDrill({
+              dryRun: true,
+              settings: effectiveRecovery(await getRecoverySettings()),
+              ledger: jobRunLedger(null)
+            })
+          }
         }
       )
       // #2480 — nightly glossary / data-guide conflict check, with an AI read of the definitions

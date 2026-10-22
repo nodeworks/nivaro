@@ -86,6 +86,15 @@ async function main() {
   if (process.env.SKIP_BOOT_MIGRATIONS === '1') {
     console.log('Migrations: skipped (SKIP_BOOT_MIGRATIONS=1)')
   } else if (!process.env.CLOUD_META_DB_URL) {
+    // #2803 — a config restore point first when anything is pending (time-boxed, never fails boot).
+    await bootPhase('Config snapshot before migrations', async () => {
+      try {
+        const { snapshotBeforeMigrations } = await import('./services/pre-migration-snapshot.js')
+        await snapshotBeforeMigrations()
+      } catch (err) {
+        console.log(`Config snapshot: skipped — ${err instanceof Error ? err.message : err}`)
+      }
+    })
     const [batch, migrations] = await bootPhase('Migrations', () => runMigrationsSafely())
     if (migrations.length > 0) {
       console.log(`Migrations: ran batch ${batch}: ${migrations.join(', ')}`)
@@ -194,7 +203,9 @@ async function main() {
     // period must cover this delay plus the drain deadline below.
     const drainDelayMs = Math.max(0, Number(process.env.SHUTDOWN_DRAIN_DELAY_MS) || 0)
     if (drainDelayMs > 0) {
-      app.log.info(`${signal} received — not ready; serving ${drainDelayMs}ms more before the drain`)
+      app.log.info(
+        `${signal} received — not ready; serving ${drainDelayMs}ms more before the drain`
+      )
       await new Promise((r) => setTimeout(r, drainDelayMs))
     }
     app.log.info(`${signal} received — draining in-flight requests`)

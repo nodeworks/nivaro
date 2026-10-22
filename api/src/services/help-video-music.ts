@@ -6,7 +6,14 @@ import type { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
-import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
+import {
+  canUseFfmpeg,
+  hasFfmpeg,
+  lockedInputArgs,
+  probeVideo,
+  probeVideoLocal,
+  runFfmpeg
+} from './ffmpeg.js'
 import { getFile, uploadFileFromPath } from './files.js'
 import { type MusicBed, normalizeMusic } from './help-video-edits.js'
 import { isUuid } from './help-video-files.js'
@@ -18,6 +25,7 @@ import {
   originOf
 } from './help-video-openverse.js'
 import { discardFile, videoWorkDir } from './help-video-uploads.js'
+import { peerFileOp } from './render-peer.js'
 import { openStoredObject } from './stored-object-stream.js'
 
 // Background music for help videos (#1547). Three tracks are generated here as
@@ -342,6 +350,61 @@ export function sniffAudio(head: Buffer): string | null {
   return null
 }
 
+type MusicProbe = Awaited<ReturnType<typeof probeVideoLocal>> & { duration_ms: number }
+
+/** The file half of uploadMusic: probe, refuse what is not music, encode AAC
+ *  into `out`, probe that. No database: the render peer's convert-music route
+ *  (#2789) runs exactly this for a slim process. */
+export async function convertMusicFile(
+  raw: string,
+  mime: string,
+  out: string
+): Promise<MusicProbe> {
+  const probe = await probeVideoLocal(raw, mime).catch(() => null)
+  if (!probe?.has_audio) {
+    throw musicError(422, 'MUSIC_NOT_AUDIO', 'That file has no sound we can read')
+  }
+  if (probe.duration_ms && probe.duration_ms > UPLOAD_MAX_MS) {
+    throw musicError(422, 'MUSIC_TOO_LONG', 'Music may be at most 20 minutes long')
+  }
+  await runFfmpeg(
+    [
+      '-y',
+      '-v',
+      'error',
+      ...lockedInputArgs(mime),
+      '-i',
+      raw,
+      '-map',
+      '0:a:0',
+      '-vn',
+      '-t',
+      String(UPLOAD_MAX_MS / 1000),
+      '-ac',
+      '2',
+      '-ar',
+      '44100',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '160k',
+      '-fs',
+      String(30 * 1024 * 1024),
+      '-movflags',
+      '+faststart',
+      out
+    ],
+    undefined,
+    undefined,
+    { lowPriority: true }
+  )
+  const done = await probeVideoLocal(out, 'audio/mp4').catch(() => null)
+  if (!done?.has_audio || !done.duration_ms) {
+    throw musicError(422, 'MUSIC_NOT_AUDIO', 'That file has no sound we can read')
+  }
+  return { ...done, duration_ms: done.duration_ms }
+}
+
 /** Converts an author's audio file to AAC and keeps it for this video. */
 export async function uploadMusic(
   user: User,
@@ -349,8 +412,12 @@ export async function uploadMusic(
   file: { filename: string; stream: Readable; truncated?: () => boolean },
   opts: { origin?: MusicOrigin; name?: string } = {}
 ): Promise<UploadedMusic> {
-  if (!(await hasFfmpeg())) {
-    throw musicError(503, 'MUSIC_NO_FFMPEG', 'Music needs ffmpeg on the server')
+  if (!(await canUseFfmpeg())) {
+    throw musicError(
+      503,
+      'MUSIC_NO_FFMPEG',
+      'Music needs ffmpeg on the server (or a render server, RENDER_URL)'
+    )
   }
   const dir = join(videoWorkDir(), 'music-in', randomUUID())
   await mkdir(dir, { recursive: true })
@@ -370,49 +437,12 @@ export async function uploadMusic(
     if (!mime) {
       throw musicError(422, 'MUSIC_NOT_AUDIO', 'That is not an audio file we can read')
     }
-    const probe = await probeVideo(raw, mime).catch(() => null)
-    if (!probe?.has_audio) {
-      throw musicError(422, 'MUSIC_NOT_AUDIO', 'That file has no sound we can read')
-    }
-    if (probe.duration_ms && probe.duration_ms > UPLOAD_MAX_MS) {
-      throw musicError(422, 'MUSIC_TOO_LONG', 'Music may be at most 20 minutes long')
-    }
     const out = join(dir, 'music.m4a')
-    await runFfmpeg(
-      [
-        '-y',
-        '-v',
-        'error',
-        ...lockedInputArgs(mime),
-        '-i',
-        raw,
-        '-map',
-        '0:a:0',
-        '-vn',
-        '-t',
-        String(UPLOAD_MAX_MS / 1000),
-        '-ac',
-        '2',
-        '-ar',
-        '44100',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '160k',
-        '-fs',
-        String(30 * 1024 * 1024),
-        '-movflags',
-        '+faststart',
-        out
-      ],
-      undefined,
-      undefined,
-      { lowPriority: true }
-    )
-    const done = await probeVideo(out, 'audio/mp4').catch(() => null)
-    if (!done?.has_audio || !done.duration_ms) {
-      throw musicError(422, 'MUSIC_NOT_AUDIO', 'That file has no sound we can read')
-    }
+    // Locally, or on the render peer for the slim image (#2789): the same
+    // checks and the same encode either way.
+    const done = (await hasFfmpeg())
+      ? await convertMusicFile(raw, mime, out)
+      : await peerFileOp<MusicProbe>('convert-music', raw, { mime, output: out })
     const name =
       (opts.name ?? basename(String(file.filename || 'Music')).replace(/\.[^.]+$/, ''))
         .replace(/\s+/g, ' ')
@@ -466,8 +496,12 @@ export async function importOpenverseMusic(
     (m) => m.origin?.provider === 'openverse' && m.origin.id === t.id
   )
   if (have) return have
-  if (!(await hasFfmpeg())) {
-    throw musicError(503, 'MUSIC_NO_FFMPEG', 'Music needs ffmpeg on the server')
+  if (!(await canUseFfmpeg())) {
+    throw musicError(
+      503,
+      'MUSIC_NO_FFMPEG',
+      'Music needs ffmpeg on the server (or a render server, RENDER_URL)'
+    )
   }
   const dir = join(videoWorkDir(), 'music-dl', randomUUID())
   await mkdir(dir, { recursive: true })
