@@ -97,6 +97,13 @@ export interface DrillResult {
   steps: DrillStep[]
   smoke: SmokeResult | null
   checkdb: { ok: boolean; ms: number; error: string | null } | null
+  /**
+   * The ownership record, written to the run's job row BEFORE any RESTORE: the only thing that
+   * lets a later drill (or this one's cleanup) treat a database under the scratch name as its own.
+   */
+  claim: { scratch_db: string; run_id: number | null; claimed_at: string } | null
+  /** The copy carries the drill's extended property. */
+  marked: boolean | null
   leftover_dropped: boolean
   dropped: boolean | null
   drop_error: string | null
@@ -129,6 +136,8 @@ function base(mode: DrillResult['mode']): DrillResult {
     steps: [],
     smoke: null,
     checkdb: null,
+    claim: null,
+    marked: null,
     leftover_dropped: false,
     dropped: null,
     drop_error: null,
@@ -161,13 +170,13 @@ export function parseResult(raw: unknown): DrillResult | null {
 
 // ── SQL reads (all plain batches; literals through qs / qi) ──────────────────
 
-const utc = (col: string) =>
-  `CONVERT(varchar(33), DATEADD(minute, CASE WHEN bs.time_zone BETWEEN -48 AND 48 THEN -15 * bs.time_zone ELSE DATEDIFF(minute, GETDATE(), GETUTCDATE()) END, ${col}), 126)`
-
-/** msdb backup history for one database: newest 5 full, 5 differential, 100 log backups. */
+/** msdb backup history for one database: newest 5 full, 5 differential, 100 log backups. Times
+ *  come back as server-local text with the backup's own time_zone; localToUtc() converts them. */
 export function backupSetSql(database: string): string {
   const cols = `bs.backup_set_id, bs.media_set_id, bs.position, bs.type,
-    ${utc('bs.backup_start_date')} AS start_utc, ${utc('bs.backup_finish_date')} AS finish_utc,
+    CONVERT(varchar(33), bs.backup_start_date, 126) AS start_local,
+    CONVERT(varchar(33), bs.backup_finish_date, 126) AS finish_local,
+    bs.time_zone AS tz, DATEDIFF(minute, GETDATE(), GETUTCDATE()) AS server_offset_min,
     CONVERT(varchar(40), bs.checkpoint_lsn) AS checkpoint_lsn,
     CONVERT(varchar(40), bs.database_backup_lsn) AS database_backup_lsn,
     bs.is_copy_only, bs.is_damaged, bs.has_backup_checksums,
@@ -177,12 +186,21 @@ export function backupSetSql(database: string): string {
   return [one('D', 5), one('I', 5), one('L', 100)].join(' UNION ALL ')
 }
 
-/** msdb's CONVERT(…, 126) text (no zone, milliseconds only when non-zero) → one ISO form. */
-export const iso = (s: unknown): string => {
-  const t = String(s ?? '')
+/**
+ * msdb stores backup times in the SQL Server's local time, with `time_zone` = the offset from
+ * UTC at the backup's start in 15-minute intervals (-48…+48; 127 = unknown). Local text from
+ * CONVERT(…, 126) → UTC ISO. Unknown zone → the server's offset now (`serverOffsetMin` =
+ * UTC − local, minutes). Unreadable text comes back unchanged.
+ */
+export function localToUtc(localText: unknown, tz: unknown, serverOffsetMin: unknown): string {
+  const t = String(localText ?? '')
   if (!t) return t
-  const d = new Date(t.endsWith('Z') ? t : `${t}Z`)
-  return Number.isNaN(d.getTime()) ? t : d.toISOString()
+  const ms = Date.parse(t.endsWith('Z') ? t : `${t}Z`)
+  if (Number.isNaN(ms)) return t
+  const zone = tz == null || tz === '' ? Number.NaN : Number(tz)
+  const offsetMin =
+    Number.isInteger(zone) && zone >= -48 && zone <= 48 ? -15 * zone : Number(serverOffsetMin) || 0
+  return new Date(ms + offsetMin * 60_000).toISOString()
 }
 
 export async function readBackupHistory(
@@ -196,8 +214,8 @@ export async function readBackupHistory(
     media_set_id: Number(r.media_set_id),
     position: Number(r.position ?? 1),
     type: String(r.type ?? '').trim(),
-    start_utc: iso(r.start_utc),
-    finish_utc: iso(r.finish_utc),
+    start_utc: localToUtc(r.start_local, r.tz, r.server_offset_min),
+    finish_utc: localToUtc(r.finish_local, r.tz, r.server_offset_min),
     checkpoint_lsn: r.checkpoint_lsn == null ? null : String(r.checkpoint_lsn),
     database_backup_lsn: r.database_backup_lsn == null ? null : String(r.database_backup_lsn),
     is_copy_only: !!r.is_copy_only,
@@ -317,32 +335,39 @@ async function checksum(database: string, ref: string): Promise<number | null> {
   return r?.c == null ? null : Number(r.c)
 }
 
-type Owner = { exists: false } | { exists: true; ours: boolean; state: string }
+/**
+ * Where the drill records which scratch databases it made. `claim` must persist (or throw)
+ * before any RESTORE; `owns` answers whether the newest recorded claim on a name belongs to a run
+ * whose copy was not confirmed dropped. A database under the scratch name is the drill's ONLY when
+ * `owns` says so: msdb restorehistory is not used (it records completed restores only), and the
+ * extended property is a mark for people, never proof on its own.
+ */
+export interface DrillLedger {
+  claim(r: DrillResult): Promise<void>
+  owns(scratch: string): Promise<boolean>
+}
 
-/** Whether a database under the scratch name exists, and whether this drill made it. */
-async function scratchOwnership(scratch: string, live: string): Promise<Owner> {
+type Owner =
+  | { exists: false }
+  | { exists: true; ours: boolean; state: string; marked: boolean | null }
+
+/** Whether a database under the scratch name exists, and whether the ledger says the drill made it. */
+async function scratchOwnership(scratch: string, ledger: DrillLedger): Promise<Owner> {
   const [row] = await runLongSql<{ state: string | null }>(
     `SELECT CONVERT(nvarchar(60), DATABASEPROPERTYEX(${qs(scratch)}, 'Status')) AS state WHERE DB_ID(${qs(scratch)}) IS NOT NULL`,
     { timeoutMs: 30_000 }
   )
   if (!row) return { exists: false }
   const state = String(row.state ?? '')
+  let marked: boolean | null = null
   if (state === 'ONLINE') {
     const [p] = await runLongSql<{ v: string | null }>(
       `SELECT CONVERT(nvarchar(200), value) AS v FROM ${qi(scratch)}.sys.extended_properties WHERE class = 0 AND name = ${qs(DRILL_PROPERTY)}`,
       { timeoutMs: 30_000 }
     ).catch(() => [])
-    return { exists: true, ours: !!p, state }
+    marked = !!p
   }
-  // Not online (a drill killed mid-restore leaves it RESTORING): ours when msdb shows its last
-  // restore came from this database's backups.
-  const [h] = await runLongSql<{ src: string | null }>(
-    `SELECT TOP (1) bs.database_name AS src FROM msdb.dbo.restorehistory rh
-     JOIN msdb.dbo.backupset bs ON bs.backup_set_id = rh.backup_set_id
-     WHERE rh.destination_database_name = ${qs(scratch)} ORDER BY rh.restore_date DESC`,
-    { timeoutMs: 30_000 }
-  ).catch(() => [])
-  return { exists: true, ours: !!h && String(h.src).toLowerCase() === live.toLowerCase(), state }
+  return { exists: true, ours: await ledger.owns(scratch), state, marked }
 }
 
 /** DROP the scratch database (online → single user first). Re-checks the name guard. */
@@ -385,6 +410,16 @@ export interface DrillOptions {
   settings: EffectiveRecovery
   /** Called with the result so far at each phase (the runner stores it on the job row). */
   onPhase?: (r: DrillResult) => void | Promise<void>
+  /** Ownership records. A run that cannot record its claim never restores. */
+  ledger?: DrillLedger
+}
+
+/** No ledger (a dry run outside a job): nothing is ever the drill's, and claims fail. */
+const EMPTY_LEDGER: DrillLedger = {
+  claim: async () => {
+    throw new Error('no run record to write the ownership claim to')
+  },
+  owns: async () => false
 }
 
 export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> {
@@ -427,7 +462,9 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
     if (running.has(tenant)) return finish('skipped', 'A restore drill is already running here.')
     running.add(tenant)
   }
-  let created = false
+  const ledger = opts.ledger ?? EMPTY_LEDGER
+  /** A RESTORE got past the name guard: a copy may exist, ours by this run's claim. */
+  let attempted = false
   try {
     await phase('reading msdb')
     let history: Awaited<ReturnType<typeof readBackupHistory>>
@@ -519,11 +556,11 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
         )
     }
 
-    const owner = await scratchOwnership(scratch, live)
+    const owner = await scratchOwnership(scratch, ledger)
     if (owner.exists && !owner.ours)
       return finish(
         'blocked',
-        `A database named ${scratch} already exists and this drill did not create it (no ${DRILL_PROPERTY} property). Drop or rename it by hand, or pick another scratch name.`
+        `A database named ${scratch} (${owner.state || 'unknown state'}) already exists and no drill run recorded creating it. Drop or rename it by hand, or pick another scratch name.`
       )
 
     if (opts.dryRun)
@@ -533,6 +570,18 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
           plan.diff ? ` and the differential of ${utcText(plan.diff.finish_utc)}` : ''
         } into ${scratch} (${gb(r.needed_bytes)})${owner.exists ? `, after dropping the drill's leftover copy (${owner.state})` : ''}.`
       )
+
+    // The ownership claim, before anything is created or dropped: no claim, no restore.
+    r.claim = { scratch_db: scratch, run_id: null, claimed_at: new Date().toISOString() }
+    try {
+      await ledger.claim(r)
+    } catch (err) {
+      r.claim = null
+      return finish(
+        'blocked',
+        `Could not record the drill's ownership claim before restoring (${errorText(err, 200)}); nothing was restored.`
+      )
+    }
 
     if (owner.exists) {
       await phase('dropping a leftover copy')
@@ -555,10 +604,10 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
       // check: the drill never restores over, or later drops, a database it did not create.
       const sql = restoreSql(scratch, st.b, moves, { recovery: st.recovery })
       try {
+        attempted = true
         await runLongSql(st.b.type === 'D' ? `${notTakenGuard(scratch)}\n${sql}` : sql, {
           timeoutMs
         })
-        created = true
         r.steps.push({
           step: st.b.type === 'D' ? 'full' : 'diff',
           ms: Date.now() - t,
@@ -567,12 +616,13 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
         })
       } catch (err) {
         const msg = errorText(err, 600)
-        if (st.b.type === 'D' && msg.includes(TAKEN_MARK))
+        if (st.b.type === 'D' && msg.includes(TAKEN_MARK)) {
+          attempted = false // the guard stopped it: whatever holds the name is not ours
           return finish(
             'blocked',
             `A database named ${scratch} appeared while the drill was checking; nothing was restored.`
           )
-        created = true // a failed restore can leave the copy behind in RESTORING state
+        }
         r.steps.push({
           step: st.b.type === 'D' ? 'full' : 'diff',
           ms: Date.now() - t,
@@ -588,10 +638,19 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
       }
     }
     r.restore_ms = r.steps.reduce((a, x) => a + x.ms, 0)
-    await runLongSql(
-      `EXEC ${qi(scratch)}.sys.sp_addextendedproperty @name = ${qs(DRILL_PROPERTY)}, @value = ${qs(r.started_at)}`,
-      { timeoutMs: 60_000 }
-    ).catch(() => undefined) // the copy is dropped below either way
+    try {
+      await runLongSql(
+        `EXEC ${qi(scratch)}.sys.sp_addextendedproperty @name = ${qs(DRILL_PROPERTY)}, @value = ${qs(r.started_at)}`,
+        { timeoutMs: 60_000 }
+      )
+      r.marked = true
+    } catch (err) {
+      r.marked = false
+      return finish(
+        'failed',
+        `Restored in ${fmtMs(r.restore_ms)}, but the copy could not be marked as the drill's (${errorText(err, 300)}).`
+      )
+    }
 
     await phase('checking the restored copy')
     const refs = [...new Set([...KEY_TABLES, ...s.restore_drill.business_tables])]
@@ -667,14 +726,25 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
   } catch (err) {
     return finish('failed', `The drill stopped: ${errorText(err, 600)}`)
   } finally {
-    if (created) {
-      try {
-        await dropScratch(scratch, live)
-        r.dropped = true
-      } catch (err) {
+    // Clean up only what exists and is ours by the ledger (re-checked here, never assumed).
+    if (attempted) {
+      const cleanupFailed = (why: string) => {
         r.dropped = false
-        r.drop_error = errorText(err, 400)
-        r.reason = `${r.reason} The scratch copy ${scratch} could not be dropped: ${r.drop_error}`
+        r.drop_error = why
+        r.verdict = 'failed'
+        r.reason = `${r.reason} The scratch copy ${scratch} is still on the server: ${why}`
+      }
+      try {
+        const now = await scratchOwnership(scratch, ledger)
+        if (!now.exists) r.dropped = null
+        else if (!now.ours)
+          cleanupFailed('no recorded claim makes it the drill’s, so it was not dropped.')
+        else {
+          await dropScratch(scratch, live)
+          r.dropped = true
+        }
+      } catch (err) {
+        cleanupFailed(`it could not be dropped (${errorText(err, 400)}).`)
       }
     }
     if (!opts.dryRun) running.delete(tenant)
@@ -710,6 +780,43 @@ async function ownRunRow(): Promise<number | null> {
   }
 }
 
+/**
+ * The ledger on nivaro_job_runs: a claim is this run's own row (job restore-drill) with the result
+ * JSON carrying `claim`; the newest claim on a scratch name owns it until that run recorded
+ * `dropped: true`. Rows are pruned with the job history (newest 50 / 30 days): a leftover older
+ * than that is refused, never guessed.
+ */
+export function jobRunLedger(rowId: number | null): DrillLedger {
+  return {
+    async claim(r) {
+      if (rowId == null) throw new Error('the drill has no job run row')
+      if (r.claim) r.claim.run_id = rowId
+      const n = await db('nivaro_job_runs')
+        .where('id', rowId)
+        .update({ progress: serializeResult(r) })
+      if (!Number(n)) throw new Error(`job run ${rowId} was not updated`)
+    },
+    async owns(scratch) {
+      const rows = (await db('nivaro_job_runs')
+        .where({ job_id: DRILL_JOB_ID })
+        .where('progress', 'like', '%"claim":{%')
+        .orderBy('id', 'desc')
+        .limit(50)
+        .select('id', 'progress')) as Array<{ id: number; progress: string | null }>
+      return ownsFrom(
+        rows.map((x) => parseResult(x.progress)),
+        scratch
+      )
+    }
+  }
+}
+
+/** Newest claim on `scratch` (results newest first) → ours unless that run confirmed the drop. */
+export function ownsFrom(results: Array<DrillResult | null>, scratch: string): boolean {
+  const hit = results.find((x) => x?.claim?.scratch_db.toLowerCase() === scratch.toLowerCase())
+  return !!hit && hit.dropped !== true
+}
+
 async function store(rowId: number | null, r: DrillResult): Promise<void> {
   if (rowId == null) return
   try {
@@ -733,7 +840,8 @@ export async function restoreDrillTick(settings: EffectiveRecovery): Promise<Dri
   const result = await runRestoreDrill({
     dryRun: false,
     settings,
-    onPhase: (r) => store(rowId, r)
+    onPhase: (r) => store(rowId, r),
+    ledger: jobRunLedger(rowId)
   })
   await store(rowId, result)
   if (result.verdict === 'failed') throw new Error(`Restore drill failed: ${result.reason}`)

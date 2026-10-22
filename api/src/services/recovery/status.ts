@@ -1,5 +1,7 @@
 import { config } from '../../config.js'
 import { errorText } from '../../lib/db-refusal.js'
+import { scrubText } from '../ai-explain.js'
+import { withReadGate } from '../read-gate.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import {
   type DrillResult,
@@ -81,8 +83,11 @@ const slow = new Map<
     db: RecoveryStatus['db_backups']
     chaos: RecoveryStatus['chaos']
     chaosError: string | null
+    uploads: RecoveryStatus['uploads']
   }
 >()
+/** One refresh at a time per tenant: concurrent callers share it. */
+const refreshing = new Map<string, Promise<void>>()
 
 /** Manual runs waiting for the heavy slot on this process (cleared when the run row exists). */
 const queued = new Map<string, number>()
@@ -93,6 +98,7 @@ export function markDrillQueued(on: boolean): void {
 
 export function resetRecoveryStatusForTests(): void {
   slow.clear()
+  refreshing.clear()
   queued.clear()
 }
 
@@ -159,19 +165,43 @@ const digest = (r: DrillResult | null, finishedAt: string | null): DrillDigest |
       }
     : null
 
+/**
+ * msdb + the chaos feed + the uploads age, cached 60 s per tenant. A refresh is an expensive read:
+ * it runs through the read gate (as `who`) and is single-flight per tenant.
+ */
+async function slowParts(tenant: string, now: number, fresh: boolean, who: string | null) {
+  const hit = slow.get(tenant)
+  if (hit && !fresh && now - hit.at <= 60_000) return hit
+  let flight = refreshing.get(tenant)
+  if (!flight) {
+    flight = withReadGate(
+      who,
+      async () => {
+        const [db, chaos, uploads] = await Promise.all([dbBackups(), chaosFeed(), uploadsAge()])
+        slow.set(tenant, {
+          at: Date.now(),
+          db,
+          chaos: chaos.chaos,
+          chaosError: chaos.error,
+          uploads
+        })
+      },
+      { label: 'telemetry:recovery' }
+    ).finally(() => refreshing.delete(tenant))
+    refreshing.set(tenant, flight)
+  }
+  await flight
+  return slow.get(tenant)!
+}
+
 export async function recoveryStatus(
-  opts: { fresh?: boolean; now?: number } = {}
+  opts: { fresh?: boolean; now?: number; who?: string | null } = {}
 ): Promise<RecoveryStatus> {
   const now = opts.now ?? Date.now()
   const eff = effectiveRecovery(await getRecoverySettings())
   const tenant = currentTenantKey()
-  let s = slow.get(tenant)
-  if (!s || opts.fresh || now - s.at > 60_000) {
-    const [db, chaos] = await Promise.all([dbBackups(), chaosFeed()])
-    s = { at: now, db, chaos: chaos.chaos, chaosError: chaos.error }
-    slow.set(tenant, s)
-  }
-  const uploads = await uploadsAge()
+  const s = await slowParts(tenant, now, !!opts.fresh, opts.who ?? null)
+  const uploads = s.uploads
 
   let runs: DrillRunRow[] = []
   let drillError: string | null = null
@@ -256,6 +286,10 @@ export async function recoveryStatus(
   }
 }
 
+/** Free text headed to the AI provider: scrubbed and capped like every telemetry tool's. */
+export const scrubForAi = (v: string | null | undefined): string | null =>
+  v == null ? null : scrubText(String(v)).slice(0, 300)
+
 /** The AI tool's view: judged rows plus the facts behind them, no settings detail. */
 export async function recoveryForAi() {
   const s = await recoveryStatus()
@@ -266,21 +300,22 @@ export async function recoveryForAi() {
       question: r.label,
       status: r.tone,
       value: r.value,
-      reason: r.reason
+      reason: scrubForAi(r.reason)
     })),
-    database_backups: s.db_backups,
-    uploads_backup: s.uploads,
+    database_backups: { newest: s.db_backups.newest, error: scrubForAi(s.db_backups.error) },
+    uploads_backup: { ...s.uploads, error: scrubForAi(s.uploads.error) },
     restore_drill: {
       enabled: s.drill.enabled,
       running: s.drill.running,
+      error: scrubForAi(s.drill.error),
       last: s.drill.last
         ? {
             verdict: s.drill.last.verdict,
-            reason: s.drill.last.reason,
+            reason: scrubForAi(s.drill.last.reason),
             finished_at: s.drill.last.finished_at,
             restore_ms: s.drill.last.restore_ms,
             backup_age_s: s.drill.last.backup_age_s,
-            smoke_failures: s.drill.last.smoke?.failures ?? []
+            smoke_failures: (s.drill.last.smoke?.failures ?? []).map((f) => scrubForAi(f))
           }
         : null,
       recent: s.drill.history.slice(0, 7).map((h) => ({
@@ -290,6 +325,7 @@ export async function recoveryForAi() {
       }))
     },
     chaos_recovery: s.chaos,
+    chaos_error: scrubForAi(s.chaos_error),
     runbook_url: s.runbook_url
   }
 }

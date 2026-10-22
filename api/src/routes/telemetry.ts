@@ -8,6 +8,7 @@ import { clientGoneSignal } from '../services/read-gate.js'
 import {
   DRILL_JOB_ID,
   isDrillRunning,
+  jobRunLedger,
   listDrillRuns,
   runRestoreDrill
 } from '../services/recovery/drill.js'
@@ -36,14 +37,30 @@ import { listStoredTraces } from '../services/telemetry-traces.js'
  *                                   ?dry_run=1 answers at once — msdb + FILELISTONLY only
  *   GET   /restore-drill/runs/:id   one drill's full stored result
  */
+/** How long run-now waits for the cluster-wide claim's answer (a Redis round trip) before 202. */
+const CLAIM_WAIT_MS = 3_000
+
 export async function telemetryRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
   app.get('/status', async () => ({ data: await telemetryStatus() }))
 
-  app.get<{ Querystring: { fresh?: string } }>('/recovery', async (req) => ({
-    data: await recoveryStatus({ fresh: req.query.fresh === '1' })
-  }))
+  // ?fresh=1 re-reads msdb and the chaos feed past the 60 s cache: once per 10 s per person.
+  const freshAt = new Map<string, number>()
+  app.get<{ Querystring: { fresh?: string } }>('/recovery', async (req, reply) => {
+    const who = String(req.user?.id ?? '')
+    const fresh = req.query.fresh === '1'
+    if (fresh) {
+      const now = Date.now()
+      if (now - (freshAt.get(who) ?? 0) < 10_000)
+        return reply
+          .code(429)
+          .send({ error: 'Re-read at most every 10 seconds', code: 'RATE_LIMITED' })
+      freshAt.set(who, now)
+      if (freshAt.size > 1000) for (const [k, t] of freshAt) if (now - t > 10_000) freshAt.delete(k)
+    }
+    return { data: await recoveryStatus({ fresh, who }) }
+  })
 
   app.patch('/recovery/settings', async (req, reply) => {
     try {
@@ -71,7 +88,9 @@ export async function telemetryRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: 'Restore drills do not run on cloud instances', code: 'DRILL_OFF' })
     if (req.query.dry_run === '1' || req.query.dry_run === 'true') {
       // Read-only: msdb, the server's rights and paths, RESTORE FILELISTONLY. Nothing stored.
-      const result = await runInBackgroundPool(() => runRestoreDrill({ dryRun: true, settings }))
+      const result = await runInBackgroundPool(() =>
+        runRestoreDrill({ dryRun: true, settings, ledger: jobRunLedger(null) })
+      )
       return { data: result }
     }
     if (!settings.drill_enabled)
@@ -80,20 +99,38 @@ export async function telemetryRoutes(app: FastifyInstance): Promise<void> {
           'The restore drill is off on this instance. Turn it on in the settings (or RESTORE_DRILL=on), or run a dry run.',
         code: 'DRILL_OFF'
       })
-    if (isDrillRunning() || (await listDrillRuns(1)).some((r) => r.status === 'running'))
-      return reply
-        .code(409)
-        .send({ error: 'A restore drill is already running', code: 'DRILL_RUNNING' })
+    const busy = () =>
+      reply.code(409).send({ error: 'A restore drill is already running', code: 'DRILL_RUNNING' })
+    let rowRunning = false
+    try {
+      rowRunning = (await listDrillRuns(1)).some((r) => r.status === 'running')
+    } catch (err) {
+      // the cluster-wide claim below still refuses a second run
+      req.log.warn({ err }, 'restore drill: run history unreadable')
+    }
+    if (isDrillRunning() || rowRunning) return busy()
     const userId = req.user?.id ?? null
     markDrillQueued(true)
-    // The CronManager owns the run: its job row, the cluster-wide heavy slot (it may wait its
-    // turn), the unsafe-twice guard and the background pool.
-    void app.cron
-      .runNow(DRILL_JOB_ID, userId)
-      .catch((err) => {
+    // The CronManager owns the run: its job row, the cluster-wide unsafe-twice claim (taken first,
+    // before anything else), the heavy slot (it may wait its turn) and the background pool. Wait
+    // for the claim's answer before saying 202: a run held on another replica is a 409.
+    const run = app.cron.runNow(DRILL_JOB_ID, userId)
+    run.finally(() => markDrillQueued(false)).catch(() => {})
+    const early = await Promise.race([
+      run.then(
+        () => ({ settled: true as const, err: null }),
+        (err: unknown) => ({ settled: true as const, err })
+      ),
+      new Promise<{ settled: false; err: null }>((resolve) => {
+        setTimeout(() => resolve({ settled: false, err: null }), CLAIM_WAIT_MS).unref?.()
+      })
+    ])
+    if (early.err instanceof JobBusyError) return busy()
+    if (early.err) req.log.error({ err: early.err }, 'restore drill run failed')
+    if (!early.settled)
+      run.catch((err) => {
         if (!(err instanceof JobBusyError)) req.log.error({ err }, 'restore drill run failed')
       })
-      .finally(() => markDrillQueued(false))
     await logActivity({
       action: 'restore-drill-run',
       user: userId ?? undefined,

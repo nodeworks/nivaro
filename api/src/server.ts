@@ -2315,14 +2315,15 @@ export async function buildServer() {
           description:
             'Nightly 02:30 — restores the newest full (plus differential) backup of this database from msdb into the scratch database nivaro_restore_drill_…, checks key tables exist and hold rows, records the restore time on Telemetry → Recovery, and always drops the copy. Needs CREATE ANY DATABASE and disk for a full copy. Runs only when the drill is on (setting, or RESTORE_DRILL=on); never on cloud instances. Dry run reads msdb and RESTORE FILELISTONLY only.',
           dryRun: async () => {
-            const [{ runRestoreDrill }, { effectiveRecovery, getRecoverySettings }] =
+            const [{ jobRunLedger, runRestoreDrill }, { effectiveRecovery, getRecoverySettings }] =
               await Promise.all([
                 import('./services/recovery/drill.js'),
                 import('./services/recovery/settings.js')
               ])
             return runRestoreDrill({
               dryRun: true,
-              settings: effectiveRecovery(await getRecoverySettings())
+              settings: effectiveRecovery(await getRecoverySettings()),
+              ledger: jobRunLedger(null)
             })
           }
         }

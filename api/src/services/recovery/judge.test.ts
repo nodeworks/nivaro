@@ -243,6 +243,17 @@ describe('recovery settings', () => {
     expect(s.targets).toEqual({ rpo_minutes: 60, rto_minutes: 240 })
     expect(s.runbook_url).toBeNull()
   })
+  it('refuses more than 50 business tables instead of cutting the list', () => {
+    const tables = Array.from({ length: 51 }, (_, i) => `t${i}`)
+    expect(() =>
+      mergeRecoveryPatch(RECOVERY_DEFAULTS, { restore_drill: { business_tables: tables } })
+    ).toThrow(/business_tables holds 51 tables; at most 50/)
+    expect(
+      mergeRecoveryPatch(RECOVERY_DEFAULTS, {
+        restore_drill: { business_tables: tables.slice(0, 50) }
+      }).restore_drill.business_tables
+    ).toHaveLength(50)
+  })
   it('names every bad field in a PATCH', () => {
     expect(() =>
       mergeRecoveryPatch(RECOVERY_DEFAULTS, {

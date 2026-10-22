@@ -19,6 +19,9 @@ import { DRILL_PREFIX, scratchNameRefusal, validTableRef } from './plan.js'
 
 export const RECOVERY_OVERRIDE_KEY = 'recovery'
 
+/** Most business tables one drill counts (a PATCH with more is refused, never cut). */
+export const MAX_BUSINESS_TABLES = 50
+
 export interface RestoreDrillSettings {
   /** The drill may run on this instance (nightly tick and Run now). Dry runs always may. */
   enabled: boolean
@@ -110,7 +113,7 @@ export function normalizeRecoverySettings(raw: unknown): RecoverySettings {
       scratch_db: scratch && !scratchNameRefusal(scratch, []) ? scratch : null,
       business_tables: [
         ...new Set(tables.map((x) => String(x ?? '').trim()).filter(validTableRef))
-      ].slice(0, 50),
+      ].slice(0, MAX_BUSINESS_TABLES),
       checkdb: d.checkdb === true,
       data_path: validServerPath(d.data_path),
       log_path: validServerPath(d.log_path),
@@ -144,6 +147,10 @@ export function mergeRecoveryPatch(stored: RecoverySettings, patch: unknown): Re
   }
   if (d.business_tables !== undefined) {
     if (!Array.isArray(d.business_tables)) bad.push('restore_drill.business_tables must be a list')
+    else if (d.business_tables.length > MAX_BUSINESS_TABLES)
+      bad.push(
+        `restore_drill.business_tables holds ${d.business_tables.length} tables; at most ${MAX_BUSINESS_TABLES}`
+      )
     else
       for (const x of d.business_tables)
         if (!validTableRef(String(x ?? '').trim()))
