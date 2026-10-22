@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Flag, Megaphone, Plus, X, Zap } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { AlertTriangle, Flag, Megaphone, Plus, X, Zap } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
@@ -64,6 +64,13 @@ export function PlanEditor({
     Object.fromEntries(initial.injects.map((i) => [i.id, fmtOffset(i.at_s)]))
   )
   const [errors, setErrors] = useState<string[]>([])
+  const errorsRef = useRef<HTMLDivElement>(null)
+  // A failed save brings its list into view and moves focus there, so the fixes are read first.
+  useEffect(() => {
+    if (!errors.length) return
+    errorsRef.current?.scrollIntoView({ block: 'nearest' })
+    errorsRef.current?.focus({ preventScroll: true })
+  }, [errors])
   const set = <K extends keyof GamedayPlan>(k: K, v: GamedayPlan[K]) =>
     setPlan((p) => ({ ...p, [k]: v }))
 
@@ -137,7 +144,7 @@ export function PlanEditor({
   const responders = plan.responders
   return (
     <form
-      className='space-y-6 p-6'
+      className='space-y-6 px-4 pt-6 sm:px-6'
       onSubmit={(e) => {
         e.preventDefault()
         save.mutate()
@@ -156,15 +163,22 @@ export function PlanEditor({
 
       {errors.length > 0 && (
         <div
+          ref={errorsRef}
           role='alert'
-          className='rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300'
+          tabIndex={-1}
+          className='flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12.5px] text-amber-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200'
         >
-          <p className='font-medium'>The plan needs a few fixes</p>
-          <ul className='mt-1 list-disc pl-5'>
-            {errors.map((er) => (
-              <li key={er}>{er}</li>
-            ))}
-          </ul>
+          <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
+          <div className='min-w-0'>
+            <p className='font-medium'>
+              The plan needs {errors.length === 1 ? 'one fix' : `${errors.length} fixes`}
+            </p>
+            <ul className='mt-1 list-disc space-y-0.5 pl-4'>
+              {errors.map((er) => (
+                <li key={er}>{er}</li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
 
@@ -176,7 +190,7 @@ export function PlanEditor({
             value={plan.title}
             maxLength={120}
             onChange={(e) => set('title', e.target.value)}
-            placeholder='Monthly staging game day'
+            placeholder='e.g. November staging game day'
           />
         </label>
         <label className='space-y-1'>
@@ -343,15 +357,19 @@ export function PlanEditor({
                   <span className='w-5 text-right text-[11px] tabular-nums text-slate-400 dark:text-muted-foreground'>
                     {n + 1}
                   </span>
-                  <label className='flex items-center gap-1'>
-                    <span className='sr-only'>Time after the start</span>
-                    <span className='font-mono text-[12px] text-slate-500 dark:text-muted-foreground'>
+                  <label className='relative flex items-center'>
+                    <span className='sr-only'>Time after the start, as minutes:seconds</span>
+                    <span
+                      className='pointer-events-none absolute left-2 font-mono text-[12px] text-slate-400 dark:text-muted-foreground'
+                      aria-hidden
+                    >
                       +
                     </span>
                     <input
                       value={offsets[inj.id] ?? ''}
                       onChange={(e) => setOffsets((o) => ({ ...o, [inj.id]: e.target.value }))}
-                      className={cn(inputCls, 'w-[68px] font-mono text-[12px]')}
+                      inputMode='numeric'
+                      className={cn(inputCls, 'w-[72px] pl-5 font-mono text-[12px] tabular-nums')}
                       placeholder='mm:ss'
                     />
                   </label>
@@ -481,7 +499,7 @@ export function PlanEditor({
         </div>
       </section>
 
-      <div className='flex items-center gap-2 border-t border-slate-200 pt-4 dark:border-border'>
+      <div className='sticky bottom-0 z-10 -mx-4 flex items-center gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:-mx-6 sm:px-6 dark:border-border dark:bg-background'>
         <button
           type='submit'
           disabled={save.isPending}
