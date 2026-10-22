@@ -170,6 +170,12 @@ describe('ringUsers', () => {
     )
     expect(lines).toEqual(['Amy declined the call'])
     expect(sent).toEqual([
+      // Amy's other windows close the card.
+      {
+        to: `user:${AMY.toUpperCase()}`,
+        event: 'huddle:ring-cancel',
+        payload: { room: 'dm:x', reason: 'answered' }
+      },
       {
         to: `user:${ROB}`,
         event: 'huddle:ring-result',

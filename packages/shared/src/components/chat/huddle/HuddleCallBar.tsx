@@ -21,6 +21,7 @@ import { HuddleCameraButton } from './HuddleCamera'
 import { HuddleNotesButton, useHuddleCollab } from './HuddleCollab'
 import { HuddleInviteButton, HuddleInviteList } from './HuddlePeoplePicker'
 import { HuddleStageTools } from './HuddleStageTools'
+import { useCloseOnWindowBlur } from './huddle-dismiss'
 import type { HuddlePipHandle } from './huddle-pip'
 import { raiseHand } from './huddle-reactions'
 import { huddleShortcuts } from './huddle-shortcuts'
@@ -130,6 +131,10 @@ function MoreMenu({
 }) {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<'menu' | 'invite'>('menu')
+  useCloseOnWindowBlur(open, () => {
+    setOpen(false)
+    setView('menu')
+  })
   const toShortcuts = useRef(false)
   const joining = huddle.state.status === 'joining'
   const raised = !!huddle.state.handAt

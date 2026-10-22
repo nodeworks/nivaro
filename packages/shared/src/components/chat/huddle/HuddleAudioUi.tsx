@@ -24,6 +24,7 @@ import {
   listAudioDevices,
   openMic
 } from './huddle-devices'
+import { useCloseOnWindowBlur } from './huddle-dismiss'
 import { huddleShortcuts } from './huddle-shortcuts'
 import { huddleSpeaking } from './huddle-speaking'
 import { useHuddleShortcuts } from './useHuddleAudio'
@@ -421,6 +422,7 @@ export function DeviceSettingsButton({
   variant?: 'gear' | 'chevron'
 }) {
   const [open, setOpen] = useState(false)
+  useCloseOnWindowBlur(open, () => setOpen(false))
   const toShortcuts = useRef(false)
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -523,6 +525,7 @@ function Kbd({ children }: { children: React.ReactNode }) {
  */
 export function ShortcutSheetAnchor() {
   const { helpOpen } = useHuddleShortcuts()
+  useCloseOnWindowBlur(helpOpen, () => huddleShortcuts.setHelpOpen(false))
   return (
     <Popover open={helpOpen} onOpenChange={(o) => huddleShortcuts.setHelpOpen(o)}>
       <PopoverAnchor asChild>

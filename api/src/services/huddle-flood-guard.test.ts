@@ -94,17 +94,28 @@ function fakeRedis(counters = false) {
     }
   }
   if (!counters) return base
+  // Expiry by the (possibly fake) clock, like the real server: a lapsed window starts over.
+  const lapse = (k: string) => {
+    const at = ttl.get(k)
+    if (at != null && at <= Date.now()) {
+      store.delete(k)
+      ttl.delete(k)
+    }
+  }
   return Object.assign(base, {
     async incr(k: string) {
+      lapse(k)
       const n = Number(store.get(k) ?? 0) + 1
       store.set(k, String(n))
       return n
     },
     async pexpire(k: string, ms: number) {
-      ttl.set(k, ms)
+      ttl.set(k, Date.now() + ms)
     },
     async pttl(k: string) {
-      return ttl.get(k) ?? -1
+      lapse(k)
+      const at = ttl.get(k)
+      return at == null ? -1 : at - Date.now()
     }
   })
 }
@@ -327,6 +338,100 @@ describe('join / leave churn', () => {
     await handlers.get('huddle:join')?.({ room })
     expect(lines.filter((l) => l.includes('started a huddle'))).toHaveLength(2)
     expect(notices).toHaveLength(2)
+  })
+})
+
+describe('calls in a direct message', () => {
+  function dmHarness(redis: HuddleRedis, ring: RingDeps, members: string[]) {
+    const lines: string[] = []
+    const d: HuddleDeps = {
+      redis,
+      canSeeRoom: async () => true,
+      settings: async () => ({ enabled: true, max_participants: 8 }),
+      postLine: async (_room, text) => {
+        lines.push(text)
+      },
+      noteWriterRefusal: async () => null,
+      postNote: async () => null,
+      warn: () => {},
+      directMembers: async () => members,
+      ring
+    }
+    const io = { to: () => ({ emit: () => {} }) }
+    const scope = {
+      scopedRoom: async (r: string) => r,
+      scopedRoomNow: (r: string) => r,
+      tenantNow: () => ''
+    }
+    const sock = (id: string, user: Record<string, unknown>) => {
+      const handlers = new Map<string, (...a: any[]) => any>()
+      const socket = {
+        id,
+        data: {} as Record<string, unknown>,
+        on: (ev: string, h: (...a: any[]) => any) => handlers.set(ev, h),
+        emit: () => {},
+        join: () => {},
+        leave: () => {}
+      }
+      registerHuddle(io as never, socket as never, () => user as unknown as User, scope, d)
+      return (ev: string, payload?: unknown) => handlers.get(ev)?.(payload)
+    }
+    return { lines, sock }
+  }
+
+  it('joining the huddle you are being rung into answers the call (no "No answer", no cooldown)', async () => {
+    const redis = fakeRedis(true)
+    const { deps: ring, sent } = ringDeps(redis)
+    const room = `dm:U-ROB:${AMY}`
+    const { lines, sock } = dmHarness(redis, ring, ['U-ROB', AMY.toUpperCase()])
+    const robS = sock('S1', rob)
+    const amyS = sock('S2', { ...amy, id: AMY })
+    await robS('huddle:join', { room })
+    expect(
+      sent.some((s) => s.event === 'huddle:ring' && s.to === `user:${AMY.toUpperCase()}`)
+    ).toBe(true)
+    // Amy uses the Join button (or another window) instead of the call card.
+    await amyS('huddle:join', { room })
+    expect(sent).toContainEqual({
+      to: 'user:U-ROB',
+      event: 'huddle:ring-result',
+      payload: { room, user: AMY, name: 'Amy', accept: true }
+    })
+    // Every other window of Amy's closes its call card.
+    expect(sent).toContainEqual({
+      to: `user:${AMY.toUpperCase()}`,
+      event: 'huddle:ring-cancel',
+      payload: { room, reason: 'answered' }
+    })
+    await timeOut(ring, null, room)
+    expect(lines.some((l) => l.startsWith('No answer'))).toBe(false)
+    expect(redis.store.has(ringGuardKeys.cooldown(null, 'U-ROB', AMY))).toBe(false)
+  })
+
+  it('the other person restarting a just-ended huddle still calls you', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-21T12:00:00Z'))
+    const redis = fakeRedis(true)
+    const { deps: ring, notices } = ringDeps(redis)
+    const ROB = 'aaaaaaaa-0000-0000-0000-00000000000f'
+    const room = `dm:${ROB}:${AMY}`
+    const { lines, sock } = dmHarness(redis, ring, [ROB.toUpperCase(), AMY.toUpperCase()])
+    const robS = sock('S1', { ...rob, id: ROB })
+    const amyS = sock('S2', { ...amy, id: AMY })
+    await robS('huddle:join', { room })
+    await amyS('huddle:join', { room })
+    vi.advanceTimersByTime(60_000)
+    await robS('huddle:leave', { room })
+    await amyS('huddle:leave', { room })
+    expect(lines.filter((l) => l.startsWith('Huddle ended'))).toHaveLength(1)
+    notices.length = 0
+
+    // Amy calls back seconds later: the same huddle resumes (no new start line)…
+    vi.advanceTimersByTime(3000)
+    await amyS('huddle:join', { room })
+    expect(lines.filter((l) => l.includes('started a huddle'))).toHaveLength(1)
+    // …but Rob is rung.
+    expect(notices).toEqual([ROB.toUpperCase()])
   })
 })
 

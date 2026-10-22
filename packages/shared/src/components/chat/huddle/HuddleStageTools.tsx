@@ -4,6 +4,7 @@ import { useMemo, useState, useSyncExternalStore } from 'react'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { cameraStore } from './huddle-camera'
+import { useCloseOnWindowBlur } from './huddle-dismiss'
 import {
   type FloatingReaction,
   HUDDLE_REACTIONS,
@@ -41,6 +42,7 @@ export function HuddleStageTools({
   children?: React.ReactNode
 }) {
   const [picking, setPicking] = useState(false)
+  useCloseOnWindowBlur(picking, () => setPicking(false))
   const raised = !!handAt
   return (
     <div className='flex items-center gap-0.5' data-huddle-stage-tools>

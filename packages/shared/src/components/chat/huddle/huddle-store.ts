@@ -125,6 +125,17 @@ const IDLE: HuddleState = {
 /** Every 15 s the server hears we are still here (it forgets us after 45 s). */
 const PING_MS = 15_000
 
+/**
+ * What a screen share asks the browser for. Chrome leaves the tab you are on out of the
+ * picker unless `selfBrowserSurface` says include — and that tab is usually the one to show.
+ * The Chrome-only hints are ignored elsewhere.
+ */
+export const SCREEN_SHARE_OPTIONS = {
+  video: { frameRate: 15, width: { ideal: 1920 }, height: { ideal: 1080 } },
+  audio: false,
+  ...({ selfBrowserSurface: 'include', surfaceSwitching: 'include' } as object)
+} as DisplayMediaStreamOptions
+
 /** The lower socket id yields in a glare (perfect negotiation's "polite" side). */
 export function politeFor(self: string, other: string): boolean {
   return self < other
@@ -257,7 +268,9 @@ class HuddleStore {
     fetchSfu?: (room: string, socket: string) => Promise<SfuTokenConfig>
   ) {
     this.fetchIce = fetchIce
-    this.fetchSfu = fetchSfu ?? null
+    // The call layer attaches without the SFU token reader: it must not unset the one the
+    // room's huddle hook attached (mount order decides who attaches last).
+    if (fetchSfu) this.fetchSfu = fetchSfu
     if (this.transport === transport) return
     for (const off of this.offs) off()
     this.transport = transport
@@ -625,6 +638,8 @@ class HuddleStore {
       off: 'Huddles are turned off on this instance.',
       'no-dm': 'Huddles run in channels and record rooms.',
       'not-signed-in': 'Sign in again to join.',
+      // One seat per person: joining from another window or app moves you there.
+      moved: 'You joined this huddle from another window, so it ended here.',
       unavailable: 'The huddle service is unavailable right now.'
     }
     this.teardown()
@@ -834,10 +849,7 @@ class HuddleStore {
     if (this.state.status !== 'live' || this.state.sharing) return
     let stream: MediaStream
     try {
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 15, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: false
-      })
+      stream = await navigator.mediaDevices.getDisplayMedia(SCREEN_SHARE_OPTIONS)
     } catch {
       return
     }

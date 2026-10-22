@@ -5,7 +5,8 @@ import {
   type LivePeer,
   mergeRoster,
   peerSummary,
-  politeFor
+  politeFor,
+  SCREEN_SHARE_OPTIONS
 } from './huddle-store'
 
 const peer = (socket: string, over: Partial<LivePeer> = {}): LivePeer => ({
@@ -102,5 +103,39 @@ describe('SFU source routing in the store (#2858)', () => {
     } finally {
       store.teardown()
     }
+  })
+})
+
+describe('screen share options', () => {
+  it('offers the tab I am on in the picker (Chrome hides it by default)', () => {
+    expect(SCREEN_SHARE_OPTIONS).toMatchObject({ selfBrowserSurface: 'include', audio: false })
+  })
+})
+
+describe('joining from another window (one seat per person)', () => {
+  const store = huddleStore as any
+
+  it('the window whose seat moved hangs up and says why', () => {
+    store.set({ room: 'dm:a:b', status: 'live', self: 'OLD', peers: [] })
+    store.onDenied({ room: 'dm:a:b', reason: 'moved' })
+    expect(store.getSnapshot()).toMatchObject({
+      status: 'error',
+      error: 'You joined this huddle from another window, so it ended here.'
+    })
+    store.clearError()
+  })
+
+  it('a window not in that huddle ignores it', () => {
+    store.clearError()
+    store.onDenied({ room: 'dm:a:b', reason: 'moved' })
+    expect(store.getSnapshot().status).toBe('idle')
+  })
+
+  it('attaching without an SFU token reader keeps the one already attached', () => {
+    const transport = { on: () => () => {}, emit: () => {} }
+    const fetchSfu = async () => ({}) as never
+    store.attach(transport, async () => ({}) as never, fetchSfu)
+    store.attach(transport, async () => ({}) as never)
+    expect(store.fetchSfu).toBe(fetchSfu)
   })
 })

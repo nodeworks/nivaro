@@ -14,8 +14,10 @@ import type { HuddleRedis } from './huddle.js'
  * A refusal is never silent: the caller gets `huddle:ring-refused` with who and how long.
  *
  * Join / leave churn (per room): a huddle that ends and restarts within CHURN_REUSE_S is the
- * same huddle — it keeps its start time, posts no new "started" line and rings nobody again —
- * and when that restart ends again inside the window it posts no "ended" line either. Start
+ * same huddle — it keeps its start time and posts no new "started" line — and when that
+ * restart ends again inside the window it posts no "ended" line either. A restart in a direct
+ * message still rings (the other person calling back must reach you); the ring guards above
+ * are what stop a join/leave loop from ringing again. Start
  * and end lines are also capped at ROOM_LINES_MAX per room per ROOM_LINES_WINDOW_S.
  *
  * Counters use INCR + PEXPIRE where the client has them (ioredis does), so a burst of parallel

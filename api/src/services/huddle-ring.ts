@@ -18,7 +18,7 @@ import {
  * an answer handled on another replica is seen by the timer on this one.
  *
  * Events: server → callee `huddle:ring {room, from, name, at, scheduled?}` and
- * `huddle:ring-cancel {room, reason}`; server → caller `huddle:ringing
+ * `huddle:ring-cancel {room, reason}` (reason `answered` = answered in another window); server → caller `huddle:ringing
  * {room, users}` and `huddle:ring-result {room, user, name, accept, reason?}`.
  * Callee → server `huddle:ring-answer {room, accept}`; caller → server
  * `huddle:ring-cancel {room}`, `huddle:invite {room, users}`.
@@ -237,6 +237,8 @@ export async function answerRing(
     input.accept ? 'accepted' : 'declined'
   )
   const name = nameOf(input.user)
+  // The callee's other windows and apps close their call card too.
+  deps.io.to(`user:${id}`).emit('huddle:ring-cancel', { room: input.room, reason: 'answered' })
   deps.io.to(`user:${call.from.id}`).emit('huddle:ring-result', {
     room: input.room,
     user: input.user.id,

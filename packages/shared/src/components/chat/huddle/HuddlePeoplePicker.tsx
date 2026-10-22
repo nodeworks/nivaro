@@ -15,6 +15,7 @@ import {
 } from '../../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { huddleCalls } from './huddle-calls'
+import { useCloseOnWindowBlur } from './huddle-dismiss'
 
 /**
  * People who could be added to a room's huddle (#2844, #2860): the search is
@@ -182,6 +183,7 @@ export function HuddleInviteButton({
   className?: string
 }) {
   const [open, setOpen] = useState(false)
+  useCloseOnWindowBlur(open, () => setOpen(false))
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>

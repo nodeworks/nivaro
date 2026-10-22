@@ -115,6 +115,7 @@ function fakeIo() {
 
 const rob = { id: 'U-ROB', first_name: 'Rob', last_name: 'Lee', email: 'rob@x' } as User
 const amy = { id: 'U-AMY', first_name: 'Amy', last_name: null, email: 'amy@x' } as User
+const ben = { id: 'U-BEN', first_name: 'Ben', last_name: null, email: 'ben@x' } as User
 
 const scope = {
   scopedRoom: async (r: string) => r,
@@ -384,7 +385,7 @@ describe('Follow me (#2855)', () => {
     expect(io.sent.at(-1)?.payload).toMatchObject({ action: 'move', step: 'files', section: null })
 
     // A late joiner learns who presents.
-    const c = connect('S3', rob)
+    const c = connect('S3', ben)
     await c.fire('huddle:join', { room })
     await c.fire('huddle:collab:sync', { room })
     expect(c.emitted.find((e) => e.event === 'huddle:follow')?.payload).toMatchObject({

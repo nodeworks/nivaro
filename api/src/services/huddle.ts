@@ -544,9 +544,15 @@ export function registerHuddle(
       const tenant = scope.tenantNow()
       const peers = await peersOf(r)
       const already = peers.some((p) => p.socket === socket.id)
-      if (!already && peers.length >= settings.max_participants) return deny(r, 'full')
+      // One seat per person: their other sockets in this huddle (another window or app, or a
+      // reconnect whose old socket the server has not noticed yet) give the seat up to this one.
+      const me = String(user.id).toUpperCase()
+      const displaced = peers.filter((p) => p.socket !== socket.id && p.user.toUpperCase() === me)
+      const others = peers.filter((p) => !displaced.includes(p))
+      if (!already && others.length >= settings.max_participants) return deny(r, 'full')
       const prev = data()
       if (prev && prev.room !== r) await leave(prev.room)
+      for (const p of displaced) await displace(r, p)
       const k = keys(tenant, r)
       const since = Date.now()
       await deps.redis.hset(
@@ -559,9 +565,10 @@ export function registerHuddle(
       setData({ room: r })
       const name = await scope.scopedRoom(`huddle:${r}`)
       if (name) socket.join(name)
+      // A seat that moved here from another socket is the same huddle carrying on.
       const first = peers.length === 0
-      // Finding 1 — the same huddle restarting within seconds keeps its start, posts no
-      // "started" line and rings nobody again.
+      // Finding 1 — the same huddle restarting within seconds keeps its start and posts no
+      // "started" line. It still rings: the ring guards (cooldown, caps) stop a join/leave loop.
       const resumed = first
         ? await resumeRecentHuddle(deps.redis, tenant, r, since).catch(() => null)
         : null
@@ -578,7 +585,7 @@ export function registerHuddle(
       }
       // #2859: one more person than the mesh comfortably carries → everyone moves to the SFU.
       const before = first ? 'mesh' : await huddleMode(deps.redis, tenant, r)
-      const count = peers.length + (already ? 0 : 1)
+      const count = others.length + (already ? 0 : 1)
       const mode = decideHuddleMode(before, count, {
         sfu: !!settings.sfu,
         switch_at: settings.switch_at ?? Number.POSITIVE_INFINITY
@@ -587,7 +594,7 @@ export function registerHuddle(
       socket.emit('huddle:joined', {
         room: r,
         self: socket.id,
-        peers: peers.filter((p) => p.socket !== socket.id),
+        peers: others.filter((p) => p.socket !== socket.id),
         mode
       })
       if (mode !== before) {
@@ -595,15 +602,17 @@ export function registerHuddle(
         if (h) io.to(h).emit('huddle:mode', { room: r, mode })
       }
       await broadcast(r)
-      await record(
-        () => deps.sessions?.joined(tenant, r, String(user.id), peers.length + (already ? 0 : 1)),
-        r
-      )
+      await record(() => deps.sessions?.joined(tenant, r, String(user.id), count), r)
       if (first && !resumed && (await roomLineAllowed(deps.redis, tenant, r).catch(() => true))) {
         await deps.postLine(r, `${nameOf(user) ?? 'Someone'} started a huddle`)
       }
+      // Joining a huddle I am being rung into answers the call (the Join button, another
+      // window): the caller hears it, my other windows close the card, no "No answer" line.
+      if (!first && deps.ring) {
+        await answerRing(deps.ring, { tenant, room: r, user, accept: true }).catch(() => false)
+      }
       // #2843 — the first person in a direct conversation's huddle calls the others.
-      if (first && !resumed && deps.ring && deps.directMembers) {
+      if (first && deps.ring && deps.directMembers) {
         const members = await deps.directMembers(r).catch(() => null)
         if (members?.length) {
           await ringUsers(deps.ring, { tenant, room: r, from: user, users: members })
@@ -613,6 +622,27 @@ export function registerHuddle(
       deps.warn({ err, room: r }, 'huddle:join failed')
       deny(r, 'unavailable')
     }
+  }
+
+  /**
+   * Take a seat away from another socket of the joining person (one seat per person). That
+   * socket — on any replica — is told `moved` so its window hangs up instead of lingering as a
+   * second, never-connecting copy of them in everyone's call. Its own later leave or
+   * disconnect finds nothing to remove and, while the person still has a seat, neither
+   * clears their "In a huddle" mark nor hangs up their calls (leave below).
+   */
+  async function displace(room: string, peer: HuddlePeer) {
+    const tenant = scope.tenantNow()
+    const k = keys(tenant, room)
+    if ((await huddleMode(deps.redis, tenant, room)) === 'sfu' && peer.user) {
+      const session = await huddleSession(deps.redis, tenant, room)
+      await evict(room, session, sfuIdentity(peer.user, peer.socket))
+    }
+    await deps.redis.zrem(k.set, peer.socket)
+    await deps.redis.hdel(k.meta, peer.socket)
+    invalidateHuddleMarks(tenant, room)
+    await collabLeft(io, scope, deps.redis, tenant, room, peer.socket)
+    io.to(peer.socket).emit('huddle:denied', { room, reason: 'moved' })
   }
 
   async function leave(room: string) {
@@ -635,7 +665,10 @@ export function registerHuddle(
       await deps.redis.hdel(k.meta, socket.id)
       // #2856 — nobody's cached recipient list may name this socket any more.
       invalidateHuddleMarks(tenant, room)
-      if (user) {
+      // A socket whose seat moved elsewhere leaving: the person is still in the call.
+      const me = user ? String(user.id).toUpperCase() : ''
+      const seated = user && (await peersOf(room)).some((p) => p.user.toUpperCase() === me)
+      if (user && !seated) {
         await unmarkHuddling(deps.redis, tenant, user.id, room).catch(() => undefined)
         // Leaving while people are still ringing hangs up on them.
         if (deps.ring) await cancelRing(deps.ring, { tenant, room, by: user }).catch(() => false)

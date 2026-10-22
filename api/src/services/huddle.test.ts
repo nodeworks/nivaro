@@ -124,6 +124,7 @@ function fakeIo() {
 
 const rob = { id: 'U-ROB', first_name: 'Rob', last_name: 'Lee', email: 'rob@x' } as User
 const amy = { id: 'U-AMY', first_name: 'Amy', last_name: null, email: 'amy@x' } as User
+const ben = { id: 'U-BEN', first_name: 'Ben', last_name: null, email: 'ben@x' } as User
 
 function deps(redis: HuddleRedis, over: Partial<HuddleDeps> = {}) {
   const lines: Array<{ room: string; text: string }> = []
@@ -182,7 +183,12 @@ describe('registerHuddle', () => {
     const io = fakeIo()
     const { d } = deps(redis)
     const [a, b, c] = ['S1', 'S2', 'S3'].map(fakeSocket)
-    for (const s of [a, b, c]) registerHuddle(io as never, s.socket as never, () => rob, scope, d)
+    for (const [s, u] of [
+      [a, rob],
+      [b, amy],
+      [c, ben]
+    ] as const)
+      registerHuddle(io as never, s.socket as never, () => u, scope, d)
     for (const s of [a, b, c]) await s.fire('huddle:join', { room: 'ch:ops' })
     const mark = async () => {
       io.sent.length = 0
@@ -218,6 +224,67 @@ describe('registerHuddle', () => {
     const joined = b.emitted[0].payload as { self: string; peers: Array<{ socket: string }> }
     expect(joined.self).toBe('S2')
     expect(joined.peers.map((p) => p.socket)).toEqual(['S1'])
+    expect(lines).toHaveLength(1)
+  })
+
+  it('one seat per person: joining from another socket moves them there, the huddle carries on', async () => {
+    const io = fakeIo()
+    const { d, lines } = deps(redis)
+    const a = fakeSocket('S1')
+    const b = fakeSocket('S2')
+    const a2 = fakeSocket('S3')
+    registerHuddle(io as never, a.socket as never, () => rob, scope, d)
+    registerHuddle(io as never, b.socket as never, () => amy, scope, d)
+    registerHuddle(
+      io as never,
+      a2.socket as never,
+      () => ({ ...rob, id: 'u-rob' }) as User,
+      scope,
+      d
+    )
+    await a.fire('huddle:join', { room: 'ch:ops' })
+    await b.fire('huddle:join', { room: 'ch:ops' })
+    const start = redis.store.get('nvr:huddle:-:ch:ops:start')
+
+    // Rob again from a second socket (another window, or a reconnect whose old socket the
+    // server has not noticed yet): the old seat goes and its socket is told why.
+    await a2.fire('huddle:join', { room: 'ch:ops' })
+    expect((await huddlePeers(redis, null, 'ch:ops')).map((p) => p.socket)).toEqual(['S2', 'S3'])
+    expect(io.sent).toContainEqual({
+      to: 'S1',
+      event: 'huddle:denied',
+      payload: { room: 'ch:ops', reason: 'moved' }
+    })
+    const joined = a2.emitted[0].payload as { peers: Array<{ socket: string }> }
+    expect(joined.peers.map((p) => p.socket)).toEqual(['S2'])
+    const last = io.sent.filter((s) => s.event === 'huddle:peers').at(-1)?.payload as {
+      peers: Array<{ socket: string }>
+    }
+    expect(last.peers.map((p) => p.socket)).toEqual(['S2', 'S3'])
+
+    // The old socket going away later changes nothing for the seat that replaced it.
+    await a.fire('disconnect')
+    expect((await huddlePeers(redis, null, 'ch:ops')).map((p) => p.socket)).toEqual(['S2', 'S3'])
+    expect(lines).toEqual([{ room: 'ch:ops', text: 'Rob Lee started a huddle' }])
+    expect(redis.store.get('nvr:huddle:-:ch:ops:start')).toBe(start)
+  })
+
+  it('the only person rejoining from a new socket keeps the same huddle (no restart, no line)', async () => {
+    const io = fakeIo()
+    const { d, lines } = deps(redis)
+    const a = fakeSocket('S1')
+    const a2 = fakeSocket('S2')
+    registerHuddle(io as never, a.socket as never, () => rob, scope, d)
+    registerHuddle(io as never, a2.socket as never, () => rob, scope, d)
+    await a.fire('huddle:join', { room: 'ch:ops' })
+    const session = await huddleSession(redis, null, 'ch:ops')
+    await a2.fire('huddle:join', { room: 'ch:ops' })
+    expect((await huddlePeers(redis, null, 'ch:ops')).map((p) => p.socket)).toEqual(['S2'])
+    expect(await huddleSession(redis, null, 'ch:ops')).toBe(session)
+    expect(lines).toHaveLength(1)
+    // The replaced socket's late leave neither ends the huddle nor touches the new seat.
+    await a.fire('huddle:leave', { room: 'ch:ops' })
+    expect((await huddlePeers(redis, null, 'ch:ops')).map((p) => p.socket)).toEqual(['S2'])
     expect(lines).toHaveLength(1)
   })
 
@@ -383,7 +450,10 @@ describe('large huddles (#2859): the mode switch', () => {
       settings: async () => ({ enabled: true, max_participants: 25, sfu: true, switch_at: 2 })
     })
     const socks = ['S1', 'S2', 'S3'].map((id) => fakeSocket(id))
-    for (const s of socks) registerHuddle(io as never, s.socket as never, () => rob, scope, d)
+    const people = [rob, amy, ben]
+    for (const [i, s] of socks.entries()) {
+      registerHuddle(io as never, s.socket as never, () => people[i], scope, d)
+    }
 
     await socks[0].fire('huddle:join', { room: 'ch:ops' })
     await socks[1].fire('huddle:join', { room: 'ch:ops' })
