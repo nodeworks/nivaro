@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, KeyRound, Loader2, RefreshCw } from 'lucide-
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { CollapsibleCard, type SummaryTone, useCardOpen } from '@/components/collapsible-card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
@@ -250,8 +251,16 @@ export function StackDriftCard() {
     onError: (err: Error) => toast.error(err.message)
   })
 
-  if (q.isError || (q.data && (!q.data.available || q.data.cloud))) return null
   const d = q.data
+  const sum = d ? driftSummary(d) : null
+  const [cardOpen, setCardOpen] = useCardOpen('stack-drift', sum?.attention ?? false)
+  // A ?drift= link opens the card for this visit without changing the remembered choice.
+  const [peek, setPeek] = useState(!!asked)
+  useEffect(() => {
+    if (asked) setPeek(true)
+  }, [asked])
+
+  if (q.isError || (d && (!d.available || d.cloud))) return null
   const toggle = (key: string) =>
     setOpen((s) => {
       const next = new Set(s)
@@ -261,24 +270,26 @@ export function StackDriftCard() {
     })
 
   return (
-    <section
+    <CollapsibleCard
       data-drift-card
-      className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'
-    >
-      <div className='flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1'>
-        <div className='min-w-0'>
-          <h2 className='text-[13.5px] font-semibold text-slate-900 dark:text-foreground'>
-            Stack drift
-          </h2>
-          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
-            Running service specs compared with what the last deploy left — checked nightly.
-          </p>
-        </div>
-        {d && d.stacks.length > 0 && d.docker_configured && (
+      title='Stack drift'
+      summary={sum?.text ?? 'checking…'}
+      tone={sum?.tone ?? 'muted'}
+      open={peek || cardOpen}
+      onOpenChange={(v) => {
+        setPeek(false)
+        setCardOpen(v)
+      }}
+      actions={
+        d &&
+        d.stacks.length > 0 &&
+        d.docker_configured && (
           <Button
             size='sm'
             variant='outline'
             data-drift-check
+            aria-label='Check now'
+            data-tip='Compare every stack with its last deploy now'
             disabled={check.isPending}
             onClick={() => check.mutate()}
           >
@@ -287,10 +298,14 @@ export function StackDriftCard() {
             ) : (
               <RefreshCw className='h-3.5 w-3.5' />
             )}
-            Check now
+            <span className='hidden sm:inline'>Check now</span>
           </Button>
-        )}
-      </div>
+        )
+      }
+    >
+      <p className='mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
+        Running service specs compared with what the last deploy left — checked nightly.
+      </p>
 
       {q.isLoading && (
         <div className='mt-3 space-y-2'>
@@ -375,8 +390,42 @@ export function StackDriftCard() {
           })}
         </ul>
       )}
-    </section>
+    </CollapsibleCard>
   )
+}
+
+/**
+ * Pure: the card's one-line summary. Attention = a stack drifted or its check failed. Never
+ * "all match" while a stack was not compared (no live source, no check yet).
+ */
+export function driftSummary(d: Pick<DriftStatus, 'stacks' | 'docker_configured'>): {
+  text: string
+  tone: SummaryTone
+  attention: boolean
+} {
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
+  if (d.stacks.length === 0) return { text: 'not compared yet', tone: 'muted', attention: false }
+  const drifted = d.stacks.filter((s) => s.drift > 0).length
+  const failed = d.stacks.filter((s) => s.live_host && s.last_check.status === 'error').length
+  const unchecked = d.stacks.filter(
+    (s) => !s.live_host || (s.last_check.status !== 'error' && !s.last_check.at)
+  ).length
+  const parts: string[] = []
+  if (drifted) parts.push(`${plural(drifted, 'stack')} drifted`)
+  if (failed) parts.push(`check failed on ${failed}`)
+  if (drifted || failed) {
+    if (unchecked) parts.push(`${unchecked} not compared`)
+    return { text: parts.join(' · '), tone: failed ? 'bad' : 'warn', attention: true }
+  }
+  if (!d.docker_configured || unchecked === d.stacks.length)
+    return { text: 'not compared yet', tone: 'muted', attention: false }
+  if (unchecked)
+    return {
+      text: `no drift in the stacks checked · ${unchecked} not compared`,
+      tone: 'muted',
+      attention: false
+    }
+  return { text: 'all stacks match the last deploy', tone: 'ok', attention: false }
 }
 
 /** Infrastructure → Stacks: one line per stack with drift, linking to Environments. */

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { CollapsibleCard, type SummaryTone, useCardOpen } from '@/components/collapsible-card'
 import { Button } from '@/components/ui/button'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
@@ -165,14 +166,19 @@ export function RunbooksCard() {
     const live = current ?? hostActive
     if (live && !openId) setOpenId(live.id)
   }, [current, hostActive, openId])
+  const sum = q.data ? runbooksSummary(q.data.runbooks, q.data.runs, current) : null
+  const [cardOpen, setCardOpen] = useCardOpen('runbooks', sum?.attention ?? false)
   if (!q.data?.available || q.data.runbooks.length === 0) return null
   return (
-    <section
+    <CollapsibleCard
       data-runbooks-card
-      className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'
+      title='Runbooks'
+      summary={sum?.text ?? ''}
+      tone={sum?.tone ?? 'muted'}
+      open={cardOpen}
+      onOpenChange={setCardOpen}
     >
-      <h2 className='text-[13.5px] font-semibold text-slate-900 dark:text-foreground'>Runbooks</h2>
-      <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+      <p className='mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
         Long operator scripts from extensions, watched here. Local ones run on this machine (local
         development only); host ones are queued for the agent on the machine that runs them. Each
         needs its dry-run report before a real run.
@@ -200,8 +206,47 @@ export function RunbooksCard() {
           )}
         />
       )}
-    </section>
+    </CollapsibleCard>
   )
+}
+
+/**
+ * Pure: the card's one-line summary. Attention = a run is live, the newest run of a runbook
+ * failed or was lost, or a host runbook has no agent checking in.
+ */
+export function runbooksSummary(
+  runbooks: Runbook[],
+  runs: RunbookRun[],
+  current: RunbookRun | null
+): { text: string; tone: SummaryTone; attention: boolean } {
+  const label = (r: RunbookRun) =>
+    runbooks.find((rb) => rb.extension === r.extension && rb.key === r.runbook)?.label ?? r.runbook
+  const live = current ?? runbooks.find((rb) => rb.active)?.active ?? null
+  if (live)
+    return {
+      text: `${label(live)} ${live.state === 'queued' ? 'queued' : 'running'}${live.mode === 'dry' ? ' (dry run)' : ''}`,
+      tone: 'ok',
+      attention: true
+    }
+  const failed = runbooks
+    .map((rb) => runs.find((r) => r.extension === rb.extension && r.runbook === rb.key))
+    .find((r) => r && (r.state === 'failed' || r.state === 'lost'))
+  if (failed)
+    return {
+      text: `${label(failed)}: last run ${failed.state === 'lost' ? 'ended without a result' : 'failed'}`,
+      tone: 'bad',
+      attention: true
+    }
+  const host = runbooks.filter((rb) => rb.runs_on === 'host')
+  const offline = host.some((rb) => !rb.agents.some((a) => a.online))
+  const count = `${runbooks.length} runbook${runbooks.length === 1 ? '' : 's'}`
+  if (offline)
+    return { text: `${count} · host agent not checking in`, tone: 'warn', attention: true }
+  return {
+    text: `${count} · nothing running${host.length ? ' · host agent online' : ''}`,
+    tone: 'muted',
+    attention: false
+  }
 }
 
 function HostAgentLine({ rb, cron }: { rb: Runbook; cron: string }) {

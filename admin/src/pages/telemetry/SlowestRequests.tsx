@@ -152,7 +152,7 @@ export function SlowestRequests({ grafanaUrl }: { grafanaUrl: string | null }) {
                           aria-label={`${isOpen ? 'Hide explanation for' : 'Explain'} ${t.route}`}
                           onClick={() => setOpen(isOpen ? null : t.trace_id)}
                           className={cn(
-                            'rounded px-1.5 py-0.5 text-[12px] text-nvr-cyan hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                            'rounded px-1.5 py-0.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
                             isOpen && 'bg-nvr-cyan/10'
                           )}
                         >

@@ -253,7 +253,7 @@ function TraceRow({ trace, grafanaUrl }: { trace: CitedTrace; grafanaUrl: string
             aria-controls={panel}
             aria-label={`${open ? 'Hide explanation for' : 'Explain'} ${name}`}
             className={cn(
-              'rounded px-1.5 py-0.5 text-nvr-cyan hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+              'rounded px-1.5 py-0.5 font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
               open && 'bg-nvr-cyan/10'
             )}
           >

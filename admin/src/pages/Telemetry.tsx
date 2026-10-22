@@ -391,7 +391,7 @@ function Alerts({
               href={`${grafanaUrl.replace(/\/$/, '')}/alerting/silences?alertmanager=am`}
               target='_blank'
               rel='noopener noreferrer'
-              className='text-nvr-cyan hover:underline'
+              className='font-medium text-nvr-navy underline underline-offset-2 dark:text-nvr-cyan'
             >
               Manage silences in Grafana
             </a>

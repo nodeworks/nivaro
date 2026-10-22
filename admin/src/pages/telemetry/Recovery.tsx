@@ -654,7 +654,7 @@ export function RecoveryPanel() {
               href={s.runbook_url}
               target='_blank'
               rel='noopener noreferrer'
-              className='inline-flex items-center gap-1 text-[12.5px] text-nvr-cyan hover:underline'
+              className='inline-flex items-center gap-1 text-[12.5px] font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
             >
               Disaster-recovery runbook
               <ArrowUpRight className='h-3.5 w-3.5' aria-hidden='true' />
