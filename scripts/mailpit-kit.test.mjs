@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+
+// js-yaml is an api dependency; resolve it from there
+const yaml = createRequire(new URL('../api/package.json', import.meta.url))('js-yaml')
 
 const dir = new URL('../deploy/staging/mailpit/', import.meta.url)
 const read = (f) => readFileSync(new URL(f, dir), 'utf8')
@@ -9,6 +13,27 @@ const overlay = read('stack.relay.yml')
 const compose = base + '\n' + overlay
 const relay = read('relay.example.yml')
 const env = read('.env.example')
+const stacks = { base: yaml.load(base), overlay: yaml.load(overlay) }
+const svc = (st) => st.services.mailpit
+
+// secrets a service attaches (short or long syntax) -> { source, target }
+const attached = (st) =>
+  (svc(st).secrets ?? []).map((x) => (typeof x === 'string' ? { source: x, target: x } : { source: x.source, target: x.target ?? x.source }))
+
+// structural checks on a parsed stack: ports must be absent or one host-mode publish of 8025
+const portProblems = (st) => {
+  const out = []
+  const s = svc(st)
+  if (s.network_mode) out.push('network_mode')
+  for (const p of s.ports ?? []) {
+    if (typeof p === 'string') { out.push(`short syntax ${p}`); continue }
+    if (p.mode !== 'host') out.push('not host mode')
+    if (Number(p.target) !== 8025) out.push(`target ${p.target}`)
+    if (Number(p.published) === 1025) out.push('1025 published')
+  }
+  return out
+}
+
 const live = (s) => s.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
 
 test('relay-all is not set anywhere', () => {
@@ -34,13 +59,17 @@ test('relay.example.yml and .env.example hold placeholders only', () => {
   }
 })
 
-test('ui-auth-file and relay config are external Swarm secrets under /run/secrets', () => {
-  const c = live(compose)
-  assert.match(c, /MP_UI_AUTH_FILE: \/run\/secrets\//)
-  assert.match(c, /MP_SMTP_RELAY_CONFIG: \/run\/secrets\//)
-  for (const name of ['mailpit_ui_auth', 'mailpit_relay']) {
-    assert.match(c, new RegExp(`^  ${name}:\\n    external: true`, 'm'), name)
+test('ui-auth-file and relay config are external Swarm secrets mounted under /run/secrets', () => {
+  const check = (st, envName) => {
+    const path = svc(st).environment[envName]
+    assert.match(path, /^\/run\/secrets\/[^/]+$/, envName)
+    const target = path.split('/').pop()
+    const hit = attached(st).find((x) => x.target === target)
+    assert.ok(hit, `${envName}: no service secret with target ${target}`)
+    assert.equal(st.secrets?.[hit.source]?.external, true, `${hit.source} must be external: true`)
   }
+  check(stacks.base, 'MP_UI_AUTH_FILE')
+  check(stacks.overlay, 'MP_SMTP_RELAY_CONFIG')
 })
 
 test('stack file uses only stack-deploy keys and the Swarm service rules', () => {
@@ -53,13 +82,24 @@ test('stack file uses only stack-deploy keys and the Swarm service rules', () =>
 })
 
 test('SMTP 1025 and the UI 8025 are never published through the ingress', () => {
-  const c = live(compose)
-  assert.doesNotMatch(c, /^\s*ports:/m, 'no active ports: key (host mode is a commented option)')
-  assert.doesNotMatch(c, /0\.0\.0\.0/)
-  assert.doesNotMatch(c, /network_mode:/, 'host networking would expose 1025 and 8025 on every interface')
+  for (const st of Object.values(stacks)) assert.deepEqual(portProblems(st), [])
+  assert.doesNotMatch(live(compose), /0\.0\.0\.0/)
   // a host-mode publish, if someone enables it, must be 8025 only and mode: host
   const commented = compose.match(/^#\s+ports:[\s\S]*?mode: host/m)?.[0] ?? ''
   assert.doesNotMatch(commented, /1025/)
+})
+
+test('port check catches quoted-key and ingress publishes (regression)', () => {
+  const bad = (txt) => portProblems(yaml.load(txt))
+  assert.ok(bad('services:\n  mailpit:\n    "ports": ["8025:8025"]').length)
+  assert.ok(bad('services:\n  mailpit:\n    "ports":\n      - {"target": 8025, "published": 8025}').length)
+  assert.ok(bad('services:\n  mailpit:\n    ports:\n      - {target: 1025, published: 1025, mode: host}').length)
+  assert.deepEqual(bad('services:\n  mailpit:\n    ports:\n      - {target: 8025, published: 8025, mode: host}'), [])
+})
+
+test('secret check catches a service with no attached secret (regression)', () => {
+  const st = yaml.load('services:\n  mailpit:\n    environment: {}\nsecrets:\n  s: {external: true}')
+  assert.deepEqual(attached(st), [])
 })
 
 test('allowed/blocked recipients exist, as settings not hard-coded in compose', () => {
