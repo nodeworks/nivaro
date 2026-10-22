@@ -78,6 +78,10 @@ export interface ReportAlert {
 export interface ReportNote {
   at: string
   actor: string | null
+  /** The writer's name as stamped on the note (game-day notes carry `by_name`). */
+  name: string | null
+  /** A note stamped on a game day's child run carries that run's id. */
+  on_run: string | null
   mark: string | null
   text: string
   after_s: number | null
@@ -248,7 +252,11 @@ export function insideBand(v: number, band: Band, tolerance = 0): boolean {
 
 export function buildRunReport(run: ChaosRun, events: ChaosRunEvent[]): RunReport {
   const sorted = [...events].sort((a, b) => (ms(a.at) ?? 0) - (ms(b.at) ?? 0) || a.id - b.id)
-  const armedEv = sorted.find((e) => e.kind === 'armed')
+  // A game day (#2852) arms through its child runs: its own timeline has a 'step' with
+  // outcome 'armed' where a plain drill has an 'armed' event.
+  const armedEv =
+    sorted.find((e) => e.kind === 'armed') ??
+    sorted.find((e) => e.kind === 'step' && e.data?.outcome === 'armed')
   const endEv = sorted.find((e) => e.kind === 'disarmed' || e.kind === 'stop' || e.kind === 'abort')
   const armedAt = ms(armedEv?.at) ?? ms(run.started_at)
   const disarmedAt = ms(endEv?.at) ?? ms(run.ended_at)
@@ -374,6 +382,10 @@ export function buildRunReport(run: ChaosRun, events: ChaosRunEvent[]): RunRepor
       }
       case 'note':
       case 'step': {
+        if (e.kind === 'step' && d.outcome === 'armed') {
+          markers.push({ t, kind: 'armed', label: str(d.label) ?? 'Fault armed' })
+          break
+        }
         const mark = noteMark(d)
         const text = str(d.text) ?? str(d.label) ?? markLabel(mark)
         // Bookkeeping notes (refusals, apply failures) are not participants' notes.
@@ -385,6 +397,8 @@ export function buildRunReport(run: ChaosRun, events: ChaosRunEvent[]): RunRepor
         notes.push({
           at: e.at,
           actor: e.actor,
+          name: str(d.by_name),
+          on_run: str(d.on_run),
           mark,
           text: text.slice(0, 1000),
           after_s: sinceArm(t)

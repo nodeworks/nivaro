@@ -46,7 +46,8 @@ export function postmortemMarkdown(input: {
   link: string | null
 }): string {
   const { run, report: r, errors, names, link } = input
-  const who = (id: string | null) => (id ? (names[id] ?? 'someone') : 'the system')
+  const who = (id: string | null, stamped: string | null = null) =>
+    (id ? names[id] : null) ?? stamped ?? (id ? 'someone' : 'the system')
   const out: string[] = []
   out.push(`# Chaos drill postmortem: ${run.label}`)
   out.push('')
@@ -137,7 +138,7 @@ export function postmortemMarkdown(input: {
   if (!r.notes.length) out.push('Nobody left a note.')
   for (const n of r.notes)
     out.push(
-      `- ${isoMin(n.at)}${n.after_s != null ? ` (+${fmtS(n.after_s)})` : ''} ${who(n.actor)}${n.mark ? ` [${markLabel(n.mark)}]` : ''}: ${esc(n.text)}`
+      `- ${isoMin(n.at)}${n.after_s != null ? ` (+${fmtS(n.after_s)})` : ''} ${who(n.actor, n.name)}${n.mark ? ` [${markLabel(n.mark)}]` : ''}: ${esc(n.text)}`
     )
   out.push('')
   out.push('## Timeline')

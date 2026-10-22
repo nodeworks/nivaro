@@ -166,6 +166,18 @@ describe('buildRunReport', () => {
     expect(r.notes[1].text).toBe('Fixed')
   })
 
+  it('a game day arms through a step with outcome armed; notes keep their stamped names', () => {
+    const r = buildRunReport(run({ kind: 'gameday', fault_key: null, started_at: at(-60) }), [
+      ev('step', 0, { outcome: 'armed', child_run_id: 'child-1' }),
+      ev('note', 30, { mark: 'noticed', text: null, by_name: 'Sam Lee', on_run: 'child-1' }, 'u2'),
+      ev('disarmed', 90)
+    ])
+    expect(r.armed_at).toBe(at(0))
+    expect(r.markers[0]).toMatchObject({ kind: 'armed' })
+    expect(r.ttd_s).toBe(30)
+    expect(r.notes[0]).toMatchObject({ name: 'Sam Lee', on_run: 'child-1', text: 'Noticed' })
+  })
+
   it('a declared incident detects; bookkeeping notes are not participants notes', () => {
     const r = buildRunReport(run(), [
       ev('armed', 0),

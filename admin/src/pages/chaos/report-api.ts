@@ -54,6 +54,8 @@ export interface RunReport {
   notes: Array<{
     at: string
     actor: string | null
+    name: string | null
+    on_run: string | null
     mark: string | null
     text: string
     after_s: number | null
