@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
+import { AlertTriangle, Info } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 import { type Catalog, chaosKeys, fetchCatalog } from './api'
 import { builderKeys, fetchPreset } from './builder/api'
 import { ExperimentBuilder } from './builder/ExperimentBuilder'
@@ -48,7 +50,19 @@ export function BuilderTab() {
       </div>
     )
   } else if (catalog.isError) {
-    body = <Notice>The catalog did not answer. Reload, or check /api/chaos/catalog.</Notice>
+    body = (
+      <Notice>
+        The fault catalog did not load (
+        <span className='font-mono text-[12px]'>/api/chaos/catalog</span>).{' '}
+        <button
+          type='button'
+          onClick={() => void catalog.refetch()}
+          className='rounded-sm font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+        >
+          Try again
+        </button>
+      </Notice>
+    )
   } else if (presetKey && (preset.isError || !preset.data)) {
     body = (
       <Notice>
@@ -89,7 +103,7 @@ export function BuilderTab() {
   }
 
   return (
-    <div className='flex-1 overflow-y-auto px-4 py-5 sm:p-6'>
+    <div className='flex-1 overflow-y-auto px-4 pb-20 pt-5 sm:p-6'>
       <div className='mb-4'>
         <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
           Build an experiment
@@ -99,6 +113,29 @@ export function BuilderTab() {
           you to confirm; Save as preset keeps it for next time.
         </p>
       </div>
+      {/* A drafted experiment (Ask AI's what-if #2860, the Traffic Map, the matrix) says so. */}
+      {specRaw && fault && !catalog.isLoading && (
+        <p
+          role='status'
+          className={cn(
+            'mb-3 flex items-start gap-2 rounded-md border px-3 py-2 text-[12.5px]',
+            spec
+              ? 'border-slate-200 bg-white text-slate-700 dark:border-border dark:bg-card dark:text-foreground/90'
+              : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200'
+          )}
+        >
+          {spec ? (
+            <Info className='mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70' aria-hidden />
+          ) : (
+            <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
+          )}
+          <span className='min-w-0'>
+            {spec
+              ? 'Opened from a drafted experiment. Nothing is armed: check each step, then Run and Confirm.'
+              : 'The link’s experiment could not be read, so the builder starts from the fault’s defaults.'}
+          </span>
+        </p>
+      )}
       {body}
     </div>
   )

@@ -26,6 +26,8 @@ export interface Choice {
   label: string
   hint?: string
   mono?: boolean
+  /** The hint is a key (sampler, area): set in mono. */
+  hintMono?: boolean
 }
 
 export function ChoiceCombobox({
@@ -142,7 +144,12 @@ export function ChoiceCombobox({
                     {c.label}
                   </span>
                   {c.hint && (
-                    <span className='shrink-0 text-[11px] tabular-nums text-muted-foreground'>
+                    <span
+                      className={cn(
+                        'shrink-0 text-[11px] tabular-nums text-muted-foreground',
+                        c.hintMono && 'font-mono'
+                      )}
+                    >
                       {c.hint}
                     </span>
                   )}

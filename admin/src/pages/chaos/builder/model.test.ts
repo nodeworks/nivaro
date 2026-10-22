@@ -8,8 +8,10 @@ import {
   faultAllowed,
   initialDraft,
   mapNodeFor,
+  mapNodeLabel,
   parseSpecParam,
   routePattern,
+  ruleWords,
   slugKey,
   targetWords
 } from './model'
@@ -122,5 +124,13 @@ describe('experiment builder model (#2844)', () => {
     expect(abortLine({ sampler: 's', op: '<', limit: 1, tolerance: 0.5 })).toBe(1.5)
     expect(abortLine({ sampler: 's', op: '>', limit: 10, tolerance: 2 })).toBe(8)
     expect(slugKey('Slow requests on 25% of traffic, 1m')).toBe('slow-requests-on-25-of-traffic-1m')
+    expect(ruleWords({ sampler: 's', op: '<=', limit: 2500 }, 'Request p95', 'ms')).toBe(
+      'Request p95 ≤ 2500 ms'
+    )
+    expect(ruleWords({ sampler: 's', op: '<', limit: 1 }, 'Server errors', '%')).toBe(
+      'Server errors < 1%'
+    )
+    expect(mapNodeLabel('redis')).toBe('Redis')
+    expect(mapNodeLabel('ext:7')).toBe('partner #7')
   })
 })

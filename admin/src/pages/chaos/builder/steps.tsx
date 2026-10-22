@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Plus, RotateCcw, X } from 'lucide-react'
+import { AlertTriangle, Plus, RotateCcw, X } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
@@ -176,7 +176,8 @@ export function StepHeading({ title, children }: { title: string; children?: Rea
 const DANGER_TONE: Record<CatalogFault['danger'], string> = {
   low: 'bg-slate-100 text-slate-700 dark:bg-muted dark:text-muted-foreground',
   medium: 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300',
-  high: 'bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300'
+  // Orange, not red: red on the chaos console means "armed now" and Stop all.
+  high: 'bg-orange-50 text-orange-800 dark:bg-orange-950/50 dark:text-orange-300'
 }
 
 // ─── 1. Fault ──────────────────────────────────────────────────────────────────
@@ -235,7 +236,8 @@ export function FaultStep({
           </p>
         )}
         {!faultAllowed(fault, caps) && (
-          <p className='text-[12.5px] text-red-700 dark:text-red-400'>
+          <p className='flex items-center gap-1.5 text-[12.5px] text-amber-800 dark:text-amber-300'>
+            <AlertTriangle className='h-3.5 w-3.5 shrink-0' aria-hidden />
             This environment's chaos settings do not allow this fault. Pick another one.
           </p>
         )}
@@ -290,16 +292,33 @@ export function TargetStep({ fault, draft, set, caps, nodes }: StepProps & { nod
               disabled={capped}
               onClick={() => !on && setTarget(emptyTarget(k, nodes))}
               className={cn(
-                'rounded-md border px-3 py-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-50',
-                on
-                  ? 'border-nvr-cyan bg-nvr-cyan/5 dark:bg-nvr-cyan/10'
-                  : 'border-slate-200 bg-white hover:border-slate-300 dark:border-border dark:bg-card dark:hover:border-slate-600'
+                'rounded-md border px-3 py-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                // A capped choice stays readable (its hint says why); only the title dims.
+                capped
+                  ? 'cursor-not-allowed border-dashed border-slate-200 bg-slate-50 dark:border-border dark:bg-muted/30'
+                  : on
+                    ? 'border-nvr-cyan bg-nvr-cyan/5 dark:bg-nvr-cyan/10'
+                    : 'border-slate-200 bg-white hover:border-slate-300 dark:border-border dark:bg-card dark:hover:border-slate-600'
               )}
             >
-              <span className='block text-[12.5px] font-medium text-slate-900 dark:text-foreground'>
+              <span
+                className={cn(
+                  'block text-[12.5px] font-medium',
+                  capped
+                    ? 'text-slate-500 dark:text-muted-foreground'
+                    : 'text-slate-900 dark:text-foreground'
+                )}
+              >
                 {TARGET_LABEL[k]}
               </span>
-              <span className='mt-0.5 block text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+              <span
+                className={cn(
+                  'mt-0.5 block text-[11.5px] leading-snug',
+                  capped
+                    ? 'text-amber-800 dark:text-amber-300'
+                    : 'text-slate-500 dark:text-muted-foreground'
+                )}
+              >
                 {capped
                   ? `This environment caps a run at ${maxShare(caps)}% of traffic.`
                   : TARGET_HINT[k]}
@@ -506,7 +525,7 @@ export function DurationStep({ fault, draft, set, caps }: StepProps) {
               aria-pressed={draft.seconds === q}
               onClick={() => set((d) => ({ ...d, seconds: q }))}
               className={cn(
-                'h-7 rounded-md border px-2.5 text-[12px] font-medium tabular-nums transition-colors duration-150',
+                'h-7 rounded-md border px-2.5 text-[12px] font-medium tabular-nums transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
                 draft.seconds === q
                   ? 'border-nvr-cyan bg-nvr-cyan/10 text-slate-900 dark:text-foreground'
                   : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-muted-foreground dark:hover:bg-muted'
@@ -577,7 +596,12 @@ export function HypothesisStep({ fault, draft, set }: StepProps) {
                 ariaLabel='Sampler'
                 value={r.sampler}
                 onChange={(v) => setRule(i, { sampler: v })}
-                choices={samplers.map((s) => ({ value: s.key, label: s.label, hint: s.key }))}
+                choices={samplers.map((s) => ({
+                  value: s.key,
+                  label: s.label,
+                  hint: s.key,
+                  hintMono: true
+                }))}
                 searchPlaceholder='Search samplers…'
                 allowCustom={(t) => /^[\w.-]{1,60}$/.test(t)}
               />
@@ -608,7 +632,7 @@ export function HypothesisStep({ fault, draft, set }: StepProps) {
               onClick={() =>
                 set((d) => ({ ...d, hypothesis: d.hypothesis.filter((_, j) => j !== i) }))
               }
-              className='rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
+              className='ml-auto rounded p-1.5 text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
             >
               <X className='h-3.5 w-3.5' aria-hidden />
             </button>
@@ -627,7 +651,7 @@ export function HypothesisStep({ fault, draft, set }: StepProps) {
               ]
             }))
           }
-          className='inline-flex items-center gap-1 text-[12.5px] font-medium text-slate-700 hover:text-slate-900 dark:text-foreground/90 dark:hover:text-foreground'
+          className='inline-flex items-center gap-1 rounded-sm text-[12.5px] font-medium text-slate-700 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-foreground/90 dark:hover:text-foreground'
         >
           <Plus className='h-3.5 w-3.5' aria-hidden /> Add a line
         </button>
@@ -637,7 +661,7 @@ export function HypothesisStep({ fault, draft, set }: StepProps) {
             onClick={() =>
               set((d) => ({ ...d, hypothesis: fault.hypothesis_defaults.map((r) => ({ ...r })) }))
             }
-            className='inline-flex items-center gap-1 text-[12.5px] text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+            className='inline-flex items-center gap-1 rounded-sm text-[12.5px] text-slate-500 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:text-foreground'
           >
             <RotateCcw className='h-3.5 w-3.5' aria-hidden /> The fault's defaults
           </button>
@@ -795,7 +819,7 @@ export function BlastStep({ fault, draft }: Omit<StepProps, 'set' | 'caps'>) {
           <ClaimList
             title='Stops working'
             items={data.claims.fails}
-            tone='text-red-700 dark:text-red-400'
+            tone='text-orange-700 dark:text-orange-400'
           />
           <ClaimList
             title='Keeps working, worse'
