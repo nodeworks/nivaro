@@ -119,6 +119,9 @@ export function GameDaysTab() {
           ) : list.length === 0 ? (
             <div className='p-4 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
               <p className='font-medium text-slate-700 dark:text-foreground'>No game days yet</p>
+              <p className='mt-1 md:hidden'>
+                A game day is a planned drill with roles and a timed list of faults.
+              </p>
               <button
                 type='button'
                 onClick={() => go('new', false, 'template')}
@@ -163,7 +166,7 @@ export function GameDaysTab() {
           <EditPlan id={selected} onDone={(id) => go(id)} />
         ) : selected ? (
           <GameDayDetail key={selected} id={selected} onEdit={() => go(selected, true)} />
-        ) : list.length || isLoading || isError ? (
+        ) : isLoading || isError ? null : list.length ? (
           <div className='flex h-full flex-col items-center justify-center gap-2 p-8 text-center'>
             <CalendarClock className='h-5 w-5 text-slate-400' aria-hidden />
             <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
@@ -172,8 +175,11 @@ export function GameDaysTab() {
           </div>
         ) : (
           <div className='flex h-full flex-col items-center justify-center p-8 text-center'>
-            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-nvr-cyan/10'>
-              <CalendarClock className='h-5 w-5 text-nvr-navy dark:text-nvr-cyan' aria-hidden />
+            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-muted'>
+              <CalendarClock
+                className='h-5 w-5 text-slate-500 dark:text-muted-foreground'
+                aria-hidden
+              />
             </div>
             <h2 className='mt-3 text-[14px] font-semibold text-slate-900 dark:text-foreground'>
               Practise a bad day before it happens
@@ -350,7 +356,7 @@ function NewPlan({
               <span className='font-medium'>
                 The “Kill a web task” inject will be refused here.
               </span>{' '}
-              {template.data.kill_task}
+              <KillTaskReason text={template.data.kill_task} />
             </span>
           </p>
         )}
@@ -393,4 +399,22 @@ function EditPlan({ id, onDone }: { id: string; onDone: (id: string | null) => v
       </p>
     )
   return <PlanEditor initial={planOf(data.run)} id={id} onDone={onDone} />
+}
+
+/** The refusal reason with any quoted runbook name set in mono. */
+function KillTaskReason({ text }: { text: string }) {
+  const parts = text.split(/"([^"]+)"/)
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 ? (
+          <code key={p} className='font-mono text-[11.5px]'>
+            {p}
+          </code>
+        ) : (
+          p
+        )
+      )}
+    </>
+  )
 }

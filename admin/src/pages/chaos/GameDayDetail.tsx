@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { EyeOff, Flag, Headphones, Megaphone, MessagesSquare, Pencil, Zap } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  EyeOff,
+  Flag,
+  Headphones,
+  Megaphone,
+  MessagesSquare,
+  Pencil,
+  ShieldOff,
+  Zap
+} from 'lucide-react'
+import { type RefObject, useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -69,6 +78,10 @@ export function GameDayDetail({ id, onEdit }: { id: string; onEdit: () => void }
     return () => clearInterval(t)
   }, [running])
   const [confirm, setConfirm] = useState<'cancel' | 'abort' | null>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const abortRef = useRef<HTMLButtonElement>(null)
+  const confirmId = useId()
+  const gateNoteId = useId()
   // The page's gate read (same key): a refused gate disables what would arm a fault.
   const { data: gate } = useQuery<ChaosStatus>({ queryKey: chaosKeys.status, queryFn: fetchStatus })
   const refused = gate && !gate.allowed ? (gate.reason ?? 'The chaos gate refused.') : null
@@ -165,39 +178,44 @@ export function GameDayDetail({ id, onEdit }: { id: string; onEdit: () => void }
               )}
               {plan.auto_start && run.status === 'planned' && ' · starts automatically'}
             </p>
+            {refused && (run.status === 'planned' || running) && (
+              <p
+                id={gateNoteId}
+                className='mt-1.5 flex items-start gap-1.5 text-[12px] text-amber-800 dark:text-amber-300'
+              >
+                <ShieldOff className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
+                <span>
+                  Faults cannot be armed on this instance, so{' '}
+                  {running ? 'fault injects are' : 'Start now and fault injects are'} off.
+                </span>
+              </p>
+            )}
           </div>
           <div className='flex shrink-0 flex-wrap items-center gap-2'>
             {run.status === 'planned' && (
               <>
-                <span data-tip={refused ? `Faults cannot be armed here. ${refused}` : undefined}>
-                  <button
-                    type='button'
-                    className={btnPrimary}
-                    disabled={act.isPending || !!refused}
-                    onClick={() => act.mutate({ action: 'start' })}
-                  >
-                    Start now
-                  </button>
-                </span>
+                <button
+                  type='button'
+                  className={btnPrimary}
+                  disabled={act.isPending || !!refused}
+                  aria-describedby={refused ? gateNoteId : undefined}
+                  onClick={() => act.mutate({ action: 'start' })}
+                >
+                  Start now
+                </button>
                 <button type='button' className={btnSecondary} onClick={onEdit}>
                   <Pencil className='h-3.5 w-3.5' aria-hidden /> Edit
                 </button>
-                {confirm === 'cancel' ? (
-                  <ConfirmInline
-                    text='Cancel this day and tell everyone?'
-                    yes='Cancel day'
-                    onYes={() => act.mutate({ action: 'cancel' })}
-                    onNo={() => setConfirm(null)}
-                  />
-                ) : (
-                  <button
-                    type='button'
-                    className={btnSecondary}
-                    onClick={() => setConfirm('cancel')}
-                  >
-                    Cancel day
-                  </button>
-                )}
+                <button
+                  ref={cancelRef}
+                  type='button'
+                  className={btnSecondary}
+                  aria-expanded={confirm === 'cancel'}
+                  aria-controls={confirm === 'cancel' ? confirmId : undefined}
+                  onClick={() => setConfirm((c) => (c === 'cancel' ? null : 'cancel'))}
+                >
+                  Cancel day
+                </button>
               </>
             )}
             {running && (
@@ -220,26 +238,19 @@ export function GameDayDetail({ id, onEdit }: { id: string; onEdit: () => void }
                 >
                   End day
                 </button>
-                {confirm === 'abort' ? (
-                  <ConfirmInline
-                    text='Stop every fault and abort?'
-                    yes='Abort'
-                    danger
-                    onYes={() => act.mutate({ action: 'end', body: { how: 'aborted' } })}
-                    onNo={() => setConfirm(null)}
-                  />
-                ) : (
-                  <button
-                    type='button'
-                    className={cn(
-                      btn,
-                      'border border-red-200 bg-white text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:bg-card dark:text-red-400 dark:hover:bg-red-950/40'
-                    )}
-                    onClick={() => setConfirm('abort')}
-                  >
-                    Abort
-                  </button>
-                )}
+                <button
+                  ref={abortRef}
+                  type='button'
+                  className={cn(
+                    btn,
+                    'border border-red-200 bg-white text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:bg-card dark:text-red-400 dark:hover:bg-red-950/40'
+                  )}
+                  aria-expanded={confirm === 'abort'}
+                  aria-controls={confirm === 'abort' ? confirmId : undefined}
+                  onClick={() => setConfirm((c) => (c === 'abort' ? null : 'abort'))}
+                >
+                  Abort
+                </button>
               </>
             )}
             {ended && (
@@ -249,6 +260,32 @@ export function GameDayDetail({ id, onEdit }: { id: string; onEdit: () => void }
             )}
           </div>
         </div>
+        {/* The confirm gets its own row so opening it never reflows the title or the buttons. */}
+        {confirm === 'cancel' && run.status === 'planned' && (
+          <div className='mt-3 flex lg:justify-end'>
+            <ConfirmInline
+              id={confirmId}
+              text='Cancel this day and tell everyone?'
+              yes='Cancel day'
+              returnFocus={cancelRef}
+              onYes={() => act.mutate({ action: 'cancel' })}
+              onNo={() => setConfirm(null)}
+            />
+          </div>
+        )}
+        {confirm === 'abort' && running && (
+          <div className='mt-3 flex lg:justify-end'>
+            <ConfirmInline
+              id={confirmId}
+              text='Stop every fault and abort?'
+              yes='Abort'
+              danger
+              returnFocus={abortRef}
+              onYes={() => act.mutate({ action: 'end', body: { how: 'aborted' } })}
+              onNo={() => setConfirm(null)}
+            />
+          </div>
+        )}
       </header>
 
       <div className='space-y-6 p-4 sm:p-6'>
@@ -335,6 +372,7 @@ export function GameDayDetail({ id, onEdit }: { id: string; onEdit: () => void }
                   phase={phase}
                   canFire={running && !steps.has(inj.id)}
                   refused={inj.kind === 'fault' ? refused : null}
+                  gateNoteId={gateNoteId}
                   busy={act.isPending}
                   now={now}
                   onFire={() => act.mutate({ action: 'step', body: { inject_id: inj.id } })}
@@ -448,21 +486,47 @@ function Cell({ label, children }: { label: string; children: React.ReactNode })
   )
 }
 
+/**
+ * Inline two-step confirm. Opening it moves focus to Keep (the safe answer); Keep or Escape
+ * hands focus back to the button that opened it.
+ */
 function ConfirmInline({
+  id,
   text,
   yes,
   danger,
+  returnFocus,
   onYes,
   onNo
 }: {
+  id?: string
   text: string
   yes: string
   danger?: boolean
+  returnFocus?: RefObject<HTMLElement | null>
   onYes: () => void
   onNo: () => void
 }) {
+  const keepRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    keepRef.current?.focus()
+  }, [])
+  const keep = () => {
+    onNo()
+    requestAnimationFrame(() => returnFocus?.current?.focus())
+  }
   return (
-    <span className='inline-flex items-center gap-1.5 text-[12px]'>
+    <fieldset
+      id={id}
+      aria-label={text}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation()
+          keep()
+        }
+      }}
+      className='m-0 inline-flex min-w-0 flex-wrap items-center gap-1.5 border-0 p-0 text-[12px]'
+    >
       <span className='text-slate-600 dark:text-muted-foreground'>{text}</span>
       <button
         type='button'
@@ -478,8 +542,9 @@ function ConfirmInline({
         {yes}
       </button>
       <button
+        ref={keepRef}
         type='button'
-        onClick={onNo}
+        onClick={keep}
         className={cn(
           btn,
           'h-7 px-2 font-normal text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
@@ -487,7 +552,7 @@ function ConfirmInline({
       >
         Keep
       </button>
-    </span>
+    </fieldset>
   )
 }
 
@@ -528,12 +593,15 @@ function armedNow(step: ChaosRunEvent | null | undefined, phase: InjectPhase, no
   return !Number.isFinite(secs) || Date.parse(step.at) + secs * 1000 > now
 }
 
-/** What an inject with no step yet says: nothing before the day, waiting during, never after. */
-const UNFIRED: Record<InjectPhase, string | null> = {
-  planned: null,
-  running: 'Waiting',
-  ended: 'Not fired'
+/** What an inject with no step yet says: nothing before the day, waiting during, and after it
+ * ended the kind's own verb. */
+const NOT_DONE: Record<GamedayInject['kind'], string> = {
+  fault: 'Not armed',
+  announce: 'Not posted',
+  checkpoint: 'Not reached'
 }
+const unfired = (phase: InjectPhase, kind: GamedayInject['kind']) =>
+  phase === 'running' ? 'Waiting' : phase === 'ended' ? NOT_DONE[kind] : null
 
 function InjectRow({
   inj,
@@ -541,6 +609,7 @@ function InjectRow({
   phase,
   canFire,
   refused,
+  gateNoteId,
   busy,
   now,
   onFire
@@ -551,11 +620,14 @@ function InjectRow({
   canFire: boolean
   /** The gate's refusal, for a fault inject on a refused instance. */
   refused: string | null
+  /** The header's visible "faults cannot be armed" line, for aria-describedby. */
+  gateNoteId: string
   busy: boolean
   now: number
   onFire: () => void
 }) {
   const [arming, setArming] = useState(false)
+  const armRef = useRef<HTMLButtonElement>(null)
   const Icon = KIND_ICON[inj.kind]
   const raw = typeof step?.data?.outcome === 'string' ? step.data.outcome : null
   // Red only while the fault is still in its window; afterwards it simply ran.
@@ -572,10 +644,10 @@ function InjectRow({
         className='h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-muted-foreground'
         aria-hidden
       />
-      <span className='min-w-0 flex-1'>
+      <span className='min-w-0 flex-1 basis-[11rem]'>
         <span className='text-slate-900 dark:text-foreground'>{inj.label}</span>
         {inj.kind === 'fault' && inj.fault && (
-          <span className='ml-2 font-mono text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          <span className='block font-mono text-[11.5px] break-all text-slate-500 sm:ml-2 sm:inline dark:text-muted-foreground'>
             {inj.fault.fault_key}
             {inj.fault.seconds ? ` · ${inj.fault.seconds}s` : ''}
           </span>
@@ -586,55 +658,62 @@ function InjectRow({
           </span>
         )}
       </span>
-      {st ? (
-        <span
-          data-tip={reason ?? undefined}
-          className={cn('rounded px-1.5 py-0.5 text-[10.5px] font-medium', st.tone)}
-        >
-          {st.label}
-          {step?.data?.manual ? ' by hand' : ''}
-        </span>
-      ) : UNFIRED[phase] ? (
-        <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-          {UNFIRED[phase]}
-        </span>
-      ) : null}
-      {child && (
-        <Link
-          to={`/chaos/runs/${child}`}
-          className='text-[11.5px] text-slate-700 underline underline-offset-2 dark:text-foreground'
-        >
-          Run
-        </Link>
-      )}
-      {canFire &&
-        (arming ? (
+      {/* State, run link and action stay together; on a narrow row they wrap as one group. */}
+      <span className='ml-auto flex shrink-0 items-center gap-3'>
+        {st ? (
+          <span
+            data-tip={reason ?? undefined}
+            className={cn('rounded px-1.5 py-0.5 text-[10.5px] font-medium', st.tone)}
+          >
+            {st.label}
+            {step?.data?.manual ? ' by hand' : ''}
+          </span>
+        ) : unfired(phase, inj.kind) ? (
+          <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            {unfired(phase, inj.kind)}
+          </span>
+        ) : null}
+        {child && (
+          <Link
+            to={`/chaos/runs/${child}`}
+            className='text-[11.5px] text-slate-700 underline underline-offset-2 dark:text-foreground'
+          >
+            Open run
+          </Link>
+        )}
+        {canFire && (
+          <button
+            ref={armRef}
+            type='button'
+            disabled={busy || !!refused}
+            aria-describedby={refused ? gateNoteId : undefined}
+            aria-expanded={inj.kind === 'fault' ? arming : undefined}
+            onClick={() => (inj.kind === 'fault' ? setArming((a) => !a) : onFire())}
+            className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[11.5px] font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+          >
+            {inj.kind === 'fault'
+              ? 'Arm now'
+              : inj.kind === 'announce'
+                ? 'Post now'
+                : 'Mark reached'}
+          </button>
+        )}
+      </span>
+      {canFire && arming && (
+        <div className='flex basis-full justify-end'>
           <ConfirmInline
             text={`Arm it for ${inj.fault?.seconds ?? 60} s now?`}
             yes='Arm now'
             danger
+            returnFocus={armRef}
             onYes={() => {
               setArming(false)
               onFire()
             }}
             onNo={() => setArming(false)}
           />
-        ) : (
-          <span data-tip={refused ? `Faults cannot be armed here. ${refused}` : undefined}>
-            <button
-              type='button'
-              disabled={busy || !!refused}
-              onClick={() => (inj.kind === 'fault' ? setArming(true) : onFire())}
-              className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[11.5px] font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
-            >
-              {inj.kind === 'fault'
-                ? 'Arm now'
-                : inj.kind === 'announce'
-                  ? 'Post now'
-                  : 'Mark reached'}
-            </button>
-          </span>
-        ))}
+        </div>
+      )}
     </li>
   )
 }
