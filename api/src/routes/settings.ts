@@ -212,6 +212,7 @@ export async function settingsRoutes(app: FastifyInstance) {
         })()),
         mail_test_env_mode: envOn(process.env.MAIL_TEST_MODE),
         mail_test_env_recipient: process.env.MAIL_TEST_RECIPIENT || null,
+        mail_catch_env_host: process.env.MAIL_CATCH_HOST?.trim() || null,
         sms_test_env_mode: envOn(process.env.SMS_TEST_MODE),
         sms_test_env_recipient: process.env.SMS_TEST_RECIPIENT || null,
         push_test_env_mode: envOn(process.env.PUSH_TEST_MODE),

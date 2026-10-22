@@ -1837,9 +1837,14 @@ export function SettingsPage() {
   const [smtpFrom, setSmtpFrom] = useState('')
   const [smtpSecure, setSmtpSecure] = useState(false)
   const [mailTestMode, setMailTestMode] = useState(false)
-  const [mailTestEnv, setMailTestEnv] = useState<{ mode: boolean; recipient: string | null }>({
+  const [mailTestEnv, setMailTestEnv] = useState<{
+    mode: boolean
+    recipient: string | null
+    catchHost: string | null
+  }>({
     mode: false,
-    recipient: null
+    recipient: null,
+    catchHost: null
   })
   const [mailTestRecipient, setMailTestRecipient] = useState('')
   const [mailTestAllowlist, setMailTestAllowlist] = useState('')
@@ -1989,7 +1994,8 @@ export function SettingsPage() {
     setMailTestMode(s.mail_test_mode === 1 || s.mail_test_mode === true)
     setMailTestEnv({
       mode: s.mail_test_env_mode === true,
-      recipient: (s.mail_test_env_recipient as string | null) ?? null
+      recipient: (s.mail_test_env_recipient as string | null) ?? null,
+      catchHost: (s.mail_catch_env_host as string | null) ?? null
     })
     setMailTestRecipient((s.mail_test_recipient as string) ?? '')
     setMailTestAllowlist((s.mail_test_allowlist as string) ?? '')
@@ -3779,23 +3785,39 @@ export function SettingsPage() {
                         )}
                       </p>
                     )}
+                    {(mailTestMode || mailTestEnv.mode) && mailTestEnv.catchHost && (
+                      <p className='mb-3 rounded-md border border-amber-300/60 bg-white/60 px-2.5 py-1.5 text-[11px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'>
+                        This instance has a catch inbox (
+                        <code className='font-mono'>MAIL_CATCH_HOST</code> is{' '}
+                        <code className='font-mono'>{mailTestEnv.catchHost}</code>). Mail for anyone
+                        outside the allowlist goes there, addressed as it was, and never reaches them.
+                        Allowlisted addresses get the real mail, and a copy lands in the catch inbox
+                        too. The test recipient is not used.
+                      </p>
+                    )}
                     {(mailTestMode || mailTestEnv.mode) && (
                       <div className='space-y-3'>
-                        <Field
-                          label='Test recipient'
-                          hint='All redirected mail goes here. Empty = non-allowlisted mail is dropped with a server log (only the allowlist still receives mail).'
-                        >
-                          <Input
-                            type='email'
-                            placeholder='dev@example.com'
-                            value={mailTestRecipient}
-                            onChange={(e) => setMailTestRecipient(e.target.value)}
-                            className='h-8 text-[13px]'
-                          />
-                        </Field>
+                        {!mailTestEnv.catchHost && (
+                          <Field
+                            label='Test recipient'
+                            hint='All redirected mail goes here. Empty = non-allowlisted mail is dropped with a server log (only the allowlist still receives mail).'
+                          >
+                            <Input
+                              type='email'
+                              placeholder='dev@example.com'
+                              value={mailTestRecipient}
+                              onChange={(e) => setMailTestRecipient(e.target.value)}
+                              className='h-8 text-[13px]'
+                            />
+                          </Field>
+                        )}
                         <Field
                           label='Allowlist'
-                          hint='Comma-separated emails and/or @domains that still receive mail normally, e.g. "qa@acme.com, @nodeworks.com".'
+                          hint={
+                            mailTestEnv.catchHost
+                              ? 'Comma-separated emails and/or @domains that get real mail; everyone else is caught. E.g. "qa@acme.com, @nodeworks.com".'
+                              : 'Comma-separated emails and/or @domains that still receive mail normally, e.g. "qa@acme.com, @nodeworks.com".'
+                          }
                         >
                           <Input
                             placeholder='qa@acme.com, @nodeworks.com'

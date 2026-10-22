@@ -162,12 +162,9 @@ test('the pinned Mailpit version in .env.example is never latest', () => {
   assert.doesNotMatch(v, /latest/i)
 })
 
-test('inbound auth is accepted and SMTP env is documented for the API', () => {
+test('inbound auth is accepted', () => {
   assert.match(compose, /MP_SMTP_AUTH_ACCEPT_ANY: "true"/)
   assert.match(compose, /MP_SMTP_AUTH_ALLOW_INSECURE: "true"/)
-  assert.match(env, /SMTP_HOST=mailpit/)
-  assert.match(env, /SMTP_PORT=1025/)
-  assert.match(env, /SMTP_SECURE=false/)
 })
 
 test('relaying is optional: stack.yml alone has no relay config or secret', () => {
@@ -200,25 +197,8 @@ test('the UI is routed by Traefik on /mailpit to port 8025, above the API router
   assert.match(env, /^MAILPIT_UI_HOST=\S+$/m)
 })
 
-test('the documented settings override pins staging SMTP to mailpit and test mode off', () => {
-  const line = env.match(/^#\s+NIVARO_SETTINGS_OVERRIDES=(.*)$/m)[1]
-  assert.deepEqual(JSON.parse(line), {
-    smtp_host: 'mailpit',
-    smtp_port: 1025,
-    smtp_secure: false,
-    smtp_user: null,
-    smtp_pass: null,
-    mail_test_mode: false
-  })
-  assert.doesNotMatch(live(env), /MAIL_TEST_MODE=/)
-})
-
-test('runbook gates removing MAIL_TEST_MODE on the smtp_host check and names no literal secret in the temporary stop', () => {
-  const docs = readFileSync(new URL('../docs/STAGING-MAIL.md', import.meta.url), 'utf8')
-  assert.match(docs, /only after confirming[\s\S]{0,80}`smtp_host`[\s\S]{0,200}empty or `mailpit`/)
-  assert.match(docs, /re-?check[\s\S]{0,80}prod\s+(DB|database) restore/i)
-  assert.match(docs, /leave test mode on/)
-  assert.doesNotMatch(docs, /--secret-rm mailpit_/)
-  assert.match(docs, /--secret-rm <relay secret name>/)
-  assert.doesNotMatch(docs, /checked by the operator/)
+test('the documented API settings keep test mode on and catch in mailpit', () => {
+  for (const line of ['MAIL_TEST_MODE=true', 'MAIL_CATCH_HOST=mailpit', 'MAIL_CATCH_PORT=1025'])
+    assert.match(env, new RegExp(`^#\\s+${line}$`, 'm'), line)
+  assert.doesNotMatch(env, /NIVARO_SETTINGS_OVERRIDES/)
 })

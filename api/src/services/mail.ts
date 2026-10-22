@@ -189,6 +189,11 @@ interface SmtpConfig {
   testMode: boolean
   testRecipient: string | null
   testAllowlist: string[]
+  /** MAIL_CATCH_HOST / MAIL_CATCH_PORT: in test mode, mail for recipients outside the allowlist
+   *  goes here, addressed as it was (a catch inbox such as Mailpit), instead of being redirected
+   *  to the test recipient or dropped. Env only, so a restored database cannot change it. */
+  catchHost: string | null
+  catchPort: number
   /** "[STAGING]" etc. — prefixed onto every outgoing subject when set, so
    *  recipients always know which instance is talking. Null = no prefix. */
   envLabel: string | null
@@ -264,6 +269,8 @@ function resolveTestMode(row: Record<string, unknown> | undefined): {
   testMode: boolean
   testRecipient: string | null
   testAllowlist: string[]
+  catchHost: string | null
+  catchPort: number
 } {
   const dbMode = row?.mail_test_mode === 1 || row?.mail_test_mode === true
   // MODE: env OR settings — env wins so a prod-DB restore into staging can
@@ -281,7 +288,9 @@ function resolveTestMode(row: Record<string, unknown> | undefined): {
     .split(',')
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
-  return { testMode, testRecipient, testAllowlist }
+  const catchHost = process.env.MAIL_CATCH_HOST?.trim() || null
+  const catchPort = Number(process.env.MAIL_CATCH_PORT) || 1025
+  return { testMode, testRecipient, testAllowlist, catchHost, catchPort }
 }
 
 function isAllowlisted(email: string, allowlist: string[]): boolean {
@@ -292,35 +301,41 @@ function isAllowlisted(email: string, allowlist: string[]): boolean {
 /**
  * Apply test-mode redirection to a recipient set. Exported for tests.
  * Returns null when the mail should be DROPPED (test mode on, nothing
- * allowlisted, and no test recipient configured).
+ * allowlisted, and no test recipient configured). With a catch host, the
+ * recipients outside the allowlist come back in `caught`, unchanged: they go
+ * to the catch inbox and nothing is redirected or dropped.
  */
 export function applyMailTestMode(
-  smtp: Pick<SmtpConfig, 'testMode' | 'testRecipient' | 'testAllowlist'>,
+  smtp: Pick<SmtpConfig, 'testMode' | 'testRecipient' | 'testAllowlist'> &
+    Partial<Pick<SmtpConfig, 'catchHost'>>,
   to: string | string[],
   subject: string
-): { to: string[]; subject: string; redirected: string[] } | null {
+): { to: string[]; subject: string; redirected: string[]; caught: string[] } | null {
   const recipients = (Array.isArray(to) ? to : String(to).split(','))
     .map((s) => s.trim())
     .filter(Boolean)
-  if (!smtp.testMode) return { to: recipients, subject, redirected: [] }
+  if (!smtp.testMode) return { to: recipients, subject, redirected: [], caught: [] }
 
   const kept = recipients.filter((r) => isAllowlisted(r, smtp.testAllowlist))
   const redirected = recipients.filter((r) => !isAllowlisted(r, smtp.testAllowlist))
-  if (redirected.length === 0) return { to: kept, subject, redirected: [] }
+  if (redirected.length === 0) return { to: kept, subject, redirected: [], caught: [] }
+  if (smtp.catchHost) return { to: kept, subject, redirected: [], caught: redirected }
 
   if (!smtp.testRecipient) {
     if (kept.length === 0) return null
     return {
       to: kept,
       subject: `[TEST — dropped: ${redirected.join(', ')}] ${subject}`,
-      redirected
+      redirected,
+      caught: []
     }
   }
   const finalTo = [...new Set([...kept, smtp.testRecipient])]
   return {
     to: finalTo,
     subject: `[TEST — was: ${redirected.join(', ')}] ${subject}`,
-    redirected
+    redirected,
+    caught: []
   }
 }
 
@@ -471,6 +486,68 @@ function buildTransporter(smtp: SmtpConfig) {
     secure: smtp.secure,
     ...(smtp.user ? { auth: { user: smtp.user, pass: smtp.pass ?? '' } } : {})
   })
+}
+
+/**
+ * Test mode with a catch host: the mail for recipients outside the allowlist goes to the catch
+ * inbox, addressed to them as it was, never to them. Logged 'dropped' with where it went (they do
+ * not receive it). Throws like any SMTP failure; callers run it BEFORE the real send so a retry
+ * never mails the allowlisted recipients twice.
+ */
+async function sendCaught(
+  smtp: SmtpConfig,
+  caught: string[],
+  message: Record<string, unknown>,
+  log: {
+    subject: string
+    template: string | null | undefined
+    body: string
+    collection?: string | null
+    item?: string | number | null
+  }
+): Promise<number | null> {
+  const where = `caught in ${smtp.catchHost}:${smtp.catchPort} (MAIL_CATCH_HOST)`
+  noteChannelRedirect('mail', caught.length)
+  try {
+    await buildCatchTransporter(smtp).sendMail({
+      ...message,
+      to: caught,
+      headers: { ...(message.headers as object | undefined), 'X-Tags': 'caught' }
+    })
+  } catch (err) {
+    await logMail(caught, log.subject, 'failed', { ...log, error: err })
+    throw err
+  }
+  return logMail(caught, log.subject, 'dropped', { ...log, error: where })
+}
+
+function buildCatchTransporter(smtp: SmtpConfig) {
+  return nodemailer.createTransport({ host: smtp.catchHost!, port: smtp.catchPort, secure: false })
+}
+
+/**
+ * Test mode with a catch host: after mail went out for real to allowlisted recipients, a copy goes
+ * to the catch inbox too (tagged "delivered"), so it shows everything the instance sent. Best
+ * effort: the real send already happened, so a catch inbox that is down only logs a warning.
+ */
+async function copyDelivered(
+  smtp: SmtpConfig,
+  delivered: string[],
+  message: Record<string, unknown>
+): Promise<void> {
+  if (!smtp.testMode || !smtp.catchHost || delivered.length === 0) return
+  try {
+    await buildCatchTransporter(smtp).sendMail({
+      ...message,
+      to: delivered,
+      headers: { ...(message.headers as object | undefined), 'X-Tags': 'delivered' }
+    })
+  } catch (err) {
+    console.warn(
+      '[mail] copy to the catch inbox failed (the mail itself was sent):',
+      err instanceof Error ? err.message : err
+    )
+  }
 }
 
 /**
@@ -693,11 +770,32 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   if (afterDigest.length === 0) return { status: 'deferred', log_id: deferredLogId }
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (routed?.redirected.length) noteChannelRedirect('mail', routed.redirected.length)
-  if (!routed || routed.to.length === 0) {
+  if (!routed || (routed.to.length === 0 && routed.caught.length === 0)) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
     const id = await logMail(afterDigest, opts.subject, 'dropped', { template: opts.template })
     return { status: 'dropped', log_id: id }
   }
+  let caughtLogId: number | null = null
+  if (routed.caught.length) {
+    caughtLogId = await sendCaught(
+      smtp,
+      routed.caught,
+      {
+        from: applySenderName(smtp.from, brand.from_name),
+        subject: withEnvLabel(smtp, routed.subject),
+        html,
+        text: opts.text
+      },
+      {
+        subject: opts.subject,
+        template: opts.template,
+        body: html,
+        collection: opts.collection,
+        item: opts.item
+      }
+    )
+  }
+  if (routed.to.length === 0) return { status: 'dropped', log_id: caughtLogId }
   // Bounce handling (#1299): a suppressed address is never sent to again —
   // each one gets its own 'dropped' row naming the bounce reason.
   const sup = await filterSuppressed(routed.to)
@@ -714,13 +812,13 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   routed.to = sup.kept
   const sendStarted = Date.now()
   try {
-    await buildTransporter(smtp).sendMail({
+    const message = {
       from: applySenderName(smtp.from, brand.from_name),
-      to: routed.to,
       subject: withEnvLabel(smtp, routed.subject),
       html,
       text: opts.text
-    })
+    }
+    await buildTransporter(smtp).sendMail({ ...message, to: routed.to })
     const id = await logMail(routed.to, opts.subject, 'sent', {
       template: opts.template,
       body: html,
@@ -728,6 +826,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       item: opts.item,
       ms: Date.now() - sendStarted
     })
+    await copyDelivered(smtp, routed.to, message)
     return { status: 'sent', log_id: id }
   } catch (err) {
     await logMail(routed.to, opts.subject, 'failed', {
@@ -832,25 +931,11 @@ export async function sendRawMail(opts: {
   if (afterDigest.length === 0) return { status: 'deferred', log_id: deferredLogId }
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (routed?.redirected.length) noteChannelRedirect('mail', routed.redirected.length)
-  if (!routed || routed.to.length === 0) {
+  if (!routed || (routed.to.length === 0 && routed.caught.length === 0)) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
     const id = await logMail(afterDigest, opts.subject, 'dropped', { template: logTemplate })
     return { status: 'dropped', log_id: id }
   }
-  // Bounce handling (#1299): suppressed addresses never send; one 'dropped'
-  // row per address names the bounce reason.
-  const sup = await filterSuppressed(routed.to)
-  let suppressedLogId: number | null = null
-  for (const d of sup.dropped) {
-    suppressedLogId = await logMail(d.address, opts.subject, 'dropped', {
-      template: logTemplate,
-      error: `suppressed: ${d.reason}`,
-      collection: opts.collection,
-      item: opts.item
-    })
-  }
-  if (sup.kept.length === 0) return { status: 'dropped', log_id: suppressedLogId }
-  routed.to = sup.kept
   const {
     title: _title,
     wrap: _wrap,
@@ -865,15 +950,50 @@ export async function sendRawMail(opts: {
     record: _record,
     ...mailOpts
   } = opts
+  let caughtLogId: number | null = null
+  if (routed.caught.length) {
+    caughtLogId = await sendCaught(
+      smtp,
+      routed.caught,
+      {
+        from: applySenderName(smtp.from, brand.from_name),
+        ...mailOpts,
+        html,
+        subject: withEnvLabel(smtp, routed.subject)
+      },
+      {
+        subject: opts.subject,
+        template: logTemplate,
+        body: html,
+        collection: opts.collection,
+        item: opts.item
+      }
+    )
+  }
+  if (routed.to.length === 0) return { status: 'dropped', log_id: caughtLogId }
+  // Bounce handling (#1299): suppressed addresses never send; one 'dropped'
+  // row per address names the bounce reason.
+  const sup = await filterSuppressed(routed.to)
+  let suppressedLogId: number | null = null
+  for (const d of sup.dropped) {
+    suppressedLogId = await logMail(d.address, opts.subject, 'dropped', {
+      template: logTemplate,
+      error: `suppressed: ${d.reason}`,
+      collection: opts.collection,
+      item: opts.item
+    })
+  }
+  if (sup.kept.length === 0) return { status: 'dropped', log_id: suppressedLogId }
+  routed.to = sup.kept
   const sendStarted = Date.now()
   try {
-    await buildTransporter(smtp).sendMail({
+    const message = {
       from: applySenderName(smtp.from, brand.from_name),
       ...mailOpts,
       html,
-      to: routed.to,
       subject: withEnvLabel(smtp, routed.subject)
-    })
+    }
+    await buildTransporter(smtp).sendMail({ ...message, to: routed.to })
     const id = await logMail(routed.to, opts.subject, 'sent', {
       template: logTemplate,
       body: html,
@@ -881,6 +1001,7 @@ export async function sendRawMail(opts: {
       item: opts.item,
       ms: Date.now() - sendStarted
     })
+    await copyDelivered(smtp, routed.to, message)
     return { status: 'sent', log_id: id }
   } catch (err) {
     await logMail(routed.to, opts.subject, 'failed', {

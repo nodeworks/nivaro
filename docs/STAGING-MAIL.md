@@ -1,10 +1,12 @@
 # Staging mail
 
-Staging sends all mail to a Mailpit container. Every message is caught in a web
-inbox; a real email goes out only when someone releases it by hand. There is no
-app change: the API reads its SMTP settings as always
-(`api/src/services/mail.ts` `getSmtpConfig`). **Production is unchanged** and
-keeps sending through the corporate relay directly.
+Staging keeps mail test mode on and catches mail in a Mailpit container. Mail
+for an address on the test allowlist (Settings → Email) goes out for real
+through the corporate relay, and a copy lands in Mailpit; mail for everyone
+else goes only to Mailpit, addressed as it was, and never reaches them. The API
+does this when `MAIL_CATCH_HOST` is set (`api/src/services/mail.ts`).
+**Production is unchanged**: it sets neither, and sends through the corporate
+relay directly.
 
 The kit is in `deploy/staging/mailpit/` (`stack.yml`, `stack.relay.yml`,
 `relay.example.yml`, `.env.example`). The staging deploy files live in
@@ -37,47 +39,37 @@ attached, so remove `efp_mail` first.
 
 ## Point the API at it
 
-In efp-nivaro's `../.env` (the `efp` stack's `env_file`), then release `efp`
-with `deploy-swarm.sh staging <release>`:
+In efp-nivaro's `../.env` (the `efp` stack's `env_file`), keep the corporate
+relay as the SMTP host and test mode on, and add the catch host; then release
+`efp` with `deploy-swarm.sh staging <release>`:
 
 ```
-SMTP_HOST=mailpit
-SMTP_PORT=1025
-SMTP_SECURE=false
-NIVARO_SETTINGS_OVERRIDES={"smtp_host":"mailpit","smtp_port":1025,"smtp_secure":false,"smtp_user":null,"smtp_pass":null,"mail_test_mode":false}
+SMTP_HOST=mailrelay.example.com
+SMTP_PORT=25
+MAIL_TEST_MODE=true
+MAIL_CATCH_HOST=mailpit
+MAIL_CATCH_PORT=1025
 ```
 
-Write the JSON on one line as is, with no quotes around it.
-`NIVARO_SETTINGS_OVERRIDES` is the top settings layer
-(`api/src/services/settings-overrides.ts`): it wins over the `nivaro_settings`
-row and Settings → Instance, and it survives a database restore. That matters
-because every `smtp_*` value saved in Settings → Mail (host, port, secure,
-user, password) wins over the `SMTP_*` env vars; without the override, a prod
-database restored into staging would mail through the corporate relay directly.
-A `null` in the override drops a saved value back to the env var.
+`MAIL_TEST_RECIPIENT` is not used while `MAIL_CATCH_HOST` is set.
 
-## Test mode
+## Who gets real mail
 
-Staging used to run with `MAIL_TEST_MODE=true` in `../.env` as its safety net.
-Turn it off only after confirming that `smtp_host` in `nivaro_settings`
-(Settings → Mail) is empty or `mailpit`, and check it again after every prod
-database restore: a restored prod DB with test mode off mails real people
-through the corporate relay. Until that check is done, leave test mode on
-(release then goes to the test recipient).
+Settings → Email → Test mode → **Allowlist**: comma-separated addresses and
+`@domains`. Those get the real mail (and a copy shows in Mailpit, tagged
+`delivered`); everyone else's is caught in Mailpit (tagged `caught`). The Email
+tab says when a catch host is set. Change the list there at any time; it takes
+effect on the next mail.
 
-- Test mode is on when **either** `MAIL_TEST_MODE` or Settings → Mail test mode
-  is on, so the Settings switch cannot turn it off while the env line is there.
-  The override above pins the Settings side off.
-- With test mode on, mail to a recipient outside the test allowlist is
-  rewritten to the test recipient before Mailpit sees it ("release to original
-  recipients" then goes to the test recipient), and when no test recipient is
-  set it is **dropped** and never reaches Mailpit at all.
-
-Order: set the `NIVARO_SETTINGS_OVERRIDES` line first, release, and check that
-a test mail lands in Mailpit; then confirm `smtp_host` in Settings → Mail is
-empty or `mailpit`; only then remove `MAIL_TEST_MODE` (and
-`MAIL_TEST_RECIPIENT`) and release again. Never remove `MAIL_TEST_MODE` while
-the override is missing or before the `smtp_host` check.
+- `MAIL_TEST_MODE=true` in the env keeps test mode on whatever Settings says, so
+  a prod database restored into staging cannot turn it off. Its allowlist
+  comes with the restore (production's is normally empty), so after a restore
+  nobody gets real mail until the list is set again.
+- The allowlist and the SMTP settings live in the database; `MAIL_TEST_MODE` and
+  `MAIL_CATCH_HOST` live in the env and survive a restore.
+- If Mailpit is down, caught mail fails like any SMTP outage (logged
+  `failed`, before anything goes out for real); a copy of delivered mail only
+  logs a warning.
 
 ## Create and rotate the secrets
 
@@ -170,16 +162,14 @@ brings relaying back.
 ## Pitfalls
 
 1. **Saved `smtp_*` settings win over `SMTP_*` env vars.** Host, port, secure,
-   user and password from Settings → Mail all override the env. The
-   `NIVARO_SETTINGS_OVERRIDES` line pins them for staging; if it is ever
-   removed, check Settings → Mail after every prod database restore.
-2. **`MAIL_TEST_MODE` in the env forces test mode on**, whatever Settings says,
-   and test mode drops or redirects mail before Mailpit sees it. Turn it off
-   only after confirming `smtp_host` in `nivaro_settings` (Settings → Mail) is
-   empty or `mailpit`, and re-check after every prod database restore. Until
-   that check is done, leave test mode on (release then goes to the test
-   recipient). See "Test mode".
-3. **Release sends real email.** That is why the UI is private and needs a login.
+   user and password from Settings → Email override the env; check them after
+   a prod database restore. Caught mail does not depend on them (it goes to
+   `MAIL_CATCH_HOST`), but allowlisted mail goes out through them.
+2. **Keep `MAIL_TEST_MODE=true` on staging.** With test mode off the catch host
+   does nothing and every mail goes out for real.
+3. **Release sends real email** (only with `stack.relay.yml` deployed). That is
+   why the UI is private and needs a login. The allowlist is the normal way to
+   let mail through; Release is for one message.
 4. **SMTP 1025 is reachable from every service on `traefik_swarm`, not only
    from the API.** Mailpit joins that shared overlay so Traefik can route the
    UI, and `MP_SMTP_AUTH_ACCEPT_ANY` accepts any login, so another service there
