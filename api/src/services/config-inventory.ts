@@ -156,7 +156,8 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_ai_playbooks',
   'nivaro_ai_glossary', // #1899 business terms (admin-curated)
   'nivaro_ai_data_guides', // #1847 per-collection Ask AI hints
-  'nivaro_role_checklists' // #2472 first-week checklists an admin published per role
+  'nivaro_role_checklists', // #2472 first-week checklists an admin published per role
+  'nivaro_chaos_presets' // #2855 saved fault presets (migration 497) — promoted between instances
 ]
 
 /** Derived from business data — differing between environments proves nothing. */

@@ -161,6 +161,8 @@ export function describeToolCall(tool: string, input: Record<string, unknown>): 
       return `Opening your ${str('name') ? `“${str('name').slice(0, 40)}” ` : ''}saved view…`
     case 'compare':
       return 'Comparing…'
+    case 'chaos_what_if':
+      return `Checking what depends on ${str('dependency') || 'it'}…`
     default:
       return `Using ${name(tool)}…`
   }

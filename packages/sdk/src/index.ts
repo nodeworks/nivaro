@@ -42,6 +42,7 @@
 // Feature-area command modules (flat public API — import everything from '@nivaro/sdk')
 export * from './commands/admin.js'
 export * from './commands/ai.js'
+export * from './commands/chaos.js'
 export * from './commands/collab.js'
 export * from './commands/content.js'
 export * from './commands/dashboards.js'

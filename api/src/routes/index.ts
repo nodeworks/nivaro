@@ -52,6 +52,8 @@ import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { chaosRoutes } from './chaos.js'
+import { chaosPresetRoutes } from './chaos-presets.js'
+import { chaosWhatIfRoutes } from './chaos-what-if.js'
 import { chatPushReplyRoutes, chatRoutes } from './chat.js'
 import { chatAdminRoutes } from './chat-admin.js'
 import { chatHuddleRoutes } from './chat-huddle.js'
@@ -508,6 +510,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // Chaos engineering (#333 → #2827) — always registered; services/chaos/gate.ts refuses with
   // a reason in cloud mode and on an unflagged production box.
   await app.register(chaosRoutes, { prefix: '/chaos' })
+  await app.register(chaosPresetRoutes, { prefix: '/chaos/presets' }) // #2855
+  await app.register(chaosWhatIfRoutes, { prefix: '/chaos/what-if' }) // #2860
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })

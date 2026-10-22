@@ -20,6 +20,12 @@ import type { User } from '../types.js'
 import { getAiClient, getAiModelSettings } from './ai-client.js'
 import { scrubText } from './ai-explain.js'
 import {
+  CHAOS_TOOL_NAMES,
+  CHAOS_TOOL_PROMPT,
+  CHAOS_TOOLS,
+  executeChaosTool
+} from './chaos/chaos-ai-tool.js'
+import {
   executeInfraTool,
   INFRA_PROMPT,
   INFRA_TOOL_NAMES,
@@ -341,7 +347,7 @@ export const TELEMETRY_TOOLS: Anthropic.Tool[] = [
 export const TELEMETRY_TOOL_NAMES = new Set(TELEMETRY_TOOLS.map((t) => t.name))
 
 /** #2842 — the telemetry tools plus the read-only infrastructure tools (infra-ai-tools.ts). */
-export const ASK_TOOLS: Anthropic.Tool[] = [...TELEMETRY_TOOLS, ...INFRA_TOOLS]
+export const ASK_TOOLS: Anthropic.Tool[] = [...TELEMETRY_TOOLS, ...INFRA_TOOLS, ...CHAOS_TOOLS]
 export const ASK_TOOL_NAMES = new Set(ASK_TOOLS.map((t) => t.name))
 
 const r1 = (v: unknown) => Math.round(num(v) * 10) / 10
@@ -531,6 +537,8 @@ export async function executeTelemetryTool(
 ): Promise<unknown> {
   // Infrastructure tools read Docker / the proxy directly and work without the telemetry store.
   if (INFRA_TOOL_NAMES.has(name)) return executeInfraTool(name, input, ctx)
+  // #2860 — "what if X died?" reads the chaos scorecard and the Traffic Map, not the store.
+  if (CHAOS_TOOL_NAMES.has(name)) return executeChaosTool(name, input)
   if (!storeConfig())
     throw new TelemetryToolError('The telemetry store is not configured on this instance')
   switch (name) {
@@ -571,7 +579,9 @@ Rules:
 - When a trace shows a repeated statement (5+ calls) call it an N+1; when database time is a small part of the request, say the time went elsewhere.
 - Be brief: a two-line answer first, then the evidence as a short list, then what to do next. No preamble.
 
-${INFRA_PROMPT}`
+${INFRA_PROMPT}
+
+${CHAOS_TOOL_PROMPT}`
 
 export interface AskTurn {
   role: 'user' | 'assistant'
