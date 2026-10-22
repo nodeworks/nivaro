@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type ReactNode, useEffect } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
+import { adminRealtime } from '@/lib/socket'
 import { cn, formatDateTime } from '@/lib/utils'
 import { type ChaosRun, type ChaosRunEvent, chaosKeys, describeTarget, fetchRun } from './api'
 import { RunCockpit } from './RunCockpit'
@@ -11,11 +12,37 @@ import { RunChip } from './RunsTab'
  * armed on what, how it ended, the timeline. The full report page is #2849.
  */
 export function RunDetail({ id }: { id: string }) {
+  const qc = useQueryClient()
   const { data, isLoading, isError } = useQuery<{ run: ChaosRun; events: ChaosRunEvent[] }>({
     queryKey: chaosKeys.run(id),
     queryFn: () => fetchRun(id),
     refetchInterval: (q) => (q.state.data?.run.status === 'running' ? 5_000 : false)
   })
+  // Live: events and run changes land straight in the cache; the 5 s poll is the net under it.
+  useEffect(() => {
+    const key = chaosKeys.run(id)
+    const offEvent = adminRealtime.on(
+      'chaos:event',
+      (p: { run_id?: string; event?: ChaosRunEvent }) => {
+        if (p?.run_id !== id || !p.event) return
+        qc.setQueryData<{ run: ChaosRun; events: ChaosRunEvent[] }>(key, (prev) =>
+          !prev || prev.events.some((e) => e.id === p.event!.id)
+            ? prev
+            : { ...prev, events: [...prev.events, p.event!] }
+        )
+      }
+    )
+    const offRun = adminRealtime.on('chaos:run', (p: { run?: ChaosRun }) => {
+      if (p?.run?.id !== id) return
+      qc.setQueryData<{ run: ChaosRun; events: ChaosRunEvent[] }>(key, (prev) =>
+        prev ? { ...prev, run: p.run! } : prev
+      )
+    })
+    return () => {
+      offEvent()
+      offRun()
+    }
+  }, [id, qc])
   if (isLoading)
     return (
       <div className='space-y-4 p-6'>
