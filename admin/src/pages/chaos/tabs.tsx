@@ -1,5 +1,7 @@
 import type { ComponentType } from 'react'
+import { BuilderTab } from './BuilderTab'
 import { FaultsTab } from './FaultsTab'
+import { PresetsTab } from './PresetsTab'
 import { RunsTab } from './RunsTab'
 
 /**
@@ -15,5 +17,7 @@ export interface ChaosTab {
 
 export const CHAOS_TABS: ChaosTab[] = [
   { id: 'faults', label: 'Faults', component: FaultsTab },
-  { id: 'runs', label: 'Runs', component: RunsTab }
+  { id: 'runs', label: 'Runs', component: RunsTab },
+  { id: 'presets', label: 'Presets', component: PresetsTab }, // #2855
+  { id: 'builder', label: 'Builder', component: BuilderTab } // #2844
 ]
