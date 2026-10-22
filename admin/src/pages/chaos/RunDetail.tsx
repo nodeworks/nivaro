@@ -7,6 +7,7 @@ import { cn, formatDateTime } from '@/lib/utils'
 import { type ChaosRun, type ChaosRunEvent, chaosKeys, describeTarget, fetchRun } from './api'
 import { RunCockpit } from './RunCockpit'
 import { RunChip } from './RunsTab'
+import { SAMPLER_LABELS } from './SamplerCharts'
 
 /**
  * One run (#2843): the cockpit while it runs (#2845), otherwise a summary — verdict, what was
@@ -235,7 +236,10 @@ export function Timeline({
   events: ChaosRunEvent[]
   compact?: boolean
 }) {
-  const shown = events.filter((e) => e.kind !== 'sample' || e.data.breach)
+  // Live events append as they arrive; sort so a late alert lands where it happened.
+  const shown = events
+    .filter((e) => e.kind !== 'sample' || e.data.breach)
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id - b.id)
   const hidden = events.length - shown.length
   return (
     <section>
@@ -259,19 +263,26 @@ export function Timeline({
           )}
         >
           {shown.map((e) => (
-            <li key={e.id} className='flex items-start gap-3 px-3 py-1.5 text-[12px]'>
-              <time className='w-[72px] shrink-0 font-mono text-[11px] tabular-nums text-slate-400 dark:text-muted-foreground/70'>
+            <li key={e.id} className='flex items-baseline gap-3 px-3 py-1.5 text-[12px]'>
+              <time
+                dateTime={e.at}
+                className='w-[84px] shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-slate-500 dark:text-muted-foreground'
+              >
                 {new Date(e.at).toLocaleTimeString([], {
                   hour: 'numeric',
                   minute: '2-digit',
                   second: '2-digit'
                 })}
               </time>
-              <span className={cn('w-16 shrink-0 font-medium', EVENT_TONE[e.kind])}>{e.kind}</span>
               <span
-                className='min-w-0 flex-1 truncate text-slate-700 dark:text-foreground'
-                title={eventText(e)}
+                className={cn(
+                  'w-16 shrink-0 font-medium',
+                  e.kind === 'sample' ? 'text-red-700 dark:text-red-300' : EVENT_TONE[e.kind]
+                )}
               >
+                {e.kind === 'sample' ? 'crossed' : e.kind}
+              </span>
+              <span className='min-w-0 flex-1 break-words text-slate-700 dark:text-foreground'>
                 {eventText(e)}
               </span>
             </li>
@@ -287,10 +298,11 @@ export function eventText(e: ChaosRunEvent): string {
   switch (e.kind) {
     case 'armed':
       return `${String(d.fault_key ?? '')} on ${String(d.target ?? 'everything')} for ${String(d.seconds ?? '?')}s`
-    case 'sample':
-      return d.breach
-        ? `${String(d.sampler)} = ${String(d.value)} crossed ${String(d.op)} ${String(d.limit)}`
-        : 'sample'
+    case 'sample': {
+      if (!d.breach) return 'sample'
+      const meta = SAMPLER_LABELS[String(d.sampler)]
+      return `${meta?.label ?? String(d.sampler)} at ${String(d.value)}${meta?.unit ? ` ${meta.unit}` : ''}, limit ${String(d.op)} ${String(d.limit)}`
+    }
     case 'abort':
       return `aborted: ${String(d.reason ?? '')}`
     case 'stop':
