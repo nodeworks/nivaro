@@ -109,6 +109,7 @@ export {
   CustomStatusEditor,
   formatStatusExpiry
 } from './components/CustomStatusEditor'
+export { DeclareIncidentButton } from './components/chaos/DeclareIncidentButton'
 export type { CumulativeFlowData } from './components/charts/CumulativeFlowChart'
 export { CumulativeFlowChart } from './components/charts/CumulativeFlowChart'
 export { ChatAnalyticsView } from './components/chat/ChatAnalyticsView'
@@ -795,6 +796,7 @@ export {
   setServerClockOffset
 } from './lib/server-clock'
 export * from './lib/socket-realtime'
+export * from './lib/stale-chunk'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
@@ -833,4 +835,3 @@ export { canViewAs, registerViewAsOpener, type ViewAsOpener, viewAs } from './li
 export * from './lib/worker-socket'
 export * from './lib/write-formula'
 export * from './types'
-export * from './lib/stale-chunk'

@@ -13,6 +13,7 @@ export * from './sections/ai-panel.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
+export * from './sections/chaos-gameday.js'
 export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
 export * from './sections/config-review.js'
@@ -102,6 +103,7 @@ import {
 } from './sections/assist-ops.js'
 import { attributesGuide } from './sections/attributes.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
+import { chaosGamedayDocs } from './sections/chaos-gameday.js'
 import {
   collabApprovals,
   collabChat,
@@ -906,6 +908,7 @@ export const navSections: NavGroup[] = [
       sqlChecksDocs,
       configReviewDocs,
       opsConsoleDocs,
+      chaosGamedayDocs,
       opsAssistantDocs,
       deploysVersionsDocs,
       instanceOverridesDocs,
