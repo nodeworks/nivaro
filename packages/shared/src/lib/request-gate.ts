@@ -481,6 +481,44 @@ export interface GatedClient extends NivaroClient {
 
 const ALWAYS_PASS = /^\/(item-locks|drafts|auth)\b/
 
+// Every closed gate's "release what you are holding" — see releaseGatedReads.
+const gateReleasers = new Set<() => void>()
+
+/**
+ * Release every read that closed gates are holding, leaving each gate closed for
+ * what comes next. The hosts share ONE react-query cache across their record
+ * tabs, so a hidden tab's queued read and the visible tab's identical query are
+ * the same query: the visible tab joins the fetch the hidden tab started and
+ * waits on a gate nobody will open — a form stuck on skeletons with no error
+ * until the hidden tab is shown (staging, 2026-10-22). releaseGatedReadsOnSharedFetch
+ * calls this whenever an observer joins a query that is already fetching.
+ */
+export function releaseGatedReads(): void {
+  for (const release of [...gateReleasers]) release()
+}
+
+type QueryCacheLike = {
+  subscribe(
+    listener: (event: { type: string; query: { state: { fetchStatus?: string } } }) => void
+  ): () => void
+}
+
+/**
+ * Wire releaseGatedReads to a react-query cache: when a component starts
+ * observing a query that is already fetching, that fetch may be one a closed
+ * gate is holding, so release the gates' queues. Returns the unsubscribe; call
+ * it once at the host that mounts gated tabs (e.g. in an effect over the
+ * QueryClient's getQueryCache()).
+ */
+export function releaseGatedReadsOnSharedFetch(cache: QueryCacheLike): () => void {
+  return cache.subscribe((event) => {
+    if (event.type !== 'observerAdded') return
+    if (event.query.state.fetchStatus !== 'fetching') return
+    if (gateReleasers.size === 0) return
+    releaseGatedReads()
+  })
+}
+
 /**
  * `opts.open` is the gate's state AT CONSTRUCTION. A host that starts a
  * hidden tab must pass `false` here rather than calling `setOpen(false)`
@@ -501,6 +539,12 @@ export function createGatedClient(
     waiting.clear()
     for (const w of entries) w.release()
   }
+  // Registered only while something is queued, so releaseGatedReads touches
+  // nothing when every gate is empty.
+  const releaseHeld = () => {
+    gateReleasers.delete(releaseHeld)
+    flush()
+  }
   const request = <T>(command: Command<T>): Promise<T> => {
     const c = command as unknown as AnyCommand
     if (open || !isGateable(c) || ALWAYS_PASS.test(c._path ?? '')) return client.request<T>(command)
@@ -513,6 +557,7 @@ export function createGatedClient(
     })
     const promise = gateOpened.then(() => client.request<T>(command))
     waiting.set(key, { promise, release })
+    gateReleasers.add(releaseHeld)
     return promise
   }
   const proxied = new Proxy(client, {
@@ -530,7 +575,10 @@ export function createGatedClient(
           }
           const was = open
           open = next
-          if (next && !was) flush()
+          if (next && !was) {
+            gateReleasers.delete(releaseHeld)
+            flush()
+          }
         }
       if (prop === 'dispose')
         return () => {
@@ -538,6 +586,7 @@ export function createGatedClient(
           disposeTimer = setTimeout(() => {
             disposeTimer = undefined
             open = true
+            gateReleasers.delete(releaseHeld)
             flush()
           }, 0)
         }
