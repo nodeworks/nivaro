@@ -18,13 +18,14 @@
  * replica through the adapter's server-side emit; each replica keeps its own counters and
  * writes them to Redis every few seconds, the console adds them up.
  *
- * Refused in cloud mode, and when NODE_ENV=production unless CHAOS_ENABLED=true (the flag the
- * HTTP drills already use).
+ * Refused in cloud mode, and when NODE_ENV=production unless CHAOS_ENABLED=true (the chaos
+ * gate, services/chaos/gate.ts). Stop all on /chaos ends socket drills too (#2827).
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import type { Socket, Server as SocketIOServer } from 'socket.io'
+import { chaosRefusal as gateRefusal } from './chaos/gate.js'
 import { getApp, getIo } from './io-holder.js'
 import { eventNameOf, splitTenantRoom } from './socket-transport.js'
 
@@ -85,12 +86,10 @@ export class ChaosError extends Error {
   }
 }
 
-/** Why socket chaos may not run in this process, or null (pure). */
+/** Why socket chaos may not run in this process, or null — the shared chaos gate (#2827). */
 export function chaosRefusal(env: NodeJS.ProcessEnv = process.env): string | null {
-  if (env.CLOUD_META_DB_URL) return 'Socket chaos never runs in cloud mode'
-  if (env.NODE_ENV === 'production' && env.CHAOS_ENABLED !== 'true')
-    return 'Socket chaos is refused in production unless CHAOS_ENABLED=true'
-  return null
+  const why = gateRefusal(env)
+  return why ? why.replace('Chaos drills', 'Socket chaos') : null
 }
 
 const UUID_RE = /^[0-9a-f-]{36}$/i
