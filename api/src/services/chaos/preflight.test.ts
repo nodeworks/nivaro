@@ -15,7 +15,7 @@ const healthy = (): PreflightDeps => ({
   openIncident: async () => null,
   poolHealth: async () => ({ wait_p95_ms: 12, saturated_pct: 0 }),
   loopLagMs: async () => 20,
-  armedCount: () => 0
+  armedCount: async () => 0
 })
 
 // A Tuesday 10:30 Eastern (14:30 UTC in October).
@@ -64,7 +64,7 @@ describe('runPreflight', () => {
       openIncident: async () => 'Database slow',
       poolHealth: async () => ({ wait_p95_ms: 3000, saturated_pct: 80 }),
       loopLagMs: async () => 20,
-      armedCount: () => 2
+      armedCount: async () => 2
     }
     const r = await runPreflight({ env: { CLOUD_META_DB_URL: 'x' }, now: SATURDAY }, deps)
     expect(r.ok).toBe(false)
@@ -95,12 +95,27 @@ describe('runPreflight', () => {
     expect(r2.checks.find((c) => c.key === 'working_hours')?.why).toMatch(/overridden/)
     // Another failing check is never overridable.
     const deps = healthy()
-    deps.armedCount = () => 1
+    deps.armedCount = async () => 1
     const r3 = await runPreflight(
       { env: { NODE_ENV: 'test' }, now: TUESDAY, override: { working_hours: true } },
       deps
     )
     expect(r3.ok).toBe(false)
+  })
+
+  it('ignores faults of the same game day in the armed check', async () => {
+    const deps = healthy()
+    deps.armedCount = async (gid) => (gid === 'gd-1' ? 0 : 2)
+    const same = await runPreflight(
+      { env: { NODE_ENV: 'test' }, now: TUESDAY, gameday_id: 'gd-1' },
+      deps
+    )
+    expect(same.ok).toBe(true)
+    const other = await runPreflight(
+      { env: { NODE_ENV: 'test' }, now: TUESDAY, gameday_id: 'gd-2' },
+      deps
+    )
+    expect(other.checks.find((c) => c.key === 'armed')?.why).toMatch(/2 faults are armed/)
   })
 
   it('runs checks other areas register and survives a throwing one', async () => {
