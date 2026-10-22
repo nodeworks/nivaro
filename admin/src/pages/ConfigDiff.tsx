@@ -11,6 +11,7 @@ import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn, formatNumber } from '@/lib/utils'
+import { RestorePointsPanel, type StoredSnapshotMeta, TriggerBadge } from './ConfigRestorePoints'
 
 interface Instance {
   version: string
@@ -75,7 +76,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
 /** Pull this table's rows FROM the uploaded snapshot onto this instance —
  *  preview first (exact insert/update counts), then an inline amber confirm.
  *  Upsert-only server-side; rows present here but absent in the snapshot are
- *  never deleted. */
+ *  never deleted. One transaction per table: all of it or none. */
 function ApplyControls({
   table,
   snapshot,
@@ -108,9 +109,11 @@ function ApplyControls({
         setConfirming(false)
       } else {
         const d = r.data.data
-        setResult(
-          `${d.inserted} inserted, ${d.updated} updated${(d.errors?.length ?? 0) > 0 ? `, ${d.errors?.length} failed` : ''}`
-        )
+        // The table applies in one transaction: a failing row means nothing was written.
+        if ((d.errors?.length ?? 0) > 0) {
+          setErr(`Nothing applied — ${d.errors?.[0]?.error ?? 'a row failed'}`)
+          setResult(null)
+        } else setResult(`${d.inserted} inserted, ${d.updated} updated`)
         setPreview(null)
         setConfirming(false)
         onApplied()
@@ -297,19 +300,6 @@ function TableDiffRow({
   )
 }
 
-interface StoredSnapshotMeta {
-  id: number
-  taken_at: string
-  version: string | null
-  environment: string | null
-  tables: number
-  rows: number
-  content_hash: string
-  bytes: number
-  trigger: string
-  same_as_previous: boolean
-}
-
 /**
  * #523 — "what drifted since <night>". The nightly `config-snapshot` cron
  * stores one gzipped snapshot a day; this diffs the live rows against any
@@ -390,7 +380,7 @@ function SincePanel() {
                 key={h.id}
                 type='button'
                 onClick={() => setPick(h.id)}
-                title={`${h.tables} tables · ${h.rows.toLocaleString()} rows · ${h.version ?? ''}${h.same_as_previous ? ' · identical to the night before' : ''}`}
+                data-tip={`${h.note ? `${h.note} · ` : ''}${h.tables} tables · ${h.rows.toLocaleString()} rows · ${h.version ?? ''}${h.same_as_previous ? ' · identical to the one before' : ''}`}
                 className={`rounded-md border px-2 py-0.5 text-[11.5px] tabular-nums ${
                   h.id === target
                     ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
@@ -398,8 +388,8 @@ function SincePanel() {
                 } ${h.same_as_previous ? 'opacity-60' : ''}`}
               >
                 {when(h.taken_at)}
-                {h.trigger === 'manual' && (
-                  <span className='ml-1 text-[10px] text-slate-400'>manual</span>
+                {h.trigger !== 'cron' && (
+                  <TriggerBadge trigger={h.trigger} className='ml-1 px-1 py-0 text-[9.5px]' />
                 )}
               </button>
             ))}
@@ -585,6 +575,7 @@ export function ConfigDiffPage() {
         )}
 
         <SincePanel />
+        <RestorePointsPanel />
 
         {!diff ? (
           <div className='rounded-lg border border-slate-200 bg-white p-8 text-center dark:border-border dark:bg-card'>

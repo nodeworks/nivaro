@@ -1,0 +1,405 @@
+import { describe, expect, it } from 'vitest'
+import { hashRow, type SnapshotRow } from '../../../services/config-inventory.js'
+import {
+  applyTablePlans,
+  type ColumnInfo,
+  type ForeignKey,
+  isRetryableDbError,
+  orderBySelfRef,
+  orderTables,
+  planHash,
+  planTable,
+  publicRows,
+  RestoreOpError,
+  type RunnableOp,
+  runOps,
+  type TableColumns,
+  toDbValue
+} from '../../../services/config-restore.js'
+import { idsToPrune } from '../../../services/config-snapshots.js'
+
+function rows(data: Record<string, Record<string, unknown>>): Record<string, SnapshotRow> {
+  const out: Record<string, SnapshotRow> = {}
+  for (const [k, d] of Object.entries(data)) out[k] = { hash: hashRow(d), data: d }
+  return out
+}
+
+function cols(spec: Record<string, Partial<ColumnInfo>>): TableColumns {
+  return new Map(
+    Object.entries(spec).map(([c, i]) => [
+      c,
+      { type: 'nvarchar', identity: false, writable: true, ...i } as ColumnInfo
+    ])
+  )
+}
+
+const layoutCols = cols({
+  id: { type: 'int', identity: true },
+  name: {},
+  col_span: { type: 'int' }
+})
+
+describe('planTable', () => {
+  it('plans inserts, updates and deletes to make live look like the snapshot', () => {
+    const target = rows({
+      '1': { id: 1, name: 'Main', col_span: 2 },
+      '2': { id: 2, name: 'Side', col_span: 1 },
+      '3': { id: 3, name: 'Gone since', col_span: 1 }
+    })
+    const live = rows({
+      '1': { id: 1, name: 'Main', col_span: 2 },
+      '2': { id: 2, name: 'Side', col_span: 4 },
+      '9': { id: 9, name: 'Added since', col_span: 1 }
+    })
+    const p = planTable('nivaro_collection_layouts', target, live, layoutCols, { deletes: true })
+    expect(p.inserts).toBe(1)
+    expect(p.updates).toBe(1)
+    expect(p.deletes).toBe(1)
+    expect(p.unchanged).toBe(1)
+    expect(p.ops.map((o) => `${o.op}:${o.key}`)).toEqual(['delete:9', 'insert:3', 'update:2'])
+    // An update writes only what differs.
+    expect(p.ops.find((o) => o.op === 'update')?.fields).toEqual(['col_span'])
+    // An insert carries the id (ids are preserved).
+    expect(p.ops.find((o) => o.op === 'insert')?.fields).toContain('id')
+  })
+
+  it('never deletes when deletes are off (uploaded-snapshot apply) and honours a key scope', () => {
+    const target = rows({ '1': { id: 1, name: 'A' }, '2': { id: 2, name: 'B' } })
+    const live = rows({ '1': { id: 1, name: 'a' }, '5': { id: 5, name: 'E' } })
+    const p = planTable('nivaro_collection_layouts', target, live, layoutCols, { deletes: false })
+    expect(p.deletes).toBe(0)
+    expect(p.inserts + p.updates).toBe(2)
+    const scoped = planTable('nivaro_collection_layouts', target, live, layoutCols, {
+      deletes: true,
+      keys: new Set(['1'])
+    })
+    expect(scoped.ops.map((o) => `${o.op}:${o.key}`)).toEqual(['update:1'])
+  })
+
+  it('skips and reports keyless rows on both sides', () => {
+    const target = rows({ '#abc': { a: 1 }, '1': { id: 1, name: 'x' } })
+    const live = rows({ '#def': { a: 2 }, '1': { id: 1, name: 'x' } })
+    const p = planTable('nivaro_collection_layouts', target, live, layoutCols, { deletes: true })
+    expect(p.ops).toEqual([])
+    expect(p.skipped_keyless).toBe(2)
+  })
+
+  it('treats a row that differs only in columns the snapshot never had as unchanged', () => {
+    // The snapshot predates a migration that added `col_span`.
+    const target = rows({ '1': { id: 1, name: 'Main' } })
+    const live = rows({ '1': { id: 1, name: 'Main', col_span: 3 } })
+    const p = planTable('nivaro_collection_layouts', target, live, layoutCols, { deletes: true })
+    expect(p.ops).toEqual([])
+    expect(p.untracked_only).toBe(1)
+    expect(p.unchanged).toBe(1)
+  })
+
+  it('never writes redacted or credential columns, even when a file carries them', () => {
+    const settingsCols = cols({ id: { type: 'int' }, project_name: {}, smtp_pass: {} })
+    const target = rows({ '1': { id: 1, project_name: 'Old', smtp_pass: 'from-a-file' } })
+    const live = rows({ '1': { id: 1, project_name: 'New' } })
+    const p = planTable('nivaro_settings', target, live, settingsCols, { deletes: true })
+    expect(p.ops[0].fields).toEqual(['project_name'])
+    const userCols = cols({ id: {}, email: {}, password_hash: {}, static_token: {} })
+    const t2 = rows({ u1: { id: 'u1', email: 'a@x', password_hash: 'h', static_token: 't' } })
+    const p2 = planTable('nivaro_users', t2, {}, userCols, { deletes: true })
+    expect(p2.ops[0].fields.sort()).toEqual(['email', 'id'])
+  })
+
+  it('reports snapshot columns the live table no longer has and does not write them', () => {
+    const target = rows({ '1': { id: 1, name: 'A', view_mode: 'grid' } })
+    const live = rows({ '1': { id: 1, name: 'B' } })
+    const p = planTable('nivaro_collection_layouts', target, live, layoutCols, { deletes: true })
+    expect(p.dropped_columns).toEqual(['view_mode'])
+    expect(p.ops[0].fields).toEqual(['name'])
+  })
+
+  it('compares dates by instant: a Date live and its ISO string in the snapshot are equal', () => {
+    const c = cols({ id: { type: 'int' }, at: { type: 'datetime' }, name: {} })
+    const target = rows({ '1': { id: 1, at: '2026-10-01T08:00:00.000Z', name: 'x' } })
+    const liveData = { id: 1, at: new Date('2026-10-01T08:00:00.000Z'), name: 'y' }
+    const live = { '1': { hash: hashRow(liveData), data: liveData } }
+    const p = planTable('nivaro_collection_layouts', target, live, c, { deletes: true })
+    expect(p.ops[0].fields).toEqual(['name'])
+  })
+})
+
+describe('planHash', () => {
+  const target = rows({ '1': { id: 1, name: 'A' } })
+  it('is stable for the same plan and moves when the live row it overwrites moves', () => {
+    const live1 = rows({ '1': { id: 1, name: 'B' } })
+    const live2 = rows({ '1': { id: 1, name: 'C' } })
+    const p1 = planTable('t', target, live1, layoutCols, { deletes: true })
+    const p1b = planTable('t', target, live1, layoutCols, { deletes: true })
+    const p2 = planTable('t', target, live2, layoutCols, { deletes: true })
+    expect(planHash('snapshot:1', [p1])).toBe(planHash('snapshot:1', [p1b]))
+    expect(planHash('snapshot:1', [p1])).not.toBe(planHash('snapshot:1', [p2]))
+    expect(planHash('snapshot:1', [p1])).not.toBe(planHash('snapshot:2', [p1]))
+    expect(planHash('snapshot:1', [p1])).toMatch(/^[0-9a-f]{64}$/)
+  })
+  it('moves when a new row appears live (a new delete)', () => {
+    const live1 = rows({ '1': { id: 1, name: 'A' } })
+    const live2 = rows({ '1': { id: 1, name: 'A' }, '2': { id: 2, name: 'new' } })
+    const h1 = planHash('s', [planTable('t', target, live1, layoutCols, { deletes: true })])
+    const h2 = planHash('s', [planTable('t', target, live2, layoutCols, { deletes: true })])
+    expect(h1).not.toBe(h2)
+  })
+})
+
+describe('ordering', () => {
+  const fks: ForeignKey[] = [
+    { child: 'b', childCol: 'a_id', parent: 'a', parentCol: 'id' },
+    { child: 'c', childCol: 'b_id', parent: 'b', parentCol: 'id' },
+    { child: 'c', childCol: 'parent_id', parent: 'c', parentCol: 'id' },
+    { child: 'x', childCol: 'a_id', parent: 'a', parentCol: 'id' }
+  ]
+  it('orders tables parent-first, ignoring self-references and tables outside the plan', () => {
+    expect(orderTables(['c', 'b', 'a'], fks)).toEqual(['a', 'b', 'c'])
+    expect(orderTables(['c', 'a'], fks)).toEqual(['c', 'a'])
+  })
+  it('keeps every table on a cycle', () => {
+    const cyc: ForeignKey[] = [
+      { child: 'p', childCol: 'q_id', parent: 'q', parentCol: 'id' },
+      { child: 'q', childCol: 'p_id', parent: 'p', parentCol: 'id' }
+    ]
+    expect(orderTables(['p', 'q', 'r'], cyc).sort()).toEqual(['p', 'q', 'r'])
+  })
+  it('orders self-referencing rows parent-first', () => {
+    const data: Record<string, Record<string, unknown>> = {
+      '3': { parent_id: 2 },
+      '2': { parent_id: 1 },
+      '1': { parent_id: null },
+      '7': { parent_id: 99 }
+    }
+    const out = orderBySelfRef(['3', '2', '1', '7'], (k) => data[k], ['parent_id'])
+    expect(out.indexOf('1')).toBeLessThan(out.indexOf('2'))
+    expect(out.indexOf('2')).toBeLessThan(out.indexOf('3'))
+  })
+})
+
+describe('runOps', () => {
+  const fk = Object.assign(new Error('FK conflict'), { number: 547 })
+  it('retries a constraint failure after the rest of the pass', async () => {
+    const done: string[] = []
+    let parentIn = false
+    const ops: RunnableOp[] = [
+      {
+        table: 'c',
+        key: '1',
+        op: 'insert',
+        run: async () => {
+          if (!parentIn) throw fk
+          done.push('child')
+        }
+      },
+      {
+        table: 'p',
+        key: '1',
+        op: 'insert',
+        run: async () => {
+          parentIn = true
+          done.push('parent')
+        }
+      }
+    ]
+    await runOps(ops, { retryable: isRetryableDbError, alive: async () => true })
+    expect(done).toEqual(['parent', 'child'])
+  })
+  it('throws (so the transaction rolls back) on a non-retryable error', async () => {
+    const ops: RunnableOp[] = [
+      {
+        table: 't',
+        key: '4',
+        op: 'update',
+        run: async () => {
+          throw new Error('conversion failed')
+        }
+      }
+    ]
+    await expect(
+      runOps(ops, { retryable: isRetryableDbError, alive: async () => true })
+    ).rejects.toBeInstanceOf(RestoreOpError)
+  })
+  it('throws when the transaction is no longer alive, and when a pass makes no progress', async () => {
+    const op: RunnableOp = {
+      table: 't',
+      key: '1',
+      op: 'delete',
+      run: async () => {
+        throw fk
+      }
+    }
+    await expect(
+      runOps([op], { retryable: isRetryableDbError, alive: async () => false })
+    ).rejects.toThrow(/delete t #1/)
+    await expect(
+      runOps([op], { retryable: isRetryableDbError, alive: async () => true })
+    ).rejects.toBeInstanceOf(RestoreOpError)
+  })
+})
+
+describe('toDbValue', () => {
+  it('turns ISO strings back into dates for date columns only', () => {
+    expect(
+      toDbValue('2026-10-01T08:00:00.000Z', { type: 'datetime', identity: false, writable: true })
+    ).toBeInstanceOf(Date)
+    expect(
+      toDbValue('2026-10-01T08:00:00.000Z', { type: 'nvarchar', identity: false, writable: true })
+    ).toBe('2026-10-01T08:00:00.000Z')
+  })
+  it('rebuilds buffers and stringifies other objects', () => {
+    const b = toDbValue(
+      { type: 'Buffer', data: [1, 2] },
+      { type: 'varbinary', identity: false, writable: true }
+    )
+    expect(Buffer.isBuffer(b)).toBe(true)
+    expect(toDbValue({ a: 1 }, { type: 'nvarchar', identity: false, writable: true })).toBe(
+      '{"a":1}'
+    )
+    expect(toDbValue(null, undefined)).toBeNull()
+  })
+})
+
+describe('publicRows', () => {
+  it('shows live → snapshot values per changed field and never a field the plan skips', () => {
+    const settingsCols = cols({ id: { type: 'int' }, project_name: {}, smtp_pass: {} })
+    const target = rows({ '1': { id: 1, project_name: 'Old', smtp_pass: 'x' } })
+    const live = rows({ '1': { id: 1, project_name: 'New' } })
+    const p = planTable('nivaro_settings', target, live, settingsCols, { deletes: true })
+    const out = publicRows(p, target, live)
+    expect(out[0].fields).toEqual([{ field: 'project_name', now: 'New', was: 'Old' }])
+  })
+})
+
+/** A knex-transaction stand-in that records what would run. */
+function fakeTrx(failOn?: (sql: string) => Error | null) {
+  const log: string[] = []
+  const exec = (sql: string, result: unknown) => {
+    const err = failOn?.(sql)
+    log.push(sql)
+    if (err) return Promise.reject(err)
+    return Promise.resolve(result)
+  }
+  const trx = ((table: string) => {
+    let where = ''
+    const q = {
+      where: (_c: string, v: string) => {
+        where = v
+        return q
+      },
+      del: () => exec(`delete ${table} ${where}`, 1),
+      update: (patch: Record<string, unknown>) =>
+        exec(`update ${table} ${where} ${Object.keys(patch).join(',')}`, 1),
+      insert: (row: Record<string, unknown>) => exec(`insert ${table} ${row.id}`, [])
+    }
+    return q
+  }) as unknown as Parameters<typeof applyTablePlans>[0]
+  ;(trx as unknown as { raw: (sql: string, b?: unknown[]) => Promise<unknown> }).raw = (
+    sql: string,
+    b?: unknown[]
+  ) => {
+    if (/XACT_STATE/.test(sql)) return Promise.resolve([{ s: 1 }])
+    if (/XACT_ABORT/.test(sql)) return Promise.resolve([])
+    const m = sql.match(/INSERT INTO \[(\w+)\]/)
+    return exec(m ? `identity-insert ${m[1]} ${b?.[0]}` : sql, [])
+  }
+  return { trx, log }
+}
+
+describe('applyTablePlans', () => {
+  const columns = new Map<string, TableColumns>([
+    ['nivaro_workflow_templates', cols({ id: { type: 'uniqueidentifier' }, name: {} })],
+    [
+      'nivaro_workflow_states',
+      cols({ id: { type: 'int', identity: true }, template_id: {}, key: {} })
+    ]
+  ])
+  const fks: ForeignKey[] = [
+    {
+      child: 'nivaro_workflow_states',
+      childCol: 'template_id',
+      parent: 'nivaro_workflow_templates',
+      parentCol: 'id'
+    }
+  ]
+  const target = {
+    nivaro_workflow_templates: rows({ T1: { id: 'T1', name: 'Approval' } }),
+    nivaro_workflow_states: rows({
+      '5': { id: 5, template_id: 'T1', key: 'draft' },
+      '6': { id: 6, template_id: 'T1', key: 'done' }
+    })
+  }
+  const live = {
+    nivaro_workflow_templates: rows({ T9: { id: 'T9', name: 'New one' } }),
+    nivaro_workflow_states: rows({
+      '6': { id: 6, template_id: 'T1', key: 'finished' },
+      '8': { id: 8, template_id: 'T9', key: 'x' }
+    })
+  }
+  const plans = ['nivaro_workflow_templates', 'nivaro_workflow_states'].map((t) =>
+    planTable(
+      t,
+      target[t as keyof typeof target],
+      live[t as keyof typeof live],
+      columns.get(t) as TableColumns,
+      {
+        deletes: true
+      }
+    )
+  )
+
+  it('deletes child-first, then inserts and updates parent-first, ids kept via IDENTITY_INSERT', async () => {
+    const { trx, log } = fakeTrx()
+    const counts = await applyTablePlans(trx, plans, target, live, columns, fks)
+    expect(log).toEqual([
+      'delete nivaro_workflow_states 8',
+      'delete nivaro_workflow_templates T9',
+      'insert nivaro_workflow_templates T1',
+      'identity-insert nivaro_workflow_states 5',
+      'update nivaro_workflow_states 6 key'
+    ])
+    expect(counts).toEqual([
+      { table: 'nivaro_workflow_templates', inserted: 1, updated: 0, deleted: 1 },
+      { table: 'nivaro_workflow_states', inserted: 1, updated: 1, deleted: 1 }
+    ])
+  })
+
+  it('retries a delete blocked by a reference until the rest of the pass clears it', async () => {
+    let blocked = true
+    const { trx, log } = fakeTrx((sql) => {
+      if (sql === 'delete nivaro_workflow_templates T9' && blocked) {
+        blocked = false
+        return Object.assign(new Error('REFERENCE constraint'), { number: 547 })
+      }
+      return null
+    })
+    await applyTablePlans(trx, plans, target, live, columns, fks)
+    expect(log.filter((l) => l === 'delete nivaro_workflow_templates T9')).toHaveLength(2)
+  })
+
+  it('throws on a hard failure so the caller rolls the whole restore back', async () => {
+    const { trx } = fakeTrx((sql) =>
+      sql.startsWith('update') ? new Error('String or binary data would be truncated') : null
+    )
+    await expect(applyTablePlans(trx, plans, target, live, columns, fks)).rejects.toThrow(
+      /update nivaro_workflow_states #6/
+    )
+  })
+})
+
+describe('idsToPrune', () => {
+  it('keeps the newest N per trigger kind — nightly rows never push out deploy points', () => {
+    const list: Array<{ id: number; trigger: string }> = []
+    let id = 1
+    list.push({ id: id++, trigger: 'pre-deploy' })
+    for (let i = 0; i < 40; i++) list.push({ id: id++, trigger: 'cron' })
+    for (let i = 0; i < 12; i++) list.push({ id: id++, trigger: 'pre-restore' })
+    const drop = new Set(idsToPrune(list))
+    expect(drop.has(1)).toBe(false) // the old deploy point survives 40 nights
+    expect(list.filter((r) => r.trigger === 'cron' && !drop.has(r.id))).toHaveLength(30)
+    expect(list.filter((r) => r.trigger === 'pre-restore' && !drop.has(r.id))).toHaveLength(10)
+    // The oldest go first.
+    expect(drop.has(2)).toBe(true)
+    expect(drop.has(41)).toBe(false)
+  })
+})

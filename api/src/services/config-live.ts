@@ -39,6 +39,11 @@ const SURFACE_OF_TABLE: Record<string, string> = {
   nivaro_workflow_templates: 'pipeline'
 }
 
+/** The open-form surface a configuration table belongs to, or null (a config restore names them). */
+export function surfaceOfConfigTable(table: string): string | null {
+  return SURFACE_OF_TABLE[table] ?? null
+}
+
 const send = keyedThrottle(THROTTLE_MS, MIN_GAP_MS, (key) => {
   const [tenant, surface, collection] = key.split('|')
   emitToTenant(tenant, 'config:update', {

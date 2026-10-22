@@ -391,6 +391,11 @@ const REDACTED: Record<string, string[]> = {
   nivaro_persisted_queries: []
 }
 
+/** Whether a snapshot strips this column — a write path must never set it from a snapshot. */
+export function isRedactedColumn(table: string, column: string): boolean {
+  return (REDACTED['*'] ?? []).includes(column) || (REDACTED[table] ?? []).includes(column)
+}
+
 export function redactRow(table: string, row: Record<string, unknown>): Record<string, unknown> {
   const drop = new Set([...(REDACTED['*'] ?? []), ...(REDACTED[table] ?? [])])
   const out: Record<string, unknown> = {}
@@ -436,6 +441,17 @@ export interface ConfigSnapshot {
   tables: Record<string, Record<string, SnapshotRow>>
   /** Tables that were requested but could not be read, with the reason. */
   errors: Record<string, string>
+  /** Stored restore points only (#2803): why this one was taken. */
+  restore_point?: {
+    trigger: string
+    note?: string | null
+    /** pre-deploy: the version being deployed. */
+    target_version?: string | null
+    /** pre-migration: the migrations about to run. */
+    migrations?: string[]
+    /** pre-restore: the snapshot being restored. */
+    restore_of?: number | null
+  }
 }
 
 /**
@@ -474,7 +490,17 @@ function rowKey(row: Record<string, unknown>, hash: string): string {
 }
 
 export async function buildConfigSnapshot(
-  opts: { label?: string; tables?: string[]; version: string; environment: string },
+  opts: {
+    label?: string
+    tables?: string[]
+    version: string
+    environment: string
+    /** Tables read at once (default 1). Serial reads of ~120 tables pay one round trip each;
+     *  the boot and restore paths read a few at a time. */
+    concurrency?: number
+    /** Stops between tables (the boot snapshot's time box): throws once aborted. */
+    signal?: AbortSignal
+  },
   database: typeof defaultDb = defaultDb
 ): Promise<ConfigSnapshot> {
   const presentRows = (await database.raw(
@@ -492,7 +518,7 @@ export async function buildConfigSnapshot(
   const tables: ConfigSnapshot['tables'] = {}
   const errors: Record<string, string> = {}
 
-  for (const table of requested) {
+  const readTable = async (table: string) => {
     try {
       const rows = (await database(table).select('*')) as Record<string, unknown>[]
       const byKey: Record<string, SnapshotRow> = {}
@@ -507,6 +533,20 @@ export async function buildConfigSnapshot(
       errors[table] = err instanceof Error ? err.message : String(err)
     }
   }
+  const queue = [...requested]
+  const lanes = Math.max(1, Math.min(opts.concurrency ?? 1, 8))
+  await Promise.all(
+    Array.from({ length: lanes }, async () => {
+      for (let t = queue.shift(); t; t = queue.shift()) {
+        if (opts.signal?.aborted) throw new Error('config snapshot aborted')
+        await readTable(t)
+      }
+    })
+  )
+  if (opts.signal?.aborted) throw new Error('config snapshot aborted')
+  // Lanes finish out of order; keep the table order stable for anything that walks it.
+  const ordered: ConfigSnapshot['tables'] = {}
+  for (const t of requested) if (tables[t]) ordered[t] = tables[t]
 
   return {
     format: 1,
@@ -518,7 +558,7 @@ export async function buildConfigSnapshot(
       label: opts.label
     },
     classification,
-    tables,
+    tables: ordered,
     errors
   }
 }

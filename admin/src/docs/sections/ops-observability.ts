@@ -88,7 +88,55 @@ export const dbHealthDocs: DocSection = {
     { type: 'h2', id: 'config-since', text: 'Environment Config — what drifted since' },
     {
       type: 'p',
-      text: 'The `config-snapshot` job stores a gzipped snapshot of every configuration table each night at 04:40 (secrets already stripped, pruned to the newest 30). Environment Config → **What drifted since…** picks any stored night and compares the live rows against it with the same engine the file upload uses — added, removed and changed rows per table, field by field. Nights identical to the one before are dimmed: a run of identical hashes is the answer "nothing drifted". **Store a snapshot now** takes one on demand. API: `GET /config-diff/history`, `POST /config-diff/history`, `GET /config-diff/since?id=|at=`.'
+      text: 'The `config-snapshot` job stores a gzipped snapshot of every configuration table each night at 04:40 (secrets already stripped). Environment Config → **What drifted since…** picks any stored snapshot and compares the live rows against it with the same engine the file upload uses — added, removed and changed rows per table, field by field. Snapshots identical to the one before are dimmed: a run of identical hashes is the answer "nothing drifted". **Store a snapshot now** takes one on demand. API: `GET /config-diff/history`, `POST /config-diff/history`, `GET /config-diff/since?id=|at=`.'
+    },
+    { type: 'h2', id: 'config-restore', text: 'Environment Config — restore points' },
+    {
+      type: 'p',
+      text: 'Every stored snapshot is also a **restore point**: an undo for a bad layout, pipeline, permission or settings change that a full database restore would be far too blunt for. Records are never touched — only configuration tables.'
+    },
+    {
+      type: 'table',
+      head: ['Kind', 'Stored', 'Kept'],
+      rows: [
+        ['Nightly', 'The `config-snapshot` job, 04:40', 'Newest 30'],
+        ['Manual', '**Store a snapshot now**, or `POST /config-diff/history`', 'Newest 10'],
+        [
+          'Before migration',
+          'At boot, when at least one migration is pending — names the migrations about to run. Time-boxed (`PRE_MIGRATION_SNAPSHOT_MS`, default 60 s, 0 = off); a snapshot that runs out of time stores nothing and boot continues. Replicas booting together store one.',
+          'Newest 10'
+        ],
+        [
+          'Before deploy',
+          'The deploy script: `POST /config-diff/history {"trigger": "pre-deploy", "version": "<new version>"}` (admin; takes as long as a snapshot, ~30–60 s)',
+          'Newest 10'
+        ],
+        [
+          'Before restore',
+          'Just before a restore writes — only the tables that restore touches. Restoring it undoes the restore.',
+          'Newest 10'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: "Retention is per kind, so thirty nightly snapshots never push the last deploy's restore point out. Only `manual` and `pre-deploy` may be sent by a client; any other trigger answers 400."
+    },
+    { type: 'h3', text: 'Restoring' },
+    {
+      type: 'ul',
+      items: [
+        '**Restore config to this point** previews every config table the snapshot carries: per table how many rows come back (deleted since), change back (edited since) and are removed (added since), with the rows and the changed fields. Untick tables to restore fewer, then preview again.',
+        'The apply is bound to the preview: it recomputes the plan and, when live configuration changed since you previewed, writes nothing and shows the new preview (409 `STALE`).',
+        'One transaction for the whole restore — all of it or none. Rows keep their ids. Deletes run child-first and inserts parent-first along foreign keys; a row that still cannot be written (a record or a table outside the restore references it) rolls everything back and names the row.',
+        'Before writing, a **Before restore** point of the touched tables is stored; the result panel links to it as **Undo this restore**.',
+        "Never restored: people accounts (`nivaro_users`), sign-in providers, each person's own pins, column choices and subscriptions, chat memberships and learned AI playbooks. Secret columns are stripped from snapshots, so a restore never overwrites a live secret; a row that differs only in columns added after the snapshot is left alone.",
+        'Caches are flushed, other replicas follow the configuration number, and open forms pick up the change. Each restored table gets a `config-restore` activity entry.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'API (admin): `POST /config-diff/history/:id/restore {mode: "preview"}` → `{plan_hash, tables[], refused[], totals, warnings}`; `{mode: "apply", plan_hash, tables?}` → `{pre_restore_id, tables[], totals}`. The single-table apply from an uploaded snapshot (`POST /config-diff/apply`) uses the same engine, upsert only, one transaction per table.'
     },
     { type: 'h2', id: 'layout-drift', text: 'Layout drift' },
     {
