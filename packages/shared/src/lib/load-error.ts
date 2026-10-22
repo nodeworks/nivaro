@@ -1,0 +1,45 @@
+/**
+ * One plain sentence for a read that failed (#2858), whatever shape the error came in: an SDK
+ * error (`status`), an axios error (`response.status`) or a fetch that never reached anything
+ * (a TypeError with no status). Used where a widget or panel used to print the raw error.
+ */
+export function loadErrorStatus(err: unknown): number | null {
+  const e = err as { status?: unknown; response?: { status?: unknown } } | null
+  const s = e?.status ?? e?.response?.status
+  return typeof s === 'number' ? s : null
+}
+
+export function loadErrorText(err: unknown, what = 'this'): string {
+  const status = loadErrorStatus(err)
+  if (status == null) {
+    const msg = err instanceof Error ? err.message : String(err ?? '')
+    if (err instanceof TypeError || /network|failed to fetch|load failed/i.test(msg))
+      return 'Can’t reach the server. Check the connection.'
+    return `Couldn’t load ${what}.`
+  }
+  if (status === 502 || status === 503 || status === 504)
+    return 'The service behind this is unavailable right now.'
+  if (status === 401) return 'Your sign-in has ended. Sign in again to see it.'
+  if (status === 403) return 'You don’t have access to this.'
+  if (status === 404)
+    return `${what === 'this' ? 'This' : what[0].toUpperCase() + what.slice(1)} no longer exists.`
+  if (status === 429) return 'Too many requests just now. Try again in a moment.'
+  if (status >= 500) return `The server hit an error loading ${what}.`
+  return `Couldn’t load ${what}.`
+}
+
+const BARE_STATUS =
+  /^(service unavailable|internal server error|bad gateway|gateway timeout|not found|forbidden|unauthorized)$/i
+
+/**
+ * The server's own explanation, when it gave one worth showing (`{error}` in the body, through
+ * axios's `response.data` or the SDK's `response`); null for a bare status text.
+ */
+export function serverErrorText(err: unknown): string | null {
+  const e = err as { response?: { data?: { error?: unknown }; error?: unknown } } | null
+  const raw = e?.response?.data?.error ?? e?.response?.error
+  if (typeof raw !== 'string') return null
+  const msg = raw.trim()
+  if (!msg || BARE_STATUS.test(msg)) return null
+  return msg.length > 200 ? `${msg.slice(0, 197)}…` : msg
+}

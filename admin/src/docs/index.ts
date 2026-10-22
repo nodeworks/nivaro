@@ -103,6 +103,7 @@ import {
 import { attributesGuide } from './sections/attributes.js'
 import { bulkActionsGuide } from './sections/bulk-actions.js'
 import { chaosCiDocs } from './sections/chaos-ci.js'
+import { chaosClientDocs } from './sections/chaos-client.js'
 import {
   collabApprovals,
   collabChat,
@@ -700,7 +701,9 @@ export const navSections: NavGroup[] = [
       smtpConfig,
       smsConfig,
       digestEmails,
-      aiExplainGuide
+      aiExplainGuide,
+      // #2840 / #2856 / #2858 — moves to the "Chaos engineering" group when that lands.
+      chaosClientDocs
     ]
   },
   {

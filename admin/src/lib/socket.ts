@@ -1,4 +1,5 @@
 import {
+  bindClientChaosSocket,
   type ClockSample,
   type CollectionUpdateEvent,
   createLeaderSocket,
@@ -307,6 +308,9 @@ function openSocket(): Socket {
 export function getSocket(): Socket {
   if (socket) return socket
   socket = openSocket()
+  // #2840 — browser chaos "socket gone" drops this tab's socket for its window (a worker facade
+  // pauses itself; a per-tab socket disconnects and reconnects through the paths below).
+  bindClientChaosSocket(socket)
   // #2476 — the session recorder lists the events this socket receives (names, rooms, ids).
   tapReplaySocket(socket)
   socket.on('connect', () => {

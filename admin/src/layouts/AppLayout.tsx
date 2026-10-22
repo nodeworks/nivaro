@@ -30,6 +30,7 @@ import {
   PanelLeftOpen,
   ScrollText,
   Star,
+  Unplug,
   UserRound
 } from 'lucide-react'
 import {
@@ -72,6 +73,8 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   AnnouncementBanner,
   ApiUpdateBanner,
+  CLIENT_CHAOS_SHORTCUT,
+  ClientChaosToolbar,
   defaultItemUrl,
   ErrorSurface,
   focusPopoutOpener,
@@ -83,9 +86,11 @@ import {
   NavigationContext,
   NivaroProvider,
   OfflineBanner,
+  openClientChaosToolbar,
   RealtimeContext,
   RealtimeStatusBanner,
   RecordOutboxHost,
+  useClientChaosGate,
   useLiveQueryBridge
 } from '@nivaro/shared'
 import { AskPanelHost } from '@/components/ask-panel-host'
@@ -551,6 +556,8 @@ export function AppLayout() {
           <FloatingReplaySlot />
           <SessionExpiryWatcher />
           <OfflineBanner />
+          {/* #2840 / #2856 — browser chaos mode: the panel + the "on" pill (portals to body). */}
+          <ClientChaosToolbar user={authUser} />
           <RealtimeStatusBanner />
           <DbOutageBanner />
           <NivaroProvider client={announcementsClient}>
@@ -760,6 +767,7 @@ export function AppLayout() {
                         <UserRound className='h-3.5 w-3.5' />
                         My Profile
                       </Link>
+                      <ChaosMenuRow user={authUser} />
                       <button
                         type='button'
                         onClick={logout}
@@ -1229,5 +1237,22 @@ function ViewAsBar() {
         {leaving ? 'Leaving…' : 'Stop viewing as'}
       </button>
     </div>
+  )
+}
+
+/** User menu → Browser chaos (#2856): only where the chaos gate lets this person use it. */
+function ChaosMenuRow({ user }: { user: Parameters<typeof useClientChaosGate>[0] }) {
+  const gate = useClientChaosGate(user)
+  if (!gate.allowed) return null
+  return (
+    <button
+      type='button'
+      onClick={openClientChaosToolbar}
+      className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900'
+    >
+      <Unplug className='h-3.5 w-3.5' />
+      <span className='flex-1 text-left'>Browser chaos</span>
+      <kbd className='font-mono text-[10.5px] text-slate-400'>{CLIENT_CHAOS_SHORTCUT}</kbd>
+    </button>
   )
 }

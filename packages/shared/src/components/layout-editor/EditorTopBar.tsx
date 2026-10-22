@@ -18,6 +18,7 @@ import { useDebounced } from '../../hooks/useDebounced'
 import { useRelationOptions } from '../../hooks/useRelationOptions'
 import type { LayoutBundle } from '../../lib/layout-ops'
 import { cn, titleCase } from '../../lib/utils'
+import { LAYOUT_PRETEND_SCOPE, usePretendDownIds } from '../PretendDown'
 import { useOverflowTip } from '../TipLayer'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -229,6 +230,7 @@ function PreviewAsButton({
     displayTemplate: template ?? null,
     enabled: open && template !== undefined
   })
+  const pretendDown = usePretendDownIds(LAYOUT_PRETEND_SCOPE).length
   const roleName = roles.find((r) => r.id === value.roleId)?.name ?? null
   const compareName = roles.find((r) => r.id === value.compareRoleId)?.name ?? null
   const summary =
@@ -242,7 +244,9 @@ function PreviewAsButton({
           ? 'Phone'
           : 'Tablet'
         : null,
-      value.who ? 'Who sees' : null
+      value.who ? 'Who sees' : null,
+      // #2858 — pretending something is down is a preview mode too: never forgotten on screen.
+      pretendDown > 0 ? `${pretendDown} down` : null
     ]
       .filter(Boolean)
       .join(' · ') || 'No record'
