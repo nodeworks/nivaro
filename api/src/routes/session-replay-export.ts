@@ -64,7 +64,14 @@ export async function sessionReplayExportRoutes(app: FastifyInstance): Promise<v
     if (!header) return reply.code(404).send({ error: 'Not found' })
 
     if (format === 'webm') {
-      enqueueWebmExport({ recordingId: id, fromMs, toMs, userId: String(req.user?.id) })
+      // Here, or on the media worker (slim image); neither = a readable 503.
+      try {
+        await enqueueWebmExport({ recordingId: id, fromMs, toMs, userId: String(req.user?.id) })
+      } catch (err) {
+        const e = err as { statusCode?: number; code?: string; message?: string }
+        if (!e.statusCode) throw err
+        return reply.code(e.statusCode).send({ error: e.message, code: e.code })
+      }
       await logActivity({
         action: 'session-recording-export',
         collection: 'nivaro_session_recordings',

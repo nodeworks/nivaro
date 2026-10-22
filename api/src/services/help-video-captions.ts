@@ -14,6 +14,7 @@ import { type Caption, EDIT_LIMITS } from './help-video-edits.js'
 import { MAX_DURATION_MS, videoWorkDir } from './help-video-uploads.js'
 import { getApp } from './io-holder.js'
 import { startJobRun } from './job-runs.js'
+import { handOff, mediaPlacement } from './media-handoff.js'
 import { openStoredObject } from './stored-object-stream.js'
 
 /**
@@ -35,7 +36,8 @@ import { openStoredObject } from './stored-object-stream.js'
  * Each run is a Background Jobs run of kind ai, and each is logged in
  * nivaro_ai_calls as feature help-video-captions: the gateway path with the
  * tokens or seconds it reported, the local path as provider local-whisper
- * with its duration.
+ * with its duration. A process without ffmpeg (the slim image) queues the
+ * job and hands it to the media worker (media-handoff.ts), which runs it.
  */
 
 export const CAPTION_LINE_MAX_CHARS = 42
@@ -511,6 +513,8 @@ export async function startCaptionJob(
   const provider = await deps.provider()
   if (provider.kind === 'none')
     throw new CaptionsError(503, 'HELP_VIDEO_CAPTIONS_NOT_CONFIGURED', provider.reason)
+  // The sound is read with ffmpeg: here, or on the media worker (slim image).
+  const placement = deps.placement ? await deps.placement() : 'here'
   const current = await readCaptionJob(versionId)
   if (current && (current.status === 'queued' || current.status === 'running'))
     throw new CaptionsError(409, 'HELP_VIDEO_CAPTIONS_BUSY', 'Captions are already being generated')
@@ -524,13 +528,42 @@ export async function startCaptionJob(
     model: provider.kind === 'gateway' ? provider.model : (provider.model ?? undefined)
   }
   await writeCaptionJob(job)
+  if (placement === 'worker' && deps.handOff) {
+    try {
+      await deps.handOff(job.version_id)
+    } catch (err) {
+      await writeCaptionJob({
+        ...job,
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        error: 'The captions could not be queued. Try again in a moment.'
+      })
+      const e = err as { statusCode?: number; code?: string; message?: string }
+      throw new CaptionsError(
+        e.statusCode ?? 503,
+        e.code ?? 'HELP_VIDEO_CAPTIONS_NO_FFMPEG',
+        String(e.message)
+      )
+    }
+    return job
+  }
+  runCaptionJobHere(job.version_id, deps)
+  return job
+}
+
+/** Runs a queued job through this process's one-at-a-time queue; the media
+ *  worker's runner (media-handoff.ts) waits for it. */
+export function runCaptionJobHere(
+  versionId: string,
+  deps: CaptionDeps = defaultDeps
+): Promise<void> {
   chain = chain
-    .then(() => processCaptionJob(job.version_id, deps))
+    .then(() => processCaptionJob(versionId, deps))
     .then(
       () => undefined,
       () => undefined
     )
-  return job
+  return chain
 }
 
 /** Resolves once every queued transcription has finished (tests, shutdown). */
@@ -563,6 +596,11 @@ export interface CaptionDeps {
   /** Runs `work` inside the cron heavy slot when the server has one. */
   heavy: (label: string, work: () => Promise<void>) => Promise<void>
   log: typeof recordAiCall
+  /** Where the job runs: here, or on the media worker (no ffmpeg here).
+   *  Throws the readable 503 when neither can. Absent = here. */
+  placement?: () => Promise<'here' | 'worker'>
+  /** Hands a queued job to the media worker. */
+  handOff?: (versionId: string) => Promise<void>
 }
 
 /** One job, start to finish: the queued row becomes running, done or failed. */
@@ -847,5 +885,14 @@ export const defaultDeps: CaptionDeps = {
   transcribeGateway,
   transcribeLocal,
   heavy,
-  log: recordAiCall
+  log: recordAiCall,
+  placement: async () =>
+    mediaPlacement('captions').catch(() => {
+      throw new CaptionsError(
+        503,
+        'HELP_VIDEO_CAPTIONS_NO_FFMPEG',
+        'This server cannot read the sound of the recording (ffmpeg is not installed and there is no media worker to hand it to)'
+      )
+    }),
+  handOff: (versionId) => handOff('captions', { version_id: versionId })
 }

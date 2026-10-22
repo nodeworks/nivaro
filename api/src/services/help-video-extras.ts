@@ -17,6 +17,7 @@ import {
   spriteGeometry
 } from './help-video-extras-plan.js'
 import { discardFile, videoWorkDir, withConversionSlot } from './help-video-uploads.js'
+import { handOff, mediaPlacement } from './media-handoff.js'
 import { openStoredObject } from './stored-object-stream.js'
 
 // Server-side thumbnails and waveform (#1560). Once an upload is finalized
@@ -93,16 +94,30 @@ function warn(msg: string): void {
 }
 
 /** Builds the sprite sheet and peaks for a finalized upload, in the
- *  background. Never throws; never blocks the caller. */
+ *  background: here when this process has ffmpeg, else on the media worker
+ *  (the slim image hands the ids over, media-handoff.ts). Never throws;
+ *  never blocks the caller. */
 export function startMediaExtras(user: User, input: MediaExtrasInput): void {
-  void buildMediaExtras(user, input).catch((err) =>
+  const log = (err: unknown) =>
     warn(`${input.uploadId}: ${err instanceof Error ? err.message : String(err)}`)
-  )
+  void (async () => {
+    if (!(await extrasMigrated())) return
+    if ((await mediaPlacement('extras')) === 'here') await buildMediaExtras(user, input)
+    else await handOff('extras', { user_id: user.id, input: { ...input } })
+  })().catch(log)
+}
+
+/** The media worker's runner (media-handoff.ts): build a handed-off
+ *  upload's extras here, as the user who finalized it. */
+export async function runMediaExtrasHere(userId: string, input: MediaExtrasInput): Promise<void> {
+  await buildMediaExtras({ id: userId }, input)
 }
 
 /** Exported for tests; production goes through startMediaExtras. */
 export async function buildMediaExtras(
-  user: User,
+  // Only the id is read (the sprite file's uploaded_by, discards): a hand-off
+  // carries the id alone, and the type keeps it that way.
+  user: Pick<User, 'id'>,
   input: MediaExtrasInput
 ): Promise<{ sprite: SpriteSheet | null; peaks: number[] | null } | null> {
   if (!(await extrasMigrated())) return null
@@ -146,8 +161,9 @@ export async function buildMediaExtras(
               }
             )
             if ((await stat(sheet)).size > 0) {
+              // uploadFileFromPath reads user.id only (uploaded_by).
               const stored = await uploadFileFromPath(
-                user,
+                user as User,
                 sheet,
                 `sprite-${input.uploadId.toLowerCase()}.jpg`,
                 'image/jpeg'

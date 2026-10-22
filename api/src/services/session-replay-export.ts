@@ -10,6 +10,8 @@
  *    (the PDF service's browser), plays it, and captures it with puppeteer's
  *    screencast (which pipes frames to ffmpeg). The video is stored as a file
  *    owned by the requester, who is notified when it is ready (or why not).
+ *    A process without ffmpeg and Chromium (the slim image) hands the job to
+ *    the media worker (media-handoff.ts), which makes it the same way.
  *
  * The browser and ffmpeg sit behind `WebmDeps` so the job is tested with fakes.
  */
@@ -278,6 +280,9 @@ export interface WebmDeps {
   workDir: () => string
   /** Runs `work` in the cron heavy slot when the app has one. */
   heavySlot: (label: string, work: () => Promise<void>) => Promise<void>
+  /** Is the requester still an active administrator? Checked again when the
+   *  job runs (it may have waited on the media worker). Absent = yes. */
+  requesterAllowed?: (userId: string) => Promise<boolean>
 }
 
 export interface JobRunLike {
@@ -307,6 +312,8 @@ export function friendlyExportError(err: unknown): string {
     return 'that part of the recording cannot be replayed'
   if (/timed? ?out|timeout|aborted|cancel/i.test(msg)) return 'capturing the replay took too long'
   if (/gone|not found/i.test(msg)) return 'the recording is gone'
+  if (/no longer an active administrator/i.test(msg))
+    return 'you are no longer an administrator, so the export was not made'
   return 'the video could not be made'
 }
 
@@ -333,6 +340,8 @@ export async function runWebmExport(
   try {
     const header = await deps.loadHeader(job.recordingId)
     if (!header) throw new Error('The recording is gone')
+    if (deps.requesterAllowed && !(await deps.requesterAllowed(job.userId)))
+      throw new Error('The requester is no longer an active administrator')
     if (!(await deps.hasFfmpeg()))
       throw new Error(
         'Exporting a recording as video needs ffmpeg and Chromium on this server (the slim image has neither)'
@@ -443,7 +452,8 @@ async function productionDeps(): Promise<WebmDeps> {
     loadEvents: loadRecordingEvents,
     loadHeader: loadRecordingHeader,
     capture: captureWithPuppeteer,
-    hasFfmpeg: async () => (await import('./ffmpeg.js')).hasFfmpeg(),
+    // ffmpeg AND Chromium (the screencast needs both): only where the job may run.
+    hasFfmpeg: async () => (await import('./media-handoff.js')).canRunHere('replay-webm'),
     storeFile: async (userId, path, name) => {
       const { uploadFileFromPath } = await import('./files.js')
       const f = await uploadFileFromPath({ id: userId } as never, path, name, 'video/webm')
@@ -475,7 +485,9 @@ async function productionDeps(): Promise<WebmDeps> {
       const app = getApp()
       if (app?.cron?.withHeavySlot) await app.cron.withHeavySlot(label, work)
       else await work()
-    }
+    },
+    requesterAllowed: async (userId) =>
+      (await import('../middleware/authenticate.js')).isActiveAdmin(userId)
   }
 }
 
@@ -488,8 +500,60 @@ export function setWebmDepsForTests(deps: WebmDeps | null): void {
   depsOverride = deps
 }
 
-/** Queue a WebM export; answers at once. The requester is notified when it is done. */
-export function enqueueWebmExport(job: WebmJob): void {
+/** Where a WebM export started on this process is made: here (ffmpeg and
+ *  Chromium are installed), or on the media worker (the slim image). Throws
+ *  the readable 503 (RENDER_UNAVAILABLE) when neither can. */
+export async function webmExportPlacement(): Promise<'here' | 'worker'> {
+  if (depsOverride) return 'here'
+  const { mediaPlacement } = await import('./media-handoff.js')
+  return mediaPlacement('replay-webm')
+}
+
+/** Queue a WebM export; answers at once. The requester is notified when it
+ *  is done, by whichever process makes it. */
+export async function enqueueWebmExport(job: WebmJob): Promise<'here' | 'worker'> {
+  const placement = await webmExportPlacement()
+  if (placement === 'worker') {
+    // The hand-off keeps a record of the queued export until it has run: a
+    // job dropped on the way still ends as a failed run and a notification
+    // (failQueuedWebmExport). At most a few per person (429 past it).
+    const { handOff } = await import('./media-handoff.js')
+    await handOff('replay-webm', { ...job }, { user: job.userId })
+    return placement
+  }
+  void runWebmExportHere(job)
+  return placement
+}
+
+/** A queued export that will not be made (dropped by the media worker: too
+ *  old, unreadable, lost, or it could not start): a failed run in Background
+ *  Jobs and a notification to the requester, through the core notify path. */
+export async function failQueuedWebmExport(
+  userId: string,
+  recordingId: string | null,
+  why: string
+): Promise<void> {
+  const deps = depsOverride ?? (await productionDeps())
+  const key = (recordingId ?? 'unknown').toLowerCase()
+  const run = await deps.jobRun(
+    'Export a session recording as WebM',
+    `session-replay-webm:${key}`,
+    userId
+  )
+  await run.fail(new Error(`Not made: ${why}`))
+  await deps
+    .notify(userId, {
+      ok: false,
+      subject: 'Recording export failed',
+      message: `The WebM export could not be made: ${why}.`,
+      recordingId: recordingId ?? ''
+    })
+    .catch(() => null)
+}
+
+/** Makes one export through this process's queue (the media worker's runner,
+ *  media-handoff.ts, waits for it). */
+export function runWebmExportHere(job: WebmJob): Promise<unknown> {
   const run = async () => {
     const deps = depsOverride ?? (await productionDeps())
     // runWebmExport settles every failure itself (job run + notification).
@@ -498,6 +562,7 @@ export function enqueueWebmExport(job: WebmJob): void {
     })
   }
   chain = chain.then(run, run)
+  return chain
 }
 
 /** Resolves once every queued export of this process is done (tests). */

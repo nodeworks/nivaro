@@ -23,6 +23,7 @@ import { isUuid } from './help-video-files.js'
 import { discardFile, videoWorkDir } from './help-video-uploads.js'
 import { getApp } from './io-holder.js'
 import { startJobRun } from './job-runs.js'
+import { handOff, mediaPlacement } from './media-handoff.js'
 import { openStoredObject } from './stored-object-stream.js'
 
 // Short clips and GIFs (#1562). An author picks a window of a version (a
@@ -33,6 +34,8 @@ import { openStoredObject } from './stored-object-stream.js'
 // ticketed media routes and are visible to exactly the people who can watch
 // the video; deleting the video purges them. One clip renders at a time per
 // process, inside the cron heavy slot like a render, recorded as a job run.
+// A process without ffmpeg (the slim image) never cuts: it queues the row and
+// hands the id to the media worker (media-handoff.ts), which makes it.
 
 const CLIPS = 'nivaro_help_video_clips'
 const VERSIONS = 'nivaro_help_video_versions'
@@ -198,13 +201,14 @@ export async function createClip(
       'Clips need a database migration this server has not run yet'
     )
   }
-  if (!(await hasFfmpeg())) {
+  // Here, or on the media worker (slim image); neither = a readable 503.
+  const placement = await mediaPlacement('clip').catch(() => {
     throw fail(
       503,
       'HELP_VIDEO_CLIP_NO_FFMPEG',
-      'This server cannot cut videos (ffmpeg is not installed)'
+      'This server cannot cut videos (ffmpeg is not installed and there is no media worker to hand them to)'
     )
-  }
+  })
   if (!isClipKind(body.kind)) {
     throw fail(400, 'HELP_VIDEO_CLIP_INVALID', 'kind must be mp4 or gif')
   }
@@ -269,7 +273,24 @@ export async function createClip(
     created_at: now,
     updated_at: now
   })
-  enqueueClip(id)
+  if (placement === 'here') enqueueClip(id)
+  else {
+    try {
+      await handOff('clip', { id })
+    } catch (err) {
+      await db(CLIPS)
+        .where({ id, status: 'queued' })
+        .update({
+          status: 'failed',
+          progress: null,
+          error: 'The clip could not be queued',
+          updated_at: new Date()
+        })
+        .catch(() => null)
+      const e = err as { statusCode?: number; code?: string; message?: string }
+      throw fail(e.statusCode ?? 503, e.code ?? 'HELP_VIDEO_CLIP_NO_FFMPEG', String(e.message))
+    }
+  }
   return (await db(CLIPS).where({ id }).first()) as Record<string, unknown>
 }
 
@@ -313,8 +334,9 @@ function readEdits(version: Record<string, unknown>): VideoEdits {
 
 // ── The queue ───────────────────────────────────────────────────────────────
 // Clips of this process, one after another; each inside the heavy slot when
-// the app offers one. Nothing is shared between processes: a clip is made by
-// the process that took the request (every process can read storage).
+// the app offers one. A clip is made by the process that took the request
+// when it has ffmpeg, else by the media worker it was handed to (every
+// process can read storage).
 
 let chain: Promise<void> = Promise.resolve()
 const active = new Map<string, AbortController>()
@@ -327,6 +349,13 @@ export function enqueueClip(id: string): void {
     else await work()
   }
   chain = chain.then(run, run)
+}
+
+/** The media worker's runner (media-handoff.ts): cut one handed-off clip
+ *  through this process's queue and wait for it. */
+export async function runClipHere(id: string): Promise<void> {
+  enqueueClip(id)
+  await whenClipsIdle()
 }
 
 /** Resolves once every queued clip of this process is done (tests). */
@@ -351,6 +380,9 @@ export function friendlyClipError(err: unknown): string {
 
 /** Cuts one queued clip. Exported for tests. */
 export async function renderClip(id: string): Promise<'ready' | 'failed' | 'skipped'> {
+  // A process without ffmpeg never claims a clip: it stays queued for the
+  // media worker instead of failing here.
+  if (!(await hasFfmpeg())) return 'skipped'
   const claimed = Number(
     await db(CLIPS)
       .where({ id, status: 'queued' })

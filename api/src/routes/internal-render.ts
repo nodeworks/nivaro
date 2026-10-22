@@ -15,12 +15,20 @@ import {
 import { convertMusicFile } from '../services/help-video-music.js'
 import type { UploadContainer } from '../services/help-video-upload-media.js'
 import { convertUploadedFile } from '../services/help-video-uploads.js'
+import {
+  type HandoffRedis,
+  handoffBacklog,
+  judgeMediaWorker,
+  readMediaWorker
+} from '../services/media-handoff.js'
 import { hasLocalChromium, htmlToPdfLocal } from '../services/pdf-layout.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import {
   bearerMatches,
   byteCap,
   encodeMeta,
+  imageVariant,
+  judgeRenderSetup,
   probeRenderPeer,
   RENDER_FILE_MAX_BYTES,
   RENDER_META_HEADER,
@@ -28,8 +36,7 @@ import {
   RENDER_PDF_MAX_BYTES,
   RENDER_TOKEN_MIN_LENGTH,
   type RenderFileOp,
-  renderPeerToken,
-  renderPeerUrl
+  renderPeerToken
 } from '../services/render-peer.js'
 import { NIVARO_VERSION } from '../version.js'
 
@@ -41,6 +48,7 @@ import { NIVARO_VERSION } from '../version.js'
  *   POST /api/internal/render/pdf           → application/pdf ({ html, format, landscape, margin })
  *   POST /api/internal/render/file/:op      → JSON (probe-*) or the output file
  *                                              (remux, convert-upload, convert-music)
+ *   GET  /api/internal/render/encoders      → { hardware } (help-video encoder report)
  *
  * Mounted ONLY when RENDER_TOKEN (at least 32 characters) is set on this
  * process (RENDER_TOKEN_FILE works), and in cloud mode only with
@@ -176,7 +184,15 @@ function callerOrigins(raw: unknown): string[] {
 }
 
 let readinessRegistered = false
-/** The client side: does this process's render peer answer? (Also in /api/preflight.) */
+const READY: Record<'ok' | 'warn' | 'fail', 'pass' | 'warn' | 'fail'> = {
+  ok: 'pass',
+  warn: 'warn',
+  fail: 'fail'
+}
+/** The client side: does this process's render peer answer, and is there a
+ *  media worker for what it hands off? (Also in /api/preflight.) A slim
+ *  process without either FAILS: a deploy gate stops it before people meet
+ *  503s. */
 export function registerRenderPeerReadiness(): void {
   if (readinessRegistered) return
   readinessRegistered = true
@@ -185,30 +201,33 @@ export function registerRenderPeerReadiness(): void {
     label: 'PDFs and video conversion have somewhere to run',
     group: 'Operations',
     description:
-      'A slim image (no Chromium, no ffmpeg) hands PDFs, video probes and conversions to the render server named in RENDER_URL. Passes when this process has the binaries itself, or when the render server answers with its token.',
+      'A slim image (no Chromium, no ffmpeg) hands PDFs, video probes and conversions to the render server named in RENDER_URL. Passes when this process has the binaries itself, or when the render server answers with its token and has them; fails on the slim image otherwise.',
     run: async () => {
-      const local = (await hasLocalChromium()) && (await hasFfmpeg())
-      if (local && !renderPeerUrl())
-        return { status: 'pass', detail: 'Chromium and ffmpeg are installed here.' }
-      const h = await probeRenderPeer()
-      if (!h.configured)
-        return {
-          status: 'warn',
-          detail:
-            'No Chromium or ffmpeg here and no RENDER_URL: PDFs, video uploads and music will refuse with a 503.'
+      const local = { chromium: await hasLocalChromium(), ffmpeg: await hasFfmpeg() }
+      const v = judgeRenderSetup(local, await probeRenderPeer(), imageVariant())
+      return { status: READY[v.status], detail: v.summary }
+    }
+  })
+  registerReadinessCheck({
+    id: 'media-worker',
+    label: 'Clips, captions, thumbnails and replay videos have a worker',
+    group: 'Operations',
+    description:
+      'A process without ffmpeg or Chromium (the slim image) hands clips, generated captions, upload thumbnails and waveforms, and session-replay videos to the media worker: a full-image process that ticks crons (or sets MEDIA_WORKER=on) and checks in every 30 seconds. Fails on the slim image when none has checked in.',
+    run: async () => {
+      const { getApp } = await import('../services/io-holder.js')
+      const r = (getApp()?.redis as HandoffRedis | undefined) ?? null
+      const v = judgeMediaWorker(
+        { ffmpeg: await hasFfmpeg(), chromium: await hasLocalChromium() },
+        {
+          variant: imageVariant(),
+          cloud: !!process.env.CLOUD_META_DB_URL,
+          redis: !!r,
+          worker: await readMediaWorker(r),
+          backlog: await handoffBacklog(r).catch(() => null)
         }
-      if (!h.ok)
-        return {
-          status: 'fail',
-          detail: `The render server (${h.url}) does not answer: ${h.error}`
-        }
-      const lacks = [!h.chromium && 'Chromium', !h.ffmpeg && 'ffmpeg'].filter(Boolean)
-      return lacks.length
-        ? { status: 'warn', detail: `The render server answers but has no ${lacks.join(' or ')}.` }
-        : {
-            status: 'pass',
-            detail: `The render server answers in ${h.ms} ms (version ${h.version}).`
-          }
+      )
+      return { status: READY[v.status], detail: v.summary }
     }
   })
 }
@@ -262,6 +281,21 @@ export async function internalRenderRoutes(app: FastifyInstance) {
         scratch_mb: Math.round(scratchInUse / 1048576)
       }
     })
+  })
+
+  // What the help-video encoder can use here (#1561): a slim process's
+  // settings page shows the render server's hardware, where renders run.
+  app.get<{ Querystring: { fresh?: string } }>('/internal/render/encoders', async (req, reply) => {
+    if (!(await hasFfmpeg()))
+      return refuse(reply, 503, 'RENDER_UNAVAILABLE', 'This render server has no ffmpeg')
+    const release = await fileSlots.acquire()
+    if (!release) return busy(reply)
+    try {
+      const { detectHardwareEncoders } = await import('../services/help-video-encoder.js')
+      return reply.send({ hardware: await detectHardwareEncoders(req.query.fresh === '1') })
+    } finally {
+      release()
+    }
   })
 
   app.post<{
