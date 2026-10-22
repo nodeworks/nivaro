@@ -16774,7 +16774,7 @@ POST   /api/ideas/:id/link                 admin: { collection, id } → 'relate
           <!-- /SYNC:admin-navigation -->
         </div>
 
-        <div class="doc-section" id="s-global-search" data-toc='[{"id":"global-search","label":"Global Search (Cmd+K)"},{"id":"global-search-usage","label":"Searching"},{"id":"global-search-api","label":"API Reference"},{"id":"global-search-behavior","label":"Search Behavior"},{"id":"global-search-integration","label":"Integration"},{"id":"global-search-analytics","label":"Search analytics"}]'>
+        <div class="doc-section" id="s-global-search" data-toc='[{"id":"global-search","label":"Global Search (Cmd+K)"},{"id":"global-search-usage","label":"Searching"},{"id":"global-search-api","label":"API Reference"},{"id":"global-search-behavior","label":"Search Behavior"},{"id":"global-search-integration","label":"Integration"},{"id":"global-search-analytics","label":"Search analytics"},{"id":"global-search-synonyms","label":"Synonyms"}]'>
           <!-- SYNC:global-search -->
           <h1 class="doc-h1" id="global-search">Global Search (Cmd+K)</h1>
           <p class="doc-p">Press Cmd+K (Ctrl+K on Windows/Linux) anywhere in the admin UI to open the command palette. Search runs across every collection you have read access to, admin pages, and quick actions. Results are ranked by relevance and category as you type, with RBAC enforced on all item results.</p>
@@ -16850,6 +16850,15 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
             <li>Search text is personal data: only administrators can read it, and rows are deleted after 60 days (<code class="doc-code">SEARCH_LOG_RETENTION_DAYS</code>, 1–3650). The search results themselves are never stored.</li>
             <li>Stored in <code class="doc-code">nivaro_search_log</code> (migration 485). <code class="doc-code">GET /api/search-analytics/summary?days=</code> (admin); signed-in clients log with <code class="doc-code">POST /api/search-analytics/log</code> and add the opened result with <code class="doc-code">POST /api/search-analytics/log/:id/open</code> (only the person who ran the search can).</li>
             <li>Searches under two characters are not logged. The same words searched in two different collections are listed separately, since each has its own fix.</li>
+          </ul>
+          <h3 class="doc-h3" id="global-search-synonyms">Synonyms</h3>
+          <p class="doc-p">A synonym is a group of words that mean the same thing to the people searching, such as “PO” and “purchase order”. A search for any word in a group also finds records that match the others: in a list’s search box, in pickers, in Cmd+K and in the cross-collection search. A group can apply everywhere or to one collection’s searches only. Add one from **Add a synonym** beside a search that found nothing (prefilled with the words people changed when they searched again within three minutes and found something; the row then shows “then tried …”), or in the **Synonyms** card at the bottom of Search Analytics, where groups are edited and deleted.</p>
+          <ul class="doc-ul">
+            <li>Synonyms only widen the words a search tries. The fields searched and every permission, row filter and user scope stay the same, so a synonym never shows anyone a record they could not already find by typing the other word.</li>
+            <li>Multi-word terms work as one unit: with “purchase order” = “po”, a search for “purchase order 4471” also finds “po 4471”. Each word of a search is still required, as before.</li>
+            <li>Adding a group that shares a word with an existing group of the same scope merges into it. A group holds 2–10 words, stored lower-case.</li>
+            <li>Changes apply at once on the server that saved them and within 30 seconds on the others. Once a synonym covers an empty search, the Found nothing row shows “Synonym added” with a link to try it.</li>
+            <li>Stored in <code class="doc-code">nivaro_search_synonyms</code> (migration 498; configuration, so it travels with config promotion). Admin routes: <code class="doc-code">GET/POST /api/search-analytics/synonyms</code> (POST body <code class="doc-code">{terms, collection?, note?}</code>, 201 new / 200 merged), <code class="doc-code">PATCH/DELETE /api/search-analytics/synonyms/:id</code>.</li>
           </ul>
           <!-- /SYNC:global-search -->
         </div>

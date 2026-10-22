@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { readItems } from '../services/items.js'
+import { searchPhrases } from '../services/search-synonyms.js'
 import type { Policy, Role, User } from '../types.js'
 
 // ─── Static admin page registry ───────────────────────────────────────────────
@@ -197,23 +198,36 @@ async function searchRecords(
   const plan = (await buildSearchPlan()).filter((p) => readableSet.has(p.collection))
   if (plan.length === 0) return []
 
-  const like = `%${escapeLike(q)}%`
+  // Search synonyms (#1581): the phrase as typed plus its synonym forms. With
+  // none (the usual case) the statement is exactly as before; with some, the
+  // forms are bound ONCE in a CTE every union member reads, so the parameter
+  // count does not multiply by columns × collections.
+  const phrases = await searchPhrases(q).catch(() => [q])
+  const likes = phrases.map((p) => `%${escapeLike(p)}%`)
   const parts: string[] = []
   const bindings: string[] = []
   for (const p of plan) {
-    const wheres = p.columns.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')
     const casts = p.columns.map((c) => `CAST([${c}] AS nvarchar(200))`)
     // T-SQL COALESCE demands ≥2 arguments — a single column goes bare.
     const labelExpr = casts.length > 1 ? `COALESCE(${casts.join(', ')})` : casts[0]
+    const wheres =
+      likes.length > 1
+        ? `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${p.columns.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
+        : p.columns.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')
     parts.push(
       `SELECT TOP ${PER_COLLECTION} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id, ${labelExpr} AS label FROM [${p.collection}] WHERE ${wheres}`
     )
-    bindings.push(...p.columns.map(() => like))
+    if (likes.length === 1) bindings.push(...p.columns.map(() => likes[0]))
   }
+  const cte =
+    likes.length > 1
+      ? `WITH nvr_syn(p) AS (${likes.map(() => 'SELECT CAST(? AS nvarchar(410))').join(' UNION ALL ')}) `
+      : ''
+  if (cte) bindings.unshift(...likes)
 
   let candidates: Array<{ c: string; id: string; label: string | null }>
   try {
-    candidates = (await db.raw(parts.join(' UNION ALL '), bindings)) as typeof candidates
+    candidates = (await db.raw(cte + parts.join(' UNION ALL '), bindings)) as typeof candidates
   } catch {
     planCache = null // stale plan (dropped table/column) — rebuild next request
     return []
@@ -276,16 +290,18 @@ async function searchRecords(
 
 function matchStatic(
   list: { label: string; path: string; keywords?: string }[],
-  q: string,
+  forms: string[],
   cap: number
 ) {
-  const lower = q.toLowerCase()
+  const lowers = forms.map((f) => f.toLowerCase())
   return list
-    .filter(
-      (p) =>
-        p.label.toLowerCase().includes(lower) ||
-        (p.keywords ?? '').toLowerCase().includes(lower) ||
-        p.path.toLowerCase().includes(lower)
+    .filter((p) =>
+      lowers.some(
+        (lower) =>
+          p.label.toLowerCase().includes(lower) ||
+          (p.keywords ?? '').toLowerCase().includes(lower) ||
+          p.path.toLowerCase().includes(lower)
+      )
     )
     .slice(0, cap)
     .map(({ label, path }) => ({ label, path }))
@@ -301,8 +317,9 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     const { q: rawQ } = req.query as { q?: string }
     const q = (rawQ ?? '').trim()
 
-    const pages = q ? matchStatic(ADMIN_PAGES, q, 8) : []
-    const actions = q ? matchStatic(QUICK_ACTIONS, q, 4) : []
+    const forms = q.length >= 2 ? await searchPhrases(q).catch(() => [q]) : [q]
+    const pages = q ? matchStatic(ADMIN_PAGES, forms, 8) : []
+    const actions = q ? matchStatic(QUICK_ACTIONS, forms, 4) : []
 
     if (q.length < 2) {
       return reply.send({ data: { records: [], pages, actions } })

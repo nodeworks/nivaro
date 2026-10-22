@@ -118,6 +118,21 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
         'Stored in `nivaro_search_log` (migration 485). `GET /api/search-analytics/summary?days=` (admin); signed-in clients log with `POST /api/search-analytics/log` and add the opened result with `POST /api/search-analytics/log/:id/open` (only the person who ran the search can).',
         'Searches under two characters are not logged. The same words searched in two different collections are listed separately, since each has its own fix.'
       ]
+    },
+    { type: 'h3', id: 'global-search-synonyms', text: 'Synonyms' },
+    {
+      type: 'p',
+      text: 'A synonym is a group of words that mean the same thing to the people searching, such as “PO” and “purchase order”. A search for any word in a group also finds records that match the others: in a list’s search box, in pickers, in Cmd+K and in the cross-collection search. A group can apply everywhere or to one collection’s searches only. Add one from **Add a synonym** beside a search that found nothing (prefilled with the words people changed when they searched again within three minutes and found something; the row then shows “then tried …”), or in the **Synonyms** card at the bottom of Search Analytics, where groups are edited and deleted.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Synonyms only widen the words a search tries. The fields searched and every permission, row filter and user scope stay the same, so a synonym never shows anyone a record they could not already find by typing the other word.',
+        'Multi-word terms work as one unit: with “purchase order” = “po”, a search for “purchase order 4471” also finds “po 4471”. Each word of a search is still required, as before.',
+        'Adding a group that shares a word with an existing group of the same scope merges into it. A group holds 2–10 words, stored lower-case.',
+        'Changes apply at once on the server that saved them and within 30 seconds on the others. Once a synonym covers an empty search, the Found nothing row shows “Synonym added” with a link to try it.',
+        'Stored in `nivaro_search_synonyms` (migration 498; configuration, so it travels with config promotion). Admin routes: `GET/POST /api/search-analytics/synonyms` (POST body `{terms, collection?, note?}`, 201 new / 200 merged), `PATCH/DELETE /api/search-analytics/synonyms/:id`.'
+      ]
     }
   ]
 }

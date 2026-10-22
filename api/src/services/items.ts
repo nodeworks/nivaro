@@ -87,6 +87,7 @@ import {
   applyRowRulesOnCreate,
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
+import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
 import {
   isSecretColumn,
@@ -581,6 +582,8 @@ export class ItemNotFoundError extends Error {
 }
 
 type QB = Knex.QueryBuilder
+/** LIKE patterns × searched columns one search may bind (SQL Server caps a statement near 2100). */
+const SEARCH_PATTERN_BUDGET = 1200
 
 const INTEGRATIONS_FIELD = '$integrations'
 
@@ -3584,10 +3587,6 @@ export async function readItems(
   if (keyset) applyKeyset(q, collection, keyset)
 
   if (search) {
-    // Escape MSSQL LIKE special characters to prevent wildcard injection.
-    // Bracket is the MSSQL escape character for [ itself.
-    const escapedSearch = search.replace(/[%_[]/g, (c) => `[${c}]`)
-
     const [fieldMeta, actualCols] = await Promise.all([
       getFields(collection),
       db
@@ -3631,14 +3630,31 @@ export async function readItems(
       // first_name has Robert, last_name has Lee, no one column has both —
       // which read as "search doesn't work" on any picker whose display label
       // concatenates columns.
-      const tokens = escapedSearch.split(/\s+/).filter(Boolean)
+      //
+      // Search synonyms (#1581): each word also matches the other words of its
+      // synonym groups, and a multi-word term ("purchase order") adds a second
+      // reading where it is one slot ("purchase order" | "po"). Only the LIKE
+      // patterns widen — the columns and every access rule stay as they are.
+      // No synonyms = one reading of one-word slots, the search as before.
+      // Escape MSSQL LIKE special characters to prevent wildcard injection.
+      // Bracket is the MSSQL escape character for [ itself.
+      const likeEscape = (v: string) => v.replace(/[%_[]/g, (c) => `[${c}]`)
+      const expanded = await searchVariants(search, collection).catch(() => [])
+      const variants = fitExpansion(
+        expanded.length ? expanded : [[[search]]],
+        searchCols.length,
+        SEARCH_PATTERN_BUDGET
+      )
+      const slotWhere = (w: Knex.QueryBuilder, slot: string[]) => {
+        for (const alt of slot) {
+          for (const f of searchCols) w.orWhere(db.raw('??', [f]), 'like', `%${likeEscape(alt)}%`)
+        }
+      }
       const applySearch = (qb: QB) => {
-        qb.where((outer) => {
-          for (const token of tokens.length > 0 ? tokens : [escapedSearch]) {
-            outer.andWhere((inner) => {
-              for (const f of searchCols) {
-                inner.orWhere(db.raw('??', [f]), 'like', `%${token}%`)
-              }
+        qb.where((any) => {
+          for (const v of variants) {
+            any.orWhere((all) => {
+              for (const slot of v) all.andWhere((inner) => slotWhere(inner, slot))
             })
           }
         })

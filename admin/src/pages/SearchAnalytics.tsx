@@ -5,13 +5,15 @@ import { Link } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn, formatNumber } from '@/lib/utils'
+import { AddSynonymButton, SynonymsCard } from './SearchSynonyms'
 
 /**
  * Search Analytics (#1581, admin only). What people typed into Cmd+K and the
  * collection search boxes: the top searches, searches that found nothing,
  * searches where nothing was opened and slow ones. Query text is personal
  * data, so this page is for administrators and rows expire (default 60 days).
- * Results are never stored.
+ * Results are never stored. A search that found nothing can be fixed with a
+ * synonym (SearchSynonyms.tsx), prefilled with what people searched next.
  */
 
 interface Line {
@@ -23,6 +25,10 @@ interface Line {
   unopened: number
   avg_results: number
   p75_ms: number | null
+  /** What people searched next, within minutes, when this found nothing (zero results only). */
+  reworded_as?: { query: string; times: number; opened: number } | null
+  /** A synonym group that now covers this search (zero results only). */
+  synonym_id?: number | null
 }
 
 interface Summary {
@@ -49,8 +55,31 @@ const ms = (v: number | null | undefined) =>
 function Fixes({ line }: { line: Line }) {
   const q = encodeURIComponent(line.query)
   const cls = 'text-[11.5px] font-medium text-cyan-700 hover:underline dark:text-nvr-cyan'
+  const tryIt = line.collection ? `/collections/${line.collection}?search=${q}` : null
+  if (line.synonym_id != null)
+    return (
+      <span className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+        <span className='inline-flex items-center rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'>
+          Synonym added
+        </span>
+        {tryIt && (
+          <Link to={tryIt} className={cls}>
+            Try it in the list
+          </Link>
+        )}
+      </span>
+    )
+  const synonym = (
+    <AddSynonymButton
+      query={line.query}
+      collection={line.collection}
+      rewordedAs={line.reworded_as}
+      className={cls}
+    />
+  )
   return line.collection ? (
     <span className='flex flex-wrap gap-x-3 gap-y-1'>
+      {synonym}
       <Link to={`/collections/${line.collection}?search=${q}`} className={cls}>
         Try it in the list
       </Link>
@@ -60,6 +89,7 @@ function Fixes({ line }: { line: Line }) {
     </span>
   ) : (
     <span className='flex flex-wrap gap-x-3 gap-y-1'>
+      {synonym}
       <Link
         to={`/ask?q=${encodeURIComponent(`Where would I find "${line.query}"?`)}`}
         className={cls}
@@ -129,6 +159,14 @@ function Table({
                     >
                       {r.collection ? r.collection : 'Cmd+K'}
                     </span>
+                    {fixes && r.reworded_as && (
+                      <span
+                        className='block truncate text-[11px] text-slate-500 dark:text-muted-foreground'
+                        data-tip={r.reworded_as.query}
+                      >
+                        then tried <span className='font-mono'>{r.reworded_as.query}</span>
+                      </span>
+                    )}
                   </td>
                   {columns.map((c) => (
                     <td
@@ -255,7 +293,7 @@ export function SearchAnalyticsPage() {
                 />
                 <Table
                   title='Found nothing'
-                  hint='Searches with no results. Each can be fixed: check which fields a list searches, or find where the thing lives.'
+                  hint='Searches with no results. Each can be fixed: add a synonym (prefilled with what people tried next), check which fields a list searches, or find where the thing lives.'
                   rows={data.zero_results ?? []}
                   columns={[
                     { label: 'Searches', value: searches },
@@ -284,6 +322,7 @@ export function SearchAnalyticsPage() {
                 />
               </>
             )}
+            <SynonymsCard />
             <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
               Search text is personal data: only administrators see this page and rows are deleted
               after {data.window?.retention_days} days. Results are never stored.

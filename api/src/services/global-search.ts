@@ -1,9 +1,10 @@
+import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { getCollection, getFields } from './collections.js'
 import { resolveDisplayValue } from './display-value.js'
 import { readItems } from './items.js'
 import { can } from './permissions.js'
-import { db } from '../db/index.js'
+import { searchPhrases } from './search-synonyms.js'
 
 /**
  * "Find the thing I'm thinking of" across every collection a person can read.
@@ -255,11 +256,15 @@ export async function globalSearch(
   const CONCURRENCY = 4
   const searchOne = async (c: (typeof searchSet)[number]) => {
     const cols = identityColumns(c.collection, c.display_template)
+    // Synonym forms of the query (#1581) — the typed text alone when none apply.
+    const forms = await searchPhrases(query, c.collection).catch(() => [query])
     const rows = (await Promise.race([
       readItems(user, c.collection, {
         // Still readItems, so permissions, row filters and user scopes all
         // apply — only the columns considered are narrowed.
-        filter: { _or: cols.map((col) => ({ [col]: { _contains: query } })) },
+        filter: {
+          _or: cols.flatMap((col) => forms.map((f) => ({ [col]: { _contains: f } })))
+        },
         // Ask for the identity columns only. With `*`, readItems computes
         // virtual rollups per row — real work for data a search result never
         // shows, and enough of it to blow the per-collection timeout.
@@ -277,7 +282,14 @@ export async function globalSearch(
     const meta = await getCollection(c.collection).catch(() => null)
     return list.map((row) => {
       const label = labelFor(row, c.display_template)
-      const { score, matched } = scoreRow(row, label, query)
+      // A hit found through a synonym scores as that form would, one point under
+      // the typed text so an exact typed match still ranks first.
+      const { score, matched } = forms
+        .map((f, i) => {
+          const r = scoreRow(row, label, f)
+          return i === 0 || r.score <= 10 ? r : { ...r, score: r.score - 1 }
+        })
+        .reduce((best, r) => (r.score > best.score ? r : best))
       return {
         collection: c.collection,
         collection_label:

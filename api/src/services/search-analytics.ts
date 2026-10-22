@@ -92,9 +92,71 @@ export interface SearchRow {
   result_count: number
   duration_ms: number | null
   opened_type: string | null
+  created_at?: Date | string | null
+}
+
+/** A follow-up search within this long of an empty one counts as its rewording. */
+export const REWORD_WINDOW_MS = 3 * 60_000
+
+const keyOf = (r: Pick<SearchRow, 'surface' | 'collection' | 'query'>) =>
+  `${r.surface}\u0000${r.surface === 'collection' ? (r.collection ?? '') : ''}\u0000${r.query.toLowerCase()}`
+
+/**
+ * What people searched next after a search found nothing: the same person, the
+ * same search box, within REWORD_WINDOW_MS, a different query that DID find
+ * something. The most common rewording of an empty search is the synonym it is
+ * missing ("po" → "purchase order"). Keyed like the summary lines.
+ */
+export function rewordings(
+  rows: SearchRow[]
+): Map<string, { query: string; times: number; opened: number }> {
+  const byUser = new Map<string, SearchRow[]>()
+  for (const r of rows) {
+    if (!r.user || r.created_at == null) continue
+    const list = byUser.get(r.user) ?? []
+    list.push(r)
+    byUser.set(r.user, list)
+  }
+  const tally = new Map<string, Map<string, { query: string; times: number; opened: number }>>()
+  const at = (r: SearchRow) => new Date(r.created_at as Date | string).getTime()
+  for (const list of byUser.values()) {
+    list.sort((a, z) => at(a) - at(z))
+    list.forEach((r, i) => {
+      if (r.result_count !== 0) return
+      const q = r.query.toLowerCase()
+      for (let j = i + 1; j < list.length && j <= i + 5; j++) {
+        const n = list[j]
+        if (at(n) - at(r) > REWORD_WINDOW_MS) break
+        if (
+          n.surface !== r.surface ||
+          (r.surface === 'collection' && n.collection !== r.collection)
+        )
+          continue
+        const nq = n.query.toLowerCase()
+        // Still typing ("purch" → "purchase") is not a rewording.
+        if (nq === q || nq.startsWith(q) || q.startsWith(nq)) continue
+        if (n.result_count === 0) continue
+        const k = keyOf(r)
+        const m = tally.get(k) ?? new Map()
+        const t = m.get(nq) ?? { query: n.query, times: 0, opened: 0 }
+        t.times++
+        if (n.opened_type) t.opened++
+        m.set(nq, t)
+        tally.set(k, m)
+        break
+      }
+    })
+  }
+  const best = new Map<string, { query: string; times: number; opened: number }>()
+  for (const [k, m] of tally) {
+    const top = [...m.values()].sort((a, z) => z.opened - a.opened || z.times - a.times)[0]
+    if (top) best.set(k, top)
+  }
+  return best
 }
 
 interface Agg {
+  surface: string
   query: string
   collection: string | null
   searches: number
@@ -117,10 +179,11 @@ export function summarizeSearches(rows: SearchRow[], topN = 25) {
   const by = new Map<string, Agg>()
   for (const r of rows) {
     // The same words in another collection are a different search to fix.
-    const key = `${r.surface}\u0000${r.collection ?? ''}\u0000${r.query.toLowerCase()}`
+    const key = keyOf(r)
     let a = by.get(key)
     if (!a) {
       a = {
+        surface: r.surface,
         query: r.query,
         collection: r.surface === 'collection' ? r.collection : null,
         searches: 0,
@@ -141,6 +204,7 @@ export function summarizeSearches(rows: SearchRow[], topN = 25) {
     else a.unopened++
     if (r.duration_ms != null) a.ms.push(r.duration_ms)
   }
+  const reworded = rewordings(rows)
   const line = (a: Agg) => ({
     query: a.query,
     collection: a.collection,
@@ -149,7 +213,8 @@ export function summarizeSearches(rows: SearchRow[], topN = 25) {
     zero_results: a.zero,
     unopened: a.unopened,
     avg_results: a.searches ? Math.round(a.results / a.searches) : 0,
-    p75_ms: p75(a.ms)
+    p75_ms: p75(a.ms),
+    reworded_as: reworded.get(keyOf(a)) ?? null
   })
   const all = [...by.values()]
   const top = (list: Agg[], metric: (a: Agg) => number) =>
@@ -199,7 +264,8 @@ export async function searchSummary(days: number) {
       'query',
       'result_count',
       'duration_ms',
-      'opened_type'
+      'opened_type',
+      'created_at'
     )) as SearchRow[]
   return {
     ready: true as const,
