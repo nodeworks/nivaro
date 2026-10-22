@@ -158,6 +158,47 @@ describe('matrix', () => {
     expect(kindFromWords('latency')).toBe('slow')
   })
 
+  it('places the database, storage and partner faults as c-fdb registers them', () => {
+    expect(placeRun({ fault_key: 'pool_hold', params: { pool: 'main' } }, { area: 'db' })).toEqual([
+      { dependency: 'database', kind: 'down' }
+    ])
+    expect(
+      placeRun({ fault_key: 'db_errors', params: { error: 'timeout' } }, { area: 'db' })
+    ).toEqual([{ dependency: 'database', kind: 'errors' }])
+    expect(
+      placeRun({ fault_key: 'storage_faults', params: { mode: 'read_only' } }, { area: 'storage' })
+    ).toEqual([{ dependency: 'files', kind: 'errors' }])
+    expect(
+      placeRun({ fault_key: 'storage_faults', params: { mode: 'slow' } }, { area: 'storage' })
+    ).toEqual([{ dependency: 'files', kind: 'slow' }])
+    const m = buildMatrix(
+      [run('partner_faults', 'broke', 1, { params: { api: 'Fusion', mode: 'rate_limited_429' } })],
+      [
+        fault('partner_faults', {
+          area: 'outbound',
+          params: {
+            api: { type: 'string', label: 'API' },
+            mode: {
+              type: 'enum',
+              label: 'Mode',
+              options: ['latency', 'error_500'],
+              default: 'latency'
+            }
+          }
+        })
+      ],
+      [{ id: '7', name: 'Fusion' }],
+      NOW
+    )
+    expect(
+      m.cells.find((c) => c.dependency === 'partner:7' && c.kind === 'errors')?.last?.verdict
+    ).toBe('broke')
+    expect(m.cells.find((c) => c.dependency === 'partner:7' && c.kind === 'slow')?.rerun).toEqual({
+      fault_key: 'partner_faults',
+      params: { mode: 'latency', api: '7' }
+    })
+  })
+
   it('colours each cell by its newest verdict and offers a re-run', () => {
     const cat = [
       ...CATALOG,

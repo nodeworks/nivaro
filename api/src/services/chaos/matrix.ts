@@ -249,7 +249,21 @@ registerPlacement({ fault_key: 'replica_partition', dependency: 'sockets', kind:
 registerPlacement({ fault_key: 'mail_down', dependency: 'mail', kind: 'down' })
 registerPlacement({ fault_key: 'db_latency', dependency: 'database', kind: 'slow' })
 registerPlacement({ fault_key: 'db_errors', dependency: 'database', kind: 'errors' })
-registerPlacement({ fault_key: 'pool_exhaustion', dependency: 'database', kind: 'down' })
+registerPlacement({ fault_key: 'pool_hold', dependency: 'database', kind: 'down' })
+registerPlacement({
+  fault_key: 'storage_faults',
+  dependency: 'files',
+  kind: 'slow',
+  params: { mode: 'slow' },
+  match: (p) => sp(p, 'mode') === 'slow'
+})
+registerPlacement({
+  fault_key: 'storage_faults',
+  dependency: 'files',
+  kind: 'errors',
+  params: { mode: 'disk_full' },
+  match: (p) => sp(p, 'mode') !== 'slow'
+})
 registerPlacement({
   fault_key: 'socket_drill',
   dependency: 'sockets',

@@ -189,7 +189,7 @@ function seedClaims(): void {
     area: 'database',
     statement:
       'The heavy-read gate fails open: a queued read proceeds after its maximum wait instead of hanging.',
-    proving: ['db_latency', 'pool_exhaustion'],
+    proving: ['db_latency', 'pool_hold'],
     source: 'services/read-gate.ts (HEAVY_READ_MAX_WAIT_MS)'
   })
   registerClaim({
@@ -213,7 +213,7 @@ function seedClaims(): void {
     area: 'database',
     statement:
       'The two connection pools are isolated: background work starving its pool leaves requests fine, and the reverse.',
-    proving: ['pool_exhaustion'],
+    proving: ['pool_hold'],
     source: 'db/pool-context.ts (#1321)'
   })
   registerClaim({
@@ -229,7 +229,7 @@ function seedClaims(): void {
     area: 'partners',
     statement:
       'A partner API that is slow, failing or rate-limiting is retried with backoff and reported, never silently treated as success.',
-    proving: ['partner_fault'],
+    proving: ['partner_faults'],
     source: 'services/external-apis.ts'
   })
   registerClaim({
@@ -237,7 +237,7 @@ function seedClaims(): void {
     area: 'files',
     statement:
       'When the file share is gone or full, file routes answer 503 with a clear message and the rest of the app keeps working.',
-    proving: ['storage_fault'],
+    proving: ['storage_faults'],
     source: 'services/files.ts'
   })
   registerClaim({
@@ -255,6 +255,30 @@ function seedClaims(): void {
       'When the sign-in provider is down, people already signed in keep working and the sign-in page shows a clear error, not a loop.',
     proving: ['oidc_fault'],
     source: 'auth/oidc.ts'
+  })
+  registerClaim({
+    key: 'process.loop_block_drained',
+    area: 'process',
+    statement:
+      'A blocked event loop on one replica is noticed and drained: its health check fails and traffic moves to the others.',
+    proving: ['event_loop_block'],
+    source: 'event-loop watchdog'
+  })
+  registerClaim({
+    key: 'process.heap_guard',
+    area: 'process',
+    statement:
+      'Memory pressure on a replica is caught by the heap guard before the process is killed for running out of memory.',
+    proving: ['memory_pressure'],
+    source: 'heap guard'
+  })
+  registerClaim({
+    key: 'process.clock_skew_safe',
+    area: 'process',
+    statement:
+      'A replica whose clock drifts does not expire sessions early, double-run schedules or break SLA timers.',
+    proving: ['clock_skew'],
+    source: 'services/chaos/clock.ts (appNow)'
   })
   registerClaim({
     key: 'http.slow_honest',
