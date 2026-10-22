@@ -116,6 +116,7 @@ export {
   CustomStatusEditor,
   formatStatusExpiry
 } from './components/CustomStatusEditor'
+export { DeclareIncidentButton } from './components/chaos/DeclareIncidentButton'
 export {
   ARMED_FAULTS_KEY,
   type ArmedFaultsState,
@@ -125,6 +126,12 @@ export {
   type PublicArmedFault,
   useArmedFaults
 } from './components/chaos/DrillBanner'
+export {
+  ACTIVE_GAMEDAYS_KEY,
+  type ActiveGameday,
+  GameDayStrip,
+  useActiveGamedays
+} from './components/chaos/GameDayStrip'
 export type { CumulativeFlowData } from './components/charts/CumulativeFlowChart'
 export { CumulativeFlowChart } from './components/charts/CumulativeFlowChart'
 export { ChatAnalyticsView } from './components/chat/ChatAnalyticsView'

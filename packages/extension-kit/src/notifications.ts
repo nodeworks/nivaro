@@ -10,6 +10,8 @@ export type NotifyCategory =
   | 'system'
   /** Huddle calls and scheduled huddles (#2843). */
   | 'huddle'
+  /** Chaos drills, game days and monkey runs (#2829, #2852). */
+  | 'chaos'
   | 'other'
 
 export type NotificationKind =

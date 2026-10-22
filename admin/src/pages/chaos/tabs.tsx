@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import { FaultsTab } from './FaultsTab'
+import { GameDaysTab } from './GameDaysTab'
 import { MatrixTab } from './MatrixTab'
 import { RunsTab } from './RunsTab'
 import { TrendsTab } from './TrendsTab'
@@ -19,5 +20,6 @@ export const CHAOS_TABS: ChaosTab[] = [
   { id: 'faults', label: 'Faults', component: FaultsTab },
   { id: 'runs', label: 'Runs', component: RunsTab },
   { id: 'matrix', label: 'Matrix', component: MatrixTab },
-  { id: 'trends', label: 'Trends', component: TrendsTab }
+  { id: 'trends', label: 'Trends', component: TrendsTab },
+  { id: 'gamedays', label: 'Game days', component: GameDaysTab }
 ]

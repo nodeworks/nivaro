@@ -14,6 +14,7 @@ import {
 } from './api'
 import { Timeline } from './RunDetail'
 import { SamplerCharts } from './SamplerCharts'
+import { ScribeBar, useRunNotes } from './Scribe'
 
 /**
  * The live cockpit (#2845) while a run is armed: countdown ring, Stop (this run) and Stop all,
@@ -33,6 +34,8 @@ export function RunCockpit({ run, events }: { run: ChaosRun; events: ChaosRunEve
   const total = Math.max(1, ends - started)
   const left = Math.max(0, ends - now)
   const frac = Math.min(1, Math.max(0, left / total))
+  // Scribe marks (#2853): a game day's fault run reads (and stamps) the day's notes.
+  const notes = useRunNotes(run.id, true).data?.notes ?? []
 
   const stop = useMutation({
     mutationFn: () => stopRun(run.id),
@@ -102,6 +105,13 @@ export function RunCockpit({ run, events }: { run: ChaosRun; events: ChaosRunEve
         </div>
       </div>
 
+      <section aria-label='Scribe'>
+        <h3 className='mb-2 text-[12.5px] font-semibold text-slate-900 dark:text-foreground'>
+          Scribe
+        </h3>
+        <ScribeBar runId={run.id} />
+      </section>
+
       <section>
         <h3 className='mb-2 text-[12.5px] font-semibold text-slate-900 dark:text-foreground'>
           What should stay true
@@ -111,7 +121,7 @@ export function RunCockpit({ run, events }: { run: ChaosRun; events: ChaosRunEve
             </span>
           )}
         </h3>
-        <SamplerCharts run={run} events={events} />
+        <SamplerCharts run={run} events={events} notes={notes} />
       </section>
 
       <Timeline events={events} compact />

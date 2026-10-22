@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import { useNavigation, useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useLiveAvailable, useLiveEvent } from '../../lib/live'
+import { DeclareIncidentButton } from './DeclareIncidentButton'
+import { GameDayStrip } from './GameDayStrip'
 
 /**
  * "Drill running" banner (#2846): while any chaos fault is armed on this instance, every app
@@ -81,7 +83,7 @@ export interface DrillBannerProps {
 }
 
 export function DrillBanner({ stopHref = '/chaos', canStop = false }: DrillBannerProps) {
-  const { armed } = useArmedFaults()
+  const { armed, allowed } = useArmedFaults()
   const { navigate, consoleUrl } = useNavigation()
   const [now, setNow] = useState(() => Date.now())
   const live = armed.filter((f) => f.ends_at > now)
@@ -90,7 +92,9 @@ export function DrillBanner({ stopHref = '/chaos', canStop = false }: DrillBanne
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [armed.length])
-  if (live.length === 0) return null
+  // Nothing this person may see is armed: a running game day they take part in still gets a
+  // calm strip with Declare incident (#2854 — in blind mode that is all a responder sees).
+  if (live.length === 0) return <GameDayStrip enabled={allowed} />
   const first = live[0]
   const href = consoleUrl ? consoleUrl(stopHref) : stopHref
   const soonest = live.reduce((m, f) => Math.min(m, f.ends_at), Number.POSITIVE_INFINITY)
@@ -125,6 +129,7 @@ export function DrillBanner({ stopHref = '/chaos', canStop = false }: DrillBanne
         ends in <span className='font-mono tabular-nums'>{drillCountdown(soonest, now)}</span>
         {' · '}this is a planned test, not an outage
       </span>
+      <DeclareIncidentButton className='ml-auto' />
       {canStop && href && (
         <a
           href={href}
@@ -133,7 +138,7 @@ export function DrillBanner({ stopHref = '/chaos', canStop = false }: DrillBanne
             e.preventDefault()
             navigate(href)
           }}
-          className='ml-auto shrink-0 rounded px-2 py-0.5 font-medium text-red-800 underline decoration-dotted underline-offset-2 hover:bg-red-100 hover:text-red-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:text-red-200 dark:hover:bg-red-950/70'
+          className='shrink-0 rounded px-2 py-0.5 font-medium text-red-800 underline decoration-dotted underline-offset-2 hover:bg-red-100 hover:text-red-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 dark:text-red-200 dark:hover:bg-red-950/70'
         >
           Stop
         </a>

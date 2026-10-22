@@ -52,6 +52,7 @@ import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { chaosRoutes } from './chaos.js'
+import { chaosGamedayRoutes } from './chaos-gameday.js'
 import { chaosReportRoutes } from './chaos-report.js'
 import { chatPushReplyRoutes, chatRoutes } from './chat.js'
 import { chatAdminRoutes } from './chat-admin.js'
@@ -510,6 +511,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // a reason in cloud mode and on an unflagged production box.
   await app.register(chaosRoutes, { prefix: '/chaos' })
   await app.register(chaosReportRoutes, { prefix: '/chaos' })
+  await app.register(chaosGamedayRoutes, { prefix: '/chaos' })
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })

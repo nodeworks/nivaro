@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Check, Download, Link2, Siren } from 'lucide-react'
+import { ArrowLeft, CalendarClock, Check, Download, Link2, Siren } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -116,8 +116,16 @@ function Actions({ data }: { data: FullReport }) {
   }
   const btn =
     'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:pointer-events-none disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+  // #2852: a game day's report (or one of its fault runs) links back to the plan.
+  const gamedayId = data.run.gameday_id ?? (data.run.kind === 'gameday' ? data.run.id : null)
   return (
     <div className='flex w-full items-center gap-2 sm:w-auto'>
+      {gamedayId && (
+        <Link to={`/chaos?tab=gamedays&gameday=${gamedayId}`} className={btn}>
+          <CalendarClock className='h-3.5 w-3.5' />
+          Game day plan
+        </Link>
+      )}
       <button
         type='button'
         onClick={copy}

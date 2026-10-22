@@ -1,3 +1,4 @@
+import { DeclareIncidentButton } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, RefreshCw, TerminalSquare } from 'lucide-react'
 import { useState } from 'react'
@@ -307,14 +308,18 @@ export function OpsConsolePage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <div className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <h1 className='flex items-center gap-2 text-[18px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-          <TerminalSquare className='h-4.5 w-4.5 text-nvr-cyan' /> Ops Console
-        </h1>
-        <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-          Log tail, alert rules, env knobs, silent-failure counters, incident timeline — plus the
-          restart and heap-snapshot levers.
-        </p>
+      <div className='sticky top-0 z-10 flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
+        <div className='min-w-0'>
+          <h1 className='flex items-center gap-2 text-[18px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+            <TerminalSquare className='h-4.5 w-4.5 text-nvr-cyan' /> Ops Console
+          </h1>
+          <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+            Log tail, alert rules, env knobs, silent-failure counters, incident timeline — plus the
+            restart and heap-snapshot levers.
+          </p>
+        </div>
+        {/* #2854: stamps the time something looked wrong onto any drill or game day in flight. */}
+        <DeclareIncidentButton />
       </div>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-8 dark:bg-background'>

@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils'
 import type { ChaosRun, ChaosRunEvent, HypothesisRule } from './api'
+import { NoteMarkers } from './Scribe'
 
 /**
  * Cockpit sparklines (#2845): one small chart per sampler, drawn from the run's `sample`
@@ -63,7 +64,16 @@ const fmt = (v: number | null, unit: string) =>
     ? '—'
     : `${Number.isInteger(v) ? v : v.toFixed(v < 10 ? 2 : 1)}${unit ? ` ${unit}` : ''}`
 
-export function SamplerCharts({ run, events }: { run: ChaosRun; events: ChaosRunEvent[] }) {
+export function SamplerCharts({
+  run,
+  events,
+  notes = []
+}: {
+  run: ChaosRun
+  events: ChaosRunEvent[]
+  /** Scribe marks (#2853) drawn over every chart at their time. */
+  notes?: ChaosRunEvent[]
+}) {
   const series = seriesFrom(run, events)
   if (series.length === 0)
     return (
@@ -79,13 +89,13 @@ export function SamplerCharts({ run, events }: { run: ChaosRun; events: ChaosRun
   return (
     <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
       {ordered.map((s) => (
-        <Sparkline key={s.key} s={s} />
+        <Sparkline key={s.key} s={s} notes={notes} />
       ))}
     </div>
   )
 }
 
-function Sparkline({ s }: { s: SamplerSeries }) {
+function Sparkline({ s, notes }: { s: SamplerSeries; notes: ChaosRunEvent[] }) {
   const W = 260
   const H = 64
   const padX = 2
@@ -151,54 +161,67 @@ function Sparkline({ s }: { s: SamplerSeries }) {
           {fmt(last, s.unit)}
         </span>
       </figcaption>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        className='mt-1 h-16 w-full'
-        role='img'
-        aria-label={`${s.label}: now ${fmt(last, s.unit)}, baseline ${fmt(s.baseline, s.unit)}${s.rule ? `, limit ${s.rule.op} ${s.rule.limit}` : ''}`}
-      >
-        {bandLo != null && bandHi != null && bandHi > bandLo && (
-          <rect
-            x={0}
-            y={y(bandHi)}
-            width={W}
-            height={Math.max(1, y(bandLo) - y(bandHi))}
-            className='fill-red-500/10'
-          />
+      <div className='relative mt-1'>
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className='h-16 w-full'
+          role='img'
+          aria-label={`${s.label}: now ${fmt(last, s.unit)}, baseline ${fmt(s.baseline, s.unit)}${s.rule ? `, limit ${s.rule.op} ${s.rule.limit}` : ''}`}
+        >
+          {bandLo != null && bandHi != null && bandHi > bandLo && (
+            <rect
+              x={0}
+              y={y(bandHi)}
+              width={W}
+              height={Math.max(1, y(bandLo) - y(bandHi))}
+              className='fill-red-500/10'
+            />
+          )}
+          {limitY != null && (
+            <line
+              x1={0}
+              x2={W}
+              y1={limitY}
+              y2={limitY}
+              className='stroke-red-500'
+              strokeWidth={1}
+            />
+          )}
+          {s.baseline != null && (
+            <line
+              x1={0}
+              x2={W}
+              y1={y(s.baseline)}
+              y2={y(s.baseline)}
+              className='stroke-slate-400 dark:stroke-slate-500'
+              strokeWidth={1}
+              strokeDasharray='3 3'
+            />
+          )}
+          {path && (
+            <path
+              d={path}
+              fill='none'
+              className={cn(s.breached ? 'stroke-red-600 dark:stroke-red-400' : 'stroke-nvr-cyan')}
+              strokeWidth={1.5}
+              strokeLinejoin='round'
+              strokeLinecap='round'
+            />
+          )}
+          {last != null && s.points.length > 0 && (
+            <circle
+              cx={x(s.points.length - 1)}
+              cy={y(last)}
+              r={2.5}
+              className={cn(s.breached ? 'fill-red-600 dark:fill-red-400' : 'fill-nvr-cyan')}
+            />
+          )}
+        </svg>
+        {s.points.length > 1 && (
+          // Samples are evenly spaced (5 s), so time maps onto the index axis.
+          <NoteMarkers notes={notes} from={s.points[0].at} to={s.points[s.points.length - 1].at} />
         )}
-        {limitY != null && (
-          <line x1={0} x2={W} y1={limitY} y2={limitY} className='stroke-red-500' strokeWidth={1} />
-        )}
-        {s.baseline != null && (
-          <line
-            x1={0}
-            x2={W}
-            y1={y(s.baseline)}
-            y2={y(s.baseline)}
-            className='stroke-slate-400 dark:stroke-slate-500'
-            strokeWidth={1}
-            strokeDasharray='3 3'
-          />
-        )}
-        {path && (
-          <path
-            d={path}
-            fill='none'
-            className={cn(s.breached ? 'stroke-red-600 dark:stroke-red-400' : 'stroke-nvr-cyan')}
-            strokeWidth={1.5}
-            strokeLinejoin='round'
-            strokeLinecap='round'
-          />
-        )}
-        {last != null && s.points.length > 0 && (
-          <circle
-            cx={x(s.points.length - 1)}
-            cy={y(last)}
-            r={2.5}
-            className={cn(s.breached ? 'fill-red-600 dark:fill-red-400' : 'fill-nvr-cyan')}
-          />
-        )}
-      </svg>
+      </div>
       <div className='mt-1 flex flex-wrap items-center gap-x-3 text-[10.5px] text-slate-500 dark:text-muted-foreground'>
         <span>
           <span
