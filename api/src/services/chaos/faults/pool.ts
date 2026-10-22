@@ -28,6 +28,7 @@ export function holdSecondsCap(env: NodeJS.ProcessEnv = process.env): number | n
 
 interface KnexLike {
   client: {
+    // lint-traps-ok: a type declaration, not a call
     acquireConnection(): Promise<unknown>
     releaseConnection(conn: unknown): unknown
   }
@@ -83,8 +84,11 @@ export async function applyPoolHold(fault: ArmedFault): Promise<(() => void) | u
   const hold: Hold = { pool, held: [], closed: false }
   holds.set(fault.id, hold)
   // Never awaited: a saturated pool answers late (or times out), and the drill must not wait.
+  // Holding is the fault: release() hands every connection back on expiry, Stop all or abort,
+  // and a connection that arrives after that goes straight back, so no finally applies here.
   for (let i = 0; i < n; i++) {
     k.client
+      // lint-traps-ok: held on purpose until release() (see above)
       .acquireConnection()
       .then((conn) => {
         if (hold.closed) giveBack(k, conn)
