@@ -192,7 +192,7 @@ export const NOTIFY_CATEGORY_LABELS: Record<NotifyCategory, string> = {
   integrations: 'Integrations',
   system: 'System',
   huddle: 'Huddles and calls',
-  chaos: 'Chaos drills',
+  chaos: 'Chaos drills and game days',
   other: 'Everything else'
 }
 

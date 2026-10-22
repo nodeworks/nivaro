@@ -321,32 +321,24 @@ async function deliver(summary: CycleSummary): Promise<void> {
     // is only stamped alerted once SOMEONE actually heard about it, so a
     // total failure retries on the next cycle instead of going quiet forever.
     let delivered = 0
-    // #2847 — during a chaos drill only the drill's participants are told.
-    const { drillAlert, tellDrillParticipants } = await import('./chaos/drill-alerts.js')
-    const drill = await drillAlert({
-      source: 'integration-signal',
+    // #2847 — an alert during a chaos drill is tagged, never silenced; the drill's people are
+    // told too (below), outside the alerted bookkeeping.
+    const { noteAlertFired } = await import('./alert-fired.js')
+    noteAlertFired({
+      source: 'integration',
       key: def.id,
       label: def.label,
       severity: settings.severity
     })
-    if (drill)
-      delivered = await tellDrillParticipants(app, drill, {
-        subject,
-        message,
-        category: 'integrations',
-        why: WHY,
-        target: {
-          kind: 'integration',
-          query: `tab=firefight&signal=${encodeURIComponent(def.id)}`,
-          action: 'review'
-        },
-        source: { kind: 'integration-signal', label: def.label, id: def.id }
-      })
-    for (const userId of drill ? [] : recipients) {
+    const { drillAlert, tellDrillParticipants, withDrillNote } = await import(
+      './chaos/drill-alerts.js'
+    )
+    const drill = await drillAlert({ source: 'integration', key: def.id, label: def.label })
+    for (const userId of recipients) {
       try {
         const result = await notifyUser(app, userId, {
           subject,
-          message,
+          message: withDrillNote(message, drill),
           category: 'integrations',
           why: WHY,
           target: {
@@ -361,6 +353,24 @@ async function deliver(summary: CycleSummary): Promise<void> {
         // Keep going — the rest of the recipients still deserve a try.
       }
     }
+    if (drill)
+      await tellDrillParticipants(
+        app,
+        drill,
+        {
+          subject,
+          message,
+          category: 'integrations',
+          why: WHY,
+          target: {
+            kind: 'integration',
+            query: `tab=firefight&signal=${encodeURIComponent(def.id)}`,
+            action: 'review'
+          },
+          source: { kind: 'integration-signal', label: def.label, id: def.id }
+        },
+        recipients
+      )
     if (delivered === 0) {
       console.warn(
         `[integration-signal-alerts] ${def.id}: notifyUser reached none of ${recipients.length} recipient(s) — leaving ${fresh.length} row(s) unstamped for the next cycle to retry`

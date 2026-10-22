@@ -27,7 +27,7 @@ export const chaosOpsDocs: DocSection = {
         ['Faults allowed', 'A fault off the list is refused (403 `CHAOS_CAP`).'],
         [
           'Share of traffic',
-          'A larger share is lowered to the limit. A run aimed at everything becomes that share when the fault can take a share.'
+          'A larger share is lowered to the limit. A run aimed at everything becomes that share when the fault can take a share; any other target (some routes, a table, a person, a replica) is sampled at the limit on top. A route pattern with fewer than two fixed parts (`/*`, `/api/*`) is refused.'
         ],
         ['Added delay', 'Every delay measured in ms is lowered to the limit.'],
         ['Run length', 'The window is shortened (never under 5 seconds).'],
@@ -48,7 +48,7 @@ export const chaosOpsDocs: DocSection = {
     { type: 'h2', id: 'chaos-ops-drill-alerts', text: 'Alerts during a drill' },
     {
       type: 'p',
-      text: 'While a fault is armed, any alert that fires — log alert rules, request rules, monitors, metric alerts, integration alerts — is part of the drill. It is recorded on the run with its time to detect, and only the drill’s people are told (the person who started it and the game day’s lead, scribe and responders; for a blind game day, not the responders), in-app with “[Drill]” in front, never by email. The Ops Console, Telemetry and the Integrations console show a **Drill** tag on alerts that fired during a run. With nothing armed, alerts go out exactly as usual.'
+      text: 'An alert that fires while a fault is armed — log alert rules, request rules, monitors, metric alerts, integration alerts, a readiness check turning to fail — is never silenced or rerouted: everyone who normally hears about it still does, by every channel they normally get. Its message gains a line naming the run: “May be caused by the chaos drill …” when the alert is about what the fault touches (a database alert during a database fault), otherwise “Fired during the chaos drill …”. The drill’s people (whoever started it, the game day’s lead, scribe and responders; for Chaos Monkey, administrators and chaos operators) are told too, in-app, when they were not already. The Ops Console, Telemetry and the Integrations console show a **Drill** tag on alerts that fired during a run. In a blind game day the note is left out of the normal recipients’ copy; the alert itself still reaches them.'
     },
     { type: 'h2', id: 'chaos-ops-monkey', text: 'Chaos Monkey' },
     {

@@ -14,7 +14,7 @@ import { applyCaps } from './caps.js'
 import { type FaultDefinition, getFault } from './catalog.js'
 import { _resetDrillForTests, startDrill } from './drill.js'
 import './faults/index.js'
-import { _resetRegistryForTests, armedFaults, CHAOS_NODE } from './registry.js'
+import { _resetRegistryForTests, armedFaults, CHAOS_NODE, chaosPoint } from './registry.js'
 import { _setRunStoreForTests } from './runs.js'
 import {
   _setChaosSettingsForTests,
@@ -72,14 +72,31 @@ describe('applyCaps (#2862)', () => {
     expect(r.target).toEqual({ kind: 'share', share_pct: 5 })
   })
 
-  it('leaves narrow targets alone under a share cap', () => {
-    const r = applyCaps(
-      def,
-      { target: { kind: 'route', pattern: '/api/items/*' } },
-      { ...NO_CAPS, max_share_pct: 5 }
-    )
-    expect(r.target).toEqual({ kind: 'route', pattern: '/api/items/*' })
-    expect(r.applied).toEqual([])
+  it('samples every non-share target at the share cap, on top of its match', () => {
+    const caps = { ...NO_CAPS, max_share_pct: 5 }
+    const r = applyCaps(def, { target: { kind: 'route', pattern: '/api/items/*' } }, caps)
+    expect(r.target).toEqual({ kind: 'route', pattern: '/api/items/*', sample_pct: 5 })
+    expect(r.applied.join()).toMatch(/route target sampled at 5%/)
+    const node = applyCaps(def, { target: { kind: 'node', node: 'n1' } }, caps)
+    expect(node.target).toEqual({ kind: 'node', node: 'n1', sample_pct: 5 })
+    // A fault that cannot take a share is sampled when aimed at everything.
+    const noShare = { ...def, targets: ['all' as const] }
+    expect(applyCaps(noShare, { target: { kind: 'all' } }, caps).target).toEqual({
+      kind: 'all',
+      sample_pct: 5
+    })
+  })
+
+  it('refuses route patterns that reach almost everything under a share cap', () => {
+    const caps = { ...NO_CAPS, max_share_pct: 10 }
+    for (const pattern of ['/*', '/api/*', '/api', '/api/:id/*'])
+      expect(() => applyCaps(def, { target: { kind: 'route', pattern } }, caps)).toThrow(
+        /two fixed path segments/
+      )
+    // Without a cap the pattern is the operator's call.
+    expect(
+      applyCaps(def, { target: { kind: 'route', pattern: '/api/*' } }, NO_CAPS).target
+    ).toEqual({ kind: 'route', pattern: '/api/*' })
   })
 
   it('refuses a fault off the allowlist', () => {
@@ -190,6 +207,24 @@ describe('caps in the run start path (#2862)', () => {
     expect(fault.params.delay_ms).toBe(1000)
     expect(Math.round((fault.ends_at - fault.started_at) / 1000)).toBe(20)
     expect((run.meta.caps as string[]).length).toBe(3)
+  })
+
+  it('a wide route under a share cap reaches only the capped share of calls', async () => {
+    _setChaosSettingsForTests(
+      normalizeChaosSettings({ environments: { default: { max_share_pct: 10 } } })
+    )
+    const { fault } = await startDrill({
+      fault_key: 'slow_requests',
+      target: { kind: 'route', pattern: '/api/items/*' },
+      by: { id: null, name: 'test' }
+    })
+    expect(fault.target).toMatchObject({ kind: 'route', sample_pct: 10 })
+    let hit = 0
+    for (let i = 0; i < 2000; i++)
+      if (chaosPoint('http.request', { route: '/api/items/x', key: `r${i}` })) hit++
+    expect(hit).toBeGreaterThan(100)
+    expect(hit).toBeLessThan(320)
+    expect(chaosPoint('http.request', { route: '/api/users/x', key: 'r1' })).toBeNull()
   })
 
   it('refuses a fault this environment does not allow, arming nothing', async () => {

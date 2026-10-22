@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { noteAlertFired } from './alert-fired.js'
 import { runCustomQueryAsUser, runCustomQueryBySlug } from './custom-query-exec.js'
 import { sendMail } from './mail.js'
 import { notifyUser } from './notification-channels.js'
@@ -289,6 +290,11 @@ export async function runMetricAlertChecks(
           ? (inserted[0] as { id: number }).id
           : (inserted[0] as number)
       results.fired++
+      noteAlertFired({
+        source: 'metric_alert',
+        key: String(rule.id),
+        label: String(rule.name ?? '')
+      })
       await notifyImmediateSubscribers(app, rule, value, threshold, logId)
     } else if (!isFiring && openLog) {
       await db('nivaro_metric_alert_log')
@@ -344,19 +350,24 @@ async function notifyImmediateSubscribers(
   const message = `${rule.def_name} is now ${fmtValue(value, rule.def_unit)} (threshold: ${
     OPERATOR_LABELS[rule.operator] ?? rule.operator
   } ${fmtValue(threshold, rule.def_unit)})`
-  // #2847 — during a chaos drill only the drill's participants are told (no email).
-  const { drillAlert, tellDrillParticipants } = await import('./chaos/drill-alerts.js')
-  const drill = await drillAlert({ source: 'metric-alert', key: String(rule.id), label: rule.name })
-  if (drill) {
-    await tellDrillParticipants(app, drill, {
-      subject,
-      category: 'alerts',
-      message,
-      collection: 'nivaro_metric_alert_log',
-      item: String(logId)
-    })
-    return
-  }
+  // #2847 — during a chaos drill the alert is tagged (never silenced) and its people told too.
+  const { drillAlert, tellDrillParticipants, withDrillNote } = await import(
+    './chaos/drill-alerts.js'
+  )
+  const drill = await drillAlert({ source: 'metric_alert', key: String(rule.id), label: rule.name })
+  if (drill)
+    await tellDrillParticipants(
+      app,
+      drill,
+      {
+        subject,
+        category: 'alerts',
+        message,
+        collection: 'nivaro_metric_alert_log',
+        item: String(logId)
+      },
+      subs.filter((s) => s.delivery_in_app).map((s) => s.user)
+    )
   if (!subs.length) return
   const now = new Date()
 
@@ -365,7 +376,7 @@ async function notifyImmediateSubscribers(
       await notifyUser(app, sub.user, {
         subject,
         category: 'alerts',
-        message,
+        message: withDrillNote(message, drill),
         collection: 'nivaro_metric_alert_log',
         item: String(logId)
       }).catch(() => undefined)

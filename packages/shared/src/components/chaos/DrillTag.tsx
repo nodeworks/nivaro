@@ -81,7 +81,7 @@ export function DrillTag({
   return (
     <span
       data-drill-tag={w.run_id}
-      data-tip={`Fired during the ${KIND[w.kind] ?? 'chaos drill'} “${w.label}”. Only the drill’s participants were told.`}
+      data-tip={`Fired during the ${KIND[w.kind] ?? 'chaos drill'} “${w.label}”. It may or may not be caused by it; everyone who normally hears about it was told.`}
       className={cn(
         'inline-flex shrink-0 items-center gap-1 rounded border border-dashed border-violet-300 bg-violet-50 px-1.5 py-px text-[10.5px] font-medium text-violet-800 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300',
         className

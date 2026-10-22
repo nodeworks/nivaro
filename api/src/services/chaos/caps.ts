@@ -20,8 +20,11 @@ import { type ChaosEnvCaps, capsFor, getChaosSettings } from './settings.js'
  *  - `max_replicas`: a fault reaching every replica of a bigger cluster is narrowed to this
  *    replica when it can target one, else refused.
  *  - `max_share_pct`: a share target is clamped; an "everything" target becomes that share when
- *    the fault can target a share. A fault that cannot be split (no share target) is governed by
- *    the allowlist and the replica cap instead.
+ *    the fault can target a share; every other target (a route, table, person, replica, room —
+ *    or everything on a fault without share targets) is sampled at the cap on top of its match
+ *    (`target.sample_pct`, shown on the run). A route pattern with fewer than two fixed path
+ *    segments (`/*`, `/api/*`) is refused under a cap. Side effects a fault's `apply` makes
+ *    (pausing Redis) are not per call: the allowlist governs those.
  *  - `max_latency_ms`: every number parameter measured in ms is clamped (refused when the cap is
  *    under the fault's own minimum).
  *  - `max_seconds`: the window is clamped (never under the 5 s floor).
@@ -68,12 +71,25 @@ export function applyCaps(
 
   const share = caps.max_share_pct
   if (share != null && share < 100) {
-    if (target.kind === 'share' && target.share_pct > share) {
-      applied.push(`share ${target.share_pct}% → ${share}% (max_share_pct)`)
-      target = { kind: 'share', share_pct: share }
+    if (target.kind === 'route' && literalSegments(target.pattern) < 2)
+      throw new ChaosError(
+        `Under a share cap a route pattern needs at least two fixed path segments (like /api/items/*); "${target.pattern}" reaches too much (max_share_pct)`,
+        403,
+        'CHAOS_CAP',
+        { cap: 'max_share_pct' }
+      )
+    if (target.kind === 'share') {
+      if (target.share_pct > share) {
+        applied.push(`share ${target.share_pct}% → ${share}% (max_share_pct)`)
+        target = { kind: 'share', share_pct: share }
+      }
     } else if (target.kind === 'all' && def.targets.includes('share')) {
       applied.push(`everything → ${share}% of traffic (max_share_pct)`)
       target = { kind: 'share', share_pct: share }
+    } else if (target.sample_pct == null || target.sample_pct > share) {
+      // A route, table, person, replica or room can still be most of the traffic: sample it.
+      applied.push(`${target.kind} target sampled at ${share}% (max_share_pct)`)
+      target = { ...target, sample_pct: share }
     }
   }
 
@@ -102,6 +118,12 @@ export function applyCaps(
     seconds = next
   }
   return { target, params, seconds, applied }
+}
+
+/** Fixed path segments of a route pattern (`/api/items/*` → 2). */
+export function literalSegments(pattern: string): number {
+  return pattern.split(/[/?]/).filter((seg) => seg && !seg.includes('*') && !seg.startsWith(':'))
+    .length
 }
 
 async function replicaCount(): Promise<number> {

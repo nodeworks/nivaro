@@ -94,8 +94,8 @@ export async function evaluateRequestRules(now = Date.now()): Promise<{
     if (n < threshold) continue
     fired++
     // #2847 — during a chaos drill this firing is tagged on the run (time to detect).
-    const { alertFired } = await import('./chaos/alert-hook.js')
-    alertFired({ source: 'request-rule', key: String(rule.id), label: rule.name, at: now })
+    const { noteAlertFired } = await import('./alert-fired.js')
+    noteAlertFired({ source: 'request_rule', key: String(rule.id), label: rule.name, at: now })
     await db('nivaro_log_alert_rules')
       .where({ id: rule.id })
       .update({ last_matched_at: new Date(now) })

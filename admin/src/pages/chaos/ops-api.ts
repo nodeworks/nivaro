@@ -56,6 +56,9 @@ export interface OperatorView {
   operator: boolean
   admin: boolean
   allowed: boolean
+  instance: string
+  /** This instance's effective limits (null for non-operators). */
+  caps: ChaosEnvCaps | null
 }
 
 export const opsKeys = {

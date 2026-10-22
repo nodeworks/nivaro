@@ -228,7 +228,7 @@ function SettingsForm() {
           <Row
             label='Share of traffic'
             htmlFor='cap-share'
-            help='A run aimed at everything becomes this share when the fault can take a share.'
+            help='Every run reaches at most this share of the calls it targets. Broad route patterns like /api/* are refused under it.'
           >
             <NumberBox
               id='cap-share'

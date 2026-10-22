@@ -1,21 +1,24 @@
 import type { FastifyInstance } from 'fastify'
+import type { AlertFired } from '../alert-fired.js'
 import type { NotifyUserOptions } from '../notification-channels.js'
-import { alertFired, type FiredAlert, onAlertFired } from './alert-hook.js'
-import { addRunEvent } from './drill.js'
+import { type ArmedFault, getFault } from './catalog.js'
 import { armedFaults } from './registry.js'
 import { type ChaosRun, getRun } from './runs.js'
 
 /**
- * Alerts tagged as drill (#2847). While a fault is armed on this instance, an alert that fires
- * is part of the drill: it is recorded on the run as an `alert` event (its fire time against the
- * run's start is the time to detect), and the paths that tell people (ops monitors, metric
- * alerts, integration signal alerts) tell only the run's participants, subject prefixed
- * "[Drill]", instead of their normal recipients. Rule: ANY alert during an armed fault — simple,
- * and an operator watching a drill is the right person to judge it.
- *
- * With no armed fault nothing changes: `drillAlert` answers null and the caller goes on exactly
- * as before. The Ops Console, Telemetry and Integrations console show the tag by time
- * (`GET /api/chaos/drill-windows`), so rows written by any path read the same.
+ * Alerts tagged as drill (#2847). An alert that fires while a fault is armed is NEVER silenced
+ * or rerouted: its normal recipients and channels stay exactly as they are (an operator must not
+ * be able to arm a trivial fault to quiet real alerts, and a real incident during a drill must
+ * still be seen). What changes:
+ *  - the message carries a drill note naming the run: "may be caused by the chaos drill X" when
+ *    the alert's subject matches the armed fault (its area, points, key or target — a database
+ *    alert during a database fault), else "fired during the chaos drill X";
+ *  - the run's participants are told too (in-app, never email), when they were not already;
+ *  - the alert rows on the Ops Console, Telemetry and the Integrations console show a Drill tag
+ *    by time (`GET /api/chaos/drill-windows`).
+ * Blind runs (#2854) keep the note out of the normal recipients' copy — the alert itself still
+ * reaches them. The run's `alert` events are written by the run monitor (chaos/monitors.ts,
+ * services/alert-fired.ts), not here. With nothing armed, `drillAlert` answers null.
  */
 
 const UUID_RE = /^[0-9a-f-]{36}$/i
@@ -61,57 +64,149 @@ export interface DrillRouting {
   run_id: string
   label: string
   participants: string[]
+  /** The alert's subject matches an armed fault ("may be caused by"). */
+  related: boolean
+  /** Blind run (#2854): the normal recipients' copy carries no drill note. */
+  blind: boolean
+  /** The sentence added to the message. */
+  note: string
 }
 
-/** The run(s) armed here right now, newest first; null when nothing is armed. */
-async function activeRuns(): Promise<ChaosRun[]> {
-  const runIds = [
-    ...new Set(
-      armedFaults()
-        .sort((a, b) => b.started_at - a.started_at)
-        .map((f) => f.run_id)
-        .filter((id): id is string => !!id)
-    )
-  ]
-  if (!runIds.length) return []
-  const runs: ChaosRun[] = []
-  for (const id of runIds) {
-    const run = await getRun(id).catch(() => null)
-    if (run && run.status === 'running') runs.push(run)
+/** The run(s) armed here right now, newest first. */
+async function activeRuns(): Promise<Array<{ run: ChaosRun; faults: ArmedFault[] }>> {
+  const byRun = new Map<string, ArmedFault[]>()
+  for (const f of armedFaults().sort((a, b) => b.started_at - a.started_at)) {
+    if (!f.run_id) continue
+    byRun.set(f.run_id, [...(byRun.get(f.run_id) ?? []), f])
   }
-  return runs
+  const out: Array<{ run: ChaosRun; faults: ArmedFault[] }> = []
+  for (const [id, faults] of byRun) {
+    const run = await getRun(id).catch(() => null)
+    if (run && run.status === 'running') out.push({ run, faults })
+  }
+  return out
+}
+
+/** What an area's alerts tend to say. */
+const AREA_WORDS: Record<string, string[]> = {
+  http: ['http', 'request', 'latency', 'slow', '5xx', 'error rate', 'p95', 'response', 'api'],
+  db: ['db', 'database', 'sql', 'pool', 'deadlock', 'query', 'connection', 'mssql'],
+  redis: ['redis', 'cache', 'session', 'lease'],
+  socket: ['socket', 'realtime', 'websocket', 'reconnect'],
+  mail: ['mail', 'smtp', 'email'],
+  outbound: ['partner', 'integration', 'external', 'erp', 'webhook', 'push'],
+  storage: ['file', 'disk', 'storage', 'share', 'upload', 'space', 'enospc'],
+  ai: ['ai', 'model', 'gateway'],
+  cron: ['cron', 'job', 'lease', 'schedule']
+}
+const AREA_ALIAS: Record<string, string> = {
+  external: 'outbound',
+  partner: 'outbound',
+  files: 'storage',
+  realtime: 'socket',
+  sockets: 'socket',
+  pool: 'db'
+}
+const GENERIC = new Set(['down', 'fault', 'faults', 'slow', 'errors', 'error', 'drill', 'pause'])
+
+/** The words that would name this fault's subject in an alert. */
+export function faultWords(f: ArmedFault): string[] {
+  const def = getFault(f.fault_key)
+  const areas = new Set<string>()
+  const add = (a: string | undefined | null) => {
+    if (!a) return
+    const k = AREA_ALIAS[a] ?? a
+    areas.add(k)
+  }
+  // Where it acts says more than the file that registered it (mail_down lives in the http area).
+  for (const p of def?.points ?? []) add(p.split('.')[0])
+  if (!areas.size) add(def?.area)
+  for (const t of f.fault_key.split('_')) if (AREA_WORDS[AREA_ALIAS[t] ?? t]) add(t)
+  const words = new Set<string>()
+  for (const a of areas) for (const w of AREA_WORDS[a] ?? [a]) words.add(w)
+  for (const t of f.fault_key.split('_')) if (t.length >= 3 && !GENERIC.has(t)) words.add(t)
+  const t = f.target
+  if (t.kind === 'table') words.add(t.table.toLowerCase())
+  if (t.kind === 'route')
+    for (const seg of t.pattern.split('/'))
+      if (seg.length >= 3 && !seg.includes('*')) words.add(seg.toLowerCase())
+  return [...words]
+}
+
+/** Does the alert's subject match this fault (pure)? Whole-word match on source + label + key. */
+export function alertRelatesTo(
+  alert: Pick<AlertFired, 'source' | 'label' | 'key'>,
+  f: ArmedFault
+): boolean {
+  const text = `${alert.source} ${alert.label} ${alert.key}`.toLowerCase().replace(/[_./:-]+/g, ' ')
+  return faultWords(f).some((w) =>
+    new RegExp(`(^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9])`).test(text)
+  )
 }
 
 /**
  * Call where an alert fires and people are about to be told. null = no drill: carry on exactly
- * as before. Otherwise the alert is recorded on the run and the caller tells only
- * `participants` (tellDrillParticipants) instead of its normal recipients.
+ * as before. Otherwise the caller tells its normal recipients as always (message through
+ * `withDrillNote`) and then `tellDrillParticipants` for the run's people not already told.
  */
-export async function drillAlert(alert: FiredAlert): Promise<DrillRouting | null> {
-  alertFired(alert)
+export async function drillAlert(
+  alert: Pick<AlertFired, 'source' | 'label' | 'key'>
+): Promise<DrillRouting | null> {
   if (!armedFaults().length) return null
   const runs = await activeRuns()
   if (!runs.length) return null
+  const related = runs.find((r) => r.faults.some((f) => alertRelatesTo(alert, f)))
+  const pick = related ?? runs[0]
   const people = new Set<string>()
-  for (const run of runs) for (const id of await runParticipants(run)) people.add(id)
-  return { run_id: runs[0].id, label: runs[0].label, participants: [...people] }
+  for (const { run } of runs) for (const id of await runParticipants(run)) people.add(id)
+  const blind = await runIsBlind(pick.run)
+  const label = pick.run.label
+  return {
+    run_id: pick.run.id,
+    label,
+    participants: [...people],
+    related: !!related,
+    blind,
+    note: related
+      ? `May be caused by the chaos drill “${label}” (run ${pick.run.id}).`
+      : `Fired during the chaos drill “${label}” (run ${pick.run.id}).`
+  }
 }
 
-/** Tell the run's participants (in-app + push, never email), subject prefixed "[Drill]". */
+async function runIsBlind(run: ChaosRun): Promise<boolean> {
+  if (run.meta?.blind === true) return true
+  if (!run.gameday_id) return false
+  const day = await getRun(run.gameday_id).catch(() => null)
+  return day?.meta?.blind === true
+}
+
+/** The message a recipient gets: the drill note appended (participants always see it). */
+export function withDrillNote(
+  message: string,
+  drill: DrillRouting | null,
+  forParticipant = false
+): string {
+  if (!drill || (drill.blind && !forParticipant)) return message
+  return `${message ?? ''}\n\n${drill.note}`.trim()
+}
+
+/** Tell the run's participants who were not already told (in-app, never email). */
 export async function tellDrillParticipants(
   app: FastifyInstance,
   routing: DrillRouting,
-  opts: NotifyUserOptions
+  opts: NotifyUserOptions,
+  alreadyTold: Iterable<string> = []
 ): Promise<number> {
   const { notifyUser } = await import('../notification-channels.js')
+  const skip = new Set([...alreadyTold].map((s) => String(s).toLowerCase()))
   let told = 0
   for (const userId of routing.participants) {
+    if (skip.has(userId.toLowerCase())) continue
     try {
       const r = await notifyUser(app, userId, {
         ...opts,
         subject: `[Drill] ${opts.subject}`,
-        message:
-          `${opts.message ?? ''}\n\nFired during the chaos drill "${routing.label}". Only the drill's participants were told.`.trim(),
+        message: withDrillNote(opts.message ?? '', routing, true),
         channels: { inapp: true }
       })
       if (!r?.decision?.dropped) told++
@@ -120,38 +215,6 @@ export async function tellDrillParticipants(
     }
   }
   return told
-}
-
-// ─── The run's timeline: one `alert` event per alert per run ──────────────────
-
-const recorded = new Set<string>()
-
-async function recordOnRun(a: FiredAlert & { at: number }): Promise<void> {
-  if (!armedFaults().length) return
-  for (const run of await activeRuns()) {
-    const k = `${run.id}|${a.source}|${a.key}`
-    if (recorded.has(k)) continue
-    recorded.add(k)
-    if (recorded.size > 5000) recorded.clear()
-    const started = run.started_at ? Date.parse(run.started_at) : Number.NaN
-    await addRunEvent(run.id, 'alert', {
-      source: a.source,
-      key: a.key,
-      label: a.label,
-      severity: a.severity ?? null,
-      fired_at: new Date(a.at).toISOString(),
-      // Time to detect: the alert's fire time against the run's start.
-      ttd_ms: Number.isFinite(started) ? Math.max(0, a.at - started) : null,
-      drill: true
-    })
-  }
-}
-
-let wired = false
-export function wireDrillAlerts(): void {
-  if (wired) return
-  wired = true
-  onAlertFired((a) => void recordOnRun(a).catch(() => undefined))
 }
 
 export interface DrillWindow {
@@ -188,10 +251,4 @@ export function drillWindows(runs: ChaosRun[], since: number, now = Date.now()):
     })
   }
   return out
-}
-
-/** Tests only. */
-export function _resetDrillAlertsForTests(): void {
-  recorded.clear()
-  wired = false
 }

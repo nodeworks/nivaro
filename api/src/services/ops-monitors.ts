@@ -3,6 +3,7 @@ import tls from 'node:tls'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
+import { noteAlertFired } from './alert-fired.js'
 import { startJobRun } from './job-runs.js'
 import { notifyUser } from './notification-channels.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
@@ -315,20 +316,16 @@ async function raiseIssue(
         updated_at: new Date()
       })
     }
-    // #2847 — during a chaos drill only the drill's participants are told.
-    const { drillAlert, tellDrillParticipants } = await import('./chaos/drill-alerts.js')
-    const drill = await drillAlert({
-      source: 'ops-monitor',
-      key: String(monitor.id),
-      label: monitor.name,
-      severity: monitor.type === 'synthetic' || monitor.type === 'journey' ? 'error' : 'warning'
-    })
-    if (app && drill) {
-      await tellDrillParticipants(app, drill, {
-        subject: `Monitor failing: ${monitor.name}`,
-        message: detail.slice(0, 500)
+    if (app) {
+      // #2847 — during a chaos drill the alert is tagged (never silenced) and its people told too.
+      const { drillAlert, tellDrillParticipants, withDrillNote } = await import(
+        './chaos/drill-alerts.js'
+      )
+      const drill = await drillAlert({
+        source: 'monitor',
+        key: String(monitor.id),
+        label: monitor.name
       })
-    } else if (app) {
       const subscribers = await db('nivaro_monitor_subscribers')
         .where({ monitor_id: monitor.id })
         .pluck('user')
@@ -338,9 +335,16 @@ async function raiseIssue(
       for (const userId of recipients) {
         await notifyUser(app, userId, {
           subject: `Monitor failing: ${monitor.name}`,
-          message: detail.slice(0, 500)
+          message: withDrillNote(detail.slice(0, 500), drill)
         }).catch(() => {})
       }
+      if (drill)
+        await tellDrillParticipants(
+          app,
+          drill,
+          { subject: `Monitor failing: ${monitor.name}`, message: detail.slice(0, 500) },
+          recipients
+        )
     }
   } catch (err) {
     console.warn('ops-monitor issue write failed:', err)
@@ -515,6 +519,7 @@ export async function evaluateMonitor(
     })
     .catch(() => {})
   if (flippedToFailing) {
+    noteAlertFired({ source: 'monitor', key: String(monitor.id), label: monitor.name })
     await raiseIssue(monitor, result.detail, app)
     // #1371 — people on the pages this monitor watches record what they see.
     const paths = [
@@ -582,3 +587,6 @@ export async function evaluateAllMonitors(app: FastifyInstance | null): Promise<
   }
   return `${monitors.length} monitor(s) evaluated, ${failing} failing`
 }
+
+/** Tests only (#2847): the raise path a failing monitor takes. */
+export const raiseIssueForTests = raiseIssue

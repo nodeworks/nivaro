@@ -123,6 +123,14 @@ function routeMatches(pattern: string, route: string): boolean {
 
 /** Does this fault reach what the caller describes (pure)? */
 export function targetMatches(fault: ArmedFault, ctx: ChaosPointContext | undefined): boolean {
+  if (!targetKindMatches(fault, ctx)) return false
+  // #2862 — a capped share sampled on top of the match.
+  const pct = fault.target.sample_pct
+  if (pct == null || fault.target.kind === 'share') return true
+  return ctx?.key ? shareBucket(ctx.key, fault.id) < pct : Math.random() * 100 < pct
+}
+
+function targetKindMatches(fault: ArmedFault, ctx: ChaosPointContext | undefined): boolean {
   const t = fault.target
   switch (t.kind) {
     case 'all':

@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { stopAllDrills } from '../services/chaos/drill.js'
-import { drillWindows, wireDrillAlerts } from '../services/chaos/drill-alerts.js'
+import { drillWindows } from '../services/chaos/drill-alerts.js'
 import { ChaosError, chaosRefusal } from '../services/chaos/gate.js'
 import {
   announceMonkeyEnd,
@@ -79,7 +79,6 @@ async function stillOperator(userId: string): Promise<boolean> {
 
 export async function chaosOpsRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('onReady', async () => {
-    wireDrillAlerts()
     setStopTokenRedis(
       (app as unknown as { redis?: Parameters<typeof setStopTokenRedis>[0] }).redis ?? null
     )
@@ -99,13 +98,20 @@ export async function chaosOpsRoutes(app: FastifyInstance): Promise<void> {
   // Anyone signed in: may I run faults here? (the console hides what an operator cannot do)
   await app.register(async (pub) => {
     pub.addHook('preHandler', requireAuth)
-    pub.get('/operator', async (req) => ({
-      data: {
-        operator: await isChaosOperator(req.user, !!req.isAdmin),
-        admin: !!req.isAdmin,
-        allowed: !chaosRefusal()
+    // `caps` = this instance's effective limits (#2862) — the builder (#2844) stops its sliders
+    // there; the server enforces them anyway.
+    pub.get('/operator', async (req) => {
+      const operator = await isChaosOperator(req.user, !!req.isAdmin)
+      return {
+        data: {
+          operator,
+          admin: !!req.isAdmin,
+          allowed: !chaosRefusal(),
+          instance: instanceKey(),
+          caps: operator ? capsFor(await getChaosSettings()) : null
+        }
       }
-    }))
+    })
   })
 
   // Administrators: the settings themselves. An operator can never widen their own reach.

@@ -1,5 +1,5 @@
 import { db } from '../db/index.js'
-import { alertFired } from './chaos/alert-hook.js'
+import { noteAlertFired } from './alert-fired.js'
 
 /**
  * Log viewer (#156) + log alert rules (#253): an in-process ring buffer of the
@@ -155,8 +155,7 @@ export function pushLog(level: number, msg: string): void {
     if (r.level && level < (LEVEL_NUM[r.level] ?? 0)) continue
     if (!r.regex.test(msg)) continue
     if (!ruleShouldFire(r, Date.now())) continue
-    // #2847 — during a chaos drill this firing is tagged on the run (time to detect).
-    alertFired({ source: 'log-rule', key: String(r.id), label: r.name, severity: 'medium' })
+    noteAlertFired({ source: 'log_rule', key: String(r.id), label: r.name, severity: 'medium' })
     void db('nivaro_log_alert_rules')
       .where({ id: r.id })
       .update({ last_matched_at: new Date() })

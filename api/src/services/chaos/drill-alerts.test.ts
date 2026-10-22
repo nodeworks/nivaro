@@ -12,88 +12,131 @@ vi.mock('../job-runs.js', () => ({
 const notify = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 1, decision: { dropped: false } }))
 vi.mock('../notification-channels.js', () => ({ notifyUser: notify }))
 
-import { _resetAlertHookForTests, alertFired } from './alert-hook.js'
+import { db } from '../../db/index.js'
+import { raiseIssueForTests } from '../ops-monitors.js'
+import type { ArmedFault } from './catalog.js'
 import { _resetDrillForTests, startDrill, stopDrill } from './drill.js'
 import {
-  _resetDrillAlertsForTests,
+  alertRelatesTo,
   drillAlert,
   drillWindows,
   runParticipants,
   tellDrillParticipants,
-  wireDrillAlerts
+  withDrillNote
 } from './drill-alerts.js'
 import './faults/index.js'
 import { _resetRegistryForTests } from './registry.js'
-import { _setRunStoreForTests, type ChaosRun, createRun, listRunEvents } from './runs.js'
+import { _setRunStoreForTests, type ChaosRun, createRun, updateRun } from './runs.js'
 
 const STARTER = '11111111-1111-1111-1111-111111111111'
 const LEAD = '22222222-2222-2222-2222-222222222222'
 const RESPONDER = '33333333-3333-3333-3333-333333333333'
+const SUBSCRIBER = '44444444-4444-4444-4444-444444444444'
 const app = {} as Parameters<typeof tellDrillParticipants>[0]
-
-const flush = () => new Promise((r) => setTimeout(r, 20))
 
 beforeEach(() => {
   delete process.env.CLOUD_META_DB_URL
   process.env.NODE_ENV = 'test'
   _setRunStoreForTests('memory')
   notify.mockClear()
-  wireDrillAlerts()
 })
 afterEach(async () => {
   await _resetRegistryForTests()
   _resetDrillForTests()
-  _resetDrillAlertsForTests()
-  _resetAlertHookForTests()
   _setRunStoreForTests(null)
 })
 
+const fault = (fault_key: string, target: ArmedFault['target'] = { kind: 'all' }) =>
+  ({ id: 'f', fault_key, label: fault_key, target, params: {} }) as unknown as ArmedFault
+
 describe('alerts tagged as drill (#2847)', () => {
   it('changes nothing when no fault is armed', async () => {
-    const routing = await drillAlert({ source: 'ops-monitor', key: '1', label: 'API up' })
-    expect(routing).toBeNull()
-    alertFired({ source: 'log-rule', key: '2', label: 'Errors' })
-    await flush()
-    expect(notify).not.toHaveBeenCalled()
+    expect(await drillAlert({ source: 'monitor', key: '1', label: 'API up' })).toBeNull()
+    expect(withDrillNote('down', null)).toBe('down')
   })
 
-  it('during a drill: records one alert event with time to detect and routes to participants', async () => {
-    const { run } = await startDrill({
-      fault_key: 'slow_requests',
-      by: { id: STARTER, name: 'Ada' }
-    })
-    const routing = await drillAlert({
-      source: 'ops-monitor',
-      key: '9',
-      label: 'API up',
-      severity: 'error'
-    })
-    expect(routing).toMatchObject({ run_id: run.id, participants: [STARTER] })
-    // A second firing of the same alert is not a second event.
-    alertFired({ source: 'ops-monitor', key: '9', label: 'API up' })
-    alertFired({ source: 'log-rule', key: '4', label: 'Errors' })
-    await flush()
-    const events = (await listRunEvents(run.id)).filter((e) => e.kind === 'alert')
-    expect(events.map((e) => e.data.source)).toEqual(['ops-monitor', 'log-rule'])
-    expect(events[0].data).toMatchObject({ label: 'API up', drill: true })
-    expect(typeof events[0].data.ttd_ms).toBe('number')
+  it('knows when an alert is about what the fault touches', () => {
+    expect(
+      alertRelatesTo(
+        { source: 'log_rule', key: '1', label: 'Mail send failures' },
+        fault('mail_down')
+      )
+    ).toBe(true)
+    expect(
+      alertRelatesTo(
+        { source: 'monitor', key: '2', label: 'Redis reachable' },
+        fault('redis_pause')
+      )
+    ).toBe(true)
+    expect(
+      alertRelatesTo(
+        { source: 'metric_alert', key: '3', label: 'API p95 latency' },
+        fault('slow_requests')
+      )
+    ).toBe(true)
+    expect(
+      alertRelatesTo(
+        { source: 'metric_alert', key: '4', label: 'Budget over plan' },
+        fault('slow_requests')
+      )
+    ).toBe(false)
+    expect(
+      alertRelatesTo({ source: 'monitor', key: '5', label: 'Mail relay' }, fault('redis_pause'))
+    ).toBe(false)
+    // Words match whole, not inside other words ("mail" is not in "mailbox-free text").
+    expect(
+      alertRelatesTo({ source: 'x', key: '6', label: 'Emailing digest' }, fault('mail_down'))
+    ).toBe(false)
+  })
 
-    const told = await tellDrillParticipants(app, routing!, {
-      subject: 'Monitor failing: API up',
-      message: 'down'
-    })
-    expect(told).toBe(1)
-    expect(notify).toHaveBeenCalledWith(
-      app,
-      STARTER,
-      expect.objectContaining({
-        subject: '[Drill] Monitor failing: API up',
-        channels: { inapp: true }
-      })
+  it('during an unrelated drill the alert still reaches its normal recipients, tagged', async () => {
+    const { run } = await startDrill({ fault_key: 'mail_down', by: { id: STARTER, name: 'Ada' } })
+    // ops monitor raise path: subscriber + creator are the normal recipients.
+    const original = vi.mocked(db).getMockImplementation()
+    vi.mocked(db).mockImplementation(((table: string) => {
+      const chain: Record<string, unknown> = {}
+      for (const m of ['where', 'whereIn']) chain[m] = () => chain
+      chain.first = async () => null
+      chain.insert = async () => [1]
+      chain.update = async () => 1
+      chain.pluck = async () => (table === 'nivaro_monitor_subscribers' ? [SUBSCRIBER] : [])
+      return chain
+    }) as never)
+    await raiseIssueForTests(
+      { id: 9, name: 'Budget sync', type: 'http', created_by: null } as never,
+      'down',
+      app
     )
+    if (original) vi.mocked(db).mockImplementation(original)
+    const calls = notify.mock.calls.map((c) => [c[1], c[2].subject, c[2].message])
+    expect(calls).toContainEqual([
+      SUBSCRIBER,
+      'Monitor failing: Budget sync',
+      `down\n\nFired during the chaos drill “Mail transport down” (run ${run.id}).`
+    ])
+    // The drill's starter is told too, marked.
+    expect(calls.find((c) => c[0] === STARTER)?.[1]).toBe('[Drill] Monitor failing: Budget sync')
+  })
 
+  it('a related alert says it may be caused by the drill; the starter is not told twice', async () => {
+    const { run } = await startDrill({ fault_key: 'mail_down', by: { id: STARTER, name: 'Ada' } })
+    const d = await drillAlert({ source: 'log_rule', key: '4', label: 'Mail send errors' })
+    expect(d).toMatchObject({ run_id: run.id, related: true, participants: [STARTER] })
+    expect(withDrillNote('x', d)).toContain('May be caused by the chaos drill')
+    expect(
+      await tellDrillParticipants(app, d!, { subject: 's', message: 'm' }, [STARTER.toUpperCase()])
+    ).toBe(0)
     await stopDrill(run.id, { id: STARTER })
-    expect(await drillAlert({ source: 'ops-monitor', key: '9', label: 'API up' })).toBeNull()
+    expect(await drillAlert({ source: 'log_rule', key: '4', label: 'Mail send errors' })).toBeNull()
+  })
+
+  it('blind runs keep the note out of the normal copy, never the alert', async () => {
+    const { run } = await startDrill({ fault_key: 'mail_down', by: { id: STARTER, name: 'Ada' } })
+    await updateRun(run.id, { meta: { ...run.meta, blind: true } })
+    const d = await drillAlert({ source: 'monitor', key: '1', label: 'API up' })
+    expect(d?.blind).toBe(true)
+    expect(withDrillNote('down', d)).toBe('down')
+    expect(withDrillNote('down', d, true)).toContain('Fired during the chaos drill')
   })
 
   it('participants: starter, the game day roles and listed people; blind runs keep responders out', async () => {
