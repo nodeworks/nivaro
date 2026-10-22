@@ -26,7 +26,7 @@ export const chaosFaultsDbDocs: DocSection = {
         ],
         [
           'Database errors (db_errors)',
-          'Fails a share of statements with a deadlock victim (1205), a request timeout (ETIMEOUT) or a connection reset (ESOCKET), shaped like the errors the SQL Server driver throws. An optional wait comes first, so a timeout can take as long as a real one.',
+          'Fails a share of statements with a deadlock victim (1205), a request timeout (ETIMEOUT) or a connection reset (ESOCKET), shaped like the errors the SQL Server driver throws. An optional wait comes first, so a timeout can take as long as a real one. Sign-in reads (users, roles, API keys, settings) and the Stop paths are never touched, so a drill can always be stopped.',
           'as above',
           '100% of statements, 15 s wait; 3 minutes'
         ],
@@ -62,7 +62,7 @@ export const chaosFaultsDbDocs: DocSection = {
         ],
         [
           'Clock skew (clock_skew)',
-          'Moves the application clock of one replica by minutes or hours. Only decisions that read the application clock move: session and API-key expiry, SLA timers, maintenance windows, the cron run slot, public dashboard link expiry, help-video media tickets and delegation expiry. Log timestamps do not.',
+          'Moves the application clock of one replica by minutes or hours. SLA timers, maintenance windows and the cron run slot follow it. Sign-in and expiry checks (sessions, API keys, public dashboard links, help-video media tickets, delegations) only ever get stricter: a clock set back is ignored for them, and session stamps stay on real time. Log timestamps do not move.',
           'one replica',
           '±24 hours; 10 minutes'
         ]

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
-import { appNow } from './chaos/clock.js'
+import { appNowForAuth } from './chaos/clock.js'
 import { notifyUser } from './notification-channels.js'
 
 /**
@@ -24,7 +24,7 @@ export async function delegateOpenTasks(userId: string, app?: FastifyInstance): 
         }
       | undefined
     if (!user?.delegate_id) return 0
-    if (user.delegate_expires_at && new Date(user.delegate_expires_at).getTime() < appNow())
+    if (user.delegate_expires_at && new Date(user.delegate_expires_at).getTime() < appNowForAuth())
       return 0
     // The delegate must themselves be able to act.
     const delegate = (await db('nivaro_users')

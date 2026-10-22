@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
-import { appNow } from '../services/chaos/clock.js'
+import { appNowForAuth } from '../services/chaos/clock.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { mcpOAuthEnabled, oauthAudienceRefusal, oauthScopeRefusal } from '../services/mcp-config.js'
 import { resolveAccessToken } from '../services/oauth-store.js'
@@ -286,7 +286,7 @@ async function applyApiKey(
     throw httpError(401, 'This API key has been switched off', 'API_KEY_REVOKED')
   }
 
-  if (key.expires_at && new Date(key.expires_at).getTime() < appNow()) {
+  if (key.expires_at && new Date(key.expires_at).getTime() < appNowForAuth()) {
     throw httpError(
       401,
       `This API key expired on ${new Date(key.expires_at).toISOString().slice(0, 10)}`,
@@ -507,8 +507,10 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
     '../services/session-policy.js'
   )
   const policy = await getSessionPolicy()
-  // #2835 — the application clock (a clock-skew drill moves it on one replica).
-  const now = appNow()
+  // #2835 — the application clock (a clock-skew drill moves it on one replica). It may only
+  // judge more strictly, and the stamps stay real time: a skewed stamp would stretch the
+  // session on every replica after the drill (F3).
+  const now = appNowForAuth()
   if (policy) {
     const verdict = judgeSession(
       limitsFor(policy, user.role as string | null),
@@ -527,8 +529,9 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
       )
     }
   }
-  if (!req.session.loginAt) req.session.loginAt = now
-  req.session.lastSeenAt = now
+  const stamp = Date.now()
+  if (!req.session.loginAt) req.session.loginAt = stamp
+  req.session.lastSeenAt = stamp
 
   await hydrateRole(req, user)
   req.authMethod = 'session'
