@@ -1,3 +1,4 @@
+import { QueryErrorState } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { Lightbulb, Plus } from 'lucide-react'
 import { useState } from 'react'
@@ -27,7 +28,13 @@ export function IdeasPage() {
     setParams(next, { replace: true })
   }
 
-  const { data: ideas = [], isLoading } = useQuery({
+  const {
+    data: ideas = [],
+    isLoading,
+    isError,
+    error,
+    refetch
+  } = useQuery({
     queryKey: ['ideas', 'list', status],
     queryFn: () =>
       api
@@ -60,7 +67,9 @@ export function IdeasPage() {
         </p>
       </header>
       <div className='min-h-0 flex-1 overflow-y-auto p-6'>
-        {isLoading ? null : ideas.length === 0 ? (
+        {isLoading ? null : isError && ideas.length === 0 ? (
+          <QueryErrorState error={error} what='ideas' onRetry={() => void refetch()} />
+        ) : ideas.length === 0 ? (
           <p className='text-[12.5px] text-slate-400'>
             No ideas{status ? ' with this status' : ' yet'} — suggest the first one.
           </p>

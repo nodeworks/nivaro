@@ -13,6 +13,11 @@ export function loadErrorText(err: unknown, what = 'this'): string {
   const status = loadErrorStatus(err)
   if (status == null) {
     const msg = err instanceof Error ? err.message : String(err ?? '')
+    if (
+      /timed? ?out|timeout/i.test(msg) ||
+      (err as { name?: string } | null)?.name === 'TimeoutError'
+    )
+      return `Couldn’t load ${what}: it is taking too long to answer.`
     if (err instanceof TypeError || /network|failed to fetch|load failed/i.test(msg))
       return 'Can’t reach the server. Check the connection.'
     return `Couldn’t load ${what}.`

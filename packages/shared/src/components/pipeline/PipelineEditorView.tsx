@@ -50,6 +50,7 @@ import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
 import { PipelineCumulativeFlowCard } from '../charts/CumulativeFlowChart'
+import { QueryErrorState } from '../QueryErrorState'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -2818,7 +2819,13 @@ export function PipelineEditorView({
   })
   const [expandedBindingId, setExpandedBindingId] = useState<number | null>(null)
 
-  const { data: templateData, isLoading } = useQuery<PipelineTemplate>({
+  const {
+    data: templateData,
+    isLoading,
+    isError: templateFailed,
+    error: templateError,
+    refetch: refetchTemplate
+  } = useQuery<PipelineTemplate>({
     queryKey: ['pipeline-template', templateId],
     queryFn: () =>
       client
@@ -3174,6 +3181,16 @@ export function PipelineEditorView({
     onSuccess: () => invalidate(),
     onError: () => toast.error('Failed to update binding')
   })
+
+  if (templateFailed && !templateData) {
+    return (
+      <QueryErrorState
+        error={templateError}
+        what='this pipeline'
+        onRetry={() => void refetchTemplate()}
+      />
+    )
+  }
 
   if (isLoading || !templateData) {
     return (

@@ -7,7 +7,9 @@ import { getSocket } from '@/lib/socket'
 // Ask AI plans outside the chat (#1954, #1952): history with the change
 // report, undo and "make a draft flow" (admins), plus plan templates.
 // ?plan=<id> selects a plan — plan notifications (#2004) link here.
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 const subscribePlan: AiPlanSubscribe = (event, handler) => {
   const s = getSocket()

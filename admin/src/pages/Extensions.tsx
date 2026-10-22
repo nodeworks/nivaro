@@ -1,3 +1,4 @@
+import { QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -88,7 +89,7 @@ function MarketplaceTab() {
     action: 'install' | 'uninstall'
   } | null>(null)
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['extensions-marketplace'],
     queryFn: () =>
       api
@@ -139,6 +140,9 @@ function MarketplaceTab() {
       </div>
     )
   }
+
+  if (isError && !data)
+    return <QueryErrorState error={error} what='the marketplace' onRetry={() => void refetch()} />
 
   const entries = data?.data ?? []
 
@@ -270,7 +274,7 @@ function EventsTab() {
   const [status, setStatus] = useState<(typeof EVENT_STATUSES)[number]>('all')
   const [page, setPage] = useState(1)
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['extension-events', status, page],
     queryFn: () =>
       api
@@ -330,6 +334,8 @@ function EventsTab() {
             <Skeleton key={k} className='h-11 rounded-none' />
           ))}
         </div>
+      ) : isError && !data ? (
+        <QueryErrorState error={error} what='events' onRetry={() => void refetch()} />
       ) : rows.length === 0 ? (
         <div className='flex flex-col items-center justify-center py-20 text-center'>
           <Inbox className='mb-3 h-9 w-9 text-slate-300 dark:text-slate-600' />
@@ -462,7 +468,7 @@ export function ExtensionsPage() {
   const queryClient = useQueryClient()
   const [tab, setTab] = usePersistedTab<string>('nvr_tab_extensions', 'installed')
 
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['extensions'],
     queryFn: () => api.get<{ data: Extension[] }>('/extensions').then((r) => r.data.data)
   })
@@ -657,6 +663,8 @@ export function ExtensionsPage() {
                 </div>
               ))}
             </div>
+          ) : isError && !data ? (
+            <QueryErrorState error={error} what='extensions' onRetry={() => void refetch()} />
           ) : extensions.length === 0 ? (
             <div className='flex flex-col items-center justify-center py-20 text-center'>
               <Puzzle className='mb-3 h-9 w-9 text-slate-300 dark:text-slate-600' />

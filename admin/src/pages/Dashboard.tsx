@@ -5,7 +5,12 @@ import {
   RecentRecordsRail
 } from '@nivaro/react'
 import { createNivaro } from '@nivaro/sdk'
-import { useLiveRefetchInterval } from '@nivaro/shared'
+import {
+  LoadErrorNote,
+  loadErrorText,
+  serverErrorText,
+  useLiveRefetchInterval
+} from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
@@ -251,7 +256,7 @@ function QuickAction({
 
 // Shared FirstLoginChecklist needs a Nivaro client + navigation context; the
 // dashboard otherwise talks axios, so a small host wraps just the card.
-const checklistClient = createNivaro(window.location.origin)
+const checklistClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 function DashboardChecklistHost() {
   const navigate = useNavigate()
   return (
@@ -284,12 +289,22 @@ export function DashboardPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
 
-  const { data: collectionsData, isLoading: collectionsLoading } = useQuery({
+  const {
+    data: collectionsData,
+    isLoading: collectionsLoading,
+    error: collectionsError,
+    refetch: refetchCollections
+  } = useQuery({
     queryKey: ['dashboard-stats', 'collections'],
     queryFn: () => api.get('/collections').then((r) => r.data.data)
   })
 
-  const { data: usersData, isLoading: usersLoading } = useQuery({
+  const {
+    data: usersData,
+    isLoading: usersLoading,
+    error: usersError,
+    refetch: refetchUsers
+  } = useQuery({
     queryKey: ['dashboard-stats', 'users'],
     queryFn: () => api.get('/users?limit=1').then((r) => r.data)
   })
@@ -303,7 +318,12 @@ export function DashboardPage() {
         .catch(() => null)
   })
 
-  const { data: activityData, isLoading: activityLoading } = useQuery({
+  const {
+    data: activityData,
+    isLoading: activityLoading,
+    error: activityError,
+    refetch: refetchActivity
+  } = useQuery({
     queryKey: ['activity', 'recent'],
     queryFn: () => api.get('/activity?limit=10&sort=-timestamp').then((r) => r.data)
   })
@@ -390,6 +410,14 @@ export function DashboardPage() {
     year: 'numeric'
   })
 
+  // The three reads the page opens with; one failing says so instead of showing zeros.
+  const loadError = collectionsError ?? usersError ?? activityError
+  const retryAll = () => {
+    if (collectionsError) void refetchCollections()
+    if (usersError) void refetchUsers()
+    if (activityError) void refetchActivity()
+  }
+
   const activityEntries: ActivityEntry[] = activityData?.data ?? []
   const extensions: Extension[] = extensionsData?.data ?? []
   const flows: Flow[] = flowsData?.data ?? []
@@ -433,6 +461,14 @@ export function DashboardPage() {
       <div className='p-8'>
         {/* First-login checklist (#134) — self-hides once dismissed */}
         <DashboardChecklistHost />
+        {loadError != null && (
+          <div className='mb-6 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
+            <LoadErrorNote
+              message={serverErrorText(loadError) ?? loadErrorText(loadError, 'the overview')}
+              onRetry={retryAll}
+            />
+          </div>
+        )}
         <div className='grid grid-cols-1 gap-8 lg:grid-cols-[1fr_280px]'>
           {/* ── Left column ──────────────────────────────────── */}
           <div className='space-y-6'>

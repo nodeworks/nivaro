@@ -10,7 +10,9 @@ import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth'
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 /** Delegation console — hosts the shared view (OOO roster, who covers whom,
  *  expiring delegations, uncovered approvals, blocked records, my delegate). */

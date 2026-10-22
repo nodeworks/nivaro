@@ -21,7 +21,7 @@ import { useAuth } from '@/lib/auth'
 // saved views, drill sheets, row actions, tree view, hierarchy scope, Ask the
 // table. The admin-only spreadsheet / calendar / Gantt views ride in as host
 // views (#743 retired the classic browser).
-const client = createNivaro(window.location.origin)
+const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 export function CollectionBrowserV2Page() {
   const { collection = '' } = useParams<{ collection: string }>()

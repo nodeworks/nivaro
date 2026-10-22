@@ -408,7 +408,15 @@ const AccountPage = lazy(() => import('@/pages/Account').then((m) => ({ default:
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, staleTime: 30_000 }
+    // A read that timed out (#2857) is not tried again: the error state is the answer, and a
+    // second 30 s wait would double the spinner.
+    queries: {
+      retry: (failures, err) => {
+        const e = err as { code?: string; name?: string } | null
+        return failures < 1 && e?.code !== 'ECONNABORTED' && e?.name !== 'TimeoutError'
+      },
+      staleTime: 30_000
+    }
   }
 })
 

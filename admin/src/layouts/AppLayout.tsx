@@ -126,7 +126,7 @@ import {
   navCategories
 } from './nav-config'
 
-const announcementsClient = createNivaro(window.location.origin)
+const announcementsClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 const SIDEBAR_KEY = 'nivaro-sidebar-collapsed'
 const CATEGORY_KEY = 'nivaro-nav-category'

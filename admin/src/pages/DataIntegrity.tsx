@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 // admin-authored not_null/regex/range/unique/formula checks that used to
 // live at /data-quality; that route now redirects here), plus Inactive people
 // (accounts that can no longer act but are still named on live work).
-const client = createNivaro(window.location.origin)
+const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 export default function DataIntegrity() {
   const navigate = useNavigate()

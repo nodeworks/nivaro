@@ -8,7 +8,7 @@ import { useNavigate } from 'react-router'
  * with its own recordUrl for its record routing.
  */
 
-const client = createNivaro(window.location.origin)
+const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 export function CommandCenterPage() {
   const navigate = useNavigate()

@@ -14,7 +14,9 @@ import { useAuth } from '@/lib/auth'
 // the shared SupportView: My requests for everyone, the Desk and the request
 // types for administrators. ?ticket=<id> (every support notification links
 // here) opens that ticket.
-const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 export function SupportPage() {
   const navigate = useNavigate()

@@ -30,7 +30,7 @@ import { useNavigate } from 'react-router'
 import { useAuth } from '@/lib/auth'
 import { createNivaro } from '@nivaro/sdk'
 
-const matrixClient = createNivaro(window.location.origin)
+const matrixClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
 // ─── Simple markdown renderer ─────────────────────────────────────────────────
 // No markdown dependency exists in the admin bundle, so this renders a safe

@@ -49,7 +49,7 @@ export function ImportsPage() {
   const definitionParam = searchParams.get('definition')
   const { user } = useAuth()
 
-  const client = useMemo(() => createNivaro(window.location.origin), [])
+  const client = useMemo(() => createNivaro(window.location.origin, { timeoutMs: 90_000 }), [])
   const realtime = useMemo(() => createImportRealtime(), [])
   const isAdmin = !!user?.is_admin
 

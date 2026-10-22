@@ -213,7 +213,9 @@ const subscribePlan: AiPlanSubscribe = (event, handler) => {
   }
 }
 
-const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 90_000
+})
 
 const detailKey = (id: string | null) => ['ask-conversation', id] as const
 
