@@ -7,6 +7,7 @@ import { UserCombobox } from '@/components/user-combobox'
 import { api, type User } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import type { CatalogFault, FaultTarget, HypothesisRule } from '../api'
+import { DANGER_CHIP } from '../ops-controls'
 import { PreflightPanel } from '../PreflightPanel'
 import { builderKeys, fetchBlast, fetchSamplers } from './api'
 import {
@@ -173,13 +174,6 @@ export function StepHeading({ title, children }: { title: string; children?: Rea
   )
 }
 
-const DANGER_TONE: Record<CatalogFault['danger'], string> = {
-  low: 'bg-slate-100 text-slate-700 dark:bg-muted dark:text-muted-foreground',
-  medium: 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300',
-  // Orange, not red: red on the chaos console means "armed now" and Stop all.
-  high: 'bg-orange-50 text-orange-800 dark:bg-orange-950/50 dark:text-orange-300'
-}
-
 // ─── 1. Fault ──────────────────────────────────────────────────────────────────
 
 export function FaultStep({
@@ -220,7 +214,7 @@ export function FaultStep({
           <span
             className={cn(
               'rounded px-1.5 py-0.5 text-[11px] font-medium',
-              DANGER_TONE[fault.danger]
+              DANGER_CHIP[fault.danger] ?? DANGER_CHIP.low
             )}
           >
             {fault.danger === 'low' ? 'Low' : fault.danger === 'medium' ? 'Medium' : 'High'} blast

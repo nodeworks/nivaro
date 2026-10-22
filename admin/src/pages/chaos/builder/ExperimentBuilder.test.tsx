@@ -97,7 +97,9 @@ describe('ExperimentBuilder (#2844)', () => {
   it('keeps Run disabled and says why while pre-flight fails', async () => {
     preflightOk = false
     mount()
-    expect(await screen.findByText(/Pre-flight: No deploy running/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/Pre-flight is blocking this run: No deploy running/)
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^Run$/ })).toBeDisabled()
   })
 

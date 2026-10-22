@@ -1,6 +1,15 @@
 import { useOverflowTip } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Play, X, Zap } from 'lucide-react'
+import {
+  AlertTriangle,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  Play,
+  X,
+  Zap
+} from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -169,7 +178,9 @@ export function ExperimentBuilder({
       : preflightOk === null
         ? 'Waiting for the pre-flight checks…'
         : preflightOk === false
-          ? `Pre-flight: ${failing.map((c) => c.label).join(', ')}.`
+          ? overridable
+            ? 'Outside working hours: tick the override to run.'
+            : `Pre-flight is blocking this run: ${failing.map((c) => c.label).join(', ')}.`
           : null
 
   const run = useMutation({
@@ -272,6 +283,8 @@ export function ExperimentBuilder({
                     <span className='hidden max-w-[150px] truncate text-[11.5px] text-slate-500 lg:block dark:text-muted-foreground'>
                       {issue ? (
                         <span className='text-amber-700 dark:text-amber-400'>Needs a value</span>
+                      ) : s.id === 'preflight' && preflightOk === false ? (
+                        <span className='text-amber-700 dark:text-amber-400'>{summary[s.id]}</span>
                       ) : (
                         summary[s.id]
                       )}
@@ -368,7 +381,8 @@ export function ExperimentBuilder({
                   onClick={() => go(s.id)}
                   className={cn(
                     'max-w-full rounded-sm text-left text-slate-800 [overflow-wrap:anywhere] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-foreground/90',
-                    issues[s.id] && 'text-amber-800 dark:text-amber-300'
+                    (issues[s.id] || (s.id === 'preflight' && preflightOk === false)) &&
+                      'text-amber-800 dark:text-amber-300'
                   )}
                 >
                   {issues[s.id] ? 'Needs a value' : summary[s.id]}
@@ -415,7 +429,14 @@ export function ExperimentBuilder({
                 onClick={() => run.mutate()}
                 className='inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 disabled:opacity-60 dark:focus-visible:ring-offset-background'
               >
-                <Zap className='h-3.5 w-3.5 shrink-0' aria-hidden />
+                {run.isPending ? (
+                  <Loader2
+                    className='h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none'
+                    aria-hidden
+                  />
+                ) : (
+                  <Zap className='h-3.5 w-3.5 shrink-0' aria-hidden />
+                )}
                 <span className='text-left'>
                   Confirm — arms {fault.label} on {targetWords(draft.target)} for{' '}
                   {formatSeconds(draft.seconds)}
@@ -431,15 +452,18 @@ export function ExperimentBuilder({
             </div>
           ) : (
             <div className='flex flex-wrap items-center gap-2'>
-              <button
-                type='button'
-                disabled={!canRun}
-                onClick={startConfirm}
-                className='inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-background'
-              >
-                <Play className='h-3.5 w-3.5' aria-hidden />
-                Run
-              </button>
+              {/* The wrapper carries why Run is off: a disabled button gets no pointer events. */}
+              <span data-tip={!canRun && why ? why : undefined} className='flex flex-1'>
+                <button
+                  type='button'
+                  disabled={!canRun}
+                  onClick={startConfirm}
+                  className='inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 dark:focus-visible:ring-offset-background'
+                >
+                  <Play className='h-3.5 w-3.5' aria-hidden />
+                  Run
+                </button>
+              </span>
               <SavePresetPopover
                 fault={fault}
                 draft={draft}
