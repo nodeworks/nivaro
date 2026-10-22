@@ -528,30 +528,33 @@ function ConfirmInline({
       className='m-0 inline-flex min-w-0 flex-wrap items-center gap-1.5 border-0 p-0 text-[12px]'
     >
       <span className='text-slate-600 dark:text-muted-foreground'>{text}</span>
-      <button
-        type='button'
-        onClick={onYes}
-        className={cn(
-          btn,
-          'h-7 px-2.5',
-          danger
-            ? 'bg-red-600 text-white hover:bg-red-700'
-            : 'bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white'
-        )}
-      >
-        {yes}
-      </button>
-      <button
-        ref={keepRef}
-        type='button'
-        onClick={keep}
-        className={cn(
-          btn,
-          'h-7 px-2 font-normal text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
-        )}
-      >
-        Keep
-      </button>
+      {/* The answer pair never splits across lines. */}
+      <span className='inline-flex items-center gap-1.5 whitespace-nowrap'>
+        <button
+          type='button'
+          onClick={onYes}
+          className={cn(
+            btn,
+            'h-7 px-2.5',
+            danger
+              ? 'bg-red-600 text-white hover:bg-red-700'
+              : 'bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white'
+          )}
+        >
+          {yes}
+        </button>
+        <button
+          ref={keepRef}
+          type='button'
+          onClick={keep}
+          className={cn(
+            btn,
+            'h-7 px-2 font-normal text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
+          )}
+        >
+          Keep
+        </button>
+      </span>
     </fieldset>
   )
 }
