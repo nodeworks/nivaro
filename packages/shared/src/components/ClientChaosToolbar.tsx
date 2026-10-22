@@ -161,7 +161,10 @@ export function ClientChaosToolbar({ user, shortcut = true }: ClientChaosToolbar
   )
 }
 
-/** Always-dark corner pill (it must read on any page, light or dark). */
+/**
+ * Always-dark corner pill (it must read on any page, light or dark). It sits left of the corner
+ * where hosts keep their round report-a-problem button, so neither hides the other.
+ */
 function ChaosPill({
   chaos,
   now,
@@ -174,7 +177,7 @@ function ChaosPill({
   return (
     <div
       data-client-chaos-pill=''
-      className='nvr-chaos-enter fixed right-4 bottom-4 z-[70] flex max-w-[calc(100vw-32px)] items-center rounded-full border border-white/10 bg-[#0f172a] text-[12px] text-slate-100 shadow-lg'
+      className='nvr-chaos-enter fixed right-[60px] bottom-4 z-[70] flex max-w-[calc(100vw-76px)] items-center rounded-full border border-white/10 bg-[#0f172a] text-[12px] text-slate-100 shadow-lg'
     >
       <style>{ENTER_CSS}</style>
       <button
@@ -317,7 +320,8 @@ function RunningView({ chaos, now }: { chaos: ClientChaosState; now: number }) {
         />
       </div>
       <p className='mt-2.5 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
-        Ends on its own. A reload keeps it on until then; sign-out and this panel always work.
+        Ends on its own when the time runs out, and stays on through a reload. Signing out and this
+        panel keep working throughout.
       </p>
       <button
         type='button'

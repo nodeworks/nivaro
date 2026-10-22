@@ -33,6 +33,8 @@ import { toolbarItems } from '../../registry/toolbarItems'
 import { LANE_ORDER, type Selection } from '../../types'
 import { createStore, inPage, strokeEdge, useStore } from '../b1-shared'
 import { BTN, LINK, SafeLink } from '../shared'
+import { simulation } from '../simulate-down'
+import { isTarget } from '../simulate-down/overlay'
 import {
   type ArmedShape,
   type ChaosMarks,
@@ -229,7 +231,8 @@ function hatch(
   ctx.beginPath()
   ctx.roundRect(r.x, r.y, r.w, r.h, 7)
   ctx.clip()
-  ctx.globalAlpha = 0.28
+  // light enough that the node's own name and figures stay readable through it
+  ctx.globalAlpha = 0.16
   ctx.strokeStyle = color
   ctx.lineWidth = 1.5
   for (let x = r.x - r.h; x < r.x + r.w; x += 5) {
@@ -248,21 +251,50 @@ function hatch(
   ctx.setLineDash([])
 }
 
+/** The pill's words: the soonest fault's label, then " · 4:17" and " +1" for more. */
+interface PillText {
+  label: string
+  tail: string
+}
+
+/**
+ * `label · 4:17 +1` cut to `max` px: the label loses letters (with an ellipsis) before the time
+ * does, so a long fault name never runs off the node or under a neighbour's pill.
+ */
+export function fitPill(ctx: CanvasRenderingContext2D, p: PillText, max: number): string {
+  const full = `${p.label}${p.tail}`
+  if (ctx.measureText(full).width <= max) return full
+  let lo = 0
+  let hi = p.label.length
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (ctx.measureText(`${p.label.slice(0, mid).trimEnd()}…${p.tail}`).width <= max) lo = mid
+    else hi = mid - 1
+  }
+  return lo > 0 ? `${p.label.slice(0, lo).trimEnd()}…${p.tail}` : p.tail.replace(/^ · /, '')
+}
+
 function pill(
   ctx: CanvasRenderingContext2D,
   r: { x: number; y: number; w: number; h: number },
-  text: string,
+  words: PillText,
   t: MapTokens,
   font: string,
-  inside: boolean
+  inside: boolean,
+  /** px kept free at the right of the top edge (Simulate down's own pill sits there). */
+  reserve = 0
 ) {
   ctx.font = font
+  // node boxes: on the top edge; entity rows (packed tight): inside, left of the rate. When
+  // Simulate down's pill leaves too little of the top edge, the drill's pill takes the bottom.
+  const bottom = !inside && reserve > 0 && r.w - 12 - reserve < 96
+  const max = inside ? Math.max(56, r.w * 0.45) : r.w - 12 - (bottom ? 0 : reserve)
+  const text = fitPill(ctx, words, max - 8)
   const w = ctx.measureText(text).width + 8
-  // node boxes: on the top edge; entity rows (packed tight): inside, left of the rate
   const x = inside ? r.x + r.w - 52 - w : r.x + 6
-  const y = inside ? r.y + (r.h - 12) / 2 : r.y - 7
+  const y = inside ? r.y + (r.h - 13) / 2 : bottom ? r.y + r.h - 6 : r.y - 7
   ctx.beginPath()
-  ctx.roundRect(x, y, w, 12, 6)
+  ctx.roundRect(x, y, w, 13, 6.5)
   ctx.fillStyle = t.card
   ctx.fill()
   ctx.lineWidth = 1
@@ -270,13 +302,13 @@ function pill(
   ctx.stroke()
   ctx.fillStyle = t.error
   ctx.textAlign = 'left'
-  ctx.fillText(text, x + 4, y + 9)
+  ctx.fillText(text, x + 4, y + 9.5)
 }
 
-const pillText = (marks: Mark[], now: number) => {
+const pillText = (marks: Mark[], now: number): PillText => {
   const soonest = marks.reduce((a, b) => (a.ends_at <= b.ends_at ? a : b))
   const more = marks.length > 1 ? ` +${marks.length - 1}` : ''
-  return `${soonest.label} · ${timeLeft(soonest.ends_at, now)}${more}`
+  return { label: soonest.label, tail: ` · ${timeLeft(soonest.ends_at, now)}${more}` }
 }
 
 export function drawChaos(
@@ -286,9 +318,13 @@ export function drawChaos(
   data: MapData,
   t: MapTokens,
   font: string,
-  now: number
+  now: number,
+  /** The node Simulate down is shading, if any: its pill owns the right of that top edge. */
+  simulated: string | null = null
 ): number {
   let drawn = 0
+  ctx.font = font
+  const simReserve = simulated ? ctx.measureText('Simulated down').width + 22 : 0
   // edges into a faulted down node
   ctx.strokeStyle = t.error
   ctx.globalAlpha = 0.6
@@ -314,7 +350,8 @@ export function drawChaos(
       const r = rects[id]
       if (!r) continue
       hatch(ctx, r, t.error)
-      pill(ctx, r, pillText(list, now), t, font, m === marks.ents)
+      const reserve = m === marks.downs && simulated && isTarget(simulated, id) ? simReserve : 0
+      pill(ctx, r, pillText(list, now), t, font, m === marks.ents, reserve)
       drawn++
     }
   const seen = new Set<string>()
@@ -347,6 +384,8 @@ register(inspectorActions, {
 register(inspectorPanels, {
   id: 'chaos-armed-here',
   order: 1,
+  // first thing under the actions: it explains every error and slow figure below it
+  top: true,
   history: true,
   applies: () => true,
   Component: inPage(ArmedHerePanel)
@@ -359,8 +398,9 @@ register(nodeMenuProviders, {
     if (!s.allowed) return []
     return injectOptions(sel, [...s.faults.values()], mapRef).map((o) => ({
       key: `inject:${o.fault_key}`,
-      label: `Inject fault here: ${o.label}`,
-      hint: 'Opens the chaos console aimed at this node',
+      label: o.label,
+      group: 'Inject fault here',
+      groupHint: 'Opens the chaos console aimed at this node',
       run: ({ navigate }) => navigate(o.href)
     }))
   }
@@ -371,7 +411,8 @@ register(canvasLayers, {
   draw(ctx, { layout, data, tokens, fonts, model, now }) {
     const marks = marksFor(model, Object.keys(layout.lanes), now)
     if (!marks) return false
-    drawChaos(ctx, marks, layout, data, tokens, `500 9.5px ${fonts.sans}`, now)
+    const sim = simulation.get()?.node ?? null
+    drawChaos(ctx, marks, layout, data, tokens, `500 9.5px ${fonts.sans}`, now, sim)
     return false
   }
 })

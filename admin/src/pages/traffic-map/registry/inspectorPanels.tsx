@@ -14,6 +14,8 @@ export interface InspectorPanel extends Registered {
   live?: boolean
   /** Render in the history view (default false). */
   history?: boolean
+  /** Render first, right under the action row, instead of after the built-in sections. */
+  top?: boolean
   Component: ComponentType<{ sel: Selection; d: InspectorData }>
 }
 
@@ -22,11 +24,14 @@ export const inspectorPanels: InspectorPanel[] = []
 export function InspectorPanels({
   sel,
   d,
-  mode
+  mode,
+  top = false
 }: {
   sel: Selection
   d: InspectorData
   mode: 'live' | 'history'
+  /** The panels that asked to come first (`top: true`) instead of the rest. */
+  top?: boolean
 }) {
   if (inspectorPanels.length === 0) return null
   const resetKey = `${sel.kind}:${sel.id}`
@@ -34,6 +39,7 @@ export function InspectorPanels({
     <>
       {byOrder(inspectorPanels)
         .filter((p) => (mode === 'live' ? p.live !== false : p.history === true))
+        .filter((p) => (p.top === true) === top)
         .filter((p) => safeApplies(() => p.applies(sel, d)))
         .map((p) => (
           <FeatureBoundary key={p.id} id={p.id} resetKey={resetKey}>
