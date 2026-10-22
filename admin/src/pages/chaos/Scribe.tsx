@@ -57,18 +57,23 @@ export function ScribeBar({ runId, className }: { runId: string; className?: str
 
   return (
     <div className={cn('flex flex-wrap items-center gap-2', className)}>
-      {PRESETS.map(({ mark, icon: Icon }) => (
-        <button
-          key={mark}
-          type='button'
-          disabled={stamp.isPending}
-          onClick={() => stamp.mutate({ mark })}
-          className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:border-nvr-cyan hover:bg-nvr-cyan/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan active:bg-nvr-cyan/10 disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground'
-        >
-          <Icon className='h-3.5 w-3.5 text-slate-500 dark:text-muted-foreground' aria-hidden />
-          {MARK_LABEL[mark]}
-        </button>
-      ))}
+      <div className='grid w-full grid-cols-3 gap-2 sm:flex sm:w-auto'>
+        {PRESETS.map(({ mark, icon: Icon }) => (
+          <button
+            key={mark}
+            type='button'
+            disabled={stamp.isPending}
+            onClick={() => stamp.mutate({ mark })}
+            className='inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:border-nvr-cyan hover:bg-nvr-cyan/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan active:bg-nvr-cyan/10 disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground'
+          >
+            <Icon
+              className='hidden h-3.5 w-3.5 text-slate-500 sm:block dark:text-muted-foreground'
+              aria-hidden
+            />
+            {MARK_LABEL[mark]}
+          </button>
+        ))}
+      </div>
       <form
         className='flex min-w-[220px] flex-1 items-center gap-1.5'
         onSubmit={(e) => {
@@ -102,7 +107,8 @@ export function ScribeBar({ runId, className }: { runId: string; className?: str
 }
 
 const MARK_TONE: Record<NoteMark, string> = {
-  noticed: 'bg-sky-500',
+  // Indigo, not sky: a sky mark disappears into the cyan sample line it sits on.
+  noticed: 'bg-indigo-500 dark:bg-indigo-400',
   found_cause: 'bg-amber-500',
   fixed: 'bg-emerald-500',
   declared: 'bg-red-500'

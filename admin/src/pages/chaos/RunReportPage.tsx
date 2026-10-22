@@ -1,12 +1,25 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowLeft, CalendarClock, Check, Download, Link2, Siren } from 'lucide-react'
+import {
+  ArrowLeft,
+  Ban,
+  CalendarClock,
+  Check,
+  CircleAlert,
+  Download,
+  Link2,
+  OctagonPause,
+  ShieldCheck,
+  ShieldX,
+  Siren,
+  X
+} from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useGoBack } from '@/lib/nav'
 import { cn, formatDateTime } from '@/lib/utils'
-import { chaosKeys, describeTarget, errText, fetchRun } from './api'
+import { chaosKeys, describeTarget, errText, fetchRun, type PreflightCheck } from './api'
 import { ChartKey, ReportCharts } from './ReportCharts'
 import { RunDetail, Timeline } from './RunDetail'
 import {
@@ -17,6 +30,7 @@ import {
   type RunReport,
   reportKeys
 } from './report-api'
+import { SAMPLER_LABELS } from './SamplerCharts'
 
 /**
  * Run report (#2849) at /chaos/runs/:id — what a finished drill showed: the verdict and the
@@ -53,7 +67,7 @@ export function RunReportPage() {
         <div className='min-w-0 flex-1'>
           {data ? (
             <>
-              <h1 className='truncate text-base font-semibold'>{data.run.label}</h1>
+              <h1 className='line-clamp-2 break-words text-base font-semibold'>{data.run.label}</h1>
               <p className='truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
                 Drill report · {formatDateTime(data.run.started_at ?? data.run.created_at)}
                 {typeof data.run.meta.started_by_name === 'string'
@@ -64,7 +78,7 @@ export function RunReportPage() {
           ) : (
             <>
               <h1 className='text-base font-semibold'>Drill report</h1>
-              <Skeleton className='mt-1 h-3 w-48' />
+              {isLoading && <Skeleton className='mt-1 h-3 w-48' />}
             </>
           )}
         </div>
@@ -74,14 +88,30 @@ export function RunReportPage() {
         {isLoading ? (
           <ReportSkeleton />
         ) : isError || !data ? (
-          <div className='p-6 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
-            <p>{errText(error, 'This run could not be read.')}</p>
-            <Link
-              to='/chaos?tab=runs'
-              className='mt-2 inline-block font-medium text-slate-900 underline-offset-2 hover:underline dark:text-foreground'
+          <div className='p-4 sm:p-6'>
+            <div
+              role='alert'
+              className='flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3.5 dark:border-border dark:bg-card'
             >
-              All runs
-            </Link>
+              <CircleAlert
+                className='mt-0.5 h-4 w-4 shrink-0 text-slate-500 dark:text-muted-foreground'
+                aria-hidden
+              />
+              <div className='min-w-0 flex-1'>
+                <p className='text-[13px] font-medium text-slate-900 dark:text-foreground'>
+                  This report could not be opened
+                </p>
+                <p className='mt-0.5 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+                  {errText(error, 'The run could not be read. It may have been removed.')}
+                </p>
+                <Link
+                  to='/chaos?tab=runs'
+                  className='mt-3 inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+                >
+                  All runs
+                </Link>
+              </div>
+            </div>
           </div>
         ) : data.run.status === 'running' ? (
           <div>
@@ -90,6 +120,8 @@ export function RunReportPage() {
             </p>
             <RunDetail id={id} />
           </div>
+        ) : data.run.status === 'refused' ? (
+          <RefusedReport data={data} />
         ) : (
           <Report data={data} />
         )}
@@ -168,6 +200,49 @@ function ReportSkeleton() {
 
 // ─── The report ───────────────────────────────────────────────────────────────
 
+/**
+ * A refused run never armed anything, so there is nothing to time or chart: say why it was
+ * refused (the pre-flight checks the server stored, or the arm error) and show the timeline.
+ */
+function RefusedReport({ data }: { data: FullReport }) {
+  const { run } = data
+  const checks = Array.isArray(run.meta.preflight)
+    ? (run.meta.preflight as PreflightCheck[]).filter((c) => !c.ok)
+    : []
+  const refusal = typeof run.meta.refusal === 'string' ? run.meta.refusal : null
+  return (
+    <div className='space-y-6 p-4 sm:p-6'>
+      <VerdictHeader data={data} />
+      <Section title='Why it was refused'>
+        {checks.length > 0 ? (
+          <ul className={listCls}>
+            {checks.map((c) => (
+              <li key={c.key} className='flex items-start gap-2.5 px-3 py-2.5 text-[12.5px]'>
+                <X
+                  className='mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400'
+                  aria-hidden
+                />
+                <div className='min-w-0'>
+                  <div className='font-medium text-slate-900 dark:text-foreground'>{c.label}</div>
+                  {c.why && (
+                    <p className='mt-0.5 text-slate-600 dark:text-muted-foreground'>{c.why}</p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className={emptyCls}>
+            {refusal ??
+              'The server refused the run before arming it. The timeline below has what it recorded.'}
+          </p>
+        )}
+      </Section>
+      <RunTimeline id={run.id} />
+    </div>
+  )
+}
+
 function Report({ data }: { data: FullReport }) {
   const { run, report, errors, names } = data
   const ranFor =
@@ -203,7 +278,13 @@ function Report({ data }: { data: FullReport }) {
         />
         <Stat
           label='Time to recover'
-          value={report.ttr_state === 'recovered' ? fmtSeconds(report.ttr_s) : '—'}
+          value={
+            report.ttr_state === 'recovered'
+              ? fmtSeconds(report.ttr_s)
+              : report.ttr_state === 'not_recovered'
+                ? 'Not back'
+                : '—'
+          }
           hint={
             report.ttr_state === 'recovered'
               ? 'back in the normal range'
@@ -265,17 +346,34 @@ function RunTimeline({ id }: { id: string }) {
   return <Timeline events={data.events} />
 }
 
+const VERDICT_LOOK = {
+  held: {
+    icon: ShieldCheck,
+    tile: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300',
+    word: 'text-emerald-800 dark:text-emerald-300'
+  },
+  broke: {
+    icon: ShieldX,
+    tile: 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300',
+    word: 'text-red-700 dark:text-red-300'
+  },
+  aborted: {
+    icon: OctagonPause,
+    tile: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300',
+    word: 'text-amber-800 dark:text-amber-300'
+  },
+  none: {
+    icon: Ban,
+    tile: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground',
+    word: 'text-slate-900 dark:text-foreground'
+  }
+} as const
+
 function VerdictHeader({ data }: { data: FullReport }) {
   const { run, report } = data
   const b = report.broke_by
-  const tone =
-    run.verdict === 'held'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-100'
-      : run.verdict === 'broke'
-        ? 'border-red-200 bg-red-50 text-red-950 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-100'
-        : run.verdict === 'aborted'
-          ? 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100'
-          : 'border-slate-200 bg-white text-slate-800 dark:border-border dark:bg-card dark:text-foreground'
+  const look = VERDICT_LOOK[run.status === 'refused' ? 'none' : (run.verdict ?? 'none')]
+  const Icon = look.icon
   const title =
     run.status === 'refused'
       ? 'Refused before anything was armed'
@@ -296,41 +394,113 @@ function VerdictHeader({ data }: { data: FullReport }) {
           : run.verdict === 'aborted'
             ? 'A limit was crossed past its tolerance and the fault stopped itself.'
             : 'The run ended without a verdict.'
+  const reason =
+    run.verdict === 'aborted' && typeof run.verdict_detail?.reason === 'string'
+      ? run.verdict_detail.reason
+      : null
+  const brokeLabel = b ? (SAMPLER_LABELS[b.sampler]?.label ?? b.sampler) : null
+  const brokeUnit = b ? (SAMPLER_LABELS[b.sampler]?.unit ?? '') : ''
   return (
-    <div className={cn('rounded-lg border px-4 py-3', tone)}>
-      <div className='flex flex-wrap items-baseline gap-x-3 gap-y-1'>
-        <span className='text-[18px] font-semibold tracking-[-0.01em]'>{title}</span>
-        <span className='text-[13px]'>{sentence}</span>
+    <div className='flex items-start gap-3.5 rounded-lg border border-slate-200 bg-white px-4 py-3.5 dark:border-border dark:bg-card'>
+      <div
+        className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg', look.tile)}
+      >
+        <Icon className='h-5 w-5' aria-hidden />
       </div>
-      {b && (
-        <p className='mt-1 text-[12.5px]'>
-          Broken by <span className='font-mono text-[12px]'>{b.sampler}</span>
-          {b.value != null && (
-            <>
-              {' '}
-              at <span className='font-mono tabular-nums'>{b.value}</span>
-            </>
-          )}
-          {b.op && b.limit != null && (
-            <>
-              {' '}
-              (limit{' '}
-              <span className='font-mono tabular-nums'>
-                {b.op} {b.limit}
+      <div className='min-w-0 flex-1'>
+        <div className='flex flex-wrap items-baseline gap-x-3 gap-y-0.5'>
+          <span className={cn('text-[18px] font-semibold tracking-[-0.01em]', look.word)}>
+            {title}
+          </span>
+          <span className='text-[13px] text-slate-700 dark:text-foreground'>{sentence}</span>
+        </div>
+        {b && (
+          <p className='mt-1 text-[12.5px] text-slate-700 dark:text-foreground'>
+            Broken by <span className='font-medium'>{brokeLabel}</span>
+            {brokeLabel !== b.sampler && (
+              <span className='font-mono text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                {' '}
+                ({b.sampler})
               </span>
-              )
+            )}
+            {b.value != null && (
+              <>
+                {' '}
+                at{' '}
+                <span className='font-mono tabular-nums'>
+                  {b.value}
+                  {brokeUnit ? ` ${brokeUnit}` : ''}
+                </span>
+              </>
+            )}
+            {b.op && b.limit != null && (
+              <>
+                , limit{' '}
+                <span className='font-mono tabular-nums'>
+                  {b.op} {b.limit}
+                </span>
+              </>
+            )}
+            .
+          </p>
+        )}
+        {reason && (
+          <p className='mt-1 text-[12.5px] text-slate-700 dark:text-foreground'>
+            <SamplerText text={reason} />
+          </p>
+        )}
+        <p className='mt-1 break-words text-[12px] text-slate-500 dark:text-muted-foreground'>
+          <span className='font-mono text-[11.5px]'>{run.fault_key ?? run.kind}</span> on{' '}
+          {describeTarget(run.target)}
+          {report.armed_at ? ` · armed ${formatDateTime(report.armed_at)}` : ''}
+          {report.disarmed_at ? ` · ended ${formatDateTime(report.disarmed_at)}` : ''}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/** Server text naming a sampler key ("http.p95_ms stayed over 900") with the plain label. */
+function SamplerText({ text }: { text: string }) {
+  const keys = Object.keys(SAMPLER_LABELS).filter((k) => text.includes(k))
+  if (!keys.length) return <>{text}</>
+  const re = new RegExp(`(${keys.map((k) => k.replace(/\./g, '\\.')).join('|')})`)
+  return (
+    <>
+      {text.split(re).map((part, i) =>
+        SAMPLER_LABELS[part] ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: split parts have no identity
+          <span key={i}>
+            <span className='font-medium'>{SAMPLER_LABELS[part].label}</span>{' '}
+            <span className='font-mono text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              ({part})
+            </span>
+          </span>
+        ) : (
+          part
+        )
+      )}
+    </>
+  )
+}
+
+/** A route template that breaks after a slash, never inside a word. */
+function RouteText({ route }: { route: string }) {
+  const parts = route.split('/')
+  return (
+    <>
+      {parts.map((p, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: path segments repeat
+        <span key={i}>
+          {p}
+          {i < parts.length - 1 && (
+            <>
+              /<wbr />
             </>
           )}
-          .
-        </p>
-      )}
-      <p className='mt-1 text-[12px] opacity-80'>
-        <span className='font-mono'>{run.fault_key ?? run.kind}</span> on{' '}
-        {describeTarget(run.target)}
-        {report.armed_at ? ` · armed ${formatDateTime(report.armed_at)}` : ''}
-        {report.disarmed_at ? ` · ended ${formatDateTime(report.disarmed_at)}` : ''}
-      </p>
-    </div>
+        </span>
+      ))}
+    </>
   )
 }
 
@@ -361,7 +531,7 @@ function Stat({
         {value}
       </div>
       {hint && (
-        <div className='truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+        <div className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
           {hint}
         </div>
       )}
@@ -419,7 +589,7 @@ function AlertsList({ report }: { report: RunReport }) {
         <li key={`${a.at}-${i}`} className='flex items-start gap-3 px-3 py-2 text-[12.5px]'>
           <After s={a.after_s} />
           <div className='min-w-0 flex-1'>
-            <div className='truncate text-slate-900 dark:text-foreground'>{a.label}</div>
+            <div className='break-words text-slate-900 dark:text-foreground'>{a.label}</div>
             <div className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
               {clock(a.at)}
               {a.source ? ` · ${a.source}` : ''}
@@ -495,8 +665,8 @@ function ErrorsPanel({ data }: { data: FullReport }) {
           <tbody className='divide-y divide-slate-100 dark:divide-border/60'>
             {e.server.map((r) => (
               <tr key={r.route}>
-                <td className='max-w-0 truncate px-3 py-1.5 font-mono text-[11.5px] text-slate-800 dark:text-foreground'>
-                  {r.route}
+                <td className='px-3 py-1.5 font-mono text-[11.5px] text-slate-800 [overflow-wrap:anywhere] dark:text-foreground'>
+                  <RouteText route={r.route} />
                 </td>
                 <td className='px-3 py-1.5 text-right tabular-nums text-slate-800 dark:text-foreground'>
                   {r.count}
@@ -511,7 +681,7 @@ function ErrorsPanel({ data }: { data: FullReport }) {
 }
 
 const MARK_TONE: Record<string, string> = {
-  noticed: 'bg-sky-50 text-sky-800 dark:bg-sky-950/50 dark:text-sky-300',
+  noticed: 'bg-indigo-50 text-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300',
   declared: 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300',
   found_cause: 'bg-slate-100 text-slate-700 dark:bg-muted dark:text-foreground',
   fixed: 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
