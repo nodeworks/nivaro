@@ -19218,15 +19218,29 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
               <tr><td>Strength</td><td>The fault’s settings, such as the added delay. Sliders stop at the caps.</td></tr>
               <tr><td>Duration</td><td>How long it stays armed. It ends by itself when the time is up.</td></tr>
               <tr><td>What stays true</td><td>The steady state: lines such as “server errors &lt; 1 %”, each checked every 5 seconds.</td></tr>
-              <tr><td>Abort limits</td><td>The tolerance on each line. Past it for three samples in a row (about 15 seconds) the run aborts on every replica.</td></tr>
+              <tr><td>Abort limits</td><td>How many bad samples in a row stop the run (1 to 10, usually 3; one sample every 5 seconds, so 3 is about 15 seconds), and the tolerance on each line. Past the tolerance for that many samples in a row the run aborts on every replica.</td></tr>
               <tr><td>Blast radius</td><td>An estimate from the last 24 hours of traffic of what would stop or slow down if the fault’s dependency went fully down. Faults that take no whole dependency down show “no estimate”.</td></tr>
               <tr><td>Pre-flight</td><td>The checks that must pass before Run, re-run by the server at the start.</td></tr></tr></tbody>
           </table></div>
           <p class="doc-p">Run takes two clicks: Run, then a red “Confirm — arms &lt;fault&gt; on &lt;target&gt; for &lt;n&gt;s”. The confirm button goes back to Run after a few seconds if you do not press it. The server checks the target, the strength and the duration again whatever the page sends, including the per-environment caps when chaos settings set them.</p>
-          <div class="doc-note">Link straight into the builder with /chaos?tab=builder&amp;fault=&lt;fault key&gt;, &amp;preset=&lt;preset key&gt;, or &amp;spec=&lt;JSON&gt; carrying fault_key, target, params, seconds and hypothesis. The Traffic Map’s “Inject fault here” and Ask AI’s drafts use these links.</div>
+          <p class="doc-p">The limits come from this instance’s chaos settings. Chaos operators who are not administrators get the same limits as administrators: the builder reads them from <code class="doc-code">GET /api/chaos/operator</code>.</p>
+          <div class="doc-note">Link straight into the builder with /chaos?tab=builder&amp;fault=&lt;fault key&gt;, &amp;preset=&lt;preset key&gt;, or &amp;spec=&lt;JSON&gt; carrying fault_key, target, params, seconds, hypothesis and abort_after. The Traffic Map’s “Inject fault here” and Ask AI’s drafts use these links.</div>
           <h2 class="doc-h2" id="chaos-presets">Presets</h2>
-          <p class="doc-p">A preset is a saved experiment: fault, target, strength, duration and what stays true, with a sentence on what it proves and the claims it tests. The Presets tab lists the shipped presets (one for each common claim, such as “Redis outage fails open”) and the ones saved on this instance. Run opens the preset in the builder to check and confirm; nothing arms from the list.</p>
+          <p class="doc-p">A preset is a saved experiment: fault, target, strength, duration, what stays true and how many bad samples stop it, with a sentence on what it proves and the claims it tests. The Presets tab lists the shipped presets and the ones saved on this instance. Run opens the preset in the builder to check and confirm; nothing arms from the list.</p>
+          <p class="doc-p">There is a shipped preset for every claim a fault on this instance can prove. Each is a small first run: a short window (two minutes at most), a narrow target where the fault allows one, and a light strength.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Area</th><th>Shipped presets</th></tr></thead>
+            <tbody><tr><tr><td>Requests and mail</td><td>Slow answers stay honest · Mail down fails clean</td></tr>
+              <tr><td>Database</td><td>Slow database queues at the read gate · Database errors fail one request · Background pool held, requests stay fast</td></tr>
+              <tr><td>Redis</td><td>Redis outage fails open · Slow Redis is tolerated · Read-only Redis is survived · Lost query cache rebuilds · Signed-out sessions stay signed out · Redis eviction is tolerated · Cut-off replica catches up</td></tr>
+              <tr><td>Scheduler</td><td>Scheduler pauses when its lease expires · No job runs twice when the lease splits</td></tr>
+              <tr><td>Partners and services</td><td>Partner errors are contained · Full disk fails uploads cleanly · AI down answers 503 · Refused AI model falls back · Sign-in down, sessions hold · Slow sign-in says so · Microsoft Graph down fails clean</td></tr>
+              <tr><td>One replica</td><td>A stalled replica is drained · The heap guard catches memory pressure · Clock skew is safe · Sockets reconnect and catch up</td></tr></tr></tbody>
+          </table></div>
           <ul class="doc-ul">
+            <li>Presets for one replica pick the first replica in the builder, or the replica that answers when started straight from the API.</li>
+            <li>The Redis key-loss and eviction presets are refused on development when Redis runs on database 0, which every local instance shares. The refusal shows when you start the run.</li>
+            <li>Taking a web task down has no preset: it runs only inside a game day with a host runbook.</li>
             <li>Save as preset in the builder stores the current draft under a name and key. Opened from a preset, it can also update that preset.</li>
             <li>Editing a shipped preset saves your own copy under the same key. Deleting that copy brings the shipped one back; shipped presets themselves cannot be deleted.</li>
             <li>Saved presets are configuration (<code class="doc-code">nivaro_chaos_presets</code>) and move between instances with config promotion and show up in Environment Config diffs.</li>
@@ -19239,7 +19253,7 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
               <tr><td>POST /api/chaos/presets</td><td>Save a preset {key, label, proves, claim_keys, spec}.</td></tr>
               <tr><td>PATCH /api/chaos/presets/:key</td><td>Edit a preset (a shipped key becomes a saved copy).</td></tr>
               <tr><td>DELETE /api/chaos/presets/:key</td><td>Delete a saved preset.</td></tr>
-              <tr><td>POST /api/chaos/presets/:key/run</td><td>Start a drill from the preset; the body may override target, params, seconds and hypothesis.</td></tr></tr></tbody>
+              <tr><td>POST /api/chaos/presets/:key/run</td><td>Start a drill from the preset; the body may override target, params, seconds, hypothesis and abort_after.</td></tr></tr></tbody>
           </table></div>
           <h2 class="doc-h2" id="chaos-what-if">Ask “what if X died?”</h2>
           <p class="doc-p">Administrators can ask Ask AI, the Telemetry page’s Ask, or a connected MCP client what happens if a dependency dies: the database, Redis, the file share, email, the AI provider, the sign-in provider, partner APIs, sockets or one replica. The answer lists the claims about it and when each was last proven by a drill, the routes, screens and jobs the blast-radius estimate expects to fail or slow down, the last drills against it, and a draft experiment.</p>
