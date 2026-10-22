@@ -9,7 +9,8 @@ import {
   type StartDrillInput,
   startDrill,
   stopAllDrills,
-  stopDrill
+  stopDrill,
+  trustedGamedayId
 } from '../services/chaos/drill.js'
 import { ChaosError, chaosRefusal } from '../services/chaos/gate.js'
 import { requireChaosOperator } from '../services/chaos/operator.js'
@@ -54,12 +55,13 @@ function fail(reply: FastifyReply, err: unknown) {
 
 function who(req: FastifyRequest): { id: string | null; name: string | null } {
   const u = req.user as
-    | { id?: string; first_name?: string | null; last_name?: string | null; email?: string }
+    | { id?: string; first_name?: string | null; last_name?: string | null }
     | undefined
   if (!u) return { id: null, name: null }
   return {
     id: u.id ?? null,
-    name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || null
+    // Display name only — the banner shows it to everyone signed in; the email never leaves.
+    name: [u.first_name, u.last_name].filter(Boolean).join(' ') || null
   }
 }
 
@@ -74,6 +76,10 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
     await import('../services/chaos/faults/index.js')
     const { wireDrillListeners } = await import('../services/chaos/drill.js')
     wireDrillListeners()
+    const { wireSteadyState } = await import('../services/chaos/steady-state.js')
+    await wireSteadyState()
+    const { wirePreflight } = await import('../services/chaos/preflight-hook.js')
+    wirePreflight()
     setChaosApp(app)
     await startChaosCluster(chaosRefusal() ? null : (app.redis ?? null))
   })
@@ -92,6 +98,22 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
     adm.addHook('preHandler', requireAdmin)
 
     adm.get('/status', async () => ({ data: await chaosStatus() }))
+
+    // #2828 — the samplers a hypothesis may name (the builder's picker).
+    adm.get('/samplers', async () => {
+      const { listSamplers, registerBuiltInSamplers } = await import(
+        '../services/chaos/steady-state.js'
+      )
+      registerBuiltInSamplers()
+      return { data: listSamplers() }
+    })
+
+    // #2848 — the checklist beside the Run button; POST /runs runs it again server-side.
+    adm.get('/preflight', async () => {
+      const { runPreflight } = await import('../services/chaos/preflight.js')
+      const r = await runPreflight()
+      return { data: { ok: r.ok, checks: r.checks } }
+    })
 
     adm.get('/catalog', async () => {
       const last = await lastRunPerFault()
@@ -160,6 +182,12 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
       if (refused) return refused
       const b = req.body ?? {}
       try {
+        // A body gameday_id is only trusted when the caller leads that running game day.
+        const day = await trustedGamedayId(b.gameday_id, {
+          id: req.user?.id ?? null,
+          isAdmin: !!req.isAdmin
+        })
+        const note = [b.note ? String(b.note) : null, day.note].filter(Boolean).join(' · ') || null
         const { run, fault } = await startDrill({
           fault_key: String(b.fault_key ?? ''),
           target: b.target,
@@ -167,10 +195,11 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
           seconds: b.seconds,
           hypothesis: b.hypothesis ?? null,
           override: b.override ?? null,
-          note: b.note ?? null,
+          abort_after: b.abort_after,
+          note,
           kind: b.kind === 'monkey' || b.kind === 'gameday' ? b.kind : 'drill',
           preset_id: b.preset_id ?? null,
-          gameday_id: b.gameday_id ?? null,
+          gameday_id: day.gameday_id,
           by: who(req)
         })
         await logActivity({

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
+import { appDate } from './chaos/clock.js'
 
 /**
  * Maintenance lifecycle (#214/#303) + smoke checks (#299): scheduled windows
@@ -71,7 +72,8 @@ export async function liftMaintenance(settingsId: number): Promise<void> {
 
 /** Per-minute sweep: activate due windows, complete expired ones. */
 export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<void> {
-  const now = new Date()
+  // #2835 — the application clock (a clock-skew drill moves it on one replica).
+  const now = appDate()
   const { bustMaintenanceCache } = await import('./security.js')
 
   const due = (await db('nivaro_maintenance_windows')

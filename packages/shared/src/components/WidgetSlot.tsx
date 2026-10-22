@@ -67,6 +67,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useDrilldown, useOptionalNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
+import { PRETEND_DOWN_EVENT } from '../lib/client-chaos'
 import { get, post } from '../lib/commands'
 import {
   HEADER_CELL_DENSE,
@@ -76,10 +77,12 @@ import {
   HEADER_VALUE_HERO,
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
+import { loadErrorText } from '../lib/load-error'
 import { affixesFor, formatWidgetValue } from '../lib/widget-value-format'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { type CacheInfo, CacheStamp, type CustomQueryEnvelope, cacheStampTip } from './CacheStamp'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
+import { LoadErrorNote } from './LoadErrorNote'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
 import { Button } from './ui/button'
 import {
@@ -1299,10 +1302,23 @@ export function WidgetSlot({
         credentials: fetchCfg.credentials,
         headers: buildHeaders()
       })
-      if (!defRes.ok) throw new Error('Widget not found')
+      if (!defRes.ok) throw Object.assign(new Error('Widget not found'), { status: defRes.status })
       return ((await defRes.json()) as { data: WidgetDef }).data
     }
   })
+  // #2858 — a failed widget offers Try again; a "Pretend down" toggle in design mode asks again
+  // at once, so the widget meets (or leaves) the pretended outage without a reload.
+  const refetchDef = defQuery.refetch
+  const retry = useCallback(() => {
+    setError(null)
+    if (defQuery.error) void refetchDef()
+    else setRefetchTick((t) => t + 1)
+  }, [defQuery.error, refetchDef])
+  useEffect(() => {
+    const again = () => setRefetchTick((t) => t + 1)
+    window.addEventListener(PRETEND_DOWN_EVENT, again)
+    return () => window.removeEventListener(PRETEND_DOWN_EVENT, again)
+  }, [])
   // biome-ignore lint/correctness/useExhaustiveDependencies: onWidgetType is a host callback, called once per definition
   useEffect(() => {
     if (!ready) return
@@ -1312,7 +1328,8 @@ export function WidgetSlot({
       setError(null)
       onWidgetType?.(defQuery.data.widget_type)
     } else if (defQuery.error) {
-      setError('Widget not found')
+      // #2858 — say what happened: a 503 is not "not found".
+      setError(loadErrorText(defQuery.error, 'this widget'))
     }
   }, [ready, defQuery.data, defQuery.error])
 
@@ -1370,7 +1387,8 @@ export function WidgetSlot({
             headers: buildHeaders(),
             body: JSON.stringify(body)
           })
-          if (!renderRes.ok) throw new Error('Render failed')
+          if (!renderRes.ok)
+            throw Object.assign(new Error('Render failed'), { status: renderRes.status })
           renderJson = (await renderRes.json()) as { data: Record<string, unknown> }
         }
         if (cancelled) return
@@ -1381,7 +1399,7 @@ export function WidgetSlot({
           setError(null)
         }
       } catch (e) {
-        if (!cancelled) setError(String(e))
+        if (!cancelled) setError(loadErrorText(e, 'this widget'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -1459,7 +1477,7 @@ export function WidgetSlot({
 
     if (error)
       return (
-        <span className='text-[11px] text-red-400' title={error}>
+        <span className='text-[11px] text-red-400' data-tip={error} title={error}>
           !
         </span>
       )
@@ -1677,7 +1695,7 @@ export function WidgetSlot({
       <div>
         {loading && bodySkeleton}
         {loading && bgOffer}
-        {error && <p className='text-[12px] text-red-500'>{error}</p>}
+        {error && <LoadErrorNote message={error} onRetry={retry} />}
         {!loading && !error && renderData && widget && renderTypedBody()}
       </div>
     )
@@ -1701,7 +1719,7 @@ export function WidgetSlot({
         <div className='border-t border-slate-100 px-4 py-3 dark:border-border'>
           {loading && bodySkeleton}
           {loading && bgOffer}
-          {error && <p className='text-[12px] text-red-500'>{error}</p>}
+          {error && <LoadErrorNote message={error} onRetry={retry} />}
           {!loading && !error && renderData && widget && renderTypedBody()}
         </div>
       )}

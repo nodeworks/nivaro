@@ -342,6 +342,9 @@ const InfrastructurePage = lazy(() =>
   import('@/pages/Infrastructure').then((m) => ({ default: m.InfrastructurePage }))
 )
 const ChaosPage = lazy(() => import('@/pages/Chaos').then((m) => ({ default: m.ChaosPage })))
+const ChaosRunReport = lazy(() =>
+  import('@/pages/chaos/RunReportPage').then((m) => ({ default: m.RunReportPage }))
+)
 const HealthDashboardPage = lazy(() =>
   import('@/pages/HealthDashboard').then((m) => ({ default: m.HealthDashboardPage }))
 )
@@ -703,6 +706,7 @@ export default function App() {
                   <Route path='telemetry' element={<TelemetryPage />} />
                   <Route path='infrastructure' element={<InfrastructurePage />} />
                   <Route path='chaos' element={<ChaosPage />} />
+                  <Route path='chaos/runs/:id' element={<ChaosRunReport />} />
                   <Route path='db-health' element={<DbHealthPage />} />
                   <Route path='ops-console' element={<OpsConsolePage />} />
                   <Route path='ops-tasks' element={<OpsTasks />} />

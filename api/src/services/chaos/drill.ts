@@ -59,7 +59,11 @@ export function publicArmedView(f: ArmedFault): PublicArmedFault {
     fault_key: f.fault_key,
     label: f.label,
     target: describeTarget(f.target),
-    started_by_name: f.started_by_name,
+    // A display name or a neutral word — never an email, the list is for everyone signed in.
+    started_by_name:
+      f.started_by_name && !f.started_by_name.includes('@')
+        ? f.started_by_name
+        : 'An administrator',
     started_at: f.started_at,
     ends_at: f.ends_at,
     run_id: f.run_id
@@ -153,6 +157,8 @@ export interface StartDrillInput {
   /** Admin-only overrides, recorded on the run (only `working_hours` exists, #2848). */
   override?: { working_hours?: boolean } | null
   note?: string | null
+  /** Consecutive samples past tolerance before the auto-abort (1–10, default 3; #2828). */
+  abort_after?: unknown
   kind?: Extract<RunKind, 'drill' | 'monkey' | 'gameday'>
   preset_id?: string | null
   gameday_id?: string | null
@@ -217,7 +223,8 @@ export async function startDrill(
       note: input.note ? String(input.note).slice(0, 500) : null,
       node: CHAOS_NODE,
       override: input.override ?? null,
-      seconds
+      seconds,
+      abort_after: Math.min(10, Math.max(1, Math.round(Number(input.abort_after)) || 3))
     } as Record<string, unknown>
   }
 
@@ -409,6 +416,35 @@ export async function stopAllDrills(
     if (await finalizeRun(run.id, 'stopped', { reason, actor: by.id })) closed.add(run.id)
   }
   return { faults, runs: [...closed] }
+}
+
+// ─── Game-day ids from a request body ─────────────────────────────────────────
+
+/**
+ * A `gameday_id` in a POST /runs body is honoured only when a game-day run with that id is
+ * running and the caller leads it (meta.lead / started_by) or is an administrator; anything
+ * else is stripped, so the pre-flight's "one drill at a time" exemption cannot be claimed by
+ * naming another drill's id. The scheduler calls startDrill() server-side and stays trusted.
+ */
+export async function trustedGamedayId(
+  raw: unknown,
+  caller: { id: string | null; isAdmin: boolean }
+): Promise<{ gameday_id: string | null; note: string | null }> {
+  if (raw == null || raw === '') return { gameday_id: null, note: null }
+  const id = String(raw).slice(0, 80)
+  const runs = await listRuns({ status: 'running', kind: 'gameday', limit: 50 })
+  const day = runs.find((r) => r.gameday_id === id)
+  if (!day)
+    return { gameday_id: null, note: `gameday_id ${id} ignored: no running game day by that id` }
+  const lead = typeof day.meta.lead === 'string' ? day.meta.lead.toLowerCase() : null
+  const me = caller.id?.toLowerCase() ?? null
+  const leads = !!me && (me === lead || me === day.started_by?.toLowerCase())
+  if (!leads && !caller.isAdmin)
+    return {
+      gameday_id: null,
+      note: `gameday_id ${id} ignored: the caller does not lead that game day`
+    }
+  return { gameday_id: id, note: null }
 }
 
 // ─── Record-only runs (CI, game-day steps measured elsewhere) ──────────────────

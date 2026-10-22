@@ -69,6 +69,25 @@ describe('chaos routes', () => {
     await app.close()
   })
 
+  it('answers the pre-flight checklist', async () => {
+    const app = await build()
+    const r = await app.inject({ method: 'GET', url: '/preflight' })
+    expect(r.statusCode).toBe(200)
+    expect(typeof r.json().data.ok).toBe('boolean')
+    expect(r.json().data.checks.map((c: { key: string }) => c.key)).toEqual(
+      expect.arrayContaining([
+        'gate',
+        'deploy',
+        'maintenance',
+        'incident',
+        'working_hours',
+        'health',
+        'armed'
+      ])
+    )
+    await app.close()
+  })
+
   it('starts a drill, arms the fault, lists it, stops it and closes the run', async () => {
     const app = await build()
     const start = await app.inject({
@@ -110,6 +129,53 @@ describe('chaos routes', () => {
 
     const list = await app.inject({ method: 'GET', url: '/runs?status=stopped' })
     expect(list.json().data.map((r: { id: string }) => r.id)).toEqual([run.id])
+    await app.close()
+  })
+
+  it('only trusts a body gameday_id that names a running game day the caller may join', async () => {
+    const app = await build()
+    const { createRun } = await import('../services/chaos/runs.js')
+    const { trustedGamedayId } = await import('../services/chaos/drill.js')
+    const lead = '11111111-1111-1111-1111-111111111111'
+    await createRun({
+      kind: 'gameday',
+      label: 'Day',
+      status: 'running',
+      gameday_id: 'gd-1',
+      started_by: lead
+    })
+    // A made-up id is stripped and noted.
+    const bogus = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      payload: { fault_key: 'mail_down', gameday_id: 'gd-nope', note: 'hi' }
+    })
+    expect(bogus.statusCode).toBe(201)
+    expect(bogus.json().data.run.gameday_id).toBeNull()
+    expect(bogus.json().data.run.meta.note).toMatch(/hi · gameday_id gd-nope ignored/)
+    // The lead (the mocked admin) may name the running game day.
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/runs',
+      payload: { fault_key: 'slow_requests', kind: 'gameday', gameday_id: 'gd-1' }
+    })
+    expect(ok.statusCode).toBe(201)
+    expect(ok.json().data.run.gameday_id).toBe('gd-1')
+    // A non-admin who does not lead it is refused the exemption; a finished game day too.
+    expect(
+      await trustedGamedayId('gd-1', { id: '22222222-2222-2222-2222-222222222222', isAdmin: false })
+    ).toMatchObject({
+      gameday_id: null,
+      note: expect.stringMatching(/does not lead/)
+    })
+    expect(await trustedGamedayId('gd-1', { id: lead, isAdmin: false })).toEqual({
+      gameday_id: 'gd-1',
+      note: null
+    })
+    expect(await trustedGamedayId(null, { id: lead, isAdmin: true })).toEqual({
+      gameday_id: null,
+      note: null
+    })
     await app.close()
   })
 

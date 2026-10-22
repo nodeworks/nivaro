@@ -4,6 +4,7 @@ import fp from 'fastify-plugin'
 import type { Redis } from 'ioredis'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { newChainId, startChain } from '../services/chain.js'
+import { appDate } from '../services/chaos/clock.js'
 import { chaosPoint } from '../services/chaos/registry.js'
 import { cronTicksEnabled } from '../services/cron-ticks.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
@@ -482,7 +483,7 @@ function holdValue(how: string): string {
 /** The scheduled time a tick belongs to: the newest fire at or before now.
  *  Croner hands the callback the actual start time, which differs between
  *  processes by milliseconds; the scheduled time does not. */
-export function scheduledFireTime(job: Cron, now = new Date()): Date {
+export function scheduledFireTime(job: Cron, now = appDate()): Date {
   try {
     const prev = job.previousRuns(1, new Date(now.getTime() + 1000))[0]
     if (prev && now.getTime() - prev.getTime() < 60_000) return prev
@@ -831,7 +832,7 @@ export class CronManager {
   /** #81 — when the schedule last SHOULD have fired (null for one-shot or
    *  unparseable expressions). Derived from the next two runs' spacing, so an
    *  irregular expression reads as its nearest regular period. */
-  expectedPreviousRun(id: string, now = new Date()): Date | null {
+  expectedPreviousRun(id: string, now = appDate()): Date | null {
     const e = this.entries.get(id)
     if (!e) return null
     try {

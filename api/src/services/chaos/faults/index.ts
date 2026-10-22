@@ -4,6 +4,14 @@
  */
 import './http.js'
 import './socket.js'
+import './db.js'
+import './pool.js'
+import './partner.js'
+import './storage.js'
+import './process.js'
+import './clock.js'
+// #1773 — records what readiness and the alerts said during each run (rides the catalog load).
+import '../monitors.js'
 import './redis.js'
 import './cron.js'
 import './partition.js'

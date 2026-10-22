@@ -1,0 +1,30 @@
+import { describe, expect, it } from 'vitest'
+import { loadErrorStatus, loadErrorText, serverErrorText } from './load-error'
+
+describe('loadErrorText (#2858)', () => {
+  it('reads every error shape', () => {
+    expect(loadErrorStatus({ status: 503 })).toBe(503)
+    expect(loadErrorStatus({ response: { status: 500 } })).toBe(500)
+    expect(loadErrorStatus(new TypeError('Failed to fetch'))).toBeNull()
+  })
+  it('says what happened in plain words', () => {
+    expect(loadErrorText(new TypeError('Failed to fetch'))).toMatch(/reach the server/)
+    expect(loadErrorText({ response: { status: 503 } })).toMatch(/unavailable/)
+    expect(loadErrorText({ status: 500 }, 'this widget')).toBe(
+      'The server hit an error loading this widget.'
+    )
+    expect(loadErrorText({ status: 404 }, 'this widget')).toBe('This widget no longer exists.')
+    expect(loadErrorText(new Error('weird'))).toBe('Couldn’t load this.')
+  })
+})
+
+describe('serverErrorText', () => {
+  it('keeps a real explanation, drops bare status words', () => {
+    expect(serverErrorText({ response: { error: 'Sales query is unavailable' } })).toBe(
+      'Sales query is unavailable'
+    )
+    expect(serverErrorText({ response: { data: { error: 'Bad filter' } } })).toBe('Bad filter')
+    expect(serverErrorText({ response: { error: 'Service Unavailable' } })).toBeNull()
+    expect(serverErrorText(new TypeError('Failed to fetch'))).toBeNull()
+  })
+})

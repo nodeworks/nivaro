@@ -1,5 +1,5 @@
-import { forgetSettledReads } from '@nivaro/shared'
-import axios from 'axios'
+import { clientChaosAxiosInterceptor, forgetSettledReads } from '@nivaro/shared'
+import axios, { AxiosError } from 'axios'
 import { getCloudPlugins, getExtensionPlugins } from '@/extensions/store'
 import { readMasquerade } from './masquerade'
 import { pageContextHeaders } from './page-context'
@@ -23,6 +23,10 @@ api.interceptors.request.use((config) => {
     if (!config.headers[k]) config.headers[k] = v
   return config
 })
+
+// Browser chaos mode (#2840): this tab's own requests fail or slow when the person turned it on.
+// Registered last so it runs first (axios runs request interceptors in reverse order).
+api.interceptors.request.use(clientChaosAxiosInterceptor(AxiosError))
 
 api.interceptors.response.use(
   (res) => {

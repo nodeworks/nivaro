@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { noteAlertFired } from './alert-fired.js'
 import { runCustomQueryAsUser, runCustomQueryBySlug } from './custom-query-exec.js'
 import { sendMail } from './mail.js'
 import { notifyUser } from './notification-channels.js'
@@ -289,6 +290,11 @@ export async function runMetricAlertChecks(
           ? (inserted[0] as { id: number }).id
           : (inserted[0] as number)
       results.fired++
+      noteAlertFired({
+        source: 'metric_alert',
+        key: String(rule.id),
+        label: String(rule.name ?? '')
+      })
       await notifyImmediateSubscribers(app, rule, value, threshold, logId)
     } else if (!isFiring && openLog) {
       await db('nivaro_metric_alert_log')

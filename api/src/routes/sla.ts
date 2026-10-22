@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appDate } from '../services/chaos/clock.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
@@ -125,7 +126,7 @@ async function computeStatus(collection: string, item: string) {
   }
 
   const enteredAt = new Date(enteredRaw)
-  const now = new Date()
+  const now = appDate() // #2835 SLA clock
 
   // Per-region clock: a mapped zone on the record's own region overrides the
   // instance-wide schedule zone for the business-hours walk.
@@ -312,7 +313,7 @@ export async function computeStatusBatch(
     if (!enteredAt.has(key)) enteredAt.set(key, new Date(h.timestamp))
   }
 
-  const now = new Date()
+  const now = appDate() // #2835 SLA clock
   const schedule = await getSlaSchedule()
   // Per-region clocks: one batched resolve, only when some matched rule
   // actually counts business hours (calendar SLAs are zone-independent).
@@ -594,7 +595,7 @@ export async function slaRoutes(app: FastifyInstance) {
       | undefined
     const schedule = await getSlaSchedule()
     const zoneByKey = await zonesForInstances(instances)
-    const now = new Date()
+    const now = appDate() // #2835 SLA clock
     const statusOf = (
       elapsed: number,
       dur: number,
@@ -690,7 +691,7 @@ export async function slaRoutes(app: FastifyInstance) {
       const zoneByKey = rule.business_hours_only
         ? await zonesForInstances(instances)
         : new Map<string, string>()
-      const now = new Date()
+      const now = appDate() // #2835 SLA clock
       const warn = rule.warning_threshold_pct ?? 80
       const rows: Array<{
         collection: string

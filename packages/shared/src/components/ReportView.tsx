@@ -132,6 +132,7 @@ const catAxisProps = (count: number) => ({
 import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
 import { del, get, post, put } from '../lib/commands'
 import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
+import { loadErrorText, serverErrorText } from '../lib/load-error'
 import { buildReportTree, type ReportTreeNode } from '../lib/report-tree'
 import {
   effectiveScopeSeedIds,
@@ -142,6 +143,7 @@ import {
 import { cn } from '../lib/utils'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { RechartsGate } from './charts/RechartsGate'
+import { LoadErrorNote } from './LoadErrorNote'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
@@ -708,10 +710,14 @@ export function QueryWidgetBody({
       </div>
     )
   if (error) {
-    const msg =
-      (error as { response?: { data?: { error?: string } } }).response?.data?.error ??
-      'Query failed'
-    return <p className='px-1 text-[12px] text-red-400'>{msg}</p>
+    // #2858 — the server's own words when it gave some, else a plain sentence; and a retry.
+    return (
+      <LoadErrorNote
+        className='px-1'
+        message={serverErrorText(error) ?? loadErrorText(error, 'this query')}
+        onRetry={() => void refetch()}
+      />
+    )
   }
 
   let rows = data ?? []
@@ -2120,10 +2126,13 @@ const WidgetCard = memo(function WidgetCard({
       </div>
     )
   else if (error) {
-    const msg =
-      (error as { response?: { data?: { error?: string } } }).response?.data?.error ??
-      'Failed to load'
-    body = <p className='px-1 text-[12px] text-red-400'>{msg}</p>
+    body = (
+      <LoadErrorNote
+        className='px-1'
+        message={serverErrorText(error) ?? loadErrorText(error, 'this widget')}
+        onRetry={() => void refetch()}
+      />
+    )
   } else if (data) {
     if (widget.type === 'queue') {
       // Queue stat widget (#380): current value + the daily snapshot series.
