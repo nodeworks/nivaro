@@ -6,7 +6,7 @@ import { attachChaosSeam } from './chaos-seam.js'
 import { attachConfigEpoch } from './config-epoch.js'
 import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
-import { migrateFreeingStaleLock } from './migration-lock.js'
+import { migrateFreeingStaleLock, underSessionAppLock } from './migration-lock.js'
 import { inBackgroundPool } from './pool-context.js'
 import { getTenantDb } from './tenant-context.js'
 
@@ -272,17 +272,8 @@ export const MIGRATION_LOCK_NAME = 'nivaro_migrations'
 // Stable integer key for pg_advisory_lock, derived from the lock name
 export const PG_LOCK_KEY = 793_416_204
 
+// pg + mysql only: mssql takes its lock on a pinned session (runMigrationsSafely).
 async function acquireMigrationLock(timeoutMs: number): Promise<boolean> {
-  if (config.DB_CLIENT === 'mssql') {
-    const res = await db.raw(
-      `DECLARE @r INT;
-       EXEC @r = sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = ?;
-       SELECT @r AS result;`,
-      [MIGRATION_LOCK_NAME, timeoutMs]
-    )
-    const row = Array.isArray(res) ? res[0] : res
-    return (row?.result ?? row?.[0]?.result ?? -999) >= 0
-  }
   if (config.DB_CLIENT === 'pg') {
     // pg_advisory_lock blocks until acquired; emulate the timeout with lock_timeout
     await db.raw(`SET lock_timeout = ${Math.max(1, Math.floor(timeoutMs))}`)
@@ -304,11 +295,7 @@ async function acquireMigrationLock(timeoutMs: number): Promise<boolean> {
 
 async function releaseMigrationLock(): Promise<void> {
   try {
-    if (config.DB_CLIENT === 'mssql') {
-      await db.raw(`EXEC sp_releaseapplock @Resource = ?, @LockOwner = 'Session'`, [
-        MIGRATION_LOCK_NAME
-      ])
-    } else if (config.DB_CLIENT === 'pg') {
+    if (config.DB_CLIENT === 'pg') {
       await db.raw('SELECT pg_advisory_unlock(?)', [PG_LOCK_KEY])
     } else {
       await db.raw('SELECT RELEASE_LOCK(?)', [MIGRATION_LOCK_NAME])
@@ -327,6 +314,17 @@ async function releaseMigrationLock(): Promise<void> {
 export async function runMigrationsSafely(): Promise<[number, string[]]> {
   if (!config.MIGRATION_SAFE_MODE) {
     return migrateLatestFreeingStaleLock()
+  }
+  if (config.DB_CLIENT === 'mssql') {
+    // Take, hold and release the session lock on ONE pinned connection (underSessionAppLock).
+    const { withLongConnection } = await import('../services/run-long.js')
+    return withLongConnection((session) =>
+      underSessionAppLock(
+        session,
+        { resource: MIGRATION_LOCK_NAME, timeoutMs: config.MIGRATION_LOCK_TIMEOUT_MS },
+        migrateLatestFreeingStaleLock
+      )
+    )
   }
   const acquired = await acquireMigrationLock(config.MIGRATION_LOCK_TIMEOUT_MS)
   if (!acquired) {

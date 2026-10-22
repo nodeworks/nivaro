@@ -54,3 +54,55 @@ export async function migrateFreeingStaleLock({
     }
   }
 }
+
+/** One pinned database session (services/run-long.ts `withLongConnection`). */
+export interface PinnedSession {
+  run<T = Record<string, unknown>>(sql: string, timeoutMs?: number): Promise<T[]>
+  /** Close the session instead of handing it back to the pool. */
+  discard(): void
+}
+
+export interface SessionAppLockOptions {
+  /** sp_getapplock resource: letters, digits and underscores only (it is sent as text). */
+  resource: string
+  /** How long to wait for the lock (MIGRATION_LOCK_TIMEOUT_MS). */
+  timeoutMs: number
+}
+
+/**
+ * Run `fn` holding a session-owned SQL Server application lock taken AND released on
+ * the one pinned session. A session lock taken by one pooled query and released by
+ * another lands on whichever connection the pool hands out: the release then fails
+ * (swallowed), and the lock stays with an idle pooled connection until the pool reaps it
+ * (30 s) or for the life of the process. A replica booting meanwhile waited on it and,
+ * because the wait ran under the 15 s request timeout, died with ETIMEOUT
+ * (staging deploy 0.3.2 rolled back, 2026-10-22). Here the wait gets its own request
+ * timeout (lock timeout + 30 s), and a release that fails closes the session, which
+ * frees the lock.
+ */
+export async function underSessionAppLock<R>(
+  session: PinnedSession,
+  { resource, timeoutMs }: SessionAppLockOptions,
+  fn: () => Promise<R>
+): Promise<R> {
+  if (!/^\w{1,255}$/.test(resource)) throw new Error(`Invalid app lock resource: ${resource}`)
+  const wait = Math.max(0, Math.floor(timeoutMs))
+  const [row] = await session.run<{ result: number }>(
+    `DECLARE @r INT;
+     EXEC @r = sp_getapplock @Resource = N'${resource}', @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = ${wait};
+     SELECT @r AS result;`,
+    wait + 30_000
+  )
+  if (!row || Number(row.result) < 0) {
+    throw new Error(
+      `Could not acquire the migration advisory lock within ${wait}ms — another instance may be stuck mid-migration.`
+    )
+  }
+  try {
+    return await fn()
+  } finally {
+    await session
+      .run(`EXEC sp_releaseapplock @Resource = N'${resource}', @LockOwner = 'Session'`, 30_000)
+      .catch(() => session.discard())
+  }
+}
