@@ -9,9 +9,11 @@ keeps sending through the corporate relay directly.
 The kit is in `deploy/staging/mailpit/` (`stack.yml`, `stack.relay.yml`, `relay.example.yml`,
 `.env.example`); the staging deploy files live in `efp-nivaro/.docker` (see
 [RELEASING.md](RELEASING.md)), so copy the kit there. Staging runs on Docker
-Swarm: merge the `mailpit` service, `secrets` and `volumes` of `stack.yml` into
-the staging stack and deploy with `docker stack deploy -c stack.yml -c stack.relay.yml` (`stack.relay.yml` is the optional relay overlay; see "Turn relaying off"; source the `.env` first,
-so the `${MAILPIT_*}` values are substituted). The API reaches it by service
+Swarm: do not hand-merge the kit. Add its files as extra `-c` files to the
+deploy command of the full staging stack, which Docker merges:
+`docker stack deploy -c <staging stack files> -c mailpit/stack.yml -c mailpit/stack.relay.yml <stack>`
+(`stack.relay.yml` is the optional relay fragment; see "Turn relaying off".
+Source the `.env` first, so the `${MAILPIT_*}` values are substituted). The API reaches it by service
 name on the stack overlay network: `SMTP_HOST=mailpit`, `SMTP_PORT=1025`,
 `SMTP_SECURE=false`. Port 1025 is never published. Label the node that holds
 the data volume once: `docker node update --label-add mailpit=true <node>`.
@@ -76,16 +78,17 @@ not set it). **Warning:** `allowed-recipients` does not apply to auto-relay
 Without a relay config Mailpit still catches every message; Release is simply
 unavailable.
 
-**Persistent way:** relaying is an optional overlay. Deploy `stack.yml` without
-`stack.relay.yml`:
+**Persistent way:** relaying is an optional fragment. Redeploy the full staging
+stack file set (every `-c` file you normally use, plus `mailpit/stack.yml`)
+without `mailpit/stack.relay.yml`:
 
 ```
-docker stack deploy -c stack.yml <stack>
+docker stack deploy -c <staging stack files> -c mailpit/stack.yml <stack>
 ```
 
-Because `stack.relay.yml` is the only file that sets `MP_SMTP_RELAY_CONFIG` and
+(Deploying `stack.yml` alone would remove every other service.) Because `stack.relay.yml` is the only file that sets `MP_SMTP_RELAY_CONFIG` and
 the `mailpit_relay` secret, the redeploy removes both (and `MAILPIT_RELAY_SECRET`
-need not be set). To turn it back on, add `-c stack.relay.yml` again.
+need not be set). To turn it back on, add `-c mailpit/stack.relay.yml` again.
 
 **Temporary stop only:** on the running stack
 
@@ -93,7 +96,7 @@ need not be set). To turn it back on, add `-c stack.relay.yml` again.
 docker service update --env-rm MP_SMTP_RELAY_CONFIG --secret-rm <relay secret name> <stack>_mailpit
 ```
 
-The next `docker stack deploy` that includes `stack.relay.yml` brings relaying back.
+The next full `docker stack deploy` that includes `stack.relay.yml` brings relaying back.
 
 ## Pitfalls
 

@@ -1,6 +1,6 @@
 # Staging mail catcher, a service for the staging Docker Swarm stack.
-# Merge the `mailpit` service, `secrets` and `volumes` into the stack file (see docs/STAGING-MAIL.md)
-# and deploy with `docker stack deploy`. Catches every message; a real email only leaves when released by hand.
+# Add this file as an extra `-c` file to the full staging stack deploy (see docs/STAGING-MAIL.md):
+# docker stack deploy -c <staging stack files> -c mailpit/stack.yml [-c mailpit/stack.relay.yml] <stack>. Catches every message; a real email only leaves when released by hand.
 # Variables are substituted from the shell that runs `docker stack deploy` (source .env first).
 services:
   mailpit:
@@ -10,7 +10,7 @@ services:
       MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-5000}
       MP_UI_AUTH_FILE: /run/secrets/mailpit-ui-auth
       # Relaying is optional: this file alone only catches. Add stack.relay.yml to enable Release
-      # (docker stack deploy -c stack.yml -c stack.relay.yml). Never set MP_SMTP_RELAY_* here.
+      # (add -c mailpit/stack.relay.yml to the full stack deploy). Never set MP_SMTP_RELAY_* here.
       # Optional auto-relay of one test mailbox: add MP_SMTP_RELAY_MATCHING with a narrow regex (docs/STAGING-MAIL.md).
       # Accept the API's SMTP auth (inbound side only; 1025 is never published).
       MP_SMTP_AUTH_ACCEPT_ANY: "true"
