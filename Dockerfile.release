@@ -213,9 +213,12 @@ COPY --from=app-files /app /app
 # help-video work, heap snapshots, Chromium's profile; HOME = font and
 # browser caches; a volume or tmpfs) and /tmp. Owned by node here, so a NEW
 # named volume mounted on them copies that ownership (and `user: 1000:1000`
-# works on it).
+# works on it). /app/work is 1777 like /tmp: a tmpfs mounted there copies the
+# MODE but is owned by root (swarm/compose 3.8 drop tmpfs.mode and uid), and
+# uid 1000 must still create tmp/ and home/ in it.
 RUN mkdir -p /app/uploads /app/work/tmp /app/work/home \
   && chown -R node:node /app/uploads /app/work \
+  && chmod 1777 /app/work \
   && chmod 0755 /app/docker-entrypoint.sh /app/healthcheck.sh
 ENV TMPDIR=/app/work/tmp \
     HOME=/app/work/home \
@@ -242,6 +245,7 @@ COPY --from=prod-deps /app /app
 COPY --from=app-files /app /app
 RUN mkdir -p /app/uploads /app/work/tmp /app/work/home \
   && chown -R node:node /app/uploads /app/work \
+  && chmod 1777 /app/work \
   && chmod 0755 /app/docker-entrypoint.sh /app/healthcheck.sh
 ENV TMPDIR=/app/work/tmp \
     HOME=/app/work/home \
