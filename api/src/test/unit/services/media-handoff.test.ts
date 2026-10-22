@@ -246,6 +246,10 @@ describe('judging the media worker (readiness + preflight)', () => {
     expect(m.judgeMediaWorker(none, { ...ctx, variant: null }).status).toBe('warn')
     expect(m.judgeMediaWorker(none, { ...ctx, redis: false, variant: 'slim' }).status).toBe('fail')
     expect(m.judgeMediaWorker(none, { ...ctx, cloud: true, variant: 'slim' }).status).toBe('fail')
+    // A deploy canary runs on its own Redis without the worker: warn only.
+    expect(m.judgeMediaWorker(none, { ...ctx, variant: 'slim', role: 'canary' }).status).toBe(
+      'warn'
+    )
   })
 
   it('fails when nobody can make replay videos; passes with a full worker', () => {

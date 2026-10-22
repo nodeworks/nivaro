@@ -192,7 +192,7 @@ export const releaseImageDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'A slim process with nowhere to send its work is a configuration error, and the deploy gate catches it: `/api/preflight` answers 503 and the readiness checks fail when there is no `RENDER_URL`, the render server does not answer, refuses the token or lacks a binary (check `render`, readiness `render-peer`), or no media worker has checked in (check `media-worker`, readiness `media-worker`). Start or update the worker before the slim web tasks. Until it is fixed, the features themselves answer a readable 503 (RENDER_UNAVAILABLE) instead of failing in the background.'
+      text: 'A slim process with nowhere to send its work is a configuration error, and the deploy gate catches it: `/api/preflight` answers 503 and the readiness checks fail when there is no `RENDER_URL`, the render server does not answer, refuses the token or lacks a binary (check `render`, readiness `render-peer`), or no media worker has checked in (check `media-worker`, readiness `media-worker`). Start or update the worker before the slim web tasks. A deploy canary (`NIVARO_ROLE=canary`, its own Redis, no worker) only warns: it serves nobody, and the preflight on a real web task after the roll is the gate. Until it is fixed, the features themselves answer a readable 503 (RENDER_UNAVAILABLE) instead of failing in the background.'
     },
     { type: 'h2', id: 'release-image-pdf-requests', text: 'What a PDF may load' },
     {

@@ -466,6 +466,29 @@ export async function probeRenderPeer(): Promise<RenderPeerHealth> {
 export function judgeRenderSetup(
   local: { chromium: boolean; ffmpeg: boolean },
   peer: RenderPeerHealth,
+  variant: 'slim' | 'full' | null,
+  role: string | undefined = process.env.NIVARO_ROLE
+): { status: 'ok' | 'warn' | 'fail'; summary: string } {
+  return canaryLenient(judgeRenderSetupFor(local, peer, variant), role)
+}
+
+/**
+ * A deploy canary (NIVARO_ROLE=canary) serves nobody and runs on its own
+ * Redis without the worker, so what would fail elsewhere only warns there:
+ * its preflight gates the migrations and the build, and the post-roll
+ * preflight on a real web task gates the render server and the media worker.
+ */
+export function canaryLenient<T extends { status: 'ok' | 'warn' | 'fail'; summary: string }>(
+  v: T,
+  role: string | undefined = process.env.NIVARO_ROLE
+): T {
+  if (v.status !== 'fail' || (role ?? '').trim().toLowerCase() !== 'canary') return v
+  return { ...v, status: 'warn', summary: `Canary (serves nobody): ${v.summary}` }
+}
+
+function judgeRenderSetupFor(
+  local: { chromium: boolean; ffmpeg: boolean },
+  peer: RenderPeerHealth,
   variant: 'slim' | 'full' | null
 ): { status: 'ok' | 'warn' | 'fail'; summary: string } {
   const needsPeer = !(local.chromium && local.ffmpeg)

@@ -1,7 +1,7 @@
 import { cronTicksEnabled } from './cron-ticks.js'
 import { hasFfmpeg } from './ffmpeg.js'
 import { getApp } from './io-holder.js'
-import { imageVariant } from './render-peer.js'
+import { canaryLenient, imageVariant } from './render-peer.js'
 
 /**
  * Media hand-off (slim parity). A process with no ffmpeg or Chromium of its
@@ -390,7 +390,16 @@ export function judgeMediaWorker(
     redis: boolean
     worker: (MediaWorkerBeat & { age_ms: number }) | null
     backlog?: Record<HandoffKind, number> | null
+    /** NIVARO_ROLE: a deploy canary only warns (canaryLenient). */
+    role?: string
   }
+): MediaJudgement {
+  return canaryLenient(judgeMediaWorkerFor(local, ctx), ctx.role ?? process.env.NIVARO_ROLE)
+}
+
+function judgeMediaWorkerFor(
+  local: { ffmpeg: boolean; chromium: boolean },
+  ctx: Parameters<typeof judgeMediaWorker>[1]
 ): MediaJudgement {
   if (local.ffmpeg && local.chromium)
     return {

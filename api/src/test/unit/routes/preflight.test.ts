@@ -74,6 +74,17 @@ describe('judgeRender', () => {
     expect(judgeRender(none, unset, null).status).toBe('warn')
   })
 
+  it('only warns on a deploy canary (own Redis, no worker, serves nobody)', () => {
+    process.env.NIVARO_ROLE = 'canary'
+    try {
+      const v = judgeRender(none, { configured: false, ok: false, url: null }, 'slim')
+      expect(v.status).toBe('warn')
+      expect(v.summary).toMatch(/^Canary/)
+    } finally {
+      delete process.env.NIVARO_ROLE
+    }
+  })
+
   it('fails when the render server is needed and does not answer or lacks a binary', () => {
     expect(judgeRender(none, { ...up, ok: false, error: 'ECONNREFUSED' }, 'slim').status).toBe(
       'fail'
