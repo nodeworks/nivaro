@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-22T16:13:58.187Z",
+  "generated_at": "2026-10-22T16:38:54.503Z",
   "releases": [
+    {
+      "version": "0.3.3",
+      "tag": "v0.3.3",
+      "date": "2026-10-22T12:38:40-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "mail",
+              "text": "catch non-allowlisted test-mode mail in a catch inbox",
+              "hash": "b66595f54"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "take the SQL Server migration lock on one pinned session",
+              "hash": "58f1d3900"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.2",
       "tag": "v0.3.2",
-      "date": "2026-10-22T12:13:43-04:00",
+      "date": "2026-10-22T12:13:58-04:00",
       "sections": [
         {
           "label": "Added",
