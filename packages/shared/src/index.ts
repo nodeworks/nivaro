@@ -124,7 +124,8 @@ export {
   type DrillBannerProps,
   drillCountdown,
   type PublicArmedFault,
-  useArmedFaults
+  useArmedFaults,
+  useDrillBannerShowing
 } from './components/chaos/DrillBanner'
 export {
   DRILL_WINDOWS_KEY,

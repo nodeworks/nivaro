@@ -4,7 +4,7 @@ import { useNavigation, useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useLiveAvailable, useLiveEvent } from '../../lib/live'
 import { DeclareIncidentButton } from './DeclareIncidentButton'
-import { GameDayStrip } from './GameDayStrip'
+import { GameDayStrip, useActiveGamedays } from './GameDayStrip'
 
 /**
  * "Drill running" banner (#2846): while any chaos fault is armed on this instance, every app
@@ -75,6 +75,16 @@ export function drillCountdown(endsAt: number, now = Date.now()): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
+/**
+ * Whether the drill banner (or its game-day strip) is showing — both carry Declare incident, so a
+ * page with its own copy (the Ops Console header) hides it meanwhile. Same reads as the banner.
+ */
+export function useDrillBannerShowing(): boolean {
+  const { armed, allowed } = useArmedFaults()
+  const days = useActiveGamedays(allowed)
+  return armed.some((f) => f.ends_at > Date.now()) || days.some((d) => d.status === 'running')
+}
+
 export interface DrillBannerProps {
   /** Where Stop sends operators (the chaos console). Default `/chaos`. */
   stopHref?: string
@@ -135,7 +145,7 @@ export function DrillBanner({ stopHref = '/chaos', canStop = false }: DrillBanne
       </span>
       <span className='min-w-0 text-red-800/80 dark:text-red-300/80'>
         {first.started_by_name ? `started by ${first.started_by_name} · ` : ''}
-        ends in <span className='font-mono tabular-nums'>{drillCountdown(soonest, now)}</span>
+        ends in <span className='tabular-nums'>{drillCountdown(soonest, now)}</span>
         {' · '}this is a planned test, not an outage
       </span>
       <DeclareIncidentButton className='ml-auto' />

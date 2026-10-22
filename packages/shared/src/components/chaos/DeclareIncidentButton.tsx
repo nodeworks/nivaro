@@ -52,12 +52,12 @@ export function DeclareIncidentButton({ className }: { className?: string }) {
   if (confirming)
     return (
       <span className={cn('inline-flex items-center gap-1.5 text-[12px]', className)}>
-        <span className='opacity-80'>Declare an incident now?</span>
+        <span className='whitespace-nowrap opacity-80'>Declare an incident now?</span>
         <button
           type='button'
           disabled={busy}
           onClick={() => void declare()}
-          className='h-7 rounded-md bg-red-600 px-2.5 font-medium text-white transition-colors duration-150 hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-1 disabled:opacity-40 dark:focus-visible:ring-offset-background'
+          className='h-7 whitespace-nowrap rounded-md border border-red-300 bg-white px-2.5 font-medium text-red-700 transition-colors duration-150 hover:border-red-400 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:opacity-40 dark:border-red-800 dark:bg-red-950/60 dark:text-red-200 dark:hover:border-red-700 dark:hover:bg-red-900/50'
         >
           {busy ? 'Declaring…' : 'Declare now'}
         </button>
@@ -65,7 +65,7 @@ export function DeclareIncidentButton({ className }: { className?: string }) {
           type='button'
           disabled={busy}
           onClick={() => setConfirming(false)}
-          className='h-7 rounded-md px-2 opacity-80 transition-colors duration-150 hover:bg-black/[0.05] hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-white/[0.08]'
+          className='h-7 whitespace-nowrap rounded-md px-2 opacity-80 transition-colors duration-150 hover:bg-black/[0.05] hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-white/[0.08]'
         >
           Cancel
         </button>
@@ -83,13 +83,13 @@ export function DeclareIncidentButton({ className }: { className?: string }) {
         type='button'
         onClick={() => setConfirming(true)}
         data-tip='Mark the moment you noticed something wrong'
-        className='inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 font-medium text-slate-700 transition-colors duration-150 hover:border-red-300 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground dark:hover:border-red-800 dark:hover:text-red-400'
+        className='inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 font-medium text-slate-700 transition-colors duration-150 hover:border-red-300 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card dark:text-foreground dark:hover:border-red-800 dark:hover:text-red-400'
       >
-        <Siren className='h-3.5 w-3.5' aria-hidden />
+        <Siren className='h-3.5 w-3.5 shrink-0' aria-hidden />
         Declare incident
       </button>
       {declaredAt && (
-        <span role='status' className='opacity-75'>
+        <span role='status' className='whitespace-nowrap opacity-75'>
           Declared at {time(declaredAt)}
         </span>
       )}

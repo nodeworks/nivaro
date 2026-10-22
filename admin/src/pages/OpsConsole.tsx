@@ -1,4 +1,4 @@
-import { DeclareIncidentButton } from '@nivaro/shared'
+import { DeclareIncidentButton, useDrillBannerShowing } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, RefreshCw, TerminalSquare } from 'lucide-react'
 import { useState } from 'react'
@@ -70,6 +70,7 @@ function Card({
 
 export function OpsConsolePage() {
   const qc = useQueryClient()
+  const bannerUp = useDrillBannerShowing()
   const [logLevel, setLogLevel] = useState('')
   const [logQ, setLogQ] = useState('')
   // #82 — regex + time window over the ring ('now-15m' style or a datetime).
@@ -321,8 +322,9 @@ export function OpsConsolePage() {
             restart and heap-snapshot levers.
           </p>
         </div>
-        {/* #2854: stamps the time something looked wrong onto any drill or game day in flight. */}
-        <DeclareIncidentButton />
+        {/* #2854: stamps the time something looked wrong onto any drill or game day in flight.
+            While the drill banner (or game-day strip) is up it carries the button, so not twice. */}
+        {!bannerUp && <DeclareIncidentButton />}
       </div>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-8 dark:bg-background'>

@@ -140,9 +140,10 @@ function MenuBody({ state, onClose, onSelect, nav }: MenuProps & { nav: Navigate
                   i > 0 && 'mt-1 border-t border-[var(--tm-line)] pt-2'
                 )}
               >
-                <p className='text-[12px] font-medium text-[var(--tm-fg)]'>{e.group}</p>
+                {/* a quiet label, not a row: only the entries under it act */}
+                <p className='text-[11px] font-medium text-[var(--tm-fg-2)]'>{e.group}</p>
                 {e.groupHint ? (
-                  <p className='text-[11px] leading-snug text-[var(--tm-fg-2)]'>{e.groupHint}</p>
+                  <p className='text-[11px] leading-snug text-[var(--tm-muted)]'>{e.groupHint}</p>
                 ) : null}
               </div>
             ) : null}
@@ -151,7 +152,7 @@ function MenuBody({ state, onClose, onSelect, nav }: MenuProps & { nav: Navigate
               role='menuitem'
               data-tm-node-menu-item={e.key}
               aria-label={e.group ? `${e.group}: ${e.label}` : undefined}
-              className={cn(ITEM, e.group && 'pl-4')}
+              className={ITEM}
               onClick={() => {
                 onClose()
                 e.run({ navigate: nav, select: onSelect })
@@ -159,7 +160,7 @@ function MenuBody({ state, onClose, onSelect, nav }: MenuProps & { nav: Navigate
             >
               <span
                 className={cn(
-                  e.group ? 'font-normal' : 'font-medium',
+                  'font-medium',
                   e.tone === 'danger' ? 'text-[var(--tm-error-ink)]' : 'text-[var(--tm-fg)]'
                 )}
               >

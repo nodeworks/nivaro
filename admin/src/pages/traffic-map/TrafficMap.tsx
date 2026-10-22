@@ -710,60 +710,64 @@ export default function TrafficMap() {
                 routes, callers and recent errors.
               </p>
             </div>
-            <div className='flex shrink-0 items-center gap-2'>
+            {/* Wraps instead of running off the page when status chips (an armed drill, a
+                simulation) widen the row; live state + Pause stay together at the end. */}
+            <div className='flex min-w-0 flex-wrap items-center justify-end gap-2'>
               <ToolbarItems slot='status' />
               <ToolbarItems slot='actions' />
               <MoreMenu />
-              <span className='mx-1 h-4 w-px bg-[var(--tm-line)]' aria-hidden='true' />
-              <div
-                className='flex items-center gap-1.5 whitespace-nowrap px-1 text-[12px] text-[var(--tm-muted)]'
-                id='tm-node'
-                title={
-                  m.journalSeq != null
-                    ? `Journal sequence ${m.journalSeq.toLocaleString()}`
-                    : undefined
-                }
-              >
-                <span
-                  className={cn(
-                    'inline-block h-[7px] w-[7px] rounded-full',
-                    live && !paused
-                      ? 'bg-[var(--tm-create)]'
-                      : stale || paused
-                        ? 'bg-[var(--tm-update)]'
-                        : 'bg-[var(--tm-muted)]'
-                  )}
-                  aria-hidden='true'
-                />
-                <span className='font-medium text-[var(--tm-fg-2)]'>{statusLabel}</span>
-                <span aria-hidden='true'>·</span>
-                <span>
-                  api <span data-testid='tm-instance'>{m.instance || '…'}</span>
-                </span>
-              </div>
-              {/* A snapshot is already still: no Pause (a `hidden` attribute loses to the chip's display class). */}
-              {!frozen && (
-                <button
-                  type='button'
-                  id='tm-pause'
-                  aria-pressed={paused}
-                  onClick={togglePause}
-                  title={paused ? 'Back to live' : 'Pause and rewind through the last 15 minutes'}
-                  className={cn(
-                    CHIP,
-                    paused
-                      ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
-                      : CHIP_OFF
-                  )}
+              <div className='flex shrink-0 items-center gap-2'>
+                <span className='mx-1 h-4 w-px bg-[var(--tm-line)]' aria-hidden='true' />
+                <div
+                  className='flex items-center gap-1.5 whitespace-nowrap px-1 text-[12px] text-[var(--tm-muted)]'
+                  id='tm-node'
+                  title={
+                    m.journalSeq != null
+                      ? `Journal sequence ${m.journalSeq.toLocaleString()}`
+                      : undefined
+                  }
                 >
-                  {paused ? (
-                    <Play className='h-3 w-3' aria-hidden='true' />
-                  ) : (
-                    <PauseIcon className='h-3 w-3' aria-hidden='true' />
-                  )}
-                  {paused ? 'Resume' : 'Pause'}
-                </button>
-              )}
+                  <span
+                    className={cn(
+                      'inline-block h-[7px] w-[7px] rounded-full',
+                      live && !paused
+                        ? 'bg-[var(--tm-create)]'
+                        : stale || paused
+                          ? 'bg-[var(--tm-update)]'
+                          : 'bg-[var(--tm-muted)]'
+                    )}
+                    aria-hidden='true'
+                  />
+                  <span className='font-medium text-[var(--tm-fg-2)]'>{statusLabel}</span>
+                  <span aria-hidden='true'>·</span>
+                  <span>
+                    api <span data-testid='tm-instance'>{m.instance || '…'}</span>
+                  </span>
+                </div>
+                {/* A snapshot is already still: no Pause (a `hidden` attribute loses to the chip's display class). */}
+                {!frozen && (
+                  <button
+                    type='button'
+                    id='tm-pause'
+                    aria-pressed={paused}
+                    onClick={togglePause}
+                    title={paused ? 'Back to live' : 'Pause and rewind through the last 15 minutes'}
+                    className={cn(
+                      CHIP,
+                      paused
+                        ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
+                        : CHIP_OFF
+                    )}
+                  >
+                    {paused ? (
+                      <Play className='h-3 w-3' aria-hidden='true' />
+                    ) : (
+                      <PauseIcon className='h-3 w-3' aria-hidden='true' />
+                    )}
+                    {paused ? 'Resume' : 'Pause'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
           <div
