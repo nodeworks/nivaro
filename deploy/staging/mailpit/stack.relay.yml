@@ -1,0 +1,16 @@
+# Optional overlay that turns on manual Release through the corporate relay.
+# Deploy: docker stack deploy -c .docker/mailpit/stack.yml -c .docker/mailpit/stack.relay.yml efp_mail
+# Redeploy without this fragment to turn relaying off: Mailpit keeps catching, Release is unavailable.
+# Relay host, credentials and allowed-/blocked-recipients live in the relay YAML secret only.
+services:
+  mailpit:
+    environment:
+      MP_SMTP_RELAY_CONFIG: /run/secrets/mailpit-relay.yml
+    secrets:
+      - source: mailpit_relay
+        target: mailpit-relay.yml
+
+secrets:
+  mailpit_relay:
+    external: true
+    name: ${MAILPIT_RELAY_SECRET:?name of the relay config Swarm secret}

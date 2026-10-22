@@ -220,3 +220,7 @@ and operator-only families counted apart) and the commands that reach no
 route. Report only; the preflight stage prints its one-line summary. Run it
 after adding routes a script should be able to call, and before an SDK
 release — the first run found three documented commands that answered 404.
+
+## Staging mail
+
+Staging catches all mail in Mailpit and releases by hand: see [STAGING-MAIL.md](STAGING-MAIL.md).

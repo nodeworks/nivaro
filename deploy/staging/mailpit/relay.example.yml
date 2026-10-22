@@ -1,0 +1,23 @@
+# Template for the Mailpit relay config. Fill in a copy on the host and load it as a Swarm secret.
+# Placeholders only: never commit a real host, user or password.
+host: relay.example.invalid
+port: 587
+starttls: true
+# none | plain | login | cram-md5
+auth: plain
+username: RELAY_USERNAME
+# The password lives only in the secret copy of this file, never in the repo.
+password: RELAY_PASSWORD
+return-path: staging-mail@nivaro.dev
+
+# (?i) makes the match case-insensitive (Go regexp), so ANA@CUSTOMER-ONE.EXAMPLE is still blocked.
+# Manual releases may only reach these domains (our own).
+allowed-recipients: '(?i)@(nivaro\.dev|team-domain-one\.example|team-domain-two\.example)$'
+
+# Never mail these, in every relay mode: customer domains and the admins the help-video probes mailed.
+blocked-recipients: '(?i)@([^@]*\.)?(customer-one\.example|customer-two\.example)$|^(probed-admin-one|probed-admin-two)@'
+
+# Optional auto-relay: MP_SMTP_RELAY_MATCHING (not enabled by this kit, see docs/STAGING-MAIL.md)
+# is NOT a key in this YAML.
+# WARNING: allowed-recipients does NOT apply to auto-relay, only blocked-recipients does.
+# Keep this regex narrow (one exact mailbox).
