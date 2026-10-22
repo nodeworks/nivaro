@@ -5,10 +5,10 @@ import {
   evictShare,
   KEY_FAMILIES,
   type KeyClient,
+  keyDrillRefusal,
   keyFamily,
   redisDbIndex,
-  restoreSnapshot,
-  sessionLossRefusal
+  restoreSnapshot
 } from '../redis-keys.js'
 import { registerRedisSamplers } from '../redis-samplers.js'
 
@@ -89,7 +89,7 @@ registerFault({
   label: 'Redis keys lost',
   area: 'redis',
   proves:
-    'Losing one family of keys is survivable: caches rebuild, the scheduler lease is re-taken, and when old keys come back (a lagging replica after a failover) a signed-out session stays signed out. Sessions are dropped only on a Redis database other than 0 (or a deployed stack that sets REDIS_CHANNEL_PREFIX) — on a shared development Redis, db 0 holds everyone’s sign-ins.',
+    'Losing one family of keys is survivable: caches rebuild, the scheduler lease is re-taken, and when old keys come back (a lagging replica after a failover) a signed-out session stays signed out. On development, keys are deleted only on a Redis database other than 0 — a shared development db 0 holds every instance’s keys, and REDIS_CHANNEL_PREFIX separates channels, not keys. On a deployed stack, sessions also need REDIS_CHANNEL_PREFIX on db 0.',
   claim_keys: ['redis.fails_open', 'redis.key_loss_rebuilds', 'auth.logout_holds'],
   targets: ['all'],
   params: {
@@ -120,10 +120,9 @@ registerFault({
     if (!redis) return
     const family = keyFamily(String(fault.params.family ?? ''))
     if (!family) throw new ChaosError('unknown key family', 400, 'CHAOS_BAD_PARAMS')
-    if (family.sessions) {
-      const why = sessionLossRefusal(redisDbIndex(redis))
-      if (why) throw new ChaosError(why, 400, 'CHAOS_REFUSED')
-    }
+    // F2 — never another instance's keys: refused on a shared development Redis db 0.
+    const why = keyDrillRefusal(family, redisDbIndex(redis))
+    if (why) throw new ChaosError(why, 400, 'CHAOS_REFUSED')
     const cap = Math.min(LOSS_CAP_MAX, Number(fault.params.max_keys) || 2000)
     const keep = fault.params.restore !== false
     const { deleted, snapshot } = await dropFamily(redis, family, cap, keep)
@@ -142,7 +141,7 @@ registerFault({
   label: 'Redis evicting keys',
   area: 'redis',
   proves:
-    'Under memory pressure Redis evicts nvr:* keys at random: every family rebuilds or fails open — a lost lease is re-taken, a lost cache recomputes, a lost lock is re-acquired.',
+    'Under memory pressure Redis evicts nvr:* keys at random: every family rebuilds or fails open — a lost lease is re-taken, a lost cache recomputes, a lost lock is re-acquired. On development it runs only on a Redis database other than 0.',
   claim_keys: ['redis.fails_open', 'redis.eviction_tolerated'],
   targets: ['all'],
   params: {
@@ -172,6 +171,8 @@ registerFault({
   apply(fault, { app }) {
     const redis = appRedis(app)
     if (!redis) return
+    const why = keyDrillRefusal(null, redisDbIndex(redis))
+    if (why) throw new ChaosError(why, 400, 'CHAOS_REFUSED')
     const share = Number(fault.params.share_pct) || 20
     const cap = Number(fault.params.max_keys) || 500
     let round = 0

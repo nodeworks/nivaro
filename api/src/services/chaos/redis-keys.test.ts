@@ -1,9 +1,10 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { _resetCatalogForTests } from './catalog.js'
 import {
   dropFamily,
   evictShare,
   type KeyClient,
+  keyDrillRefusal,
   keyFamily,
   redisDbIndex,
   restoreSnapshot,
@@ -148,7 +149,7 @@ describe('key-loss and eviction drills (#2832)', () => {
       off()
     }
     expect(c.store.has('sess:a')).toBe(true)
-    expect(notes[0]).toMatch(/apply failed: Sessions are dropped only/)
+    expect(notes[0]).toMatch(/apply failed: .*other than 0/)
   })
 
   it('eviction sweeps on its interval and stops with the window', async () => {
@@ -187,5 +188,87 @@ describe('Redis drill samplers (#2832)', () => {
     const { listSamplers } = await import('./steady-state.js')
     const keys = listSamplers().map((s) => s.key)
     expect(keys).toEqual(expect.arrayContaining(['redis.errors_per_min', 'cache.metadata_hit_pct']))
+  })
+})
+
+describe("F2 — key drills never touch another instance's keys on a shared dev Redis", () => {
+  const dev = { NODE_ENV: 'development' }
+  const devPrefixed = { NODE_ENV: 'development', REDIS_CHANNEL_PREFIX: 'c-x:' }
+  const deployed = { NODE_ENV: 'production', CHAOS_ENABLED: 'true' }
+
+  it('development db 0 refuses every family and eviction, with or without a prefix', () => {
+    for (const env of [dev, devPrefixed]) {
+      for (const f of [
+        'nvr',
+        'event_journal',
+        'cron_lease',
+        'idempotency',
+        'query_cache',
+        'sessions'
+      ])
+        expect(keyDrillRefusal(keyFamily(f), 0, env)).toMatch(/other than 0/)
+      expect(keyDrillRefusal(null, 0, env)).toMatch(/other than 0/)
+    }
+  })
+
+  it('a throwaway database is always allowed; a deployed db 0 refuses only sessions without a prefix', () => {
+    expect(keyDrillRefusal(keyFamily('nvr'), 9, dev)).toBeNull()
+    expect(keyDrillRefusal(null, 9, dev)).toBeNull()
+    expect(keyDrillRefusal(keyFamily('nvr'), 0, deployed)).toBeNull()
+    expect(keyDrillRefusal(null, 0, deployed)).toBeNull()
+    expect(keyDrillRefusal(keyFamily('sessions'), 0, deployed)).toMatch(/Sessions/)
+    expect(
+      keyDrillRefusal(keyFamily('sessions'), 0, { ...deployed, REDIS_CHANNEL_PREFIX: 's:' })
+    ).toBeNull()
+  })
+
+  describe('armed on development db 0', () => {
+    const notes: string[] = []
+    let saved: NodeJS.ProcessEnv
+    let off: () => void = () => {}
+    beforeEach(() => {
+      saved = { ...process.env }
+      process.env.NODE_ENV = 'development'
+      off = onRegistryChange((ev) => {
+        if (ev.type === 'disarmed') notes.push(ev.reason)
+      })
+    })
+    afterEach(async () => {
+      off()
+      process.env = saved
+      await stopAll('test')
+      await _resetRegistryForTests()
+      notes.length = 0
+    })
+
+    it('redis_key_loss family=nvr deletes nothing and says why (prefix set too)', async () => {
+      process.env.REDIS_CHANNEL_PREFIX = 'c-x:'
+      const { setChaosApp } = await import('./registry.js')
+      const c = fakeKeys({ 'nvr:ev:stream': 's', 'nvr:cron:leader': 'rob', 'nvr:idem:1': 'x' }, 0)
+      setChaosApp({ redis: c })
+      await armFault({ fault_key: 'redis_key_loss', params: { family: 'nvr' }, seconds: 10 })
+      expect(c.store.size).toBe(3)
+      expect(notes[0]).toMatch(
+        /apply failed: Keys are deleted only on a Redis database other than 0/
+      )
+    })
+
+    it('redis_evict deletes nothing on db 0', async () => {
+      vi.useFakeTimers()
+      const { setChaosApp } = await import('./registry.js')
+      const keys: Record<string, string> = {}
+      for (let i = 0; i < 50; i++) keys[`nvr:k${i}`] = '1'
+      const c = fakeKeys(keys, 0)
+      setChaosApp({ redis: c })
+      await armFault({
+        fault_key: 'redis_evict',
+        params: { share_pct: 100, interval_s: 2 },
+        seconds: 10
+      })
+      await vi.advanceTimersByTimeAsync(5000)
+      vi.useRealTimers()
+      expect(c.store.size).toBe(50)
+      expect(notes[0]).toMatch(/apply failed: Keys are deleted only/)
+    })
   })
 })

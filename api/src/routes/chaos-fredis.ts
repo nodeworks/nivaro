@@ -7,7 +7,7 @@ import { requireChaosOperator } from '../services/chaos/operator.js'
 import { partitionReport, startPartitionProbe } from '../services/chaos/partition.js'
 import { partitionCatchUpStats } from '../services/chaos/partition-point.js'
 import { redisChaosStats } from '../services/chaos/redis-hook.js'
-import { redisDbIndex, sessionLossRefusal } from '../services/chaos/redis-keys.js'
+import { keyDrillRefusal, redisDbIndex, sessionLossRefusal } from '../services/chaos/redis-keys.js'
 
 /**
  * Checks for the Redis, scheduler and partition drills (#2832, #2833, #2838), under /api/chaos:
@@ -19,7 +19,7 @@ import { redisDbIndex, sessionLossRefusal } from '../services/chaos/redis-keys.j
  *                                              that is not cut off, before arming the partition
  *   GET  /checks/partition?probe=             expected vs delivered on THIS replica: lost, doubled
  *   GET  /checks/redis                        this replica's Redis fault counters and whether the
- *                                              sessions family may be dropped here (#2832)
+ *                                              keys (and sessions) may be dropped here (#2832)
  *
  * Reads answer even where the gate refuses drills (they read history); the probe is a drill step.
  */
@@ -65,6 +65,8 @@ export async function chaosFredisRoutes(app: FastifyInstance): Promise<void> {
         data: {
           db,
           sessions_refusal: sessionLossRefusal(db),
+          // F2 — key loss / eviction on any family (development db 0 is shared).
+          key_drill_refusal: keyDrillRefusal(null, db),
           counters: redisChaosStats(),
           stream_catch_up: partitionCatchUpStats()
         }

@@ -17,7 +17,7 @@ export interface KeyFamily {
   label: string
   /** SCAN MATCH prefix. */
   prefix: string
-  /** Sessions — refused on a shared development Redis (see sessionLossRefusal). */
+  /** Sessions — also refused on a deployed db 0 without REDIS_CHANNEL_PREFIX (keyDrillRefusal). */
   sessions?: boolean
 }
 
@@ -49,18 +49,36 @@ export function redisDbIndex(client: unknown): number {
 }
 
 /**
- * Why the sessions family may not be dropped here, or null. A development Redis is shared:
- * db 0 holds everyone's sign-ins, and REDIS_CHANNEL_PREFIX separates channels, not keys — so
- * on development only a non-zero database counts. A deployed stack (its own Redis) may also
- * drop them when it sets REDIS_CHANNEL_PREFIX.
+ * Why a key-loss (`family`) or eviction (`family` null) drill may not run against this Redis,
+ * or null (#2832, security finding F2). These drills delete keys, and on a shared development
+ * Redis db 0 every key belongs to every API using it: REDIS_CHANNEL_PREFIX separates channels,
+ * not keys, and none of these families writes its keys under the prefix — so on development,
+ * db 0 is refused for every family and for eviction, prefix or not. A deployed stack has its
+ * own Redis and may run them, except sessions, which also need REDIS_CHANNEL_PREFIX there.
+ * Any database other than 0 is a throwaway and always allowed.
  */
-export function sessionLossRefusal(
+export function keyDrillRefusal(
+  family: KeyFamily | null,
   dbIndex: number,
   env: NodeJS.ProcessEnv = process.env
 ): string | null {
   if (dbIndex !== 0) return null
-  if ((env.REDIS_CHANNEL_PREFIX ?? '') !== '' && env.NODE_ENV !== 'development') return null
-  return 'Sessions are dropped only on a Redis database other than 0 (or a deployed stack that sets REDIS_CHANNEL_PREFIX): on a shared development Redis, db 0 holds everyone’s sign-ins.'
+  const prefixed = (env.REDIS_CHANNEL_PREFIX ?? '') !== ''
+  if (env.NODE_ENV === 'development')
+    return prefixed
+      ? 'Keys are deleted only on a Redis database other than 0 here: this development Redis is shared, and REDIS_CHANNEL_PREFIX separates channels, not keys — none of these keys belong to this instance alone.'
+      : 'Keys are deleted only on a Redis database other than 0 here: on a shared development Redis, db 0 holds every instance’s sessions, caches, scheduler lease and event stream.'
+  if (family?.sessions && !prefixed)
+    return 'Sessions are dropped only on a Redis database other than 0 (or a deployed stack that sets REDIS_CHANNEL_PREFIX): on a shared development Redis, db 0 holds everyone’s sign-ins.'
+  return null
+}
+
+/** Why the sessions family may not be dropped here, or null (see keyDrillRefusal). */
+export function sessionLossRefusal(
+  dbIndex: number,
+  env: NodeJS.ProcessEnv = process.env
+): string | null {
+  return keyDrillRefusal(keyFamily('sessions'), dbIndex, env)
 }
 
 /** The slice of ioredis these drills use (tests pass an in-memory fake). */

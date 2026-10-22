@@ -68,6 +68,7 @@ describe('chaos check routes (#2832, #2833, #2838)', () => {
     expect(res.json().data).toMatchObject({
       db: 0,
       sessions_refusal: expect.stringMatching(/other than 0/),
+      key_drill_refusal: expect.stringMatching(/other than 0/),
       counters: expect.objectContaining({ readonly: expect.any(Number) })
     })
   })
