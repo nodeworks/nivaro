@@ -1,3 +1,4 @@
+import { bindClientChaosSocket, type ClientChaosSocket } from './client-chaos'
 import { deliveryAckFor } from './delivery-ack'
 import type { CollectionUpdateEvent, RealtimeAdapter, RealtimeStatus } from './realtime'
 import { forgetSettledReads } from './request-gate'
@@ -181,6 +182,8 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     if (socket) return socket
     const s = typeof opts.socket === 'function' ? opts.socket() : opts.socket
     socket = s
+    // Browser chaos "socket gone" (#2840) reaches every host's socket from here.
+    bindClientChaosSocket(s as ClientChaosSocket)
     // Attached to a socket that is already up: its next auth:ok is a reconnect (catch up).
     everAuthed = s.connected
     s.on('auth:ok', () => {

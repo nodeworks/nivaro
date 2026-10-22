@@ -337,7 +337,8 @@ export async function listRuns(opts: ListRunsOptions = {}): Promise<ChaosRun[]> 
     (!opts.fault_key || run.fault_key === opts.fault_key)
   if (await hasTables()) {
     try {
-      let q = db(RUNS_TABLE).orderBy('created_at', 'desc').limit(limit)
+      // `id` breaks created_at ties deterministically (datetime resolution is ~3 ms on MSSQL).
+      let q = db(RUNS_TABLE).orderBy('created_at', 'desc').orderBy('id', 'desc').limit(limit)
       if (statuses) q = q.whereIn('status', statuses)
       if (opts.kind) q = q.where({ kind: opts.kind })
       if (opts.fault_key) q = q.where({ fault_key: opts.fault_key })
@@ -364,9 +365,12 @@ export async function listRuns(opts: ListRunsOptions = {}): Promise<ChaosRun[]> 
       /* memory */
     }
   }
+  // Newest first; insertion order breaks ties made inside one millisecond.
   return [...memRuns.values()]
-    .filter(keep)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map((run, i) => ({ run, i }))
+    .filter((x) => keep(x.run))
+    .sort((a, b) => b.run.created_at.localeCompare(a.run.created_at) || b.i - a.i)
+    .map((x) => x.run)
     .slice(0, limit)
 }
 

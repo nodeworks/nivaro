@@ -1,3 +1,4 @@
+import { bindClientChaosSocket } from './client-chaos'
 import type { SocketLike } from './socket-realtime'
 
 /**
@@ -72,6 +73,14 @@ export interface WorkerSocket extends FallbackSocket {
   disconnect(): void
   /** 'pending' until the worker greets or the fallback is taken. */
   mode(): 'pending' | 'worker' | 'fallback'
+  /**
+   * Browser chaos "socket gone" (#2840) for THIS tab: the worker's socket serves every tab, so
+   * it is never touched — this tab hears a disconnect, gets no events and sends nothing until
+   * the pause ends, then re-greets the worker (connect + auth:ok, as a new tab would) and
+   * reloads what it may have missed (`nvr:catchup-full`). On the fallback socket it is a real
+   * disconnect and connect.
+   */
+  chaosPause(down: boolean): void
   /** The transport the worker's socket uses (for status displays). */
   io: { engine: { transport: { name?: string }; once(ev: string, cb: () => void): void } }
 }
@@ -121,6 +130,7 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
   let readyTimer: ReturnType<typeof setTimeout> | null = null
   let silenceTimer: ReturnType<typeof setInterval> | null = null
   let closed = false
+  let chaosDown = false
 
   const fire = (event: string, args: any[]) => {
     for (const cb of [...(listeners.get(event) ?? [])]) {
@@ -164,6 +174,8 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
     connected = false
     const s = opts.fallback()
     real = s
+    // Socket gone (#2840) was already on for this tab: the new socket stays down with it.
+    if (chaosDown) s.disconnect?.()
     for (const [event, set] of listeners) for (const cb of set) s.on(event, cb)
     // Named listeners sit on the real socket now; its onAny serves only the any-listeners.
     if (anyListeners.size) s.onAny?.((event, ...args) => fireAnyOnly(event, args))
@@ -180,6 +192,15 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
       }
     }
   }
+
+  const greet = () =>
+    post({
+      t: 'hello',
+      app: opts.app,
+      features: opts.features ?? [],
+      version: opts.version ?? {},
+      active: typeof document === 'undefined' || document.visibilityState === 'visible'
+    })
 
   const post = (msg: Record<string, unknown>) => {
     try {
@@ -199,13 +220,7 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
         readyTimer = null
         if (msg.proto !== WORKER_SOCKET_PROTO) return fallbackNow(`proto-${String(msg.proto)}`)
         mode = 'worker'
-        post({
-          t: 'hello',
-          app: opts.app,
-          features: opts.features ?? [],
-          version: opts.version ?? {},
-          active: typeof document === 'undefined' || document.visibilityState === 'visible'
-        })
+        if (!chaosDown) greet()
         silenceTimer = setInterval(() => {
           if (Date.now() - lastPing > (opts.silentMs ?? 20_000)) fallbackNow('worker-silent')
         }, 5_000)
@@ -230,6 +245,8 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
           .then((token) => post({ t: 'token', req: msg.req, token }))
         return
       case 'ev': {
+        // Socket gone for this tab (#2840): the worker's events are not this tab's to hear.
+        if (chaosDown) return
         if (msg.event === 'connect') connected = true
         if (msg.event === 'disconnect') connected = false
         fire(String(msg.event), Array.isArray(msg.args) ? msg.args : [])
@@ -276,6 +293,7 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
 
   const socket: WorkerSocket = {
     get connected() {
+      if (chaosDown && mode !== 'fallback') return false
       return mode === 'fallback' ? !!real?.connected : connected
     },
     on(event, cb) {
@@ -314,6 +332,11 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
     emit(event, ...args) {
       if (mode === 'fallback') return real?.emit(event, ...args)
       const last = args[args.length - 1]
+      if (chaosDown) {
+        // What the worker answers while its own socket is down: an empty ack, nothing sent.
+        if (typeof last === 'function') setTimeout(() => (last as Listener)(), 0)
+        return socket
+      }
       if (typeof last === 'function') {
         const id = ++ackId
         acks.set(id, last as Listener)
@@ -331,6 +354,25 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
       real?.disconnect?.()
     },
     mode: () => mode,
+    chaosPause(down) {
+      if (down === chaosDown || closed) return
+      chaosDown = down
+      if (mode === 'fallback') {
+        if (down) real?.disconnect?.()
+        else real?.connect?.()
+        return
+      }
+      if (down) {
+        const was = connected
+        connected = false
+        if (was) fire('disconnect', ['transport close'])
+        return
+      }
+      // Back: greet the worker again (it answers status, connect and auth:ok to this tab only),
+      // then reload what this tab missed while it was not listening.
+      if (mode === 'worker') greet()
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
+    },
     io: {
       engine: {
         get transport() {
@@ -350,5 +392,6 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
   }
 
   start()
+  bindClientChaosSocket(socket)
   return socket
 }

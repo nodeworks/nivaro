@@ -3,15 +3,21 @@ import {
   BackgroundRunOffer,
   CumulativeFlowChart,
   type CumulativeFlowData,
+  dashboardPretendDownOptions,
+  LoadErrorNote,
   liveQueryMeta,
   liveWidgetInterval,
+  loadErrorText,
   NivaroProvider,
+  PretendDownButton,
   QueryWidgetBody,
   useLiveRefetchInterval,
-  useLiveWidget
+  useLiveWidget,
+  usePretendDownScope
 } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlertTriangle,
   ArrowLeft,
   BarChart2,
   Filter,
@@ -52,6 +58,7 @@ import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton'
 import { WidgetFigure, type WidgetFigureData } from '@/components/widget-figure'
 import { api, type Collection, type Dashboard, type DashboardWidget } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
 import { cn, formatNumber } from '@/lib/utils'
 
@@ -276,7 +283,7 @@ function WidgetCard({
     requireBridge: true,
     enabled: followsCollection
   })
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['widget-data', widget.id, filtersKey],
     queryFn: () =>
       api
@@ -319,6 +326,19 @@ function WidgetCard({
           )}
         </div>
         <div className='flex shrink-0 items-center gap-1.5'>
+          {/* #2858 — figures from before a failed refresh stay, marked as not current. */}
+          {isError && data && (
+            <button
+              type='button'
+              onClick={() => void refetch()}
+              data-tip={`${loadErrorText(error, 'this widget')} Showing the last figures. Click to try again.`}
+              aria-label='Could not refresh — try again'
+              className='inline-flex h-5 items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 text-[10px] font-medium text-amber-800 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200'
+            >
+              <AlertTriangle className='h-3 w-3' />
+              Not current
+            </button>
+          )}
           <Badge variant='outline' className={cn('h-5 px-1.5 text-[10px]', cfg.color)}>
             {cfg.label}
           </Badge>
@@ -342,6 +362,12 @@ function WidgetCard({
         <div className='flex min-h-0 flex-1 items-center justify-center'>
           {isLoading ? (
             <Loader2 className='h-5 w-5 animate-spin text-slate-300' />
+          ) : isError && !data ? (
+            <LoadErrorNote
+              centered
+              message={loadErrorText(error, 'this chart')}
+              onRetry={() => void refetch()}
+            />
           ) : (
             <WidgetFigure type='ai_query' data={(data ?? null) as WidgetFigureData | null} />
           )}
@@ -368,6 +394,13 @@ function WidgetCard({
                 />
               </NivaroProvider>
             </div>
+          ) : isError && !data ? (
+            // #2858 — a widget whose data failed used to say "No data", which is a different fact.
+            <LoadErrorNote
+              centered
+              message={loadErrorText(error, 'this widget')}
+              onRetry={() => void refetch()}
+            />
           ) : !data ? (
             <p className='text-[12px] text-slate-400'>No data</p>
           ) : widget.type === 'count' ||
@@ -564,7 +597,12 @@ function ChartWrapper({
 const presetClient = createNivaro(window.location.origin)
 
 function PresetWidgetBody({ presetId }: { presetId: string | null }) {
-  const { data: presets = [] } = useQuery({
+  const {
+    data: presets = [],
+    isError,
+    error,
+    refetch
+  } = useQuery({
     queryKey: ['report-widget-presets'],
     queryFn: () =>
       api
@@ -579,6 +617,10 @@ function PresetWidgetBody({ presetId }: { presetId: string | null }) {
         .then((r) => r.data.data)
   })
   const preset = presets.find((p) => String(p.id) === String(presetId))
+  if (isError && !preset)
+    return (
+      <LoadErrorNote message={loadErrorText(error, 'this preset')} onRetry={() => void refetch()} />
+    )
   if (!preset) return <p className='text-[12px] text-slate-400'>Preset not found.</p>
   if (preset.widget_type !== 'query' || !preset.config?.query) {
     return (
@@ -1168,6 +1210,8 @@ function DrillSheet({
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+const PRETEND_SCOPE = 'dashboard-edit'
+
 export function DashboardEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -1177,6 +1221,9 @@ export function DashboardEditPage() {
   const [editingName, setEditingName] = useState(false)
   const [nameInput, setNameInput] = useState('')
   const [drill, setDrill] = useState<DrillTarget | null>(null)
+  // #2858 — Pretend down: this viewer's dependencies, cleared when the page closes.
+  usePretendDownScope(PRETEND_SCOPE)
+  const { user } = useAuth()
 
   // #635 — global filters are session state (sessionStorage per dashboard);
   // no server column exists for them yet.
@@ -1249,6 +1296,7 @@ export function DashboardEditPage() {
   }
 
   const widgets = data.widgets ?? []
+  const pretendOptions = dashboardPretendDownOptions(widgets)
 
   // Sort widgets by row then col
   const sorted = [...widgets].sort((a, b) => a.row - b.row || a.col - b.col)
@@ -1315,6 +1363,9 @@ export function DashboardEditPage() {
           </div>
 
           <div className='flex items-center gap-2'>
+            {widgets.length > 0 && (
+              <PretendDownButton scope={PRETEND_SCOPE} options={pretendOptions} user={user} />
+            )}
             <DashboardLinkPopover dashboardId={data.id} />
             <Button
               size='sm'

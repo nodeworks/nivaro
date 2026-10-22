@@ -958,6 +958,54 @@ export const obsTrafficMapAct: DocSection = {
       type: 'note',
       text: 'The request log has no screen column, so a screen is the page each person last opened before the call (within 30 minutes). The panel shows how many calls could be matched that way.'
     },
+    {
+      type: 'h2',
+      id: 'traffic-map-simulate-down',
+      text: 'Blast radius: simulating a dependency down'
+    },
+    {
+      type: 'p',
+      text: 'Simulate down answers "what breaks if this goes away?" before anyone runs a drill. Pick a dependency from Simulate down in the toolbar (SQL Server, Redis, file storage, email, SMS, web push, an AI provider, a partner or the sign-in provider) or press Simulate down on a dependency node in the inspector. Nothing is switched off: the answer is worked out from recorded traffic over the last 1 hour, 6 hours, 24 hours (the default) or 7 days.'
+    },
+    {
+      type: 'p',
+      text: 'The map dims everything that keeps working and shades what depends on the node: a solid red outline for what calls it directly, a dashed one for what reaches it through another node (the people, keys and jobs using an affected endpoint, the partners and channels only those endpoints feed). The node itself is hatched and marked Simulated down. Stop with the × on the toolbar chip.'
+    },
+    {
+      type: 'table',
+      head: ['In the panel', 'What it lists'],
+      rows: [
+        [
+          'Stops working',
+          'What the code does when the node is gone, in plain sentences (hover one to see the file that makes it true).'
+        ],
+        [
+          'Routes',
+          'Each affected route template with its calls per minute over the window. When Redis is down only the calls signed in by a browser session fail, so a route shows that share.'
+        ],
+        [
+          'Screens',
+          'Screens (the page header both apps send) whose calls reach an affected endpoint, from this server’s live map.'
+        ],
+        [
+          'Scheduled jobs',
+          'Jobs that need the node directly (every job for the database; every job stops firing on the clock without Redis) or call an affected route.'
+        ],
+        [
+          'Channels and partners',
+          'Notification channels that stop, and partners or channels fed only through affected endpoints.'
+        ],
+        [
+          'Keeps working, degraded',
+          'What carries on worse: caches skipped, live updates on one server only, rate limits failing open.'
+        ],
+        ['Unaffected', 'What people often expect to break but does not.']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'The sources are the request log (route, sign-in method, the job that made the call), job runs, the AI and partner call logs, minute history when it is switched on, and this server’s live map. On a rewound map or a frozen snapshot the window ends at that moment. The figures are kept for 5 minutes. Admins only, like the whole map. API: GET /api/traffic-map/blast-radius?node=redis&window=24h (window 1h, 6h, 24h or 7d; until= an earlier end time).'
+    },
     { type: 'h2', id: 'traffic-map-tell-affected', text: 'Telling the people affected' },
     {
       type: 'p',
