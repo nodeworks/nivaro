@@ -62,7 +62,8 @@ test('SMTP 1025 and the UI 8025 are never published through the ingress', () => 
 test('allowed/blocked recipients exist, as settings not hard-coded in compose', () => {
   assert.match(live(relay), /^allowed-recipients:/m)
   assert.match(live(relay), /^blocked-recipients:/m)
-  assert.match(relay, /^# matching:/m)
+  assert.match(relay, /^# .*MP_SMTP_RELAY_MATCHING.*NOT a key in this YAML/m)
+  assert.doesNotMatch(live(relay), /^\s*matching:/m)
   assert.match(relay, /allowed-recipients does NOT apply to auto-relay/)
   assert.doesNotMatch(live(compose), /RECIPIENTS|MATCHING/)
 })
