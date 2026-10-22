@@ -82,6 +82,11 @@ test('image is axllent/mailpit with a pinned tag, never latest', () => {
   assert.match(env, /^MAILPIT_VERSION=/m)
 })
 
+test('the pinned Mailpit version in .env.example is never latest', () => {
+  const v = env.match(/^MAILPIT_VERSION=(.*)$/m)[1]
+  assert.doesNotMatch(v, /latest/i)
+})
+
 test('inbound auth is accepted and SMTP env is documented for the API', () => {
   assert.match(compose, /MP_SMTP_AUTH_ACCEPT_ANY: "true"/)
   assert.match(compose, /MP_SMTP_AUTH_ALLOW_INSECURE: "true"/)
