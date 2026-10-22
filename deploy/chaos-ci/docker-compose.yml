@@ -63,13 +63,14 @@ services:
     command: ['-host=0.0.0.0', '-config=/config/toxiproxy.json']
     volumes:
       - ./toxiproxy.json:/config/toxiproxy.json:ro
+    # --mode host only: the api proxy upstream is the checkout's API on the host (Linux needs host-gateway)
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     ports:
-      - '${CHAOS_CI_TOXI_PORT:-18474}:8474'
-      - '${CHAOS_CI_MSSQL_PORT:-11433}:1433'
-      - '${CHAOS_CI_REDIS_PORT:-16379}:6379'
-      - '${CHAOS_CI_API_PORT:-13055}:3055'
+      - '127.0.0.1:${CHAOS_CI_TOXI_PORT:-18474}:8474'
+      - '127.0.0.1:${CHAOS_CI_MSSQL_PORT:-11433}:1433'
+      - '127.0.0.1:${CHAOS_CI_REDIS_PORT:-16379}:6379'
+      - '127.0.0.1:${CHAOS_CI_API_PORT:-13055}:3055'
 
   # The API as released (Dockerfile.release), DB and Redis through the proxy.
   api:
