@@ -66,7 +66,10 @@ export function ScribeBar({ runId, className }: { runId: string; className?: str
             onClick={() => stamp.mutate({ mark })}
             className='inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-800 transition-colors duration-150 hover:border-nvr-cyan hover:bg-nvr-cyan/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan active:bg-nvr-cyan/10 disabled:opacity-40 dark:border-border dark:bg-card dark:text-foreground'
           >
-            <Icon className='h-3.5 w-3.5 text-slate-500 dark:text-muted-foreground' aria-hidden />
+            <Icon
+              className='hidden h-3.5 w-3.5 text-slate-500 sm:block dark:text-muted-foreground'
+              aria-hidden
+            />
             {MARK_LABEL[mark]}
           </button>
         ))}

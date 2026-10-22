@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { type ReactNode, useEffect } from 'react'
+import { type ReactNode, useEffect, useLayoutEffect, useRef } from 'react'
 import { Link } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { adminRealtime } from '@/lib/socket'
@@ -241,6 +241,14 @@ export function Timeline({
     .filter((e) => e.kind !== 'sample' || e.data.breach)
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id - b.id)
   const hidden = events.length - shown.length
+  // Live (compact): follow the newest event, unless the reader has scrolled up to look back.
+  const listRef = useRef<HTMLOListElement>(null)
+  const pinned = useRef(true)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run when a row lands
+  useLayoutEffect(() => {
+    const el = listRef.current
+    if (compact && el && pinned.current) el.scrollTop = el.scrollHeight
+  }, [compact, shown.length])
   return (
     <section>
       <h3 className='mb-2 flex items-baseline gap-2 text-[12.5px] font-semibold text-slate-900 dark:text-foreground'>
@@ -257,13 +265,22 @@ export function Timeline({
         </p>
       ) : (
         <ol
+          ref={listRef}
+          onScroll={(ev) => {
+            const el = ev.currentTarget
+            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+          }}
           className={cn(
             'divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border/60 dark:border-border dark:bg-card',
-            compact && 'max-h-72 overflow-y-auto'
+            // Phones get the whole list in the page scroll; a nested scroller there hides rows.
+            compact && 'sm:max-h-72 sm:overflow-y-auto sm:overscroll-contain'
           )}
         >
           {shown.map((e) => (
-            <li key={e.id} className='flex items-baseline gap-3 px-3 py-1.5 text-[12px]'>
+            <li
+              key={e.id}
+              className='flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-1.5 text-[12px] sm:flex-nowrap'
+            >
               <time
                 dateTime={e.at}
                 className='w-[84px] shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-slate-500 dark:text-muted-foreground'
@@ -276,13 +293,18 @@ export function Timeline({
               </time>
               <span
                 className={cn(
-                  'w-16 shrink-0 font-medium',
-                  e.kind === 'sample' ? 'text-red-700 dark:text-red-300' : EVENT_TONE[e.kind]
+                  'shrink-0 font-medium sm:w-16',
+                  e.kind === 'sample'
+                    ? 'text-red-700 dark:text-red-300'
+                    : // Red marks a fault that is armed now; afterwards "armed" is just history.
+                      e.kind === 'armed' && !compact
+                      ? 'text-slate-700 dark:text-foreground'
+                      : EVENT_TONE[e.kind]
                 )}
               >
                 {e.kind === 'sample' ? 'crossed' : e.kind}
               </span>
-              <span className='min-w-0 flex-1 break-words text-slate-700 dark:text-foreground'>
+              <span className='min-w-0 basis-full break-words text-slate-700 sm:flex-1 sm:basis-auto dark:text-foreground'>
                 {eventText(e)}
               </span>
             </li>

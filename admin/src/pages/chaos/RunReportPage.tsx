@@ -219,7 +219,7 @@ function RefusedReport({ data }: { data: FullReport }) {
             {checks.map((c) => (
               <li key={c.key} className='flex items-start gap-2.5 px-3 py-2.5 text-[12.5px]'>
                 <X
-                  className='mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400'
+                  className='mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400'
                   aria-hidden
                 />
                 <div className='min-w-0'>
@@ -445,7 +445,9 @@ function VerdictHeader({ data }: { data: FullReport }) {
           </p>
         )}
         {reason && (
-          <p className='mt-1 text-[12.5px] text-slate-700 dark:text-foreground'>{reason}</p>
+          <p className='mt-1 text-[12.5px] text-slate-700 dark:text-foreground'>
+            <SamplerText text={reason} />
+          </p>
         )}
         <p className='mt-1 break-words text-[12px] text-slate-500 dark:text-muted-foreground'>
           <span className='font-mono text-[11.5px]'>{run.fault_key ?? run.kind}</span> on{' '}
@@ -455,6 +457,50 @@ function VerdictHeader({ data }: { data: FullReport }) {
         </p>
       </div>
     </div>
+  )
+}
+
+/** Server text naming a sampler key ("http.p95_ms stayed over 900") with the plain label. */
+function SamplerText({ text }: { text: string }) {
+  const keys = Object.keys(SAMPLER_LABELS).filter((k) => text.includes(k))
+  if (!keys.length) return <>{text}</>
+  const re = new RegExp(`(${keys.map((k) => k.replace(/\./g, '\\.')).join('|')})`)
+  return (
+    <>
+      {text.split(re).map((part, i) =>
+        SAMPLER_LABELS[part] ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: split parts have no identity
+          <span key={i}>
+            <span className='font-medium'>{SAMPLER_LABELS[part].label}</span>{' '}
+            <span className='font-mono text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              ({part})
+            </span>
+          </span>
+        ) : (
+          part
+        )
+      )}
+    </>
+  )
+}
+
+/** A route template that breaks after a slash, never inside a word. */
+function RouteText({ route }: { route: string }) {
+  const parts = route.split('/')
+  return (
+    <>
+      {parts.map((p, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: path segments repeat
+        <span key={i}>
+          {p}
+          {i < parts.length - 1 && (
+            <>
+              /<wbr />
+            </>
+          )}
+        </span>
+      ))}
+    </>
   )
 }
 
@@ -619,8 +665,8 @@ function ErrorsPanel({ data }: { data: FullReport }) {
           <tbody className='divide-y divide-slate-100 dark:divide-border/60'>
             {e.server.map((r) => (
               <tr key={r.route}>
-                <td className='break-all px-3 py-1.5 font-mono text-[11.5px] text-slate-800 dark:text-foreground'>
-                  {r.route}
+                <td className='px-3 py-1.5 font-mono text-[11.5px] text-slate-800 [overflow-wrap:anywhere] dark:text-foreground'>
+                  <RouteText route={r.route} />
                 </td>
                 <td className='px-3 py-1.5 text-right tabular-nums text-slate-800 dark:text-foreground'>
                   {r.count}

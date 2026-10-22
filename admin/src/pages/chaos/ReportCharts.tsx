@@ -237,7 +237,7 @@ export function ChartKey() {
       <span className={item}>
         <span
           aria-hidden
-          className='w-4 border-t-[1.5px] border-dashed'
+          className='w-4 border-t-2 border-dashed'
           style={{ borderColor: colors.broke }}
         />
         Limit
@@ -245,7 +245,7 @@ export function ChartKey() {
       <span className={item}>
         <span
           aria-hidden
-          className='h-3 border-l border-dashed'
+          className='h-3.5 border-l-2 border-dashed'
           style={{ borderColor: colors.aborted }}
         />
         Alert
@@ -253,7 +253,7 @@ export function ChartKey() {
       <span className={item}>
         <span
           aria-hidden
-          className='h-3 border-l border-dashed'
+          className='h-3.5 border-l-2 border-dashed'
           style={{ borderColor: colors.info }}
         />
         Note
