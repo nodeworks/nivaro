@@ -11,6 +11,7 @@ import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn, formatNumber } from '@/lib/utils'
+import { RestorePointsPanel, type StoredSnapshotMeta, TriggerBadge } from './ConfigRestorePoints'
 
 interface Instance {
   version: string
@@ -75,7 +76,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
 /** Pull this table's rows FROM the uploaded snapshot onto this instance —
  *  preview first (exact insert/update counts), then an inline amber confirm.
  *  Upsert-only server-side; rows present here but absent in the snapshot are
- *  never deleted. */
+ *  never deleted. One transaction per table: all of it or none. */
 function ApplyControls({
   table,
   snapshot,
@@ -90,6 +91,8 @@ function ApplyControls({
     updates: number
     unchanged: number
     skipped_keyless: number
+    skipped_inactive_user?: number
+    plan_hash: string
   } | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -102,24 +105,36 @@ function ApplyControls({
     try {
       const r = await api.post<{
         data: Record<string, number> & { errors?: Array<{ key: string; error: string }> }
-      }>('/config-diff/apply', { snapshot, table, mode })
+      }>('/config-diff/apply', {
+        snapshot,
+        table,
+        mode,
+        ...(mode === 'apply' ? { plan_hash: preview?.plan_hash } : {})
+      })
       if (mode === 'preview') {
         setPreview(r.data.data as never)
         setConfirming(false)
       } else {
         const d = r.data.data
-        setResult(
-          `${d.inserted} inserted, ${d.updated} updated${(d.errors?.length ?? 0) > 0 ? `, ${d.errors?.length} failed` : ''}`
-        )
+        // The table applies in one transaction: a failing row means nothing was written.
+        if ((d.errors?.length ?? 0) > 0) {
+          setErr(`Nothing applied — ${d.errors?.[0]?.error ?? 'a row failed'}`)
+          setResult(null)
+        } else setResult(`${d.inserted} inserted, ${d.updated} updated`)
         setPreview(null)
         setConfirming(false)
         onApplied()
       }
     } catch (e) {
-      setErr(
-        (e as { response?: { data?: { error?: string } } }).response?.data?.error ??
-          (e instanceof Error ? e.message : 'Apply failed')
-      )
+      const res = (
+        e as { response?: { data?: { error?: string; code?: string; preview?: never } } }
+      ).response
+      // Bound to the preview: the table moved since — show the new counts, apply again.
+      if (res?.data?.code === 'STALE' && res.data.preview) {
+        setPreview(res.data.preview)
+        setConfirming(false)
+      }
+      setErr(res?.data?.error ?? (e instanceof Error ? e.message : 'Apply failed'))
     } finally {
       setBusy(false)
     }
@@ -143,6 +158,9 @@ function ApplyControls({
           <span className='text-[11.5px] text-muted-foreground'>
             {preview.inserts} inserts · {preview.updates} updates · {preview.unchanged} unchanged
             {preview.skipped_keyless > 0 ? ` · ${preview.skipped_keyless} keyless skipped` : ''}
+            {(preview.skipped_inactive_user ?? 0) > 0
+              ? ` · ${preview.skipped_inactive_user} grants to inactive people skipped`
+              : ''}
           </span>
         )}
         {preview && preview.inserts + preview.updates > 0 && !confirming && (
@@ -297,19 +315,6 @@ function TableDiffRow({
   )
 }
 
-interface StoredSnapshotMeta {
-  id: number
-  taken_at: string
-  version: string | null
-  environment: string | null
-  tables: number
-  rows: number
-  content_hash: string
-  bytes: number
-  trigger: string
-  same_as_previous: boolean
-}
-
 /**
  * #523 — "what drifted since <night>". The nightly `config-snapshot` cron
  * stores one gzipped snapshot a day; this diffs the live rows against any
@@ -390,7 +395,7 @@ function SincePanel() {
                 key={h.id}
                 type='button'
                 onClick={() => setPick(h.id)}
-                title={`${h.tables} tables · ${h.rows.toLocaleString()} rows · ${h.version ?? ''}${h.same_as_previous ? ' · identical to the night before' : ''}`}
+                data-tip={`${h.note ? `${h.note} · ` : ''}${h.tables} tables · ${h.rows.toLocaleString()} rows · ${h.version ?? ''}${h.same_as_previous ? ' · identical to the one before' : ''}`}
                 className={`rounded-md border px-2 py-0.5 text-[11.5px] tabular-nums ${
                   h.id === target
                     ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
@@ -398,8 +403,8 @@ function SincePanel() {
                 } ${h.same_as_previous ? 'opacity-60' : ''}`}
               >
                 {when(h.taken_at)}
-                {h.trigger === 'manual' && (
-                  <span className='ml-1 text-[10px] text-slate-400'>manual</span>
+                {h.trigger !== 'cron' && (
+                  <TriggerBadge trigger={h.trigger} className='ml-1 px-1 py-0 text-[9.5px]' />
                 )}
               </button>
             ))}
@@ -585,6 +590,7 @@ export function ConfigDiffPage() {
         )}
 
         <SincePanel />
+        <RestorePointsPanel />
 
         {!diff ? (
           <div className='rounded-lg border border-slate-200 bg-white p-8 text-center dark:border-border dark:bg-card'>

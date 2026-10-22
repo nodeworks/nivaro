@@ -7,8 +7,16 @@ import {
   buildConfigSnapshot,
   type ConfigSnapshot,
   classifyTables,
-  diffSnapshots
+  diffSnapshots,
+  redactSnapshot
 } from '../services/config-inventory.js'
+import { markConfigRead } from '../services/config-live.js'
+import {
+  applyRestore,
+  applyUploadedTable,
+  previewRestore,
+  RestoreError
+} from '../services/config-restore.js'
 import {
   diffSinceSnapshot,
   listConfigSnapshots,
@@ -83,14 +91,99 @@ export async function configDiffRoutes(app: FastifyInstance) {
   app.get('/config-diff/history', { preHandler: requireAdmin }, async () => ({
     data: await listConfigSnapshots()
   }))
-  app.post('/config-diff/history', { preHandler: requireAdmin }, async (req) => {
-    const meta = await takeConfigSnapshot('manual', req.user?.id ?? null)
-    await logActivity({
-      action: 'config-snapshot-store',
-      user: req.user?.id ?? null,
-      comment: `${meta.tables} tables, ${meta.rows} rows`
+  /**
+   * Store a snapshot now. Body (optional): `{ trigger: 'manual' | 'pre-deploy', version?, note? }`.
+   * The deploy script sends `{ trigger: 'pre-deploy', version: '<new version>' }` before it rolls
+   * the stack (#2803). 'cron', 'pre-migration' and 'pre-restore' are taken by the server itself.
+   */
+  app.post('/config-diff/history', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = (req.body ?? {}) as { trigger?: unknown; version?: unknown; note?: unknown }
+    const trigger = body.trigger == null || body.trigger === '' ? 'manual' : body.trigger
+    if (trigger !== 'manual' && trigger !== 'pre-deploy') {
+      return reply.code(400).send({ error: "trigger must be 'manual' or 'pre-deploy'" })
+    }
+    const version = body.version == null || body.version === '' ? null : body.version
+    if (version !== null && (typeof version !== 'string' || !/^[\w.+-]{1,40}$/.test(version))) {
+      return reply.code(400).send({ error: 'version must be up to 40 letters, digits or . _ + -' })
+    }
+    if (body.note != null && typeof body.note !== 'string') {
+      return reply.code(400).send({ error: 'note must be text' })
+    }
+    const extra = typeof body.note === 'string' ? body.note.trim().slice(0, 300) : ''
+    const note =
+      trigger === 'pre-deploy'
+        ? [`Before deploying ${version ?? 'a new version'}`, extra].filter(Boolean).join(' — ')
+        : extra || null
+    const meta = await takeConfigSnapshot(trigger, {
+      userId: req.user?.id ?? null,
+      note,
+      targetVersion: version
     })
+    if (!note) {
+      await logActivity({
+        action: 'config-snapshot-store',
+        user: req.user?.id ?? null,
+        collection: 'nivaro_config_snapshots',
+        item: String(meta.id),
+        req
+      })
+    }
     return { data: meta }
+  })
+
+  /**
+   * #2803 — restore config to a stored snapshot. Body `{ mode: 'preview' | 'apply',
+   * plan_hash?, tables?, allow_cascade? }`. Preview writes nothing and returns per-table insert/update/delete
+   * counts, row diffs and a plan hash; apply needs that hash and answers 409 STALE with a fresh
+   * preview when live config moved since. Before writing, a 'pre-restore' snapshot of the
+   * touched tables is stored — restoring it undoes the restore.
+   */
+  app.post('/config-diff/history/:id/restore', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number((req.params as { id: string }).id)
+    if (!Number.isInteger(id) || id <= 0) return reply.code(400).send({ error: 'Bad snapshot id' })
+    const body = (req.body ?? {}) as {
+      mode?: unknown
+      plan_hash?: unknown
+      tables?: unknown
+      allow_cascade?: unknown
+    }
+    const allowCascade = body.allow_cascade === true
+    const mode = body.mode === 'apply' ? 'apply' : body.mode === 'preview' ? 'preview' : null
+    if (!mode) return reply.code(400).send({ error: "mode must be 'preview' or 'apply'" })
+    let tables: string[] | null = null
+    if (body.tables != null) {
+      if (
+        !Array.isArray(body.tables) ||
+        body.tables.length > 500 ||
+        !body.tables.every((t) => typeof t === 'string' && /^nivaro_[a-z0-9_]+$/i.test(t))
+      ) {
+        return reply.code(400).send({ error: 'tables must be a list of nivaro_* table names' })
+      }
+      tables = body.tables as string[]
+    }
+    try {
+      if (mode === 'preview') {
+        markConfigRead(req)
+        return { data: await previewRestore(id, tables, allowCascade) }
+      }
+      const hash = String(body.plan_hash ?? '')
+      if (!/^[0-9a-f]{64}$/.test(hash)) {
+        return reply.code(400).send({ error: 'plan_hash from the preview is required' })
+      }
+      const result = await applyRestore(id, {
+        planHash: hash,
+        tables,
+        allowCascade,
+        userId: req.user?.id ?? null,
+        req
+      })
+      return { data: result }
+    } catch (err) {
+      if (err instanceof RestoreError) {
+        return reply.code(err.status).send({ error: err.message, code: err.code, ...err.extra })
+      }
+      throw err
+    }
   })
   app.get('/config-diff/since', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as { id?: string; at?: string }
@@ -152,18 +245,20 @@ export async function configDiffRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const body = req.body as { snapshot?: ConfigSnapshot } | ConfigSnapshot | undefined
-      const theirs = (body && 'snapshot' in body ? body.snapshot : body) as
+      const uploaded = (body && 'snapshot' in body ? body.snapshot : body) as
         | ConfigSnapshot
         | undefined
 
-      if (!theirs || typeof theirs !== 'object' || !theirs.tables) {
+      if (!uploaded || typeof uploaded !== 'object' || !uploaded.tables) {
         return reply.code(400).send({ error: 'Body must be a config snapshot (or {snapshot})' })
       }
-      if (theirs.format !== 1) {
+      if (uploaded.format !== 1) {
         return reply
           .code(400)
-          .send({ error: `Unsupported snapshot format: ${String(theirs.format)}` })
+          .send({ error: `Unsupported snapshot format: ${String(uploaded.format)}` })
       }
+      // A file written by an older build may still carry a credential column: never echoed.
+      const theirs = redactSnapshot(uploaded)
 
       // Only build the tables the uploaded snapshot actually carries — comparing
       // against tables it never captured would report every row as "added here",
@@ -194,9 +289,11 @@ export async function configDiffRoutes(app: FastifyInstance) {
    *   the missing column instead of failing the row.
    * - Rows keyed `#<hash>` (no id column) cannot be upserted by identity and
    *   are reported as skipped.
-   * - mode 'preview' computes the exact plan and writes nothing; 'apply'
-   *   executes it. The client always previews first, but the server does not
-   *   trust it to.
+   * - mode 'preview' computes the exact plan and its hash and writes nothing;
+   *   'apply' needs that hash (409 STALE when the table moved since).
+   * - The engine is services/config-restore.ts (shared with the stored-snapshot
+   *   restore): RESTORE_EXCLUDED tables refused, grants only for active people,
+   *   one locked transaction — all of the table or none of it.
    */
   app.post(
     '/config-diff/apply',
@@ -207,149 +304,46 @@ export async function configDiffRoutes(app: FastifyInstance) {
         table?: string
         keys?: string[]
         mode?: 'preview' | 'apply'
+        plan_hash?: string
       }
-      const theirs = body?.snapshot
+      const uploaded = body?.snapshot
       const table = String(body?.table ?? '')
       const mode = body?.mode === 'apply' ? 'apply' : 'preview'
-      if (!theirs || typeof theirs !== 'object' || !theirs.tables || theirs.format !== 1) {
+      if (!uploaded || typeof uploaded !== 'object' || !uploaded.tables || uploaded.format !== 1) {
         return reply.code(400).send({ error: 'Body must carry a format-1 config snapshot' })
       }
       if (!/^nivaro_[a-z0-9_]+$/i.test(table)) {
         return reply.code(400).send({ error: 'table must be a nivaro_* table name' })
       }
-      const theirRows = theirs.tables[table]
-      if (!theirRows) {
-        return reply.code(400).send({ error: `The snapshot does not carry ${table}` })
+      if (mode === 'apply' && !/^[0-9a-f]{64}$/.test(String(body?.plan_hash ?? ''))) {
+        return reply.code(400).send({ error: 'plan_hash from the preview is required' })
       }
-      const presentRows = (await db.raw(
-        `SELECT name FROM sys.tables WHERE name LIKE 'nivaro[_]%'`
-      )) as Array<{ name: string }>
-      const classification = classifyTables(presentRows.map((r) => r.name))
-      if (!classification.config.includes(table)) {
-        return reply
-          .code(400)
-          .send({ error: `${table} is not a CONFIG table on this instance — only config applies` })
-      }
-
-      // Live side, same redaction/hashing as the snapshot so comparison is honest.
-      const mine = await buildConfigSnapshot({
-        tables: [table],
-        version: NIVARO_VERSION,
-        environment: config.NODE_ENV
-      })
-      const mineRows = mine.tables[table] ?? {}
-
-      const scope =
-        Array.isArray(body?.keys) && body.keys.length > 0 ? new Set(body.keys.map(String)) : null
-      const inserts: string[] = []
-      const updates: string[] = []
-      const skippedKeyless: string[] = []
-      for (const [key, row] of Object.entries(theirRows)) {
-        if (scope && !scope.has(key)) continue
-        if (key.startsWith('#')) {
-          skippedKeyless.push(key)
-          continue
-        }
-        const current = mineRows[key]
-        if (!current) inserts.push(key)
-        else if (current.hash !== row.hash) updates.push(key)
-      }
-
-      const CAP = 5000
-      const planned = inserts.length + updates.length
-      if (planned > CAP) {
-        return reply.code(400).send({
-          error: `${planned} rows planned — the per-apply cap is ${CAP}. Scope with keys[].`
+      if (mode === 'preview') markConfigRead(req)
+      const theirs = redactSnapshot(uploaded)
+      try {
+        const out = await applyUploadedTable(theirs, table, {
+          mode,
+          planHash: body?.plan_hash ?? null,
+          keys: Array.isArray(body?.keys) ? body.keys.map(String) : null,
+          userId: req.user?.id ?? null
         })
-      }
-
-      if (mode === 'preview') {
-        return reply.send({
-          data: {
-            table,
-            inserts: inserts.length,
-            updates: updates.length,
-            unchanged: Object.keys(theirRows).length - planned - skippedKeyless.length,
-            skipped_keyless: skippedKeyless.length,
-            insert_keys: inserts.slice(0, 50),
-            update_keys: updates.slice(0, 50)
-          }
-        })
-      }
-
-      // Live column set — snapshot keys are untrusted; only plain identifiers
-      // that exist on the target table reach SQL (the promotion precedent).
-      const colRows = (await db.raw(
-        `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?`,
-        [table]
-      )) as Array<{ name: string }>
-      const liveCols = new Set(colRows.map((c) => c.name))
-      const identRe = /^[A-Za-z_][A-Za-z0-9_]*$/
-      const identityRows = (await db.raw(
-        `SELECT COLUMN_NAME AS name FROM information_schema.columns
-         WHERE TABLE_NAME = ? AND COLUMNPROPERTY(OBJECT_ID(TABLE_NAME), COLUMN_NAME, 'IsIdentity') = 1`,
-        [table]
-      )) as Array<{ name: string }>
-      const hasIdentity = identityRows.some((c) => c.name === 'id')
-
-      const filterCols = (data: Record<string, unknown>) => {
-        const out: Record<string, unknown> = {}
-        for (const [k, v] of Object.entries(data)) {
-          if (!identRe.test(k) || !liveCols.has(k)) continue
-          out[k] = v
+        if (mode === 'apply') {
+          const done = out as { inserted: number; updated: number }
+          await logActivity({
+            action: 'config-apply',
+            user: req.user?.id,
+            collection: table,
+            comment: `applied from snapshot (${theirs.instance?.environment ?? '?'} ${theirs.instance?.version ?? ''}): ${done.inserted} inserted, ${done.updated} updated`,
+            req
+          })
         }
-        return out
-      }
-
-      let inserted = 0
-      let updated = 0
-      const errors: Array<{ key: string; error: string }> = []
-      for (const key of updates) {
-        try {
-          const patch = filterCols(theirRows[key].data)
-          delete patch.id
-          if (Object.keys(patch).length === 0) continue
-          await db(table).where('id', key).update(patch)
-          updated++
-        } catch (err) {
-          errors.push({ key, error: err instanceof Error ? err.message.slice(0, 200) : 'failed' })
+        return reply.send({ data: out })
+      } catch (err) {
+        if (err instanceof RestoreError) {
+          return reply.code(err.status).send({ error: err.message, code: err.code, ...err.extra })
         }
+        throw err
       }
-      for (const key of inserts) {
-        try {
-          const row = filterCols(theirRows[key].data)
-          if (hasIdentity && row.id != null) {
-            // IDENTITY_INSERT must live inside ONE batch (trash-restore precedent).
-            const cols = Object.keys(row)
-            await db.raw(
-              `SET IDENTITY_INSERT [${table}] ON;
-               INSERT INTO [${table}] (${cols.map((c) => `[${c}]`).join(', ')})
-               VALUES (${cols.map(() => '?').join(', ')});
-               SET IDENTITY_INSERT [${table}] OFF;`,
-              cols.map((c) => {
-                const v = row[c]
-                return v !== null && typeof v === 'object' ? JSON.stringify(v) : (v as never)
-              })
-            )
-          } else {
-            await db(table).insert(row)
-          }
-          inserted++
-        } catch (err) {
-          errors.push({ key, error: err instanceof Error ? err.message.slice(0, 200) : 'failed' })
-        }
-      }
-
-      await logActivity({
-        action: 'config-apply',
-        user: req.user?.id,
-        collection: table,
-        comment: `applied from snapshot (${theirs.instance?.environment ?? '?'} ${theirs.instance?.version ?? ''}): ${inserted} inserted, ${updated} updated${errors.length ? `, ${errors.length} failed` : ''}`,
-        req
-      })
-      return reply.send({
-        data: { table, inserted, updated, skipped_keyless: skippedKeyless.length, errors }
-      })
     }
   )
 }

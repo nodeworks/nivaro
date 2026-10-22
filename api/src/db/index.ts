@@ -58,7 +58,7 @@ export function isMssql(): boolean {
   return config.DB_CLIENT === 'mssql'
 }
 
-function buildConnection(host: string, port: number) {
+export function buildConnection(host: string, port: number) {
   if (config.DB_CLIENT === 'mssql') {
     return {
       server: host,
@@ -87,7 +87,7 @@ function buildConnection(host: string, port: number) {
   }
 }
 
-const writePort = config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
+export const writePort = config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
 
 // The static Knex instance — used in self-hosted mode and for migration/lock calls
 // that run outside of a request context (no ALS value set).
