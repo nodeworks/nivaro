@@ -75,7 +75,7 @@ describe('blind drills (#2854)', () => {
     const start = await app.inject({
       method: 'POST',
       url: '/blind/runs',
-      payload: { fault_key: 'slow_requests', seconds: 60 }
+      payload: { fault_key: 'slow_requests', seconds: 60, override: { working_hours: true } }
     })
     expect(start.statusCode).toBe(201)
     const runId = start.json().data.run.id

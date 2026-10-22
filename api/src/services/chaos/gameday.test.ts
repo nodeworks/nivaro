@@ -37,6 +37,7 @@ import {
   declareIncident,
   endGameday,
   fireDue,
+  reportEvents,
   revealGameday,
   runGamedayTick,
   startGameday,
@@ -263,6 +264,19 @@ describe('scribe marks (#2853) and declare (#2854)', () => {
       addNote(run.id, { mark: 'noticed' }, { id: OUTSIDER, name: 'O', operator: false })
     ).rejects.toMatchObject({ code: 'CHAOS_NOT_PARTICIPANT' })
     await expect(addNote(run.id, {}, op)).rejects.toThrow(/Pick a mark/)
+  })
+
+  it('a fault run’s report borrows the day’s marks from its window (#2849)', async () => {
+    const { run } = await createGameday(plan(), op)
+    await startGameday(run.id, op)
+    const childId = String((await steps(run.id)).find((d) => d.inject_id === 'a')?.child_run_id)
+    await addNote(run.id, { mark: 'noticed' }, { id: RESP, name: 'R', operator: false })
+    const child = await getRun(childId)
+    const evs = await reportEvents(child!)
+    const borrowed = evs.filter((e) => e.kind === 'note' && e.data.mark === 'noticed')
+    expect(borrowed).toHaveLength(1)
+    expect(borrowed[0].id).toBeLessThan(0)
+    expect(borrowed[0].run_id).toBe(childId)
   })
 
   it('declare stamps a declared mark on every running day', async () => {

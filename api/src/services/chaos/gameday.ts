@@ -907,3 +907,22 @@ export function _resetGamedayForTests(): void {
   for (const id of [...timers.keys()]) clearInjectTimers(id)
   localClaims.clear()
 }
+
+/**
+ * A run's events for its report (#2849): a game day's fault run gets the day's scribe marks
+ * stamped inside its window (+5 min), since people stamp on the day, not on one fault. Ids of
+ * the borrowed events are negated so they never collide with the run's own.
+ */
+export async function reportEvents(run: ChaosRun): Promise<ChaosRunEvent[]> {
+  const own = await listRunEvents(run.id, { limit: 3000 })
+  if (!run.gameday_id || !run.started_at) return own
+  const from = Date.parse(run.started_at)
+  const to = Date.parse(run.ended_at ?? run.ends_at ?? '') + 5 * 60_000
+  const borrowed = (await listRunEvents(run.gameday_id, { kinds: ['note'], limit: 3000 }))
+    .filter((e) => {
+      const t = Date.parse(e.at)
+      return t >= from && (!Number.isFinite(to) || t <= to)
+    })
+    .map((e) => ({ ...e, id: -e.id, run_id: run.id }))
+  return [...own, ...borrowed].sort((a, b) => a.at.localeCompare(b.at))
+}

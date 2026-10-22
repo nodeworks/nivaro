@@ -229,7 +229,7 @@ export function GameDayDetail({ id, onEdit }: { id: string; onEdit: () => void }
               </>
             )}
             {ended && (
-              <Link to={`/chaos?tab=runs&run=${run.id}`} className={btnSecondary}>
+              <Link to={`/chaos/runs/${run.id}`} className={btnSecondary}>
                 Open the report
               </Link>
             )}
@@ -347,7 +347,7 @@ export function GameDayDetail({ id, onEdit }: { id: string; onEdit: () => void }
               {children.map((c) => (
                 <li key={c.id}>
                   <Link
-                    to={`/chaos?tab=runs&run=${c.id}`}
+                    to={`/chaos/runs/${c.id}`}
                     className='flex items-center gap-3 px-3 py-2 text-[12.5px] transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-muted'
                   >
                     <span className='min-w-0 flex-1 truncate text-slate-900 dark:text-foreground'>
@@ -552,7 +552,7 @@ function InjectRow({
       )}
       {child && (
         <Link
-          to={`/chaos?tab=runs&run=${child}`}
+          to={`/chaos/runs/${child}`}
           className='text-[11.5px] text-slate-700 underline underline-offset-2 dark:text-foreground'
         >
           Run

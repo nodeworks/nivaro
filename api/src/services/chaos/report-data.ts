@@ -2,7 +2,7 @@ import { db } from '../../db/index.js'
 import { routeTemplate } from '../traffic-entities.js'
 import type { ErrorsSeen } from './postmortem.js'
 import { buildRunReport, type RunFigures, runFigures } from './report.js'
-import { type ChaosRun, listRunEvents, updateRun } from './runs.js'
+import { type ChaosRun, updateRun } from './runs.js'
 
 /**
  * The reads behind the run report, matrix and trends (#2849 #2850 #2859): errors people saw in
@@ -149,7 +149,8 @@ export async function figuresFor(
     if (budget <= 0) continue
     budget--
     try {
-      const events = await listRunEvents(run.id, { limit: 3000 })
+      const { reportEvents } = await import('./gameday.js')
+      const events = await reportEvents(run)
       const figures = runFigures(buildRunReport(run, events))
       out.set(run.id, figures)
       const ended = run.ended_at ? new Date(run.ended_at).getTime() : null

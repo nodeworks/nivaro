@@ -3,13 +3,14 @@ import { adminBaseUrl } from '../admin-base.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { listFaults } from '../services/chaos/catalog.js'
 import { claimStatuses, claimsReadiness } from '../services/chaos/claims.js'
+import { reportEvents } from '../services/chaos/gameday.js'
 import { chaosRefusal } from '../services/chaos/gate.js'
 import { buildMatrix } from '../services/chaos/matrix.js'
 import { postmortemMarkdown } from '../services/chaos/postmortem.js'
 import { wireRecoveryWatch } from '../services/chaos/recovery.js'
 import { buildRunReport } from '../services/chaos/report.js'
 import { errorsSeen, figuresFor, listPartners, userNames } from '../services/chaos/report-data.js'
-import { getRun, listRunEvents, listRuns } from '../services/chaos/runs.js'
+import { getRun, listRuns } from '../services/chaos/runs.js'
 import { buildTrends } from '../services/chaos/trends.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 
@@ -58,7 +59,8 @@ const runLink = (id: string): string | null => {
 async function loadReport(id: string) {
   const run = await getRun(id)
   if (!run) return null
-  const events = await listRunEvents(run.id, { limit: 3000 })
+  // Game-day fault runs also carry the day's scribe marks from their window (#2853).
+  const events = await reportEvents(run)
   const report = buildRunReport(run, events)
   const from = report.armed_at ? new Date(report.armed_at).getTime() : null
   const to = report.disarmed_at ? new Date(report.disarmed_at).getTime() : Date.now()

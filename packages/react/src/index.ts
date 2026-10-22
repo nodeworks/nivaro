@@ -4,6 +4,7 @@
 export type { CascadeFilterRule, FieldDependencyConfig } from '@nivaro/sdk'
 // Expression engine result types (the functions were already exported)
 export type {
+  ActiveGameday,
   ApiVersionInfo,
   BannerLine,
   BaseMapBubble,
@@ -92,6 +93,7 @@ export type {
 // Browser chaos mode (#2840), the personal chaos toolbar (#2856) and "Pretend down" (#2858).
 // A host calls installClientChaosFetch() first thing at boot and mounts <ClientChaosToolbar>.
 export {
+  ACTIVE_GAMEDAYS_KEY,
   ACTIVE_USER_OPTION_FILTER,
   AccessDeniedPanel,
   AddendumPanel,
@@ -266,6 +268,7 @@ export {
   formatStatusExpiry,
   formatValue,
   formulaConstant,
+  GameDayStrip,
   type GatedClient,
   GridFlushContext,
   getApiUpdate,
@@ -586,6 +589,7 @@ export {
   UserRosterCluster,
   updateItemIds,
   updateTouches,
+  useActiveGamedays,
   useAfterIdle,
   useApiFetchConfig,
   useApiUpdate,
