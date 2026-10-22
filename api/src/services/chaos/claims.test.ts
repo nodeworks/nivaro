@@ -156,6 +156,22 @@ describe('matrix', () => {
       placeRun({ fault_key: 'ai_gateway_fault', params: { mode: 'timeout' } }, { area: 'outbound' })
     ).toEqual([{ dependency: 'ai', kind: 'down' }])
     expect(kindFromWords('latency')).toBe('slow')
+    expect(placeRun({ fault_key: 'redis_partition', params: {} })).toEqual([
+      { dependency: 'redis', kind: 'partitioned' },
+      { dependency: 'sockets', kind: 'partitioned' }
+    ])
+    expect(
+      placeRun({ fault_key: 'oidc_down', params: { mode: 'slow' } }, { area: 'outbound' })
+    ).toEqual([{ dependency: 'sign-in', kind: 'slow' }])
+    expect(
+      placeRun(
+        { fault_key: 'ai_gateway_fault', params: { mode: 'model_refused' } },
+        { area: 'outbound' }
+      )
+    ).toEqual([{ dependency: 'ai', kind: 'errors' }])
+    expect(
+      placeRun({ fault_key: 'graph_down', params: { mode: 'down' } }, { area: 'outbound' })
+    ).toEqual([])
   })
 
   it('places the database, storage and partner faults as c-fdb registers them', () => {

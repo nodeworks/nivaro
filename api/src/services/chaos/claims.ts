@@ -173,7 +173,7 @@ function seedClaims(): void {
     area: 'redis',
     statement:
       'When Redis is unreachable, requests keep answering, signed-in sessions hold and caches miss instead of erroring.',
-    proving: ['redis_pause', 'redis_latency', 'redis_readonly', 'redis_key_loss'],
+    proving: ['redis_pause', 'redis_latency', 'redis_readonly', 'redis_key_loss', 'redis_evict'],
     source: 'plugins/redis.ts, services/read-gate.ts'
   })
   registerClaim({
@@ -197,7 +197,7 @@ function seedClaims(): void {
     area: 'sockets',
     statement:
       'Sockets reconnect and catch up after drops, delays or a replica cut off from pub/sub — nothing lost or doubled.',
-    proving: ['socket_drill', 'replica_partition'],
+    proving: ['socket_drill', 'redis_partition'],
     source: 'services/socket-chaos.ts, realtime event stream'
   })
   registerClaim({
@@ -253,7 +253,7 @@ function seedClaims(): void {
     area: 'sign-in',
     statement:
       'When the sign-in provider is down, people already signed in keep working and the sign-in page shows a clear error, not a loop.',
-    proving: ['oidc_fault'],
+    proving: ['oidc_down'],
     source: 'auth/oidc.ts'
   })
   registerClaim({
@@ -279,6 +279,14 @@ function seedClaims(): void {
       'A replica whose clock drifts does not expire sessions early, double-run schedules or break SLA timers.',
     proving: ['clock_skew'],
     source: 'services/chaos/clock.ts (appNow)'
+  })
+  registerClaim({
+    key: 'graph.fails_clean',
+    area: 'partners',
+    statement:
+      'When Microsoft Graph is down or slow, directory lookups fail with a clear message and sign-in and saves keep working.',
+    proving: ['graph_down'],
+    source: 'services/microsoft.ts'
   })
   registerClaim({
     key: 'http.slow_honest',
