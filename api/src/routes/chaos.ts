@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { visibleArmedFor } from '../services/chaos/armed-visibility.js'
 import { listFaults } from '../services/chaos/catalog.js'
 import {
   chaosStatus,
@@ -81,9 +82,12 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
   // Everyone signed in: what the banner needs and nothing more.
   await app.register(async (pub) => {
     pub.addHook('preHandler', requireAuth)
-    pub.get('/armed', async () => {
+    pub.get('/armed', async (req) => {
       const why = chaosRefusal()
-      return { data: { allowed: !why, armed: why ? [] : armedFaults().map(publicArmedView) } }
+      // Blind drills (#2854) stay hidden from responders: insiders + operators only.
+      const viewer = { id: req.user?.id ?? null, operator: !!req.isAdmin }
+      const armed = why ? [] : visibleArmedFor(viewer, armedFaults()).map(publicArmedView)
+      return { data: { allowed: !why, armed } }
     })
   })
 

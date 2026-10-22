@@ -4,3 +4,4 @@
  */
 import './http.js'
 import './socket.js'
+import './gameday.js'

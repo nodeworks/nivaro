@@ -3,6 +3,7 @@ import { getIo } from '../io-holder.js'
 import type { JobRunHandle } from '../job-runs.js'
 import { emitToTenant } from '../record-events.js'
 import { currentTenantKey, tenantScopedRoom } from '../tenant-rooms.js'
+import { anyHidden, insiderViews, publicArmed } from './armed-visibility.js'
 import {
   type ArmedFault,
   clampSeconds,
@@ -91,12 +92,30 @@ export async function chaosStatus(): Promise<ChaosStatus> {
 
 export const CHAOS_WATCH_ROOM = 'watch:chaos'
 
-/** Everyone: the armed list changed (the banner re-reads or applies the payload). */
+/**
+ * Everyone: the armed list changed (the banner re-reads or applies the payload). Blind faults
+ * (#2854, armed-visibility.ts) leave the broadcast; their insiders get their fuller list in
+ * their own room right after, and the console watch room gets everything.
+ */
 export function emitArmedChanged(): void {
+  const at = Date.now()
+  const all = armedFaults()
   emitToTenant(currentTenantKey(), 'chaos:armed', {
-    at: Date.now(),
-    armed: armedFaults().map(publicArmedView)
+    at,
+    armed: publicArmed(all).map(publicArmedView)
   })
+  if (!anyHidden(all)) return
+  try {
+    const io = getIo()
+    for (const [userId, list] of insiderViews(all))
+      io?.to(`user:${userId}`).emit('chaos:armed', { at, armed: list.map(publicArmedView) })
+    io?.to(tenantScopedRoom(CHAOS_WATCH_ROOM)).emit('chaos:armed', {
+      at,
+      armed: all.map(publicArmedView)
+    })
+  } catch {
+    /* decoration */
+  }
 }
 
 /** Admins watching the console (`admin:join chaos`): a run changed or got an event. */
