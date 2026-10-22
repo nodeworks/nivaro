@@ -49,6 +49,10 @@ test('compose carries no relay username/password as flag or literal', () => {
   assert.doesNotMatch(c, /MP_SMTP_RELAY_(USERNAME|PASSWORD|SECRET)\s*[:=]/)
 })
 
+test('no relay username or password key is written into the stack files', () => {
+  assert.doesNotMatch(live(compose), /^\s*(-\s+)?(username|password)\s*:/m)
+})
+
 test('relay.example.yml and .env.example hold placeholders only', () => {
   assert.match(relay, /^password:\s*RELAY_PASSWORD\s*$/m)
   assert.match(relay, /^username:\s*RELAY_USERNAME\s*$/m)
@@ -131,6 +135,13 @@ test('recipient regexes release our domains and block customers and probed admin
   assert.match('ANA@NIVARO.DEV', allowed)
   assert.doesNotMatch('ANA@NIVARO.DEV', blocked)
   assert.doesNotMatch('ANA@EVIL.EXAMPLE', allowed)
+})
+
+test('blocked-recipients also blocks subdomains of customer domains', () => {
+  const src = relay.match(/^blocked-recipients: '\(\?i\)(.*)'$/m)[1]
+  const blocked = new RegExp(src, 'i')
+  assert.match('ana@mail.customer-one.example', blocked)
+  assert.match('ANA@EU.CUSTOMER-TWO.EXAMPLE', blocked)
 })
 
 test('only MP_SMTP_RELAY_CONFIG is set as an MP_SMTP_RELAY_* env var in the stack file', () => {
