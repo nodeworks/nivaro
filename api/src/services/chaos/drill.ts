@@ -418,6 +418,35 @@ export async function stopAllDrills(
   return { faults, runs: [...closed] }
 }
 
+// ─── Game-day ids from a request body ─────────────────────────────────────────
+
+/**
+ * A `gameday_id` in a POST /runs body is honoured only when a game-day run with that id is
+ * running and the caller leads it (meta.lead / started_by) or is an administrator; anything
+ * else is stripped, so the pre-flight's "one drill at a time" exemption cannot be claimed by
+ * naming another drill's id. The scheduler calls startDrill() server-side and stays trusted.
+ */
+export async function trustedGamedayId(
+  raw: unknown,
+  caller: { id: string | null; isAdmin: boolean }
+): Promise<{ gameday_id: string | null; note: string | null }> {
+  if (raw == null || raw === '') return { gameday_id: null, note: null }
+  const id = String(raw).slice(0, 80)
+  const runs = await listRuns({ status: 'running', kind: 'gameday', limit: 50 })
+  const day = runs.find((r) => r.gameday_id === id)
+  if (!day)
+    return { gameday_id: null, note: `gameday_id ${id} ignored: no running game day by that id` }
+  const lead = typeof day.meta.lead === 'string' ? day.meta.lead.toLowerCase() : null
+  const me = caller.id?.toLowerCase() ?? null
+  const leads = !!me && (me === lead || me === day.started_by?.toLowerCase())
+  if (!leads && !caller.isAdmin)
+    return {
+      gameday_id: null,
+      note: `gameday_id ${id} ignored: the caller does not lead that game day`
+    }
+  return { gameday_id: id, note: null }
+}
+
 // ─── Record-only runs (CI, game-day steps measured elsewhere) ──────────────────
 
 export interface RecordRunInput {

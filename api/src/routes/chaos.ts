@@ -9,7 +9,8 @@ import {
   type StartDrillInput,
   startDrill,
   stopAllDrills,
-  stopDrill
+  stopDrill,
+  trustedGamedayId
 } from '../services/chaos/drill.js'
 import { ChaosError, chaosRefusal } from '../services/chaos/gate.js'
 import { requireChaosOperator } from '../services/chaos/operator.js'
@@ -181,6 +182,12 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
       if (refused) return refused
       const b = req.body ?? {}
       try {
+        // A body gameday_id is only trusted when the caller leads that running game day.
+        const day = await trustedGamedayId(b.gameday_id, {
+          id: req.user?.id ?? null,
+          isAdmin: !!req.isAdmin
+        })
+        const note = [b.note ? String(b.note) : null, day.note].filter(Boolean).join(' · ') || null
         const { run, fault } = await startDrill({
           fault_key: String(b.fault_key ?? ''),
           target: b.target,
@@ -189,10 +196,10 @@ export async function chaosRoutes(app: FastifyInstance): Promise<void> {
           hypothesis: b.hypothesis ?? null,
           override: b.override ?? null,
           abort_after: b.abort_after,
-          note: b.note ?? null,
+          note,
           kind: b.kind === 'monkey' || b.kind === 'gameday' ? b.kind : 'drill',
           preset_id: b.preset_id ?? null,
-          gameday_id: b.gameday_id ?? null,
+          gameday_id: day.gameday_id,
           by: who(req)
         })
         await logActivity({
