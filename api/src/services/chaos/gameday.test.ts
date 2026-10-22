@@ -44,6 +44,7 @@ import {
   stepGameday
 } from './gameday.js'
 import { _resetRegistryForTests, armedFaults } from './registry.js'
+import { buildRunReport } from './report.js'
 import { _setRunStoreForTests, getRun, listRunEvents, listRuns, updateRun } from './runs.js'
 
 const LEAD = '11111111-1111-4111-8111-111111111111'
@@ -277,6 +278,18 @@ describe('scribe marks (#2853) and declare (#2854)', () => {
     expect(borrowed).toHaveLength(1)
     expect(borrowed[0].id).toBeLessThan(0)
     expect(borrowed[0].run_id).toBe(childId)
+  })
+
+  it('a note stamped on a fault run counts once in that run’s report (#2849 #2853)', async () => {
+    const { run } = await createGameday(plan(), op)
+    await startGameday(run.id, op)
+    const childId = String((await steps(run.id)).find((d) => d.inject_id === 'a')?.child_run_id)
+    await addNote(childId, { mark: 'found_cause' }, { id: SCRIBE, name: 'S', operator: false })
+    const child = await getRun(childId)
+    const evs = await reportEvents(child!)
+    expect(evs.filter((e) => e.kind === 'note' && e.data.mark === 'found_cause')).toHaveLength(1)
+    const report = buildRunReport(child!, evs)
+    expect(report.notes.filter((n) => n.mark === 'found_cause')).toHaveLength(1)
   })
 
   it('declare stamps a declared mark on every running day', async () => {

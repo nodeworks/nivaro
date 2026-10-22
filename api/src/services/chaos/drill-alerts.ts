@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import type { AlertFired } from '../alert-fired.js'
 import type { NotifyUserOptions } from '../notification-channels.js'
+import { isBlindRun } from './blind.js'
 import { type ArmedFault, getFault } from './catalog.js'
 import { armedFaults } from './registry.js'
 import { type ChaosRun, getRun } from './runs.js'
@@ -30,9 +31,9 @@ function ids(raw: unknown): string[] {
 
 /**
  * Who takes part in a run: whoever started it plus the game day's people (`meta.participants`,
- * `meta.roles.{lead, scribe, responders}` on the run or on its game-day row). Blind runs
- * (#2854, `meta.blind`) leave the responders out — they are being tested. A monkey run's people
- * are administrators and chaos operators.
+ * `meta.roles.{lead, scribe, responders}` on the run or on its game-day row — gameday.ts
+ * rolesMeta). Blind runs (#2854, `meta.blind` or an open blind window) leave the responders
+ * out — they are being tested. A monkey run's people are administrators and chaos operators.
  */
 export async function runParticipants(run: ChaosRun): Promise<string[]> {
   const out = new Set<string>(ids(run.started_by))
@@ -41,7 +42,7 @@ export async function runParticipants(run: ChaosRun): Promise<string[]> {
     const day = await getRun(run.gameday_id).catch(() => null)
     if (day) rows.push(day)
   }
-  const blind = rows.some((r) => r.meta?.blind === true)
+  const blind = rows.some(blindRow)
   for (const r of rows) {
     const roles = (r.meta?.roles ?? {}) as Record<string, unknown>
     for (const id of ids(r.started_by)) out.add(id)
@@ -174,11 +175,18 @@ export async function drillAlert(
   }
 }
 
+/** Blind (#2854): inside an unrevealed blind window (blind.ts — single blind drills and game
+ *  days), or a game day whose plan is blind and not yet revealed (`meta.blind`, rolesMeta). */
+function blindRow(run: ChaosRun): boolean {
+  return run.meta?.blind === true || isBlindRun(run.id)
+}
+
 async function runIsBlind(run: ChaosRun): Promise<boolean> {
-  if (run.meta?.blind === true) return true
+  if (blindRow(run)) return true
   if (!run.gameday_id) return false
+  if (isBlindRun(run.gameday_id)) return true
   const day = await getRun(run.gameday_id).catch(() => null)
-  return day?.meta?.blind === true
+  return !!day && blindRow(day)
 }
 
 /** The message a recipient gets: the drill note appended (participants always see it). */

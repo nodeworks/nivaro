@@ -17,6 +17,7 @@ vi.mock('../mail.js', () => ({ sendMail: mail, sendRawMail: vi.fn() }))
 import { db } from '../../db/index.js'
 import { notifyImmediateSubscribersForTests } from '../metric-alerts.js'
 import { raiseIssueForTests } from '../ops-monitors.js'
+import { _resetBlindForTests, openBlindWindow, revealBlindWindow } from './blind.js'
 import type { ArmedFault } from './catalog.js'
 import { _resetDrillForTests, startDrill, stopDrill } from './drill.js'
 import {
@@ -44,6 +45,7 @@ beforeEach(() => {
   notify.mockClear()
 })
 afterEach(async () => {
+  _resetBlindForTests()
   await _resetRegistryForTests()
   _resetDrillForTests()
   _setRunStoreForTests(null)
@@ -181,6 +183,14 @@ describe('alerts tagged as drill (#2847)', () => {
     expect(d?.blind).toBe(true)
     expect(withDrillNote('down', d)).toBe('down')
     expect(withDrillNote('down', d, true)).toContain('Fired during the chaos drill')
+  })
+
+  it('an open blind window (blind.ts) makes the run blind until it is revealed', async () => {
+    const { run } = await startDrill({ fault_key: 'mail_down', by: { id: STARTER, name: 'Ada' } })
+    await openBlindWindow({ id: run.id, kind: 'run', lead: STARTER, until: Date.now() + 60_000 })
+    expect((await drillAlert({ source: 'monitor', key: '1', label: 'API up' }))?.blind).toBe(true)
+    await revealBlindWindow(run.id)
+    expect((await drillAlert({ source: 'monitor', key: '1', label: 'API up' }))?.blind).toBe(false)
   })
 
   it('participants: starter, the game day roles and listed people; blind runs keep responders out', async () => {
