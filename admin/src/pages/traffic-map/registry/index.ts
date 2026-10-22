@@ -67,6 +67,7 @@ import '../features/export-image'
 import '../features/history'
 import '../features/baselines'
 import '../features/tm-actions'
+import '../features/simulate-down'
 
 export {
   type CanvasLayer,

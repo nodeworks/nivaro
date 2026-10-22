@@ -47,6 +47,7 @@ const DOWN_FALLBACK: Record<string, string> = {
   sms: 'SMS',
   push: 'Web push',
   teams: 'Teams',
+  signin: 'Sign-in provider',
   'ai:anthropic': 'Anthropic',
   'ai:gateway-openai': 'AI gateway',
   'ai:gateway-anthropic': 'AI gateway'

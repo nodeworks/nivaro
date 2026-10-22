@@ -3,6 +3,7 @@
  * Traffic Map — actions that change behaviour or reach people (under /api/traffic-map, admin only,
  * 404 in cloud mode):
  *   GET  /blast-radius?node=            what depends on a node, 7 days observed (#2152)
+ *   GET  /blast-radius?node=&window=&until=  simulate a dependency down: what breaks (#2841)
  *   GET  /affected-people?node=&screens= who would be told, last hour (#2274)
  *   POST /tell-affected                 a broadcast to them through the announcement service (#2274)
  *   GET|POST /debug-windows, DELETE /debug-windows/:id, GET /debug-windows/:id/traces   (#2215)
@@ -36,6 +37,12 @@ import {
   listExtensionLenses,
   readExtensionLens
 } from '../../services/traffic-actions/ext-lenses.js'
+import {
+  parseDependencyNode,
+  parseSimWindow,
+  parseUntil,
+  simulateDown
+} from '../../services/traffic-actions/simulate-down.js'
 import {
   CACHE_DEFAULT_MIN,
   CACHE_MAX_MIN,
@@ -136,10 +143,35 @@ export async function tmActionsRoutes(
   const send = deps?.send ?? injectSend(app)
 
   // ── #2152 blast radius ───────────────────────────────────────────────────
-  app.get<{ Querystring: { node?: string; fresh?: string } }>(
+  app.get<{ Querystring: { node?: string; fresh?: string; window?: string; until?: string } }>(
     '/blast-radius',
     async (req, reply) => {
-      const node = parseBlastNode(String(req.query.node ?? ''))
+      // #2841 simulate down: a window (or a dependency the #2152 view does not take) asks what
+      // breaks if the node goes away, worked out from recorded traffic over that window.
+      const raw = String(req.query.node ?? '')
+      if (req.query.window !== undefined || !parseBlastNode(raw)) {
+        const dep = parseDependencyNode(raw)
+        const window = parseSimWindow(req.query.window)
+        if (!dep)
+          return reply.code(400).send({
+            error:
+              'Simulate down is worked out for a dependency: the database, Redis, file storage, a channel, an AI provider, a partner or the sign-in provider',
+            code: 'BLAST_NODE'
+          })
+        if (!window)
+          return reply
+            .code(400)
+            .send({ error: 'window must be one of 1h, 6h, 24h or 7d', code: 'BLAST_WINDOW' })
+        const data = await simulateDown(dep, window, {
+          until: parseUntil(req.query.until),
+          who: req.user?.id ?? null,
+          fresh: req.query.fresh === '1'
+        })
+        if (!data)
+          return reply.code(404).send({ error: 'No such partner', code: 'BLAST_NOT_FOUND' })
+        return { data }
+      }
+      const node = parseBlastNode(raw)
       if (!node)
         return reply.code(400).send({
           error: 'Blast radius is worked out for an endpoint or a partner node',
