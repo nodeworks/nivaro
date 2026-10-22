@@ -13,16 +13,26 @@
 // from an old checkout and read as "my edit did nothing". Reported, never
 // killed — stopping them is a person's call: `kill <pid>`.
 //
+// Mail: Mailpit (pnpm dev:mail) catches every message the local API sends; the inbox is
+// http://127.0.0.1:8025. The pieces this script starts get SMTP pinned to it through
+// NIVARO_SETTINGS_OVERRIDES (merged into the one in .env), which wins over SMTP settings saved
+// in the database, and test mode off, so mail shows its real recipients and never leaves.
+//
 // Usage:  node scripts/dev-preflight.mjs            check + launch the missing pieces
 //         node scripts/dev-preflight.mjs --check    report only, exit 0
 //         DEV_PREFLIGHT=off pnpm dev                 skip the check, launch everything
+//         DEV_MAIL=off pnpm dev                      no Mailpit; the API mails as .env says
 
 import { execFileSync, spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { parseEnv } from 'node:util'
 
 const CHECK_ONLY = process.argv.includes('--check')
 const MODE = (process.env.DEV_PREFLIGHT ?? 'attach').toLowerCase()
+const MAIL = (process.env.DEV_MAIL ?? 'on').toLowerCase() !== 'off'
 
 const PIECES = [
+  ...(MAIL ? [{ name: 'mail', port: 1025, color: 'magenta', cmd: 'pnpm dev:mail' }] : []),
   { name: 'redis', port: 6379, color: 'cyan', cmd: 'pnpm dev:redis' },
   { name: 'api', port: 3055, color: 'blue', cmd: 'wait-on tcp:6379 && pnpm dev:api' },
   { name: 'admin', port: 3056, color: 'green', cmd: 'pnpm --filter @nivaro/admin dev' }
@@ -100,6 +110,38 @@ if (!toStart.length) {
 }
 
 log(`starting: ${toStart.map((p) => p.name).join(', ')}`)
+
+// The API loads .env without overriding what is already set, so these win over it.
+const env = { ...process.env }
+if (MAIL) {
+  let fromFile = {}
+  try {
+    fromFile = parseEnv(readFileSync(new URL('../.env', import.meta.url), 'utf8'))
+  } catch {}
+  let overrides = {}
+  try {
+    const o = JSON.parse(process.env.NIVARO_SETTINGS_OVERRIDES ?? fromFile.NIVARO_SETTINGS_OVERRIDES ?? '{}')
+    if (o && typeof o === 'object' && !Array.isArray(o)) overrides = o
+  } catch {}
+  Object.assign(env, {
+    SMTP_HOST: '127.0.0.1',
+    SMTP_PORT: '1025',
+    SMTP_SECURE: 'false',
+    MAIL_TEST_MODE: 'false',
+    NIVARO_SETTINGS_OVERRIDES: JSON.stringify({
+      ...overrides,
+      smtp_host: '127.0.0.1',
+      smtp_port: 1025,
+      smtp_secure: false,
+      smtp_user: null,
+      smtp_pass: null,
+      mail_test_mode: false
+    })
+  })
+  log('mail: the API sends to Mailpit (inbox http://127.0.0.1:8025); DEV_MAIL=off to mail as .env says')
+  if (!toStart.some((p) => p.name === 'api'))
+    log('mail: warn: the API was already running, so it still mails as it did — restart it under pnpm dev')
+}
 const args = [
   'exec',
   'concurrently',
@@ -110,7 +152,7 @@ const args = [
   toStart.map((p) => p.color).join(','),
   ...toStart.map((p) => p.cmd)
 ]
-const child = spawn('pnpm', args, { stdio: 'inherit', shell: process.platform === 'win32' })
+const child = spawn('pnpm', args, { stdio: 'inherit', env, shell: process.platform === 'win32' })
 const forward = (sig) => () => child.kill(sig)
 process.on('SIGINT', forward('SIGINT'))
 process.on('SIGTERM', forward('SIGTERM'))

@@ -13,6 +13,7 @@
     "dev:db": "node scripts/dev-against-db.mjs",
     "dev:api": "pnpm --filter @nivaro/api dev",
     "dev:admin": "pnpm --filter @nivaro/admin dev",
+    "dev:mail": "docker run --rm --name nivaro-mailpit -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 -v nivaro_mailpit_data:/data -e MP_DATABASE=/data/mailpit.db -e MP_SMTP_AUTH_ACCEPT_ANY=true -e MP_SMTP_AUTH_ALLOW_INSECURE=true axllent/mailpit:v1.31.6",
     "dev:redis": "docker run --rm -p 6379:6379 -v nivaro_redis_data:/data redis:7-alpine redis-server --appendonly yes",
     "dev:docker": "docker compose up --build",
     "dev:docker:down": "docker compose down",
