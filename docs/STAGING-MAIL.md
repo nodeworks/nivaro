@@ -63,7 +63,7 @@ matching `blocked-recipients`.
 | Relay host, port, STARTTLS, auth, username, password, return-path | the `mailpit_relay` Swarm secret (a filled copy of `relay.example.yml`) |
 | `allowed-recipients` (our domains) | the same relay YAML secret, `allowed-recipients:` |
 | `blocked-recipients` (customer domains, probed admins; every relay mode) | the same relay YAML secret, `blocked-recipients:` |
-| Optional auto-relay of one test mailbox | `MP_SMTP_RELAY_MATCHING` env var on the service (not a YAML key); unset by default |
+| Optional auto-relay of one test mailbox | not enabled by this kit (see below); `matching` is not a relay YAML key |
 
 Mailpit ignores `MP_SMTP_RELAY_*` env settings unless `MP_SMTP_RELAY_HOST` is set
 too, so the recipient regexes are kept in the YAML secret only; `stack.yml` sets
@@ -71,10 +71,15 @@ no `MP_SMTP_RELAY_*` variable at all (`MP_SMTP_RELAY_CONFIG` is set in
 `stack.relay.yml`). To change any of
 them, edit the file and rotate the secret. Credentials never go in a CLI flag,
 `stack.yml` or the repo. `--smtp-relay-all` is never set: catching everything is
-the default. To enable the optional matching, add `MP_SMTP_RELAY_MATCHING` with
-a regex to the service only when you have one (an empty value is ignored, but do
-not set it). **Warning:** `allowed-recipients` does not apply to auto-relay
-(matching); only `blocked-recipients` does, so keep the regex to one exact mailbox.
+the default. The optional auto-relay (`--smtp-relay-matching` / `MP_SMTP_RELAY_MATCHING`) is
+**not part of this kit**: it is an `MP_SMTP_RELAY_*` setting, so it is ignored
+unless `MP_SMTP_RELAY_HOST` is set as an env var too, and the kit test fails on
+any `MP_SMTP_RELAY_*` var other than `MP_SMTP_RELAY_CONFIG` in `stack.yml`. Do not
+add it to the service env. Enabling it means a deliberate change: edit
+`scripts/mailpit-kit.test.mjs` and the stack files together, and confirm on
+staging that it takes effect. **Warning:** `allowed-recipients` does not apply to
+auto-relay (matching); only `blocked-recipients` does, so keep the regex to one
+exact mailbox.
 
 ## Turn relaying off
 

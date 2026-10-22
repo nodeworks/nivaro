@@ -10,8 +10,8 @@ services:
       MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-5000}
       MP_UI_AUTH_FILE: /run/secrets/mailpit-ui-auth
       # Relaying is optional: this file alone only catches. Add stack.relay.yml to enable Release
-      # (add -c mailpit/stack.relay.yml to the full stack deploy). Never set MP_SMTP_RELAY_* here.
-      # Optional auto-relay of one test mailbox: add MP_SMTP_RELAY_MATCHING with a narrow regex (docs/STAGING-MAIL.md).
+      # (add -c mailpit/stack.relay.yml to the full stack deploy). Never set MP_SMTP_RELAY_* here
+      # (the optional matching var included; see docs/STAGING-MAIL.md).
       # Accept the API's SMTP auth (inbound side only; 1025 is never published).
       MP_SMTP_AUTH_ACCEPT_ANY: "true"
       MP_SMTP_AUTH_ALLOW_INSECURE: "true"

@@ -17,7 +17,7 @@ allowed-recipients: '(?i)@(nivaro\.dev|team-domain-one\.example|team-domain-two\
 # Never mail these, in every relay mode: customer domains and the admins the help-video probes mailed.
 blocked-recipients: '(?i)@([^@]*\.)?(customer-one\.example|customer-two\.example)$|^(probed-admin-one|probed-admin-two)@'
 
-# Optional: auto-relay mail for one narrow test mailbox. This is the MP_SMTP_RELAY_MATCHING
-# env var set on the service (e.g. '^staging-tester@nivaro\.dev$'), NOT a key in this YAML.
+# Optional auto-relay: MP_SMTP_RELAY_MATCHING (not enabled by this kit, see docs/STAGING-MAIL.md)
+# is NOT a key in this YAML.
 # WARNING: allowed-recipients does NOT apply to auto-relay, only blocked-recipients does.
 # Keep this regex narrow (one exact mailbox).
