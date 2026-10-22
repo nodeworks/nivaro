@@ -41,7 +41,7 @@ vi.mock('../services/job-runs.js', () => ({
 
 import { _resetDrillForTests } from '../services/chaos/drill.js'
 import { _setPresetStoreForTests, MAX_SAVED } from '../services/chaos/presets.js'
-import { _resetRegistryForTests, armedFaults } from '../services/chaos/registry.js'
+import { _resetRegistryForTests, armedFaults, CHAOS_NODE } from '../services/chaos/registry.js'
 import { _setRunStoreForTests, getRun } from '../services/chaos/runs.js'
 import { _setChaosSettingsForTests, CHAOS_SETTINGS_DEFAULTS } from '../services/chaos/settings.js'
 import { chaosRoutes } from './chaos.js'
@@ -181,6 +181,73 @@ describe('chaos preset routes (#2855)', () => {
     })
     expect(admin.statusCode).toBe(201)
     expect((await getRun(admin.json().data.run.id))?.meta.override).toEqual(override)
+  })
+
+  it('keeps abort_after on a saved preset and passes it to the drill; the body overrides (#2844)', async () => {
+    const app = await build()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/chaos/presets',
+      payload: {
+        key: 'patient-slow',
+        label: 'Patient slow requests',
+        spec: {
+          fault_key: 'slow_requests',
+          target: { kind: 'share', share_pct: 10 },
+          seconds: 20,
+          abort_after: 6
+        }
+      }
+    })
+    expect(created.statusCode).toBe(201)
+    expect(created.json().data.spec.abort_after).toBe(6)
+    // A later edit that does not name abort_after keeps it (the normalizer passes it through).
+    const edited = await app.inject({
+      method: 'PATCH',
+      url: '/chaos/presets/patient-slow',
+      payload: { label: 'Renamed' }
+    })
+    expect(edited.json().data.spec.abort_after).toBe(6)
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/chaos/presets',
+      payload: {
+        key: 'bad-abort',
+        label: 'Bad',
+        spec: { fault_key: 'slow_requests', abort_after: 'soon' }
+      }
+    })
+    expect(bad.statusCode).toBe(400)
+
+    const run = await app.inject({ method: 'POST', url: '/chaos/presets/patient-slow/run' })
+    expect(run.statusCode).toBe(201)
+    expect((await getRun(run.json().data.run.id))?.meta.abort_after).toBe(6)
+    await _resetRegistryForTests()
+    const over = await app.inject({
+      method: 'POST',
+      url: '/chaos/presets/patient-slow/run',
+      payload: { abort_after: 2 }
+    })
+    expect((await getRun(over.json().data.run.id))?.meta.abort_after).toBe(2)
+    await _resetRegistryForTests()
+    // A shipped preset without abort_after runs on the drill's default.
+    const plain = await app.inject({
+      method: 'POST',
+      url: '/chaos/presets/slow-answers-stay-honest/run',
+      payload: { seconds: 10 }
+    })
+    expect((await getRun(plain.json().data.run.id))?.meta.abort_after).toBe(3)
+  })
+
+  it('runs a replica-only shipped preset on the replica that answers (#2855)', async () => {
+    const app = await build()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/chaos/presets/clock-skew-is-safe/run',
+      payload: { seconds: 5 }
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json().data.fault.target).toEqual({ kind: 'node', node: CHAOS_NODE })
   })
 
   it('refuses a new saved preset once the instance holds the maximum (F10)', async () => {

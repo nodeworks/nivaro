@@ -43,8 +43,10 @@ function answers(url: string) {
         { key: 'deploy', label: 'No deploy running', ok: preflightOk, why: 'A deploy is running' }
       ]
     })
-  if (url === '/chaos/settings')
-    return caps ? ok({ effective_caps: caps }) : Promise.reject({ response: { status: 404 } })
+  // Caps come from GET /chaos/operator (#2862): readable by every chaos operator, not only admins.
+  if (url === '/chaos/operator')
+    return ok({ operator: true, admin: false, allowed: true, instance: 'dev', caps })
+  if (url === '/chaos/settings') return Promise.reject({ response: { status: 403 } })
   if (url === '/chaos/samplers') return Promise.reject({ response: { status: 404 } })
   return ok([])
 }
@@ -92,8 +94,34 @@ describe('ExperimentBuilder (#2844)', () => {
       target: { kind: 'all' },
       params: { delay_ms: 1500 },
       seconds: 30,
-      hypothesis: slow.hypothesis_defaults
+      hypothesis: slow.hypothesis_defaults,
+      abort_after: 3
     })
+  })
+
+  it('sends the abort limit the abort step sets and reads it back in the summary', async () => {
+    mount()
+    fireEvent.click(await step(/^Abort limits/))
+    const box = screen.getByRole('spinbutton', { name: /Stop after/ })
+    expect(box).toHaveValue(3)
+    fireEvent.change(box, { target: { value: '5' } })
+    expect(
+      screen.getByText(
+        (_, el) => el?.tagName === 'P' && /about 25 seconds of trouble/.test(el.textContent ?? '')
+      )
+    ).toBeInTheDocument()
+    const summary = screen.getByRole('complementary', { name: 'This run' })
+    expect(within(summary).getByText('5 bad samples in a row (about 25s)')).toBeInTheDocument()
+    // Out of range is pulled back inside 1–10 when the box loses focus.
+    fireEvent.change(box, { target: { value: '40' } })
+    fireEvent.blur(box)
+    expect(box).toHaveValue(10)
+    const run = screen.getByRole('button', { name: /^Run$/ })
+    await waitFor(() => expect(run).toBeEnabled())
+    fireEvent.click(run)
+    fireEvent.click(screen.getByRole('button', { name: /Confirm — arms/ }))
+    await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1))
+    expect(postMock.mock.calls[0][1]).toMatchObject({ abort_after: 10 })
   })
 
   it('keeps Run disabled and says why while pre-flight fails', async () => {
@@ -113,7 +141,7 @@ describe('ExperimentBuilder (#2844)', () => {
     expect(screen.getByRole('button', { name: /^Run$/ })).toBeDisabled()
   })
 
-  it('stops the duration slider at the environment cap when #2862 caps exist', async () => {
+  it('stops the duration slider at the cap a non-admin operator reads from /chaos/operator (#2862)', async () => {
     caps = { max_seconds: 60 }
     mount()
     fireEvent.click(await step(/^Duration/))

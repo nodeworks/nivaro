@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Plus, RotateCcw, X } from 'lucide-react'
-import type { CSSProperties, ReactNode } from 'react'
+import { type CSSProperties, type ReactNode, useEffect, useId, useState } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { UserCombobox } from '@/components/user-combobox'
@@ -11,10 +11,12 @@ import { DANGER_CHIP } from '../ops-controls'
 import { PreflightPanel } from '../PreflightPanel'
 import { builderKeys, fetchBlast, fetchSamplers } from './api'
 import {
+  ABORT_AFTER_MAX,
+  ABORT_AFTER_MIN,
   abortLine,
-  BREACHES_TO_ABORT,
   BUILTIN_SAMPLERS,
   type ChaosCaps,
+  clampAbortAfter,
   type DraftSpec,
   emptyTarget,
   faultAllowed,
@@ -705,13 +707,13 @@ export function AbortStep({ draft, set }: StepProps) {
   const samplers = useSamplerChoices()
   const labelOf = (k: string) => samplers.find((s) => s.key === k)?.label ?? k
   const unitOf = (k: string) => samplers.find((s) => s.key === k)?.unit ?? ''
-  const window = BREACHES_TO_ABORT * SAMPLE_EVERY_S
+  const n = clampAbortAfter(draft.abort_after)
   return (
     <div>
       <StepHeading title='When to stop early'>
         A line that is broken but still within its tolerance only marks the verdict. Past the
-        tolerance for {BREACHES_TO_ABORT} samples in a row (about {window} s) the run aborts and
-        every replica disarms the fault.
+        tolerance for {n} sample{n === 1 ? '' : 's'} in a row the run aborts and every replica
+        disarms the fault.
       </StepHeading>
       {draft.hypothesis.length === 0 ? (
         <p className={cn(hintCls, 'text-[12.5px]')}>
@@ -719,42 +721,101 @@ export function AbortStep({ draft, set }: StepProps) {
           on Stop and on Stop all.
         </p>
       ) : (
-        <ul className='max-w-2xl divide-y divide-slate-200 rounded-md border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
-          {draft.hypothesis.map((r, i) => (
-            <li
-              key={`${i}-${r.sampler}`}
-              className='flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5'
-            >
-              <div className='min-w-0 flex-1 basis-56 text-[12.5px] text-slate-700 dark:text-foreground/90'>
-                Abort if <span className='font-medium'>{labelOf(r.sampler)}</span> {OP_WORD[r.op]}{' '}
-                <span className='font-medium tabular-nums'>
-                  {withUnit(abortLine(r), unitOf(r.sampler))}
-                </span>
-              </div>
-              <label className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-muted-foreground'>
-                Tolerance
-                <input
-                  type='number'
-                  min={0}
-                  className={cn(inputCls, 'w-20 text-right')}
-                  value={r.tolerance ?? 0}
-                  onChange={(e) =>
-                    set((d) => ({
-                      ...d,
-                      hypothesis: d.hypothesis.map((x, j) =>
-                        j === i ? { ...x, tolerance: Math.max(0, Number(e.target.value) || 0) } : x
-                      )
-                    }))
-                  }
-                />
-                <span className='w-12 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
-                  {unitOf(r.sampler)}
-                </span>
-              </label>
-            </li>
-          ))}
-        </ul>
+        <>
+          <AbortAfterControl
+            value={draft.abort_after}
+            onChange={(v) => set((d) => ({ ...d, abort_after: v }))}
+          />
+          <ul className='max-w-2xl divide-y divide-slate-200 rounded-md border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
+            {draft.hypothesis.map((r, i) => (
+              <li
+                key={`${i}-${r.sampler}`}
+                className='flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5'
+              >
+                <div className='min-w-0 flex-1 basis-56 text-[12.5px] text-slate-700 dark:text-foreground/90'>
+                  Abort if <span className='font-medium'>{labelOf(r.sampler)}</span> {OP_WORD[r.op]}{' '}
+                  <span className='font-medium tabular-nums'>
+                    {withUnit(abortLine(r), unitOf(r.sampler))}
+                  </span>
+                </div>
+                <label className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-muted-foreground'>
+                  Tolerance
+                  <input
+                    type='number'
+                    min={0}
+                    className={cn(inputCls, 'w-20 text-right')}
+                    value={r.tolerance ?? 0}
+                    onChange={(e) =>
+                      set((d) => ({
+                        ...d,
+                        hypothesis: d.hypothesis.map((x, j) =>
+                          j === i
+                            ? { ...x, tolerance: Math.max(0, Number(e.target.value) || 0) }
+                            : x
+                        )
+                      }))
+                    }
+                  />
+                  <span className='w-12 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
+                    {unitOf(r.sampler)}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
+    </div>
+  )
+}
+
+/**
+ * How many bad samples in a row abort the run (POST /chaos/runs `abort_after`, 1–10). One sentence
+ * with the number inside it, then what that means in time: lower stops sooner, higher rides out a
+ * short spike.
+ */
+function AbortAfterControl({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  const hintId = useId()
+  const [text, setText] = useState(String(value))
+  // Follow outside changes (a preset, a deep link) without fighting the person typing.
+  useEffect(() => {
+    setText((t) => (Number(t) === value ? t : String(value)))
+  }, [value])
+  const n = clampAbortAfter(value)
+  const commit = (raw: string) => {
+    setText(raw)
+    const v = Number(raw)
+    if (raw.trim() !== '' && Number.isInteger(v) && v >= ABORT_AFTER_MIN && v <= ABORT_AFTER_MAX)
+      onChange(v)
+  }
+  return (
+    <div className='mb-3 max-w-2xl'>
+      <label className='flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-slate-700 dark:text-foreground/90'>
+        Stop after
+        <input
+          type='number'
+          inputMode='numeric'
+          min={ABORT_AFTER_MIN}
+          max={ABORT_AFTER_MAX}
+          step={1}
+          aria-describedby={hintId}
+          className={cn(inputCls, 'w-16 text-right')}
+          value={text}
+          onChange={(e) => commit(e.target.value)}
+          onBlur={() => {
+            const v = clampAbortAfter(text)
+            setText(String(v))
+            onChange(v)
+          }}
+        />
+        bad sample{n === 1 ? '' : 's'} in a row
+      </label>
+      <p id={hintId} className={cn(hintCls, 'mt-1')}>
+        A sample is taken every {SAMPLE_EVERY_S} seconds, so this is about{' '}
+        <span className='tabular-nums'>{n * SAMPLE_EVERY_S} seconds</span> of trouble. Lower stops
+        sooner; higher rides out a short spike. From {ABORT_AFTER_MIN} to {ABORT_AFTER_MAX}; 3 suits
+        most drills.
+      </p>
     </div>
   )
 }

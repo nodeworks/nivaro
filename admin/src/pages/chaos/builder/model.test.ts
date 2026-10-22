@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { CatalogFault } from '../api'
 import {
+  abortAfterWords,
   abortLine,
   builderHref,
+  clampAbortAfter,
   clampDraft,
   draftIssues,
   faultAllowed,
@@ -12,6 +14,7 @@ import {
   parseSpecParam,
   routePattern,
   ruleWords,
+  runBody,
   slugKey,
   targetWords,
   withUnit
@@ -135,5 +138,27 @@ describe('experiment builder model (#2844)', () => {
     expect(withUnit('5–120', 's')).toBe('5–120 s')
     expect(mapNodeLabel('redis')).toBe('Redis')
     expect(mapNodeLabel('ext:7')).toBe('partner #7')
+  })
+
+  it('carries abort_after: default 3, layered, clamped to 1–10, in the body and the deep link', () => {
+    expect(initialDraft(slow, []).abort_after).toBe(3)
+    const fromPreset = initialDraft(slow, [{ fault_key: 'slow_requests', abort_after: 6 }])
+    expect(fromPreset.abort_after).toBe(6)
+    // The deep link wins over the preset.
+    expect(initialDraft(slow, [{ abort_after: 6 }, { abort_after: 2 }]).abort_after).toBe(2)
+    expect(initialDraft(slow, [{ abort_after: 40 }]).abort_after).toBe(10)
+    expect(clampAbortAfter(0)).toBe(3)
+    expect(clampAbortAfter('x')).toBe(3)
+    expect(clampAbortAfter(4.6)).toBe(5)
+    expect(clampDraft({ ...fromPreset, abort_after: -2 }, slow, null).abort_after).toBe(3)
+
+    const body = runBody({ ...fromPreset, abort_after: 7 })
+    expect(body.abort_after).toBe(7)
+    const href = builderHref({ spec: body })
+    const back = parseSpecParam(new URL(href, 'http://x').searchParams.get('spec'))
+    expect(initialDraft(slow, [back]).abort_after).toBe(7)
+
+    expect(abortAfterWords(1)).toBe('1 bad sample in a row (about 5s)')
+    expect(abortAfterWords(3)).toBe('3 bad samples in a row (about 15s)')
   })
 })

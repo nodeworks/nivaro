@@ -11,10 +11,12 @@ import {
   getPreset,
   listPresets,
   type PresetInput,
+  type PresetSpec,
   presetStoreMode,
   savePreset,
   updatePreset
 } from '../services/chaos/presets.js'
+import { CHAOS_NODE } from '../services/chaos/registry.js'
 import { updateRun } from '../services/chaos/runs.js'
 
 /**
@@ -32,6 +34,17 @@ import { updateRun } from '../services/chaos/runs.js'
  */
 
 const UUID_RE = /^[0-9a-f-]{36}$/i
+
+/**
+ * A preset without a target takes its fault's first target kind. A replica-only fault (a shipped
+ * "one replica" preset) gets the replica answering the request — the builder picks one itself.
+ */
+function presetTarget(spec: PresetSpec): unknown {
+  if (spec.target) return spec.target
+  return getFault(spec.fault_key)?.targets[0] === 'node'
+    ? { kind: 'node', node: CHAOS_NODE }
+    : undefined
+}
 
 function fail(reply: FastifyReply, err: unknown) {
   if (err instanceof ChaosError)
@@ -150,6 +163,7 @@ export async function chaosPresetRoutes(app: FastifyInstance): Promise<void> {
         params?: unknown
         seconds?: unknown
         hypothesis?: unknown
+        abort_after?: unknown
         override?: { working_hours?: boolean } | null
         note?: string | null
       }
@@ -163,12 +177,13 @@ export async function chaosPresetRoutes(app: FastifyInstance): Promise<void> {
       try {
         const { run, fault } = await startDrill({
           fault_key: p.spec.fault_key,
-          target: b.target ?? p.spec.target,
+          target: b.target ?? presetTarget(p.spec),
           params: b.params ?? p.spec.params,
           seconds: b.seconds ?? p.spec.seconds,
           hypothesis: (Array.isArray(b.hypothesis) ? b.hypothesis : p.spec.hypothesis) ?? null,
           // The working-hours override is an administrator's call, not an operator's (#2862, F6).
           override: req.isAdmin ? (b.override ?? null) : null,
+          abort_after: b.abort_after ?? p.spec.abort_after,
           note: b.note ?? p.spec.note ?? null,
           // The run column is a uuid: shipped presets (no id) ride meta.preset_key only.
           preset_id: p.id && UUID_RE.test(p.id) ? p.id : null,

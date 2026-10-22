@@ -32,6 +32,8 @@ export interface PresetSpec {
   params?: FaultParams
   seconds?: number
   hypothesis?: HypothesisRule[]
+  /** Samples in a row past tolerance before the run aborts (1–10; unset = the drill's 3). */
+  abort_after?: number
   note?: string | null
 }
 
@@ -209,6 +211,15 @@ function hypothesisOf(raw: unknown): HypothesisRule[] {
   return out
 }
 
+/** `abort_after` as the drill takes it (a whole number in 1–10), or undefined when unset. */
+function abortAfterOf(raw: unknown): number | undefined {
+  if (raw == null || raw === '') return undefined
+  const n = Math.round(Number(raw))
+  if (!Number.isFinite(n) || n < 1)
+    throw new ChaosError('spec.abort_after must be a number from 1 to 10', 400, 'CHAOS_PRESET')
+  return Math.min(10, n)
+}
+
 /**
  * A checked spec. Against a fault this instance knows, the catalog's own validators run (target
  * shape, params clamped into the caps, seconds into [5, max]); a preset promoted from an instance
@@ -221,6 +232,7 @@ export function validateSpec(raw: unknown): PresetSpec {
     throw new ChaosError('spec.fault_key must name a fault', 400, 'CHAOS_PRESET')
   const def = getFault(faultKey)
   const hypothesis = s.hypothesis == null ? undefined : hypothesisOf(s.hypothesis)
+  const abortAfter = abortAfterOf(s.abort_after)
   const note = str(s.note, 500)
   if (def) {
     const seconds =
@@ -233,6 +245,7 @@ export function validateSpec(raw: unknown): PresetSpec {
       params: validateParams(def, s.params),
       ...(seconds != null ? { seconds } : {}),
       ...(hypothesis ? { hypothesis } : {}),
+      ...(abortAfter != null ? { abort_after: abortAfter } : {}),
       ...(note ? { note } : {})
     }
   }
@@ -252,6 +265,7 @@ export function validateSpec(raw: unknown): PresetSpec {
     params,
     ...(seconds != null && Number.isFinite(seconds) ? { seconds: Math.round(seconds) } : {}),
     ...(hypothesis ? { hypothesis } : {}),
+    ...(abortAfter != null ? { abort_after: abortAfter } : {}),
     ...(note ? { note } : {})
   }
 }

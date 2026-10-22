@@ -47,8 +47,8 @@ export function SavePresetPopover({
   }
 
   const spec = () => {
-    const { fault_key, target, params, seconds, hypothesis, note } = runBody(draft)
-    return { fault_key, target, params, seconds, hypothesis, note }
+    const { fault_key, target, params, seconds, hypothesis, abort_after, note } = runBody(draft)
+    return { fault_key, target, params, seconds, hypothesis, abort_after, note }
   }
 
   const done = (p: ChaosPreset, verb: string) => {

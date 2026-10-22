@@ -8,7 +8,7 @@ import type { CatalogFault, FaultTarget, HypothesisRule, ParamSpec } from '../ap
  * Deep link (Traffic Map "Inject fault here", the resilience matrix, Ask AI's draft):
  *   /chaos?tab=builder&fault=<key>
  *   /chaos?tab=builder&preset=<key>
- *   /chaos?tab=builder&spec=<encodeURIComponent(JSON {fault_key, target, params, seconds, hypothesis, note})>
+ *   /chaos?tab=builder&spec=<encodeURIComponent(JSON {fault_key, target, params, seconds, hypothesis, abort_after, note})>
  * `spec` wins over the preset's own spec, which wins over the fault's defaults.
  */
 
@@ -20,6 +20,8 @@ export interface DraftSpec {
   params: Record<string, ParamValue>
   seconds: number
   hypothesis: HypothesisRule[]
+  /** Samples in a row past tolerance before the run aborts (1–10, the server's default 3). */
+  abort_after: number
   note: string
 }
 
@@ -64,9 +66,22 @@ export const BUILTIN_SAMPLERS: Array<{ key: string; label: string; unit: string 
   { key: 'records.save_failures', label: 'Failed saves', unit: 'per min' }
 ]
 
-/** The hypothesis watcher's rule (SEAM §6): a sample every 5 s, three breaches in a row abort. */
+/**
+ * The hypothesis watcher's rule (SEAM §6): a sample every 5 s; `abort_after` breaches in a row
+ * (1–10, default 3; POST /chaos/runs `abort_after`) abort the run.
+ */
 export const SAMPLE_EVERY_S = 5
 export const BREACHES_TO_ABORT = 3
+export const ABORT_AFTER_MIN = 1
+export const ABORT_AFTER_MAX = 10
+
+/** A whole number of samples inside [1, 10]; anything unreadable is the default 3. */
+export function clampAbortAfter(raw: unknown): number {
+  const n = Math.round(Number(raw))
+  return Number.isFinite(n) && n > 0
+    ? Math.min(ABORT_AFTER_MAX, Math.max(ABORT_AFTER_MIN, n))
+    : BREACHES_TO_ABORT
+}
 
 const clampN = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 
@@ -140,6 +155,7 @@ export interface SpecLike {
   params?: Record<string, ParamValue> | null
   seconds?: number | null
   hypothesis?: HypothesisRule[] | null
+  abort_after?: number | null
   note?: string | null
 }
 
@@ -156,6 +172,7 @@ export function initialDraft(
     params: defaultParams(fault),
     seconds: fault.default_seconds,
     hypothesis: fault.hypothesis_defaults.map((r) => ({ ...r })),
+    abort_after: BREACHES_TO_ABORT,
     note: ''
   }
   for (const l of layers) {
@@ -165,6 +182,7 @@ export function initialDraft(
       for (const k of Object.keys(fault.params)) if (k in l.params) d.params[k] = l.params[k]
     if (l.seconds != null) d.seconds = Number(l.seconds)
     if (Array.isArray(l.hypothesis)) d.hypothesis = l.hypothesis.map((r) => ({ ...r }))
+    if (l.abort_after != null) d.abort_after = clampAbortAfter(l.abort_after)
     if (l.note) d.note = String(l.note)
   }
   return clampDraft(d, fault, caps)
@@ -189,6 +207,7 @@ export function clampDraft(d: DraftSpec, fault: CatalogFault, caps: ChaosCaps | 
     ...d,
     target,
     params,
+    abort_after: clampAbortAfter(d.abort_after),
     seconds: Math.round(
       clampN(Number(d.seconds) || fault.default_seconds, 5, maxSeconds(fault, caps))
     )
@@ -389,6 +408,13 @@ export function runBody(d: DraftSpec) {
     params: d.params,
     seconds: d.seconds,
     hypothesis: d.hypothesis,
+    abort_after: clampAbortAfter(d.abort_after),
     note: d.note.trim() || null
   }
+}
+
+/** The abort limit in words: "3 bad samples in a row (about 15 s)". */
+export function abortAfterWords(n: number): string {
+  const k = clampAbortAfter(n)
+  return `${k} bad sample${k === 1 ? '' : 's'} in a row (about ${formatSeconds(k * SAMPLE_EVERY_S)})`
 }

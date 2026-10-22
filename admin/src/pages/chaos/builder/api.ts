@@ -1,12 +1,13 @@
 import { api } from '@/lib/api'
 import type { ArmedFault, ChaosRun, FaultTarget, HypothesisRule } from '../api'
-import type { ChaosCaps, ParamValue } from './model'
+import type { ParamValue } from './model'
 
 /**
- * Client for the builder (#2844) and presets (#2855): presets CRUD, run-from-preset, the
- * environment caps (#2862, optional), the sampler list (#2828, optional) and the Traffic Map
- * blast radius (#2841, optional). Optional sources answer null when the server does not have
- * them, so the builder degrades instead of erroring.
+ * Client for the builder (#2844) and presets (#2855): presets CRUD, run-from-preset, the sampler
+ * list (#2828, optional) and the Traffic Map blast radius (#2841, optional). Optional sources
+ * answer null when the server does not have them, so the builder degrades instead of erroring.
+ * The environment caps (#2862) come from GET /chaos/operator (ops-api.ts `fetchOperator`), which
+ * every chaos operator may read — GET /chaos/settings is administrators only.
  */
 
 export interface PresetSpec {
@@ -15,6 +16,8 @@ export interface PresetSpec {
   params?: Record<string, ParamValue>
   seconds?: number
   hypothesis?: HypothesisRule[]
+  /** Samples in a row past tolerance before the run aborts (1–10, default 3). */
+  abort_after?: number
   note?: string | null
 }
 
@@ -45,7 +48,6 @@ export interface PresetInput {
 export const builderKeys = {
   presets: ['chaos', 'presets'] as const,
   preset: (key: string) => ['chaos', 'presets', key] as const,
-  caps: ['chaos', 'caps'] as const,
   samplers: ['chaos', 'samplers'] as const,
   blast: (node: string) => ['chaos', 'blast', node] as const,
   routes: ['chaos', 'route-choices'] as const,
@@ -90,14 +92,6 @@ async function optional<T>(load: () => Promise<T>): Promise<T | null> {
     throw e
   }
 }
-
-/** The environment's effective caps (#2862, GET /chaos/settings) when the server has them. */
-export const fetchCaps = () =>
-  optional(() =>
-    api
-      .get('/chaos/settings')
-      .then((r) => (r.data.data?.effective_caps ?? null) as ChaosCaps | null)
-  )
 
 /** Samplers the hypothesis can name (#2828) when the server lists them. */
 export const fetchSamplers = () =>

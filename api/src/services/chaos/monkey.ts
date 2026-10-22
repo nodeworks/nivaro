@@ -147,13 +147,20 @@ export interface MonkeySpec {
   params: Record<string, unknown>
   seconds: number
   hypothesis: HypothesisRule[]
+  /** The preset's abort limit, when it sets one (#2844); unset = the drill's default 3. */
+  abort_after?: number
   preset: string | null
 }
 
 interface PresetLike {
   key: string
   label?: string
-  spec: { fault_key: string; params?: Record<string, unknown>; hypothesis?: HypothesisRule[] }
+  spec: {
+    fault_key: string
+    params?: Record<string, unknown>
+    hypothesis?: HypothesisRule[]
+    abort_after?: number
+  }
 }
 
 async function presetFor(key: string): Promise<PresetLike | null> {
@@ -203,6 +210,7 @@ export async function pickMonkeySpec(
       params: preset?.spec.params ?? {},
       seconds: Math.max(5, Math.min(m.max_seconds, def.max_seconds)),
       hypothesis: hyp,
+      ...(preset?.spec.abort_after != null ? { abort_after: preset.spec.abort_after } : {}),
       preset: preset?.key ?? null
     })
   }
@@ -255,6 +263,7 @@ export async function tickMonkey(
       params: spec.params,
       seconds: spec.seconds,
       hypothesis: spec.hypothesis,
+      abort_after: spec.abort_after,
       note: 'Chaos Monkey',
       kind: 'monkey',
       by: { id: null, name: 'Chaos Monkey' }

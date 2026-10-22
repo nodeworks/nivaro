@@ -28,8 +28,11 @@ import {
   preflightOf,
   startRun
 } from '../api'
-import { builderKeys, type ChaosPreset, fetchCaps, runPreset } from './api'
+import { fetchOperator, type OperatorView, opsKeys } from '../ops-api'
+import { type ChaosPreset, runPreset } from './api'
 import {
+  abortAfterWords,
+  type ChaosCaps,
   clampDraft,
   type DraftSpec,
   draftIssues,
@@ -99,9 +102,13 @@ export function ExperimentBuilder({
     queryKey: chaosKeys.status,
     queryFn: fetchStatus
   })
-  const { data: caps = null } = useQuery({
-    queryKey: builderKeys.caps,
-    queryFn: fetchCaps,
+  // The environment's caps (#2862) from GET /chaos/operator — readable by every chaos operator,
+  // not only administrators. Shares the console's operator query (same key, same shape); a
+  // server without the route leaves caps null and the catalog's own limits apply.
+  const { data: caps = null } = useQuery<OperatorView, unknown, ChaosCaps | null>({
+    queryKey: opsKeys.operator,
+    queryFn: fetchOperator,
+    select: (v) => v.caps ?? null,
     staleTime: 60_000,
     retry: false
   })
@@ -548,9 +555,7 @@ function useStepSummaries(
             )
             .join('; ')
         : 'none — records only',
-      abort: d.hypothesis.length
-        ? `${d.hypothesis.length} line${d.hypothesis.length === 1 ? '' : 's'}, 3 breaches in a row`
-        : 'only at the end',
+      abort: d.hypothesis.length ? abortAfterWords(d.abort_after) : 'only at the end',
       blast: node ? `if ${mapNodeLabel(node)} went down` : 'no estimate',
       preflight:
         preflightOk === null

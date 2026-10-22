@@ -98,11 +98,19 @@ describe('chaos routes', () => {
     const start = await app.inject({
       method: 'POST',
       url: '/runs',
-      payload: { fault_key: 'slow_requests', params: { delay_ms: 250 }, seconds: 60, note: 'test' }
+      payload: {
+        fault_key: 'slow_requests',
+        params: { delay_ms: 250 },
+        seconds: 60,
+        note: 'test',
+        abort_after: 5
+      }
     })
     expect(start.statusCode).toBe(201)
     const { run, fault } = start.json().data
     expect(run.status).toBe('running')
+    // The builder's abort limit (#2844) rides the run for the steady-state watcher.
+    expect(run.meta.abort_after).toBe(5)
     expect(run.fault_key).toBe('slow_requests')
     expect(run.meta.job_run_id).toBe(7)
     expect(run.hypothesis).toEqual([{ sampler: 'http.5xx_pct', op: '<', limit: 1, tolerance: 0.5 }])
