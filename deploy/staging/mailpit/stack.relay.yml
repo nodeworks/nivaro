@@ -2,6 +2,7 @@
 # Deploy: docker stack deploy -c .docker/mailpit/stack.yml -c .docker/mailpit/stack.relay.yml efp_mail
 # Redeploy without this fragment to turn relaying off: Mailpit keeps catching, Release is unavailable.
 # Relay host, credentials and allowed-/blocked-recipients live in the relay YAML secret only.
+# Resource limits, read-only root and cap_drop come from stack.yml (the files merge).
 services:
   mailpit:
     environment:

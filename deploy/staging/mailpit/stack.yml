@@ -27,6 +27,16 @@ services:
       traefik_swarm: {}
     volumes:
       - mailpit-data:/data
+      # Read-only root (below): SQLite's scratch files go to this tmpfs, the store to the volume.
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 33554432 # 32 MiB
+    # Hardened (checked with v1.21.8: SMTP accepts mail, the UI and API answer behind the login,
+    # the store survives a restart). Swarm applies read_only and cap_drop (Docker 20.10+);
+    # it has no no-new-privileges for services, so that one is not set here.
+    read_only: true
+    cap_drop: [ALL]
     secrets:
       - source: mailpit_ui_auth
         target: mailpit-ui-auth
@@ -40,6 +50,11 @@ services:
       restart_policy:
         condition: any
         delay: 5s
+      # Observed 31 MiB (staging, 2026-10-22, 5000-message cap): sized with room for a
+      # burst of large messages.
+      resources:
+        limits: { cpus: '0.5', memory: 256M }
+        reservations: { cpus: '0.05', memory: 32M }
       labels:
         traefik.enable: "true"
         traefik.http.routers.efp-mailpit.rule: Host(`${MAILPIT_UI_HOST:?the staging API hostname}`) && PathPrefix(`/mailpit`)

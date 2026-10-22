@@ -18,7 +18,8 @@
  *   check   production promotion is switched on (`enabled` in the config — off
  *           until cutover, so a --go can never deploy by accident); the image
  *           tag exists on Docker Hub and reports a digest (pinned as line 2 of
- *           the pin file; no digest = a blocker); the
+ *           the pin file; no digest = a blocker), and the <version>-slim tag's
+ *           digest when it exists (line 3, the slim web image, #2789); the
  *           deployment commit that took this version to staging exists; staging
  *           answered with it; the portal commit staging serves is on its main
  *           branch; a GitLab token is present.
@@ -356,6 +357,11 @@ async function main() {
   const source = sourceCommit(cfg, VERSION)
   const migrations = migrationsBetween(prodVersion, VERSION)
   const digest = cfg.image ? await hubDigest(cfg.image, VERSION) : null
+  // The slim web image (#2789) rides line 3 of the pin. Optional: a version
+  // published before the slim image existed has none, and the deploy then
+  // runs web on the full image for that version.
+  const slimDigest = cfg.image ? await hubDigest(cfg.image, `${VERSION}-slim`) : null
+  const slimPinned = Boolean(digest && digest !== 'present' && slimDigest && slimDigest !== 'present')
   const frontend = fe ? frontendCommit(fe) : null
   const priority = routePriority(cfg)
   const blockers = []
@@ -379,7 +385,7 @@ async function main() {
   if (fe && !frontend?.hash) blockers.push(`portal: ${frontend?.why}`)
   if (fe && !fe.project) blockers.push('portal: no gitlab_project configured')
 
-  const pinText = `${VERSION}\n${digest && digest !== 'present' ? `${digest}\n` : ''}`
+  const pinText = `${VERSION}\n${digest && digest !== 'present' ? `${digest}\n` : ''}${slimPinned ? `${slimDigest}\n` : ''}`
   const plan = {
     version: VERSION,
     target: prod.name,
@@ -392,6 +398,7 @@ async function main() {
     verified_by_run: verifiedRuns.includes(VERSION),
     source_commit: source,
     image_digest: digest,
+    slim_digest: slimPinned ? slimDigest : null,
     frontend_commit: frontend?.hash ? { hash: frontend.hash, short: frontend.short, subject: frontend.subject } : null,
     route_priority: priority,
     migrations,
@@ -403,7 +410,7 @@ async function main() {
       { stage: 'check', text: `image ${cfg.image ?? '(none configured)'}:${VERSION} ${digest ? (digest === 'present' ? 'present' : `→ ${digest.slice(0, 19)}…`) : 'MISSING'}; staging ${stagingNow ? 'runs it now' : verifiedRuns.includes(VERSION) ? 'verified it in a finished release run' : 'never answered with it'}` },
       { stage: 'check', text: source ? `API: source commit ${source.hash.slice(0, 8)} — ${source.subject}` : `API: no deploy commit for ${VERSION} on ${prod.sourceBranch}` },
       ...(fe ? [{ stage: 'check', text: frontend?.hash ? `${fe.name}: staging serves ${frontend.short} — ${frontend.subject}` : `${fe.name}: ${frontend?.why}` }] : []),
-      { stage: 'push', text: `API: merge into ${prod.branch}, pin ${VERSION}${digest && digest !== 'present' ? ' + digest' : ''} in ${prod.pinFile}, push (throwaway worktree)` },
+      { stage: 'push', text: `API: merge into ${prod.branch}, pin ${VERSION}${digest && digest !== 'present' ? ' + digest' : ''}${slimPinned ? ' + slim digest' : ''} in ${prod.pinFile}, push (throwaway worktree)` },
       ...(fe ? [{ stage: 'push', text: frontend?.alreadyOnBranch ? `${fe.name}: ${fe.branch} already holds ${frontend.short}` : `${fe.name}: merge ${frontend?.short ?? '?'} into ${fe.branch}, push (its pipeline builds the image)` }] : []),
       { stage: 'deploy', text: `API: wait for build_extension, play deploy_production${BOOTSTRAP ? ' with GATE_MODE=bootstrap (first deploy)' : ''}, wait for it (canary + migrations + gated roll)` },
       ...(fe ? [{ stage: 'deploy', text: `${fe.name}: after the API passed — wait for build_production, play deploy_production, wait for it` }] : []),
