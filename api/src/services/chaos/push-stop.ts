@@ -2,6 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { config } from '../../config.js'
 import { type ArmedFault, describeTarget } from './catalog.js'
 import { runParticipants } from './drill-alerts.js'
+import { CHAOS_KEY_PREFIX } from './registry.js'
 import { type ChaosRun, getRun } from './runs.js'
 
 /**
@@ -100,7 +101,7 @@ export async function spendStopToken(claims: StopClaims, now = Date.now()): Prom
   try {
     const ok = await Promise.race([
       bus.set(
-        `nvr:chaos:stoptok:${claims.n}`,
+        `${CHAOS_KEY_PREFIX}stoptok:${claims.n}`,
         claims.r,
         'PX',
         Math.max(1000, claims.e - now),

@@ -1,6 +1,6 @@
 import { setArmedVisibility } from './armed-visibility.js'
 import type { ArmedFault } from './catalog.js'
-import { onRegistryChange } from './registry.js'
+import { CHAOS_CHANNEL, CHAOS_KEY_PREFIX, onRegistryChange } from './registry.js'
 
 /**
  * Blind mode (#2854). The lead starts a drill or game day without telling the responders: while
@@ -29,9 +29,8 @@ export interface BlindWindow {
   revealed_at: number | null
 }
 
-const PREFIX = process.env.REDIS_CHANNEL_PREFIX ?? ''
-export const BLIND_CHANNEL = `${PREFIX}nvr:chaos:blind`
-export const BLIND_KEY = 'nvr:chaos:blind'
+export const BLIND_CHANNEL = `${CHAOS_CHANNEL}:blind`
+export const BLIND_KEY = `${CHAOS_KEY_PREFIX}blind`
 /** A fault armed this long before the window opened still counts (clock spread). */
 const OPEN_SLACK_MS = 2000
 
