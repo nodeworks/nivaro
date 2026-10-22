@@ -126,6 +126,12 @@ export function ExperimentBuilder({
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const railRef = useRef<HTMLOListElement>(null)
+  // On a phone the rail scrolls sideways: fade the right edge while more steps sit past it.
+  const [railMore, setRailMore] = useState(false)
+  const measureRail = () => {
+    const el = railRef.current
+    if (el) setRailMore(el.scrollWidth - el.scrollLeft - el.clientWidth > 4)
+  }
   const presetTipRef = useOverflowTip<HTMLSpanElement>(preset ? `from ${preset.label}` : null)
 
   // Caps (#2862) can arrive after the first render: pull the draft back inside them.
@@ -180,7 +186,7 @@ export function ExperimentBuilder({
         : preflightOk === false
           ? overridable
             ? 'Outside working hours: tick the override to run.'
-            : `Pre-flight is blocking this run: ${failing.map((c) => c.label).join(', ')}.`
+            : `Pre-flight is blocking this run: ${failing.map((c) => sentence(c.why ?? c.label)).join(' ')}`
           : null
 
   const run = useMutation({
@@ -220,7 +226,15 @@ export function ExperimentBuilder({
   useEffect(() => {
     const el = railRef.current?.querySelector<HTMLElement>('[aria-current="step"]')
     el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+    measureRail()
   }, [step])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measureRail only reads the ref
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined' || !railRef.current) return
+    const ro = new ResizeObserver(() => measureRail())
+    ro.observe(railRef.current)
+    return () => ro.disconnect()
+  }, [])
   const idx = STEPS.findIndex((s) => s.id === step)
 
   const summary = useStepSummaries(fault, draft, preflightOk, failing.length)
@@ -242,7 +256,12 @@ export function ExperimentBuilder({
       >
         <ol
           ref={railRef}
-          className='flex gap-1 overflow-x-auto px-3 py-2 [scrollbar-width:none] lg:flex-col lg:gap-0.5 lg:overflow-visible lg:px-2 lg:py-3 [&::-webkit-scrollbar]:hidden'
+          onScroll={measureRail}
+          className={cn(
+            railMore &&
+              '[mask-image:linear-gradient(to_right,#000_calc(100%-40px),transparent)] lg:[mask-image:none]',
+            'flex gap-1 overflow-x-auto px-3 py-2 [scrollbar-width:none] lg:flex-col lg:gap-0.5 lg:overflow-visible lg:px-2 lg:py-3 [&::-webkit-scrollbar]:hidden'
+          )}
         >
           {STEPS.map((s, i) => {
             const on = s.id === step
@@ -541,4 +560,10 @@ function useStepSummaries(
             : `${failing} check${failing === 1 ? '' : 's'} failing`
     }
   }, [fault, d, samplers, preflightOk, failing])
+}
+
+/** A check's detail as a sentence ("Incident #42 is open." not "Incident #42 is open"). */
+function sentence(t: string): string {
+  const v = t.trim()
+  return /[.!?]$/.test(v) ? v : `${v}.`
 }

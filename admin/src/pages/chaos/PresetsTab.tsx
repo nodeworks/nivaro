@@ -79,19 +79,19 @@ export function PresetsTab() {
 
   return (
     <div className='flex-1 overflow-y-auto px-4 pb-20 pt-5 sm:p-6'>
-      <div className='mb-4 flex flex-wrap items-end justify-between gap-3'>
+      <div className='mb-4'>
         <div className='min-w-0'>
           <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>Presets</h2>
           <p className='mt-0.5 max-w-[75ch] text-[12.5px] text-slate-500 dark:text-muted-foreground'>
             Ready-made experiments, one per claim worth proving. Run opens it in the builder to
             check and confirm; save your own from the builder.
           </p>
+          {data && (
+            <p className='mt-1 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              {STORE_WORDS[data.store] ?? STORE_WORDS.memory}
+            </p>
+          )}
         </div>
-        {data && (
-          <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-            {STORE_WORDS[data.store] ?? STORE_WORDS.memory}
-          </span>
-        )}
       </div>
 
       <div className='mb-3 flex flex-wrap items-center gap-2'>

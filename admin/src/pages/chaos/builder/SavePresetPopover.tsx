@@ -96,7 +96,12 @@ export function SavePresetPopover({
           </button>
         </PopoverTrigger>
       </span>
-      <PopoverContent align='end' className='w-[min(360px,calc(100vw-32px))] p-0'>
+      <PopoverContent
+        align='end'
+        // Clear of the app's icon rail on a phone (left) as well as the screen edges.
+        collisionPadding={{ top: 16, right: 16, bottom: 16, left: 68 }}
+        className='w-[min(360px,calc(100vw-84px))] p-0'
+      >
         <form
           className='space-y-3 p-3'
           onSubmit={(e) => {

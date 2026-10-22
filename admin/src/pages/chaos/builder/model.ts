@@ -283,7 +283,7 @@ export function paramWords(fault: CatalogFault, params: Record<string, ParamValu
     // A switch reads as its label when on and drops out when off ("Add jitter", not "Add jitter on").
     if (s.type === 'boolean') {
       if (v) parts.push(s.label)
-    } else if (s.type === 'number') parts.push(`${s.label} ${v}${s.unit ? ` ${s.unit}` : ''}`)
+    } else if (s.type === 'number') parts.push(`${s.label} ${withUnit(String(v), s.unit)}`)
     else if (v !== '' && v != null) parts.push(`${s.label} ${v}`)
   }
   return parts.join(' · ')
@@ -297,10 +297,15 @@ export function abortLine(r: HypothesisRule): number {
 
 const OP_SYMBOL: Record<HypothesisRule['op'], string> = { '<': '<', '<=': '≤', '>': '>', '>=': '≥' }
 
+/** A number with its unit, the one way the builder writes them: "2500 ms", "1.5%", "1–100%". */
+export function withUnit(n: number | string, unit: string | null | undefined): string {
+  if (!unit) return String(n)
+  return unit === '%' ? `${n}%` : `${n} ${unit}`
+}
+
 /** One steady-state line in words: "Request p95 < 2500 ms". */
 export function ruleWords(r: HypothesisRule, label: string, unit: string): string {
-  const u = !unit ? '' : unit === '%' ? '%' : ` ${unit}`
-  return `${label} ${OP_SYMBOL[r.op] ?? r.op} ${r.limit}${u}`
+  return `${label} ${OP_SYMBOL[r.op] ?? r.op} ${withUnit(r.limit, unit)}`
 }
 
 /** A Traffic Map dependency node as people name it ("ext:7" → "partner #7"). */

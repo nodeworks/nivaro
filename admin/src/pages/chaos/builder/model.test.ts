@@ -13,7 +13,8 @@ import {
   routePattern,
   ruleWords,
   slugKey,
-  targetWords
+  targetWords,
+  withUnit
 } from './model'
 
 const slow: CatalogFault = {
@@ -130,6 +131,8 @@ describe('experiment builder model (#2844)', () => {
     expect(ruleWords({ sampler: 's', op: '<', limit: 1 }, 'Server errors', '%')).toBe(
       'Server errors < 1%'
     )
+    expect(withUnit(1.5, '%')).toBe('1.5%')
+    expect(withUnit('5–120', 's')).toBe('5–120 s')
     expect(mapNodeLabel('redis')).toBe('Redis')
     expect(mapNodeLabel('ext:7')).toBe('partner #7')
   })

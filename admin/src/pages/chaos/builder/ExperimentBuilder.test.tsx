@@ -39,7 +39,9 @@ function answers(url: string) {
   if (url === '/chaos/preflight')
     return ok({
       ok: preflightOk,
-      checks: [{ key: 'deploy', label: 'No deploy running', ok: preflightOk, why: 'deploying' }]
+      checks: [
+        { key: 'deploy', label: 'No deploy running', ok: preflightOk, why: 'A deploy is running' }
+      ]
     })
   if (url === '/chaos/settings')
     return caps ? ok({ effective_caps: caps }) : Promise.reject({ response: { status: 404 } })
@@ -98,7 +100,7 @@ describe('ExperimentBuilder (#2844)', () => {
     preflightOk = false
     mount()
     expect(
-      await screen.findByText(/Pre-flight is blocking this run: No deploy running/)
+      await screen.findByText(/Pre-flight is blocking this run: A deploy is running\./)
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^Run$/ })).toBeDisabled()
   })

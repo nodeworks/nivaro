@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Plus, RotateCcw, X } from 'lucide-react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { UserCombobox } from '@/components/user-combobox'
@@ -26,7 +26,8 @@ import {
   paramRange,
   SAMPLE_EVERY_S,
   shareCapNarrowsAll,
-  TARGET_LABEL
+  TARGET_LABEL,
+  withUnit
 } from './model'
 import { ChoiceCombobox, RouteCombobox, TableCombobox } from './pickers'
 
@@ -36,7 +37,25 @@ export const inputCls =
   'h-8 rounded-md border border-slate-200 bg-white px-2 text-[12.5px] tabular-nums text-slate-900 placeholder:text-slate-500 focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-muted-foreground'
 export const labelCls = 'text-[12px] font-medium text-slate-700 dark:text-foreground/90'
 const hintCls = 'text-[12px] text-slate-500 dark:text-muted-foreground'
-const rangeCls = 'h-1.5 w-full cursor-pointer accent-nvr-cyan'
+const rangeCls = 'nvr-builder-range w-full'
+
+/**
+ * The builder's sliders, drawn by hand: Chrome's native track ignores accent-color for the unfilled
+ * part (near-black in light mode). Same look as the shared chaos toolbar's slider: slate track,
+ * cyan fill up to the value (--nvr-range-fill), white thumb ringed in cyan, a focus halo.
+ */
+const RANGE_CSS = `
+.nvr-builder-range { -webkit-appearance: none; appearance: none; height: 16px; background: transparent; cursor: pointer; --nvr-range-track: rgb(226 232 240) }
+.dark .nvr-builder-range { --nvr-range-track: rgb(255 255 255 / 0.14) }
+.nvr-builder-range::-webkit-slider-runnable-track { height: 4px; border-radius: 9999px; background: linear-gradient(to right, rgb(var(--nvr-cyan-rgb, 0 206 255)) 0 var(--nvr-range-fill, 0%), var(--nvr-range-track) var(--nvr-range-fill, 0%) 100%) }
+.nvr-builder-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 9999px; background: #fff; border: 2px solid rgb(var(--nvr-cyan-rgb, 0 206 255)); box-shadow: 0 1px 2px rgb(0 0 0 / 0.15) }
+.nvr-builder-range::-moz-range-track { height: 4px; border-radius: 9999px; background: var(--nvr-range-track) }
+.nvr-builder-range::-moz-range-progress { height: 4px; border-radius: 9999px; background: rgb(var(--nvr-cyan-rgb, 0 206 255)) }
+.nvr-builder-range::-moz-range-thumb { width: 10px; height: 10px; border-radius: 9999px; background: #fff; border: 2px solid rgb(var(--nvr-cyan-rgb, 0 206 255)) }
+.nvr-builder-range:focus-visible { outline: none }
+.nvr-builder-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.35) }
+.nvr-builder-range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.35) }
+`
 
 type SetDraft = (fn: (d: DraftSpec) => DraftSpec) => void
 
@@ -93,6 +112,9 @@ function Segmented<T extends string>({
   )
 }
 
+const clampTo = (n: number, lo: number, hi: number) =>
+  Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo
+
 /** Slider + number box for one bounded number. */
 function NumberDial({
   label,
@@ -121,16 +143,21 @@ function NumberDial({
           {label}
         </label>
         <span className='text-[11.5px] tabular-nums text-slate-500 dark:text-muted-foreground'>
-          {min}–{max}
-          {unit ? ` ${unit}` : ''}
+          {withUnit(`${min}–${max}`, unit)}
           {capped ? ` · ${capped}` : ''}
         </span>
       </div>
       <div className='flex items-center gap-3'>
+        <style>{RANGE_CSS}</style>
         <input
           type='range'
           aria-label={label}
           className={rangeCls}
+          style={
+            {
+              '--nvr-range-fill': `${((clampTo(value, min, max) - min) / (max - min || 1)) * 100}%`
+            } as CSSProperties
+          }
           min={min}
           max={max}
           step={step}
@@ -286,7 +313,7 @@ export function TargetStep({ fault, draft, set, caps, nodes }: StepProps & { nod
               disabled={capped}
               onClick={() => !on && setTarget(emptyTarget(k, nodes))}
               className={cn(
-                'rounded-md border px-3 py-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                'flex flex-col items-start justify-start rounded-md border px-3 py-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
                 // A capped choice stays readable (its hint says why); only the title dims.
                 capped
                   ? 'cursor-not-allowed border-dashed border-slate-200 bg-slate-50 dark:border-border dark:bg-muted/30'
@@ -701,7 +728,7 @@ export function AbortStep({ draft, set }: StepProps) {
               <div className='min-w-0 flex-1 basis-56 text-[12.5px] text-slate-700 dark:text-foreground/90'>
                 Abort if <span className='font-medium'>{labelOf(r.sampler)}</span> {OP_WORD[r.op]}{' '}
                 <span className='font-medium tabular-nums'>
-                  {abortLine(r)} {unitOf(r.sampler)}
+                  {withUnit(abortLine(r), unitOf(r.sampler))}
                 </span>
               </div>
               <label className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-muted-foreground'>
@@ -720,6 +747,9 @@ export function AbortStep({ draft, set }: StepProps) {
                     }))
                   }
                 />
+                <span className='w-12 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
+                  {unitOf(r.sampler)}
+                </span>
               </label>
             </li>
           ))}
