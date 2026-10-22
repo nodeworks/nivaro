@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { detectHardwareEncoders } from '../services/help-video-encoder.js'
+import { renderHostEncoders } from '../services/help-video-encoder.js'
 import {
   currentHouseStyle,
   HOUSE_STYLE_DEFAULTS,
@@ -50,7 +50,8 @@ async function settingsBody(fresh: boolean) {
   const { migrated, stored } = await loadHelpVideoSettings()
   const own = storedEncoder(stored)
   const { encoder, sources } = effectiveEncoder(own)
-  const hardware = await detectHardwareEncoders(fresh).catch(() => null)
+  // Where renders run: here, or the render server of a slim process.
+  const hardware = await renderHostEncoders(fresh).catch(() => null)
   return {
     migrated,
     encoder,
@@ -64,7 +65,7 @@ async function settingsBody(fresh: boolean) {
       crf_max: CRF_MAX,
       two_pass_max_minutes: TWO_PASS_MAX_MINUTES
     },
-    // What THIS process can use; another replica may differ.
+    // What the process that renders can use (`source`: here | render-server).
     hardware: hardware ?? { available: [], failed: [], checked_at: null }
   }
 }

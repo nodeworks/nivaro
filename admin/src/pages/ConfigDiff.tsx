@@ -217,22 +217,36 @@ function TableDiffRow({
         className='flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted'
       >
         <Chevron className='h-3.5 w-3.5 shrink-0 text-muted-foreground' />
-        <span className='min-w-0 flex-1 truncate font-mono text-[12px]'>{diff.table}</span>
+        <span className='min-w-0 flex-1 truncate font-mono text-[12px]' data-tip={diff.table}>
+          {diff.table}
+        </span>
         {diff.only_on && (
-          <span className='shrink-0 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10.5px] text-amber-700 dark:text-amber-400'>
-            only on {diff.only_on === 'mine' ? 'this instance' : 'the uploaded one'}
+          <span
+            className='shrink-0 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10.5px] text-amber-700 dark:text-amber-400'
+            data-tip={`This table is only on ${diff.only_on === 'mine' ? 'this instance' : 'the uploaded one'}`}
+          >
+            only {diff.only_on === 'mine' ? 'here' : 'there'}
           </span>
         )}
-        <span className='w-16 shrink-0 text-right text-[12px] tabular-nums text-green-600 dark:text-green-400'>
+        <span
+          className='shrink-0 text-right text-[12px] tabular-nums text-green-600 sm:w-16 dark:text-green-400'
+          data-tip={diff.added.length ? `${diff.added.length} only here` : undefined}
+        >
           {diff.added.length ? `+${diff.added.length}` : ''}
         </span>
-        <span className='w-16 shrink-0 text-right text-[12px] tabular-nums text-red-600 dark:text-red-400'>
+        <span
+          className='shrink-0 text-right text-[12px] tabular-nums text-red-600 sm:w-16 dark:text-red-400'
+          data-tip={diff.removed.length ? `${diff.removed.length} only there` : undefined}
+        >
           {diff.removed.length ? `−${diff.removed.length}` : ''}
         </span>
-        <span className='w-16 shrink-0 text-right text-[12px] tabular-nums text-amber-600 dark:text-amber-400'>
+        <span
+          className='shrink-0 text-right text-[12px] tabular-nums text-amber-600 sm:w-16 dark:text-amber-400'
+          data-tip={diff.changed.length ? `${diff.changed.length} changed` : undefined}
+        >
           {diff.changed.length ? `~${diff.changed.length}` : ''}
         </span>
-        <span className='w-20 shrink-0 text-right text-[11px] text-muted-foreground'>
+        <span className='hidden w-20 shrink-0 text-right text-[11px] text-muted-foreground sm:block'>
           {formatNumber(diff.same)} same
         </span>
       </button>
@@ -288,8 +302,13 @@ function TableDiffRow({
                       </p>
                     )}
                     {row.fields.map((f) => (
-                      <div key={f.field} className='grid grid-cols-[140px_1fr_1fr] gap-2 py-0.5'>
-                        <span className='truncate font-mono text-[10.5px]'>{f.field}</span>
+                      <div
+                        key={f.field}
+                        className='grid grid-cols-1 gap-x-2 gap-y-0.5 py-0.5 sm:grid-cols-[140px_1fr_1fr]'
+                      >
+                        <span className='truncate font-mono text-[10.5px]' data-tip={f.field}>
+                          {f.field}
+                        </span>
                         <span className='break-all text-[10.5px] text-green-700 dark:text-green-400'>
                           {short(f.mine)}
                         </span>
@@ -366,7 +385,7 @@ function SincePanel() {
       data-config-since
     >
       <div className='flex flex-wrap items-center gap-3'>
-        <div className='min-w-0 flex-1'>
+        <div className='min-w-0 flex-1 basis-60'>
           <h2 className='text-[13px] font-semibold'>What drifted since…</h2>
           <p className='text-[12px] text-muted-foreground'>
             A snapshot of every configuration table is stored each night at 04:40. Pick a night; the
@@ -500,8 +519,8 @@ export function ConfigDiffPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
-        <div className='flex items-center gap-2.5'>
+      <header className='flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-slate-200 px-6 py-4 dark:border-border'>
+        <div className='flex min-w-0 items-center gap-2.5'>
           <GitCompare className='h-5 w-5 text-muted-foreground' />
           <div>
             <h1 className='text-lg font-semibold'>Environment Config</h1>
@@ -510,7 +529,7 @@ export function ConfigDiffPage() {
             </p>
           </div>
         </div>
-        <div className='flex items-center gap-2'>
+        <div className='flex flex-wrap items-center gap-2'>
           <Button
             size='sm'
             variant='outline'
@@ -680,16 +699,16 @@ export function ConfigDiffPage() {
               <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
                 <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2 dark:border-border'>
                   <span className='flex-1 text-[12px] font-medium'>Differences by table</span>
-                  <span className='w-16 text-right text-[10.5px] uppercase tracking-wide text-muted-foreground'>
+                  <span className='hidden w-16 text-right text-[10.5px] uppercase tracking-wide text-muted-foreground sm:block'>
                     here
                   </span>
-                  <span className='w-16 text-right text-[10.5px] uppercase tracking-wide text-muted-foreground'>
+                  <span className='hidden w-16 text-right text-[10.5px] uppercase tracking-wide text-muted-foreground sm:block'>
                     there
                   </span>
-                  <span className='w-16 text-right text-[10.5px] uppercase tracking-wide text-muted-foreground'>
+                  <span className='hidden w-16 text-right text-[10.5px] uppercase tracking-wide text-muted-foreground sm:block'>
                     changed
                   </span>
-                  <span className='w-20' />
+                  <span className='hidden w-20 sm:block' />
                 </div>
                 {diff.tables.map((t) => (
                   <TableDiffRow

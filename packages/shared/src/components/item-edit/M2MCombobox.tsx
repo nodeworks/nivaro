@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronDown, ChevronsUpDown, Loader2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
+import { parseAllowedCollections } from '../../lib/allowed-collections'
 import { get } from '../../lib/commands'
 import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
@@ -46,10 +47,7 @@ import type { CMSRelation } from './types'
 // so the combobox loads options instead of spinning forever.
 
 function allowedList(rel: CMSRelation | undefined): string[] {
-  return (rel?.one_allowed_collections ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
+  return parseAllowedCollections(rel?.one_allowed_collections)
 }
 
 export function resolveM2MRelatedCollection(otherRel: CMSRelation | undefined): string | null {

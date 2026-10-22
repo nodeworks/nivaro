@@ -21,7 +21,10 @@ vi.mock('../../../middleware/authenticate.js', () => ({
     if (!state.admin) return reply.code(403).send({ error: 'Forbidden', code: 'ADMIN_ONLY' })
   }
 }))
-vi.mock('../../../services/help-video-encoder.js', () => ({ detectHardwareEncoders: vi.fn() }))
+vi.mock('../../../services/help-video-encoder.js', () => ({
+  detectHardwareEncoders: vi.fn(),
+  renderHostEncoders: vi.fn()
+}))
 vi.mock('../../../services/help-video-render.js', () => ({ cancelRender: vi.fn() }))
 vi.mock('../../../services/help-video-render-queue.js', () => ({ listRenderQueue: vi.fn() }))
 vi.mock('../../../services/help-video-house-style.js', () => ({

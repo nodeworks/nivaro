@@ -4,8 +4,19 @@ import { db, migrationSource } from '../db/index.js'
 import { extensionRegistry, missingExtensionEnv } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { hasFfmpeg } from '../services/ffmpeg.js'
+import {
+  type HandoffRedis,
+  handoffBacklog,
+  judgeMediaWorker,
+  readMediaWorker
+} from '../services/media-handoff.js'
 import { hasLocalChromium } from '../services/pdf-layout.js'
-import { imageVariant, probeRenderPeer, type RenderPeerHealth } from '../services/render-peer.js'
+import {
+  imageVariant,
+  judgeRenderSetup,
+  probeRenderPeer,
+  type RenderPeerHealth
+} from '../services/render-peer.js'
 import { NIVARO_VERSION } from '../version.js'
 
 /**
@@ -224,54 +235,33 @@ function checkVersion(): Check {
 }
 
 /**
- * #2789 — where PDFs and video work run. The full image has Chromium and
- * ffmpeg; the slim one hands them to RENDER_URL. warn, never fail: everything
- * else serves while the render server is down (a deploy that starts the web
- * tasks before the worker must not be refused for it).
+ * #2789 — where PDFs and video work run (judgeRenderSetup in render-peer.ts:
+ * a slim process with no working render server FAILS, so the deploy gate
+ * catches it before people meet 503s; the worker must be up before web).
  */
 export function judgeRender(
   local: { chromium: boolean; ffmpeg: boolean },
   peer: RenderPeerHealth,
   variant: 'slim' | 'full' | null
 ): Check {
-  const detail = { variant, local, peer }
-  if (!peer.configured) {
-    if (local.chromium && local.ffmpeg)
-      return {
-        id: 'render',
-        status: 'ok',
-        summary: 'Chromium and ffmpeg are installed here.',
-        detail
-      }
-    const missing = [!local.chromium && 'Chromium', !local.ffmpeg && 'ffmpeg'].filter(Boolean)
-    return {
-      id: 'render',
-      status: 'warn',
-      summary: `No ${missing.join(' or ')} here and no RENDER_URL — PDFs or video uploads will refuse with a 503.`,
-      detail
-    }
-  }
-  if (!peer.ok)
-    return {
-      id: 'render',
-      status: 'warn',
-      summary: `The render server (RENDER_URL) does not answer: ${peer.error}`,
-      detail
-    }
-  const lacks = [!peer.chromium && 'Chromium', !peer.ffmpeg && 'ffmpeg'].filter(Boolean)
-  if (lacks.length)
-    return {
-      id: 'render',
-      status: 'warn',
-      summary: `The render server answers but has no ${lacks.join(' or ')}.`,
-      detail
-    }
-  return {
-    id: 'render',
-    status: 'ok',
-    summary: `The render server answers (${peer.ms} ms).`,
-    detail
-  }
+  const v = judgeRenderSetup(local, peer, variant)
+  return { id: 'render', status: v.status, summary: v.summary, detail: { variant, local, peer } }
+}
+
+/** Slim parity: clips, captions, thumbnails and replay videos started on a
+ *  process without the binaries go to the media worker (media-handoff.ts). */
+async function checkMediaWorker(app: FastifyInstance): Promise<Check> {
+  const local = { ffmpeg: await hasFfmpeg(), chromium: await hasLocalChromium() }
+  const r = (app as unknown as { redis?: HandoffRedis }).redis ?? null
+  const variant = imageVariant()
+  const v = judgeMediaWorker(local, {
+    variant,
+    cloud: !!process.env.CLOUD_META_DB_URL,
+    redis: !!r,
+    worker: await readMediaWorker(r),
+    backlog: await handoffBacklog(r).catch(() => null)
+  })
+  return { id: 'media-worker', status: v.status, summary: v.summary, detail: { variant, local } }
 }
 
 async function checkRender(): Promise<Check> {
@@ -314,13 +304,21 @@ async function checkConnectivity(app: FastifyInstance): Promise<Check[]> {
 
 export async function preflightRoutes(app: FastifyInstance) {
   app.get('/preflight', { preHandler: requireAdmin }, async (_req, reply) => {
-    const [migrations, connectivity, render] = await Promise.all([
+    const [migrations, connectivity, render, media] = await Promise.all([
       checkMigrations(),
       checkConnectivity(app),
-      checkRender()
+      checkRender(),
+      checkMediaWorker(app)
     ])
 
-    const checks: Check[] = [migrations, ...connectivity, checkExtensions(), checkVersion(), render]
+    const checks: Check[] = [
+      migrations,
+      ...connectivity,
+      checkExtensions(),
+      checkVersion(),
+      render,
+      media
+    ]
     const status = worst(checks)
 
     return reply.code(status === 'fail' ? 503 : 200).send({

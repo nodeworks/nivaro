@@ -48,6 +48,7 @@ import { discardFile, pointerOfFile, videoWorkDir } from './help-video-uploads.j
 import { getApp } from './io-holder.js'
 import { isCancelled, requestCancel } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
+import { kickMediaWorker } from './media-handoff.js'
 import { imageVariant } from './render-peer.js'
 import { openStoredObject } from './stored-object-stream.js'
 
@@ -132,6 +133,10 @@ export async function queueRender(versionId: string): Promise<void> {
   else if (renderingAllowed()) {
     pending.add(String(versionId).toLowerCase())
     startPump()
+  } else {
+    // A process that may not render (the slim image, NIVARO_ROLE=web): the
+    // queue owner hears of it now instead of at its next 5-minute sweep.
+    kickMediaWorker('render')
   }
 }
 

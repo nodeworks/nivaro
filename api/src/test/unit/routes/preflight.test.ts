@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diffMigrations } from '../../../routes/preflight.js'
+import { diffMigrations, judgeRender } from '../../../routes/preflight.js'
 
 /**
  * The fail case here is the one that took a staging deploy down twice: the ledger
@@ -48,5 +48,47 @@ describe('diffMigrations', () => {
   it('is order-independent — the ledger is not sorted by name', () => {
     const check = diffMigrations(files, ['003_c.ts', '001_a.ts', '002_b.ts'])
     expect(check.status).toBe('ok')
+  })
+})
+
+// Slim parity: the slim image with nowhere to send PDFs and video work is a
+// config error a deploy gate must stop (503 from /api/preflight), not a warn.
+describe('judgeRender', () => {
+  const none = { chromium: false, ffmpeg: false }
+  const up = { configured: true, ok: true, url: 'http://w', chromium: true, ffmpeg: true, ms: 3 }
+
+  it('passes with the binaries here, or a render server that has them', () => {
+    expect(
+      judgeRender(
+        { chromium: true, ffmpeg: true },
+        { configured: false, ok: false, url: null },
+        'full'
+      ).status
+    ).toBe('ok')
+    expect(judgeRender(none, up, 'slim').status).toBe('ok')
+  })
+
+  it('FAILS on the slim image without RENDER_URL; only warns on a dev box', () => {
+    const unset = { configured: false, ok: false, url: null }
+    expect(judgeRender(none, unset, 'slim').status).toBe('fail')
+    expect(judgeRender(none, unset, null).status).toBe('warn')
+  })
+
+  it('only warns on a deploy canary (own Redis, no worker, serves nobody)', () => {
+    process.env.NIVARO_ROLE = 'canary'
+    try {
+      const v = judgeRender(none, { configured: false, ok: false, url: null }, 'slim')
+      expect(v.status).toBe('warn')
+      expect(v.summary).toMatch(/^Canary/)
+    } finally {
+      delete process.env.NIVARO_ROLE
+    }
+  })
+
+  it('fails when the render server is needed and does not answer or lacks a binary', () => {
+    expect(judgeRender(none, { ...up, ok: false, error: 'ECONNREFUSED' }, 'slim').status).toBe(
+      'fail'
+    )
+    expect(judgeRender(none, { ...up, chromium: false }, 'slim').status).toBe('fail')
   })
 })
