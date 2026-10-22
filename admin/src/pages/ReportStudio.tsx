@@ -1,3 +1,4 @@
+import { QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarChart3, FolderOpen, Globe, Pencil, Plus, Star } from 'lucide-react'
 import { useState } from 'react'
@@ -33,7 +34,13 @@ export function ReportStudioPage() {
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
 
-  const { data: reports = [], isLoading } = useQuery({
+  const {
+    data: reports = [],
+    isLoading,
+    isError,
+    error,
+    refetch
+  } = useQuery({
     queryKey: ['report-defs'],
     queryFn: () => api.get<{ data: ReportDef[] }>('/report-studio/').then((r) => r.data.data)
   })
@@ -132,6 +139,8 @@ export function ReportStudioPage() {
       <div className='flex-1 overflow-y-auto bg-slate-50 px-6 py-5 dark:bg-background'>
         {isLoading ? (
           <p className='text-[13px] text-slate-400'>Loading…</p>
+        ) : isError && reports.length === 0 ? (
+          <QueryErrorState error={error} what='reports' onRetry={() => void refetch()} />
         ) : reports.length === 0 ? (
           <div className='max-w-md py-10'>
             <BarChart3 className='h-8 w-8 text-slate-300' />

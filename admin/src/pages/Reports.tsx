@@ -1,3 +1,4 @@
+import { QueryErrorState } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { Download, FileBarChart, FilterX } from 'lucide-react'
 import { useState } from 'react'
@@ -290,7 +291,13 @@ export function ReportsPage() {
         .then((r) => r.data.data as { collection: string; display_name: string | null }[])
   })
 
-  const { data: activityData, isLoading: activityLoading } = useQuery({
+  const {
+    data: activityData,
+    isLoading: activityLoading,
+    isError: activityFailed,
+    error: activityError,
+    refetch: refetchActivity
+  } = useQuery({
     queryKey: ['reports-activity', filters, page],
     queryFn: () =>
       api
@@ -394,6 +401,12 @@ export function ReportsPage() {
                     <Skeleton key={i} className='h-10 w-full rounded' />
                   ))}
                 </div>
+              ) : activityFailed && !activityData ? (
+                <QueryErrorState
+                  error={activityError}
+                  what='the activity report'
+                  onRetry={() => void refetchActivity()}
+                />
               ) : (
                 <>
                   <Table>

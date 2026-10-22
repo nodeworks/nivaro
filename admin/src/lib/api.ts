@@ -12,7 +12,17 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' }
 })
 
+/** A read that has not answered in this long is abandoned so the screen can say so (#2857). */
+export const READ_TIMEOUT_MS = 30_000
+
 api.interceptors.request.use((config) => {
+  // Reads only: writes, uploads and downloads (blob/stream) run as long as they need.
+  if (
+    !config.timeout &&
+    (config.method ?? 'get').toLowerCase() === 'get' &&
+    !['blob', 'arraybuffer', 'stream'].includes(config.responseType ?? '')
+  )
+    config.timeout = READ_TIMEOUT_MS
   const ws = localStorage.getItem(WORKSPACE_KEY)
   if (ws) config.headers['x-workspace'] = ws
   // A "View as" tab acts as that person (lib/masquerade.ts).

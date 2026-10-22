@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn } from '../../lib/utils'
+import { QueryErrorState } from '../QueryErrorState'
 
 /**
  * Sender analytics (admin): where notifications come from and whether they
@@ -219,7 +220,7 @@ export function NotificationAnalyticsView({ className }: { className?: string })
   const client = useNivaroClient()
   const [days, setDays] = useState<7 | 30 | 90>(30)
   const [actedHours, setActedHours] = useState<4 | 24 | 72>(24)
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['notification-analytics', days, actedHours],
     queryFn: () =>
       client
@@ -291,7 +292,13 @@ export function NotificationAnalyticsView({ className }: { className?: string })
         </div>
       </header>
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
-        {isLoading || !data ? (
+        {isError && !data ? (
+          <QueryErrorState
+            error={error}
+            what='notification analytics'
+            onRetry={() => void refetch()}
+          />
+        ) : isLoading || !data ? (
           <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>Loading…</p>
         ) : (
           <div className='space-y-5'>

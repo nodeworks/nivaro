@@ -10,6 +10,7 @@ import {
   loadErrorText,
   NivaroProvider,
   PretendDownButton,
+  QueryErrorState,
   QueryWidgetBody,
   useLiveRefetchInterval,
   useLiveWidget,
@@ -1244,7 +1245,7 @@ export function DashboardEditPage() {
     }
   }, [globalFilters, id])
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['dashboard', id],
     queryFn: () => api.get<{ data: Dashboard }>(`/dashboards/${id}`).then((r) => r.data.data),
     enabled: !!id
@@ -1280,6 +1281,22 @@ export function DashboardEditPage() {
             <Skeleton key={k} className='h-40 rounded-xl' />
           ))}
         </div>
+      </div>
+    )
+  }
+
+  if (!data && isError) {
+    return (
+      <div className='flex flex-1 flex-col items-center justify-center'>
+        <QueryErrorState
+          error={error}
+          what='this dashboard'
+          onRetry={() => void refetch()}
+          className='flex-none'
+        />
+        <Button variant='outline' onClick={() => navigate('/dashboards')}>
+          Back to Dashboards
+        </Button>
       </div>
     )
   }

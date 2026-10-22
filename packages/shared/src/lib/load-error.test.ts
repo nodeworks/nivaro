@@ -28,3 +28,12 @@ describe('serverErrorText', () => {
     expect(serverErrorText(new TypeError('Failed to fetch'))).toBeNull()
   })
 })
+
+describe('loadErrorText timeouts (#2857)', () => {
+  it('says a request that never answered took too long', () => {
+    expect(loadErrorText(new Error('timeout of 30000ms exceeded'))).toMatch(/too long/)
+    expect(loadErrorText(Object.assign(new Error('x'), { name: 'TimeoutError' }))).toMatch(
+      /too long/
+    )
+  })
+})
