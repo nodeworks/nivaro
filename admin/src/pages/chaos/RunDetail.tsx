@@ -6,7 +6,7 @@ import { adminRealtime } from '@/lib/socket'
 import { cn, formatDateTime } from '@/lib/utils'
 import { type ChaosRun, type ChaosRunEvent, chaosKeys, describeTarget, fetchRun } from './api'
 import { RunCockpit } from './RunCockpit'
-import { RunChip } from './RunsTab'
+import { RUN_KIND_LABEL, RunChip } from './RunsTab'
 import { SAMPLER_LABELS } from './SamplerCharts'
 
 /**
@@ -79,8 +79,8 @@ function RunSummary({ run, events }: { run: ChaosRun; events: ChaosRunEvent[] })
               {run.label}
             </h2>
             <RunChip run={run} />
-            <span className='rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium capitalize text-slate-600 dark:bg-muted dark:text-muted-foreground'>
-              {run.kind}
+            <span className='rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-muted-foreground'>
+              {RUN_KIND_LABEL[run.kind] ?? run.kind}
             </span>
           </div>
           <p className='mt-1 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
@@ -89,8 +89,8 @@ function RunSummary({ run, events }: { run: ChaosRun; events: ChaosRunEvent[] })
             {typeof run.meta.note === 'string' && run.meta.note ? ` · ${run.meta.note}` : ''}
           </p>
         </div>
-        <div className='flex items-center gap-3'>
-          <span className='font-mono text-[11px] text-slate-400 dark:text-muted-foreground/70'>
+        <div className='flex min-w-0 items-center gap-3'>
+          <span className='hidden truncate font-mono text-[11px] text-slate-500 sm:inline dark:text-muted-foreground'>
             {run.id}
           </span>
           {/* #2849 — the full report: charts, timings, errors people saw, postmortem export */}
@@ -105,7 +105,7 @@ function RunSummary({ run, events }: { run: ChaosRun; events: ChaosRunEvent[] })
 
       <VerdictLine run={run} />
 
-      <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-3 lg:grid-cols-6 dark:border-border dark:bg-border'>
+      <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-3 2xl:grid-cols-6 dark:border-border dark:bg-border'>
         <Cell
           label='Fault'
           value={<span className='font-mono text-[11.5px]'>{run.fault_key ?? '—'}</span>}
@@ -143,24 +143,28 @@ function RunSummary({ run, events }: { run: ChaosRun; events: ChaosRunEvent[] })
               const breach = (detail.breaches as Array<{ sampler: string }> | undefined)?.find(
                 (b) => b.sampler === h.sampler
               )
+              // A run with no verdict (refused, stopped by hand) never judged its limits.
+              const judged = run.verdict != null
               return (
                 <li
                   key={`${h.sampler}-${i}`}
                   className='flex items-center justify-between gap-3 px-3 py-2 text-[12.5px]'
                 >
-                  <span className='font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
+                  <span className='min-w-0 break-words font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
                     {h.sampler} {h.op} {h.limit}
                     {h.tolerance ? ` ± ${h.tolerance}` : ''}
                   </span>
                   <span
                     className={cn(
-                      'text-[11.5px] font-medium',
-                      breach
-                        ? 'text-red-700 dark:text-red-300'
-                        : 'text-emerald-700 dark:text-emerald-300'
+                      'shrink-0 text-[11.5px] font-medium',
+                      !judged
+                        ? 'text-slate-500 dark:text-muted-foreground'
+                        : breach
+                          ? 'text-red-700 dark:text-red-300'
+                          : 'text-emerald-700 dark:text-emerald-300'
                     )}
                   >
-                    {breach ? 'crossed' : 'held'}
+                    {!judged ? 'Not judged' : breach ? 'Crossed' : 'Held'}
                   </span>
                 </li>
               )
@@ -190,9 +194,9 @@ function VerdictLine({ run }: { run: ChaosRun }) {
   const tone =
     run.verdict === 'held'
       ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-200'
-      : run.verdict === 'broke' || run.status === 'refused'
+      : run.verdict === 'broke'
         ? 'border-red-200 bg-red-50 text-red-900 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200'
-        : run.verdict === 'aborted'
+        : run.verdict === 'aborted' || run.status === 'refused'
           ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200'
           : 'border-slate-200 bg-white text-slate-700 dark:border-border dark:bg-card dark:text-foreground'
   return (
@@ -209,7 +213,10 @@ function Cell({ label, value }: { label: string; value: ReactNode }) {
       <div className='text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
         {label}
       </div>
-      <div className='mt-0.5 truncate text-[12.5px] font-medium text-slate-900 dark:text-foreground'>
+      <div
+        data-tip={typeof value === 'string' ? value : undefined}
+        className='mt-0.5 break-words text-[12.5px] font-medium text-slate-900 sm:truncate dark:text-foreground'
+      >
         {value}
       </div>
     </div>

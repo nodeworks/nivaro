@@ -13,7 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { errText } from './api'
+import { type Catalog, chaosKeys, errText, fetchCatalog } from './api'
 import {
   type ChaosEnvCaps,
   type ChaosSettingsView,
@@ -64,6 +64,7 @@ export function SettingsTab() {
     queryKey: opsKeys.operator,
     queryFn: fetchOperator
   })
+  if (me && !me.admin && me.caps) return <OperatorLimits instance={me.instance} caps={me.caps} />
   if (me && !me.admin)
     return (
       <div className='flex flex-1 items-center justify-center p-8'>
@@ -77,6 +78,88 @@ export function SettingsTab() {
       </div>
     )
   return <SettingsForm />
+}
+
+/**
+ * What an operator sees: the same limits, read-only, from GET /chaos/operator (the settings
+ * route itself is for administrators). Fault names come from the catalog everyone reads.
+ */
+function OperatorLimits({ instance, caps }: { instance: string; caps: ChaosEnvCaps }) {
+  const { data: catalog } = useQuery<Catalog>({
+    queryKey: chaosKeys.catalog,
+    queryFn: fetchCatalog
+  })
+  const label = new Map((catalog?.faults ?? []).map((f) => [f.key, f.label]))
+  const limit = (v: number | null, unit: string) =>
+    v == null ? (
+      <span className='text-slate-500 dark:text-muted-foreground'>No limit</span>
+    ) : (
+      <span className='tabular-nums'>
+        {v}
+        {unit.startsWith('%') ? '' : ' '}
+        {unit}
+      </span>
+    )
+  return (
+    <div className='flex-1 overflow-y-auto px-4 py-5 sm:p-6'>
+      <div className='space-y-4 pb-6'>
+        <p className='flex max-w-[75ch] items-start gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+          <Lock className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
+          You run drills here as a chaos operator. These limits hold every run you start; only
+          administrators change them.
+        </p>
+        <Section
+          title='Limits on this instance'
+          help='Numbers over a limit are lowered to it when a run starts; a fault off the list is refused.'
+          aside={
+            <span className='inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2 py-1 text-[11.5px] text-slate-600 dark:bg-muted dark:text-muted-foreground'>
+              Instance
+              <span className='font-mono text-[11px] text-slate-800 dark:text-foreground'>
+                {instance}
+              </span>
+            </span>
+          }
+        >
+          <Row label='Faults allowed'>
+            {caps.allowed_faults === '*' ? (
+              <span className='text-[12.5px] text-slate-800 dark:text-foreground'>
+                Every fault in the catalog
+              </span>
+            ) : caps.allowed_faults.length === 0 ? (
+              <span className='text-[12.5px] text-amber-800 dark:text-amber-300'>
+                None: every run here is refused.
+              </span>
+            ) : (
+              <ul className='flex flex-wrap gap-1.5'>
+                {caps.allowed_faults.map((k) => (
+                  <li
+                    key={k}
+                    className='rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[12.5px] text-slate-800 dark:border-border dark:bg-muted dark:text-foreground'
+                  >
+                    {label.get(k) ?? k}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Row>
+          {(
+            [
+              ['Share of traffic', caps.max_share_pct, '% at most'],
+              ['Added delay', caps.max_latency_ms, 'ms at most'],
+              ['Run length', caps.max_seconds, 'seconds at most'],
+              ['Replicas', caps.max_replicas, 'at most']
+            ] as const
+          ).map(([name, v, unit]) => (
+            <Row key={name} label={name}>
+              <span className='text-[12.5px] text-slate-800 dark:text-foreground'>
+                {limit(v, unit)}
+              </span>
+            </Row>
+          ))}
+        </Section>
+      </div>
+    </div>
+  )
 }
 
 function SettingsForm() {

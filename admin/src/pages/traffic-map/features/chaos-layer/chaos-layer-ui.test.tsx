@@ -97,6 +97,8 @@ function renderMap(sel: Selection, extra?: ReactNode) {
         <TrafficMapContext.Provider value={value}>
           <ToolbarItems slot='status' />
           <InspectorActions sel={sel} d={d} />
+          {/* as the Inspector renders them: the top: true panels first, then the rest */}
+          <InspectorPanels sel={sel} d={d} mode='live' top />
           <InspectorPanels sel={sel} d={d} mode='live' />
           {extra}
         </TrafficMapContext.Provider>
@@ -140,7 +142,8 @@ describe('chaos layer', () => {
     renderMap(sel)
     await waitFor(() => expect(chaosState.get().faults.size).toBe(1))
     const entries = nodeMenuEntries(sel)
-    expect(entries.map((e) => e.label)).toEqual(['Simulate down', 'Inject fault here: Redis pause'])
+    expect(entries.map((e) => e.label)).toEqual(['Simulate down', 'Redis pause'])
+    expect(entries[1].group).toBe('Inject fault here')
     const onClose = vi.fn()
     render(
       <MemoryRouter>
@@ -148,6 +151,13 @@ describe('chaos layer', () => {
       </MemoryRouter>
     )
     const menu = document.querySelector('[role=menu]') as HTMLElement
+    // the faults sit under one "Inject fault here" heading; each row still says it in full
+    expect(menu.textContent).toContain('Inject fault here')
+    expect(
+      menu
+        .querySelector('[data-tm-node-menu-item="inject:redis_pause"]')
+        ?.getAttribute('aria-label')
+    ).toBe('Inject fault here: Redis pause')
     expect(document.activeElement?.getAttribute('data-tm-node-menu-item')).toBe('simulate-down')
     fireEvent.keyDown(menu, { key: 'ArrowDown' })
     expect(document.activeElement?.getAttribute('data-tm-node-menu-item')).toBe(

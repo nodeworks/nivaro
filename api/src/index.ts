@@ -34,6 +34,7 @@ import {
   storeBoot
 } from './services/boot-phases.js'
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
+import { installProcessGuards } from './services/process-guards.js'
 import { NIVARO_VERSION } from './version.js'
 
 async function main() {
@@ -118,6 +119,9 @@ async function main() {
   }
 
   const app = await bootPhase('Server: plugins, routes, extensions', () => buildServer())
+  // A stray rejected promise (e.g. a Redis command flushed while Redis restarts) is logged,
+  // never a crash of a serving process.
+  installProcessGuards(app.log)
 
   // These all query the static DB at startup — skip in cloud mode.
   if (!process.env.CLOUD_META_DB_URL) {

@@ -46,9 +46,10 @@ export function PreflightPanel({
             <span
               className={cn(
                 'rounded px-1.5 py-0.5 text-[11px] font-medium',
+                // A block is a stop sign, not danger: amber. Red stays for armed faults.
                 ok
                   ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
-                  : 'bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300'
+                  : 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
               )}
             >
               {ok ? 'Clear' : serverChecks ? 'Refused at start' : 'Blocked'}
@@ -60,9 +61,12 @@ export function PreflightPanel({
           onClick={() => void refetch()}
           aria-label='Re-run the checks'
           data-tip='Re-run the checks'
-          className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-foreground'
+          className='rounded p-1 text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
         >
-          <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} aria-hidden />
+          <RefreshCw
+            className={cn('h-3.5 w-3.5', isFetching && 'animate-spin motion-reduce:animate-none')}
+            aria-hidden
+          />
         </button>
       </div>
       {isLoading ? (
@@ -86,14 +90,14 @@ export function PreflightPanel({
                 />
               ) : (
                 <X
-                  className='mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400'
+                  className='mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400'
                   aria-label='Failed'
                 />
               )}
               <div className='min-w-0'>
                 <div className='text-[12.5px] text-slate-900 dark:text-foreground'>{c.label}</div>
                 {!c.ok && c.why && (
-                  <div className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                  <div className='mt-0.5 text-[11.5px] text-slate-600 dark:text-muted-foreground'>
                     {c.why}
                   </div>
                 )}

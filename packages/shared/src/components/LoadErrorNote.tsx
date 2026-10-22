@@ -31,7 +31,7 @@ export function LoadErrorNote({
         aria-hidden
       />
       <div className={cn('min-w-0', centered && 'max-w-[240px]')}>
-        <p className='leading-snug'>{message}</p>
+        <p className='leading-snug [text-wrap:balance]'>{message}</p>
         {onRetry && (
           <button
             type='button'

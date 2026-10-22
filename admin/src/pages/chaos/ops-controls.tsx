@@ -117,6 +117,14 @@ export function NumberBox({
   )
 }
 
+/** Same chips as the Faults tab: low is quiet, medium a pale amber, high an orange tint with a ring
+ *  (badges stay tints; hue + ring keep high apart from medium without shouting at rest). */
+export const DANGER_CHIP: Record<string, string> = {
+  low: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground',
+  medium: 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300',
+  high: 'bg-orange-100 text-orange-900 ring-1 ring-inset ring-orange-300 dark:bg-orange-950/60 dark:text-orange-200 dark:ring-orange-800'
+}
+
 const DANGER_LABEL: Record<string, string> = {
   low: 'Low blast',
   medium: 'Medium blast',
@@ -164,12 +172,8 @@ export function FaultChecklist({
               {c.danger ? (
                 <span
                   className={cn(
-                    'shrink-0 text-[11px]',
-                    c.danger === 'high'
-                      ? 'text-red-700 dark:text-red-300'
-                      : c.danger === 'medium'
-                        ? 'text-amber-700 dark:text-amber-300'
-                        : 'text-slate-500 dark:text-muted-foreground'
+                    'shrink-0 rounded px-1.5 py-0.5 text-[10.5px] font-medium',
+                    DANGER_CHIP[c.danger] ?? DANGER_CHIP.low
                   )}
                 >
                   {DANGER_LABEL[c.danger] ?? c.danger}
@@ -203,7 +207,8 @@ export function SaveBar({
 }) {
   if (!dirty && !error) return null
   return (
-    <div className='sticky bottom-0 z-10 -mx-4 mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 bg-white px-4 py-2.5 sm:-mx-6 sm:px-6 dark:border-border dark:bg-card'>
+    // pr-16 keeps Save clear of the floating bug-report button in the bottom-right corner.
+    <div className='sticky bottom-0 z-10 -mx-4 mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 bg-white py-2.5 pl-4 pr-16 sm:-mx-6 sm:pl-6 dark:border-border dark:bg-card'>
       <p
         role={error ? 'alert' : 'status'}
         className={cn(
@@ -217,7 +222,7 @@ export function SaveBar({
         type='button'
         onClick={onDiscard}
         disabled={saving}
-        className='h-8 rounded-md px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-muted-foreground dark:hover:bg-muted'
+        className='h-8 rounded-md px-3 text-[12.5px] font-medium text-slate-600 transition-colors duration-150 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-50 dark:text-muted-foreground dark:hover:bg-muted'
       >
         Discard
       </button>
@@ -225,9 +230,11 @@ export function SaveBar({
         type='button'
         onClick={onSave}
         disabled={saving || !dirty}
-        className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-medium text-nvr-navy hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:opacity-50 dark:focus-visible:ring-offset-background'
+        className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-medium text-white transition-colors duration-150 hover:bg-[#00b8e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:opacity-50 dark:focus-visible:ring-offset-background'
       >
-        {saving && <Loader2 className='h-3.5 w-3.5 animate-spin' aria-hidden />}
+        {saving && (
+          <Loader2 className='h-3.5 w-3.5 animate-spin motion-reduce:animate-none' aria-hidden />
+        )}
         Save changes
       </button>
     </div>

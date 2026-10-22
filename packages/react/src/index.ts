@@ -615,6 +615,7 @@ export {
   useDebounced,
   useDeleteMessage,
   useDndActive,
+  useDrillBannerShowing,
   useDrilldown,
   useDrilldownViews,
   useEditMessage,

@@ -1475,11 +1475,19 @@ export function WidgetSlot({
     const compactStyle = (widget?.config?.compact_style as string | undefined) ?? 'default'
     const isPill = compactStyle === 'pill-dark' || compactStyle === 'pill-light'
 
+    // #2858 — a calm amber mark (a load failure is not danger); hover says why, click retries.
     if (error)
       return (
-        <span className='text-[11px] text-red-400' data-tip={error} title={error}>
-          !
-        </span>
+        <button
+          type='button'
+          onClick={retry}
+          data-load-error=''
+          data-tip={`${error} Click to try again.`}
+          aria-label={`${error} Try again`}
+          className='inline-flex h-5 w-5 items-center justify-center rounded text-amber-500 hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-amber-400 dark:hover:bg-amber-400/10'
+        >
+          <AlertTriangle className='h-3.5 w-3.5' aria-hidden />
+        </button>
       )
 
     // Strip mode: dedicated band below header, full-height cells with dividers

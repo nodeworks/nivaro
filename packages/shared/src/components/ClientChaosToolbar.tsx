@@ -1,5 +1,13 @@
 import { Gauge, Radio, ServerCrash, Shuffle, Unplug, WifiOff, X } from 'lucide-react'
-import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState
+} from 'react'
 import { createPortal } from 'react-dom'
 import {
   CLIENT_CHAOS_MAX_FAIL_WRITES,
@@ -161,7 +169,11 @@ export function ClientChaosToolbar({ user, shortcut = true }: ClientChaosToolbar
   )
 }
 
-/** Always-dark corner pill (it must read on any page, light or dark). */
+/**
+ * Always-dark corner pill (it must read on any page, light or dark). It sits left of the corner
+ * where hosts keep their round report-a-problem button, so neither hides the other. A host with a
+ * different corner sets `--nvr-chaos-pill-right` (default 60px).
+ */
 function ChaosPill({
   chaos,
   now,
@@ -174,7 +186,8 @@ function ChaosPill({
   return (
     <div
       data-client-chaos-pill=''
-      className='nvr-chaos-enter fixed right-4 bottom-4 z-[70] flex max-w-[calc(100vw-32px)] items-center rounded-full border border-white/10 bg-[#0f172a] text-[12px] text-slate-100 shadow-lg'
+      style={PILL_PLACE}
+      className='nvr-chaos-enter fixed bottom-4 z-[70] flex items-center rounded-full border border-white/10 bg-[#0f172a] text-[12px] text-slate-100 shadow-lg'
     >
       <style>{ENTER_CSS}</style>
       <button
@@ -205,10 +218,25 @@ function ChaosPill({
   )
 }
 
+const PILL_PLACE: CSSProperties = {
+  right: 'var(--nvr-chaos-pill-right, 60px)',
+  maxWidth: 'calc(100vw - var(--nvr-chaos-pill-right, 60px) - 16px)'
+}
+
 const ENTER_CSS = `
 @keyframes nvr-chaos-in { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
 .nvr-chaos-enter { animation: nvr-chaos-in 180ms cubic-bezier(0.22, 1, 0.36, 1) backwards }
 @media (prefers-reduced-motion: reduce) { .nvr-chaos-enter { animation: none } }
+.nvr-chaos-range { -webkit-appearance: none; appearance: none; height: 16px; background: transparent; cursor: pointer; --nvr-range-track: rgb(226 232 240) }
+.dark .nvr-chaos-range { --nvr-range-track: rgb(255 255 255 / 0.14) }
+.nvr-chaos-range::-webkit-slider-runnable-track { height: 4px; border-radius: 9999px; background: linear-gradient(to right, rgb(var(--nvr-cyan-rgb, 0 206 255)) 0 var(--nvr-range-fill, 0%), var(--nvr-range-track) var(--nvr-range-fill, 0%) 100%) }
+.nvr-chaos-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 9999px; background: #fff; border: 2px solid rgb(var(--nvr-cyan-rgb, 0 206 255)); box-shadow: 0 1px 2px rgb(0 0 0 / 0.15) }
+.nvr-chaos-range::-moz-range-track { height: 4px; border-radius: 9999px; background: var(--nvr-range-track) }
+.nvr-chaos-range::-moz-range-progress { height: 4px; border-radius: 9999px; background: rgb(var(--nvr-cyan-rgb, 0 206 255)) }
+.nvr-chaos-range::-moz-range-thumb { width: 10px; height: 10px; border-radius: 9999px; background: #fff; border: 2px solid rgb(var(--nvr-cyan-rgb, 0 206 255)) }
+.nvr-chaos-range:focus-visible { outline: none }
+.nvr-chaos-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.35) }
+.nvr-chaos-range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.35) }
 `
 
 function ChaosPanel({
@@ -317,7 +345,8 @@ function RunningView({ chaos, now }: { chaos: ClientChaosState; now: number }) {
         />
       </div>
       <p className='mt-2.5 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
-        Ends on its own. A reload keeps it on until then; sign-out and this panel always work.
+        Ends on its own when the time runs out, and stays on through a reload. Signing out and this
+        panel keep working throughout.
       </p>
       <button
         type='button'
@@ -423,7 +452,13 @@ function SetupView() {
             step={range.step}
             value={value}
             onChange={(e) => setStrength((s) => ({ ...s, [preset]: Number(e.target.value) }))}
-            className='mt-1 w-full accent-nvr-cyan'
+            // a styled track (slate-200 / white 14% in dark) instead of the browser's near-black
+            className='nvr-chaos-range mt-1 w-full'
+            style={
+              {
+                '--nvr-range-fill': `${((value - range.min) / (range.max - range.min || 1)) * 100}%`
+              } as CSSProperties
+            }
           />
         </label>
       )}

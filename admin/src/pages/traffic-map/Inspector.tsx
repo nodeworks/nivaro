@@ -734,6 +734,7 @@ export function Inspector({
         </div>
         <div className={BODY} data-testid='tm-inspector-body'>
           {sel && <InspectorActions sel={sel} d={d} />}
+          {sel && <InspectorPanels sel={sel} d={d} mode={showHistory ? 'history' : 'live'} top />}
           {children}
           {history?.available && <HoursBar hours={history.hours} onHours={history.onHours} />}
           {showHistory && history ? (
