@@ -604,6 +604,7 @@
           <a class="docs-nav-item" data-section="infrastructure-edge" href="#infrastructure-edge">Proxy, resources &amp; GitLab</a>
           <a class="docs-nav-item" data-section="infrastructure-host" href="#infrastructure-host">Host health, reboot &amp; logs</a>
           <a class="docs-nav-item" data-section="infrastructure-drift" href="#infrastructure-drift">Stack drift</a>
+          <a class="docs-nav-item" data-section="release-image" href="#release-image">Release image</a>
         </div>
       </div>
 
@@ -19232,6 +19233,13 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           </ul>
           <div class="doc-note">Administrators only, and not available in cloud mode. GET /api/infrastructure/drift returns the stored status for the page.</div>
           <!-- /SYNC:infrastructure-drift -->
+        </div>
+
+        <div class="doc-section" id="s-release-image" data-toc='[{"id":"release-image","label":"Release image"},{"id":"release-image-user","label":"Runs as uid 1000, not root"},{"id":"release-image-paths","label":"What it writes (read-only root filesystem)"},{"id":"release-image-tini","label":"tini as PID 1"},{"id":"release-image-health","label":"Health check"},{"id":"release-image-heap","label":"Node heap from the memory limit"},{"id":"release-image-slim","label":"The slim image and the render server"},{"id":"release-image-pdf-requests","label":"What a PDF may load"},{"id":"release-image-verify","label":"Verify the signature"}]'>
+          <!-- SYNC:release-image -->
+          <h1 class="doc-h1" id="release-image">Release image</h1>
+          <p class="doc-p">Nivaro ships as one Docker image that holds the API and the admin app, <code>nodeworks/nivaro:&lt;version&gt;</code>, and a smaller <code>-slim</code> image without Chromium and ffmpeg. Both run as uid 1000 under tini, have a health check and are signed with cosign.</p>
+          <!-- /SYNC:release-image -->
         </div>
 
         <div class="doc-section" id="s-chaos" data-toc='[{"id":"chaos","label":"Chaos engineering"},{"id":"chaos-gate","label":"The gate and CHAOS_ENABLED"},{"id":"chaos-faults","label":"Faults"},{"id":"chaos-runs","label":"Runs and verdicts"},{"id":"chaos-hypothesis","label":"Steady-state hypothesis and auto-abort"},{"id":"chaos-preflight","label":"Pre-flight checklist"},{"id":"chaos-console","label":"The console"},{"id":"chaos-cockpit","label":"Live run cockpit"},{"id":"chaos-banner","label":"The “Drill running” banner"}]'>

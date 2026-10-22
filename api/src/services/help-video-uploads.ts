@@ -6,11 +6,13 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { storageChaos } from './chaos/faults/storage.js'
 import {
+  canUseFfmpeg,
   hasFfmpeg,
   lockedInputArgs,
-  probeStreams,
-  probeVideo,
-  remuxToFile,
+  probeStreamsLocal,
+  type probeVideo,
+  probeVideoLocal,
+  remuxAndProbe,
   runFfmpeg
 } from './ffmpeg.js'
 import { deleteFile, getFile, uploadFileFromPath } from './files.js'
@@ -35,6 +37,7 @@ import {
   normalizeClicks,
   normalizeLevels
 } from './help-video-walk.js'
+import { peerFileOp } from './render-peer.js'
 import { deleteStoredObject } from './storage-drivers.js'
 
 // The host name, not the per-boot INSTANCE_ID: a restarted container keeps its
@@ -254,12 +257,12 @@ export async function openUpload(
   if (isFile) {
     // A picked file: what the browser says it is means nothing. The first part
     // decides the container (sniffContainer) and finalize probes the streams,
-    // which needs ffmpeg.
-    if (!(await hasFfmpeg())) {
+    // which needs ffmpeg — here, or on the render peer (slim image, #2789).
+    if (!(await canUseFfmpeg())) {
       throw fail(
         503,
         'UPLOAD_NO_FFMPEG',
-        'This server cannot read uploaded videos (ffmpeg is not installed)'
+        'This server cannot read uploaded videos (ffmpeg is not installed and no render server is configured)'
       )
     }
     const size = Number(opts.size)
@@ -429,12 +432,14 @@ export async function finalizeUpload(
       height: null as number | null,
       has_audio: true
     }
-    if (await hasFfmpeg()) {
+    // Locally, or on the render peer for the slim image (#2789).
+    if (await canUseFfmpeg()) {
       try {
-        await remuxToFile(raw, fixed, String(row.mime))
+        probe = await remuxAndProbe(raw, fixed, String(row.mime))
         path = fixed
-        probe = await probeVideo(fixed, String(row.mime))
       } catch (err) {
+        // The render peer being down is not the recording's fault: try again later.
+        if (String((err as { code?: string }).code ?? '').startsWith('RENDER_PEER')) throw err
         console.warn(`help-video upload ${String(dbId)}: ffmpeg failed: ${(err as Error).message}`)
         throw fail(422, 'UPLOAD_UNREADABLE', 'The recording could not be read')
       }
@@ -588,6 +593,94 @@ function setFileMeta(dbId: unknown, m: UploadMeta) {
     .update({ meta: metaJson(m), updated_at: new Date() })
 }
 
+export interface ConvertedUpload {
+  container: UploadContainer
+  probe: Awaited<ReturnType<typeof probeVideo>>
+}
+
+/**
+ * The file half of processFile: probe the streams with the sniffed container
+ * pinned, refuse what cannot be kept (422 with the reason), copy or convert
+ * into `outPath(ext)` and probe the result. No database: the render peer's
+ * convert-upload route (#2789) runs exactly this for a slim process.
+ */
+export async function convertUploadedFile(
+  raw: string,
+  mime: UploadContainer,
+  opts: {
+    signal: AbortSignal
+    outPath: (ext: string) => string
+    onPhase?: (phase: string, progress: number | null) => Promise<void>
+  }
+): Promise<ConvertedUpload> {
+  const { signal } = opts
+  const phase = (p: string, progress: number | null) =>
+    opts.onPhase ? opts.onPhase(p, progress) : Promise.resolve()
+  const probed = await probeStreamsLocal(raw, mime).catch(() => {
+    throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
+  })
+  if (probed.duration_ms != null && probed.duration_ms > MAX_DURATION_MS) {
+    throw fail(422, 'UPLOAD_TOO_LONG', 'Videos can be up to 30 minutes')
+  }
+  const plan = planUploadedVideo(probed)
+  if ('error' in plan) throw fail(422, plan.error.code, plan.error.message)
+  const ext = plan.container === 'video/mp4' ? '.mp4' : '.webm'
+  const out = opts.outPath(ext)
+  const converting = plan.kind !== 'copy'
+  await phase(converting ? 'waiting' : 'checking', null)
+  const total = probed.duration_ms
+  let beat = 0
+  const encode = () =>
+    runFfmpeg(
+      buildUploadArgs(plan, { path: raw, inputLock: lockedInputArgs(mime) }, out, uploadThreads(), {
+        maxSeconds: MAX_OUTPUT_SECONDS,
+        maxBytes: MAX_OUTPUT_BYTES
+      }),
+      converting && total
+        ? (ms) => {
+            const now = Date.now()
+            if (now - beat < 1500) return
+            beat = now
+            const progress = Math.max(0, Math.min(99, Math.round((ms / total) * 100)))
+            void phase('converting', progress).catch(() => undefined)
+          }
+        : undefined,
+      signal,
+      { lowPriority: converting }
+    )
+  try {
+    if (converting) {
+      await withConversionSlot(
+        () => phase('waiting', null),
+        async () => {
+          if (signal.aborted) throw new Error('cancelled while waiting')
+          await phase('converting', 0)
+          await encode()
+        }
+      )
+    } else {
+      await encode()
+    }
+  } catch (err) {
+    if (signal.aborted) throw fail(409, 'UPLOAD_CANCELLED', 'The upload was cancelled')
+    console.warn(`help-video upload: ffmpeg (${plan.kind}) failed: ${(err as Error).message}`)
+    throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
+  }
+  const outBytes = await stat(out)
+    .then((x) => x.size)
+    .catch(() => 0)
+  if (outBytes >= MAX_OUTPUT_BYTES * 0.99) {
+    // ffmpeg stopped at the size bound: the result would be cut short.
+    throw fail(422, 'UPLOAD_TOO_BIG', 'That video is too large once converted')
+  }
+  const probe = await probeVideoLocal(out, plan.container).catch(() => null)
+  if (!probe?.width) throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
+  if (probe.duration_ms != null && probe.duration_ms > MAX_DURATION_MS) {
+    throw fail(422, 'UPLOAD_TOO_LONG', 'Videos can be up to 30 minutes')
+  }
+  return { container: plan.container, probe }
+}
+
 /**
  * Turns an uploaded file into a stored source the player can play anywhere
  * (rules in help-video-upload-media.ts): probe the streams with the sniffed
@@ -616,82 +709,54 @@ export async function processFile(
       .catch(() => 0)
     if (!size) throw fail(422, 'UPLOAD_EMPTY', 'The file was empty')
     await setFileMeta(dbId, { ...keep, phase: 'checking' })
-    const probed = await probeStreams(raw, mime).catch(() => {
-      throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
-    })
-    if (probed.duration_ms != null && probed.duration_ms > MAX_DURATION_MS) {
-      throw fail(422, 'UPLOAD_TOO_LONG', 'Videos can be up to 30 minutes')
-    }
-    const plan = planUploadedVideo(probed)
-    if ('error' in plan) throw fail(422, plan.error.code, plan.error.message)
-    const ext = plan.container === 'video/mp4' ? '.mp4' : '.webm'
-    out = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed${ext}`)
-    const converting = plan.kind !== 'copy'
-    await setFileMeta(dbId, {
-      ...keep,
-      phase: converting ? 'waiting' : 'checking',
-      progress: null
-    })
-    const total = probed.duration_ms
-    let beat = 0
-    const encode = () =>
-      runFfmpeg(
-        buildUploadArgs(
-          plan,
-          { path: raw, inputLock: lockedInputArgs(mime) },
-          out as string,
-          uploadThreads(),
-          { maxSeconds: MAX_OUTPUT_SECONDS, maxBytes: MAX_OUTPUT_BYTES }
-        ),
-        converting && total
-          ? (ms) => {
-              const now = Date.now()
-              if (now - beat < 1500) return
-              beat = now
-              const progress = Math.max(0, Math.min(99, Math.round((ms / total) * 100)))
-              void setFileMeta(dbId, { ...keep, phase: 'converting', progress }).catch(
-                () => undefined
-              )
-            }
-          : undefined,
+    let converted: ConvertedUpload
+    if (await hasFfmpeg()) {
+      converted = await convertUploadedFile(raw, mime, {
         signal,
-        { lowPriority: converting }
-      )
-    try {
-      if (converting) {
-        await withConversionSlot(
-          () => setFileMeta(dbId, { ...keep, phase: 'waiting', progress: null }),
-          async () => {
-            if (signal.aborted) throw new Error('cancelled while waiting')
-            await setFileMeta(dbId, { ...keep, phase: 'converting', progress: 0 })
-            await encode()
-          }
+        outPath: (ext) => {
+          out = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed${ext}`)
+          return out
+        },
+        onPhase: (phase, progress) =>
+          setFileMeta(dbId, { ...keep, phase, progress }).then(() => undefined)
+      })
+    } else {
+      // The slim image (#2789): the render peer probes and converts; the file
+      // goes there and back. No progress from it, so a heartbeat keeps the
+      // finalizing claim fresh while it works.
+      out = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed.peer`)
+      await setFileMeta(dbId, { ...keep, phase: 'converting', progress: null })
+      const beat = setInterval(() => {
+        void setFileMeta(dbId, { ...keep, phase: 'converting', progress: null }).catch(
+          () => undefined
         )
-      } else {
-        await encode()
+      }, 30_000)
+      try {
+        converted = await peerFileOp<ConvertedUpload>('convert-upload', raw, {
+          mime,
+          output: out,
+          signal
+        })
+      } catch (err) {
+        if (signal.aborted) throw fail(409, 'UPLOAD_CANCELLED', 'The upload was cancelled')
+        throw err
+      } finally {
+        clearInterval(beat)
       }
-    } catch (err) {
-      if (signal.aborted) throw fail(409, 'UPLOAD_CANCELLED', 'The upload was cancelled')
-      console.warn(
-        `help-video upload ${String(dbId).toLowerCase()}: ffmpeg (${plan.kind}) failed: ${(err as Error).message}`
-      )
-      throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
+      if (!converted?.container || !converted.probe)
+        throw fail(502, 'UPLOAD_SAVE_FAILED', 'The render server sent no result')
     }
-    const outBytes = await stat(out)
-      .then((x) => x.size)
-      .catch(() => 0)
-    if (outBytes >= MAX_OUTPUT_BYTES * 0.99) {
-      // ffmpeg stopped at the size bound: the result would be cut short.
-      throw fail(422, 'UPLOAD_TOO_BIG', 'That video is too large once converted')
-    }
-    const probe = await probeVideo(out, plan.container).catch(() => null)
-    if (!probe?.width) throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
-    if (probe.duration_ms != null && probe.duration_ms > MAX_DURATION_MS) {
-      throw fail(422, 'UPLOAD_TOO_LONG', 'Videos can be up to 30 minutes')
-    }
+    const { probe } = converted
+    const plan = { container: converted.container }
+    const ext = plan.container === 'video/mp4' ? '.mp4' : '.webm'
     await setFileMeta(dbId, { ...keep, phase: 'saving' })
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
-    const file = await uploadFileFromPath(user, out, `upload-${stamp}${ext}`, plan.container)
+    const file = await uploadFileFromPath(
+      user,
+      out as string,
+      `upload-${stamp}${ext}`,
+      plan.container
+    )
     createdFile = String(file.id)
     const done = await db('nivaro_help_video_uploads')
       .where({ id: dbId, status: 'finalizing' })

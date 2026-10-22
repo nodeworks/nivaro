@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
-import { hasFfmpeg, probeVideo } from './ffmpeg.js'
+import { canUseFfmpeg, probeVideo } from './ffmpeg.js'
 import { getFile, uploadFileFromPath } from './files.js'
 import { downloadsAllowed, withDownloads } from './help-video-download.js'
 import { editedDuration, hashEdits, type VideoEdits } from './help-video-edits.js'
@@ -305,6 +305,14 @@ interface ImportSession {
 }
 const sessions = new Map<string, ImportSession>()
 
+/** A render-peer outage (#2789) is not the file's fault: say so instead. */
+function peerDown(err: unknown): string | null {
+  const code = String((err as { code?: string })?.code ?? '')
+  return code.startsWith('RENDER_PEER') || code === 'RENDER_UNAVAILABLE'
+    ? (err as Error).message
+    : null
+}
+
 function sessionDir(id: string): string {
   return join(videoWorkDir(), 'packages', id)
 }
@@ -475,14 +483,15 @@ async function checkMedia(
   const h = await head(path)
   if (role === 'source' || role === 'rendered') {
     if (!looksLikeVideo(f.mime, h)) return `The ${role} file is not a ${f.mime} video`
-    if (await hasFfmpeg()) {
+    // Locally, or on the render peer for the slim image (#2789).
+    if (await canUseFfmpeg()) {
       try {
         const p = await probeVideo(path, f.mime)
         if (!p.duration_ms || p.duration_ms <= 0) return `The ${role} file has no length`
         if (p.duration_ms > 31 * 60_000) return `The ${role} file is over 30 minutes`
         s.probes.set(f.entry, p)
-      } catch {
-        return `The ${role} file could not be read`
+      } catch (err) {
+        return peerDown(err) ?? `The ${role} file could not be read`
       }
     }
     return null
@@ -491,13 +500,13 @@ async function checkMedia(
     return h.toString('utf8').startsWith('WEBVTT') ? null : 'The captions are not WebVTT'
   if (role === 'music') {
     if (h.subarray(4, 8).toString('latin1') !== 'ftyp') return 'The music file is not AAC audio'
-    if (await hasFfmpeg()) {
+    if (await canUseFfmpeg()) {
       try {
         const p = await probeVideo(path, 'audio/mp4')
         if (!p.has_audio || !p.duration_ms) return 'The music file has no sound'
         if (p.duration_ms > 21 * 60_000) return 'The music file is over 20 minutes'
-      } catch {
-        return 'The music file could not be read'
+      } catch (err) {
+        return peerDown(err) ?? 'The music file could not be read'
       }
     }
     return null

@@ -324,7 +324,8 @@ export async function buildServer() {
     // DB outage posture (#329): probe loop + fast honest 503s while down.
     const { startDbHealthProbe, isDbHealthy } = await import('./services/db-health.js')
     startDbHealthProbe()
-    const DB_EXEMPT = /^\/api\/(version|health|changelog)/
+    // The render peer (#2789) never reads the database.
+    const DB_EXEMPT = /^\/api\/(version|health|changelog|internal\/render\/)/
     app.addHook('onRequest', async (req, reply) => {
       if (!isDbHealthy() && /^\/api([/?]|$)/.test(req.url) && !DB_EXEMPT.test(req.url)) {
         return reply.code(503).send({

@@ -7,7 +7,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { storageChaos } from './chaos/faults/storage.js'
 import { cronTicksEnabled } from './cron-ticks.js'
-import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
+import { hasFfmpeg, isLockedMime, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { deleteFile, getFile, type StoredFile, uploadFileFromPath } from './files.js'
 import { rasterizeAnnotations } from './help-video-annotations.js'
 import {
@@ -48,6 +48,7 @@ import { discardFile, pointerOfFile, videoWorkDir } from './help-video-uploads.j
 import { getApp } from './io-holder.js'
 import { isCancelled, requestCancel } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
+import { imageVariant } from './render-peer.js'
 import { openStoredObject } from './stored-object-stream.js'
 
 // Bakes a published help video's edits into an MP4 + WebVTT + poster.
@@ -92,6 +93,10 @@ type Outcome = 'ready' | 'failed' | 'unavailable' | 'skipped'
 export function renderingAllowed(): boolean {
   if ((process.env.VIDEO_RENDER ?? '').toLowerCase() === 'off') return false
   if ((process.env.NIVARO_ROLE ?? '').trim().toLowerCase() === 'web') return false
+  // The slim image (#2789) has no ffmpeg or Chromium: it never takes a row, and
+  // (when it ticks crons) never marks the queue 'unavailable' for the full
+  // process that will render it.
+  if (imageVariant() === 'slim') return false
   return true
 }
 
@@ -282,8 +287,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     const sourceMime = String(source.type)
     // Never let ffprobe/ffmpeg guess the format of a recording: refuse a mime
     // with no pinned demuxer before either one opens the file.
-    if (!lockedInputArgs(sourceMime).includes('-f'))
-      throw new Error(`Unsupported recording format: ${sourceMime}`)
+    if (!isLockedMime(sourceMime)) throw new Error(`Unsupported recording format: ${sourceMime}`)
     const ext = sourceMime.includes('mp4') ? '.mp4' : '.webm'
     const sourcePath = join(dir, `source${ext}`)
     const opened = await openStoredObject(String(source.filename_disk))

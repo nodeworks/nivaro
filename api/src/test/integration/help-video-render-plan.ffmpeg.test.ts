@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { hasFfmpeg, probeVideo, runFfmpeg } from '../../services/ffmpeg.js'
 import { normalizeEdits } from '../../services/help-video-edits.js'
 import { buildPosterArgs, buildRenderPlan } from '../../services/help-video-render-plan.js'
-import { runRenderPlan } from './help-video-graph-file.js'
+import { probeImage, runRenderPlan } from './help-video-graph-file.js'
 
 describe('render plan through real ffmpeg', () => {
   it('cuts, speeds up, blurs, zooms and overlays a test clip', async (ctx) => {
@@ -82,7 +82,7 @@ describe('render plan through real ffmpeg', () => {
 
     const poster = join(dir, 'p.jpg')
     await runFfmpeg(buildPosterArgs(out, 500, poster))
-    const pj = await probeVideo(poster)
+    const pj = await probeImage(poster)
     expect(pj.width).toBe(640)
   }, 120_000)
 

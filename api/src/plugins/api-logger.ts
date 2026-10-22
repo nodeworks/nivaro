@@ -157,6 +157,8 @@ function shouldSkip(path: string, method: string): boolean {
   if (path.startsWith('/api/health')) return true
   // #1088 — a Prometheus scrape every 15s is not traffic anyone reads here.
   if (path === '/api/metrics' || path.startsWith('/api/metrics?')) return true
+  // #2789 — the render peer's calls are the slim process's own requests, already logged there.
+  if (path.startsWith('/api/internal/render/')) return true
   if (path.startsWith('/api/api-analytics')) return true
   return false
 }

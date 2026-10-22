@@ -139,6 +139,7 @@ import { integrationHealthRoutes } from './integration-health.js'
 import { integrationObligationsRoutes } from './integration-obligations.js'
 import { integrationPartnersRoutes } from './integration-partners.js'
 import { integrationSignalsRoutes } from './integration-signals.js'
+import { internalRenderRoutes } from './internal-render.js'
 import { issuesRoutes } from './issues.js'
 import { itemActionsRoutes } from './item-actions.js'
 import { itemLocksRoutes } from './item-locks.js'
@@ -303,6 +304,9 @@ export async function registerRoutes(app: FastifyInstance) {
       url.startsWith('/api/rum') ||
       // Chaos Stop all (#2861) must work during maintenance (operators, and the phone push).
       url.startsWith('/api/chaos/stop-all') ||
+      // The render peer (#2789) renders for another process's request, which
+      // that process already judged; it carries a bearer, never a person.
+      url.startsWith('/api/internal/render/') ||
       // Batches of reads (#1304, people cards) are POSTs only because they carry a body.
       url.startsWith('/api/items/batch-read') ||
       url.startsWith('/api/users/cards') ||
@@ -412,6 +416,8 @@ export async function registerRoutes(app: FastifyInstance) {
 
   await app.register(healthRoutes)
   await app.register(preflightRoutes)
+  // #2789 — render peer: mounted only where RENDER_TOKEN is set (bearer-only).
+  await app.register(internalRenderRoutes)
   await app.register(traceRoutes)
   await app.register(configDiffRoutes)
   await app.register(environmentRoutes, { prefix: '/environments' })

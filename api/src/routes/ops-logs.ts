@@ -134,7 +134,12 @@ export async function opsLogsRoutes(app: FastifyInstance) {
       'IMPORT_STATEMENT_TIMEOUT_MS',
       'SQL_CHECKS',
       'SQL_LINT_URL',
-      'SQL_LINT_TOKEN'
+      'SQL_LINT_TOKEN',
+      'NIVARO_IMAGE_VARIANT',
+      'NIVARO_HEAP_FROM_CGROUP',
+      'RENDER_URL',
+      'RENDER_TOKEN',
+      'RENDER_PEER_CLOUD'
     ]) {
       if (rows.some((r) => r.key === key)) continue
       const v = process.env[key]

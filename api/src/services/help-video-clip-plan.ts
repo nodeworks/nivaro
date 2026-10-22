@@ -1,4 +1,4 @@
-import { lockedInputArgs } from './ffmpeg.js'
+import { isLockedMime, lockedInputArgs } from './ffmpeg.js'
 import { introMs, type VideoEdits } from './help-video-edits.js'
 import { blurPower, graphArgs, pixelRect, renderSizes } from './help-video-render-plan.js'
 
@@ -141,8 +141,9 @@ export function buildClipPlan(
   input: ClipPlanInput,
   pass?: 'palette' | 'encode'
 ): { args: string[]; graph: string } {
+  if (!isLockedMime(input.inputMime))
+    throw new Error(`Unsupported recording format: ${input.inputMime}`)
   const lock = lockedInputArgs(input.inputMime)
-  if (!lock.includes('-f')) throw new Error(`Unsupported recording format: ${input.inputMime}`)
   const gif = input.kind === 'gif'
   if (gif && !pass) throw new Error('A GIF needs a pass')
   if (gif && !input.palettePath) throw new Error('A GIF needs a palette path')

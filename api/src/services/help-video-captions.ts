@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises'
 import { db } from '../db/index.js'
 import { gatewayBearer, gatewayFromSettings, parseAiModels, settingsRow } from './ai-client.js'
 import { recordAiCall } from './ai-log.js'
-import { hasFfmpeg, lockedInputArgs, runFfmpeg } from './ffmpeg.js'
+import { hasFfmpeg, isLockedMime, lockedInputArgs, runFfmpeg } from './ffmpeg.js'
 import { getFile } from './files.js'
 import { type Caption, EDIT_LIMITS } from './help-video-edits.js'
 import { MAX_DURATION_MS, videoWorkDir } from './help-video-uploads.js'
@@ -726,8 +726,7 @@ async function loadSource(versionId: string, dir: string) {
   const source = await getFile(String(v.source_file))
   if (!source?.filename_disk) throw new Error('Stored object not found')
   const mime = String(source.type ?? '')
-  if (!lockedInputArgs(mime).includes('-f'))
-    throw new Error(`Unsupported recording format: ${mime}`)
+  if (!isLockedMime(mime)) throw new Error(`Unsupported recording format: ${mime}`)
   const path = join(dir, mime.includes('mp4') ? 'source.mp4' : 'source.webm')
   const opened = await openStoredObject(String(source.filename_disk))
   await pipeline(opened.stream, createWriteStream(path))

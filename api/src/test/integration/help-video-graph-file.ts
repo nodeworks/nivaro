@@ -35,3 +35,23 @@ export async function runClipPlan(
   await runFfmpeg(plan.args)
   return plan.args
 }
+
+/** Width and height of an image ffmpeg wrote (a poster, a sprite sheet). Our
+ *  probes refuse anything but pinned audio/video demuxers, so tests read
+ *  their own images with ffprobe directly. */
+export async function probeImage(path: string): Promise<{ width: number; height: number }> {
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const { stdout } = await promisify(execFile)('ffprobe', [
+    '-v',
+    'error',
+    '-show_entries',
+    'stream=width,height',
+    '-of',
+    'json',
+    path
+  ])
+  const s = (JSON.parse(stdout) as { streams?: Array<{ width?: number; height?: number }> })
+    .streams?.[0]
+  return { width: Number(s?.width ?? 0), height: Number(s?.height ?? 0) }
+}
