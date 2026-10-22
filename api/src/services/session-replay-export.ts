@@ -333,7 +333,10 @@ export async function runWebmExport(
   try {
     const header = await deps.loadHeader(job.recordingId)
     if (!header) throw new Error('The recording is gone')
-    if (!(await deps.hasFfmpeg())) throw new Error('ffmpeg is not installed')
+    if (!(await deps.hasFfmpeg()))
+      throw new Error(
+        'Exporting a recording as video needs ffmpeg and Chromium on this server (the slim image has neither)'
+      )
     const win = cutReplayWindow(await deps.loadEvents(job.recordingId), job.fromMs, job.toMs)
     if (!win) throw new Error('The recording has no full snapshot: nothing to replay')
     const durationMs = Math.min(WEBM_MAX_MS, win.endOffsetMs - win.startOffsetMs)

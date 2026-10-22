@@ -48,6 +48,7 @@ import { discardFile, pointerOfFile, videoWorkDir } from './help-video-uploads.j
 import { getApp } from './io-holder.js'
 import { isCancelled, requestCancel } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
+import { imageVariant } from './render-peer.js'
 import { openStoredObject } from './stored-object-stream.js'
 
 // Bakes a published help video's edits into an MP4 + WebVTT + poster.
@@ -92,6 +93,10 @@ type Outcome = 'ready' | 'failed' | 'unavailable' | 'skipped'
 export function renderingAllowed(): boolean {
   if ((process.env.VIDEO_RENDER ?? '').toLowerCase() === 'off') return false
   if ((process.env.NIVARO_ROLE ?? '').trim().toLowerCase() === 'web') return false
+  // The slim image (#2789) has no ffmpeg or Chromium: it never takes a row, and
+  // (when it ticks crons) never marks the queue 'unavailable' for the full
+  // process that will render it.
+  if (imageVariant() === 'slim') return false
   return true
 }
 

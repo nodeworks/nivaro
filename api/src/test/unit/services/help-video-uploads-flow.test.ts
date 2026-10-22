@@ -111,10 +111,17 @@ const ff = vi.hoisted(() => ({
 }))
 vi.mock('../../../services/ffmpeg.js', () => ({
   hasFfmpeg: async () => ff.has,
+  canUseFfmpeg: async () => ff.has,
   probeVideo: async () => ff.probe,
+  probeVideoLocal: async () => ff.probe,
   remuxToFile: async (i: string, o: string) => writeFileSync(o, readFileSync(i)),
+  remuxAndProbe: async (i: string, o: string) => {
+    writeFileSync(o, readFileSync(i))
+    return ff.probe
+  },
   lockedInputArgs: (mime: string) => ['-f', mime],
   probeStreams: async () => ({ duration_ms: ff.probe.duration_ms, streams: ff.streams }),
+  probeStreamsLocal: async () => ({ duration_ms: ff.probe.duration_ms, streams: ff.streams }),
   runFfmpeg: async (args: string[], _p: unknown, signal?: AbortSignal) => {
     ff.ran.push(args)
     if (ff.hang) {

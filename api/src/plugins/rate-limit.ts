@@ -60,6 +60,8 @@ export const rateLimitPlugin = fp(async (app: FastifyInstance) => {
     const url = req.raw.url ?? ''
     if (!url.startsWith('/api/') && url !== '/api') return
     if (url === '/api/health' || url.startsWith('/api/health?')) return
+    // The render peer (#2789): one caller (the slim process) on behalf of everyone.
+    if (url.startsWith('/api/internal/render/')) return
 
     const nowSec = Math.floor(Date.now() / 1000)
     const windowStart = Math.floor(nowSec / WINDOW_SECONDS) * WINDOW_SECONDS

@@ -1,4 +1,5 @@
 // api/src/services/pdf-layout.ts
+import { existsSync } from 'node:fs'
 import type { Browser } from 'puppeteer'
 import puppeteer from 'puppeteer'
 import { db } from '../db/index.js'
@@ -7,6 +8,7 @@ import { isEmptyValue, isFolded, shapePdfFields } from './form-structure.js'
 import type { PdfLayoutData } from './pdf-layout-themes.js'
 import { classicTheme, escHtml, executiveTheme, minimalTheme } from './pdf-layout-themes.js'
 import { resolvePlacementText, type TextContext, textRulesOf } from './placement-behaviour.js'
+import { peerHtmlToPdf, renderPeerUrl, renderUnavailable } from './render-peer.js'
 
 // Allowlist-based HTML sanitizer for richtext fields rendered in PDF.
 // Strips all tags not on the allowlist (keeps inner text), drops block-removed tags
@@ -376,9 +378,31 @@ async function enrichRelationValues(
 }
 
 let browser: Browser | null = null
+let localChromium: Promise<boolean> | null = null
+
+/** Whether this process can start a browser itself: the system Chromium the
+ *  full image names in PUPPETEER_EXECUTABLE_PATH, or one puppeteer downloaded.
+ *  The slim image has neither (#2789). Checked once per process. */
+export function hasLocalChromium(): Promise<boolean> {
+  if (!localChromium) {
+    localChromium = (async () => {
+      try {
+        const path =
+          process.env.PUPPETEER_EXECUTABLE_PATH?.trim() || (await puppeteer.executablePath())
+        return !!path && existsSync(path)
+      } catch {
+        return false
+      }
+    })()
+  }
+  return localChromium
+}
 
 export async function getBrowser(): Promise<Browser> {
   if (browser?.connected) return browser
+  // Help-video cards and session-replay exports need a browser of their own;
+  // only PDFs (htmlToPdf) can go to the render peer.
+  if (!(await hasLocalChromium())) throw renderUnavailable('pdf')
   browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
     headless: true
@@ -780,8 +804,23 @@ export async function generatePdfFromLayout(params: {
   })
 }
 
-/** Render an HTML string to a PDF buffer (JS disabled, backgrounds on). */
+/** Render an HTML string to a PDF buffer (JS disabled, backgrounds on).
+ *  Locally when this process has Chromium; otherwise on the render peer
+ *  (RENDER_URL, #2789) — the same Buffer either way; otherwise a 503 that
+ *  says why. */
 export async function htmlToPdf(
+  html: string,
+  opts: { format?: 'A4' | 'Letter'; landscape?: boolean; margin?: string } = {}
+): Promise<Buffer> {
+  if (!(await hasLocalChromium())) {
+    if (renderPeerUrl()) return peerHtmlToPdf(html, opts)
+    throw renderUnavailable('pdf')
+  }
+  return htmlToPdfLocal(html, opts)
+}
+
+/** The local render, also what the render peer's own route calls. */
+export async function htmlToPdfLocal(
   html: string,
   opts: { format?: 'A4' | 'Letter'; landscape?: boolean; margin?: string } = {}
 ): Promise<Buffer> {
