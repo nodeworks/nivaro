@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
+import {
+  notePartitionCatchUp,
+  notePartitionDelivery,
+  streamPausedByPartition
+} from './chaos/partition-point.js'
 import type { JournalEntry } from './event-journal.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
@@ -156,6 +161,7 @@ function deliver(d: DecodedStreamEntry): void {
   const payload = entry.seq != null && ackSampled(entry.seq) && d.at ? { ...live, _st: d.at } : live
   io.local.to(entry.room).emit(entry.event, payload)
   stats.delivered++
+  notePartitionDelivery(entry.room, entry.seq) // #2838 — the partition drill's probe rooms only
   if (d.at) {
     stats.lastDeliveryLagMs = Math.max(0, Date.now() - d.at)
     // Traffic Map (#2266): only entries another replica wrote say anything about the hop.
@@ -167,7 +173,14 @@ type XReadReply = Array<[string, Array<[string, string[]]>]> | null
 
 async function readLoop(): Promise<void> {
   let afterError = false
+  let afterPause = false
   while (running && reader) {
+    // #2838 — a partition drill on this replica: hold the reader, keep the offset, catch up after.
+    if (streamPausedByPartition()) {
+      afterPause = true
+      await new Promise((r) => setTimeout(r, 250))
+      continue
+    }
     try {
       const reply = (await reader.xread(
         'COUNT',
@@ -198,6 +211,10 @@ async function readLoop(): Promise<void> {
           // (this replica's own writes reached them from journaledEmit).
           if (d.node !== NODE) notifyJournalListeners(d.entry)
         }
+      }
+      if (afterPause) {
+        notePartitionCatchUp(count)
+        afterPause = false
       }
       if (afterError) {
         stats.resumes++

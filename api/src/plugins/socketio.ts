@@ -5,6 +5,7 @@ import { Redis } from 'ioredis'
 import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { chaosRedisClient, chaosRedisSubscriber } from '../services/chaos/redis-hook.js'
 import { canSeeRoom } from '../services/chat.js'
 import {
   type ClientVersion,
@@ -460,6 +461,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
   const pubClient = new Redis(app.redis.options)
   const subClient = new Redis(app.redis.options)
+  // #2832 / #2838 — the Redis fault seam: latency on the publisher, a partition cuts both.
+  chaosRedisClient(pubClient)
+  chaosRedisSubscriber(subClient)
 
   // Redis pub/sub channels ignore the db index, so two APIs on one Redis
   // (pnpm dev:db beside the dev API) would deliver each other's room events.

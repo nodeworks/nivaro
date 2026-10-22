@@ -5,6 +5,7 @@ import type { Redis } from 'ioredis'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { newChainId, startChain } from '../services/chain.js'
 import { appDate } from '../services/chaos/clock.js'
+import { chaosPoint } from '../services/chaos/registry.js'
 import { cronTicksEnabled } from '../services/cron-ticks.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { type JobRunTrigger, startJobRun } from '../services/job-runs.js'
@@ -239,7 +240,11 @@ export class CronLeader {
   private holder: string | null = null
   private timer: ReturnType<typeof setInterval> | null = null
 
-  constructor(readonly instanceId: string = INSTANCE_ID) {}
+  constructor(
+    readonly instanceId: string = INSTANCE_ID,
+    /** The lease key — only the chaos test scheduler (#2833) uses another. */
+    readonly leaseKey: string = LEASE_KEY
+  ) {}
 
   get active(): boolean {
     return this.redis !== null
@@ -261,7 +266,7 @@ export class CronLeader {
     const r = this.redis ?? this.observer
     if (!r) return null
     try {
-      return await r.get(LEASE_KEY)
+      return await r.get(this.leaseKey)
     } catch {
       return this.holder
     }
@@ -286,9 +291,16 @@ export class CronLeader {
     const r = this.redis
     if (!r) return
     const began = Date.now()
+    // #2833 — a lease-split drill aimed at this replica: the lease lapses (or is dropped) and
+    // this process neither renews nor competes until the window ends.
+    const drill = chaosPoint('cron.lease')
+    if (drill) {
+      await this.chaosLapse(r, String(drill.params.mode ?? 'expire'), drill.ends_at)
+      return
+    }
     try {
       if (this.isLeader(began)) {
-        const ok = await r.eval(RENEW_LUA, 1, LEASE_KEY, this.instanceId, String(LEASE_MS))
+        const ok = await r.eval(RENEW_LUA, 1, this.leaseKey, this.instanceId, String(LEASE_MS))
         if (Number(ok) === 1) {
           this.heldUntil = began + LEASE_MS - LEASE_MARGIN_MS
         } else {
@@ -297,7 +309,7 @@ export class CronLeader {
         }
       }
       if (!this.isLeader()) {
-        const res = await r.set(LEASE_KEY, this.instanceId, 'PX', LEASE_MS, 'NX')
+        const res = await r.set(this.leaseKey, this.instanceId, 'PX', LEASE_MS, 'NX')
         if (res === 'OK') {
           this.heldUntil = began + LEASE_MS - LEASE_MARGIN_MS
           console.log(
@@ -305,10 +317,29 @@ export class CronLeader {
           )
         }
       }
-      this.holder = await r.get(LEASE_KEY)
+      this.holder = await r.get(this.leaseKey)
     } catch {
       // Redis unreachable: keep whatever is left of the current lease (it
       // lapses on its own before the key can), never extend it.
+    }
+  }
+
+  /**
+   * #2833 — the drill's side of one renew round. `expire`: stop renewing; this process stops
+   * believing it leads a little before the key lapses, as after a stall. `drop`: delete our own
+   * lease now and step down. `split`: delete it but go on believing until the window ends — a
+   * paused process whose clock-based belief is wrong, so two replicas think they lead.
+   */
+  private async chaosLapse(r: Redis, mode: string, endsAt: number): Promise<void> {
+    if (mode === 'expire') return
+    const held = this.heldUntil > Date.now()
+    if (mode === 'split' && held) this.heldUntil = Math.max(this.heldUntil, endsAt)
+    else this.heldUntil = 0
+    if (!held) return
+    try {
+      await r.eval(RELEASE_LUA, 1, this.leaseKey, this.instanceId)
+    } catch {
+      /* the key lapses on its own */
     }
   }
 
@@ -323,7 +354,7 @@ export class CronLeader {
     this.heldUntil = 0
     if (!r || !held) return
     try {
-      await r.eval(RELEASE_LUA, 1, LEASE_KEY, this.instanceId)
+      await r.eval(RELEASE_LUA, 1, this.leaseKey, this.instanceId)
     } catch {
       /* the key expires on its own */
     }
@@ -462,7 +493,29 @@ export function scheduledFireTime(job: Cron, now = appDate()): Date {
   return new Date(Math.round(now.getTime() / 1000) * 1000)
 }
 
+/**
+ * Options for a CronManager other than the app's own — only the chaos test scheduler (#2833)
+ * passes any: it ticks on a process whose real ticks are off, records its runs as `manual`
+ * (so no "scheduled run on a ticks-off process" issue is raised), keeps its skips in the log
+ * and competes for its own lease key, never the real one.
+ */
+export interface CronManagerOptions {
+  ticksEnabled?: () => boolean
+  scheduledTrigger?: JobRunTrigger
+  onIssue?: (message: string, severity: 'medium' | 'high') => void
+  leaseKey?: string
+}
+
 export class CronManager {
+  constructor(private readonly opts: CronManagerOptions = {}) {
+    this.leader = new CronLeader(INSTANCE_ID, opts.leaseKey ?? LEASE_KEY)
+  }
+  private ticksOn(): boolean {
+    return (this.opts.ticksEnabled ?? cronTicksEnabled)()
+  }
+  private issue(message: string, severity: 'medium' | 'high'): void {
+    ;(this.opts.onIssue ?? raiseCronIssue)(message, severity)
+  }
   private entries = new Map<string, InternalEntry>()
   private runningSince = new Map<string, number>()
   /** Paused cron ids (#198) — hydrated from settings at boot, edited via /cron routes. */
@@ -480,14 +533,14 @@ export class CronManager {
   private tzOverrides = new Map<string, string>()
   /** #1080 — the scheduler lease. Inactive (every tick allowed) until a Redis
    *  client is attached, so tests and single-process tools keep working. */
-  readonly leader = new CronLeader()
+  readonly leader: CronLeader
 
   /** Start competing for the scheduler lease. Only a process whose ticks are
    *  enabled competes — a replica with ticks off must never hold it, or the
    *  worker would never fire. */
   startLeaderElection(redis: Redis): void {
     this.leader.observe(redis)
-    if (!cronTicksEnabled()) return
+    if (!this.ticksOn()) return
     this.leader.start(redis)
   }
   /** Lease status with the holder read fresh — for the admin surfaces. A
@@ -496,7 +549,7 @@ export class CronManager {
     LeaderStatus & { ticks_enabled: boolean; development: boolean; heavy_slot: string | null }
   > {
     const st = this.leader.status()
-    const ticks = cronTicksEnabled()
+    const ticks = this.ticksOn()
     const holder = await this.leader.currentHolder()
     return {
       ...st,
@@ -509,7 +562,7 @@ export class CronManager {
   }
   /** May this process fire scheduled ticks right now? */
   mayTick(): boolean {
-    if (!cronTicksEnabled()) return false
+    if (!this.ticksOn()) return false
     return this.leader.active ? this.leader.isLeader() : true
   }
 
@@ -762,6 +815,11 @@ export class CronManager {
     })()
   }
 
+  /** A job's watchdog budget (ms): how long a run may take before it reads as hung (#2833). */
+  budgetMs(id: string): number {
+    return this.entries.get(id)?.scheduleOpts?.watchdogMs ?? WATCHDOG_DEFAULT_MS
+  }
+
   /** #32 — run a job's dry-run handler; null when it has none. */
   async dryRun(id: string): Promise<{ supported: boolean; report: unknown }> {
     const e = this.entries.get(id)
@@ -809,7 +867,7 @@ export class CronManager {
         protect: () => {
           const since = this.runningSince.get(id)
           const mins = since ? Math.round((Date.now() - since) / 60_000) : 0
-          raiseCronIssue(
+          this.issue(
             `Cron "${id}" tick skipped — the previous tick has been running for ${mins} minute(s)`,
             'medium'
           )
@@ -823,7 +881,7 @@ export class CronManager {
         // Ticks off on this process (development by default, or CRON_TICKS=off):
         // schedules stay registered and run-now still works, but only the
         // deployed instance fires on the clock — see cronTicksEnabled().
-        if (!cronTicksEnabled()) return
+        if (!this.ticksOn()) return
         // Chained (#54): this job runs after another one completes, not on
         // its own clock — the tick is a no-op while the chain stands.
         if (this.chains.has(id)) return
@@ -854,7 +912,7 @@ export class CronManager {
               const run = await startJobRun('cron', id, {
                 extensionId: opts?.extensionId,
                 chainId,
-                trigger: 'schedule',
+                trigger: this.opts.scheduledTrigger ?? 'schedule',
                 leaseHolder: this.leaseHolderNow()
               })
               await run.fail(err)
@@ -870,12 +928,12 @@ export class CronManager {
             const run = await startJobRun('cron', id, {
               extensionId: opts?.extensionId,
               chainId,
-              trigger: 'schedule',
+              trigger: this.opts.scheduledTrigger ?? 'schedule',
               leaseHolder: this.leaseHolderNow()
             })
             this.runningSince.set(id, Date.now())
             const watchdog = setTimeout(() => {
-              raiseCronIssue(
+              this.issue(
                 `Cron "${id}" has been running for over ${Math.round(budget / 60_000)} minutes — likely hung (its work has stopped happening)`,
                 'high'
               )

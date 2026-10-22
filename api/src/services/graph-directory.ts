@@ -1,5 +1,6 @@
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { graphChaos } from './chaos/outbound-points.js'
 import { overlaySettings } from './settings-overrides.js'
 
 // ─── Microsoft Graph directory ───────────────────────────────────────────────
@@ -384,6 +385,7 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
           })
   let res: Response
   try {
+    await graphChaos() // #2834
     res = await fetch(`https://login.microsoftonline.com/${c.tenant}/oauth2/v2.0/token`, {
       method: 'POST',
       body,
@@ -514,6 +516,7 @@ async function graphGet(path: string, init?: { headers?: Record<string, string> 
   const { token } = await appToken()
   let res: Response
   try {
+    await graphChaos() // #2834
     res = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
       headers: { Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) },
       signal: AbortSignal.timeout(8000)
@@ -721,6 +724,7 @@ export async function fetchDirectoryPhotos(ids: string[]): Promise<Map<string, s
     const { token } = await appToken()
     let res: Response
     try {
+      await graphChaos() // #2834
       res = await fetch('https://graph.microsoft.com/v1.0/$batch', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

@@ -1,5 +1,6 @@
 import * as oidc from 'openid-client'
 import { config } from '../config.js'
+import { graphChaos, oidcChaos } from '../services/chaos/outbound-points.js'
 
 let _oidcConfig: Awaited<ReturnType<typeof oidc.discovery>> | null = null
 
@@ -16,6 +17,8 @@ export async function getOIDCConfig() {
   if (!oidcConfigured()) {
     throw new Error('OIDC is not configured (blank OIDC_ISSUER / OIDC_CLIENT_ID)')
   }
+  // #2834 — an IdP-down drill reaches discovery even when it is cached (a fresh replica).
+  await oidcChaos('discovery')
   if (!_oidcConfig) {
     _oidcConfig = await oidc.discovery(
       new URL(config.OIDC_ISSUER),
@@ -82,6 +85,7 @@ export function bustDynamicOidcCache(id?: number) {
 
 async function getDynamicOIDCConfig(p: DynamicOidcProvider) {
   const sig = `${p.issuer}|${p.client_id}|${p.client_secret ?? ''}`
+  await oidcChaos('discovery') // #2834
   const hit = _dynConfigs.get(p.id)
   if (hit && hit.sig === sig && Date.now() - hit.fetched < DYN_DISCOVERY_TTL_MS) return hit.cfg
   const cfg = await oidc.discovery(new URL(p.issuer), p.client_id, p.client_secret ?? undefined)
@@ -127,6 +131,7 @@ export async function handleDynamicCallback(
   codeVerifier: string
 ) {
   const cfg = await getDynamicOIDCConfig(provider)
+  await oidcChaos('token') // #2834
   const tokens = await oidc.authorizationCodeGrant(cfg, requestUrl, {
     pkceCodeVerifier: codeVerifier,
     expectedState: state,
@@ -157,6 +162,7 @@ export interface GraphOrgProfile {
 export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgProfile | null> {
   if (!isMicrosoftIssuer()) return null
   try {
+    await graphChaos(5000) // #2834
     const res = await fetch(
       'https://graph.microsoft.com/v1.0/me?$select=givenName,surname,jobTitle,companyName,department,mobilePhone,businessPhones,officeLocation,city,state,country,employeeId,preferredLanguage',
       {
@@ -255,6 +261,7 @@ async function probeGatedGraphEndpoints(accessToken: string): Promise<void> {
 export async function fetchGraphPhoto(accessToken: string): Promise<string | null> {
   if (!isMicrosoftIssuer()) return null
   try {
+    await graphChaos(5000) // #2834
     const res = await fetch('https://graph.microsoft.com/v1.0/me/photos/96x96/$value', {
       headers: { Authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(5000)
@@ -271,6 +278,7 @@ export async function fetchGraphPhoto(accessToken: string): Promise<string | nul
 
 export async function handleCallback(requestUrl: URL, state: string, codeVerifier: string) {
   const cfg = await getOIDCConfig()
+  await oidcChaos('token') // #2834
   const tokens = await oidc.authorizationCodeGrant(cfg, requestUrl, {
     pkceCodeVerifier: codeVerifier,
     expectedState: state,

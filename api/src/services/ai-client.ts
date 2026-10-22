@@ -21,6 +21,7 @@ import {
   type StreamOptions,
   streamMessage
 } from './ai-stream.js'
+import { withAiChaos } from './chaos/outbound-points.js'
 import { overlaySettings } from './settings-overrides.js'
 import { noteAiFallback } from './traffic-taps/ai.js'
 
@@ -976,10 +977,15 @@ async function buildAiClient(
     if (!api.base_url || !api.token_url || !api.client_id || !api.client_secret) return null
     const models = parseAiModels(s)
     const model = opts?.model?.trim() || models.default || s.ai_model || 'claude-4-5-haiku'
-    const build = (m: string) =>
-      s.ai_gateway_format === 'anthropic'
-        ? anthropicGatewayClient(api, m, caching)
-        : openAiCompatClient(api, m, caching)
+    // #2834 — every per-model client passes the `ai.call` fault point (the one seam).
+    const build = async (m: string) =>
+      withAiChaos(
+        s.ai_gateway_format === 'anthropic'
+          ? await anthropicGatewayClient(api, m, caching)
+          : openAiCompatClient(api, m, caching),
+        m,
+        m === model
+      )
     const chain =
       opts?.fallback === false
         ? [model]
@@ -994,7 +1000,11 @@ async function buildAiClient(
   const key = config.ANTHROPIC_API_KEY || s.anthropic_api_key
   if (!key) return null
   const inner = new Anthropic({ apiKey: key })
-  return caching ? cachingClient(inner, 'anthropic') : loggedClient(inner, 'anthropic')
+  return withAiChaos(
+    caching ? cachingClient(inner, 'anthropic') : loggedClient(inner, 'anthropic'),
+    opts?.model?.trim() || 'anthropic',
+    true
+  )
 }
 
 /**

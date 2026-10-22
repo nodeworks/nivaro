@@ -15,6 +15,7 @@ export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
 export * from './sections/chaos.js'
 export * from './sections/chaos-faults-db.js'
+export * from './sections/chaos-faults-redis.js'
 export * from './sections/chaos-gameday.js'
 export * from './sections/chaos-report.js'
 export * from './sections/collaboration.js'
@@ -110,6 +111,7 @@ import { chaosDocs } from './sections/chaos.js'
 import { chaosCiDocs } from './sections/chaos-ci.js'
 import { chaosClientDocs } from './sections/chaos-client.js'
 import { chaosFaultsDbDocs } from './sections/chaos-faults-db.js'
+import { chaosFaultsRedisDocs } from './sections/chaos-faults-redis.js'
 import { chaosGamedayDocs } from './sections/chaos-gameday.js'
 import { chaosTrafficMapDocs } from './sections/chaos-map.js'
 import { chaosOpsDocs } from './sections/chaos-ops.js'
@@ -950,6 +952,7 @@ export const navSections: NavGroup[] = [
       chaosReportDocs,
       chaosGamedayDocs,
       chaosFaultsDbDocs,
+      chaosFaultsRedisDocs,
       chaosClientDocs,
       chaosTrafficMapDocs,
       chaosCiDocs,

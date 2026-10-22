@@ -611,7 +611,9 @@ export function LoginPage() {
                     ? 'Your account is suspended — usually because the directory no longer lists it, a retention rule ran, or an administrator set it. Ask an administrator: the reason is shown on your account page, and they can restore access.'
                     : error === 'session_expired'
                       ? 'Your session ended — it reached the time limit or sat idle longer than this instance allows. Sign in again to carry on.'
-                      : 'Authentication failed. Please try again or contact IT support.'}
+                      : error === 'provider_unavailable'
+                        ? 'The sign-in provider is not answering right now. Anyone already signed in keeps working — try again in a few minutes.'
+                        : 'Authentication failed. Please try again or contact IT support.'}
                 </div>
               )}
 

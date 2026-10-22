@@ -13,3 +13,7 @@ import './clock.js'
 // #1773 — records what readiness and the alerts said during each run (rides the catalog load).
 import '../monitors.js'
 import './gameday.js'
+import './redis.js'
+import './cron.js'
+import './partition.js'
+import './outbound.js'

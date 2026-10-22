@@ -20,6 +20,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api-logger.js'
 import { logActivity } from '../services/activity.js'
+import { idpUnreachable } from '../services/chaos/outbound-points.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
 import { bumpUserAccessVersion } from '../services/permission-cache.js'
 import { recordLogin } from '../services/security.js'
@@ -404,8 +405,15 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(loginUrlFor(req.session.returnTo, '?error=oidc_disabled'))
     }
     req.session.oidcProviderId = undefined
-    const url = await buildLoginUrl(state, codeVerifier, redirectUri)
-    return reply.redirect(url.href)
+    try {
+      const url = await buildLoginUrl(state, codeVerifier, redirectUri)
+      return reply.redirect(url.href)
+    } catch (err) {
+      // #2834 — the provider's discovery is down (a fresh replica has nothing cached): send
+      // people back to the sign-in page with a reason, never a raw 500 on a navigation.
+      app.log.error({ err }, 'OIDC login error')
+      return reply.redirect(loginUrlFor(req.session.returnTo, '?error=provider_unavailable'))
+    }
   })
 
   // OIDC callback
@@ -507,7 +515,9 @@ export async function authRoutes(app: FastifyInstance) {
           })
         )
         .catch(() => {})
-      return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
+      // #2834 — an unreachable provider is not a failed sign-in: say which it was.
+      const why = idpUnreachable(err) ? 'provider_unavailable' : 'auth_failed'
+      return reply.redirect(loginUrlFor(req.session.returnTo, `?error=${why}`))
     }
   })
 
