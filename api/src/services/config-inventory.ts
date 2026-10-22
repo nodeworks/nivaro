@@ -240,6 +240,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_sql_check_findings',
   'nivaro_sql_check_events',
   'nivaro_sql_check_fixes',
+  'nivaro_infra_drift_baselines', //   stack drift baselines (migration 500) — per database
+  'nivaro_infra_drift_findings',
   'nivaro_session_events',
   'nivaro_replay_clips', // session replay library (migration 422) — per environment, like its recordings
   'nivaro_replay_shares', // replay share links (migration 422)

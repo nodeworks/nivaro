@@ -112,7 +112,8 @@ export const infrastructureDocs: DocSection = {
           'When do swarm certificates expire? Is any secret unused?',
           'infra_swarm and infra_secrets.'
         ],
-        ['Is CI healthy?', 'infra_gitlab.']
+        ['Is CI healthy?', 'infra_gitlab.'],
+        ['Did anyone change a running service by hand?', 'infra_drift (see Stack drift).']
       ]
     },
     {

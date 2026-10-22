@@ -17,6 +17,8 @@
  * mode: a tenant never sees the operator's hosts.
  */
 
+import { createHash, createHmac } from 'node:crypto'
+
 export interface DockerHost {
   name: string
   url: string
@@ -151,6 +153,87 @@ export function sanitizeDockerValue(value: unknown, parentKey = ''): unknown {
   return out
 }
 
+// ── Environment digests (#2798 stack drift) ──────────────────────────────────
+//
+// The drift detector must notice an env change without ever holding a secret. `digestEnv` turns
+// a service's `Env` array into a KEY → value map in which every value that looks secret (by its
+// key, URL credentials, or a long token-like value) is replaced by a keyed hash. The hash key is
+// this deployment's SESSION_SECRET, so a stored hash cannot be brute-forced offline from the
+// database alone. Only the drift paths ask for this (`env: 'digest'` on a /services read, or
+// `sanitizeServiceSpec` on a posted inspect object); everything else still drops `Env` outright.
+
+/** Env keys whose value is never kept in clear. */
+const ENV_SECRET_KEY =
+  /(secret|token|pass|key|credential|auth|dsn|private|cookie|signing|salt|cert)/i
+/** A long unbroken token-like value (API keys, JWTs, base64 blobs) is hashed whatever its key. */
+const TOKENISH = /^[A-Za-z0-9+/=_.-]{32,}$/
+export const ENV_HASH_PREFIX = 'hmac:'
+
+function envHashKey(): string {
+  return process.env.SESSION_SECRET || 'nivaro-env-digest'
+}
+
+/** Which hash key the digests were made with (a short fingerprint, never the key). */
+export function envDigestKeyId(): string {
+  return createHash('sha256').update(envHashKey()).digest('hex').slice(0, 8)
+}
+
+/** True when this env value is kept only as a hash. */
+export function envValueIsSecret(key: string, value: string): boolean {
+  if (ENV_SECRET_KEY.test(key)) return true
+  if (/\b[a-z][a-z0-9+.-]*:\/\/[^\s/@]+@/i.test(value)) return true
+  return TOKENISH.test(value) && /\d/.test(value) && /[A-Za-z]/.test(value)
+}
+
+/** `['A=1', 'DB_PASSWORD=x']` → `{ A: '1', DB_PASSWORD: 'hmac:…' }` (later duplicates win). */
+export function digestEnv(env: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!Array.isArray(env)) return out
+  for (const raw of env) {
+    if (typeof raw !== 'string') continue
+    const eq = raw.indexOf('=')
+    const key = (eq < 0 ? raw : raw.slice(0, eq)).trim()
+    if (!key || key.length > 200) continue
+    const value = eq < 0 ? '' : raw.slice(eq + 1)
+    out[key] = envValueIsSecret(key, value)
+      ? `${ENV_HASH_PREFIX}${createHmac('sha256', envHashKey()).update(value).digest('hex').slice(0, 32)}`
+      : value.slice(0, 2000)
+  }
+  return out
+}
+
+/**
+ * One service object (a `docker service inspect` entry, from the Engine or posted by a deploy
+ * script) through the central sanitizer, with each `Env` block replaced by its digest map under
+ * `EnvDigest` (secret values hashed). The rest is exactly what `sanitizeDockerValue` returns.
+ */
+export function sanitizeServiceSpec(value: unknown): unknown {
+  return digestEnvBlocks(value, '')
+}
+
+const SPEC_CONTAINERS = new Set(['Spec', 'PreviousSpec', 'TaskTemplate', 'ContainerSpec'])
+
+function digestEnvBlocks(value: unknown, parentKey: string): unknown {
+  if (Array.isArray(value)) return value.map((v) => digestEnvBlocks(v, parentKey))
+  if (!value || typeof value !== 'object') return sanitizeDockerValue(value, parentKey)
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (k === 'Env') {
+      out.EnvDigest = digestEnv(v)
+      continue
+    }
+    if (SPEC_CONTAINERS.has(k)) {
+      out[k] = digestEnvBlocks(v, k)
+      continue
+    }
+    // Every other key goes through the sanitizer exactly as a plain read would (dropped keys
+    // stay dropped; labels, log config and arguments keep their masking).
+    const one = sanitizeDockerValue({ [k]: v }, parentKey) as Record<string, unknown>
+    if (k in one) out[k] = one[k]
+  }
+  return out
+}
+
 function cleanUrl(raw: string): string | null {
   const url = raw.trim().replace(/\/+$/, '')
   return /^https?:\/\/[^\s]+$/i.test(url) ? url : null
@@ -203,6 +286,11 @@ export interface DockerGetOptions {
   query?: Record<string, string | number | boolean | object | undefined>
   /** How long a result is reused (default 15 s; 0 = always fresh). */
   cacheMs?: number
+  /**
+   * 'digest' (only on /services) keeps each service's env as a KEY → value map with secret
+   * values hashed (`EnvDigest`, see digestEnv) — for the drift detector. Default: Env dropped.
+   */
+  env?: 'drop' | 'digest'
 }
 
 function buildPath(path: string, query?: DockerGetOptions['query']): string {
@@ -223,8 +311,11 @@ export async function dockerGet<T = unknown>(
   opts: DockerGetOptions = {}
 ): Promise<T> {
   if (!allowedPath(path)) throw new DockerUnavailableError(`Path not allowed: ${path}`, host.name)
+  const digest = opts.env === 'digest'
+  if (digest && !(path === '/services' || path.startsWith('/services/')))
+    throw new DockerUnavailableError(`Env digests are only read from /services`, host.name)
   const full = buildPath(path, opts.query)
-  const key = `${host.name}|${full}`
+  const key = `${host.name}|${digest ? 'env:' : ''}${full}`
   const ttl = opts.cacheMs ?? DEFAULT_CACHE_MS
   const hit = cache.get(key)
   if (ttl > 0 && hit && Date.now() - hit.at < ttl) return hit.value as T
@@ -257,7 +348,8 @@ export async function dockerGet<T = unknown>(
       )
     }
     // Sanitized BEFORE the cache, so no cached copy ever holds what was stripped.
-    const value = sanitizeDockerValue(await res.json()) as T
+    const body = await res.json()
+    const value = (digest ? sanitizeServiceSpec(body) : sanitizeDockerValue(body)) as T
     cache.set(key, { at: Date.now(), value })
     if (cache.size > 2000) cache.delete(cache.keys().next().value as string)
     return value
