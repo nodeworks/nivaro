@@ -195,16 +195,24 @@ export async function run({ only }) {
     // list so a reconnect does not mask the server's own re-gating.
     s.joins = []
     const m1 = s.mark()
+    const tPatch = Date.now()
     const r = await admin.patch(`/api/users/${u.id}`, { role: null })
     t.check('PATCH role null', r.ok, r.status)
-    const ac = await s.next('access:changed', () => true, { from: m1, timeoutMs: END_BUDGET_MS })
+    // The socket's own re-gate names the rooms it left; a tenant-wide `access:changed {at}`
+    // notice (record-events.ts) can arrive first and must not be taken for it. The re-gate runs
+    // on the sweep (SOCKET_SWEEP_MS: 5 s here, 30 s by default).
+    const ac = await s.next('access:changed', (p) => Array.isArray(p?.rooms_left), { from: m1, timeoutMs: END_BUDGET_MS })
     t.metric('access_changed', ac?.p ?? null)
-    t.check('access:changed arrives', !!ac)
+    t.metric('regate_ms_after_patch', ac ? ac.at - tPatch : null)
+    t.check('access:changed {rooms_left} arrives (re-gated)', !!ac && ac.p.rooms_left.includes('collection:rt_items'), ac?.p)
     await sleep(500)
     const m2 = s.mark()
     await admin.must('PATCH', `/api/items/rt_items/${id0}`, { n: 3 })
     await sleep(2000)
-    t.check('no rt_items events after losing access', s.all('collection:update', m2).length === 0, s.all('collection:update', m2).length)
+    const leaked = s.all('collection:update', m2)
+    t.metric('leaked', leaked.map((e) => ({ ms_after_access_changed: e.at - (ac?.at ?? 0), replay: !!e.replay, p: e.p })))
+    t.metric('socket', { connects: s.connects, auths: s.authCount, disconnects: s.disconnects, roomCatchups: s.roomCatchups })
+    t.check('no rt_items events after losing access', leaked.length === 0, leaked.length)
   })
 
   // ── tokens that must not open anything ───────────────────────────────────
