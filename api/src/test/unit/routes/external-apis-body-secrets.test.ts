@@ -123,6 +123,19 @@ describe('external API body secrets — read masking', () => {
 })
 
 describe('external API body secrets — PATCH', () => {
+  it('PATCH refuses a body secret name outside letters, digits, - and _', async () => {
+    const app = buildApp()
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/3',
+      payload: { auth_config: { body_secrets: { 'bad name': 'x' } } }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toContain('Secret names use letters, digits, - and _')
+    expect(updates).toHaveLength(0)
+    await app.close()
+  })
+
   it('PATCH with masked value keeps the stored secret', async () => {
     const app = buildApp()
     const res = await app.inject({

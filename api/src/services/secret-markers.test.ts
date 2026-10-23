@@ -92,6 +92,10 @@ describe('token shape', () => {
     const t = makeSecretTokens()
     expect(Number.isFinite(Number(t.token('x')))).toBe(false)
     expect(t.token(undefined as any)).toBe('')
+    expect(t.token('bad name')).toBe('')
+    expect(t.token('a.b')).toBe('')
+    expect(t.token('x'.repeat(65))).toBe('')
+    expect(t.token('ok-name_1')).not.toBe('')
   })
 })
 
@@ -106,6 +110,10 @@ describe('protectTemplatePlaceholders', () => {
     expect(body.t).toBe(ph)
     expect(body.a).not.toContain('⟦nvr-secret:')
     expect(body.b).not.toContain('⟦nvr-secret:')
+  })
+  it('a template placeholder with an invalid name stays inert text', () => {
+    const p = protectTemplatePlaceholders('{"a":"⟦nvr-secret:bad name⟧"}')
+    expect(JSON.stringify(p.finish(JSON.parse(p.text)))).not.toContain('⟦nvr-secret:')
   })
   it('adjacent interpolations cannot assemble a marker', () => {
     const p = protectTemplatePlaceholders('{"a":"{x}{y}"}')

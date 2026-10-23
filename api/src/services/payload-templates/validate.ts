@@ -1,3 +1,4 @@
+import { SECRET_NAME_RE } from '../secret-markers.js'
 import type { MapSpec } from './types.js'
 
 // Schema check for a stored field map (types.ts). The draft route refuses a
@@ -88,6 +89,9 @@ function checkValueSpec(v: unknown, at: string, errors: string[]): void {
       break
     case 'secret':
       if (typeof v.name !== 'string' || !v.name.trim()) errors.push(`${at}.name must name a secret`)
+      else if (!SECRET_NAME_RE.test(v.name)) {
+        errors.push(`${at}.name: Secret names use letters, digits, - and _`)
+      }
       break
     case 'switch':
       if (!Array.isArray(v.cases)) errors.push(`${at}.cases must be a list`)

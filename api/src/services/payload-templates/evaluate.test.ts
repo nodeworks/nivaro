@@ -817,6 +817,16 @@ describe('secret typed as non-text', () => {
   })
 })
 
+describe('secret names', () => {
+  it('validateSpec rejects a secret name outside letters, digits, - and _', () => {
+    const r = validateSpec(
+      spec([f({ id: 'a', key: 'a', value: { source: 'secret', name: 'a b' } })])
+    )
+    expect(r.ok).toBe(false)
+    expect(JSON.stringify(r)).toContain('Secret names use letters, digits, - and _')
+  })
+})
+
 describe('validateSpec', () => {
   it('accepts a well-formed spec', () => {
     const s: MapSpec = spec([

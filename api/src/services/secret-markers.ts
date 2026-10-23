@@ -1,7 +1,7 @@
 /**
  * The ONE implementation of the secret-placeholder defence. Record, trigger and response data
- * must never be able to forge a body-secret placeholder `⟦nvr-secret:<name>⟧`; only ADMIN-AUTHORED
- * template text (a `secret` source, `secrets.<name>` / `| secret`, a literal placeholder in a
+ * must never be able to forge a body-secret placeholder `⟦nvr-secret:<name>⟧`; only
+ * ADMIN-AUTHORED template text (a `secret` source, `secrets.<name>` / `| secret`, a literal placeholder in a
  * JSON body template) may produce a real one. Pure module (no db / config imports) so the payload
  * evaluator, the code-mode render and body-secrets.ts all share it and cannot drift.
  */
@@ -12,6 +12,9 @@ export const SECRET_PLACEHOLDER = (name: string): string => `⟦nvr-secret:${nam
 
 /** Matches one placeholder; group 1 = the secret name. */
 export const PLACEHOLDER_RE = /⟦nvr-secret:([^⟧]*)⟧/g
+/** A body-secret name: what the editor offers, `secrets.<name>` and `| secret` accept. */
+export const SECRET_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
+
 export const MARKER = '⟦nvr-secret:'
 /** The marker with a zero-width space after "secret": reads the same, never matches. */
 const NEUTRAL_MARKER = '⟦nvr-secret\u200b:'
@@ -88,8 +91,8 @@ export function neutralizeSecretMarkers(value: unknown): unknown {
 
 /**
  * A per-call, unforgeable token factory for the places that must emit a real placeholder while
- * data is still flowing through. `token(name)` returns a private token (underscore-wrapped random digits: not a number, case
- * filters leave it alone, JSON text carries it unescaped, data cannot guess it). `finish(value)`
+ * data is still flowing through. `token(name)` returns a private token (underscore-wrapped random
+ * digits: not a number, case filters leave it alone, JSON text carries it unescaped, data cannot guess it). `finish(value)`
  * is the ONE final pass: neutralize every string value and key (so record text, JSON text decoded
  * along the way, fixed text and formula output can never forge a marker), and only then swap the
  * tokens for the real placeholders — in string VALUES; a token in an object key comes back
@@ -118,7 +121,7 @@ export function makeSecretTokens(): {
   return {
     token: (name) => {
       // Not a real name (e.g. `{{ __secret_token.token }}` called with nothing): no token.
-      if (typeof name !== 'string' || name === '') return ''
+      if (typeof name !== 'string' || !SECRET_NAME_RE.test(name)) return ''
       names.push(name)
       return `_${nonce}${String(names.length - 1).padStart(6, '0')}_`
     },
@@ -147,7 +150,10 @@ export function protectTemplatePlaceholders(templateText: string): {
   finish: (parsed: unknown) => unknown
 } {
   const t = makeSecretTokens()
-  const text = templateText.replace(PLACEHOLDER_RE, (_m, name: string) => t.token(name))
+  // A name outside SECRET_NAME_RE gets no token: it stays text and finish() neutralizes it.
+  const text = templateText.replace(PLACEHOLDER_RE, (m, name: string) =>
+    SECRET_NAME_RE.test(name) ? t.token(name) : m
+  )
   return { text, finish: t.finish }
 }
 

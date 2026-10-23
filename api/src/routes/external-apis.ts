@@ -33,6 +33,7 @@ import {
   redactUrl
 } from '../services/outbound-redaction.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { SECRET_NAME_RE } from '../services/secret-markers.js'
 import { isSensitiveHeaderName, maskBodySecrets } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { readAgreed, validateAgreed, withAgreed } from '../services/traffic-partner-contract.js'
@@ -224,6 +225,19 @@ function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unk
  * - anything else (absent, or a string — the instance-override editor flattens nested objects to
  *   text) keeps the stored map, so an unrelated auth edit never wipes the body secrets.
  */
+/** The first body-secret name in an auth_config / instance overrides that breaks SECRET_NAME_RE. */
+function badBodySecretName(authConfig: unknown, overrides: unknown): string | null {
+  const names = (cfg: unknown): string[] =>
+    isRecord(cfg) && isRecord(cfg.body_secrets) ? Object.keys(cfg.body_secrets) : []
+  const all = [...names(authConfig)]
+  if (isRecord(overrides))
+    for (const o of Object.values(overrides)) all.push(...names(isRecord(o) ? o.auth_config : null))
+  const bad = all.find((n) => !SECRET_NAME_RE.test(n))
+  return bad === undefined
+    ? null
+    : `Secret name '${bad}': Secret names use letters, digits, - and _`
+}
+
 function nextBodySecrets(
   incoming: unknown,
   existing: unknown
@@ -595,6 +609,8 @@ export async function externalApisRoutes(app: FastifyInstance) {
     // different error message depending on whether the row already existed.
     const graceError = validateGraceMinutes(body.ack_grace_minutes, body.skip_grace_minutes)
     if (graceError) return reply.code(400).send({ error: graceError })
+    const badSecret = badBodySecretName(body.auth_config, undefined)
+    if (badSecret) return reply.code(400).send({ error: badSecret })
     const now = new Date()
     const [inserted] = await db('nivaro_external_apis')
       .insert({
@@ -764,6 +780,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
       }
     }
     // #89 — per-instance overrides, masked secrets preserved.
+    {
+      const badSecret = badBodySecretName(body.auth_config, body.instance_overrides)
+      if (badSecret) return reply.code(400).send({ error: badSecret })
+    }
     if (body.instance_overrides !== undefined) {
       patch.instance_overrides = mergeInstanceOverrides(
         body.instance_overrides,
