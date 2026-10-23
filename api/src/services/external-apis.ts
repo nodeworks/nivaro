@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
+import { bodySecretsOf, scrubSecretValues, substituteBodySecrets } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { partnerChaosFetch, partnerFault, readChaosResponse } from './chaos/faults/partner.js'
 import {
@@ -51,6 +52,10 @@ export function instanceOverrideFor(
   return o && typeof o === 'object' ? o : null
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
 /** The row with this instance's overrides folded into base_url / auth_config / headers. */
 export function resolveInstanceRow<T extends ExternalApiRow>(
   row: T,
@@ -62,7 +67,14 @@ export function resolveInstanceRow<T extends ExternalApiRow>(
   if (typeof o.base_url === 'string' && o.base_url.trim()) out.base_url = o.base_url.trim()
   if (o.auth_config && typeof o.auth_config === 'object') {
     const base = parseJson<Record<string, unknown>>(row.auth_config) ?? {}
-    out.auth_config = JSON.stringify({ ...base, ...o.auth_config })
+    const merged: Record<string, unknown> = { ...base, ...o.auth_config }
+    // Body secrets merge per name: production can override just `token`, the rest stay. A
+    // non-object override value is ignored rather than replacing the whole map.
+    const bs = base.body_secrets
+    const os = o.auth_config.body_secrets
+    if (isRecord(bs) || isRecord(os))
+      merged.body_secrets = { ...(isRecord(bs) ? bs : {}), ...(isRecord(os) ? os : {}) }
+    out.auth_config = JSON.stringify(merged)
   }
   if (o.headers && typeof o.headers === 'object') {
     const base = parseJson<Record<string, string>>(row.headers) ?? {}
@@ -694,6 +706,14 @@ export async function callExternalApi(
   }
 
   const cfg = parseJson<Record<string, unknown>>(row.auth_config)
+  const sendsBody = method !== 'GET' && method !== 'HEAD' && body !== undefined
+  // Body secrets: placeholders become the real values only in what goes on the wire — before any
+  // token fetch, serialization or signing. An unknown name refuses the call (nothing is sent).
+  // `body` itself (the logged / recorded copy) keeps the placeholders.
+  const bodySecrets = bodySecretsOf(cfg)
+  const wireBody = sendsBody ? substituteBodySecrets(body, bodySecrets, row.name) : body
+  // A partner may echo the request back: what we log / record of its answer is scrubbed.
+  const logText = (t: string): string => (wireBody === body ? t : scrubSecretValues(t, bodySecrets))
   const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
   const auth = await resolveAuth(row.auth_type, cfg, {
     apiId: row.id,
@@ -709,20 +729,28 @@ export async function callExternalApi(
   const reqHeaders: Record<string, string> = { ...staticHeaders, ...auth.headers, ...extraHeaders }
   const init: RequestInit = { method, headers: reqHeaders }
 
+  // reqBodyStr = what logs and the flight recorder keep (placeholders); wireBodyStr = what is sent.
   let reqBodyStr: string | null = null
-  if (method !== 'GET' && method !== 'HEAD' && body !== undefined) {
+  let wireBodyStr: string | null = null
+  if (sendsBody) {
     if (!Object.keys(reqHeaders).some((h) => h.toLowerCase() === 'content-type')) {
       reqHeaders['Content-Type'] = 'application/json'
     }
     reqBodyStr = typeof body === 'string' ? body : JSON.stringify(body)
-    init.body = reqBodyStr
+    wireBodyStr =
+      wireBody === body
+        ? reqBodyStr
+        : typeof wireBody === 'string'
+          ? wireBody
+          : JSON.stringify(wireBody)
+    init.body = wireBodyStr
   }
 
-  // Body-dependent auth types — signed against the final body / canonical URL.
+  // Body-dependent auth types — signed against the final (substituted) body / canonical URL.
   if (row.auth_type === 'hmac') {
-    applyHmacAuth(cfg as unknown as HmacConfig | null, reqHeaders, reqBodyStr)
+    applyHmacAuth(cfg as unknown as HmacConfig | null, reqHeaders, wireBodyStr)
   } else if (row.auth_type === 'aws_sigv4') {
-    applyAwsSigV4Auth(cfg as unknown as AwsSigV4Config | null, method, url, reqHeaders, reqBodyStr)
+    applyAwsSigV4Auth(cfg as unknown as AwsSigV4Config | null, method, url, reqHeaders, wireBodyStr)
   }
 
   const controller = new AbortController()
@@ -854,7 +882,7 @@ export async function callExternalApi(
       request_headers: reqHeaders,
       request_body: reqBodyStr,
       response_headers: resHeaders,
-      response_body: text
+      response_body: logText(text)
     }
   )
   // #604 — record mode: this live answer becomes a mock rule for this instance.
@@ -863,7 +891,7 @@ export async function callExternalApi(
       method,
       path: suffix || '/',
       status: res.status,
-      bodyText: text
+      bodyText: logText(text)
     })
   }
   if (options._log) {
@@ -877,7 +905,7 @@ export async function callExternalApi(
       request_body: reqBodyStr,
       response_status: res.status,
       response_headers: resHeaders,
-      response_body: text,
+      response_body: logText(text),
       duration_ms: durationMs,
       user_id: options._log.userId ?? null
     })

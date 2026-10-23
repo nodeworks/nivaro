@@ -192,11 +192,63 @@ function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unk
           SECRET_HEADER_RE.test(hk) && hv ? MASK : hv
         ])
       )
+    } else if (k === 'body_secrets') {
+      // Body secrets: every value is a credential; names stay readable.
+      out[k] = isRecord(v)
+        ? Object.fromEntries(Object.entries(v).map(([n, sv]) => [n, sv ? MASK : sv]))
+        : v
+          ? MASK
+          : v
     } else {
       out[k] = SECRET_FIELDS.has(k) && v ? MASK : v
     }
   }
   return out
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+/**
+ * The body_secrets map to store after an edit (undefined = store none):
+ * - an object: per name, a still-masked value keeps the stored secret, a mask with nothing
+ *   stored behind it is dropped (never saved as the mask), a name absent is removed;
+ * - null clears them all;
+ * - anything else (absent, or a string — the instance-override editor flattens nested objects to
+ *   text) keeps the stored map, so an unrelated auth edit never wipes the body secrets.
+ */
+function nextBodySecrets(
+  incoming: unknown,
+  existing: unknown
+): Record<string, unknown> | undefined {
+  const prev = isRecord(existing) ? existing : {}
+  let out: Record<string, unknown>
+  if (incoming === null) return undefined
+  if (isRecord(incoming)) {
+    out = {}
+    for (const [name, v] of Object.entries(incoming)) {
+      if (v === MASK) {
+        if (typeof prev[name] === 'string' && prev[name]) out[name] = prev[name]
+        continue
+      }
+      out[name] = v
+    }
+  } else {
+    out = { ...prev }
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Writes nextBodySecrets' answer onto a config object (removing the key when there is none). */
+function applyBodySecrets(
+  target: Record<string, unknown>,
+  incoming: unknown,
+  existing: unknown
+): void {
+  const bs = nextBodySecrets(incoming, existing)
+  if (bs) target.body_secrets = bs
+  else delete target.body_secrets
 }
 
 // #66/#74 readiness: a mocked API on a production-shaped instance and any
@@ -392,6 +444,7 @@ function mergeInstanceOverrides(
         if (val === MASK && prev?.auth_config && prev.auth_config[k] != null)
           merged[k] = prev.auth_config[k]
       }
+      applyBodySecrets(merged, v.auth_config.body_secrets, prev?.auth_config?.body_secrets)
       if (Object.keys(merged).length) entry.auth_config = merged
     }
     if (v.headers && typeof v.headers === 'object') {
@@ -413,7 +466,12 @@ function mergeAuthConfig(
   existing: Record<string, unknown> | null
 ): Record<string, unknown> | null {
   if (incoming === undefined) return existing
-  if (incoming === null) return null
+  if (incoming === null) {
+    // The editor sends null for auth type "none" — body secrets are not part of the auth type.
+    const kept: Record<string, unknown> = {}
+    applyBodySecrets(kept, undefined, existing?.body_secrets)
+    return Object.keys(kept).length ? kept : null
+  }
   const out: Record<string, unknown> = { ...incoming }
   for (const field of SECRET_FIELDS) {
     if (out[field] === MASK && existing && existing[field] != null) {
@@ -438,6 +496,7 @@ function mergeAuthConfig(
     }
     out.token_headers = merged
   }
+  applyBodySecrets(out, out.body_secrets, existing?.body_secrets)
   return out
 }
 
