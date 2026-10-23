@@ -86,8 +86,10 @@ services:
       MSSQL_MEMORY_LIMIT_MB: '2560'
     ports:
       - '127.0.0.1:${RTCI_MSSQL_PORT:-24433}:1433'
-    volumes:
-      - mssql-data:/var/opt/mssql
+    # Data in memory, not on Docker's disk: every run starts from an empty database anyway, and a
+    # long soak writes a lot of api_logs/activity rows (Docker Desktop's disk filled up twice).
+    tmpfs:
+      - /var/opt/mssql:size=${RTCI_MSSQL_TMPFS:-4g}
 
   # Waits for the server (sqlcmd from the 2022 image — fine under qemu, only sqlservr is not),
   # then creates the empty database the boot migrations (worker first, then web) fill.
@@ -327,5 +329,4 @@ services:
       - '127.0.0.1:${RTCI_CLOUD2_PORT:-24132}:3055'
 
 volumes:
-  mssql-data:
   pg-data:

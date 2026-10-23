@@ -103,7 +103,7 @@ export class LiveSocket {
     return this
   }
 
-  async authenticate() {
+  async authenticate(attempt = 0) {
     try {
       const token = this.o.staticToken ?? (await this.client.wsToken())
       this.s.emit('client:hello', {
@@ -117,6 +117,11 @@ export class LiveSocket {
       this.s.emit('auth', { token })
     } catch (e) {
       this.authFailures.push({ message: e.message, status: e.status, at: Date.now() })
+      // A ws-token request can land on a web process that is going away (a replica loss in
+      // single-role mode): retry with backoff while the socket is up, like a real tab would on
+      // its next reconnect. A 401/403 is final.
+      if (e.status !== 401 && e.status !== 403 && attempt < 6 && this.s?.connected && !this.closed)
+        setTimeout(() => void this.authenticate(attempt + 1), 300 * 2 ** attempt)
     }
   }
 
