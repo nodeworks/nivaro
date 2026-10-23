@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   Ban,
   CheckCircle2,
-  CircleX,
   Eye,
   RefreshCw,
   XCircle
@@ -163,11 +162,11 @@ export function CheckResultsList({
                 {errs.map((p) => {
                   const c = problemCopy(p, { recordLabel: r.label, spec, partner })
                   return (
+                    // The record row's XCircle already says it fails: no second icon per line.
                     <li
                       key={`${p.field_id}:${p.path}:${p.message}`}
-                      className='flex items-start gap-1.5 text-[12px] leading-snug text-red-700 dark:text-red-300'
+                      className='text-[12px] leading-snug text-red-700 dark:text-red-300'
                     >
-                      <CircleX className='mt-[2px] h-3 w-3 shrink-0' aria-hidden />
                       <span data-tip={c.tip}>{c.text}</span>
                     </li>
                   )

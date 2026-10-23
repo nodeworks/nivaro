@@ -173,5 +173,11 @@ describe('humanizePath with collection names', () => {
     expect(humanizePath('record.po_id.number', null, names)).toBe('Purchase order → Number')
     expect(humanizePath('record.po_number', null, names)).toBe('PO number')
     expect(humanizePath('record.mwf_queue.mwf_id')).toBe('Mwf queue → Mwf id')
+    expect(humanizePath('context.pos[0].purchase_order_data.number', null, names)).toBe(
+      'Purchase order → Number'
+    )
+    expect(humanizePath('context.fusion_warehouse[0].location_data.inventory_org')).toBe(
+      'Fusion warehouse → Location → Inventory org'
+    )
   })
 })
