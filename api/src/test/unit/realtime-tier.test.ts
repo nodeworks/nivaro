@@ -417,6 +417,27 @@ describe('realtime tier (NIVARO_ROLE=realtime + SOCKETS=off)', () => {
         }
       ])
       expect(board.boardPeerViewers('record:projects:42').map((v) => v.id)).toEqual(['u-3'])
+      // Ops topic viewers (issue / ticket / layout pages) merge the same way.
+      const topics = await import('../../services/presence-topics.js')
+      topics.addTopicViewer('ops:issue-view:7', 'local-1', { id: 'me', name: 'Me' })
+      board.setBoardsForTests([
+        {
+          node: 'rt-b',
+          at: Date.now(),
+          sockets: 2,
+          users: ['u-3', 'me'],
+          viewers: {},
+          pages: [],
+          topics: {
+            'ops:issue-view:7': [
+              { socket: 's3', id: 'u-3', name: 'Cy' },
+              { socket: 's4', id: 'ME', name: 'Me' }
+            ]
+          }
+        }
+      ])
+      expect(topics.topicViewers('ops:issue-view:7').map((v) => v.id)).toEqual(['me', 'u-3'])
+      topics.removeTopicViewer('ops:issue-view:7', 'local-1')
     } finally {
       board.resetBoard()
     }

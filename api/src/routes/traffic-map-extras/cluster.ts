@@ -1,6 +1,6 @@
 // api/src/routes/traffic-map-extras/cluster.ts
 import type { FastifyInstance } from 'fastify'
-import { getRealtimeStats } from '../../plugins/socketio.js'
+import { getLocalRealtimeStats } from '../../plugins/socketio.js'
 import { startInflightCluster } from '../../services/inflight-cluster.js'
 import { INSTANCE_ID, listInstances } from '../../services/instance-roster.js'
 import { getIo } from '../../services/io-holder.js'
@@ -17,7 +17,8 @@ import { currentStoreId } from '../../services/traffic-taps.js'
 const WINDOWS = new Set([60, 300, 900])
 
 export function localSnapshot(window: number): TrafficSnapshot {
-  const stats = getRealtimeStats()
+  // Per node (merged across nodes): this process's own sockets, never the realtime board.
+  const stats = getLocalRealtimeStats()
   const users = new Set<string>()
   for (const s of stats.sockets) {
     const u = s.user as { id?: string } | string | null

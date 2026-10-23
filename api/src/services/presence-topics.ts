@@ -10,6 +10,8 @@
  *                    that passed that topic's join gate.
  */
 
+import { boardPeerTopicViewers } from './realtime-board.js'
+
 export interface TopicViewer {
   id: string
   name: string
@@ -92,10 +94,21 @@ export function setTopicViewerSelection(
   return true
 }
 
-/** One entry per person, whatever the number of tabs (the latest selection wins). */
+/** This process's viewer lists, one entry per socket (the realtime board publishes them). */
+export function localTopicViewerEntries(): Record<string, Array<TopicViewer & { socket: string }>> {
+  const out: Record<string, Array<TopicViewer & { socket: string }>> = {}
+  for (const [room, m] of viewersByRoom) out[room] = [...m].map(([socket, v]) => ({ socket, ...v }))
+  return out
+}
+
+/**
+ * One entry per person, whatever the number of tabs (the latest selection wins). With several
+ * realtime processes the others' viewers come from the realtime board (post-mortem 3.3), a few
+ * seconds old; a single process has none.
+ */
 export function topicViewers(room: string): TopicViewer[] {
   const byPerson = new Map<string, TopicViewer>()
-  for (const v of viewersByRoom.get(room)?.values() ?? []) {
+  for (const v of [...(viewersByRoom.get(room)?.values() ?? []), ...boardPeerTopicViewers(room)]) {
     const key = v.id.toUpperCase()
     const cur = byPerson.get(key)
     if (!cur || (v.at ?? 0) > (cur.at ?? 0)) byPerson.set(key, v)

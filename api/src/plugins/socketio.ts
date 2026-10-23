@@ -52,6 +52,7 @@ import {
   cleanSignalState,
   isPresenceTopic,
   isSelectionTopic,
+  localTopicViewerEntries,
   RECORD_SIGNAL_KINDS,
   removeSocketFromTopics,
   removeTopicViewer,
@@ -288,6 +289,15 @@ export function getRealtimeStats(): ReturnType<typeof localRealtimeStats> {
   return localRealtimeStats()
 }
 
+/**
+ * This process's own sockets, never the board — for per-node figures another process merges
+ * (Traffic Map cluster snapshots), which would otherwise count a realtime process's sockets
+ * once on it and again on every SOCKETS=off process.
+ */
+export function getLocalRealtimeStats(): ReturnType<typeof localRealtimeStats> {
+  return localRealtimeStats()
+}
+
 function localRealtimeStats(io: SocketIOServer | null = _ioRef): {
   sockets: Array<SocketMeta & { id: string; tenant: string | null; rooms: string[] }>
   rooms: Array<{ room: string; size: number }>
@@ -421,7 +431,8 @@ export function collectLocalBoard(io: SocketIOServer | null = _ioRef): LocalBoar
       users: [...users],
       viewers,
       pages,
-      rooms
+      rooms,
+      topics: localTopicViewerEntries()
     },
     stats: {
       sockets: stats.sockets as unknown as LocalBoard['stats']['sockets'],

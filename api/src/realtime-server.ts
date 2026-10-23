@@ -163,6 +163,33 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     const pc = await import('./services/permission-cache.js')
     if (pc.permissionCacheEnabled()) pc.setPermissionCacheRedis(app.redis)
     // What this process's sockets know, for the SOCKETS=off processes (services/realtime-board.ts).
+    // Traffic Map: the watch room's presence/resync events live with the sockets, and the
+    // cluster relay announces this process's watchers so the web processes send it their
+    // frames (and answers snapshot requests). On web both start from the map's route plugins.
+    const { attachTrafficPresence } = await import('./services/traffic-map-presence.js')
+    attachTrafficPresence(app.io)
+    if (process.env.NODE_ENV !== 'test') {
+      const { startInflightCluster } = await import('./services/inflight-cluster.js')
+      const stopInflight = startInflightCluster(app.redis)
+      app.addHook('onClose', async () => stopInflight())
+      try {
+        const { startTrafficCluster } = await import('./services/traffic-cluster.js')
+        const { localSnapshot } = await import('./routes/traffic-map-extras/cluster.js')
+        const { getIo } = await import('./services/io-holder.js')
+        const { listInstances } = await import('./services/instance-roster.js')
+        const stopCluster = await startTrafficCluster(app.redis, {
+          node: INSTANCE_ID,
+          io: () => getIo() as never,
+          snapshotOf: localSnapshot,
+          peers: {
+            list: async () => (await listInstances()).map((r) => String(r.id ?? '')).filter(Boolean)
+          }
+        })
+        app.addHook('onClose', async () => stopCluster())
+      } catch (err) {
+        app.log.warn({ err }, 'traffic-map cluster relay did not start on this realtime process')
+      }
+    }
     const { startBoardPublisher, startBoardReader } = await import('./services/realtime-board.js')
     const stopBoard = startBoardPublisher(app.redis, () => collectLocalBoard(app.io))
     // The other realtime processes' viewers, so `record:viewers` lists everyone on the record.
@@ -216,6 +243,10 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     app.addHook('onClose', async () => stopEpochWatch())
     const { startInstanceRoster } = await import('./services/instance-roster.js')
     startInstanceRoster(app.redis)
+    // Per-minute event-loop lag peaks for the stall monitor (ops-signals.ts): realtime processes
+    // are judged like every other node.
+    const { startOpsSignals } = await import('./services/ops-signals.js')
+    void startOpsSignals(app.redis ?? null).catch(() => {})
     const { startPoolAttribution } = await import('./services/pool-attribution.js')
     startPoolAttribution()
     const { startDbHealthProbe, isDbHealthy } = await import('./services/db-health.js')

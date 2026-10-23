@@ -62,6 +62,16 @@ export interface BoardLive {
   pages: Array<PageAtData & { socket: string }>
   /** Members of the rooms code checks before it bothers to emit (`watch:*`, chaos partitions). */
   rooms?: Record<string, number>
+  /** Ops topic rooms (issue-view / ticket / layout) → their viewers, one entry per socket. */
+  topics?: Record<string, BoardTopicViewer[]>
+}
+
+export interface BoardTopicViewer {
+  socket: string
+  id: string
+  name: string
+  selected?: string | null
+  at?: number
 }
 
 export interface BoardStats {
@@ -220,6 +230,13 @@ export function boardPeerViewers(
 ): Array<{ socket: string; id: string; name: string }> {
   const out: Array<{ socket: string; id: string; name: string }> = []
   for (const b of liveBoards) if (b.node !== INSTANCE_ID) out.push(...(b.viewers?.[room] ?? []))
+  return out
+}
+
+/** Viewers of an ops topic room (tenant-scoped) held by OTHER realtime processes. */
+export function boardPeerTopicViewers(room: string): BoardTopicViewer[] {
+  const out: BoardTopicViewer[] = []
+  for (const b of liveBoards) if (b.node !== INSTANCE_ID) out.push(...(b.topics?.[room] ?? []))
   return out
 }
 
