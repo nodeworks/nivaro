@@ -7,6 +7,7 @@ import {
   updateAsAction
 } from './action-writes.js'
 import { logActivity } from './activity.js'
+import { protectTemplatePlaceholders, scrubSecretsFor, secretPathsOf } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
@@ -788,8 +789,13 @@ export async function runTransitionActions(opts: {
 
     let body: Record<string, unknown>
     try {
-      const rendered = await engine.parseAndRender(action.payload_template, scope)
-      body = JSON.parse(rendered) as Record<string, unknown>
+      // Only the template's own placeholders stay real (substituted at send, bodySecrets: true):
+      // whatever record / context / response data renders — JSON-escaped markers included — is
+      // neutralized after the parse. The preview renders the same way so its payload signature
+      // matches the real push.
+      const tpl = protectTemplatePlaceholders(action.payload_template)
+      const rendered = await engine.parseAndRender(tpl.text, scope)
+      body = tpl.finish(JSON.parse(rendered)) as Record<string, unknown>
     } catch (err) {
       const submissionId = await recordSubmission(
         collection,
@@ -934,6 +940,7 @@ export async function runTransitionActions(opts: {
         method: (action.method as 'POST' | 'PUT') ?? 'POST',
         path: action.endpoint_path,
         body,
+        bodySecrets: true,
         // `timeout_ms` on the action config wins; the default is generous
         // because a partner that validates each line (Fusion IIP) answers a
         // 30-line push in minutes, and a timeout here reads as a failed push.
@@ -1387,8 +1394,13 @@ export async function recordSubmission(
         status,
         attempts: 1,
         last_error: error,
-        payload: JSON.stringify({ endpoint_path: endpointPath, body }),
-        response: serializeResponseBody(responseBody),
+        // secret_paths: where the template's real placeholders sit — a resend honours only those.
+        payload: JSON.stringify({
+          endpoint_path: endpointPath,
+          body,
+          secret_paths: body ? secretPathsOf(body) : []
+        }),
+        response: await scrubSecretsFor(externalApi, serializeResponseBody(responseBody)),
         change_signature: signature ?? null,
         ...requesterFields,
         ...(await chainFields('nivaro_erp_submissions')),
@@ -1666,8 +1678,13 @@ export async function previewErpActions(opts: {
     }
     let body: Record<string, unknown>
     try {
-      const rendered = await engine.parseAndRender(action.payload_template, scope)
-      body = JSON.parse(rendered) as Record<string, unknown>
+      // Only the template's own placeholders stay real (substituted at send, bodySecrets: true):
+      // whatever record / context / response data renders — JSON-escaped markers included — is
+      // neutralized after the parse. The preview renders the same way so its payload signature
+      // matches the real push.
+      const tpl = protectTemplatePlaceholders(action.payload_template)
+      const rendered = await engine.parseAndRender(tpl.text, scope)
+      body = tpl.finish(JSON.parse(rendered)) as Record<string, unknown>
     } catch (err) {
       out.push({
         ...base,

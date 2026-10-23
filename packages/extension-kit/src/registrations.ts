@@ -385,6 +385,11 @@ export interface CallOptions {
   /** Pre-defined endpoint name or id. Sets method/path/body/query/headers
    *  defaults; caller options override. */
   endpoint?: string | number
+  /** Substitute `⟦nvr-secret:<name>⟧` placeholders in the body with the API's body secrets
+   *  (auth_config.body_secrets) at send time; an unknown name refuses the call. Off by default:
+   *  without it placeholders are sent as-is. Only bodies built from admin-authored templates
+   *  (with record data passed through neutralizeSecretMarkers) should set it. */
+  bodySecrets?: boolean
   /** Logging context — omit to skip logging. */
   _log?: {
     triggeredBy?: string

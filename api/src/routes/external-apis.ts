@@ -3,6 +3,13 @@ import { load as yamlLoad } from 'js-yaml'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  BodySecretError,
+  bodySecretsOf,
+  isRecord,
+  scrubSecretValues,
+  substituteBodySecrets
+} from '../services/body-secrets.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
 import {
   contractTargets,
@@ -26,7 +33,7 @@ import {
   redactUrl
 } from '../services/outbound-redaction.js'
 import { registerReadinessCheck } from '../services/readiness.js'
-import { maskBodySecrets } from '../services/secret-mask.js'
+import { isSensitiveHeaderName, maskBodySecrets } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { readAgreed, validateAgreed, withAgreed } from '../services/traffic-partner-contract.js'
 
@@ -177,7 +184,9 @@ function validateGraceMinutes(
 const SECRET_FIELDS = new Set(['token', 'password', 'client_secret', 'value'])
 const MASK = '••••••'
 
-const SECRET_HEADER_RE = /secret|token|password|key/i
+// Header credentials in auth_config.token_headers and instance overrides: the maskHeaders rule
+// (Authorization, Cookie, Proxy-Authorization, anything *token* / *key* / *auth* …).
+const SECRET_HEADER_RE = { test: (name: string) => isSensitiveHeaderName(name) }
 
 function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!cfg) return null
@@ -192,11 +201,60 @@ function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unk
           SECRET_HEADER_RE.test(hk) && hv ? MASK : hv
         ])
       )
+    } else if (k === 'body_secrets') {
+      // Body secrets: every value is a credential; names stay readable.
+      out[k] = isRecord(v)
+        ? Object.fromEntries(Object.entries(v).map(([n, sv]) => [n, sv ? MASK : sv]))
+        : v
+          ? MASK
+          : v
     } else {
       out[k] = SECRET_FIELDS.has(k) && v ? MASK : v
     }
   }
   return out
+}
+
+/**
+ * The body_secrets map to store after an edit (undefined = store none):
+ * - an object: per name, a still-masked value keeps the stored secret, a mask with nothing
+ *   stored behind it is dropped (never saved as the mask), a name absent — or set to null / '' /
+ *   anything that is not a non-empty string — is removed;
+ * - null clears them all;
+ * - anything else (absent, or a string — the instance-override editor flattens nested objects to
+ *   text) keeps the stored map, so an unrelated auth edit never wipes the body secrets.
+ */
+function nextBodySecrets(
+  incoming: unknown,
+  existing: unknown
+): Record<string, unknown> | undefined {
+  const prev = isRecord(existing) ? existing : {}
+  let out: Record<string, unknown>
+  if (incoming === null) return undefined
+  if (isRecord(incoming)) {
+    out = {}
+    for (const [name, v] of Object.entries(incoming)) {
+      if (v === MASK) {
+        if (typeof prev[name] === 'string' && prev[name]) out[name] = prev[name]
+        continue
+      }
+      if (typeof v === 'string' && v !== '') out[name] = v
+    }
+  } else {
+    out = { ...prev }
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Writes nextBodySecrets' answer onto a config object (removing the key when there is none). */
+function applyBodySecrets(
+  target: Record<string, unknown>,
+  incoming: unknown,
+  existing: unknown
+): void {
+  const bs = nextBodySecrets(incoming, existing)
+  if (bs) target.body_secrets = bs
+  else delete target.body_secrets
 }
 
 // #66/#74 readiness: a mocked API on a production-shaped instance and any
@@ -392,6 +450,7 @@ function mergeInstanceOverrides(
         if (val === MASK && prev?.auth_config && prev.auth_config[k] != null)
           merged[k] = prev.auth_config[k]
       }
+      applyBodySecrets(merged, v.auth_config.body_secrets, prev?.auth_config?.body_secrets)
       if (Object.keys(merged).length) entry.auth_config = merged
     }
     if (v.headers && typeof v.headers === 'object') {
@@ -413,7 +472,12 @@ function mergeAuthConfig(
   existing: Record<string, unknown> | null
 ): Record<string, unknown> | null {
   if (incoming === undefined) return existing
-  if (incoming === null) return null
+  if (incoming === null) {
+    // The editor sends null for auth type "none" — body secrets are not part of the auth type.
+    const kept: Record<string, unknown> = {}
+    applyBodySecrets(kept, undefined, existing?.body_secrets)
+    return Object.keys(kept).length ? kept : null
+  }
   const out: Record<string, unknown> = { ...incoming }
   for (const field of SECRET_FIELDS) {
     if (out[field] === MASK && existing && existing[field] != null) {
@@ -438,6 +502,7 @@ function mergeAuthConfig(
     }
     out.token_headers = merged
   }
+  applyBodySecrets(out, out.body_secrets, existing?.body_secrets)
   return out
 }
 
@@ -823,6 +888,20 @@ export async function externalApisRoutes(app: FastifyInstance) {
     const extraHeaders = req.body?.headers ?? {}
     const cfg = parseJson<Record<string, unknown>>(row.auth_config)
     const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
+    const secrets = bodySecretsOf(cfg)
+    // An echoed secret never reaches the log or the editor's response panel.
+    const scrub = (t: string): string => scrubSecretValues(t, secrets)
+    const scrubHeaders = (h: Record<string, string>): Record<string, string> =>
+      Object.fromEntries(Object.entries(h).map(([k, v]) => [k, scrub(v)]))
+    // An unknown body secret refuses the test before anything is sent.
+    if (method !== 'GET' && method !== 'HEAD' && req.body?.body !== undefined) {
+      try {
+        substituteBodySecrets(req.body.body, secrets, row.name)
+      } catch (err) {
+        if (err instanceof BodySecretError) return reply.code(400).send({ error: err.message })
+        throw err
+      }
+    }
 
     const startMs = Date.now()
     let fetchError: string | null = null
@@ -848,14 +927,18 @@ export async function externalApisRoutes(app: FastifyInstance) {
       const headers: Record<string, string> = { ...staticHeaders, ...auth.headers, ...extraHeaders }
 
       const init: RequestInit = { method, headers }
+      // reqBodyStr (placeholders) is what the call log keeps; the wire body has the API's body
+      // secrets substituted, exactly as an opted-in real call (bodySecrets: true) would.
       let reqBodyStr: string | null = null
       if (method !== 'GET' && method !== 'HEAD' && req.body?.body !== undefined) {
         if (!Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
           headers['Content-Type'] = 'application/json'
         }
-        reqBodyStr =
-          typeof req.body.body === 'string' ? req.body.body : JSON.stringify(req.body.body)
-        init.body = reqBodyStr
+        const raw = req.body.body
+        reqBodyStr = typeof raw === 'string' ? raw : JSON.stringify(raw)
+        const wire = substituteBodySecrets(raw, secrets, row.name)
+        init.body =
+          wire === raw ? reqBodyStr : typeof wire === 'string' ? wire : JSON.stringify(wire)
       }
 
       // No SSRF guard here — external APIs are admin-only and intentionally reach
@@ -877,8 +960,9 @@ export async function externalApisRoutes(app: FastifyInstance) {
       res.headers.forEach((value, key) => {
         resHeaders[key] = value
       })
+      const shownHeaders = scrubHeaders(resHeaders)
 
-      const text = await res.text()
+      const text = scrub(await res.text())
       let parsedBody: unknown = text
       const ct = res.headers.get('content-type') ?? ''
       if (ct.includes('application/json')) {
@@ -907,7 +991,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
           request_headers: headers,
           request_body: reqBodyStr,
           response_status: res.status,
-          response_headers: resHeaders,
+          response_headers: shownHeaders,
           response_body: text,
           duration_ms: durationMs,
           user_id: req.user?.id ?? null
@@ -917,7 +1001,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       return {
         data: {
           status: res.status,
-          headers: resHeaders,
+          headers: shownHeaders,
           body: parsedBody
         }
       }

@@ -11,6 +11,25 @@ export const SENSITIVE_KEY_PATTERN =
 
 export const MASK = '••••••'
 
+/** Header names that always carry a credential — the explicit baseline the pattern widens. */
+export const SENSITIVE_HEADER_NAMES = new Set([
+  'authorization',
+  'x-api-key',
+  'api-key',
+  'x-auth-token',
+  'x-access-token',
+  'cookie',
+  'set-cookie',
+  'proxy-authorization'
+])
+
+/** True when a header name carries (or looks like it carries) a credential — the one rule the
+ *  call-log masking (maskHeaders) and config-snapshot redaction both use. */
+export function isSensitiveHeaderName(name: string): boolean {
+  const lk = name.toLowerCase()
+  return SENSITIVE_HEADER_NAMES.has(lk) || SENSITIVE_KEY_PATTERN.test(lk)
+}
+
 /** True when a header or JSON key name looks like it holds a credential. */
 export function isSensitiveKey(name: string): boolean {
   return SENSITIVE_KEY_PATTERN.test(name.toLowerCase())
