@@ -167,15 +167,21 @@ shared worker, `REALTIME_SHARED_WORKER`).
 | web | 4 | request handling (the 2026-10-23 load was HTTP handler CPU, not connections) |
 | worker | 1 | crons, imports, media |
 
-Per realtime task: one core; memory limit **1280 MB** with `--max-old-space-size=768`
-(provisional). Measured on a development build (2026-10-23, 400 websocket connections that had
-not signed in and received nothing): ~185 MB heap at rest, +~120 KB heap and external memory per
-socket. Signed-in sockets receiving traffic cost more: rooms, presence, pushed widgets, send
-buffers (`SOCKET_BUFFER_SOFT_BYTES` 1 MB / hard 8 MB per slow consumer) and, with
-`SOCKET_COMPRESSION` on (the default), per-message-deflate zlib state outside the heap (a few
-hundred KB per socket that has sent a compressed frame). Set the final limit from a measurement
-with 400 signed-in sockets under traffic (the realtime CI stack); `SOCKET_COMPRESSION=off` trades
-that memory for bandwidth. Watch `nivaro_sockets_connected`, event-loop lag (keep p99
+Per realtime task: one core; memory limit **1 GiB** with `--max-old-space-size=512`.
+Measured by the realtime CI stack (2026-10-23, 250 people, ~1.6 tabs each, every socket signed
+in, presence and record events flowing):
+
+| | sockets | RSS idle → peak | heap (max) | external (max) | per socket |
+|---|---|---|---|---|---|
+| one task, compression on (default) | 374 | 214 → 367 MiB | 145 MiB | 17 MiB | ~0.41 MiB |
+| one task, `SOCKET_COMPRESSION=off` | 322 | 207 → 274 MiB | 151 MiB | 11 MiB | ~0.21 MiB |
+| two tasks sharing ~400 (compression on) | 199–207 each | 305–312 MiB | ≤137 MiB | ≤15 MiB | |
+
+About half of a socket's cost with compression on is per-message-deflate state outside the V8
+heap. All ~400 sockets on one task (the other restarting) is ~380 MiB RSS: 1 GiB leaves room for
+slow-consumer send buffers (`SOCKET_BUFFER_SOFT_BYTES` 1 MB / hard 8 MB per socket) and a
+reconnect storm; 768 MiB with `--max-old-space-size=384` also holds it, at about half the limit.
+`SOCKET_COMPRESSION=off` halves the per-socket cost for more bandwidth. Watch `nivaro_sockets_connected`, event-loop lag (keep p99
 under 100 ms) and the delivery SLO (Realtime console, 95% under 2 s).
 
 Database connections: realtime 2 x 20, web 4 x (25 + 5), worker 15 + 10 = 185 at most; check

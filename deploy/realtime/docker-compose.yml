@@ -92,9 +92,11 @@ services:
         order: start-first
       resources:
         limits:
-          # Provisional until measured with 400 signed-in sockets receiving traffic: per-message
-          # deflate (SOCKET_COMPRESSION, on by default) keeps zlib state outside the heap.
-          memory: 1280M
+          # Measured (realtime CI, 2026-10-23): 374 signed-in sockets under traffic on ONE task =
+          # 367 MiB RSS, heap <= 145 MiB (compression on; ~0.4 MiB per socket, half of it zlib
+          # state outside the heap). 1 GiB holds all ~400 sockets on one task (a peer restart)
+          # at ~40%, with room for slow-consumer send buffers and a reconnect storm.
+          memory: 1024M
     environment:
       <<: *env
       NIVARO_ROLE: realtime
@@ -105,7 +107,7 @@ services:
       # Not needed (a realtime process never ticks or renders); kept explicit.
       CRON_TICKS: 'off'
       MEDIA_WORKER: 'off'
-      NODE_OPTIONS: --max-old-space-size=768
+      NODE_OPTIONS: --max-old-space-size=512
     labels:
       - traefik.enable=true
       # Above the web catch-all. PathRegexp is Traefik v3 (v2: Path(`/api/events/views/{id:[^/]+}/stream`)).

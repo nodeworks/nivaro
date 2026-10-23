@@ -89,7 +89,7 @@ export const realtimeTierDocs: DocSection = {
     { type: 'h2', id: 'realtime-tier-sizing', text: 'Sizing for 200–250 people' },
     {
       type: 'p',
-      text: 'About 400 sockets with extra tabs. Run two realtime processes, about 200 sockets each, so either can carry all of them through a restart; four web and one worker. Give each realtime process one core and, until it is measured with signed-in sockets under traffic, a 1280 MB limit with `--max-old-space-size=768`: at rest it holds about 185 MB of heap, and each socket adds its rooms, presence, send buffer and, with `SOCKET_COMPRESSION` on, compression state outside the heap. Roll realtime processes one at a time, the new one started first: recreating both at once drops every connection. Keep event-loop lag p99 under 100 ms and the delivery target (95% under 2 s) green.'
+      text: 'About 400 sockets with extra tabs. Run two realtime processes, about 200 sockets each, so either can carry all of them through a restart; four web and one worker. Give each realtime process one core and a 1 GB limit with `--max-old-space-size=512`. Measured with every socket signed in and events flowing: one process held 374 sockets in 367 MB (heap 145 MB), about 0.4 MB per socket with `SOCKET_COMPRESSION` on (half of it compression state outside the heap) and 0.2 MB with it off; two processes sharing about 400 sockets used about 310 MB each. All 400 on one process during a restart is about 380 MB. Roll realtime processes one at a time, the new one started first: recreating both at once drops every connection. Keep event-loop lag p99 under 100 ms and the delivery target (95% under 2 s) green.'
     },
     { type: 'h2', id: 'realtime-tier-presence', text: 'Who is viewing what' },
     {
