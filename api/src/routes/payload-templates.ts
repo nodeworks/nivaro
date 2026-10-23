@@ -1,13 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
-import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { bodySecretNames } from '../services/body-secrets.js'
 import { markConfigRead } from '../services/config-live.js'
 import { readItems } from '../services/items.js'
 import { validateSpec } from '../services/payload-templates/evaluate.js'
 import {
-  bustPayloadTemplateCache,
   getTemplate,
   getVersion,
   hasNewerDefault,
@@ -24,7 +23,8 @@ import {
   type TemplateRow
 } from '../services/payload-templates/index.js'
 import {
-  type ActingUser,
+  assertRecordCollection,
+  CollectionRefusedError,
   createTemplate,
   deleteTemplate,
   RecordNotFoundError,
@@ -36,9 +36,11 @@ import {
   usedByCounts
 } from '../services/payload-templates/queries.js'
 import { blockingProblems } from '../services/payload-templates/render.js'
+import { convertTemplate } from '../services/payload-templates/to-liquid.js'
 import type { MapSpec, Problem } from '../services/payload-templates/types.js'
 import { getLabels } from '../services/queues.js'
 import { withReadGate } from '../services/read-gate.js'
+import type { User } from '../types.js'
 
 // ─── /api/payload-templates (admin) ──────────────────────────────────────────
 // Spec 2026-10-22 §11: list / read / draft / preview / check / publish /
@@ -49,20 +51,12 @@ import { withReadGate } from '../services/read-gate.js'
 
 const TABLE = 'nivaro_payload_templates'
 const KEY_RE = /^[a-z0-9-]+$/
-const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const CHECK_DEFAULT = 20
 const CHECK_MAX = 50
 const SEARCH_LIMIT = 20
 const EMPTY_MAP = JSON.stringify({ v: 1, fields: [] })
-// Task 9 ships the converter; a variable specifier keeps tsc from requiring the file.
-const TO_LIQUID_MODULE = '../services/payload-templates/to-liquid.js'
 
 type Which = 'draft' | 'published'
-type ConvertResult = { ok: true; liquid: string } | { ok: false; diffs: unknown[] }
-type Converter = (
-  spec: MapSpec,
-  scopes: Record<string, unknown>[]
-) => ConvertResult | Promise<ConvertResult>
 type Body = { mode: PayloadMode; body: string }
 
 const warning = () => config.PAYLOAD_EDIT_WARNING ?? null
@@ -75,10 +69,8 @@ function statusOf(row: TemplateRow): 'live' | 'draft' | 'unpublished' {
     : 'live'
 }
 
-function actingUser(req: FastifyRequest): ActingUser | null {
-  const u = req.user as (ActingUser & { id?: string }) | undefined
-  return u ? { ...u, id: u.id ?? null } : null
-}
+/** The signed-in admin (requireAdmin ran): records are read as them. */
+const reader = (req: FastifyRequest): User => req.user as User
 
 /** A map body must parse and pass validateSpec; code is any text. Null = fine. */
 function bodyErrors(input: Partial<Body> | undefined): string[] | null {
@@ -97,8 +89,12 @@ function bodyErrors(input: Partial<Body> | undefined): string[] | null {
 
 function sendError(reply: FastifyReply, e: unknown) {
   if (e instanceof PayloadTemplateError) {
-    const status = e.code === 'unknown_key' ? 404 : e.code === 'unpublished' ? 409 : 400
+    const status =
+      e.code === 'unknown_key' ? 404 : e.code === 'conflict' || e.code === 'unpublished' ? 409 : 400
     return reply.code(status).send({ error: e.code, message: e.message, problems: e.problems })
+  }
+  if (e instanceof CollectionRefusedError) {
+    return reply.code(400).send({ error: 'collection_refused', message: e.message })
   }
   if (e instanceof RecordNotFoundError) {
     return reply.code(404).send({ error: 'record_not_found', message: e.message })
@@ -112,13 +108,27 @@ async function loadOr404(key: string, reply: FastifyReply): Promise<TemplateRow 
   return row
 }
 
+/** A template whose records this route will read: found, and its collection a business one
+ *  (registered / promoted rows never passed the create route's check). 404 / 400 otherwise. */
+async function loadReadable(key: string, reply: FastifyReply): Promise<TemplateRow | null> {
+  const row = await loadOr404(key, reply)
+  if (!row) return null
+  try {
+    assertRecordCollection(row.collection)
+  } catch (e) {
+    sendError(reply, e)
+    return null
+  }
+  return row
+}
+
 /** Render one record: the saved draft, an unsaved draft, or the published body (never throws on problems). */
 async function renderFor(
   row: TemplateRow,
   id: string,
   which: Which,
   draft: Body | undefined,
-  user: ActingUser | null,
+  user: User,
   memo?: Map<string, Promise<unknown>>
 ) {
   const { scope, skipped } = await scopeForRecord(row, id, user, memo)
@@ -134,9 +144,14 @@ async function renderFor(
   } else if (draft) {
     draftBody = draft
   }
-  // Body secrets render as the placeholder (the evaluator never sees a value); secret names for
-  // the missing-secret check come from the service's lazy body-secrets lookup.
-  const r = await renderPayloadTemplate(row.key, scope, draftBody ? { draftBody } : { draft: true })
+  // Body secrets render as the placeholder (the evaluator never sees a value); the names feed
+  // the missing-secret problem ("MWF API has no `token` secret yet").
+  const secretNames = async (api: string) => bodySecretNames(api)
+  const r = await renderPayloadTemplate(
+    row.key,
+    scope,
+    draftBody ? { draftBody, secretNames } : { draft: true, secretNames }
+  )
   return {
     body: r.body,
     problems: r.problems,
@@ -229,10 +244,10 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
       const errors = bodyErrors(b.draft)
       if (errors) return reply.code(400).send({ error: 'invalid', errors })
     }
-    const row = await loadOr404(req.params.key, reply)
+    const row = await loadReadable(req.params.key, reply)
     if (!row) return reply
     try {
-      return await renderFor(row, String(b.id), parseWhich(b.which), b.draft, actingUser(req))
+      return await renderFor(row, String(b.id), parseWhich(b.which), b.draft, reader(req))
     } catch (e) {
       return sendError(reply, e)
     }
@@ -247,12 +262,12 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
       const n = Math.floor(Number(b.limit ?? CHECK_DEFAULT))
       const limit = Math.min(CHECK_MAX, Math.max(1, Number.isFinite(n) ? n : CHECK_DEFAULT))
       const which = parseWhich(b.which)
-      const row = await loadOr404(req.params.key, reply)
+      const row = await loadReadable(req.params.key, reply)
       if (!row) return reply
       if (which === 'published' && row.published_version == null) {
         return reply.code(409).send({ error: 'unpublished', message: 'Nothing is published yet' })
       }
-      const user = actingUser(req)
+      const user = reader(req)
       const results = await withReadGate(
         req.user?.id,
         async () => {
@@ -361,41 +376,47 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     }
   })
 
-  // ── convert map → Liquid (Task 9; equality-gated) ──
-  app.post<{ Params: { key: string }; Body: { ids?: Array<string | number>; base_rev?: number } }>(
+  // ── convert map → Liquid (one way, equality-gated over the recent-records set) ──
+  app.post<{ Params: { key: string }; Body: { base_rev?: number } }>(
     '/:key/convert',
     async (req, reply) => {
-      let convert: Converter | null = null
-      try {
-        const m = (await import(TO_LIQUID_MODULE)) as Record<string, unknown>
-        const fn = m.convertTemplate ?? m.convertIfEqual
-        if (typeof fn === 'function') convert = fn as Converter
-      } catch {
-        convert = null
-      }
-      if (!convert) return reply.code(501).send({ error: 'not_available' })
-      const row = await loadOr404(req.params.key, reply)
+      const row = await loadReadable(req.params.key, reply)
       if (!row) return reply
       if (row.draft_mode !== 'map' || !row.draft_body) {
-        return reply.code(400).send({ error: 'Only a field map draft can be converted' })
+        return reply
+          .code(400)
+          .send({ error: 'invalid', message: 'Only a field map can be converted' })
       }
       const b = req.body ?? {}
       try {
-        const spec = JSON.parse(row.draft_body) as MapSpec
-        const ids =
-          Array.isArray(b.ids) && b.ids.length
-            ? b.ids.slice(0, CHECK_MAX).map(String)
-            : await recentIds(row, CHECK_DEFAULT)
-        const user = actingUser(req)
-        const scopes: Record<string, unknown>[] = []
+        let spec: MapSpec
+        try {
+          spec = JSON.parse(row.draft_body) as MapSpec
+        } catch (e) {
+          return reply.code(400).send({
+            error: 'invalid',
+            message: `Invalid field map JSON: ${e instanceof Error ? e.message : String(e)}`
+          })
+        }
+        // The same records and scopes as Check recent records / Preview. A record whose scope
+        // cannot be built (gone, refused by the registrar) is left out; none left = refused below.
+        const user = reader(req)
         const memo = new Map<string, Promise<unknown>>()
-        for (const id of ids) scopes.push((await scopeForRecord(row, id, user, memo)).scope)
-        const r = await convert(spec, scopes)
+        const scopes: Record<string, unknown>[] = []
+        for (const id of await recentIds(row, CHECK_DEFAULT)) {
+          try {
+            scopes.push((await scopeForRecord(row, id, user, memo)).scope)
+          } catch (e) {
+            if (!(e instanceof RecordNotFoundError)) throw e
+          }
+        }
+        const r = await convertTemplate(spec, scopes)
         if (!r.ok) return reply.code(422).send({ error: 'not_equal', diffs: r.diffs })
         const saved = await saveDraft(
           row.key,
           { mode: 'code', body: r.liquid, base_rev: Number(b.base_rev ?? row.draft_rev) },
-          req.user?.id ?? null
+          req.user?.id ?? null,
+          { convert: true }
         )
         if (!saved.ok) return reply.code(409).send({ error: 'stale', current: saved.current })
         return { rev: saved.rev, liquid: r.liquid }
@@ -409,19 +430,21 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
   app.get<{ Params: { key: string }; Querystring: { q?: string } }>(
     '/:key/record-search',
     async (req, reply) => {
-      const row = await loadOr404(req.params.key, reply)
+      const row = await loadReadable(req.params.key, reply)
       if (!row) return reply
-      if (!IDENT_RE.test(row.collection)) return { data: [] }
       const q = String(req.query.q ?? '').trim()
       const ids: string[] = []
-      if (q && /^\d+$/.test(q)) {
-        const exact = (await db(row.collection).where({ id: q }).first('id')) as
-          | { id: unknown }
-          | undefined
-        if (exact) ids.push(String(exact.id))
-      }
       try {
-        const found = await readItems(req.user!, row.collection, {
+        if (q && /^\d+$/.test(q)) {
+          const exact = await readItems(reader(req), row.collection, {
+            fields: ['id'],
+            filter: { id: { _eq: q } },
+            limit: 1,
+            count: false
+          })
+          for (const r of exact.data ?? []) ids.push(String(r.id))
+        }
+        const found = await readItems(reader(req), row.collection, {
           fields: ['id'],
           ...(q ? { search: q } : {}),
           sort: ['-id'],
@@ -471,8 +494,10 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     const label = String(b.label ?? '').trim()
     if (!label) return reply.code(400).send({ error: 'label is required' })
     const collection = String(b.collection ?? '').trim()
-    if (!IDENT_RE.test(collection) || /^nivaro_/i.test(collection)) {
-      return reply.code(400).send({ error: 'collection must be a record collection' })
+    try {
+      assertRecordCollection(collection)
+    } catch (e) {
+      return sendError(reply, e)
     }
     const mode: PayloadMode = isMode(b.mode) ? b.mode : 'map'
     const body = typeof b.body === 'string' ? b.body : mode === 'map' ? EMPTY_MAP : '{}'
@@ -494,7 +519,6 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
       },
       req.user?.id ?? null
     )
-    bustPayloadTemplateCache()
     await logActivity({
       action: 'payload-template-create',
       user: req.user?.id ?? null,
@@ -523,7 +547,6 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
       })
     }
     await deleteTemplate(row.id)
-    bustPayloadTemplateCache()
     await logActivity({
       action: 'payload-template-delete',
       user: req.user?.id ?? null,

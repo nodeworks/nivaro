@@ -14,6 +14,7 @@ import { authenticate, requireAdmin, requireAuth } from '../middleware/authentic
 import { logActivity } from '../services/activity.js'
 import { registerPortalLinks } from '../services/app-links.js'
 import { registerBriefLine } from '../services/approval-brief-lines.js'
+import { hasBodySecret } from '../services/body-secrets.js'
 import { currentChain } from '../services/chain.js'
 import { type ChainTable, chainFields } from '../services/chain-columns.js'
 import { beginChainRoot } from '../services/chain-roots.js'
@@ -124,24 +125,10 @@ function withExtensionLog(extId: string, options?: CallOptions): CallOptions {
   }
 }
 
-// Body secrets (services/body-secrets.ts) are looked up lazily, so the loader works on a build
-// without them; a variable specifier keeps tsc from requiring the file.
-const BODY_SECRETS_MODULE = '../services/body-secrets.js'
-let hasBodySecretFn: Promise<((api: string, name: string) => Promise<boolean>) | null> | null = null
-
-/** Whether an external API has a body secret by this name (false when unknown / unavailable). */
+/** Whether an external API has a body secret by this name; false when it cannot tell. */
 async function extensionHasBodySecret(apiName: string, name: string): Promise<boolean> {
-  hasBodySecretFn ??= import(BODY_SECRETS_MODULE)
-    .then((m: Record<string, unknown>) =>
-      typeof m?.hasBodySecret === 'function'
-        ? (m.hasBodySecret as (api: string, name: string) => Promise<boolean>)
-        : null
-    )
-    .catch(() => null)
-  const fn = await hasBodySecretFn
-  if (!fn) return false
   try {
-    return (await fn(String(apiName), String(name))) === true
+    return (await hasBodySecret(String(apiName), String(name))) === true
   } catch {
     return false
   }

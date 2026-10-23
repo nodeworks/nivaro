@@ -136,8 +136,22 @@ vi.mock('../../../services/queues.js', () => ({
     return out
   })
 }))
+// Records are read through the items service (permission-aware projection); here it answers
+// from the stand-in tables.
 vi.mock('../../../services/items.js', () => ({
-  readItems: vi.fn(async () => ({ data: [{ id: 12 }, { id: 11 }] }))
+  readItems: vi.fn(async (_u: unknown, collection: string, q: { filter?: Row }) => {
+    const id = (q.filter?.id as { _eq?: unknown } | undefined)?._eq
+    const rows = (fake.tables[collection] ?? []).filter((r) => id == null || String(r.id) === id)
+    return { data: rows.map((r) => ({ id: r.id })).reverse() }
+  }),
+  readOne: vi.fn(async (_u: unknown, collection: string, id: string) => {
+    const r = (fake.tables[collection] ?? []).find((x) => String(x.id) === String(id))
+    return r ? { ...r } : null
+  })
+}))
+vi.mock('../../../services/body-secrets.js', () => ({
+  bodySecretNames: vi.fn(async () => []),
+  hasBodySecret: vi.fn(async () => false)
 }))
 // The action context machinery (buildContext) runs real queries; here each
 // named context key answers with fixed rows.
@@ -201,12 +215,18 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
         .map((r) => structuredClone(r)),
     saveDraft: async (
       key: string,
-      input: { mode: 'map' | 'code'; body: string; base_rev: number }
+      input: { mode: 'map' | 'code'; body: string; base_rev: number },
+      _user: string | null,
+      opts: { convert?: boolean } = {}
     ) => {
       const r = need(key)
       if (input.mode === 'map') {
         const v = validateSpec(JSON.parse(input.body))
         if (!v.ok) throw new PayloadTemplateError('invalid', v.errors.join('; '))
+      }
+      // Mode lock, as the service: only Convert (map → code) changes it.
+      if (input.mode !== r.draft_mode && !(opts.convert && input.mode === 'code')) {
+        throw new PayloadTemplateError('invalid', real.MODE_CHANGE_MESSAGE)
       }
       if (r.draft_rev !== input.base_rev) return { ok: false, current: structuredClone(r) }
       Object.assign(r, {
@@ -241,6 +261,7 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
     },
     restoreVersion: async (key: string, v: number) => {
       const r = need(key)
+      if (v === 7) throw new PayloadTemplateError('conflict', 'draft kept changing; try again')
       if (v !== r.published_version) return null
       r.draft_body = r.published_body
       r.draft_rev += 1
@@ -274,6 +295,7 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
 import { payloadTemplateRoutes } from '../../../routes/payload-templates.js'
 import { logActivity } from '../../../services/activity.js'
 import { markConfigRead } from '../../../services/config-live.js'
+import { readItems, readOne } from '../../../services/items.js'
 import { bustPayloadTemplateCache } from '../../../services/payload-templates/index.js'
 import { withReadGate } from '../../../services/read-gate.js'
 
@@ -385,12 +407,17 @@ beforeEach(() => {
       { id: 12, workflow_id: null }
     ],
     nivaro_payload_templates: [],
-    nivaro_payload_template_versions: []
+    nivaro_payload_template_versions: [],
+    nivaro_payload_template_drafts: [],
+    nivaro_users: [{ id: 'u1', email: 'x@y', static_token: 'secret' }],
+    directus_users: [{ id: 'u1', email: 'x@y', password: 'secret' }]
   })
   vi.mocked(markConfigRead).mockClear()
   vi.mocked(withReadGate).mockClear()
   vi.mocked(bustPayloadTemplateCache).mockClear()
   vi.mocked(logActivity).mockClear()
+  vi.mocked(readOne).mockClear()
+  vi.mocked(readItems).mockClear()
 })
 
 async function call(method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: Row) {
@@ -572,6 +599,9 @@ describe('payload template routes', () => {
     expect((await call('GET', '/mwf-ir-order/versions/9')).status).toBe(404)
     expect((await call('POST', '/mwf-ir-order/versions/2/restore')).body).toEqual({ rev: 4 })
     expect((await call('POST', '/mwf-ir-order/versions/9/restore')).status).toBe(404)
+    const conflict = await call('POST', '/mwf-ir-order/versions/7/restore')
+    expect(conflict.status).toBe(409)
+    expect(conflict.body.error).toBe('conflict')
     expect((await call('POST', '/mwf-ir-order/reset-default')).status).toBe(400)
   })
 
@@ -586,6 +616,20 @@ describe('payload template routes', () => {
     expect(bustPayloadTemplateCache).toHaveBeenCalled()
     const row = fake.tables.nivaro_payload_templates.find((r) => r.key === 'new-payload')
     expect(row).toMatchObject({ label: 'New payload', external_api: 'MWF', owner: null })
+    expect(row).not.toHaveProperty('draft_body')
+    expect(fake.tables.nivaro_payload_template_drafts).toEqual([
+      expect.objectContaining({
+        template_id: row?.id,
+        mode: 'map',
+        body: '{"v":1,"fields":[]}',
+        rev: 1,
+        updated_by: 'admin-1'
+      })
+    ])
+    for (const collection of ['nivaro_users', 'directus_users', 'Bad Name']) {
+      const refused = await call('POST', '', { key: 'sys', label: 'x', collection })
+      expect(refused.status).toBe(400)
+    }
     expect((await call('POST', '', { key: 'Bad Key', label: 'x', collection: 'a' })).status).toBe(
       400
     )
@@ -605,11 +649,13 @@ describe('payload template routes', () => {
 
     fake.tables.nivaro_payload_templates.push({ id: 77, key: 'loose' })
     fake.tables.nivaro_payload_template_versions.push({ id: 1, template_id: 77, version: 1 })
+    fake.tables.nivaro_payload_template_drafts.push({ template_id: 77, rev: 2 })
     svc.rows.set('loose', tpl({ id: 77, key: 'loose' }))
     const ok = await call('DELETE', '/loose')
     expect(ok.status).toBe(200)
     expect(fake.tables.nivaro_payload_templates.some((r) => r.key === 'loose')).toBe(false)
     expect(fake.tables.nivaro_payload_template_versions).toHaveLength(0)
+    expect(fake.tables.nivaro_payload_template_drafts).toHaveLength(0)
     expect(bustPayloadTemplateCache).toHaveBeenCalled()
   })
 
@@ -622,9 +668,70 @@ describe('payload template routes', () => {
     ])
   })
 
-  it('answers 501 for convert while the converter is not installed', async () => {
+  it('converts the map draft to Liquid over the recent records, as a convert save', async () => {
     const res = await call('POST', '/mwf-ir-order/convert', { base_rev: 3 })
-    expect(res.status).toBe(501)
-    expect(res.body).toEqual({ error: 'not_available' })
+    expect(res.status).toBe(200)
+    expect(res.body.rev).toBe(4)
+    expect(typeof res.body.liquid).toBe('string')
+    const row = svc.rows.get('mwf-ir-order')
+    expect(row).toMatchObject({ draft_mode: 'code', draft_body: res.body.liquid, draft_rev: 4 })
+    // The converted Liquid renders what the map rendered.
+    const preview = await call('POST', '/mwf-ir-order/preview', { id: '11', which: 'draft' })
+    expect(preview.body.body).toEqual({
+      workflow_id: 'WF-11',
+      efp_state: 'Submitted',
+      queue: 'Q-7'
+    })
+    // Only a map converts; a stale base_rev is refused.
+    expect((await call('POST', '/mwf-ir-order/convert', { base_rev: 4 })).status).toBe(400)
+  })
+
+  it('refuses convert with the differences when it cannot prove the output', async () => {
+    fake.tables.inventory_request = []
+    const res = await call('POST', '/mwf-ir-order/convert', { base_rev: 3 })
+    expect(res.status).toBe(422)
+    expect(res.body.error).toBe('not_equal')
+    expect(res.body.diffs[0]).toMatchObject({ index: -1 })
+    expect(svc.rows.get('mwf-ir-order')?.draft_mode).toBe('map')
+    const modeLock = await call('PUT', '/mwf-ir-order/draft', {
+      mode: 'code',
+      body: '{}',
+      base_rev: 3
+    })
+    expect(modeLock.status).toBe(400)
+  })
+
+  it('answers unpublished with 409 and the message', async () => {
+    const res = await call('POST', '/fusion-transfer-order/preview', {
+      id: '11',
+      which: 'published'
+    })
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('unpublished')
+    expect(res.body.message).toMatch(/not published/)
+  })
+
+  it('never reads a system collection, whatever the stored row says', async () => {
+    for (const collection of ['nivaro_users', 'directus_users']) {
+      svc.rows.set('sys', tpl({ id: 50, key: 'sys', collection }))
+      vi.mocked(readOne).mockClear()
+      vi.mocked(readItems).mockClear()
+      vi.mocked(withReadGate).mockClear()
+      const preview = await call('POST', '/sys/preview', { id: 'u1', which: 'draft' })
+      expect(preview.status).toBe(400)
+      expect(preview.body.error).toBe('collection_refused')
+      expect(preview.body.body).toBeUndefined()
+      const check = await call('POST', '/sys/check', { which: 'draft' })
+      expect(check.status).toBe(400)
+      expect(check.body.results).toBeUndefined()
+      const search = await call('GET', '/sys/record-search?q=u1')
+      expect(search.status).toBe(400)
+      expect(search.body.data).toBeUndefined()
+      const convert = await call('POST', '/sys/convert', { base_rev: 3 })
+      expect(convert.status).toBe(400)
+      expect(readOne).not.toHaveBeenCalled()
+      expect(readItems).not.toHaveBeenCalled()
+      expect(withReadGate).not.toHaveBeenCalled()
+    }
   })
 })

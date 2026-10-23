@@ -1,9 +1,17 @@
 import { db } from '../../db/index.js'
+import type { User } from '../../types.js'
 import { skipReason } from '../integration-obligations.js'
+import { readOne } from '../items.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
+import { isSystemCollection } from '../system-collections.js'
 import { buildContext } from '../workflow-actions.js'
 import { type ConditionRule, evalConditionRule } from '../workflow-conditions.js'
-import { type PayloadMode, registeredDef, type TemplateRow } from './index.js'
+import {
+  bustPayloadTemplateCache,
+  type PayloadMode,
+  registeredDef,
+  type TemplateRow
+} from './index.js'
 
 // ─── Partner payload templates: reads and writes the routes need ─────────────
 // Spec 2026-10-22 §11. Who uses a template (transitions + registrar senders),
@@ -12,7 +20,7 @@ import { type PayloadMode, registeredDef, type TemplateRow } from './index.js'
 
 const T = 'nivaro_payload_templates'
 const V = 'nivaro_payload_template_versions'
-/** Working copies (Task 5 fix round moves drafts here); absent = draft columns on T. */
+/** Working copies (one row per template; none yet = the draft mirrors the published body). */
 const DRAFTS = 'nivaro_payload_template_drafts'
 const TRANSITIONS = 'nivaro_workflow_transitions'
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -163,9 +171,40 @@ export class RecordNotFoundError extends Error {
   }
 }
 
-async function readRecord(collection: string, id: string): Promise<Record<string, unknown>> {
-  if (!IDENT_RE.test(collection)) throw new RecordNotFoundError(collection, id)
-  const row = (await db(collection).where({ id }).first()) as Record<string, unknown> | undefined
+/** A template whose collection is not a business collection (system table, bad name). */
+export class CollectionRefusedError extends Error {
+  constructor(collection: string) {
+    super(`'${collection}' is not a record collection payload templates can read`)
+    this.name = 'CollectionRefusedError'
+  }
+}
+
+/**
+ * Templates read records only from business collections: never a system table (nivaro_* /
+ * directus_*), never a name that is not a plain identifier. Checked on create AND before every
+ * read, since registered and promoted rows never pass the create route.
+ */
+export function assertRecordCollection(collection: unknown): asserts collection is string {
+  if (
+    typeof collection !== 'string' ||
+    !IDENT_RE.test(collection) ||
+    isSystemCollection(collection)
+  ) {
+    throw new CollectionRefusedError(String(collection ?? ''))
+  }
+}
+
+/** One record through the items service (permission-aware projection; null = not visible). */
+async function readRecord(
+  reader: User,
+  collection: string,
+  id: string
+): Promise<Record<string, unknown>> {
+  assertRecordCollection(collection)
+  const row = (await readOne(reader, collection, id, undefined, ['*'])) as
+    | Record<string, unknown>
+    | null
+    | undefined
   if (!row) throw new RecordNotFoundError(collection, id)
   return row
 }
@@ -236,7 +275,8 @@ type BuildContextDefs = Parameters<typeof buildContext>[0]
 export async function scopeForRecord(
   row: TemplateRow,
   id: string,
-  actingUser: ActingUser | null,
+  /** The admin previewing: records are read as them, and they are the scope's acting_user. */
+  reader: User,
   /** Share across records of one template (Check recent records): the referencing action and
    *  its target state are read once. */
   memo?: Map<string, Promise<unknown>>
@@ -250,19 +290,19 @@ export async function scopeForRecord(
     }
     return p
   }
-  const acting = actingUser
-    ? {
-        id: actingUser.id ?? null,
-        email: actingUser.email ?? null,
-        first_name: actingUser.first_name ?? null,
-        last_name: actingUser.last_name ?? null,
-        employee_id: actingUser.employee_id ?? null
-      }
-    : null
+  assertRecordCollection(row.collection)
+  const u = reader as User & ActingUser
+  const acting = {
+    id: u.id ?? null,
+    email: u.email ?? null,
+    first_name: u.first_name ?? null,
+    last_name: u.last_name ?? null,
+    employee_id: u.employee_id ?? null
+  }
   const [ref] = await once(`refs:${row.key}`, () => referencingTransitions(row.key))
   if (ref) {
-    const record = await readRecord(row.collection, id)
-    const userId = actingUser?.id ?? null
+    const record = await readRecord(reader, row.collection, id)
+    const userId = reader.id ?? null
     const lookups = row.lookups
       ? await buildContext(row.lookups as BuildContextDefs, id, record, userId)
       : {}
@@ -287,19 +327,19 @@ export async function scopeForRecord(
     return { scope: { acting_user: acting, ...scope }, skipped: null }
   }
   return {
-    scope: { record: await readRecord(row.collection, id), acting_user: acting },
+    scope: { record: await readRecord(reader, row.collection, id), acting_user: acting },
     skipped: null
   }
 }
 
 /** Record ids "Check recent records" renders: the registrar's `recent()` or the newest rows. */
 export async function recentIds(row: TemplateRow, limit: number): Promise<string[]> {
+  assertRecordCollection(row.collection)
   const def = registeredDef(row.key)
   if (def?.recent) {
     const ids = await def.recent(limit)
     return (Array.isArray(ids) ? ids : []).slice(0, limit).map(String)
   }
-  if (!IDENT_RE.test(row.collection)) return []
   const rows = (await db(row.collection).orderBy('id', 'desc').limit(limit).select('id')) as Array<{
     id: unknown
   }>
@@ -319,13 +359,16 @@ export type CreateTemplateInput = {
   body: string
 }
 
-/** Insert a UI-created template (no owner, not published) with its first draft. */
+/**
+ * Insert a UI-created template (no owner, not published) and its first draft (rev 1) in one
+ * transaction, then bust the published cache.
+ */
 export async function createTemplate(
   input: CreateTemplateInput,
   userId: string | null
 ): Promise<void> {
+  assertRecordCollection(input.collection)
   const now = new Date()
-  const separateDrafts = await db.schema.hasTable(DRAFTS)
   await db.transaction(async (trx) => {
     await trx(T).insert({
       key: input.key,
@@ -339,18 +382,8 @@ export async function createTemplate(
       lookups: null,
       default_hash: null,
       created_at: now,
-      updated_at: now,
-      ...(separateDrafts
-        ? {}
-        : {
-            draft_mode: input.mode,
-            draft_body: input.body,
-            draft_rev: 1,
-            draft_updated_by: userId,
-            draft_updated_at: now
-          })
+      updated_at: now
     })
-    if (!separateDrafts) return
     // Insert-then-select: `.returning('id')` shapes differ on this stack.
     const row = (await trx(T).where({ key: input.key }).first('id')) as { id: number } | undefined
     if (!row) throw new Error('created template row not found')
@@ -363,14 +396,15 @@ export async function createTemplate(
       updated_at: now
     })
   })
+  bustPayloadTemplateCache()
 }
 
 /** Remove a template with its draft and versions (callers check it is unreferenced first). */
 export async function deleteTemplate(id: number): Promise<void> {
-  const separateDrafts = await db.schema.hasTable(DRAFTS)
   await db.transaction(async (trx) => {
-    if (separateDrafts) await trx(DRAFTS).where({ template_id: id }).delete()
+    await trx(DRAFTS).where({ template_id: id }).delete()
     await trx(V).where({ template_id: id }).delete()
     await trx(T).where({ id }).delete()
   })
+  bustPayloadTemplateCache()
 }
