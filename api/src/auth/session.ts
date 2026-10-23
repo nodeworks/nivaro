@@ -4,6 +4,7 @@ import fastifySession from '@fastify/session'
 import type { FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
 import { config } from '../config.js'
+import { withAuthDeadline } from '../services/auth-deadline.js'
 
 // Logout must hold against the rolling save: `rolling: true` re-saves every
 // request's session at response end, so a request from ANOTHER tab that
@@ -42,7 +43,12 @@ export async function revokeSessions(
 export function buildRedisStore(redis: Redis) {
   return {
     get(sid: string, callback: (err: unknown, session: FastifySessionObject | null) => void) {
-      redis.mget(`sess:${sid}`, `${REVOKED_PREFIX}${sid}`).then(
+      // Time-limited (services/auth-deadline.ts): a Redis that stops answering fails the
+      // request with 503 instead of holding it open in its first hook forever.
+      withAuthDeadline(
+        redis.mget(`sess:${sid}`, `${REVOKED_PREFIX}${sid}`),
+        'the session store'
+      ).then(
         ([raw, revoked]) =>
           callback(null, raw && !revoked ? (JSON.parse(raw) as FastifySessionObject) : null),
         (err) => callback(err, null)
