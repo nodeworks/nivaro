@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  ExternalLink,
   Filter,
   GitFork,
   GripVertical,
@@ -45,7 +46,7 @@ import type React from 'react'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
-import { useNivaroClient } from '../../context'
+import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
@@ -735,6 +736,8 @@ type TransitionAction = {
   m2m?: Record<string, unknown>
   // shared
   payload_template?: string
+  /** A saved payload template (wins over the inline payload_template). */
+  payload_template_key?: string
   guard?: unknown[]
   context?: Record<string, unknown>
   on_success?: { set?: Record<string, string> }
@@ -1562,6 +1565,98 @@ function JsonField({
   )
 }
 
+type PayloadTemplateOption = {
+  key: string
+  label: string
+  external_api: string
+  status: 'live' | 'draft' | 'unpublished'
+  published_version: number | null
+  draft_rev: number
+  used_by_count: number
+  newer_default: boolean
+}
+
+const CUSTOM_PAYLOAD = '__custom__'
+
+function payloadStatusText(t: PayloadTemplateOption): string {
+  if (t.status === 'live') return `Live v${t.published_version ?? '?'}`
+  if (t.status === 'draft') return 'Draft changes'
+  return 'Not published'
+}
+
+function PayloadTemplatePicker({
+  externalApi,
+  value,
+  onChange
+}: {
+  externalApi: string
+  value: string | undefined
+  onChange: (key: string | undefined) => void
+}) {
+  const client = useNivaroClient()
+  const nav = useNavigation()
+  const api = externalApi.trim()
+  const { data: templates } = useQuery({
+    queryKey: ['payload-templates', 'list', api],
+    queryFn: () =>
+      client
+        .request<{ data: PayloadTemplateOption[]; warning: string | null }>(
+          get(`/payload-templates?external_api=${encodeURIComponent(api)}`)
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!api
+  })
+  const { data: apis } = useQuery({
+    queryKey: ['external-apis', 'list'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: number; name: string }> }>(get('/external-apis'))
+        .then((r) => r.data ?? []),
+    enabled: !!value
+  })
+  const options = [
+    { value: CUSTOM_PAYLOAD, label: 'Custom (inline Liquid)' },
+    ...(templates ?? []).map((t) => ({
+      value: t.key,
+      label: `${t.label} · ${payloadStatusText(t)}`
+    }))
+  ]
+  const apiRow = (apis ?? []).find((a) => a.name === api || String(a.id) === api)
+  const apiSegment = apiRow ? String(apiRow.id) : api
+  const href = value
+    ? `/external-apis/${encodeURIComponent(apiSegment)}/payloads/${encodeURIComponent(value)}`
+    : null
+  const target = href ? (nav.consoleUrl ? nav.consoleUrl(href) : href) : null
+
+  return (
+    <div className='space-y-1'>
+      <span className='text-[10.5px] uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+        Payload template
+      </span>
+      <div className='flex items-center gap-2'>
+        <div className='min-w-0 flex-1'>
+          <SimpleCombobox
+            value={value ?? CUSTOM_PAYLOAD}
+            onChange={(v) => onChange(v === CUSTOM_PAYLOAD ? undefined : v)}
+            options={options}
+            placeholder={api ? 'Custom (inline Liquid)' : 'Enter an external API first'}
+          />
+        </div>
+        {target && (
+          <button
+            type='button'
+            onClick={() => nav.navigate(target)}
+            className='flex shrink-0 items-center gap-1 text-[11px] text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+          >
+            <ExternalLink className='h-3 w-3' />
+            Open template
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function TransitionActionsSection({
   actions,
   onChange
@@ -1595,8 +1690,8 @@ function TransitionActionsSection({
             Run AFTER the transition lands — never block it. Liquid templates see{' '}
             <code className='font-mono'>record</code>, <code className='font-mono'>context</code>,{' '}
             <code className='font-mono'>state</code>, <code className='font-mono'>response</code>;
-            filters: jsonify, editorjs_text, add_days, iso_date, at_least_days_out, next_open_day.
-            Every erp_submit attempt logs to ERP Submissions (with retry).
+            filters: jsonify, editorjs_text, add_days, iso_date, at_least_days_out, next_open_day,
+            pad_start. Every erp_submit attempt logs to ERP Submissions (with retry).
           </p>
           {actions.map((action, idx) => (
             <div
@@ -1701,19 +1796,28 @@ function TransitionActionsSection({
                 </div>
               )}
 
-              <div className='space-y-1'>
-                <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>
-                  Payload template (Liquid — must render to valid JSON)
-                </span>
-                <Textarea
-                  value={action.payload_template ?? ''}
-                  onChange={(e) => update(idx, { payload_template: e.target.value })}
-                  rows={5}
-                  spellCheck={false}
-                  placeholder={'{"name": {{ record.name | jsonify }}}'}
-                  className='font-mono text-[11px] resize-y'
+              {action.type === 'erp_submit' && (
+                <PayloadTemplatePicker
+                  externalApi={String(action.external_api ?? '')}
+                  value={action.payload_template_key}
+                  onChange={(k) => update(idx, { payload_template_key: k })}
                 />
-              </div>
+              )}
+              {!(action.type === 'erp_submit' && action.payload_template_key) && (
+                <div className='space-y-1'>
+                  <span className='text-[10.5px] uppercase tracking-wide text-slate-400'>
+                    Payload template (Liquid — must render to valid JSON)
+                  </span>
+                  <Textarea
+                    value={action.payload_template ?? ''}
+                    onChange={(e) => update(idx, { payload_template: e.target.value })}
+                    rows={5}
+                    spellCheck={false}
+                    placeholder={'{"name": {{ record.name | jsonify }}}'}
+                    className='font-mono text-[11px] resize-y'
+                  />
+                </div>
+              )}
               <div className='grid gap-2 sm:grid-cols-2'>
                 <JsonField
                   label='Guard (condition rules)'
