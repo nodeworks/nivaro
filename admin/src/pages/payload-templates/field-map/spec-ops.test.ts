@@ -233,6 +233,10 @@ describe('moveField', () => {
     expect(keysOf(r.spec.fields)).toEqual(['po_number', 'lines', 'note', 'efp_state'])
     const across = moveFieldTo(s, 'a', 'c2')
     expect(across.ok).toBe(false)
+    if (!across.ok) expect(across.code).toBe('other_group')
+    const same = moveFieldTo(s, 'a', 'a')
+    expect(same.ok).toBe(false)
+    if (!same.ok) expect(same.code).toBe('same_place')
     expect(across.spec).toBe(s)
   })
 })
@@ -414,6 +418,39 @@ describe('renameListAlias safety', () => {
     expect(findField(s, 'a')?.field.value).toEqual({ source: 'path', path: 'records.qty' })
     // record.id was never captured by the alias
     expect(findField(s, 'r')?.field.value).toEqual({ source: 'path', path: 'record.id' })
+  })
+
+  it('never rewrites away from an unsafe name: rows already called "record" stay put', () => {
+    const s = spec([
+      {
+        id: 'g',
+        key: 'lines',
+        type: 'list',
+        include: 'always',
+        list: {
+          source: 'context.lines',
+          item: 'record',
+          where: [{ field: 'record.ok', op: 'eq', value: 1 }],
+          sort: 'record.n'
+        },
+        children: [
+          f('a', 'id', { value: { source: 'path', path: 'record.id' } }),
+          f('b', 'f', { value: { source: 'formula', liquid: '{{ record.x }}' } })
+        ]
+      }
+    ])
+    const r = renameListAlias(s, 'g', 'record', 'records')
+    expect(r.rewrote).toBe(false)
+    const g = findField(r.spec, 'g')?.field
+    expect(g?.list?.item).toBe('records')
+    expect(g?.list?.where?.[0].field).toBe('record.ok')
+    expect(g?.list?.sort).toBe('record.n')
+    expect(findField(r.spec, 'a')?.field.value).toEqual({ source: 'path', path: 'record.id' })
+    expect((findField(r.spec, 'b')?.field.value as { liquid: string }).liquid).toBe(
+      '{{ record.x }}'
+    )
+    // leaving an outer list's row name is unsafe too
+    expect(renameListAlias(nested(), 'g', 'order', 'row').rewrote).toBe(false)
   })
 
   it("rewrites a nested list's source, filter and sort, but not inside a list that reuses the name", () => {

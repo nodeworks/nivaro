@@ -710,7 +710,7 @@ export function FieldMap(props: FieldMapProps) {
       const r = moveFieldTo(current(), String(e.active.id), String(e.over.id))
       if (r.ok) apply(r.spec)
       // The row springs back; say why when it was dropped into another group.
-      else if (r.reason !== 'Same place.') toast.message(r.reason)
+      else if (r.code === 'other_group') toast.message(r.reason)
     },
     [apply, current]
   )

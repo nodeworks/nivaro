@@ -110,19 +110,23 @@ export function useSpecHistory(
     setFlags((f) => (f.undo === next.undo && f.redo === next.redo ? f : next))
   }, [])
 
-  const mounted = useRef(false)
+  // Which template this mounted map has already seen a spec for. A different key (the editor
+  // switched templates without remounting) is a first sight for THAT key — its history is
+  // never emptied by a switch, only by an outside change while it is the one open.
+  const openFor = useRef<{ key: string | undefined } | null>(null)
   useLayoutEffect(() => {
     const s = storeRef.current?.store
     if (!s) return
+    const open = openFor.current !== null && openFor.current.key === historyKey
     // Same content in a new object (the shell re-read the draft) is not a change.
     if (s.seen && s.seen !== spec && JSON.stringify(s.seen) !== JSON.stringify(spec)) {
-      s.history = mounted.current ? emptyHistory() : recordHistory(s.history, s.seen)
+      s.history = open ? emptyHistory() : recordHistory(s.history, s.seen)
     }
-    mounted.current = true
+    openFor.current = { key: historyKey }
     s.seen = spec
     latest.current = spec
     sync()
-  }, [spec, sync])
+  }, [spec, sync, historyKey])
 
   const emit = useCallback(
     (next: MapSpec) => {

@@ -313,4 +313,54 @@ describe('FieldMap', () => {
     expect(v.cases).toHaveLength(1)
     expect(v.else).toEqual({ source: 'builtin', name: 'state.label' })
   })
+
+  it("switching templates while the map stays open keeps each template's undo history", () => {
+    key++
+    const k = key
+    const specA: MapSpec = { v: 1, fields: [f('a1', 'alpha')] }
+    const specB: MapSpec = { v: 1, fields: [f('b1', 'beta')] }
+    let show: (which: 'A' | 'B') => void = () => {}
+    let loadA: (s: MapSpec) => void = () => {}
+    function TwoTemplates() {
+      const [which, setWhich] = useState<'A' | 'B'>('A')
+      const [a, setA] = useState(specA)
+      const [b, setB] = useState(specB)
+      show = setWhich
+      loadA = setA
+      latest = which === 'A' ? a : b
+      return (
+        <FieldMap
+          spec={which === 'A' ? a : b}
+          onChange={which === 'A' ? setA : setB}
+          values={{}}
+          problems={[]}
+          lockedKeys={[]}
+          secretNames={[]}
+          collection='workflows'
+          historyKey={`switch-${k}-${which}`}
+        />
+      )
+    }
+    render(<TwoTemplates />)
+    fireEvent.change(keyInputs()[0], { target: { value: 'alpha_2' } })
+    act(() => show('B'))
+    expect(keys()).toEqual(['beta'])
+    fireEvent.change(keyInputs()[0], { target: { value: 'beta_2' } })
+    // The shell re-reads A's stored draft on the way back (a new object, other content):
+    // that must not empty A's history — it was not edited from outside while open.
+    act(() => {
+      loadA({ v: 1, fields: [f('a1', 'alpha_2', { note: 'as stored' })] })
+      show('A')
+    })
+    expect(keys()).toEqual(['alpha_2'])
+    expect(screen.getByLabelText('Undo')).not.toBeDisabled()
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
+    expect(latest.fields[0].note).toBeUndefined()
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
+    expect(keys()).toEqual(['alpha'])
+    act(() => show('B'))
+    expect(keys()).toEqual(['beta_2'])
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
+    expect(keys()).toEqual(['beta'])
+  })
 })

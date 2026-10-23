@@ -10,7 +10,18 @@ import type { ConditionRule, Field, ListSpec, MapSpec, ValueSpec } from '../api'
 // Ids are random and never derived from a position (a reorder or an undo must
 // not re-point a problem or a preview value at another row).
 
-export type OpResult = { ok: true; spec: MapSpec } | { ok: false; spec: MapSpec; reason: string }
+/** Why an op refused — callers branch on this, never on the message text. */
+export type OpRefusal =
+  | 'gone'
+  | 'locked'
+  | 'same_place'
+  | 'other_group'
+  | 'group_edge'
+  | 'scalar_one'
+
+export type OpResult =
+  | { ok: true; spec: MapSpec }
+  | { ok: false; spec: MapSpec; code: OpRefusal; reason: string }
 
 export type FieldType = Field['type']
 
@@ -237,10 +248,13 @@ export const SCALAR_ONE_FIELD =
 
 export function removeField(spec: MapSpec, id: string, locked: ReadonlySet<string>): OpResult {
   const reason = lockReason(spec, id, locked, 'removed')
-  if (reason) return { ok: false, spec, reason }
-  if (inScalarList(spec, id)) return { ok: false, spec, reason: SCALAR_ONE_FIELD }
+  if (reason) return { ok: false, spec, code: 'locked', reason }
+  if (inScalarList(spec, id))
+    return { ok: false, spec, code: 'scalar_one', reason: SCALAR_ONE_FIELD }
   const next = mapSiblings(spec, id, (siblings, i) => siblings.filter((_, j) => j !== i))
-  return next ? { ok: true, spec: next } : { ok: false, spec, reason: 'That field is gone.' }
+  return next
+    ? { ok: true, spec: next }
+    : { ok: false, spec, code: 'gone', reason: 'That field is gone.' }
 }
 
 export function renameKey(
@@ -250,10 +264,10 @@ export function renameKey(
   locked: ReadonlySet<string>
 ): OpResult {
   const at = findField(spec, id)
-  if (!at) return { ok: false, spec, reason: 'That field is gone.' }
+  if (!at) return { ok: false, spec, code: 'gone', reason: 'That field is gone.' }
   if (at.field.key === key) return { ok: true, spec }
   const reason = lockReason(spec, id, locked, 'renamed')
-  if (reason) return { ok: false, spec, reason }
+  if (reason) return { ok: false, spec, code: 'locked', reason }
   return { ok: true, spec: mapField(spec, id, (f) => ({ ...f, key })) }
 }
 
@@ -265,10 +279,10 @@ export function setType(
   locked: ReadonlySet<string>
 ): OpResult {
   const at = findField(spec, id)
-  if (!at) return { ok: false, spec, reason: 'That field is gone.' }
+  if (!at) return { ok: false, spec, code: 'gone', reason: 'That field is gone.' }
   if (at.field.type === type) return { ok: true, spec }
   const reason = lockReason(spec, id, locked, 'retyped')
-  if (reason) return { ok: false, spec, reason }
+  if (reason) return { ok: false, spec, code: 'locked', reason }
   const next = mapField(spec, id, (f) => {
     const { value, children, list, ...rest } = f
     if (type === 'object') return { ...rest, type, children: children ?? [] }
@@ -390,7 +404,13 @@ function rewriteField(f: Field, from: string, to: string): Field {
 }
 
 /** Names a list's rows can't take: scope roots, and the row names of the lists around and inside it. */
-export function aliasConflict(spec: MapSpec, id: string, name: string): string | null {
+export function aliasConflict(
+  spec: MapSpec,
+  id: string,
+  name: string,
+  /** Count the row names of lists inside this one (a new name they would shadow). */
+  inner = true
+): string | null {
   const n = name.trim()
   if (!n) return null
   if (RESERVED_ALIASES.has(n)) return `“${n}” is already a name in the payload`
@@ -399,15 +419,15 @@ export function aliasConflict(spec: MapSpec, id: string, name: string): string |
     for (const f of fields) {
       if (f.id === id) {
         outer.push(...aliases)
-        const inner: string[] = []
+        const innerNames: string[] = []
         const down = (fs: Field[]) => {
           for (const c of fs) {
-            if (c.type === 'list') inner.push(c.list?.item || 'line')
+            if (c.type === 'list') innerNames.push(c.list?.item || 'line')
             if (c.children?.length) down(c.children)
           }
         }
-        down(f.children ?? [])
-        outer.push(...inner)
+        if (inner) down(f.children ?? [])
+        outer.push(...innerNames)
         return true
       }
       const next = f.type === 'list' ? [...aliases, f.list?.item || 'line'] : aliases
@@ -435,7 +455,15 @@ export function renameListAlias(
   from: string,
   to: string
 ): { spec: MapSpec; rewrote: boolean } {
-  const unsafe = !from || !to || from === to || !!aliasConflict(spec, id, to)
+  // Never rewrite toward a name that captures other paths — nor AWAY from one: when the rows are
+  // already called `record`, every `record.x` inside may mean the record itself.
+  const unsafe =
+    !from ||
+    !to ||
+    from === to ||
+    !!aliasConflict(spec, id, to) ||
+    // (a nested list reusing `from` is fine: the rewrite stops at it)
+    !!aliasConflict(spec, id, from, false)
   const next = mapField(spec, id, (f) => {
     const list: ListSpec = { ...(f.list ?? { source: '', item: from }), item: to }
     if (unsafe) return { ...f, list }
@@ -449,28 +477,33 @@ export function renameListAlias(
 /** Move a row one place up (-1) or down (+1) inside its own group. */
 export function moveField(spec: MapSpec, id: string, delta: -1 | 1): OpResult {
   const at = findField(spec, id)
-  if (!at) return { ok: false, spec, reason: 'That field is gone.' }
+  if (!at) return { ok: false, spec, code: 'gone', reason: 'That field is gone.' }
   const to = at.index + delta
   if (to < 0 || to >= at.siblings.length)
     return {
       ok: false,
       spec,
+      code: 'group_edge',
       reason: delta < 0 ? 'Already first in its group.' : 'Already last in its group.'
     }
   const next = mapSiblings(spec, id, (siblings, i) => arrayMove(siblings, i, to))
-  return next ? { ok: true, spec: next } : { ok: false, spec, reason: 'That field is gone.' }
+  return next
+    ? { ok: true, spec: next }
+    : { ok: false, spec, code: 'gone', reason: 'That field is gone.' }
 }
 
 /** Drag-and-drop: put `id` where `overId` is. Both must share a group. */
 export function moveFieldTo(spec: MapSpec, id: string, overId: string): OpResult {
-  if (id === overId) return { ok: false, spec, reason: 'Same place.' }
+  if (id === overId) return { ok: false, spec, code: 'same_place', reason: 'Same place.' }
   const a = findField(spec, id)
   const b = findField(spec, overId)
-  if (!a || !b) return { ok: false, spec, reason: 'That field is gone.' }
+  if (!a || !b) return { ok: false, spec, code: 'gone', reason: 'That field is gone.' }
   if (a.siblings !== b.siblings)
-    return { ok: false, spec, reason: 'Fields move within their own group.' }
+    return { ok: false, spec, code: 'other_group', reason: 'Fields move within their own group.' }
   const next = mapSiblings(spec, id, (siblings, i) => arrayMove(siblings, i, b.index))
-  return next ? { ok: true, spec: next } : { ok: false, spec, reason: 'That field is gone.' }
+  return next
+    ? { ok: true, spec: next }
+    : { ok: false, spec, code: 'gone', reason: 'That field is gone.' }
 }
 
 export function arrayMove<T>(arr: T[], from: number, to: number): T[] {
