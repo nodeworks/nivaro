@@ -634,7 +634,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     }
   }
   // presence:changed goes out at most once per window per tenant, carrying every changed id
-  // (services/presence-changed.ts); the first change of a quiet tenant still goes out at once.
+  // (services/presence-changed.ts; adaptive 2–3 s); the first change of a quiet tenant still
+  // goes out at once.
   const presenceChanged = createPresenceChangedCoalescer((tenant, payload) =>
     emitToTenant(tenant, 'presence:changed', payload as unknown as Record<string, unknown>)
   )

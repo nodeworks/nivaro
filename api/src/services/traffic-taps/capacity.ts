@@ -65,16 +65,21 @@ let poolTimer: NodeJS.Timeout | null = null
 export function startCapacitySampling(): void {
   if (poolTimer || process.env.CLOUD_META_DB_URL) return
   poolTimer = setInterval(() => {
-    const p = pool()
-    if (!p) return
-    const sec = currentTrafficSec()
-    poolSamples.push({
-      at: sec,
-      used: p.numUsed?.() ?? 0,
-      pending: p.numPendingAcquires?.() ?? 0,
-      rps: state().ring.sum(10, sec)[0] / 10
-    })
-    if (poolSamples.length > POOL_SAMPLES) poolSamples.shift()
+    // A throw in a timer callback is an uncaught exception for the whole process.
+    try {
+      const p = pool()
+      if (!p) return
+      const sec = currentTrafficSec()
+      poolSamples.push({
+        at: sec,
+        used: p.numUsed?.() ?? 0,
+        pending: p.numPendingAcquires?.() ?? 0,
+        rps: state().ring.sum(10, sec)[0] / 10
+      })
+      if (poolSamples.length > POOL_SAMPLES) poolSamples.shift()
+    } catch {
+      /* never — a missed sample is fine */
+    }
   }, POOL_SAMPLE_MS)
   poolTimer.unref?.()
 }

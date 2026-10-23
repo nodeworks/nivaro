@@ -94,9 +94,14 @@ function tableMock(rows: Record<string, Array<Record<string, unknown>>>) {
     return chain
   })
 }
+// Every app is closed after its test: the routes start process-wide samplers that stop when
+// the app closes — left open, the capacity sampler ticked against this file's db mock (which
+// has no _staticDb) once the file outlived its 5 s interval.
+const apps: Array<ReturnType<typeof Fastify>> = []
 function buildApp() {
   const app = Fastify({ logger: false })
   app.register(trafficMapRoutes, { prefix: '/traffic-map' })
+  apps.push(app)
   return app
 }
 const req = (over: Record<string, unknown>) => ({
@@ -118,7 +123,8 @@ beforeEach(() => {
   advanceTo(T0)
   delete process.env.CLOUD_META_DB_URL
 })
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(apps.splice(0).map((a) => a.close()))
   vi.clearAllMocks()
   delete process.env.CLOUD_META_DB_URL
 })

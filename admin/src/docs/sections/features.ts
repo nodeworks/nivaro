@@ -811,14 +811,15 @@ Authorization: Bearer <admin-token>
       type: 'pre',
       code: `GET /api/reports/summary
 Authorization: Bearer <admin-token>
-?from=2025-01-01&to=2025-12-31
+?from=2025-01-01&to=2025-12-31   // without from: the last 30 days (before to, or now)
+                                  // a bare date in to includes that whole day
 
 → {
   "by_action":     [{ "action": "create", "count": 450 }],
   "by_collection": [{ "collection": "projects", "count": 300 }],
   "by_user":       [{ "user_id", "first_name", "last_name", "email", "count" }],
   "total_events":  1234,
-  "date_range":    { "from": "...", "to": "..." }
+  "date_range":    { "from": "...", "to": "...", "default_days": 30 | null }
 }`
     }
   ]

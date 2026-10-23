@@ -1,11 +1,19 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { requireAdmin } from '../middleware/authenticate.js'
+import {
+  mergeUserNames,
+  parseReportDate,
+  SUMMARY_DEFAULT_DAYS,
+  summaryQueries,
+  summaryWindow
+} from '../services/activity-report.js'
+import { selectInChunks } from '../services/db-batch.js'
 
 function toCSV(rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return ''
   const headers = Object.keys(rows[0])
-  const escape = (v: unknown): string => {
+  const escapeCell = (v: unknown): string => {
     let s = v == null ? '' : String(v)
     if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
     if (s.includes(',') || s.includes('"') || s.includes('\n')) {
@@ -13,7 +21,10 @@ function toCSV(rows: Record<string, unknown>[]): string {
     }
     return s
   }
-  const lines = [headers.join(','), ...rows.map((r) => headers.map((h) => escape(r[h])).join(','))]
+  const lines = [
+    headers.join(','),
+    ...rows.map((r) => headers.map((h) => escapeCell(r[h])).join(','))
+  ]
   return lines.join('\r\n')
 }
 
@@ -56,13 +67,18 @@ export async function reportsRoutes(app: FastifyInstance) {
       query.where('a.action', q.action)
       countQuery.where('a.action', q.action)
     }
-    if (q.from) {
-      query.where('a.timestamp', '>=', new Date(q.from))
-      countQuery.where('a.timestamp', '>=', new Date(q.from))
+    const from = parseReportDate(q.from, 'start')
+    const to = parseReportDate(q.to, 'end')
+    if (from === 'invalid' || to === 'invalid') {
+      return reply.status(400).send({ error: '`from` / `to` must be valid dates' })
     }
-    if (q.to) {
-      query.where('a.timestamp', '<=', new Date(q.to))
-      countQuery.where('a.timestamp', '<=', new Date(q.to))
+    if (from) {
+      query.where('a.timestamp', '>=', from)
+      countQuery.where('a.timestamp', '>=', from)
+    }
+    if (to) {
+      query.where('a.timestamp', '<=', to)
+      countQuery.where('a.timestamp', '<=', to)
     }
 
     if (format === 'csv') {
@@ -81,36 +97,26 @@ export async function reportsRoutes(app: FastifyInstance) {
   })
 
   // GET /api/reports/summary
+  // Always windowed (last SUMMARY_DEFAULT_DAYS days when no `from`); aggregates read
+  // nivaro_activity alone and names are joined after grouping (services/activity-report.ts).
   app.get('/summary', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as Record<string, string>
+    const win = summaryWindow(q)
+    if ('error' in win) return reply.status(400).send({ error: win.error })
 
-    const base = () => {
-      const b = db('nivaro_activity as a')
-      if (q.from) b.where('a.timestamp', '>=', new Date(q.from))
-      if (q.to) b.where('a.timestamp', '<=', new Date(q.to))
-      return b
-    }
-
+    const queries = summaryQueries(db, win)
     const [byAction, byCollection, byUser, totalRows] = await Promise.all([
-      base().select('a.action').count('a.id as count').groupBy('a.action').orderBy('count', 'desc'),
-      base()
-        .select('a.collection')
-        .count('a.id as count')
-        .groupBy('a.collection')
-        .orderBy('count', 'desc')
-        .whereNotNull('a.collection'),
-      db('nivaro_activity as a')
-        .leftJoin('nivaro_users as u', 'a.user', 'u.id')
-        .select(db.raw('a.[user] as user_id'), 'u.first_name', 'u.last_name', 'u.email')
-        .count('a.id as count')
-        .groupBy('a.user', 'u.first_name', 'u.last_name', 'u.email')
-        .orderBy('count', 'desc')
-        .modify((qb) => {
-          if (q.from) qb.where('a.timestamp', '>=', new Date(q.from))
-          if (q.to) qb.where('a.timestamp', '<=', new Date(q.to))
-        }),
-      base().count('a.id as count')
+      queries.byAction,
+      queries.byCollection,
+      queries.byUser,
+      queries.total
     ])
+
+    const grouped = byUser as unknown as { user_id: string | null; count: string | number }[]
+    const ids = grouped.map((r) => r.user_id).filter((id): id is string => id != null)
+    const users = await selectInChunks(ids, 1000, (chunk) =>
+      db('nivaro_users').select('id', 'first_name', 'last_name', 'email').whereIn('id', chunk)
+    )
 
     const totalEvents = Number((totalRows[0] as { count: string | number }).count)
 
@@ -123,23 +129,14 @@ export async function reportsRoutes(app: FastifyInstance) {
         collection: (r as { collection: string }).collection,
         count: Number((r as { count: string | number }).count)
       })),
-      by_user: (
-        byUser as {
-          user_id: string
-          first_name: string | null
-          last_name: string | null
-          email: string
-          count: string | number
-        }[]
-      ).map((r) => ({
-        user_id: r.user_id,
-        first_name: r.first_name,
-        last_name: r.last_name,
-        email: r.email,
-        count: Number(r.count)
-      })),
+      by_user: mergeUserNames(grouped, users),
       total_events: totalEvents,
-      date_range: { from: q.from ?? null, to: q.to ?? null }
+      // The window actually counted: `from` is filled in when the default applied.
+      date_range: {
+        from: q.from ? q.from : win.from.toISOString(),
+        to: q.to ? q.to : null,
+        default_days: win.defaulted ? SUMMARY_DEFAULT_DAYS : null
+      }
     })
   })
 }

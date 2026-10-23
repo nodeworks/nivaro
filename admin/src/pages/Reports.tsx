@@ -23,7 +23,7 @@ import {
   TableRow
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
-import { cn, formatDateTime, formatNumber } from '@/lib/utils'
+import { cn, formatDate, formatDateTime, formatNumber } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -53,11 +53,11 @@ type SummaryResponse = {
     user_id: string
     first_name: string | null
     last_name: string | null
-    email: string
+    email: string | null
     count: number
   }[]
   total_events: number
-  date_range: { from: string | null; to: string | null }
+  date_range: { from: string | null; to: string | null; default_days?: number | null }
 }
 
 type Filters = {
@@ -119,6 +119,20 @@ function hasActiveFilters(f: Filters) {
 
 // ─── Stat strip ───────────────────────────────────────────────────────────────
 
+/** Which window the totals cover — the server counts the last 30 days when no From is set. */
+function summaryRangeLabel(range: SummaryResponse['date_range'] | undefined): string | null {
+  if (!range) return null
+  if (range.default_days) {
+    return range.to
+      ? `Totals for the ${range.default_days} days to ${formatDate(range.to)}`
+      : `Totals for the last ${range.default_days} days`
+  }
+  if (range.from && range.to)
+    return `Totals for ${formatDate(range.from)} – ${formatDate(range.to)}`
+  if (range.from) return `Totals since ${formatDate(range.from)}`
+  return null
+}
+
 function StatStrip({
   summaryData,
   loading
@@ -140,27 +154,34 @@ function StatStrip({
     { label: 'Deletes', value: actionCount('delete'), cls: 'text-red-600 dark:text-red-400' }
   ]
 
+  const rangeLabel = summaryRangeLabel(summaryData?.date_range)
+
   return (
-    <div className='grid grid-cols-4 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
-      {stats.map((s) => (
-        <div key={s.label} className='bg-white px-4 py-3.5 dark:bg-card'>
-          <p className='mb-1 text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
-            {s.label}
-          </p>
-          {loading ? (
-            <Skeleton className='h-6 w-16 rounded' />
-          ) : (
-            <p
-              className={cn(
-                'text-[22px] font-semibold leading-none tabular-nums',
-                s.cls || 'text-slate-900 dark:text-foreground'
-              )}
-            >
-              {formatNumber(s.value ?? 0)}
+    <div className='space-y-1.5'>
+      {rangeLabel && (
+        <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>{rangeLabel}</p>
+      )}
+      <div className='grid grid-cols-4 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
+        {stats.map((s) => (
+          <div key={s.label} className='bg-white px-4 py-3.5 dark:bg-card'>
+            <p className='mb-1 text-[11px] font-medium text-slate-400 dark:text-muted-foreground'>
+              {s.label}
             </p>
-          )}
-        </div>
-      ))}
+            {loading ? (
+              <Skeleton className='h-6 w-16 rounded' />
+            ) : (
+              <p
+                className={cn(
+                  'text-[22px] font-semibold leading-none tabular-nums',
+                  s.cls || 'text-slate-900 dark:text-foreground'
+                )}
+              >
+                {formatNumber(s.value ?? 0)}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

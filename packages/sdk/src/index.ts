@@ -1640,11 +1640,15 @@ export interface ActivityReportSummary {
     user_id: string
     first_name: string | null
     last_name: string | null
-    email: string
+    email: string | null
     count: number
   }>
   total_events: number
-  date_range: { from: string | null; to: string | null }
+  /**
+   * The window counted. Without `from` the server counts the last `default_days` days
+   * (30) and fills `from` in.
+   */
+  date_range: { from: string | null; to: string | null; default_days?: number | null }
 }
 
 export interface ActivityReportQuery {
@@ -1686,7 +1690,7 @@ export function runActivityReportCsv(query?: ActivityReportQuery): Command<strin
   return cmd('GET', '/reports/activity', params)
 }
 
-/** Aggregated activity report summary (admin). */
+/** Aggregated activity report summary (admin). Without `from`: the last 30 days. */
 export function readActivityReportSummary(query?: {
   from?: string
   to?: string
