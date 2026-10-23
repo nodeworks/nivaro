@@ -15,7 +15,7 @@ describe('renderBody code mode', () => {
   it('code mode parses Liquid output as JSON', async () => {
     const r = await renderBody(
       'code',
-      '{"a": "{{ record.x }}", "n": 2}',
+      '{"a": {{ record.x | jsonify }}, "n": 2}',
       { record: { x: 'hi' } },
       {}
     )
@@ -82,13 +82,14 @@ describe('renderBody code mode', () => {
     expect(msgs).toMatch(/efp_state/)
     expect(msgs).toMatch(/a\.b/)
     expect(msgs).toMatch(/a\.c/)
-    expect(r.problems.every((p) => p.field_id === '' && p.severity === 'error')).toBe(true)
+    expect(r.problems.every((p) => p.field_id === '')).toBe(true)
+    expect(r.problems.find((p) => p.path === 'efp_state')?.severity).toBe('warning')
     expect(r.problems.filter((p) => p.path === 'a.b')).toHaveLength(1)
   })
 })
 
 describe('renderBody map mode', () => {
-  it('missing locked key is an error', async () => {
+  it('map: locked key with no spec field is an error', async () => {
     const r = await renderBody(
       'map',
       spec([f({ id: 'f1', key: 'a', value: fixed('x') })]),
@@ -100,6 +101,45 @@ describe('renderBody map mode', () => {
     const p = r.problems.find((x) => x.path === 'efp_state')
     expect(p?.severity).toBe('error')
     expect(blockingProblems(r.problems)).toContain(p)
+  })
+
+  it('map: locked not_empty field absent from output is fine', async () => {
+    const r = await renderBody(
+      'map',
+      spec([
+        f({
+          id: 'f1',
+          key: 'po_number',
+          include: 'not_empty',
+          value: { source: 'path', path: 'record.po' }
+        })
+      ]),
+      { record: { po: null } },
+      { lockedKeys: ['po_number'] }
+    )
+    expect(r.body).toEqual({})
+    expect(r.problems).toEqual([])
+  })
+
+  it('code: locked key missing from output is a warning', async () => {
+    const r = await renderBody('code', '{"a": 1}', {}, { lockedKeys: ['efp_state'] })
+    expect(r.problems).toHaveLength(1)
+    expect(r.problems[0].severity).toBe('warning')
+    expect(blockingProblems(r.problems)).toEqual([])
+  })
+
+  it('pattern too long is an error; rules on a group warn', async () => {
+    const r = await renderBody(
+      'map',
+      spec([
+        f({ id: 'p', key: 'p', value: fixed('a'), rules: { pattern: 'a'.repeat(201) } }),
+        f({ id: 'g', key: 'g', type: 'object', children: [], rules: { max_length: 1 } })
+      ]),
+      {},
+      {}
+    )
+    expect(r.problems.find((x) => x.field_id === 'p')?.message).toMatch(/too long/)
+    expect(r.problems.find((x) => x.field_id === 'g')?.severity).toBe('warning')
   })
 
   it('rules: required, max_length, allowed, pattern, min/max each report', async () => {
@@ -160,5 +200,45 @@ describe('renderBody map mode', () => {
     const r = await renderBody('map', '{nope', {}, {})
     expect(r.body).toBeNull()
     expect(r.problems).toHaveLength(1)
+  })
+})
+
+describe('renderBody code mode JSON injection', () => {
+  it('a record value with quotes that injects a key is a duplicate-key error', async () => {
+    const r = await renderBody(
+      'code',
+      '{"a": "{{ record.x }}", "injected": "real"}',
+      { record: { x: 'x", "injected": "y' } },
+      {}
+    )
+    const dup = r.problems.find((p) => p.message.includes("Duplicate key 'injected'"))
+    expect(dup?.severity).toBe('error')
+    expect(dup?.message).toMatch(/jsonify/)
+  })
+
+  it('nested objects may reuse a key; the same object may not', async () => {
+    const ok = await renderBody(
+      'code',
+      '{"a": {"k": 1}, "b": {"k": 2}, "c": [{"k": 1}, {"k": 2}]}',
+      {},
+      {}
+    )
+    expect(ok.problems.filter((p) => p.severity === 'error')).toEqual([])
+    const bad = await renderBody('code', '{"a": 1, "a": 2}', {}, {})
+    expect(bad.problems.some((p) => p.message.includes("Duplicate key 'a'"))).toBe(true)
+  })
+
+  it('warns on an output tag not passed through jsonify', async () => {
+    const r = await renderBody(
+      'code',
+      '{"a": "{{ record.x }}", "b": {{ record.y | jsonify }}, "t": "{{ secrets.token }}", "u": "{{ \'k\' | secret }}"}',
+      { record: { x: 'ok', y: 'ok' } },
+      { secretNames: ['token', 'k'] }
+    )
+    const warns = r.problems.filter((p) => p.severity === 'warning')
+    expect(warns).toHaveLength(1)
+    expect(warns[0].message).toBe(
+      "Output 'record.x' is not passed through | jsonify — record text with quotes can break the payload"
+    )
   })
 })
