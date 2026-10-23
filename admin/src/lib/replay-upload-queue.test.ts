@@ -3,6 +3,7 @@ import {
   BACKOFF_MAX_MS,
   backoffDelay,
   classifyUploadError,
+  clipChunkFailure,
   idbChunkStore,
   isResumable,
   KEEPALIVE_BUDGET,
@@ -377,5 +378,72 @@ describe('route, build and retries (#1368)', () => {
       route: '/home',
       build: 'dev'
     })
+  })
+})
+
+describe('a recording that will never take a chunk (staging 2026-10-23)', () => {
+  it('a 401 (View-as ended, signed out) stops for good, even on a resumed id', async () => {
+    const { uploader, calls } = setup(async () => {
+      throw Object.assign(httpError(401), { response: { code: 'MASQUERADE_EXPIRED' } })
+    })
+    uploader.begin('R1', 5, { trusted: false })
+    uploader.enqueue([ev(5)])
+    uploader.enqueue([ev(6)])
+    // Not 'stale': a fresh recording would be refused the same way.
+    expect(await uploader.drain()).toBe('abandoned')
+    expect(calls.length).toBe(1)
+    expect(uploader.size).toBe(0)
+    expect(uploader.stopped).toBe(true)
+  })
+
+  it('after a 401 / 403 / 409 nothing more is queued, drained or sent on pagehide', async () => {
+    for (const status of [401, 403, 409]) {
+      const { uploader, calls } = setup(async () => {
+        throw axiosError(status)
+      })
+      uploader.begin('R1')
+      uploader.enqueue([ev(1)])
+      uploader.enqueue([ev(2)])
+      expect(await uploader.drain()).toBe(status === 409 ? 'closed' : 'abandoned')
+      expect(uploader.enqueue([ev(3)])).toBeNull()
+      expect(uploader.keepaliveBatch()).toEqual([])
+      expect(await uploader.drain()).toBe('ok')
+      expect(calls.length).toBe(1)
+    }
+  })
+
+  it('a 400 drops that chunk and the rest still go — no loop', async () => {
+    const { uploader, calls } = setup(async (_id, seq) => {
+      if (seq === 0) throw httpError(400)
+    })
+    uploader.begin('R1')
+    uploader.enqueue([ev(1)])
+    uploader.enqueue([ev(2)])
+    expect(await uploader.drain()).toBe('ok')
+    expect(calls.map((c) => c.seq)).toEqual([0, 1])
+    expect(uploader.size).toBe(0)
+    expect(uploader.stopped).toBe(false)
+  })
+
+  it('a new recording (begin / rebase) takes chunks again', async () => {
+    const { uploader } = setup(async () => {
+      throw httpError(401)
+    })
+    uploader.begin('R1')
+    uploader.enqueue([ev(1)])
+    await uploader.drain()
+    uploader.begin('R2')
+    expect(uploader.enqueue([ev(2)])).not.toBeNull()
+  })
+
+  it('clip uploads stop on a refusal of the recording or the person, go on otherwise', () => {
+    expect([401, 403, 404, 409].map(clipChunkFailure)).toEqual(['stop', 'stop', 'stop', 'stop'])
+    expect([400, 413, 429, 500, undefined].map(clipChunkFailure)).toEqual([
+      'next',
+      'next',
+      'next',
+      'next',
+      'next'
+    ])
   })
 })

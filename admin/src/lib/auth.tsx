@@ -1,4 +1,4 @@
-import { clearRecordOutbox } from '@nivaro/shared'
+import { clearRecordOutbox, isSignedOutError, noteSignedIn, noteUnauthorized } from '@nivaro/shared'
 import { useQueryClient } from '@tanstack/react-query'
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from 'react'
 import { api, type User, WORKSPACE_KEY } from './api'
@@ -25,6 +25,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const res = await api.get<{ data: User }>('/auth/me')
       const u = res.data.data
+      // The signed-out gate (socket token, RUM, identity reads) opens here and in other tabs.
+      noteSignedIn()
       if (u.current_workspace) localStorage.setItem(WORKSPACE_KEY, u.current_workspace)
       // Before any screen mounts: last session's metadata fills the cache (#2449).
       await bootMetadataCache(queryClient, u).catch(() => {})
@@ -34,6 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // (Offline / 5xx is not — the cached copy is what lets a reload paint.)
       if ((err as { response?: { status?: number } })?.response?.status === 401) {
         void wipeMetadataOnSignOut()
+        if (isSignedOutError(err, true)) noteUnauthorized()
       }
       setUser(null)
     } finally {

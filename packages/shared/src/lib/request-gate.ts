@@ -1,5 +1,14 @@
 import type { Command, NivaroClient } from '@nivaro/sdk'
 import { noteOwnWriteFromCommand } from './own-writes'
+import {
+  claimIdentityCall,
+  isIdentityRead,
+  isSignedOutError,
+  noteCredentialChanged,
+  noteSignedIn,
+  noteUnauthorized,
+  signedOutError
+} from './signed-out'
 
 /**
  * Two transport-level wrappers over a NivaroClient.
@@ -387,6 +396,24 @@ interface SettledEntry {
   value: unknown
 }
 
+/**
+ * Feed a request's outcome to the signed-out gate: an identity read that succeeds opens it, a
+ * 401 that says the session is gone closes it (only identity refusals push the backoff out — a
+ * page of reads all refused at once is one refusal, not twenty).
+ */
+function watchSignedOut<T>(sent: Promise<T>, identity: boolean): Promise<T> {
+  return sent.then(
+    (res) => {
+      if (identity) noteSignedIn()
+      return res
+    },
+    (err) => {
+      if (isSignedOutError(err, identity)) noteUnauthorized(identity)
+      throw err
+    }
+  )
+}
+
 export function withGetCoalescing(
   client: NivaroClient,
   opts: CoalescingOptions = {}
@@ -420,7 +447,7 @@ export function withGetCoalescing(
       // and when it lands (a read sent meanwhile must not settle).
       const busts = !cannotChangeConfig(c)
       if (busts) forgetSettledReads()
-      const sent = client.request<T>(command)
+      const sent = watchSignedOut(client.request<T>(command), false)
       return (busts ? sent.finally(forgetSettledReads) : sent).then((res) => {
         noteOwnWriteFromCommand(c._method, c._path, c._body, res)
         return res
@@ -435,14 +462,19 @@ export function withGetCoalescing(
     }
     const current = inflight.get(key)
     if (current) return (current as Promise<T>).then(cloneResult)
+    // A signed-out tab stops asking who it is (signed-out.ts): one probe per backoff window.
+    const identity = isIdentityRead(c._method, c._path, c._params)
+    if (identity && !claimIdentityCall()) return Promise.reject(signedOutError())
     const read = batch ? batchableRead(c) : null
     const metaName = !read && metaBatch ? batchableCollectionMeta(c) : null
-    const sent =
+    const sent = watchSignedOut(
       read && batch
         ? batch<T>(command, read)
         : metaName && metaBatch
           ? metaBatch<T>(command, metaName)
-          : client.request<T>(command)
+          : client.request<T>(command),
+      identity
+    )
     const epoch = settledEpoch
     const p = sent
       .then((res) => {
@@ -459,6 +491,12 @@ export function withGetCoalescing(
     get(target, prop, receiver) {
       if (prop === 'request') return request
       if (prop === COALESCED) return true
+      // New credentials: whatever the old ones were refused may work now.
+      if (prop === 'setToken' && typeof target.setToken === 'function')
+        return (token: string | null) => {
+          target.setToken(token)
+          noteCredentialChanged()
+        }
       const v = Reflect.get(target, prop, receiver)
       return typeof v === 'function' ? v.bind(target) : v
     }

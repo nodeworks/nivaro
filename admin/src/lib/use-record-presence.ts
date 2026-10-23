@@ -1,12 +1,11 @@
 import { relayLiveEvent } from '@nivaro/shared'
 import { useEffect, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
-import { api } from '@/lib/api'
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 import { useAuth } from '@/lib/auth'
-import { getSocket, usesWorkerSocket } from '@/lib/socket'
+import { getSocket, mintWsToken, usesWorkerSocket } from '@/lib/socket'
 import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 
 /**
@@ -67,12 +66,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
         // authenticate directly.
         let token = user?.static_token ?? null
         if (!token) {
-          try {
-            const r = await api.get<{ data: { token: string } }>('/auth/ws-token')
-            token = r.data.data?.token ?? (r.data as unknown as { token?: string }).token ?? null
-          } catch {
-            token = null
-          }
+          token = await mintWsToken()
         }
         if (token && !disposed) socket.emit('auth', { token })
       })

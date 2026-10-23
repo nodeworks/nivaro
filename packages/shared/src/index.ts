@@ -859,6 +859,18 @@ export {
   serverNow,
   setServerClockOffset
 } from './lib/server-clock'
+export {
+  claimIdentityCall,
+  guardIdentityCall,
+  isSignedOut,
+  isSignedOutError,
+  noteCredentialChanged,
+  noteSignedIn,
+  noteUnauthorized,
+  onSignedIn,
+  SIGNED_OUT_MAX_MS,
+  signedOutBackoff
+} from './lib/signed-out'
 export * from './lib/socket-realtime'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'

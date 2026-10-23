@@ -105,6 +105,9 @@ export function backoffDelay(attempt: number, random: () => number = Math.random
  * - closed: 409 — the recording is closed or capped; stop for good.
  * - abandon: any other 4xx (403 not yours, 404 gone, 401 signed out) — no
  *   chunk of this recording will ever be accepted.
+ * A 401 (signed out, or a View-as session that ended — MASQUERADE_EXPIRED) is
+ * never a stale resumed id either: a fresh recording would be refused the same
+ * way, so the uploader stops outright (`ReplayUploader.drain`).
  */
 export type UploadFailure = 'retry' | 'drop-chunk' | 'closed' | 'abandon'
 
@@ -114,6 +117,19 @@ export function classifyUploadError(status: number | undefined): UploadFailure {
   if (status === 408 || status === 429) return 'retry'
   if (typeof status === 'number' && status >= 400 && status < 500) return 'abandon'
   return 'retry'
+}
+
+/**
+ * One-shot clip uploads (error-clip mode): after a failed chunk, go on to the
+ * next one or stop? A chunk refused as too big or malformed (413 / 400) is
+ * dropped and the rest still go; a refusal of the recording or the person
+ * (401 signed out / View-as ended, 403, 404, 409 closed) stops — every later
+ * chunk would be refused the same way. A transient failure moves on too: a
+ * clip is sent once, with no retry queue.
+ */
+export function clipChunkFailure(status: number | undefined): 'next' | 'stop' {
+  const failure = classifyUploadError(status)
+  return failure === 'closed' || failure === 'abandon' ? 'stop' : 'next'
 }
 
 /** HTTP status off an axios error ({response: {status}}) or a fetch error ({status}). */
@@ -458,6 +474,12 @@ export class ReplayUploader {
    * up from sessionStorage until the server has taken a chunk for it.
    */
   trusted = true
+  /**
+   * The recording was refused for good (closed / abandoned): nothing more is
+   * queued or sent for it until `begin()` / `rebase()` points the uploader at
+   * another one. A pagehide keepalive after the refusal sends nothing.
+   */
+  stopped = false
   private pending: QueuedChunk[] = []
   private bytesQueued = 0
   private restored = new WeakSet<QueuedChunk>()
@@ -489,6 +511,7 @@ export class ReplayUploader {
     this.recordingId = recordingId
     this.nextSeq = nextSeq
     this.trusted = opts.trusted ?? true
+    this.stopped = false
     this.attempt = 0
     this.pending = []
     this.bytesQueued = 0
@@ -525,7 +548,7 @@ export class ReplayUploader {
    * names the route it was recorded on and the build (#1368).
    */
   enqueue(events: unknown[], meta: { route?: string; build?: string } = {}): QueuedChunk | null {
-    if (!this.recordingId || events.length === 0) return null
+    if (!this.recordingId || this.stopped || events.length === 0) return null
     let bytes = 2
     try {
       bytes = JSON.stringify(events).length
@@ -581,7 +604,7 @@ export class ReplayUploader {
    * Callers keep this single-flight.
    */
   async drain(keepalive = false): Promise<DrainOutcome> {
-    while (this.recordingId && this.pending.length > 0) {
+    while (this.recordingId && !this.stopped && this.pending.length > 0) {
       if (!this.online()) return 'offline'
       const chunk = this.pending[0]
       const viaKeepalive = keepalive && chunk.bytes <= KEEPALIVE_CHUNK_BYTES
@@ -599,18 +622,21 @@ export class ReplayUploader {
         this.attempt = 0
         this.forget(chunk)
       } catch (err) {
-        const failure = classifyUploadError(errorStatus(err))
+        const status = errorStatus(err)
+        const failure = classifyUploadError(status)
         if (failure === 'retry') {
           this.attempt++
           return 'retry'
         }
         if (failure === 'drop-chunk') {
-          console.warn(`[session-recorder] chunk ${chunk.seq} too large — dropped`)
+          console.warn(
+            `[session-recorder] chunk ${chunk.seq} refused (too large or malformed) — dropped`
+          )
           this.trusted = true
           this.forget(chunk)
           continue
         }
-        if (!this.trusted) {
+        if (!this.trusted && status !== 401) {
           // A resumed id the server won't take (ended, purged, someone
           // else's): the previous page's leftovers can't go anywhere, but
           // this page's chunks — opening full snapshot included — move to
@@ -619,6 +645,7 @@ export class ReplayUploader {
           return 'stale'
         }
         this.discard()
+        this.stopped = true
         return failure === 'closed' ? 'closed' : 'abandoned'
       } finally {
         this.sending = null
@@ -639,6 +666,7 @@ export class ReplayUploader {
     this.recordingId = recordingId
     this.nextSeq = 0
     this.trusted = true
+    this.stopped = false
     this.attempt = 0
     this.pending = []
     this.bytesQueued = 0
@@ -658,6 +686,7 @@ export class ReplayUploader {
    * the server ignores a seq it already holds.
    */
   keepaliveBatch(budget = KEEPALIVE_BUDGET): KeepaliveRequest[] {
+    if (this.stopped) return []
     const queue = this.pending.filter((c) => c !== this.sending)
     return packKeepalive(queue, budget - this.sendingKeepaliveBytes)
   }

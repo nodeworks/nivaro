@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { io } from 'socket.io-client'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { mintWsToken } from '@/lib/socket'
 import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -57,12 +57,7 @@ export function PresenceLiveMap() {
     socket.on('connect', async () => {
       let token = user?.static_token ?? null
       if (!token) {
-        try {
-          const r = await api.get<{ data?: { token?: string }; token?: string }>('/auth/ws-token')
-          token = r.data.data?.token ?? r.data.token ?? null
-        } catch {
-          token = null
-        }
+        token = await mintWsToken()
       }
       if (token) socket.emit('auth', { token })
     })

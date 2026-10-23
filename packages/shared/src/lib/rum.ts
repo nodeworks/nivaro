@@ -11,6 +11,8 @@
  * '/collections/:c/:id') so p75s aggregate per PAGE, not per record.
  */
 
+import { isSignedOut, isSignedOutError, noteUnauthorized } from './signed-out'
+
 interface RumEvent {
   route: string
   kind: 'load' | 'route' | 'rage' | 'dead' | 'widget'
@@ -154,6 +156,11 @@ function watchDeadClicks(currentRoute: () => string): void {
 
 function flush(): void {
   if (queue.length === 0) return
+  // A signed-out tab's beacons are refused (401) every time: drop them until a sign-in.
+  if (isSignedOut()) {
+    queue.length = 0
+    return
+  }
   const body = JSON.stringify({ events: queue.splice(0, queue.length) })
   try {
     const token = tokenProvider?.()
@@ -173,7 +180,13 @@ function flush(): void {
         },
         body,
         keepalive: true
-      }).catch(() => {})
+      })
+        .then(async (r) => {
+          if (r.status !== 401) return
+          const response = await r.json().catch(() => null)
+          if (isSignedOutError({ status: 401, response })) noteUnauthorized(false)
+        })
+        .catch(() => {})
     }
   } catch {
     // never let telemetry throw
