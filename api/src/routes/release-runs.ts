@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { readGateTokens } from '../services/release-gate-tokens.js'
 import {
   cancelRun,
   currentRun,
@@ -172,23 +173,7 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
    * line). A config entry's own `gate.token_env` still wins inside the chain.
    */
   const gateTokensEnv = async (): Promise<Record<string, string>> => {
-    // Best-effort: a registry that cannot be read means no tokens (the gate
-    // then checks /api/ready only and says so), never a release that cannot start.
-    let rows: Array<{ base_url: string; api_token: string }> = []
-    try {
-      rows = await db('nivaro_environment_components')
-        .where('kind', 'api')
-        .whereNotNull('base_url')
-        .whereNotNull('api_token')
-        .select('base_url', 'api_token')
-    } catch {
-      rows = []
-    }
-    const map: Record<string, string> = {}
-    for (const r of rows) {
-      const base = String(r.base_url).trim().replace(/\/+$/, '')
-      if (base && r.api_token) map[base] = String(r.api_token)
-    }
+    const map = await readGateTokens()
     return Object.keys(map).length ? { RELEASE_GATE_TOKENS: JSON.stringify(map) } : {}
   }
 

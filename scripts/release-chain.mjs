@@ -369,8 +369,41 @@ async function snapshotReadiness(cfg, V) {
   }
 }
 
+/**
+ * A chain started from a terminal gets no RELEASE_GATE_TOKENS from the Release
+ * card, so it reads the same map from the Environments registry itself
+ * (scripts/release-gate-tokens.mts → api/src/services/release-gate-tokens.ts).
+ * Best-effort and silent about values: no database, no tokens, and the gate
+ * falls back to /api/ready as before. A config entry's gate.token_env still wins.
+ */
+function loadRegistryGateTokens() {
+  if (process.env.RELEASE_GATE_TOKENS) return
+  const tsx = resolve(ROOT, 'api', 'node_modules', '.bin', 'tsx')
+  if (!existsSync(tsx)) return
+  const r = spawnSync(tsx, [resolve(ROOT, 'scripts', 'release-gate-tokens.mts')], {
+    cwd: resolve(ROOT, 'api'),
+    encoding: 'utf8',
+    timeout: 30_000
+  })
+  const line = String(r.stdout ?? '')
+    .trim()
+    .split('\n')
+    .pop()
+  try {
+    const map = JSON.parse(line || '{}')
+    const n = Object.keys(map).length
+    if (n > 0) {
+      process.env.RELEASE_GATE_TOKENS = JSON.stringify(map)
+      console.log(`  gate tokens: ${n} API(s) from the Environments registry`)
+    }
+  } catch {
+    // no usable registry answer — the gate checks /api/ready only and says so
+  }
+}
+
 async function main() {
   const pushedShas = {}
+  loadRegistryGateTokens()
   const cfg = loadConfig()
   const ch = detectChanges()
   const p = plan(cfg, ch)

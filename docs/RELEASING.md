@@ -132,8 +132,11 @@ verify stage then runs `scripts/release-gate.mjs` against that API:
 
 The last three need an admin gate token. The card hands the chain the token
 each API component holds in the Environments registry (by base URL, in the
-child's environment, never its arguments); a terminal run reads
-`"gate": { "token_env": "NAME" }` on the verify entry. Without a token only
+child's environment, never its arguments). A terminal run reads the same
+registry itself at startup (`scripts/release-gate-tokens.mts`, "gate tokens:
+N API(s) from the Environments registry" in the log); `"gate": { "token_env":
+"NAME" }` on a verify entry still wins. To set or rotate a token: Environments
+→ the environment → its api component → API token (an admin key for that API). Without a token only
 `/api/ready` is checked and the log says so; a token the API refuses fails the
 stage (`### FAILED at verify`) — fix the token, then **Resume from verify**.
 `"gate": { "readiness_tolerance": 5 }` allows a small drop; `"gate": false`
