@@ -1,0 +1,38 @@
+# Traefik v2.4 — single mode. See single.v3.yml.
+http:
+  routers:
+    realtime:
+      entryPoints: [web]
+      rule: >-
+        PathPrefix(`/socket.io/`) || Path(`/api/graphql-ws`) || Path(`/api/graphql/stream`) ||
+        Path(`/api/events/stream`) || Path(`/api/events/views/{id:[^/]+}/stream`)
+      priority: 100
+      service: realtime
+    web:
+      entryPoints: [web]
+      rule: PathPrefix(`/`)
+      priority: 1
+      service: web
+  services:
+    realtime:
+      loadBalancer:
+        sticky:
+          cookie:
+            name: nvr_rt
+            httpOnly: true
+        healthCheck:
+          path: /api/ready
+          interval: 2s
+          timeout: 1s
+        servers:
+          - url: http://toxiproxy:8201
+          - url: http://toxiproxy:8202
+    web:
+      loadBalancer:
+        healthCheck:
+          path: /api/ready
+          interval: 2s
+          timeout: 1s
+        servers:
+          - url: http://toxiproxy:8201
+          - url: http://toxiproxy:8202
