@@ -23,7 +23,17 @@
  *     {last_seen, is_online, is_idle} only — never creates a row;
  *   - refetches GET /api/presence/online on every `presence:changed` and every user_presence
  *     `collection:update`, joining a fetch already in flight (react-query cancelRefetch:false);
- *     `--refetch-debounce-ms` models the debounced client fix, `--refetch off` none at all;
+ *     `--refetch-debounce-ms` models the debounced client fix, `--refetch off` none at all,
+ *     `--row-refetch off` no refetch on user_presence collection updates (the fixed client);
+ *     `--refetch-rule gap10` the shipped rule (packages/shared presence-live.ts): your own
+ *     change refreshes at once; otherwise one pending refresh per tab, 1 s after the first
+ *     change when the last event-driven refresh was ≥ 10 s ago, else at 10 s since it + 0–2 s
+ *     jitter (pair it with `--poll-ms 60000`, the backstop poll);
+ *   - staleness: from a person coming back from idle (presence:idle false → last_active) to
+ *     each open tab's /presence/online showing it (p50/p95/max, and how many never did in 60 s);
+ *   - `--heartbeat-mode on-change` (the fixed client): PATCH only when idle flipped since the
+ *     last one, else {last_active} every 2 min and the full row every 5 min (checked every
+ *     `--heartbeat-ms`, one person-wide beat); default `always` = every tab, every beat;
  *   - reconnects now and then (`--reconnect-every-s`, mean 600 s per tab).
  * Each person flips idle now and then (`--idle-every-s`, mean 120 s) from one of their tabs.
  *
@@ -108,6 +118,13 @@ function onOff(args, key, d) {
   throw new UsageError(`--${key} takes on or off`)
 }
 
+function oneOf(args, key, values, d) {
+  const raw = args[key]
+  if (raw === undefined) return d
+  if (typeof raw === 'string' && values.includes(raw)) return raw
+  throw new UsageError(`--${key} takes ${values.join(' or ')}`)
+}
+
 /** Tokens from flags / env / file (file contents handed in, so this stays pure). */
 export function collectTokens(args, env, fileText) {
   const split = (s) =>
@@ -150,6 +167,9 @@ export function readOptions(args, env = {}, fileText = null) {
     reconnectEveryS: num(args, 'reconnect-every-s', 600, { min: 0 }),
     refetch: onOff(args, 'refetch', true),
     refetchDebounceMs: num(args, 'refetch-debounce-ms', 0, { min: 0, max: 60_000 }),
+    rowRefetch: onOff(args, 'row-refetch', true),
+    refetchRule: oneOf(args, 'refetch-rule', ['every', 'gap10'], 'every'),
+    heartbeatMode: oneOf(args, 'heartbeat-mode', ['always', 'on-change'], 'always'),
     pollMs: num(args, 'poll-ms', 0, { min: 0 }),
     pageAt: onOff(args, 'page-at', false),
     ack: onOff(args, 'ack', true),
@@ -585,6 +605,7 @@ class Runner {
     this.timers = new Set()
     this.reconnects = 0
     this.joinedFetches = 0
+    this.stale = { pending: new Map(), step: [], all: [], never: 0, stepNever: 0, superseded: 0 }
     this.adminOk = true
     this.genLag = monitorEventLoopDelay({ resolution: 20 })
     this.genLag.enable()
@@ -713,13 +734,14 @@ class Runner {
     })
     s.on('presence:changed', (payload) => {
       this.tracker.receive('presence', keysOf('presence:changed', payload), tab.id, Date.now())
-      this.refetch(tab)
+      if (this.o.refetchRule === 'gap10') this.onPresenceGap10(tab, payload)
+      else this.refetch(tab)
     })
     s.on('collection:update', (payload) => {
       if (payload?.collection !== 'user_presence') return
       const ids = keysOf('collection:update', payload)
       this.tracker.receive('row', ids, tab.id, Date.now())
-      this.refetch(tab)
+      if (this.o.rowRefetch) this.refetch(tab)
     })
     if (this.o.ack)
       s.onAny((_event, payload) => {
@@ -783,11 +805,26 @@ class Runner {
       if (p.rowId === null) p.rowId = undefined
       return
     }
+    let body = { last_seen: new Date().toISOString(), is_online: true, is_idle: p.idle }
+    if (this.o.heartbeatMode === 'on-change') {
+      // The fixed client: one beat per person, and only when something changed.
+      const now = Date.now()
+      const beat = (p.beat ??= { idle: null, activeAt: 0, fullAt: 0, busy: false })
+      if (beat.busy) return
+      if (beat.idle !== p.idle || now - beat.fullAt >= 300_000) {
+        beat.fullAt = now
+        beat.activeAt = now
+      } else if (now - beat.activeAt >= 120_000) {
+        beat.activeAt = now
+        body = { last_active: new Date().toISOString() }
+      } else return
+      beat.idle = p.idle
+    }
     this.tracker.write('row', String(p.rowId), Date.now(), this.authedTabIds())
     await this.http('PATCH', `/api/items/user_presence/${p.rowId}`, {
       token: p.token,
       route: 'PATCH /api/items/user_presence/:id',
-      body: { last_seen: new Date().toISOString(), is_online: true, is_idle: p.idle }
+      body
     })
   }
 
@@ -799,6 +836,7 @@ class Runner {
         if (tab && p.userId) {
           p.idle = !p.idle
           this.tracker.write('presence', p.userId, Date.now(), this.authedTabIds())
+          this.noteStale(p)
           tab.socket.emit('presence:idle', { idle: p.idle })
         }
         this.scheduleIdle(p)
@@ -838,6 +876,72 @@ class Runner {
     this.fetchOnline(tab)
   }
 
+  /** The shipped client rule (packages/shared/src/lib/presence-live.ts), per tab. */
+  onPresenceGap10(tab, payload) {
+    if (!this.o.refetch || this.stopping) return
+    const self = String(tab.person.userId ?? '').toUpperCase()
+    const ids = [payload?.user_id, ...(Array.isArray(payload?.user_ids) ? payload.user_ids : [])]
+      .filter(Boolean)
+      .map((x) => String(x).toUpperCase())
+    const fire = () => {
+      if (tab.gapTimer) clearTimeout(tab.gapTimer)
+      tab.gapTimer = null
+      tab.lastRefreshAt = Date.now()
+      this.fetchOnline(tab)
+    }
+    if (self && payload?.many !== true && ids.includes(self)) return fire()
+    if (tab.gapTimer) return
+    const since = Date.now() - (tab.lastRefreshAt ?? 0)
+    const delay = since >= 10_000 ? 1000 : 10_000 - Math.max(0, since) + Math.random() * 2000
+    tab.gapTimer = this.timer(fire, delay)
+  }
+
+  /**
+   * Back from idle (person `p`): every open tab's list should show it (staleness). Only this
+   * direction is visible at once — the server stamps last_active, which /presence/online
+   * returns; going idle shows only after IDLE_AFTER_MS of no input, by design.
+   */
+  noteStale(p) {
+    if (p.idle) return
+    const key = String(p.userId).toUpperCase()
+    const prev = this.stale.pending.get(key)
+    if (prev) this.stale.superseded += prev.waiting.size
+    this.stale.pending.set(key, { idle: p.idle, at: Date.now(), waiting: new Set(this.authedTabIds()) })
+  }
+
+  checkStale(tab, body) {
+    const rows = Array.isArray(body?.data) ? body.data : null
+    if (!rows || !this.stale.pending.size) return
+    const now = Date.now()
+    for (const [key, w] of this.stale.pending) {
+      if (!w.waiting.has(tab.id)) continue
+      const row = rows.find((r) => String(r.user_id).toUpperCase() === key)
+      const active = row?.last_active ? Date.parse(row.last_active) : 0
+      // 1 s allowance for the container clock; flips are minutes apart, so an older stamp
+      // cannot pass for this one.
+      if (row && active >= w.at - 1000) {
+        w.waiting.delete(tab.id)
+        this.stale.step.push(now - w.at)
+        this.stale.all.push(now - w.at)
+      }
+    }
+  }
+
+  sweepStale(now) {
+    for (const [key, w] of this.stale.pending) {
+      if (now - w.at < 60_000 && w.waiting.size) continue
+      this.stale.never += w.waiting.size
+      this.stale.stepNever += w.waiting.size
+      this.stale.pending.delete(key)
+    }
+  }
+
+  staleFigures(list, never) {
+    const v = [...list].sort((a, b) => a - b)
+    const at = (q) => (v.length ? v[Math.min(v.length - 1, Math.floor(q * v.length))] : null)
+    return { n: v.length, p50_ms: at(0.5), p95_ms: at(0.95), max_ms: v.length ? v[v.length - 1] : null, never: never }
+  }
+
   fetchOnline(tab) {
     if (this.stopping) return
     if (tab.inflight) {
@@ -847,9 +951,13 @@ class Runner {
     tab.inflight = this.http('GET', '/api/presence/online', {
       token: tab.person.token,
       route: 'GET /api/presence/online'
-    }).finally(() => {
-      tab.inflight = null
     })
+      .then((r) => {
+        if (r?.ok) this.checkStale(tab, r.data)
+      })
+      .finally(() => {
+        tab.inflight = null
+      })
   }
 
   async sampleServer() {
@@ -877,7 +985,10 @@ class Runner {
       this.stopping = true
     }
     process.on('SIGINT', onSig)
-    this.timer(() => this.tracker.sweep(Date.now()), 1000, true)
+    this.timer(() => {
+      this.tracker.sweep(Date.now())
+      this.sweepStale(Date.now())
+    }, 1000, true)
     this.timer(() => void this.sampleServer(), this.o.sampleS * 1000, true)
     console.log(tableHeader())
     for (const step of plan) {
@@ -904,11 +1015,14 @@ class Runner {
         routes,
         client_queued: this.stepRoutes.queued,
         delivery: this.tracker.takeStep(this.o.targetMs),
+        staleness: this.staleFigures(this.stale.step, this.stale.stepNever),
         server: this.server.summary(),
         generator_lag_p99_ms: Math.round(this.genLag.percentile(99) / 1e6),
         generator_lag_max_ms: Math.round(this.genLag.max / 1e6)
       }
       steps.push(row)
+      this.stale.step = []
+      this.stale.stepNever = 0
       console.log(tableRow(row))
       this.stepRoutes = new RouteBook()
       this.server = new ServerBook()
@@ -945,7 +1059,7 @@ function printPlan(o, plan, est) {
     `Steps    ${plan.map((s) => `${s.label} ${s.people}p ${Math.round(s.durationMs / 1000)}s`).join(' · ')}`
   )
   console.log(
-    `Per tab  ping ${o.pingMs / 1000}s · heartbeat ${o.heartbeatMs ? `${o.heartbeatMs / 1000}s` : 'off'} · idle flip ~${o.idleEveryS || '–'}s/person · reconnect ~${o.reconnectEveryS || '–'}s · refetch ${o.refetch ? (o.refetchDebounceMs ? `debounced ${o.refetchDebounceMs} ms` : 'every event') : 'off'}`
+    `Per tab  ping ${o.pingMs / 1000}s · heartbeat ${o.heartbeatMs ? `${o.heartbeatMs / 1000}s` : 'off'} · idle flip ~${o.idleEveryS || '–'}s/person · reconnect ~${o.reconnectEveryS || '–'}s · refetch ${o.refetch ? (o.refetchDebounceMs ? `debounced ${o.refetchDebounceMs} ms` : 'every event') : 'off'}${o.rowRefetch ? '' : ' (not on row updates)'} · heartbeat ${o.heartbeatMode} · rule ${o.refetchRule}`
   )
   console.log(
     `Expected at full load (before any server coalescing): ${est.writes_per_s} presence writes/s → ${est.deliveries_per_s} deliveries/s`
@@ -1039,6 +1153,7 @@ async function main() {
       joined_refetches: runner.joinedFetches,
       reconnects: runner.reconnects,
       delivery: runner.tracker.total(o.targetMs),
+      staleness: { ...runner.staleFigures(runner.stale.all, runner.stale.never), superseded: runner.stale.superseded },
       server_metrics: runner.adminOk ? 'sampled' : 'unavailable (the admin token was refused)'
     }
   }
@@ -1050,6 +1165,10 @@ async function main() {
   const d = report.totals.delivery
   console.log(
     `Delivery: ${d.deliveries} deliveries, p50 ${d.p50_ms} ms, p95 ${d.p95_ms} ms, p99 ${d.p99_ms} ms, ${d.within_target_pct}% within ${o.targetMs} ms, ${d.missed} missed`
+  )
+  const st = report.totals.staleness
+  console.log(
+    `Staleness (back from idle → every tab's list shows it): ${st.n} tab views, p50 ${st.p50_ms} ms, p95 ${st.p95_ms} ms, max ${st.max_ms} ms, ${st.never} never within 60 s`
   )
   if (!runner.adminOk) console.log('Server lag/pool: unavailable — pass an admin --admin-token')
   if (o.out) {

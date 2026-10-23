@@ -1,0 +1,43 @@
+# Generated variant of single.v3.yml with a third web process (rtci.sh up … --web3).
+# Traefik v3 — single mode (today's build): web-1/web-2 serve sockets themselves. The same paths
+# as tier mode get the sticky cookie (socket.io long-polling needs it), so the suites run the
+# same way against both modes.
+http:
+  routers:
+    realtime:
+      entryPoints: [web]
+      rule: >-
+        PathPrefix(`/socket.io/`) || Path(`/api/graphql-ws`) || Path(`/api/graphql/stream`) ||
+        Path(`/api/events/stream`) || PathRegexp(`^/api/events/views/[^/]+/stream$`)
+      priority: 100
+      service: realtime
+    web:
+      entryPoints: [web]
+      rule: PathPrefix(`/`)
+      priority: 1
+      service: web
+  services:
+    realtime:
+      loadBalancer:
+        sticky:
+          cookie:
+            name: nvr_rt
+            httpOnly: true
+        healthCheck:
+          path: /api/ready
+          interval: 2s
+          timeout: 1s
+        servers:
+          - url: http://toxiproxy:8201
+          - url: http://toxiproxy:8202
+          - url: http://toxiproxy:8203
+    web:
+      loadBalancer:
+        healthCheck:
+          path: /api/ready
+          interval: 2s
+          timeout: 1s
+        servers:
+          - url: http://toxiproxy:8201
+          - url: http://toxiproxy:8202
+          - url: http://toxiproxy:8203

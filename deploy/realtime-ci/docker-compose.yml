@@ -1,0 +1,349 @@
+# Realtime tier test stack. Fully isolated: its own MSSQL (an empty database
+# the API's boot migrations fill), Redis, toxiproxy and Traefik. Nothing here
+# ever reaches EFP_Development, staging or production.
+#
+#   deploy/realtime-ci/rtci.sh up [tier|single] [--image <tag>]   # build, start, seed
+#   node tests/realtime/run.mjs --suite parity                    # see tests/realtime/README.md
+#   deploy/realtime-ci/rtci.sh down                               # stop and remove volumes
+#
+# Topology (tier mode):
+#
+#   test runner ─▶ traefik (v3 :24080, v2.4 :24082 with --v2)
+#                    ├─ /socket.io, /api/graphql-ws, SSE paths ─▶ toxiproxy rt1_http/rt2_http ─▶ rt-1, rt-2
+#                    │      (cookie sticky: nvr_rt)
+#                    └─ everything else ─▶ toxiproxy web1_http/web2_http ─▶ web-1, web-2 (SOCKETS=off)
+#   web-1, web-2, rt-1, rt-2, worker ─▶ toxiproxy redis_<node> ─▶ redis      (one proxy per process,
+#                                     ─▶ toxiproxy mssql ─▶ mssql              so one can be partitioned)
+#
+# single mode = today's build: web-1/web-2 serve sockets themselves (SOCKETS on) and Traefik
+# sends the socket/SSE paths to them with the same sticky cookie; no rt-* services.
+#
+# Host ports (127.0.0.1 only) stay off Rob's dev ports (3055/3056/3057/1433/6379/6679/8474) and
+# chaos-ci's (13055/11433/16379/18474). All of them are in rtci.env — the one place they live.
+name: nivaro-realtime-ci
+
+x-api-env: &api-env
+  NODE_ENV: production
+  PORT: '3055'
+  DB_HOST: toxiproxy
+  DB_PORT: '7433'
+  DB_DATABASE: nivaro_rtci
+  DB_USER: sa
+  DB_PASSWORD: Rtci_Passw0rd_2026!
+  DB_ENCRYPT: 'false'
+  DB_TRUST_SERVER_CERT: 'true'
+  DB_POOL_MAX: '20'
+  DB_POOL_BACKGROUND_MAX: '5'
+  SESSION_SECRET: realtime-ci-session-secret-0123456789abcdef
+  COOKIE_SECURE: 'false'
+  TRUST_PROXY: 'true'
+  OIDC_ENABLED: 'false'
+  PUBLIC_URL: http://localhost:${RTCI_HTTP_PORT:-24080}
+  ADMIN_URL: http://localhost:${RTCI_HTTP_PORT:-24080}
+  CACHE_WARM: 'off'
+  MIGRATION_SAFE_MODE: 'true'
+  BOOT_DEPS_WAIT_MS: '180000'
+  SHUTDOWN_DRAIN_DELAY_MS: '0'
+  SOCKET_SWEEP_MS: '5000'
+  GRAPHQL_WS_SIGNIN_CHECK_MS: '5000'
+  # on (default) | off — per-message deflate; the load suite measures both
+  # (RTCI_SOCKET_COMPRESSION=off rtci.sh compose up -d --force-recreate rt-1 rt-2).
+  SOCKET_COMPRESSION: ${RTCI_SOCKET_COMPRESSION:-on}
+  METRICS_TOKEN: rtci-metrics-token-0123456789abcdef
+  REALTIME_ACK_EVERY: '1'
+  NIVARO_HEALTHCHECK_PATH: /api/ready
+  LOG_LEVEL: ${RTCI_LOG_LEVEL:-info}
+  # Tests only: the realtime suites read these back from /api/version and the roster.
+  RTCI: '1'
+
+x-api: &api
+  image: ${RTCI_IMAGE:-nivaro-rtci:local}
+  restart: 'no'
+  stop_grace_period: 15s
+  healthcheck:
+    test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3055/api/ready >/dev/null || exit 1']
+    interval: 3s
+    timeout: 3s
+    retries: 400
+    start_period: 20s
+
+services:
+  # SQL Server 2022 on amd64 hosts (CI). An arm64 Mac whose Docker runs amd64 under qemu (no
+  # Rosetta) crashes sqlservr, so rtci.sh switches to Azure SQL Edge there (same engine family,
+  # arm64 native) — RTCI_MSSQL_IMAGE / RTCI_MSSQL_PLATFORM override either way.
+  mssql:
+    image: ${RTCI_MSSQL_IMAGE:-mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04}
+    platform: ${RTCI_MSSQL_PLATFORM:-linux/amd64}
+    # Azure SQL Edge as its default non-root user sometimes fails its first start on a fresh
+    # volume ("The system directory [/.system] could not be created. Errno [13]"): run as root
+    # and let it retry.
+    user: root
+    restart: on-failure:5
+    environment:
+      ACCEPT_EULA: 'Y'
+      MSSQL_SA_PASSWORD: Rtci_Passw0rd_2026!
+      MSSQL_PID: Developer
+      MSSQL_MEMORY_LIMIT_MB: '2560'
+    ports:
+      - '127.0.0.1:${RTCI_MSSQL_PORT:-24433}:1433'
+    # Data in memory, not on Docker's disk: every run starts from an empty database anyway, and a
+    # long soak writes a lot of api_logs/activity rows (Docker Desktop's disk filled up twice).
+    tmpfs:
+      - /var/opt/mssql:size=${RTCI_MSSQL_TMPFS:-4g}
+
+  # Waits for the server (sqlcmd from the 2022 image — fine under qemu, only sqlservr is not),
+  # then creates the empty database the boot migrations (worker first, then web) fill.
+  mssql-init:
+    image: mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04
+    platform: linux/amd64
+    depends_on:
+      - mssql
+    restart: 'no'
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        for i in $$(seq 1 180); do
+          /opt/mssql-tools18/bin/sqlcmd -C -S mssql -U sa -P 'Rtci_Passw0rd_2026!' -b -l 3 -Q 'select 1' >/dev/null 2>&1 && break
+          sleep 2
+        done
+        /opt/mssql-tools18/bin/sqlcmd -C -S mssql -U sa -P 'Rtci_Passw0rd_2026!' -b -l 5 \
+          -Q "IF DB_ID('nivaro_rtci') IS NULL CREATE DATABASE nivaro_rtci"
+
+  # `rtci.sh sql "<query>"` runs through this (profile tools — never started by `up`).
+  sqlcmd:
+    image: mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04
+    platform: linux/amd64
+    profiles: ['tools']
+    entrypoint:
+      - /opt/mssql-tools18/bin/sqlcmd
+      - -C
+      - -S
+      - mssql
+      - -U
+      - sa
+      - -P
+      - Rtci_Passw0rd_2026!
+      - -d
+      - nivaro_rtci
+      - -I
+      - -b
+      - -W
+      - -s
+      - '|'
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '127.0.0.1:${RTCI_REDIS_PORT:-24379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ['-host=0.0.0.0', '-config=/config/toxiproxy.json']
+    volumes:
+      - ./toxiproxy.json:/config/toxiproxy.json:ro
+    ports:
+      - '127.0.0.1:${RTCI_TOXI_PORT:-24474}:8474'
+
+  # ── API processes ──────────────────────────────────────────────────────────
+  # The worker boots first and runs the migrations; everything else waits for it.
+  worker:
+    <<: *api
+    depends_on:
+      mssql-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+    environment:
+      <<: *api-env
+      NIVARO_ROLE: worker
+      REDIS_URL: redis://toxiproxy:7021
+      CRON_TICKS: ${RTCI_WORKER_CRONS:-on}
+      SOCKETS: ${RTCI_WEB_SOCKETS:-off}
+    ports:
+      - '127.0.0.1:${RTCI_WORKER_PORT:-24121}:3055'
+
+  web-1:
+    <<: *api
+    depends_on:
+      worker:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+      NIVARO_ROLE: web
+      REDIS_URL: redis://toxiproxy:7001
+      CRON_TICKS: 'off'
+      SOCKETS: ${RTCI_WEB_SOCKETS:-off}
+    ports:
+      - '127.0.0.1:${RTCI_WEB1_PORT:-24101}:3055'
+
+  web-2:
+    <<: *api
+    image: ${RTCI_IMAGE_WEB2:-${RTCI_IMAGE:-nivaro-rtci:local}}
+    depends_on:
+      worker:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+      NIVARO_ROLE: web
+      REDIS_URL: redis://toxiproxy:7002
+      CRON_TICKS: 'off'
+      SOCKETS: ${RTCI_WEB_SOCKETS:-off}
+    ports:
+      - '127.0.0.1:${RTCI_WEB2_PORT:-24102}:3055'
+
+  # A third web process (`rtci.sh up … --web3`): production plans more web replicas, and the
+  # cross-process board/journal paths are only fully exercised with more than two.
+  web-3:
+    <<: *api
+    profiles: ['web3']
+    depends_on:
+      worker:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+      NIVARO_ROLE: web
+      REDIS_URL: redis://toxiproxy:7003
+      CRON_TICKS: 'off'
+      SOCKETS: ${RTCI_WEB_SOCKETS:-off}
+    ports:
+      - '127.0.0.1:${RTCI_WEB3_PORT:-24103}:3055'
+
+  rt-1:
+    <<: *api
+    image: ${RTCI_IMAGE_RT1:-${RTCI_IMAGE:-nivaro-rtci:local}}
+    profiles: ['tier']
+    depends_on:
+      worker:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+      NIVARO_ROLE: realtime
+      REDIS_URL: redis://toxiproxy:7011
+      CRON_TICKS: 'off'
+    ports:
+      - '127.0.0.1:${RTCI_RT1_PORT:-24111}:3055'
+
+  rt-2:
+    <<: *api
+    image: ${RTCI_IMAGE_RT2:-${RTCI_IMAGE:-nivaro-rtci:local}}
+    profiles: ['tier']
+    depends_on:
+      worker:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+      NIVARO_ROLE: realtime
+      REDIS_URL: redis://toxiproxy:7012
+      CRON_TICKS: 'off'
+    ports:
+      - '127.0.0.1:${RTCI_RT2_PORT:-24112}:3055'
+
+  # ── Proxies ────────────────────────────────────────────────────────────────
+  # Dynamic config picked by mode: traefik/<mode>.v3.yml (rtci.sh sets RTCI_MODE).
+  traefik:
+    image: traefik:v3.6.14
+    command:
+      - --entrypoints.web.address=:80
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --ping=true
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --providers.file.watch=true
+      - --log.level=${RTCI_TRAEFIK_LOG:-WARN}
+    volumes:
+      - ./traefik/${RTCI_TRAEFIK_CFG:-${RTCI_MODE:-tier}}.v3.yml:/etc/traefik/dynamic.yml:ro
+    ports:
+      - '127.0.0.1:${RTCI_HTTP_PORT:-24080}:80'
+      - '127.0.0.1:${RTCI_DASH_PORT:-24088}:8080'
+    depends_on:
+      - toxiproxy
+
+  # Traefik v2.4 (what production ran before the v3 move) — `rtci.sh up --v2`.
+  traefik-v2:
+    image: traefik:v2.4
+    profiles: ['v2']
+    command:
+      - --entrypoints.web.address=:80
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --providers.file.watch=true
+      - --log.level=${RTCI_TRAEFIK_LOG:-WARN}
+    volumes:
+      - ./traefik/${RTCI_TRAEFIK_CFG:-${RTCI_MODE:-tier}}.v2.yml:/etc/traefik/dynamic.yml:ro
+    ports:
+      - '127.0.0.1:${RTCI_HTTP_V2_PORT:-24082}:80'
+    depends_on:
+      - toxiproxy
+
+  # ── Cloud mode (profile cloud, `node tests/realtime/run.mjs --suite cloud`) ─────────────────
+  # Two tenants on Postgres (as the shared/Neon tiers run), tenant resolved per request and per
+  # socket from X-Tenant-Host / Host, two API replicas on one Redis (channel prefix of their own).
+  # The realtime role refuses cloud mode, so these are single-role processes: this checks that
+  # no event crosses tenants through the Redis adapter or the event stream.
+  pg:
+    image: postgres:16-alpine
+    profiles: ['cloud']
+    environment:
+      POSTGRES_USER: rtci
+      POSTGRES_PASSWORD: rtci_pg_pw
+      POSTGRES_DB: postgres
+    volumes:
+      - ./cloud-init.sql:/docker-entrypoint-initdb.d/cloud-init.sql:ro
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - '127.0.0.1:${RTCI_PG_PORT:-24432}:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U rtci -d cloud_meta']
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  cloud-1: &cloud
+    image: ${RTCI_IMAGE:-nivaro-rtci:local}
+    profiles: ['cloud']
+    restart: 'no'
+    depends_on:
+      pg:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: &cloud-env
+      NODE_ENV: production
+      PORT: '3055'
+      CLOUD_META_DB_URL: postgres://rtci:rtci_pg_pw@pg:5432/cloud_meta
+      PROVISION_SECRET: rtci-provision-secret
+      REDIS_URL: redis://redis:6379
+      REDIS_CHANNEL_PREFIX: 'rtci-cloud:'
+      SESSION_SECRET: realtime-ci-session-secret-0123456789abcdef
+      COOKIE_SECURE: 'false'
+      OIDC_ENABLED: 'false'
+      PUBLIC_URL: http://localhost:${RTCI_CLOUD1_PORT:-24131}
+      ADMIN_URL: http://localhost:${RTCI_CLOUD1_PORT:-24131}
+      CRON_TICKS: 'off'
+      CACHE_WARM: 'off'
+      SOCKET_SWEEP_MS: '5000'
+      LOG_LEVEL: ${RTCI_LOG_LEVEL:-info}
+    ports:
+      - '127.0.0.1:${RTCI_CLOUD1_PORT:-24131}:3055'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3055/api/ready >/dev/null || exit 1']
+      interval: 3s
+      timeout: 3s
+      retries: 200
+      start_period: 10s
+
+  cloud-2:
+    <<: *cloud
+    ports:
+      - '127.0.0.1:${RTCI_CLOUD2_PORT:-24132}:3055'
+
+volumes:
+  pg-data:
