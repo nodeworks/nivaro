@@ -12,7 +12,7 @@ import { INSTANCE_ID } from './instance-roster.js'
  * steady state) and the concurrency sample. A web process with SOCKETS=off holds no sockets, so
  * every realtime process publishes its share here and those processes read it back:
  *
- *   nvr:rt:board:<slot>:<process>:live   viewers + page pings + counts, every 2 s, 10 s TTL
+ *   nvr:rt:board:<slot>:<process>:live   viewers + page pings + counts, every 1 s, 10 s TTL
  *   nvr:rt:board:<slot>:<process>:stats  the socket list and room sizes, every 10 s, 30 s TTL
  *   nvr:rt:board:<slot>:nodes            registry: sorted set of publishing processes, score =
  *                                        their last publish (ms); entries older than 60 s go
@@ -21,7 +21,7 @@ import { INSTANCE_ID } from './instance-roster.js'
  * each other's people. A reader asks the registry which processes published lately and MGETs
  * their keys: two round trips per read, whatever the size of the key space (no SCAN).
  *
- * A reader polls the live keys every 2 s and the stats keys every 10 s into memory, so the
+ * A reader polls the live keys every 1 s and the stats keys every 10 s into memory, so the
  * socket plugin's getters stay synchronous and no request waits on another process (no
  * fetchSockets quorum). A realtime process that stopped publishing drops out with its TTL; one
  * that stops gracefully withdraws its keys at once (withdrawBoard).
@@ -29,7 +29,9 @@ import { INSTANCE_ID } from './instance-roster.js'
  * viewer lists) read: a deployment without the tier never touches these keys.
  */
 
-const LIVE_MS = 2_000
+// 1 s, not 2: an entry is then at most ~2 s old when read (publish + read interval), inside the
+// 3 s the notification skip trusts — at 2 s about a quarter of real viewers read as too old.
+const LIVE_MS = 1_000
 const STATS_MS = 10_000
 const LIVE_TTL_S = 10
 const STATS_TTL_S = 30
@@ -391,7 +393,7 @@ export function boardHasUser(userId: string): boolean {
 
 /**
  * Members of `room` wherever they are: this process's sockets, plus — on a SOCKETS=off process —
- * the realtime processes' (from the board, up to ~4 s old). For the "is anyone listening?"
+ * the realtime processes' (from the board, up to ~2 s old). For the "is anyone listening?"
  * checks in front of an emit; the emit itself rides the adapter either way.
  */
 export function roomListeners(

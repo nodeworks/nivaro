@@ -20,7 +20,7 @@ import {
   specifiedDirectives
 } from 'graphql'
 import type { Knex } from 'knex'
-import { db } from '../db/index.js'
+import { db, isMssql } from '../db/index.js'
 import {
   domainMutationFields,
   domainQueryFields,
@@ -489,6 +489,35 @@ async function applyNestedListArgs(
  * autosaves, settings, rules — and only a change here needs a new schema).
  */
 export async function schemaInputsFingerprint(): Promise<string> {
+  const bound = [...(await boundCollections())].sort()
+  // SQL Server: one row per table from the server (count + two checksums of every column), so
+  // nothing is shipped or hashed on the event loop. Other dialects hash the rows here.
+  let mssql = false
+  try {
+    mssql = isMssql()
+  } catch {
+    /* a stubbed database module (tests): the portable read */
+  }
+  if (mssql) {
+    try {
+      const rows = (await db.raw(
+        `SELECT 'c' AS t, COUNT(*) AS n, CHECKSUM_AGG(BINARY_CHECKSUM(*)) AS h,
+                SUM(CAST(BINARY_CHECKSUM(*) AS BIGINT)) AS s FROM nivaro_collections
+         UNION ALL SELECT 'f', COUNT(*), CHECKSUM_AGG(BINARY_CHECKSUM(*)),
+                SUM(CAST(BINARY_CHECKSUM(*) AS BIGINT)) FROM nivaro_fields
+         UNION ALL SELECT 'r', COUNT(*), CHECKSUM_AGG(BINARY_CHECKSUM(*)),
+                SUM(CAST(BINARY_CHECKSUM(*) AS BIGINT)) FROM nivaro_relations`
+      )) as Array<{ t: string; n: unknown; h: unknown; s: unknown }>
+      const parts = [...rows]
+        .sort((a, b) => String(a.t).localeCompare(String(b.t)))
+        .map((r) => `${r.t}:${String(r.n)}:${String(r.h)}:${String(r.s)}`)
+      return createHash('sha1')
+        .update(JSON.stringify([parts, bound]))
+        .digest('hex')
+    } catch {
+      /* fall through to the portable read */
+    }
+  }
   const rowsOf = async (table: string) =>
     ((await db(table).select('*')) as Array<Record<string, unknown>>)
       .map((r) => JSON.stringify(r))
@@ -498,7 +527,6 @@ export async function schemaInputsFingerprint(): Promise<string> {
     rowsOf('nivaro_fields'),
     rowsOf('nivaro_relations')
   ])
-  const bound = [...(await boundCollections())].sort()
   return createHash('sha1')
     .update(JSON.stringify([collections, fields, relations, bound]))
     .digest('hex')

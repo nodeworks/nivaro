@@ -5,11 +5,19 @@ import { describe, expect, it, vi } from 'vitest'
  * POST /presence/record-viewers answers counts only for records the caller may read (second
  * review of post-mortem 3.3: with the realtime board the counts are cluster-wide).
  */
+const caller = vi.hoisted(() => ({
+  current: {
+    user: { id: 'u-1', role: 'r-1' } as Record<string, unknown>,
+    isAdmin: false,
+    scopes: null as unknown
+  }
+}))
 vi.mock('../../../middleware/authenticate.js', async (orig) => ({
   ...(await orig<typeof import('../../../middleware/authenticate.js')>()),
-  requireAuth: async (req: { user?: unknown; isAdmin?: boolean }) => {
-    req.user = { id: 'u-1', role: 'r-1' }
-    req.isAdmin = false
+  requireAuth: async (req: { user?: unknown; isAdmin?: boolean; apiKeyScopes?: unknown }) => {
+    req.user = caller.current.user
+    req.isAdmin = caller.current.isAdmin
+    if (caller.current.scopes) req.apiKeyScopes = caller.current.scopes
   },
   requireAdmin: async (req: { user?: unknown; isAdmin?: boolean }) => {
     req.user = { id: 'admin', role: 'r-admin' }
@@ -31,12 +39,13 @@ vi.mock('../../../plugins/socketio.js', async (orig) => ({
     { collection: 'secrets', item: '9', viewers: [{ id: 'd', name: 'D' }] }
   ]
 }))
-const visible = vi.fn(async (_u: unknown, collection: string, ids: string[]) =>
-  collection === 'projects' ? ids.filter((id) => id !== '2') : []
+const visible = vi.fn(async (_u: unknown, collection: string, ids: string[], admin?: boolean) =>
+  admin ? ids : collection === 'projects' ? ids.filter((id) => id !== '2') : []
 )
 vi.mock('../../../services/socket-access.js', async (orig) => ({
   ...(await orig<typeof import('../../../services/socket-access.js')>()),
-  visibleRecordIds: (u: unknown, c: string, ids: string[]) => visible(u, c, ids)
+  visibleRecordIds: (u: unknown, c: string, ids: string[], admin?: boolean) =>
+    visible(u, c, ids, admin)
 }))
 
 describe('POST /presence/record-viewers', () => {
@@ -62,6 +71,42 @@ describe('POST /presence/record-viewers', () => {
     expect(visible).toHaveBeenCalledTimes(2)
     expect(visible.mock.calls[0][2]).toEqual(['1', '2'])
     await app.close()
+  })
+})
+
+describe('POST /presence/record-viewers with an admin API key', () => {
+  it('keeps to the key: its collection scopes, then the full read gate', async () => {
+    const scopes = [{ collection: 'projects', actions: ['read'] }]
+    caller.current = {
+      user: { id: 'svc', role: 'r-admin', api_key_scopes: scopes },
+      isAdmin: true,
+      scopes
+    }
+    visible.mockClear()
+    try {
+      const { recordViewersRoutes } = await import('../../../routes/realtime.js')
+      const app = Fastify()
+      await app.register(recordViewersRoutes)
+      const res = await app.inject({
+        method: 'POST',
+        url: '/record-viewers',
+        payload: {
+          pairs: [
+            { collection: 'projects', item_id: '1' },
+            { collection: 'projects', item_id: '2' },
+            { collection: 'secrets', item_id: '9' }
+          ]
+        }
+      })
+      // `secrets` is outside the key's scopes; `projects` went through the gate, not the
+      // admin short cut (which would have counted record 2 too).
+      expect(res.json().data).toEqual({ 'projects:1': 1 })
+      expect(visible).toHaveBeenCalledTimes(1)
+      expect(visible.mock.calls[0][3]).toBe(false)
+      await app.close()
+    } finally {
+      caller.current = { user: { id: 'u-1', role: 'r-1' }, isAdmin: false, scopes: null }
+    }
   })
 })
 

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
-import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { checkApiKeyScope, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import {
   emitForceRefresh,
   getClusterClientVersionGroups,
@@ -64,9 +64,15 @@ export async function recordViewersRoutes(app: FastifyInstance): Promise<void> {
       }
       const readable = new Set<string>()
       const user = req.user as User
-      for (const [collection, ids] of byCollection)
-        for (const id of await visibleRecordIds(user, collection, [...ids], req.isAdmin))
+      // An API key narrows even an administrator: its collection scopes first, then the full
+      // read gate (never the admin short cut) so its row restrictions apply too.
+      const keyNarrowed = !!(user.api_key_scopes || user.api_key_scope_restrictions?.length)
+      const admin = !!req.isAdmin && !keyNarrowed
+      for (const [collection, ids] of byCollection) {
+        if (!checkApiKeyScope(req, 'read', collection)) continue
+        for (const id of await visibleRecordIds(user, collection, [...ids], admin))
           readable.add(`${collection}:${id}`)
+      }
       for (const p of pairs) {
         if (!p?.collection || p.item_id == null) continue
         if (!readable.has(`${p.collection}:${p.item_id}`)) continue

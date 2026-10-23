@@ -106,10 +106,10 @@ not care. So:
   page, the socket list and room sizes (Realtime console, Traffic Map, chaos steady state), the
   concurrency sample, and "is anyone watching?" before the traffic feed, AI call feed, flow
   firehose and similar emits. Each realtime process publishes its share to Redis — the
-  **realtime board**, `nvr:rt:board:<slot>:<process>:live` every 2 s (10 s TTL) and `:stats`
+  **realtime board**, `nvr:rt:board:<slot>:<process>:live` every 1 s (10 s TTL) and `:stats`
   every 10 s, listed in the registry `nvr:rt:board:<slot>:nodes` (a sorted set by last
   publish) — and every `SOCKETS=off` process reads it back into memory (registry + one MGET, no
-  key scan), so these answers are at most ~4 s old (the socket list ~20 s) and no request waits
+  key scan), so these answers are at most ~2 s old (the socket list ~20 s) and no request waits
   on another process. A process that serves sockets answers from its own, as before. An in-app
   notification is skipped only on a board entry younger than 3 s (a deliver beats a wrong skip),
   and a realtime process takes its entries off the board as its drain starts.
