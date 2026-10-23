@@ -827,6 +827,70 @@ describe('secret names', () => {
   })
 })
 
+describe('validateSpec draft vs publish', () => {
+  const half = {
+    v: 1,
+    fields: [
+      { id: 'a', key: 'x', type: 'text', include: 'always', value: { source: 'path', path: '' } },
+      { id: 'b', key: 'y', type: 'text', include: 'always', value: { source: 'secret', name: '' } },
+      {
+        id: 'c',
+        key: 'n',
+        type: 'number',
+        include: 'always',
+        value: { source: 'secret', name: 'token' }
+      },
+      {
+        id: 'd',
+        key: 'l',
+        type: 'list',
+        include: 'always',
+        list: { source: '', item: 'line', scalar: true },
+        children: []
+      },
+      { id: 'e', key: 'p', type: 'text', include: 'always', rules: { pattern: '([a-' } }
+    ]
+  }
+
+  it('draft lets incomplete rows through', () => {
+    expect(validateSpec(half, { mode: 'draft' }).ok).toBe(true)
+  })
+
+  it('publish (the default) requires every row complete', () => {
+    const r = validateSpec(half)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.errors.join('\n')).toMatch(/fields\[0\]\.value\.path must be a path/)
+    expect(r.errors.join('\n')).toMatch(/fields\[1\]\.value\.name must name a secret/)
+    expect(r.errors.join('\n')).toMatch(/secret can only be sent as text/)
+    expect(r.errors.join('\n')).toMatch(/a list needs list.source/)
+    expect(r.errors.join('\n')).toMatch(/scalar list needs exactly one child/)
+    expect(r.errors.join('\n')).toMatch(/rules\.pattern/)
+  })
+
+  it('draft still refuses the wrong structure and types', () => {
+    const r = validateSpec(
+      {
+        v: 1,
+        fields: [
+          { id: 'a', key: 1, type: 'texty', include: 'sometimes' },
+          { id: 'a', key: 'b', type: 'list', include: 'always', list: { source: 3 } },
+          { id: 'c', key: 'c', type: 'text', include: 'always', value: { source: 'path', path: 5 } }
+        ]
+      },
+      { mode: 'draft' }
+    )
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.errors.join('\n')).toMatch(/key must be text/)
+    expect(r.errors.join('\n')).toMatch(/unknown type/)
+    expect(r.errors.join('\n')).toMatch(/include must be/)
+    expect(r.errors.join('\n')).toMatch(/duplicate id/)
+    expect(r.errors.join('\n')).toMatch(/list needs list.source/)
+    expect(r.errors.join('\n')).toMatch(/path must be a path/)
+  })
+})
+
 describe('validateSpec', () => {
   it('accepts a well-formed spec', () => {
     const s: MapSpec = spec([

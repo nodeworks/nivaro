@@ -25,6 +25,7 @@ import {
 import {
   assertRecordCollection,
   CollectionRefusedError,
+  contextKeys,
   createTemplate,
   deleteTemplate,
   RecordNotFoundError,
@@ -74,7 +75,11 @@ function statusOf(row: TemplateRow): 'live' | 'draft' | 'unpublished' {
 /** The signed-in admin (requireAdmin ran): records are read as them. */
 const reader = (req: FastifyRequest): User => req.user as User
 
-/** A map body must parse and pass validateSpec; code is any text. Null = fine. */
+/**
+ * A map body must parse and pass validateSpec; code is any text. Null = fine.
+ * Draft saves, previews of an unsaved draft and new templates use the 'draft'
+ * strength: half-built rows are allowed and show up as preview problems.
+ */
 function bodyErrors(input: Partial<Body> | undefined): string[] | null {
   if (!input || !isMode(input.mode)) return ['mode must be map or code']
   if (typeof input.body !== 'string') return ['body must be text']
@@ -85,7 +90,7 @@ function bodyErrors(input: Partial<Body> | undefined): string[] | null {
   } catch (e) {
     return [`Invalid field map JSON: ${e instanceof Error ? e.message : String(e)}`]
   }
-  const v = validateSpec(parsed)
+  const v = validateSpec(parsed, { mode: 'draft' })
   return v.ok ? null : v.errors
 }
 
@@ -207,6 +212,7 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
         ...(await withPeopleNames(row)),
         status: statusOf(row),
         used_by: await usedBy(row.key),
+        context_keys: await contextKeys(row),
         newer_default: hasNewerDefault(row),
         has_default: !!def,
         ...(def ? { default_mode: def.default.mode, default_body: def.default.body } : {})

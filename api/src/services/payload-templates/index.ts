@@ -7,6 +7,7 @@ import { currentTenantKey } from '../tenant-rooms.js'
 import { validateSpec } from './evaluate.js'
 import { blockingProblems, renderBody } from './render.js'
 import type { Problem } from './types.js'
+import type { ValidateMode } from './validate.js'
 
 // ─── Partner payload templates: the service ──────────────────────────────────
 // Spec 2026-10-22 §4, §6.1, §7.2. A template has a published body senders use
@@ -195,8 +196,17 @@ function toRow(r: Record<string, unknown>): TemplateRow {
   }
 }
 
-/** Structural check of a body: map = valid field-map JSON; code = any text. */
-function checkBody(mode: unknown, body: unknown, what: string): void {
+/**
+ * Structural check of a body: map = valid field-map JSON; code = any text.
+ * `strength` 'draft' lets incomplete rows through (drafts always save);
+ * 'publish' requires every row complete.
+ */
+function checkBody(
+  mode: unknown,
+  body: unknown,
+  what: string,
+  strength: ValidateMode = 'publish'
+): void {
   if (!isMode(mode)) {
     throw new PayloadTemplateError('invalid', `${what}: mode must be map or code`, [
       problem('mode must be map or code')
@@ -215,7 +225,7 @@ function checkBody(mode: unknown, body: unknown, what: string): void {
     const msg = `Invalid field map JSON: ${e instanceof Error ? e.message : String(e)}`
     throw new PayloadTemplateError('invalid', `${what}: ${msg}`, [problem(msg)])
   }
-  const v = validateSpec(parsed)
+  const v = validateSpec(parsed, { mode: strength })
   if (!v.ok) {
     throw new PayloadTemplateError(
       'invalid',
@@ -517,7 +527,7 @@ export async function saveDraft(
   opts: { convert?: boolean } = {}
 ): Promise<{ ok: true; rev: number } | { ok: false; current: TemplateRow }> {
   const row = await requireTemplate(key)
-  checkBody(input?.mode, input?.body, `Payload template '${key}' draft`)
+  checkBody(input?.mode, input?.body, `Payload template '${key}' draft`, 'draft')
   const base = Number(input.base_rev)
   if (!Number.isInteger(base) || base < 0) {
     throw new PayloadTemplateError('invalid', 'base_rev must be a whole number', [
@@ -569,7 +579,8 @@ export async function publishDraft(
         problem('The draft is empty')
       ])
     }
-    checkBody(draft.mode, draft.body, `Payload template '${key}' draft`)
+    // Publishing needs every row complete (a draft may be half-built).
+    checkBody(draft.mode, draft.body, `Payload template '${key}' draft`, 'publish')
     const mode = draft.mode as PayloadMode
     const newest = (await trx(V)
       .where({ template_id: row.id })
@@ -720,7 +731,7 @@ export async function installTemplateDraft(
   if (typeof bundle.collection !== 'string' || !COLLECTION_RE.test(bundle.collection)) {
     bad('collection must be a plain collection name')
   }
-  checkBody(bundle.mode, bundle.body, `Payload template '${key}' draft`)
+  checkBody(bundle.mode, bundle.body, `Payload template '${key}' draft`, 'draft')
   const locked = Array.isArray(bundle.locked_keys)
     ? bundle.locked_keys.filter((k): k is string => typeof k === 'string')
     : []
