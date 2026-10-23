@@ -17,6 +17,12 @@ import { TrafficMapContext, type TrafficMapContextValue } from './context'
 import { callerLabel, EventTicker, KIND_VAR } from './EventTicker'
 import { useStore } from './features/b1-shared'
 import { EnvironmentBand } from './features/env-band'
+import {
+  BatchDecoder,
+  type FrameBatchWire,
+  TRAFFIC_MAP_BATCH_EVENT,
+  TRAFFIC_MAP_RESYNC_EVENT
+} from './features/frame-batch'
 import { nodeFeed } from './features/node-merge'
 import { usePinFilter } from './features/pins'
 import {
@@ -370,12 +376,29 @@ export default function TrafficMap() {
 
   useEffect(() => {
     if (frozenId) return // a frozen view never goes live
-    const leave = joinWatchRoom('traffic-map')
+    // Post-mortem 3.1: a hidden tab leaves the watch room, so the server stops building and
+    // sending frames for it (none at all once no page watches); coming back rejoins and re-seeds
+    // from the snapshot (onVis below).
+    let leave: (() => void) | null = document.hidden ? null : joinWatchRoom('traffic-map')
     // #1098: frames from every API process; nodeFeed merges them (or keeps one node's).
     const offReseed = nodeFeed.onReseed(() => void loadSnapshot(filtersRef.current.win))
+    // Older servers: one `traffic-map:frame` per process per second.
     const off = adminRealtime.on('traffic-map:frame', (p: unknown) => {
       if (pausedRef.current || document.hidden) return
       nodeFeed.accept(p as TrafficFrame, apply)
+    })
+    // Batch servers: one `traffic-map:batch` per second, deltas against each process's last frame.
+    const decoder = new BatchDecoder()
+    let lastResync = 0
+    const offBatch = adminRealtime.on(TRAFFIC_MAP_BATCH_EVENT, (p: unknown) => {
+      // decoded even while paused or hidden: the next delta builds on this one
+      const { frames, missing } = decoder.decode(p as FrameBatchWire)
+      if (missing && Date.now() - lastResync > 2000) {
+        lastResync = Date.now()
+        adminRealtime.emit(TRAFFIC_MAP_RESYNC_EVENT, {})
+      }
+      if (pausedRef.current || document.hidden) return
+      for (const f of frames) nodeFeed.accept(f, apply)
     })
     function apply(f: TrafficFrame) {
       const m = modelRef.current
@@ -409,7 +432,13 @@ export default function TrafficMap() {
     }
     socket.on('auth:ok', onAuth)
     const onVis = () => {
-      if (!document.hidden && !pausedRef.current) void loadSnapshot(filtersRef.current.win)
+      if (document.hidden) {
+        leave?.()
+        leave = null
+        return
+      }
+      if (!leave) leave = joinWatchRoom('traffic-map')
+      if (!pausedRef.current) void loadSnapshot(filtersRef.current.win)
     }
     document.addEventListener('visibilitychange', onVis)
     const watchdog = setInterval(() => {
@@ -419,8 +448,9 @@ export default function TrafficMap() {
     }, 2000)
     return () => {
       off()
+      offBatch()
       offReseed()
-      leave()
+      leave?.()
       socket.off('auth:ok', onAuth)
       document.removeEventListener('visibilitychange', onVis)
       clearInterval(watchdog)

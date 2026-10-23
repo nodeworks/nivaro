@@ -973,7 +973,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
       return scopedRoom(`watch:${room}`)
     }
-    const onAdminJoin = async (payload: { room?: string }) => {
+    const onAdminJoin = async (payload: { room?: string; frames?: unknown }) => {
       const room = payload?.room
       const user = authenticatedUser
       if (!user?.role || typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
@@ -986,7 +986,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           const role = await db('nivaro_roles').where({ id: user.role }).first()
           return !!role?.admin_access
         },
-        () => socket.join(name)
+        () => {
+          // Post-mortem 3.1: a Traffic Map page that reads `traffic-map:batch` says so on join
+          // (traffic-map-batch.ts); one without the flag keeps per-frame events.
+          if (room === 'traffic-map') socket.data.trafficMapBatch = payload?.frames === 'batch'
+          socket.join(name)
+        }
       )
     }
     socket.on('admin:join', inSocketTenant(socket, onAdminJoin))

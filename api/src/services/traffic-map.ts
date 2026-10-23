@@ -25,6 +25,14 @@ import {
   type TrafficLane
 } from './traffic-entities.js'
 import {
+  batchStoreIds,
+  dropBatchState,
+  resetTrafficMapBatches,
+  roomMembers,
+  TRAFFIC_MAP_BATCH_EVENT,
+  takeBatch
+} from './traffic-map-batch.js'
+import {
   keepEvent,
   type MapMemoryFacts,
   measureThisFrame,
@@ -1415,13 +1423,17 @@ export function resetTrafficMap(): void {
   extCompiled = []
   extSig = ''
   resetTapState()
+  resetTrafficMapBatches()
 }
 
 // ── emitter ──────────────────────────────────────────────────────────────────
 interface IoLike {
-  sockets: { adapter: { rooms: Map<string, Set<string>> } }
-  to(room: string): { emit(ev: string, payload: unknown): void }
-  local?: { to(room: string): { emit(ev: string, payload: unknown): void } }
+  sockets: {
+    adapter: { rooms: Map<string, Set<string>> }
+    sockets?: Map<string, { data?: unknown }>
+  }
+  to(room: string | string[]): { emit(ev: string, payload: unknown): void }
+  local?: { to(room: string | string[]): { emit(ev: string, payload: unknown): void } }
   engine?: { clientsCount?: number }
 }
 export const TRAFFIC_MAP_ROOM = 'watch:traffic-map'
@@ -1430,6 +1442,26 @@ export const TRAFFIC_MAP_EVENT = 'traffic-map:frame'
 /** The socket room a store's frames go to: the historic room self-hosted, one per tenant else. */
 export function trafficRoomFor(storeId: string): string {
   return storeId === DEFAULT_STORE ? TRAFFIC_MAP_ROOM : `${TRAFFIC_MAP_ROOM}:${storeId}`
+}
+/** The store a Traffic Map room belongs to (trafficRoomFor reversed); null for any other room. */
+export function trafficStoreOfRoom(room: string): string | null {
+  if (room === TRAFFIC_MAP_ROOM) return DEFAULT_STORE
+  return room.startsWith(`${TRAFFIC_MAP_ROOM}:`) ? room.slice(TRAFFIC_MAP_ROOM.length + 1) : null
+}
+
+/**
+ * Send one frame to the room's per-frame pages (sockets that joined without asking for batches,
+ * traffic-map-batch.ts). The whole room when nobody asked for batches: one broadcast as before.
+ */
+export function emitFrameToLegacy(
+  io: IoLike,
+  room: string,
+  m: { all: number; legacy: string[] },
+  frame: FrameWire
+): void {
+  if (!m.legacy.length) return
+  const target = m.legacy.length === m.all ? room : m.legacy
+  ;(io.local ?? io).to(target).emit(TRAFFIC_MAP_EVENT, frame)
 }
 
 /**
@@ -1481,18 +1513,23 @@ export function startTrafficMapEmitter(
       const io = ioOf()
       const ids = new Set(trafficStoreIds())
       if (!process.env.CLOUD_META_DB_URL) ids.add(DEFAULT_STORE)
+      for (const id of batchStoreIds()) ids.add(id) // relayed frames waiting for their batch
       let watchedAny = false
       for (const id of ids) {
         withTrafficStore(id, () => {
           overheadTick(sec) // #2178: re-judge the request rate (event sampling)
-          const local = io?.sockets?.adapter?.rooms?.get(trafficRoomFor(id))?.size ?? 0
+          const room = trafficRoomFor(id)
+          const m = roomMembers(io, room)
+          const local = m.all
           if (local > 0) cluster?.announce(id)
+          if (!m.batch.length) dropBatchState(id)
           const remote = cluster?.watched(id) ?? false
           if (!io || (local === 0 && !remote)) {
             discardTick()
             return
           }
           watchedAny = true
+          const built: FrameWire[] = []
           // Emit every completed second we have not sent (timer drift can skip one); cap the
           // catch-up at 5 s, then skip ahead.
           for (let s = Math.max(nextFrameSec, sec - 5); s <= sec - 1; s++) {
@@ -1500,13 +1537,25 @@ export function startTrafficMapEmitter(
             const frame = buildFrame(s, { sockets: io.engine?.clientsCount ?? 0, journalSeq })
             if (opts.node) frame.node = opts.node
             noteFrameCost(s, Number((process.hrtime.bigint() - t0) / 1000n))
-            if (local > 0) {
-              ;(io.local ?? io).to(trafficRoomFor(id)).emit(TRAFFIC_MAP_EVENT, frame)
+            if (m.legacy.length) {
+              emitFrameToLegacy(io, room, m, frame)
               // size measured on every 4th frame and scaled — a stringify per frame would cost
               // as much as the emit it is measuring
-              if (measureThisFrame()) noteSocketBytes(s, JSON.stringify(frame).length * local)
+              if (measureThisFrame())
+                noteSocketBytes(s, JSON.stringify(frame).length * m.legacy.length)
             }
+            if (m.batch.length) built.push(frame)
             if (remote) cluster?.publish(id, frame)
+          }
+          // Batch pages: one emit per tick with this node's frames and the relayed ones.
+          if (m.batch.length) {
+            const batch = takeBatch(id, m.batch, built, sec)
+            if (batch) {
+              const target = m.batch.length === m.all ? room : m.batch
+              ;(io.local ?? io).to(target).emit(TRAFFIC_MAP_BATCH_EVENT, batch)
+              if (measureThisFrame())
+                noteSocketBytes(sec - 1, JSON.stringify(batch).length * m.batch.length)
+            }
           }
         })
       }

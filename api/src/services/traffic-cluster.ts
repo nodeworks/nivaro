@@ -5,7 +5,8 @@
  *
  *  - a node with watchers in a store's room announces it over Redis every 2 s; a node that heard
  *    an announcement in the last 5 s keeps building frames for that store and publishes them,
- *    and every node with local watchers re-emits the other nodes' frames to its own sockets.
+ *    and every node with local watchers re-emits the other nodes' frames to its own sockets
+ *    (pages that asked for batches get them with the node's next tick, traffic-map-batch.ts).
  *    No watcher anywhere = no announcement = nothing published (idle clusters stay silent).
  *  - a snapshot request is answered by every node; the requester merges them (traffic-merge.ts).
  *
@@ -15,12 +16,13 @@
 import { randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import {
+  emitFrameToLegacy,
   type FrameWire,
   setTrafficCluster,
-  TRAFFIC_MAP_EVENT,
   type TrafficSnapshot,
   trafficRoomFor
 } from './traffic-map.js'
+import { queueBatchFrame, roomMembers } from './traffic-map-batch.js'
 import { noteRedisBytes } from './traffic-overhead.js'
 import { withTrafficStore } from './traffic-taps.js'
 
@@ -29,9 +31,12 @@ export const WATCH_TTL_MS = 5000
 export const SNAPSHOT_TIMEOUT_MS = 900
 
 interface IoLike {
-  sockets: { adapter: { rooms: Map<string, Set<string>> } }
-  local?: { to(room: string): { emit(ev: string, payload: unknown): void } }
-  to(room: string): { emit(ev: string, payload: unknown): void }
+  sockets: {
+    adapter: { rooms: Map<string, Set<string>> }
+    sockets?: Map<string, { data?: unknown }>
+  }
+  local?: { to(room: string | string[]): { emit(ev: string, payload: unknown): void } }
+  to(room: string | string[]): { emit(ev: string, payload: unknown): void }
 }
 
 export type ClusterMessage =
@@ -89,9 +94,12 @@ export class TrafficClusterRelay {
       this.remote.set(m.store, this.now() + WATCH_TTL_MS)
     } else if (m.t === 'frame') {
       const io = this.io()
-      const room = trafficRoomFor(m.store)
-      if (io && (io.sockets?.adapter?.rooms?.get(room)?.size ?? 0) > 0)
-        (io.local ?? io).to(room).emit(TRAFFIC_MAP_EVENT, m.frame)
+      if (!io) return
+      const members = roomMembers(io, trafficRoomFor(m.store))
+      if (!members.all) return
+      // Per-frame pages get it now; batch pages with this node's next tick (traffic-map-batch.ts).
+      emitFrameToLegacy(io, trafficRoomFor(m.store), members, m.frame)
+      if (members.batch.length) queueBatchFrame(m.store, m.frame)
     } else if (m.t === 'snap-req') {
       const w = Number(m.window)
       if (w !== 60 && w !== 300 && w !== 900) return
