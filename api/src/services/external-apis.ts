@@ -1,6 +1,12 @@
 import { createHash, createHmac } from 'node:crypto'
 import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
+import {
+  bodySecretsOf,
+  isRecord,
+  scrubSecretValues,
+  substituteBodySecrets
+} from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { partnerChaosFetch, partnerFault, readChaosResponse } from './chaos/faults/partner.js'
 import {
@@ -12,7 +18,7 @@ import {
   redactionFor
 } from './outbound-recorder.js'
 import { maskJsonPaths, redactHeaders } from './outbound-redaction.js'
-import { maskBodySecrets, maskQueryString, SENSITIVE_KEY_PATTERN } from './secret-mask.js'
+import { isSensitiveHeaderName, maskBodySecrets, maskQueryString } from './secret-mask.js'
 import { instanceKey } from './settings-overrides.js'
 import { noteOutbound } from './traffic-map.js'
 
@@ -62,7 +68,14 @@ export function resolveInstanceRow<T extends ExternalApiRow>(
   if (typeof o.base_url === 'string' && o.base_url.trim()) out.base_url = o.base_url.trim()
   if (o.auth_config && typeof o.auth_config === 'object') {
     const base = parseJson<Record<string, unknown>>(row.auth_config) ?? {}
-    out.auth_config = JSON.stringify({ ...base, ...o.auth_config })
+    const merged: Record<string, unknown> = { ...base, ...o.auth_config }
+    // Body secrets merge per name: production can override just `token`, the rest stay. A
+    // non-object override value is ignored rather than replacing the whole map.
+    const bs = base.body_secrets
+    const os = o.auth_config.body_secrets
+    if (isRecord(bs) || isRecord(os))
+      merged.body_secrets = { ...(isRecord(bs) ? bs : {}), ...(isRecord(os) ? os : {}) }
+    out.auth_config = JSON.stringify(merged)
   }
   if (o.headers && typeof o.headers === 'object') {
     const base = parseJson<Record<string, string>>(row.headers) ?? {}
@@ -170,26 +183,9 @@ function parseJson<T>(v: string | null | undefined): T | null {
 
 // ─── Header masking ───────────────────────────────────────────────────────────
 
-const SENSITIVE_HEADER_NAMES = new Set([
-  'authorization',
-  'x-api-key',
-  'api-key',
-  'x-auth-token',
-  'x-access-token',
-  'cookie',
-  'set-cookie',
-  'proxy-authorization'
-])
-
-/** Anything a header's lowercased name even LOOKS like it might carry a
- *  credential under — a partner can invent any header name it likes for a
- *  session id, a signature, or a bearer token under its own scheme, and a
- *  hand-picked name list can never keep up with that. Broader on purpose:
- *  masked-and-wrong (content-type never matches this) costs nothing, shown-
- *  and-a-real-leak costs everything. `SENSITIVE_HEADER_NAMES` above stays as
- *  the explicit, always-masked baseline this widens, never replaces. The SAME
- *  rule masks JSON keys in stored bodies (secret-mask.ts). */
-const SENSITIVE_HEADER_PATTERN = SENSITIVE_KEY_PATTERN
+// The header rule (SENSITIVE_HEADER_NAMES baseline widened by SENSITIVE_KEY_PATTERN — a partner
+// can invent any header name for a session id, a signature or a bearer token) lives in
+// secret-mask.ts as isSensitiveHeaderName, shared with the config-snapshot redaction.
 
 /** Exported so a reader (the integration-partners call detail route) can
  *  re-mask on the way out — a defence against any row written before a
@@ -199,7 +195,7 @@ export function maskHeaders(headers: Record<string, string>): Record<string, str
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(headers)) {
     const lk = k.toLowerCase()
-    const isSensitive = SENSITIVE_HEADER_NAMES.has(lk) || SENSITIVE_HEADER_PATTERN.test(lk)
+    const isSensitive = isSensitiveHeaderName(k)
     if (isSensitive && v) {
       if (lk === 'authorization') {
         const parts = v.split(' ')
@@ -694,6 +690,26 @@ export async function callExternalApi(
   }
 
   const cfg = parseJson<Record<string, unknown>>(row.auth_config)
+  const sendsBody = method !== 'GET' && method !== 'HEAD' && body !== undefined
+  // Body secrets (opt-in, `bodySecrets: true`): placeholders become the real values only in what
+  // goes on the wire — before any token fetch, serialization or signing. An unknown name refuses
+  // the call (nothing is sent). `body` itself (the logged / recorded copy) keeps the placeholders.
+  // Without the flag a placeholder is sent as the literal text it is.
+  const bodySecrets = bodySecretsOf(cfg)
+  const wireBody =
+    sendsBody && options.bodySecrets === true
+      ? substituteBodySecrets(body, bodySecrets, row.name)
+      : body
+  // A partner may echo a secret back: what we log / record of its answer is scrubbed (always —
+  // a caller may have put a secret's value in the body some other way).
+  const hasSecrets = Object.keys(bodySecrets).length > 0
+  const logText = (t: string): string => (hasSecrets ? scrubSecretValues(t, bodySecrets) : t)
+  const logHeaders = (h: Record<string, string>): Record<string, string> =>
+    hasSecrets
+      ? Object.fromEntries(
+          Object.entries(h).map(([k, v]) => [k, scrubSecretValues(v, bodySecrets)])
+        )
+      : h
   const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
   const auth = await resolveAuth(row.auth_type, cfg, {
     apiId: row.id,
@@ -709,20 +725,28 @@ export async function callExternalApi(
   const reqHeaders: Record<string, string> = { ...staticHeaders, ...auth.headers, ...extraHeaders }
   const init: RequestInit = { method, headers: reqHeaders }
 
+  // reqBodyStr = what logs and the flight recorder keep (placeholders); wireBodyStr = what is sent.
   let reqBodyStr: string | null = null
-  if (method !== 'GET' && method !== 'HEAD' && body !== undefined) {
+  let wireBodyStr: string | null = null
+  if (sendsBody) {
     if (!Object.keys(reqHeaders).some((h) => h.toLowerCase() === 'content-type')) {
       reqHeaders['Content-Type'] = 'application/json'
     }
     reqBodyStr = typeof body === 'string' ? body : JSON.stringify(body)
-    init.body = reqBodyStr
+    wireBodyStr =
+      wireBody === body
+        ? reqBodyStr
+        : typeof wireBody === 'string'
+          ? wireBody
+          : JSON.stringify(wireBody)
+    init.body = wireBodyStr
   }
 
-  // Body-dependent auth types — signed against the final body / canonical URL.
+  // Body-dependent auth types — signed against the final (substituted) body / canonical URL.
   if (row.auth_type === 'hmac') {
-    applyHmacAuth(cfg as unknown as HmacConfig | null, reqHeaders, reqBodyStr)
+    applyHmacAuth(cfg as unknown as HmacConfig | null, reqHeaders, wireBodyStr)
   } else if (row.auth_type === 'aws_sigv4') {
-    applyAwsSigV4Auth(cfg as unknown as AwsSigV4Config | null, method, url, reqHeaders, reqBodyStr)
+    applyAwsSigV4Auth(cfg as unknown as AwsSigV4Config | null, method, url, reqHeaders, wireBodyStr)
   }
 
   const controller = new AbortController()
@@ -853,8 +877,8 @@ export async function callExternalApi(
       triggered_by: options._log?.triggeredBy ?? null,
       request_headers: reqHeaders,
       request_body: reqBodyStr,
-      response_headers: resHeaders,
-      response_body: text
+      response_headers: logHeaders(resHeaders),
+      response_body: logText(text)
     }
   )
   // #604 — record mode: this live answer becomes a mock rule for this instance.
@@ -863,7 +887,7 @@ export async function callExternalApi(
       method,
       path: suffix || '/',
       status: res.status,
-      bodyText: text
+      bodyText: logText(text)
     })
   }
   if (options._log) {
@@ -876,8 +900,8 @@ export async function callExternalApi(
       request_headers: reqHeaders,
       request_body: reqBodyStr,
       response_status: res.status,
-      response_headers: resHeaders,
-      response_body: text,
+      response_headers: logHeaders(resHeaders),
+      response_body: logText(text),
       duration_ms: durationMs,
       user_id: options._log.userId ?? null
     })

@@ -8,23 +8,32 @@ import { blockingProblems, renderBody } from './render.js'
 import type { Problem } from './types.js'
 
 // ─── Partner payload templates: the service ──────────────────────────────────
-// Spec 2026-10-22 §4, §6.1, §7.2. A template has a working draft (draft_rev =
-// optimistic concurrency) and a published body senders use; every publish also
-// writes an immutable row in nivaro_payload_template_versions.
+// Spec 2026-10-22 §4, §6.1, §7.2. A template has a published body senders use
+// (nivaro_payload_templates.published_*) and a working draft in
+// nivaro_payload_template_drafts (rev = optimistic concurrency); every publish
+// also writes an immutable row in nivaro_payload_template_versions.
 //
+//   - Draft writes touch ONLY the drafts table, which config-epoch does not watch,
+//     so editor autosaves never move the config epoch (every process would clear
+//     every cache). Publish, seed and registrar metadata write the templates
+//     table, which is watched.
 //   - Seed, never overwrite: register inserts a missing template (draft =
 //     published = the shipped default, version 1); an existing row's draft and
-//     published bodies are never touched. A changed shipped default only shows
-//     as hasNewerDefault() until someone resets the draft to it.
-//   - Published bodies are cached per tenant (60 s), busted here on publish and
-//     by the config epoch (cache-registrations.ts) when another process writes.
+//     published bodies are never touched. A changed shipped default shows as
+//     hasNewerDefault() until a body equal to it is published.
+//   - Published bodies are cached per tenant (60 s): a publish here clears this
+//     tenant's entries; another process's write clears them all through the
+//     config epoch (cache-registrations.ts).
 //   - Registered defs (scope / recent / senders functions) live in process, per
 //     tenant; a def registered at boot (no tenant) answers for every tenant.
 
 const T = 'nivaro_payload_templates'
 const V = 'nivaro_payload_template_versions'
+const D = 'nivaro_payload_template_drafts'
 const KEY_RE = /^[a-z0-9-]+$/
 const CACHE_MS = 60_000
+const DRAFT_RETRIES = 5
+export const MODE_CHANGE_MESSAGE = 'Mode can only change through Convert to Liquid'
 
 export type PayloadMode = 'map' | 'code'
 
@@ -46,7 +55,11 @@ export type PayloadTemplateDef = {
 
 export type RegisteredPayloadTemplate = PayloadTemplateDef & { owner: string }
 
-/** A template row with its JSON columns parsed. Bodies stay text (map spec JSON or Liquid). */
+/**
+ * A template with its draft joined in and its JSON columns parsed. Bodies stay text (map spec
+ * JSON or Liquid). With no draft row yet, the draft mirrors the published body and
+ * `draft_rev` is 0 (the first save sends base_rev 0).
+ */
 export type TemplateRow = {
   id: number
   key: string
@@ -84,7 +97,7 @@ export type TemplateVersionSummary = {
 
 export type TemplateVersion = TemplateVersionSummary & { body: string }
 
-export type PayloadTemplateErrorCode = 'unknown_key' | 'unpublished' | 'invalid'
+export type PayloadTemplateErrorCode = 'unknown_key' | 'unpublished' | 'invalid' | 'conflict'
 
 export class PayloadTemplateError extends Error {
   readonly code: PayloadTemplateErrorCode
@@ -136,10 +149,17 @@ const affected = (n: unknown): number => {
 
 const isMode = (m: unknown): m is PayloadMode => m === 'map' || m === 'code'
 
+const parseLocked = (raw: unknown): string[] => {
+  const v = parseJson((raw as string | null) ?? null)
+  return Array.isArray(v) ? v.filter((k): k is string => typeof k === 'string') : []
+}
+
+/** `r` = a templates row with the draft columns aliased `draft_*` (null when no draft row). */
 function toRow(r: Record<string, unknown>): TemplateRow {
-  const locked = parseJson((r.locked_keys as string | null) ?? null)
   const lookups = parseJson((r.lookups as string | null) ?? null)
   const num = (v: unknown): number | null => (v == null ? null : Number(v))
+  const publishedMode = isMode(r.published_mode) ? r.published_mode : null
+  const hasDraft = r.draft_rev != null
   return {
     id: Number(r.id),
     key: String(r.key),
@@ -149,19 +169,19 @@ function toRow(r: Record<string, unknown>): TemplateRow {
     endpoint_path: (r.endpoint_path as string | null) ?? null,
     collection: String(r.collection ?? ''),
     owner: (r.owner as string | null) ?? null,
-    draft_mode: isMode(r.draft_mode) ? r.draft_mode : 'map',
-    draft_body: (r.draft_body as string | null) ?? null,
-    draft_rev: Number(r.draft_rev ?? 1),
+    draft_mode: hasDraft && isMode(r.draft_mode) ? r.draft_mode : (publishedMode ?? 'map'),
+    draft_body: hasDraft
+      ? ((r.draft_body as string | null) ?? null)
+      : ((r.published_body as string | null) ?? null),
+    draft_rev: hasDraft ? Number(r.draft_rev) : 0,
     draft_updated_by: (r.draft_updated_by as string | null) ?? null,
     draft_updated_at: (r.draft_updated_at as Date | null) ?? null,
-    published_mode: isMode(r.published_mode) ? r.published_mode : null,
+    published_mode: publishedMode,
     published_body: (r.published_body as string | null) ?? null,
     published_version: num(r.published_version),
     published_at: (r.published_at as Date | null) ?? null,
     published_by: (r.published_by as string | null) ?? null,
-    locked_keys: Array.isArray(locked)
-      ? locked.filter((k): k is string => typeof k === 'string')
-      : [],
+    locked_keys: parseLocked(r.locked_keys),
     lookups:
       lookups && typeof lookups === 'object' && !Array.isArray(lookups)
         ? (lookups as Record<string, unknown>)
@@ -316,7 +336,7 @@ async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
       await db(T)
         .where({ id: existing.id })
         .update({ ...meta, updated_at: new Date() })
-      bustPayloadTemplateCache()
+      bustTenantCache()
     }
     return
   }
@@ -326,11 +346,6 @@ async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
       await trx(T).insert({
         key: def.key,
         ...meta,
-        draft_mode: def.default.mode,
-        draft_body: def.default.body,
-        draft_rev: 1,
-        draft_updated_by: null,
-        draft_updated_at: now,
         published_mode: def.default.mode,
         published_body: def.default.body,
         published_version: 1,
@@ -343,8 +358,17 @@ async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
       // Insert-then-select: `.returning('id')` shapes differ on this stack.
       const row = (await trx(T).where({ key: def.key }).first('id')) as { id: number } | undefined
       if (!row) throw new Error('seeded row not found')
+      const id = Number(row.id)
+      await trx(D).insert({
+        template_id: id,
+        mode: def.default.mode,
+        body: def.default.body,
+        rev: 1,
+        updated_by: null,
+        updated_at: now
+      })
       await trx(V).insert({
-        template_id: Number(row.id),
+        template_id: id,
         version: 1,
         mode: def.default.mode,
         body: def.default.body,
@@ -358,22 +382,39 @@ async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
     if (await getTemplate(def.key)) return
     throw e
   }
-  bustPayloadTemplateCache()
+  bustTenantCache()
 }
 
 // ─── reads ───────────────────────────────────────────────────────────────────
 
+const ROW_COLUMNS = [
+  't.*',
+  'd.mode as draft_mode',
+  'd.body as draft_body',
+  'd.rev as draft_rev',
+  'd.updated_by as draft_updated_by',
+  'd.updated_at as draft_updated_at'
+]
+
+const joined = () =>
+  db(`${T} as t`).leftJoin(`${D} as d`, 't.id', 'd.template_id') as ReturnType<typeof db>
+
 export async function getTemplate(key: string): Promise<TemplateRow | null> {
-  const r = (await db(T).where({ key }).first()) as Record<string, unknown> | undefined
+  const r = (await joined()
+    .where({ 't.key': key })
+    .first(...ROW_COLUMNS)) as Record<string, unknown> | undefined
   return r ? toRow(r) : null
 }
 
 export async function listTemplates(
   filter: { external_api?: string } = {}
 ): Promise<TemplateRow[]> {
-  const q = db(T)
-  if (filter.external_api) q.where({ external_api: filter.external_api })
-  const rows = (await q.orderBy('label', 'asc').select()) as Record<string, unknown>[]
+  const q = joined()
+  if (filter.external_api) q.where({ 't.external_api': filter.external_api })
+  const rows = (await q.orderBy('t.label', 'asc').select(...ROW_COLUMNS)) as Record<
+    string,
+    unknown
+  >[]
   return rows.map(toRow)
 }
 
@@ -407,43 +448,90 @@ export async function listVersions(key: string): Promise<TemplateVersionSummary[
   return rows.map(summaryOf)
 }
 
-export async function getVersion(key: string, version: number): Promise<TemplateVersion | null> {
-  const row = await requireTemplate(key)
-  const r = (await db(V).where({ template_id: row.id, version }).first()) as
+async function versionOf(templateId: number, version: number): Promise<TemplateVersion | null> {
+  const r = (await db(V).where({ template_id: templateId, version }).first()) as
     | Record<string, unknown>
     | undefined
   return r ? { ...summaryOf(r), body: String(r.body ?? '') } : null
 }
 
+export async function getVersion(key: string, version: number): Promise<TemplateVersion | null> {
+  const row = await requireTemplate(key)
+  return versionOf(row.id, version)
+}
+
 // ─── draft / publish ─────────────────────────────────────────────────────────
 
-/** Save the working draft. Stale `base_rev` → `{ ok: false, current }` and nothing written. */
+/** The mode the draft has now, or null when the template has never had a body. */
+const currentMode = (row: TemplateRow): PayloadMode | null =>
+  row.draft_rev > 0 ? row.draft_mode : row.published_mode
+
+/**
+ * Write the draft at `base` (0 = no draft row yet → insert). Touches the drafts table only.
+ * False = `base` is not the current revision (nothing written).
+ */
+async function writeDraft(
+  templateId: number,
+  base: number,
+  mode: PayloadMode,
+  body: string,
+  userId: string | null
+): Promise<boolean> {
+  const now = new Date()
+  if (base === 0) {
+    try {
+      await db(D).insert({
+        template_id: templateId,
+        mode,
+        body,
+        rev: 1,
+        updated_by: userId ?? null,
+        updated_at: now
+      })
+      return true
+    } catch (e) {
+      // A draft row appeared in between (primary key): stale. Anything else is real.
+      const exists = await db(D).where({ template_id: templateId }).first('template_id')
+      if (exists) return false
+      throw e
+    }
+  }
+  const n = await db(D)
+    .where({ template_id: templateId, rev: base })
+    .update({ mode, body, rev: base + 1, updated_by: userId ?? null, updated_at: now })
+  return affected(n) > 0
+}
+
+/**
+ * Save the working draft. Stale `base_rev` → `{ ok: false, current }` and nothing written.
+ * The mode never changes here; `{ convert: true }` (the Convert to Liquid route) allows
+ * map → code only.
+ */
 export async function saveDraft(
   key: string,
   input: { mode: PayloadMode; body: string; base_rev: number },
-  userId: string | null
+  userId: string | null,
+  opts: { convert?: boolean } = {}
 ): Promise<{ ok: true; rev: number } | { ok: false; current: TemplateRow }> {
+  const row = await requireTemplate(key)
   checkBody(input?.mode, input?.body, `Payload template '${key}' draft`)
   const base = Number(input.base_rev)
-  if (!Number.isInteger(base)) {
+  if (!Number.isInteger(base) || base < 0) {
     throw new PayloadTemplateError('invalid', 'base_rev must be a whole number', [
       problem('base_rev must be a whole number')
     ])
   }
-  const now = new Date()
-  const n = await db(T)
-    .where({ key, draft_rev: base })
-    .update({
-      draft_mode: input.mode,
-      draft_body: input.body,
-      draft_rev: base + 1,
-      draft_updated_by: userId ?? null,
-      draft_updated_at: now,
-      updated_at: now
-    })
-  if (affected(n) > 0) return { ok: true, rev: base + 1 }
+  const was = currentMode(row)
+  if (was && was !== input.mode && !(opts.convert && was === 'map' && input.mode === 'code')) {
+    throw new PayloadTemplateError('invalid', MODE_CHANGE_MESSAGE, [problem(MODE_CHANGE_MESSAGE)])
+  }
+  if (await writeDraft(row.id, base, input.mode, input.body, userId)) {
+    return { ok: true, rev: base + 1 }
+  }
   return { ok: false, current: await requireTemplate(key) }
 }
+
+const STALE = Symbol('stale')
 
 /** Publish the saved draft as the next version. Stale `base_rev` → `{ ok: false, current }`. */
 export async function publishDraft(
@@ -452,84 +540,96 @@ export async function publishDraft(
   userId: string | null
 ): Promise<{ ok: true; version: number } | { ok: false; current: TemplateRow }> {
   const row = await requireTemplate(key)
-  if (row.draft_rev !== Number(input?.base_rev)) return { ok: false, current: row }
-  if (row.draft_body == null || !row.draft_body.trim()) {
-    throw new PayloadTemplateError('invalid', `Payload template '${key}' has an empty draft`, [
-      problem('The draft is empty')
+  const base = Number(input?.base_rev)
+  if (row.draft_rev !== base) return { ok: false, current: row }
+  if (row.draft_rev === 0) {
+    throw new PayloadTemplateError('invalid', `Payload template '${key}' has no draft to publish`, [
+      problem('There is no draft to publish')
     ])
   }
-  checkBody(row.draft_mode, row.draft_body, `Payload template '${key}' draft`)
-  const newest = (await db(V)
-    .where({ template_id: row.id })
-    .orderBy('version', 'desc')
-    .first('version')) as { version: number } | undefined
-  const version = Math.max(row.published_version ?? 0, Number(newest?.version ?? 0)) + 1
   const note = String(input.note ?? '')
     .trim()
     .slice(0, 1000)
+  const def = registeredDef(key)
+  const defaultHash = def ? hashBody(def.default.body) : null
   const now = new Date()
-  const published = await db.transaction(async (trx) => {
-    // Guarded on both numbers: a draft save or another publish in between makes this a no-op.
+  const result = await db.transaction(async (trx) => {
+    // A guarded no-op update takes the draft row's update lock until commit: a draft save in
+    // between either landed first (rev moved → stale) or waits for this publish.
+    const locked = await trx(D).where({ template_id: row.id, rev: base }).update({ rev: base })
+    if (affected(locked) === 0) return STALE
+    const draft = (await trx(D).where({ template_id: row.id }).first('mode', 'body')) as
+      | { mode: string; body: string | null }
+      | undefined
+    if (!draft?.body?.trim()) {
+      throw new PayloadTemplateError('invalid', `Payload template '${key}' has an empty draft`, [
+        problem('The draft is empty')
+      ])
+    }
+    checkBody(draft.mode, draft.body, `Payload template '${key}' draft`)
+    const mode = draft.mode as PayloadMode
+    const newest = (await trx(V)
+      .where({ template_id: row.id })
+      .orderBy('version', 'desc')
+      .first('version')) as { version: number } | undefined
+    const version = Math.max(row.published_version ?? 0, Number(newest?.version ?? 0)) + 1
+    // The shipped-default baseline moves only when that default goes live.
+    const adopt = defaultHash && hashBody(draft.body) === defaultHash ? defaultHash : null
+    // Guarded on the version this caller saw: a publish that landed since makes this stale
+    // (the draft lock alone would let two publishes of the same rev both go through).
     const n = await trx(T)
-      .where({ id: row.id, draft_rev: row.draft_rev, published_version: row.published_version })
+      .where({ id: row.id, published_version: row.published_version })
       .update({
-        published_mode: row.draft_mode,
-        published_body: row.draft_body,
+        published_mode: mode,
+        published_body: draft.body,
         published_version: version,
         published_at: now,
         published_by: userId ?? null,
-        updated_at: now
+        updated_at: now,
+        ...(adopt ? { default_hash: adopt } : {})
       })
-    if (affected(n) === 0) return false
+    if (affected(n) === 0) return STALE
     await trx(V).insert({
       template_id: row.id,
       version,
-      mode: row.draft_mode,
-      body: row.draft_body,
+      mode,
+      body: draft.body,
       note,
       published_by: userId ?? null,
       published_at: now
     })
-    return true
+    return version
   })
-  if (!published) return { ok: false, current: await requireTemplate(key) }
-  bustPayloadTemplateCache()
+  if (result === STALE) return { ok: false, current: await requireTemplate(key) }
+  bustTenantCache()
   await logActivity({
     action: 'payload-template-publish',
     user: userId,
     collection: T,
     item: key,
-    comment: note ? `Published v${version}: ${note}` : `Published v${version}`
+    comment: note ? `Published v${result}: ${note}` : `Published v${result}`
   })
-  return { ok: true, version }
+  return { ok: true, version: result }
 }
 
-/** Write a draft body unconditionally on top of whatever revision is current (rev + 1). */
+/** Write a draft body on top of whatever revision is current (rev + 1). */
 async function replaceDraft(
   row: TemplateRow,
   mode: PayloadMode,
   body: string,
-  userId: string | null,
-  extra: Record<string, unknown> = {}
+  userId: string | null
 ): Promise<number> {
   let current = row
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const now = new Date()
-    const n = await db(T)
-      .where({ id: current.id, draft_rev: current.draft_rev })
-      .update({
-        draft_mode: mode,
-        draft_body: body,
-        draft_rev: current.draft_rev + 1,
-        draft_updated_by: userId ?? null,
-        draft_updated_at: now,
-        updated_at: now,
-        ...extra
-      })
-    if (affected(n) > 0) return current.draft_rev + 1
+  for (let attempt = 0; attempt < DRAFT_RETRIES; attempt++) {
+    if (await writeDraft(current.id, current.draft_rev, mode, body, userId)) {
+      return current.draft_rev + 1
+    }
     current = await requireTemplate(row.key)
   }
-  throw new Error(`Payload template '${row.key}' draft kept changing; try again`)
+  throw new PayloadTemplateError(
+    'conflict',
+    `Payload template '${row.key}' draft kept changing; try again`
+  )
 }
 
 /** Put a published version's body into the draft. Null when that version does not exist. */
@@ -539,7 +639,7 @@ export async function restoreVersion(
   userId: string | null
 ): Promise<{ rev: number } | null> {
   const row = await requireTemplate(key)
-  const v = await getVersion(key, version)
+  const v = await versionOf(row.id, version)
   if (!v) return null
   const rev = await replaceDraft(row, v.mode, v.body, userId)
   await logActivity({
@@ -552,7 +652,10 @@ export async function restoreVersion(
   return { rev }
 }
 
-/** Put the registrar's shipped default into the draft (and adopt its hash as the baseline). */
+/**
+ * Put the registrar's shipped default into the draft. The newer-default flag stays until a
+ * body equal to the default is published.
+ */
 export async function resetToDefault(key: string, userId: string | null): Promise<{ rev: number }> {
   const row = await requireTemplate(key)
   const def = registeredDef(key)
@@ -561,9 +664,7 @@ export async function resetToDefault(key: string, userId: string | null): Promis
       problem('No extension registers a default for this template')
     ])
   }
-  const rev = await replaceDraft(row, def.default.mode, def.default.body, userId, {
-    default_hash: hashBody(def.default.body)
-  })
+  const rev = await replaceDraft(row, def.default.mode, def.default.body, userId)
   await logActivity({
     action: 'payload-template-reset',
     user: userId,
@@ -576,15 +677,51 @@ export async function resetToDefault(key: string, userId: string | null): Promis
 
 // ─── published cache (per tenant) ────────────────────────────────────────────
 
-type CacheEntry = { at: number; row: TemplateRow | null }
+/** What a published render needs — the cache never holds a draft. */
+type PublishedTemplate = {
+  key: string
+  external_api: string | null
+  locked_keys: string[]
+  published_mode: PayloadMode | null
+  published_body: string | null
+  published_version: number | null
+}
+type CacheEntry = { at: number; row: PublishedTemplate | null }
 const publishedCache = new Map<string, Map<string, CacheEntry>>()
 
-/** Drop every tenant's cached published bodies. */
+/** Drop every tenant's cached published bodies (another process wrote; the config epoch). */
 export function bustPayloadTemplateCache(): void {
   publishedCache.clear()
 }
 
-async function cachedTemplate(key: string): Promise<TemplateRow | null> {
+/** Drop this tenant's cached published bodies (a write made here). */
+function bustTenantCache(): void {
+  publishedCache.delete(currentTenantKey())
+}
+
+async function publishedTemplate(key: string): Promise<PublishedTemplate | null> {
+  const r = (await db(T)
+    .where({ key })
+    .first(
+      'key',
+      'external_api',
+      'locked_keys',
+      'published_mode',
+      'published_body',
+      'published_version'
+    )) as Record<string, unknown> | undefined
+  if (!r) return null
+  return {
+    key: String(r.key),
+    external_api: (r.external_api as string | null) ?? null,
+    locked_keys: parseLocked(r.locked_keys),
+    published_mode: isMode(r.published_mode) ? r.published_mode : null,
+    published_body: (r.published_body as string | null) ?? null,
+    published_version: r.published_version == null ? null : Number(r.published_version)
+  }
+}
+
+async function cachedPublished(key: string): Promise<PublishedTemplate | null> {
   const tenant = currentTenantKey()
   let m = publishedCache.get(tenant)
   if (!m) {
@@ -593,7 +730,7 @@ async function cachedTemplate(key: string): Promise<TemplateRow | null> {
   }
   const hit = m.get(key)
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.row
-  const row = await getTemplate(key)
+  const row = await publishedTemplate(key)
   m.set(key, { at: Date.now(), row })
   return row
 }
@@ -628,6 +765,9 @@ async function secretNamesFor(
   }
 }
 
+const unknownKey = (key: string) =>
+  new PayloadTemplateError('unknown_key', `Payload template '${key}' does not exist`)
+
 /**
  * Render a template for a scope. Published (default): cached body; throws PayloadTemplateError
  * for an unknown key, no published version, or blocking problems. Draft / draftBody: the
@@ -638,16 +778,12 @@ export async function renderPayloadTemplate(
   scope: Record<string, unknown>,
   opts: RenderTemplateOpts = {}
 ): Promise<RenderTemplateResult> {
-  const preview = !!opts.draft || !!opts.draftBody
-  const row = preview ? await getTemplate(key) : await cachedTemplate(key)
-  if (!row) {
-    throw new PayloadTemplateError('unknown_key', `Payload template '${key}' does not exist`)
-  }
   const resolver = opts.secretNames ?? defaultSecretNames
-  const secretNames = await secretNamesFor(row.external_api, resolver)
-  const renderOpts = { lockedKeys: row.locked_keys, secretNames }
 
-  if (preview) {
+  if (opts.draft || opts.draftBody) {
+    const row = await getTemplate(key)
+    if (!row) throw unknownKey(key)
+    const secretNames = await secretNamesFor(row.external_api, resolver)
     const mode = opts.draftBody?.mode ?? row.draft_mode
     const body = opts.draftBody?.body ?? row.draft_body
     if (!isMode(mode)) {
@@ -661,17 +797,23 @@ export async function renderPayloadTemplate(
     if (body == null) {
       return { body: null, problems: [problem('The draft is empty')], values: {}, version: null }
     }
-    const r = await renderBody(mode, body, scope, renderOpts)
+    const r = await renderBody(mode, body, scope, { lockedKeys: row.locked_keys, secretNames })
     return { ...r, version: null }
   }
 
+  const row = await cachedPublished(key)
+  if (!row) throw unknownKey(key)
   if (row.published_version == null || row.published_body == null || !row.published_mode) {
     throw new PayloadTemplateError(
       'unpublished',
       `Payload template '${key}' has no published version`
     )
   }
-  const r = await renderBody(row.published_mode, row.published_body, scope, renderOpts)
+  const secretNames = await secretNamesFor(row.external_api, resolver)
+  const r = await renderBody(row.published_mode, row.published_body, scope, {
+    lockedKeys: row.locked_keys,
+    secretNames
+  })
   const blocking = blockingProblems(r.problems)
   if (blocking.length) {
     throw new PayloadTemplateError(

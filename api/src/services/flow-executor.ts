@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 import { errorText } from '../lib/db-refusal.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
+import { protectTemplatePlaceholders } from './body-secrets.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { callExternalApi } from './external-apis.js'
@@ -625,6 +626,9 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
     }
 
     const callOpts: Parameters<typeof callExternalApi>[1] = {
+      // Body secrets: the op's body template is admin-authored; protectTemplatePlaceholders below
+      // keeps only ITS placeholders real — nothing the trigger / run data renders can name one.
+      bodySecrets: true,
       _log: { triggeredBy: `flow:${ctx.flowId}`, userId: ctx.userId }
     }
 
@@ -639,7 +643,8 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
     }
     if (opts.body) {
       try {
-        callOpts.body = JSON.parse(resolveTemplate(opts.body as string, data)) as unknown
+        const tpl = protectTemplatePlaceholders(opts.body as string)
+        callOpts.body = tpl.finish(JSON.parse(resolveTemplate(tpl.text, data)))
       } catch {
         callOpts.body = opts.body as string
       }

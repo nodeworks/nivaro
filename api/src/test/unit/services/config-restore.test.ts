@@ -1,6 +1,6 @@
 import type { Knex } from 'knex'
 import { describe, expect, it } from 'vitest'
-import { hashRow, type SnapshotRow } from '../../../services/config-inventory.js'
+import { hashRow, redactRow, type SnapshotRow } from '../../../services/config-inventory.js'
 import {
   applyTablePlans,
   type ColumnInfo,
@@ -385,6 +385,81 @@ describe('applyTablePlans', () => {
     await expect(applyTablePlans(trx, plans, target, live, columns, fks)).rejects.toThrow(
       /update nivaro_workflow_states #6/
     )
+  })
+})
+
+describe('applyTablePlans — external API instance_overrides (redacted by value)', () => {
+  const apiCols = new Map<string, TableColumns>([
+    [
+      'nivaro_external_apis',
+      cols({ id: { type: 'int', identity: true }, name: {}, instance_overrides: {} })
+    ]
+  ])
+  const liveRaw = {
+    id: 4,
+    name: 'MWF',
+    instance_overrides: JSON.stringify({
+      production: {
+        base_url: 'https://prod-NEW.example',
+        auth_config: { body_secrets: { token: 'PROD-TOKEN' } }
+      }
+    })
+  }
+  const snapRaw = {
+    id: 4,
+    name: 'MWF',
+    instance_overrides: JSON.stringify({
+      production: {
+        base_url: 'https://prod-OLD.example',
+        auth_config: { body_secrets: { token: 'OLD-TOKEN' } }
+      }
+    })
+  }
+
+  function redacted(raw: Record<string, unknown>): Record<string, SnapshotRow> {
+    const data = redactRow('nivaro_external_apis', raw)
+    return { '4': { hash: hashRow(data), data } }
+  }
+
+  it('the update keeps the live credentials and takes only the plain parts from the snapshot', async () => {
+    const target = { nivaro_external_apis: redacted(snapRaw) }
+    const live = { nivaro_external_apis: redacted(liveRaw) }
+    expect(JSON.stringify(target)).not.toContain('OLD-TOKEN')
+    const plan = planTable(
+      'nivaro_external_apis',
+      target.nivaro_external_apis,
+      live.nivaro_external_apis,
+      apiCols.get('nivaro_external_apis') as TableColumns,
+      { deletes: false }
+    )
+    expect(plan.ops).toEqual([
+      expect.objectContaining({ op: 'update', fields: ['instance_overrides'] })
+    ])
+    const writes: Array<{ sql: string; b: unknown[] }> = []
+    const trx = (() => {
+      throw new Error('raw only')
+    }) as unknown as Parameters<typeof applyTablePlans>[0]
+    ;(trx as unknown as { raw: (sql: string, b?: unknown[]) => Promise<unknown> }).raw = async (
+      sql: string,
+      b: unknown[] = []
+    ) => {
+      if (/XACT_STATE/.test(sql)) return [{ s: 1 }]
+      writes.push({ sql, b })
+      if (/SELECT \[instance_overrides\] FROM \[nivaro_external_apis\] WITH \(UPDLOCK/.test(sql))
+        return [{ instance_overrides: liveRaw.instance_overrides }]
+      return /UPDATE/.test(sql) ? [{ n: 1 }] : []
+    }
+    await applyTablePlans(trx, [plan], target, live, apiCols, [])
+    const upd = writes.find((w) => /UPDATE \[nivaro_external_apis\]/.test(w.sql))
+    expect(upd).toBeDefined()
+    const written = JSON.parse(String(upd?.b[0]))
+    expect(written).toEqual({
+      production: {
+        base_url: 'https://prod-OLD.example',
+        auth_config: { body_secrets: { token: 'PROD-TOKEN' } }
+      }
+    })
+    expect(JSON.stringify(writes)).not.toContain('OLD-TOKEN')
   })
 })
 
