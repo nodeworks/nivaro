@@ -38,6 +38,10 @@ import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.j
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { registerOpsTask } from '../services/ops-tasks.js'
+import {
+  registerPayloadTemplate,
+  renderPayloadTemplate
+} from '../services/payload-templates/index.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
@@ -117,6 +121,29 @@ function withExtensionLog(extId: string, options?: CallOptions): CallOptions {
   return {
     ...opts,
     _log: { ...opts._log, triggeredBy: opts._log?.triggeredBy ?? `extension:${extId}` }
+  }
+}
+
+// Body secrets (services/body-secrets.ts) are looked up lazily, so the loader works on a build
+// without them; a variable specifier keeps tsc from requiring the file.
+const BODY_SECRETS_MODULE = '../services/body-secrets.js'
+let hasBodySecretFn: Promise<((api: string, name: string) => Promise<boolean>) | null> | null = null
+
+/** Whether an external API has a body secret by this name (false when unknown / unavailable). */
+async function extensionHasBodySecret(apiName: string, name: string): Promise<boolean> {
+  hasBodySecretFn ??= import(BODY_SECRETS_MODULE)
+    .then((m: Record<string, unknown>) =>
+      typeof m?.hasBodySecret === 'function'
+        ? (m.hasBodySecret as (api: string, name: string) => Promise<boolean>)
+        : null
+    )
+    .catch(() => null)
+  const fn = await hasBodySecretFn
+  if (!fn) return false
+  try {
+    return (await fn(String(apiName), String(name))) === true
+  } catch {
+    return false
   }
 }
 
@@ -723,6 +750,20 @@ export function registrationMembers(
         itemActionRegistry.register(def)
       }
     },
+    payloadTemplates: {
+      // Validates before any side effect (a bad definition rejects; nothing is registered or
+      // seeded); a database failure while seeding is logged by the service, never thrown.
+      register: async (def) => {
+        note('payload-templates')
+        await registerPayloadTemplate(extId, def)
+        own('payload_templates', `${def.key} · ${def.label}`)
+      },
+      render: async (key, scope) => {
+        const r = await renderPayloadTemplate(key, scope)
+        return { body: r.body, problems: r.problems, version: r.version }
+      },
+      hasBodySecret: (apiName, name) => extensionHasBodySecret(apiName, name)
+    },
     notificationChannels: {
       register: (def) => {
         note('notification-channels')
@@ -1269,6 +1310,7 @@ async function loadExtension(
     | 'links'
     | 'bulkActions'
     | 'itemActions'
+    | 'payloadTemplates'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'
@@ -1499,6 +1541,7 @@ export async function loadExtensions(
     | 'links'
     | 'bulkActions'
     | 'itemActions'
+    | 'payloadTemplates'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'
@@ -1630,6 +1673,7 @@ export async function loadCloudExtensions(
     | 'traffic'
     | 'bulkActions'
     | 'itemActions'
+    | 'payloadTemplates'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'
@@ -1826,6 +1870,7 @@ export async function scanNewExtensions(
     | 'traffic'
     | 'bulkActions'
     | 'itemActions'
+    | 'payloadTemplates'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'

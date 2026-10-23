@@ -134,6 +134,44 @@ export interface CacheWarmContext {
 
 export type CacheWarmFn = (ctx: CacheWarmContext) => Promise<unknown> | unknown
 
+/** One thing wrong with a payload template render, anchored to its field-map row. */
+export type PayloadTemplateProblem = {
+  field_id: string
+  /** Where in the output body, e.g. `orderLines[0].quantity`. */
+  path: string
+  message: string
+  severity: 'error' | 'warning'
+}
+
+export type PayloadTemplateMode = 'map' | 'code'
+
+/** A partner payload template an extension ships (spec 2026-10-22 §7.1). Seeded once
+ *  (draft = published = `default`, version 1); an existing template is never overwritten. */
+export type PayloadTemplateDef = {
+  /** Lowercase letters, digits and dashes (at most 120). */
+  key: string
+  label: string
+  description?: string
+  /** The external API's name, as `callExternalApi` looks it up. */
+  external_api: string
+  /** Display + preview context only — the sender still makes the call. */
+  endpoint_path?: string
+  /** The record type previews pick from. */
+  collection: string
+  /** Map spec JSON (`mode: 'map'`) or Liquid text (`mode: 'code'`). */
+  default: { mode: PayloadTemplateMode; body: string }
+  /** Output keys Nivaro reads back; they cannot be removed or renamed in the editor. */
+  locked_keys?: string[]
+  /** Extra data lookups merged into `context` (same shape as an erp_submit action's context). */
+  lookups?: Record<string, unknown>
+  /** The render scope for one record — the same function the push uses, so preview == push. */
+  scope?: (id: string) => Promise<Record<string, unknown>>
+  /** Record ids "Check recent records" renders (newest first). */
+  recent?: (limit: number) => Promise<string[]>
+  /** Human labels for "Used by", e.g. `efp-ops: Push to Fusion button`. */
+  senders?: string[]
+}
+
 export interface ExtensionContext {
   app: ExtensionApp
   database: Knex
@@ -235,6 +273,27 @@ export interface ExtensionContext {
   bulkActions: { register(def: BulkActionDef): void }
   /** Contextual buttons in the record form's toolbar. */
   itemActions: { register(def: ItemActionDef): void }
+  /** Partner payload templates (spec 2026-10-22): bodies editable in the admin, versioned,
+   *  published before a push ever uses them. */
+  payloadTemplates: {
+    /** Register (and seed, once) a template. Rejects on an invalid definition before any
+     *  side effect; a seeding failure is logged, never thrown. */
+    register(def: PayloadTemplateDef): Promise<void>
+    /** Render the PUBLISHED version for a scope. Rejects (with `problems`) on an unknown key,
+     *  nothing published, or blocking problems — nothing should be sent then. Body secrets come
+     *  back as `⟦nvr-secret:<name>⟧` placeholders; pass `bodySecrets: true` to
+     *  `callExternalApi` to have them substituted at send time. */
+    render(
+      key: string,
+      scope: Record<string, unknown>
+    ): Promise<{
+      body: Record<string, unknown> | null
+      problems: PayloadTemplateProblem[]
+      version: number | null
+    }>
+    /** Whether the named external API carries this body secret. */
+    hasBodySecret(apiName: string, name: string): Promise<boolean>
+  }
   /** Custom notification delivery channels (SMS, Slack, Teams…). */
   notificationChannels: { register(def: NotificationChannelDef): void }
   /** Extension-owned alert subscriptions on the profile's notification

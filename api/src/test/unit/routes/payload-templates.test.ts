@@ -1,0 +1,630 @@
+import Fastify from 'fastify'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Route harness for /payload-templates. The template service is replaced by an
+// in-memory stand-in with the same signatures (drafts move tables in a later
+// round; the routes only ever go through the service). Rendering is real
+// (render.ts), so preview values are the evaluator's. The routes' own reads
+// (transitions, states, records, create/delete) go to a loose knex stand-in.
+
+type Row = Record<string, unknown>
+
+const fake = vi.hoisted(() => {
+  process.env.PAYLOAD_EDIT_WARNING = 'Payload templates here are replaced every night.'
+  const tables: Record<string, Row[]> = {}
+  let nextId = 900
+  const like = (value: unknown, pattern: string) => {
+    const re = new RegExp(
+      `^${pattern
+        .split('%')
+        .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('.*')}$`,
+      's'
+    )
+    return re.test(String(value ?? ''))
+  }
+  const chain = (table: string) => {
+    const preds: Array<(r: Row) => boolean> = []
+    const order: Array<[string, string]> = []
+    let lim: number | undefined
+    const matched = () => {
+      let out = (tables[table] ?? []).filter((r) => preds.every((p) => p(r)))
+      for (const [col, dir] of [...order].reverse()) {
+        out = [...out].sort((a, b) => {
+          const x = a[col] as number | string
+          const y = b[col] as number | string
+          const c = x < y ? -1 : x > y ? 1 : 0
+          return dir === 'desc' ? -c : c
+        })
+      }
+      return lim === undefined ? out : out.slice(0, lim)
+    }
+    const q: Record<string, unknown> = {}
+    q.where = (a: unknown, op?: unknown, v?: unknown) => {
+      if (a && typeof a === 'object') {
+        preds.push((r) =>
+          Object.entries(a as Row).every(([k, val]) => String(r[k]) === String(val))
+        )
+      } else if (v === undefined) {
+        preds.push((r) => String(r[a as string]) === String(op))
+      } else if (op === 'like') {
+        preds.push((r) => like(r[a as string], String(v)))
+      } else if (op === '=') {
+        preds.push((r) => String(r[a as string]) === String(v))
+      }
+      return q
+    }
+    q.andWhere = q.where
+    q.whereIn = (col: string, vals: unknown[]) => {
+      const set = new Set(vals.map(String))
+      preds.push((r) => set.has(String(r[col])))
+      return q
+    }
+    q.whereNotNull = (col: string) => {
+      preds.push((r) => r[col] != null)
+      return q
+    }
+    q.orderBy = (col: string, dir = 'asc') => {
+      order.push([col, dir])
+      return q
+    }
+    q.limit = (n: number) => {
+      lim = n
+      return q
+    }
+    q.select = () => q
+    q.first = async () => matched()[0]
+    q.update = async (patch: Row) => {
+      const rows = matched()
+      for (const r of rows) Object.assign(r, patch)
+      return rows.length
+    }
+    q.insert = async (data: Row | Row[]) => {
+      const list = (Array.isArray(data) ? data : [data]).map((d) => ({ id: nextId++, ...d }))
+      tables[table] = [...(tables[table] ?? []), ...list]
+      return list.map((r) => r.id)
+    }
+    q.delete = async () => {
+      const gone = new Set(matched())
+      tables[table] = (tables[table] ?? []).filter((r) => !gone.has(r))
+      return gone.size
+    }
+    q.del = q.delete
+    // biome-ignore lint/suspicious/noThenProperty: knex builders are thenables
+    q.then = (ok: (r: Row[]) => unknown, fail?: (e: unknown) => unknown) =>
+      Promise.resolve(matched()).then(ok, fail)
+    return q
+  }
+  const db = Object.assign((table: string) => chain(table), {
+    transaction: async (cb: (trx: unknown) => unknown) => cb(db),
+    schema: { hasTable: async (t: string) => t in tables }
+  })
+  const reset = (seed: Record<string, Row[]>) => {
+    for (const k of Object.keys(tables)) delete tables[k]
+    for (const [k, v] of Object.entries(seed)) tables[k] = v.map((r) => ({ ...r }))
+    nextId = 900
+  }
+  return { db, tables, reset }
+})
+
+const auth = vi.hoisted(() => ({ admin: true }))
+
+vi.mock('../../../db/index.js', () => ({ db: fake.db }))
+vi.mock('../../../middleware/authenticate.js', () => ({
+  authenticate: vi.fn(async () => {}),
+  requireAdmin: vi.fn(async (req: { user?: unknown; isAdmin?: boolean }) => {
+    if (!auth.admin) {
+      throw Object.assign(new Error('Forbidden'), { statusCode: 403, code: 'ADMIN_ONLY' })
+    }
+    req.user = { id: 'admin-1', email: 'admin@x.test', first_name: 'Ada', last_name: 'Admin' }
+    req.isAdmin = true
+  })
+}))
+vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
+vi.mock('../../../services/config-live.js', () => ({ markConfigRead: vi.fn() }))
+vi.mock('../../../services/read-gate.js', () => ({
+  withReadGate: vi.fn(async (_who: unknown, fn: () => Promise<unknown>) => fn())
+}))
+vi.mock('../../../services/liquid-dates.js', async (orig) => ({
+  ...((await orig()) as Record<string, unknown>),
+  instanceTimezone: async () => 'America/New_York'
+}))
+vi.mock('../../../services/queues.js', () => ({
+  getLabels: vi.fn(async (m: Map<string, Set<string>>) => {
+    const out: Record<string, string> = {}
+    for (const [col, ids] of m) for (const id of ids) out[`${col}:${id}`] = `IR-${id}`
+    return out
+  })
+}))
+vi.mock('../../../services/items.js', () => ({
+  readItems: vi.fn(async () => ({ data: [{ id: 12 }, { id: 11 }] }))
+}))
+// The action context machinery (buildContext) runs real queries; here each
+// named context key answers with fixed rows.
+vi.mock('../../../services/workflow-actions.js', () => ({
+  buildContext: vi.fn(async (defs: Record<string, unknown> | undefined) => {
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(defs ?? {})) out[k] = k === 'mwf_queue' ? [{ name: 'Q-7' }] : []
+    return out
+  })
+}))
+
+// ── In-memory template service ───────────────────────────────────────────────
+type FakeRow = {
+  id: number
+  key: string
+  label: string
+  description: string | null
+  external_api: string | null
+  endpoint_path: string | null
+  collection: string
+  owner: string | null
+  draft_mode: 'map' | 'code'
+  draft_body: string | null
+  draft_rev: number
+  published_mode: 'map' | 'code' | null
+  published_body: string | null
+  published_version: number | null
+  locked_keys: string[]
+  lookups: Record<string, unknown> | null
+  default_hash: string | null
+}
+const svc = vi.hoisted(() => ({
+  rows: new Map<string, FakeRow>(),
+  registered: new Map<string, Record<string, unknown>>()
+}))
+
+vi.mock('../../../services/payload-templates/index.js', async (orig) => {
+  const real = (await orig()) as typeof import('../../../services/payload-templates/index.js')
+  const { renderBody } = await import('../../../services/payload-templates/render.js')
+  const { validateSpec } = await import('../../../services/payload-templates/evaluate.js')
+  const { PayloadTemplateError } = real
+  const clone = (r: FakeRow | undefined) => (r ? structuredClone(r) : null)
+  const need = (key: string) => {
+    const r = svc.rows.get(key)
+    if (!r)
+      throw new PayloadTemplateError('unknown_key', `Payload template '${key}' does not exist`)
+    return r
+  }
+  return {
+    ...real,
+    bustPayloadTemplateCache: vi.fn(),
+    registeredDef: (key: string) => svc.registered.get(key) ?? null,
+    hasNewerDefault: (r: { key: string; default_hash: string | null }) => {
+      const def = svc.registered.get(r.key) as { default: { body: string } } | undefined
+      return !!def && real.hashBody(def.default.body) !== r.default_hash
+    },
+    getTemplate: async (key: string) => clone(svc.rows.get(key)),
+    listTemplates: async (f: { external_api?: string } = {}) =>
+      [...svc.rows.values()]
+        .filter((r) => !f.external_api || r.external_api === f.external_api)
+        .map((r) => structuredClone(r)),
+    saveDraft: async (
+      key: string,
+      input: { mode: 'map' | 'code'; body: string; base_rev: number }
+    ) => {
+      const r = need(key)
+      if (input.mode === 'map') {
+        const v = validateSpec(JSON.parse(input.body))
+        if (!v.ok) throw new PayloadTemplateError('invalid', v.errors.join('; '))
+      }
+      if (r.draft_rev !== input.base_rev) return { ok: false, current: structuredClone(r) }
+      Object.assign(r, {
+        draft_mode: input.mode,
+        draft_body: input.body,
+        draft_rev: r.draft_rev + 1
+      })
+      return { ok: true, rev: r.draft_rev }
+    },
+    publishDraft: async (key: string, input: { base_rev: number; note: string }) => {
+      const r = need(key)
+      if (r.draft_rev !== input.base_rev) return { ok: false, current: structuredClone(r) }
+      const version = (r.published_version ?? 0) + 1
+      Object.assign(r, {
+        published_mode: r.draft_mode,
+        published_body: r.draft_body,
+        published_version: version
+      })
+      return { ok: true, version }
+    },
+    listVersions: async (key: string) => {
+      const r = need(key)
+      return r.published_version
+        ? [{ id: 1, version: r.published_version, mode: r.published_mode, note: 'n' }]
+        : []
+    },
+    getVersion: async (key: string, v: number) => {
+      const r = need(key)
+      return v === r.published_version
+        ? { id: 1, version: v, mode: r.published_mode, note: 'n', body: r.published_body }
+        : null
+    },
+    restoreVersion: async (key: string, v: number) => {
+      const r = need(key)
+      if (v !== r.published_version) return null
+      r.draft_body = r.published_body
+      r.draft_rev += 1
+      return { rev: r.draft_rev }
+    },
+    resetToDefault: async (key: string) => {
+      const r = need(key)
+      const def = svc.registered.get(key) as { default: { body: string } } | undefined
+      if (!def) throw new PayloadTemplateError('invalid', 'no default')
+      r.draft_body = def.default.body
+      r.draft_rev += 1
+      return { rev: r.draft_rev }
+    },
+    renderPayloadTemplate: async (
+      key: string,
+      scope: Record<string, unknown>,
+      opts: { draft?: boolean; draftBody?: { mode: 'map' | 'code'; body: string } } = {}
+    ) => {
+      const r = need(key)
+      const preview = !!opts.draft || !!opts.draftBody
+      const mode = opts.draftBody?.mode ?? (preview ? r.draft_mode : r.published_mode)
+      const body = opts.draftBody?.body ?? (preview ? r.draft_body : r.published_body)
+      const out = await renderBody(mode as 'map' | 'code', String(body), scope, {
+        lockedKeys: r.locked_keys
+      })
+      return { ...out, version: preview ? null : r.published_version }
+    }
+  }
+})
+
+import { payloadTemplateRoutes } from '../../../routes/payload-templates.js'
+import { logActivity } from '../../../services/activity.js'
+import { markConfigRead } from '../../../services/config-live.js'
+import { bustPayloadTemplateCache } from '../../../services/payload-templates/index.js'
+import { withReadGate } from '../../../services/read-gate.js'
+
+const SPEC = JSON.stringify({
+  v: 1,
+  fields: [
+    {
+      id: 'f1',
+      key: 'workflow_id',
+      type: 'text',
+      value: { source: 'path', path: 'record.workflow_id' },
+      include: 'always',
+      rules: { required: true }
+    },
+    {
+      id: 'f2',
+      key: 'efp_state',
+      type: 'text',
+      value: { source: 'builtin', name: 'state.label' },
+      include: 'always'
+    },
+    {
+      id: 'f3',
+      key: 'queue',
+      type: 'text',
+      value: { source: 'path', path: 'context.mwf_queue[0].name' },
+      include: 'not_empty'
+    }
+  ]
+})
+
+const tpl = (over: Partial<FakeRow>): FakeRow => ({
+  id: 1,
+  key: 'mwf-ir-order',
+  label: 'MWF IR order',
+  description: null,
+  external_api: 'MWF',
+  endpoint_path: '/update_workflow.php',
+  collection: 'inventory_request',
+  owner: null,
+  draft_mode: 'map',
+  draft_body: SPEC,
+  draft_rev: 3,
+  published_mode: 'map',
+  published_body: SPEC,
+  published_version: 2,
+  locked_keys: [],
+  lookups: null,
+  default_hash: null,
+  ...over
+})
+
+const action = (key: string, extra: Row = {}) =>
+  JSON.stringify([
+    { type: 'notify' },
+    {
+      type: 'erp_submit',
+      external_api: 'MWF',
+      endpoint_path: '/update_workflow.php',
+      payload_template_key: key,
+      context: { mwf_queue: { collection: 'mwf_queue', filter: { ir: '$id' } } },
+      ...extra
+    }
+  ])
+
+beforeEach(() => {
+  auth.admin = true
+  svc.rows.clear()
+  svc.registered.clear()
+  svc.rows.set('mwf-ir-order', tpl({}))
+  svc.rows.set(
+    'fusion-transfer-order',
+    tpl({
+      id: 2,
+      key: 'fusion-transfer-order',
+      label: 'Fusion transfer order',
+      external_api: 'Fusion IIP',
+      published_version: null,
+      published_mode: null,
+      published_body: null,
+      owner: 'efp-ops'
+    })
+  )
+  fake.reset({
+    nivaro_workflow_templates: [{ id: 'T1', name: 'Inventory Request' }],
+    nivaro_workflow_states: [
+      { id: 'S1', template: 'T1', key: 'SUBMITTED', label: 'Submitted', external_label: null }
+    ],
+    nivaro_workflow_transitions: [
+      {
+        id: 'TR1',
+        template: 'T1',
+        label: 'Submit to Warehouse',
+        to_state: 'S1',
+        sort: 1,
+        actions: action('mwf-ir-order')
+      },
+      {
+        id: 'TR2',
+        template: 'T1',
+        label: 'Auto-submit',
+        to_state: 'S1',
+        sort: 2,
+        actions: action('mwf-ir-order-x')
+      }
+    ],
+    inventory_request: [
+      { id: 11, workflow_id: 'WF-11' },
+      { id: 12, workflow_id: null }
+    ],
+    nivaro_payload_templates: [],
+    nivaro_payload_template_versions: []
+  })
+  vi.mocked(markConfigRead).mockClear()
+  vi.mocked(withReadGate).mockClear()
+  vi.mocked(bustPayloadTemplateCache).mockClear()
+  vi.mocked(logActivity).mockClear()
+})
+
+async function call(method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: Row) {
+  const app = Fastify({ logger: false })
+  app.register(payloadTemplateRoutes, { prefix: '/payload-templates' })
+  await app.ready()
+  const res = await app.inject({ method, url: `/payload-templates${url}`, payload })
+  await app.close()
+  return { status: res.statusCode, body: res.json() as Record<string, any> }
+}
+
+describe('payload template routes', () => {
+  it('refuses a non-admin', async () => {
+    auth.admin = false
+    expect((await call('GET', '')).status).toBe(403)
+    expect(
+      (await call('PUT', '/mwf-ir-order/draft', { mode: 'map', body: SPEC, base_rev: 3 })).status
+    ).toBe(403)
+  })
+
+  it('lists templates, filtered by external API, with status, usage and the edit warning', async () => {
+    const all = await call('GET', '')
+    expect(all.status).toBe(200)
+    expect(all.body.warning).toBe('Payload templates here are replaced every night.')
+    expect(all.body.data.map((r: Row) => r.key).sort()).toEqual([
+      'fusion-transfer-order',
+      'mwf-ir-order'
+    ])
+    const mwf = await call('GET', '?external_api=MWF')
+    expect(mwf.body.data).toEqual([
+      {
+        key: 'mwf-ir-order',
+        label: 'MWF IR order',
+        external_api: 'MWF',
+        status: 'live',
+        published_version: 2,
+        draft_rev: 3,
+        used_by_count: 1,
+        newer_default: false
+      }
+    ])
+    const fusion = await call('GET', '?external_api=Fusion%20IIP')
+    expect(fusion.body.data[0].status).toBe('unpublished')
+  })
+
+  it('shows one template with who uses it', async () => {
+    svc.registered.set('mwf-ir-order', {
+      key: 'mwf-ir-order',
+      owner: 'efp-ops',
+      default: { mode: 'map', body: SPEC },
+      senders: ['efp-ops: MDSi recovery']
+    })
+    const res = await call('GET', '/mwf-ir-order')
+    expect(res.status).toBe(200)
+    expect(res.body.warning).toBe('Payload templates here are replaced every night.')
+    expect(res.body.data.used_by).toEqual([
+      {
+        kind: 'transition',
+        label: 'Inventory Request · Submit to Warehouse',
+        template_id: 'T1',
+        transition_id: 'TR1'
+      },
+      { kind: 'code', label: 'efp-ops: MDSi recovery' }
+    ])
+    expect(res.body.data.newer_default).toBe(true)
+    expect(res.body.data.default_body).toBe(SPEC)
+    expect((await call('GET', '/nope')).status).toBe(404)
+  })
+
+  it('saves a draft, refuses a stale base_rev with the current row, and refuses a bad spec', async () => {
+    const edited = SPEC.replace('"queue"', '"queue_name"')
+    const ok = await call('PUT', '/mwf-ir-order/draft', { mode: 'map', body: edited, base_rev: 3 })
+    expect(ok.status).toBe(200)
+    expect(ok.body).toEqual({ rev: 4 })
+    const stale = await call('PUT', '/mwf-ir-order/draft', { mode: 'map', body: SPEC, base_rev: 3 })
+    expect(stale.status).toBe(409)
+    expect(stale.body.error).toBe('stale')
+    expect(stale.body.current.draft_rev).toBe(4)
+    expect(stale.body.current.draft_body).toBe(edited)
+    const bad = await call('PUT', '/mwf-ir-order/draft', {
+      mode: 'map',
+      body: JSON.stringify({ v: 2, fields: [] }),
+      base_rev: 4
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.body.errors).toContain('v must be 1')
+    const notJson = await call('PUT', '/mwf-ir-order/draft', {
+      mode: 'map',
+      body: '{',
+      base_rev: 4
+    })
+    expect(notJson.status).toBe(400)
+  })
+
+  it('previews against a record with the referencing action scope, values keyed by field id', async () => {
+    const res = await call('POST', '/mwf-ir-order/preview', { id: '11', which: 'draft' })
+    expect(res.status).toBe(200)
+    expect(markConfigRead).toHaveBeenCalled()
+    expect(res.body.body).toEqual({ workflow_id: 'WF-11', efp_state: 'Submitted', queue: 'Q-7' })
+    expect(res.body.values).toMatchObject({ f1: 'WF-11', f2: 'Submitted', f3: 'Q-7' })
+    expect(res.body.skipped).toBeNull()
+    expect(res.body.version).toBeNull()
+    expect(res.body.problems).toEqual([])
+
+    const live = await call('POST', '/mwf-ir-order/preview', { id: '11', which: 'published' })
+    expect(live.body.version).toBe(2)
+
+    // An unsaved edit renders instead of the stored draft.
+    const draft = SPEC.replace('"efp_state"', '"state"')
+    const unsaved = await call('POST', '/mwf-ir-order/preview', {
+      id: '11',
+      which: 'draft',
+      draft: { mode: 'map', body: draft }
+    })
+    expect(unsaved.body.body).toEqual({ workflow_id: 'WF-11', state: 'Submitted', queue: 'Q-7' })
+
+    expect(
+      (await call('POST', '/mwf-ir-order/preview', { id: '999', which: 'draft' })).status
+    ).toBe(404)
+  })
+
+  it('says when the referencing action would not send for the record', async () => {
+    fake.tables.nivaro_workflow_transitions[0].actions = action('mwf-ir-order', {
+      guard: [{ field: 'workflow_id', op: 'not_empty' }]
+    })
+    const res = await call('POST', '/mwf-ir-order/preview', { id: '12', which: 'draft' })
+    expect(res.status).toBe(200)
+    expect(res.body.skipped).toMatch(/guard unmet: workflow_id/)
+  })
+
+  it('uses the registrar scope when no transition references the template', async () => {
+    svc.registered.set('fusion-transfer-order', {
+      key: 'fusion-transfer-order',
+      owner: 'efp-ops',
+      default: { mode: 'map', body: SPEC },
+      scope: async (id: string) => ({ record: { workflow_id: `REG-${id}` }, state: { label: 'X' } })
+    })
+    const res = await call('POST', '/fusion-transfer-order/preview', { id: '5', which: 'draft' })
+    expect(res.status).toBe(200)
+    expect(res.body.body).toEqual({ workflow_id: 'REG-5', efp_state: 'X' })
+  })
+
+  it('checks recent records through the read gate, one result per record', async () => {
+    const res = await call('POST', '/mwf-ir-order/check', { which: 'draft', limit: 500 })
+    expect(res.status).toBe(200)
+    expect(markConfigRead).toHaveBeenCalled()
+    expect(withReadGate).toHaveBeenCalledTimes(1)
+    expect(res.body.results).toHaveLength(2)
+    const [first, second] = res.body.results
+    expect(first).toMatchObject({ id: '12', label: 'IR-12', ok: false, skipped: null })
+    expect(first.problems.some((p: Row) => p.field_id === 'f1')).toBe(true)
+    expect(second).toMatchObject({ id: '11', label: 'IR-11', ok: true, problems: [] })
+  })
+
+  it('publishes, then the list shows the template live; a stale publish is refused', async () => {
+    await call('PUT', '/mwf-ir-order/draft', {
+      mode: 'map',
+      body: SPEC.replace('"queue"', '"q"'),
+      base_rev: 3
+    })
+    const listed = await call('GET', '?external_api=MWF')
+    expect(listed.body.data[0].status).toBe('draft')
+    expect((await call('POST', '/mwf-ir-order/publish', { base_rev: 3, note: 'x' })).status).toBe(
+      409
+    )
+    expect((await call('POST', '/mwf-ir-order/publish', { base_rev: 4, note: '' })).status).toBe(
+      400
+    )
+    const pub = await call('POST', '/mwf-ir-order/publish', { base_rev: 4, note: 'Rename queue' })
+    expect(pub.status).toBe(200)
+    expect(pub.body).toEqual({ version: 3 })
+    const after = await call('GET', '?external_api=MWF')
+    expect(after.body.data[0]).toMatchObject({ status: 'live', published_version: 3 })
+  })
+
+  it('lists, reads and restores versions; resets to the shipped default', async () => {
+    expect((await call('GET', '/mwf-ir-order/versions')).body.data).toHaveLength(1)
+    expect((await call('GET', '/mwf-ir-order/versions/2')).body.data.body).toBe(SPEC)
+    expect((await call('GET', '/mwf-ir-order/versions/9')).status).toBe(404)
+    expect((await call('POST', '/mwf-ir-order/versions/2/restore')).body).toEqual({ rev: 4 })
+    expect((await call('POST', '/mwf-ir-order/versions/9/restore')).status).toBe(404)
+    expect((await call('POST', '/mwf-ir-order/reset-default')).status).toBe(400)
+  })
+
+  it('creates a template and busts the published cache', async () => {
+    const res = await call('POST', '', {
+      key: 'new-payload',
+      label: 'New payload',
+      external_api: 'MWF',
+      collection: 'inventory_request'
+    })
+    expect(res.status).toBe(201)
+    expect(bustPayloadTemplateCache).toHaveBeenCalled()
+    const row = fake.tables.nivaro_payload_templates.find((r) => r.key === 'new-payload')
+    expect(row).toMatchObject({ label: 'New payload', external_api: 'MWF', owner: null })
+    expect((await call('POST', '', { key: 'Bad Key', label: 'x', collection: 'a' })).status).toBe(
+      400
+    )
+    expect(
+      (await call('POST', '', { key: 'mwf-ir-order', label: 'x', collection: 'inventory_request' }))
+        .status
+    ).toBe(409)
+  })
+
+  it('refuses to delete a referenced or registrar-owned template', async () => {
+    const referenced = await call('DELETE', '/mwf-ir-order')
+    expect(referenced.status).toBe(409)
+    expect(referenced.body.error).toBe('referenced')
+    const owned = await call('DELETE', '/fusion-transfer-order')
+    expect(owned.status).toBe(409)
+    expect(owned.body.error).toBe('registered')
+
+    fake.tables.nivaro_payload_templates.push({ id: 77, key: 'loose' })
+    fake.tables.nivaro_payload_template_versions.push({ id: 1, template_id: 77, version: 1 })
+    svc.rows.set('loose', tpl({ id: 77, key: 'loose' }))
+    const ok = await call('DELETE', '/loose')
+    expect(ok.status).toBe(200)
+    expect(fake.tables.nivaro_payload_templates.some((r) => r.key === 'loose')).toBe(false)
+    expect(fake.tables.nivaro_payload_template_versions).toHaveLength(0)
+    expect(bustPayloadTemplateCache).toHaveBeenCalled()
+  })
+
+  it('answers record search with display labels', async () => {
+    const res = await call('GET', '/mwf-ir-order/record-search?q=WF')
+    expect(res.status).toBe(200)
+    expect(res.body.data).toEqual([
+      { id: '12', label: 'IR-12' },
+      { id: '11', label: 'IR-11' }
+    ])
+  })
+
+  it('answers 501 for convert while the converter is not installed', async () => {
+    const res = await call('POST', '/mwf-ir-order/convert', { base_rev: 3 })
+    expect(res.status).toBe(501)
+    expect(res.body).toEqual({ error: 'not_available' })
+  })
+})
