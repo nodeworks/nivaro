@@ -6,6 +6,8 @@ import { clearAutoFailures } from '../services/auto-transition-memory.js'
 import {
   neutralizeSecretMarkers,
   restrictPlaceholders,
+  scrubbedBodyMessage,
+  scrubbedExcerpt,
   scrubSecretsFor,
   secretPathsOf
 } from '../services/body-secrets.js'
@@ -105,11 +107,16 @@ interface SendOutcome {
  * 2xx → 'pending' (or 'accepted' when the body contains an explicit acceptance);
  * non-2xx / thrown → 'failed' with last_error.
  */
-function interpretResponse(httpStatus: number, body: unknown): SendOutcome {
+async function interpretResponse(
+  externalApi: number,
+  httpStatus: number,
+  body: unknown
+): Promise<SendOutcome> {
   if (httpStatus >= 200 && httpStatus < 300) {
     // A 2xx whose body refuses (status: ERROR, api_status: Bad Request…) did
-    // not land — recording it pending/accepted would read as success.
-    const refusal = detectDefaultBodyRejection(body)
+    // not land — recording it pending/accepted would read as success. The
+    // message quotes the body, so it is built from the scrubbed body (stored).
+    const refusal = await scrubbedBodyMessage(externalApi, body, detectDefaultBodyRejection)
     if (refusal) {
       return {
         status: 'failed',
@@ -141,11 +148,12 @@ function interpretResponse(httpStatus: number, body: unknown): SendOutcome {
     }
     return { status, external_ref: ref, error: null, response: body, http_status: httpStatus }
   }
-  const bodyStr = typeof body === 'string' ? body : JSON.stringify(body ?? null)
+  // The excerpt is stored (last_error, attempt error, obligation reason): scrubbed whole, then cut.
+  const excerpt = await scrubbedExcerpt(externalApi, body ?? null, 500)
   return {
     status: 'failed',
     external_ref: null,
-    error: `HTTP ${httpStatus}${bodyStr ? `: ${bodyStr.slice(0, 500)}` : ''}`,
+    error: `HTTP ${httpStatus}${excerpt ? `: ${excerpt}` : ''}`,
     response: body,
     http_status: httpStatus
   }
@@ -170,7 +178,7 @@ export async function sendPayload(
       timeoutMs: 30_000,
       _log: { triggeredBy: 'erp-submission', userId }
     })
-    return interpretResponse(res.status, res.body)
+    return await interpretResponse(externalApi, res.status, res.body)
   } catch (err) {
     return {
       status: 'failed',

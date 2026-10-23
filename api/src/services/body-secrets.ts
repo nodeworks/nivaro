@@ -198,6 +198,37 @@ export function bodySecretsFromConfigText(text: string | null | undefined): Reco
 }
 
 /**
+ * The API's body secrets for a scrub, or null when they cannot be resolved (the config read
+ * throws, or its auth_config is unreadable) — logged here with the error text only, never a
+ * value. `{}` = found with none, or no such API. Never throws.
+ */
+export async function secretsForScrub(
+  apiNameOrId: string | number
+): Promise<Record<string, string> | null> {
+  try {
+    return await resolvedSecrets(apiNameOrId, true)
+  } catch (err) {
+    console.warn(
+      `body-secrets: API ${String(apiNameOrId).slice(0, 100)} — secret scrub failed, storing the marker: ${
+        err instanceof Error ? err.message : String(err)
+      }`.slice(0, 300)
+    )
+    return null
+  }
+}
+
+/**
+ * `value` scrubbed with already-resolved secrets: null secrets (cannot tell) = the fail-closed
+ * stand-in (scrubFailedValue), `{}` = unchanged, else every secret value back as its placeholder.
+ */
+export function applyScrub<T>(value: T, secrets: Record<string, string> | null): T | ScrubFailed {
+  if (value === null || value === undefined) return value
+  if (secrets === null) return scrubFailedValue(value)
+  if (Object.keys(secrets).length === 0) return value
+  return scrubDeep(value, secrets) as T
+}
+
+/**
  * `value` with every body secret of this API (instance-resolved) put back as its placeholder —
  * for what gets STORED from a partner's answer (nivaro_erp_submissions.response, attempt rows).
  * Never use it on the body handed back to a caller (ack parsing reads that).
@@ -221,20 +252,89 @@ export async function scrubSecretsFor<T>(
   value: T
 ): Promise<T | ScrubFailed> {
   if (value === null || value === undefined) return value
-  let secrets: Record<string, string>
+  return applyScrub(value, await secretsForScrub(apiNameOrId))
+}
+
+/** A response body as excerpt text: a string as-is, anything else as JSON ('' for undefined). */
+function bodyText(body: unknown): string {
+  if (typeof body === 'string') return body
+  return JSON.stringify(body ?? null) ?? ''
+}
+
+/**
+ * An excerpt of a partner's response body for STORED error text (last_error, attempt error,
+ * obligation reason, flow $error): the WHOLE body text is scrubbed first, then cut to `max` — a
+ * secret straddling the cut can never survive half-scrubbed. Cannot tell = SCRUB_FAILED_TEXT.
+ * `secrets` may be passed when the caller already resolved them (undefined = look them up).
+ */
+export async function scrubbedExcerpt(
+  apiNameOrId: string | number,
+  body: unknown,
+  max = 500,
+  secrets?: Record<string, string> | null
+): Promise<string> {
+  const text = bodyText(body)
+  if (!text) return text
+  const s = secrets === undefined ? await secretsForScrub(apiNameOrId) : secrets
+  if (s === null) return SCRUB_FAILED_TEXT
+  return scrubSecretValues(text, s).slice(0, max)
+}
+
+/**
+ * A message built FROM a partner's body (detectDefaultBodyRejection / detectConfiguredBodyError
+ * quote its fields) for stored error text. The decision is made on the raw body (null = no
+ * message, nothing looked up); the message is then rebuilt from the scrubbed body, so any cut
+ * the builder makes happens after the scrub. Cannot tell = SCRUB_FAILED_TEXT.
+ */
+export async function scrubbedBodyMessage(
+  apiNameOrId: string | number,
+  body: unknown,
+  build: (body: unknown) => string | null
+): Promise<string | null> {
+  const raw = build(body)
+  if (raw == null) return null
+  const secrets = await secretsForScrub(apiNameOrId)
+  if (secrets === null) return SCRUB_FAILED_TEXT
+  if (Object.keys(secrets).length === 0) return raw
+  const scrubbedBody =
+    typeof body === 'string' ? scrubSecretValues(body, secrets) : scrubDeep(body, secrets)
+  return scrubSecretValues(build(scrubbedBody) ?? raw, secrets)
+}
+
+/**
+ * For writing a partner's answer to the call log / flight recorder from a row already in hand:
+ * the secrets are read strictly from its (instance-resolved) auth_config TEXT. Unreadable =
+ * fail closed: `text` gives SCRUB_FAILED_TEXT and `headers` keeps every name with its value
+ * dropped. Never throws.
+ */
+export function responseLogScrubber(authConfigText: string | null | undefined): {
+  secrets: Record<string, string>
+  unknown: boolean
+  text: (t: string) => string
+  headers: (h: Record<string, string>) => Record<string, string>
+} {
+  let secrets: Record<string, string> = {}
+  let unknown = false
   try {
-    secrets = await resolvedSecrets(apiNameOrId, true)
-  } catch (err) {
-    // The error text only: the value may hold the very secret the scrub was for.
-    console.warn(
-      `body-secrets: response for API ${String(apiNameOrId).slice(0, 100)} not stored — secret scrub failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`.slice(0, 300)
-    )
-    return scrubFailedValue(value)
+    secrets = bodySecretsFromConfigText(authConfigText)
+  } catch {
+    unknown = true
   }
-  if (Object.keys(secrets).length === 0) return value
-  return scrubDeep(value, secrets) as T
+  const has = Object.keys(secrets).length > 0
+  return {
+    secrets,
+    unknown,
+    text: (t) =>
+      unknown ? (scrubFailedValue(t) as string) : has ? scrubSecretValues(t, secrets) : t,
+    headers: (h) =>
+      unknown
+        ? scrubFailedHeaders(h)
+        : has
+          ? Object.fromEntries(
+              Object.entries(h).map(([k, v]) => [k, scrubSecretValues(v, secrets)])
+            )
+          : h
+  }
 }
 
 async function resolvedSecrets(

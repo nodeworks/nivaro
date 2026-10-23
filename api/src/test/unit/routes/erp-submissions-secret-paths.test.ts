@@ -113,3 +113,67 @@ describe('secretPathsOf / restrictPlaceholders', () => {
     expect(restrictPlaceholders({ a: REAL }, undefined)).toEqual({ a: NEUTRAL })
   })
 })
+
+describe('sendPayload — the stored error text never carries an echoed secret', () => {
+  const stored = {
+    endpoint_path: '/orders',
+    body: { t: REAL },
+    secret_paths: ['/t']
+  }
+  const answer = (status: number, body: unknown) =>
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+
+  it('a 4xx echoing the token: the excerpt carries the placeholder', async () => {
+    answer(400, { error: 'bad', echo: { t: 'S3CRET-TOKEN' } })
+    const out = await sendPayload(5, stored as never, undefined)
+    expect(out.status).toBe('failed')
+    expect(out.error).toContain(REAL)
+    expect(out.error).not.toContain('S3CRET-TOKEN')
+    // The answer itself is untouched (it is scrubbed where it is stored).
+    expect(JSON.stringify(out.response)).toContain('S3CRET-TOKEN')
+  })
+
+  it('the secret straddling the 500-char cut never survives half-scrubbed', async () => {
+    // '{"pad":"' is 8 chars, so the token starts at 495 and crosses the cut at 500.
+    answer(400, { pad: `${'x'.repeat(487)}S3CRET-TOKEN tail` })
+    const out = await sendPayload(5, stored as never, undefined)
+    expect(out.error).not.toContain('S3CRET')
+    expect(out.error).toMatch(/⟦nvr-$/)
+  })
+
+  it('a 2xx refusal quoting the token: the message is built from the scrubbed body', async () => {
+    answer(200, { status: 'ERROR', message: 'token S3CRET-TOKEN rejected' })
+    const out = await sendPayload(5, stored as never, undefined)
+    expect(out.status).toBe('failed')
+    expect(out.error).toBe(`token ${REAL} rejected`)
+  })
+
+  it('the config read fails for the scrub: the marker, never the excerpt', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const base = vi.mocked(db).getMockImplementation()
+    // Reads before the request goes out (the send's own) succeed; the scrub's read after fails.
+    let sent = 0
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table !== 'nivaro_external_apis' || fetchMock.mock.calls.length === sent)
+        return (base as (t: string) => unknown)(table)
+      const chain: Record<string, unknown> = {}
+      chain.where = vi.fn(() => chain)
+      chain.first = vi.fn(async () => Promise.reject(new Error('pool timeout')))
+      return chain
+    }) as never)
+    sent = fetchMock.mock.calls.length
+    answer(400, { echo: 'S3CRET-TOKEN' })
+    const out = await sendPayload(5, stored as never, undefined)
+    expect(out.error).toBe('HTTP 400: {"_scrub_failed":true}')
+    sent = fetchMock.mock.calls.length
+    answer(200, { status: 'ERROR', message: 'token S3CRET-TOKEN rejected' })
+    const refused = await sendPayload(5, stored as never, undefined)
+    expect(refused.error).toBe('{"_scrub_failed":true}')
+    warn.mockRestore()
+  })
+})

@@ -14,6 +14,7 @@
  * comes from probes when the API has any in the window, else from calls.
  */
 import { db } from '../db/index.js'
+import { responseLogScrubber } from './body-secrets.js'
 import { mockConfigFor, resolveAuth, resolveInstanceRow } from './external-apis.js'
 import { recordSideCall } from './outbound-recorder.js'
 
@@ -72,6 +73,7 @@ export async function probeApi(apiId: number, triggeredBy = 'probe'): Promise<Pr
   if (mockConfigFor(stored))
     return { ...out, skipped: 'mocked', ok: false, detail: 'Mock mode is on for this instance' }
   const row = resolveInstanceRow({ ...stored, enabled: !!stored.enabled })
+  const logScrub = responseLogScrubber(row.auth_config)
   const cfg = parseJson<Record<string, unknown>>(row.auth_config)
   const hasHealth = !!row.health_path?.trim()
   const isOauth = row.auth_type === 'oauth2_cc'
@@ -133,7 +135,8 @@ export async function probeApi(apiId: number, triggeredBy = 'probe'): Promise<Pr
         res.headers.forEach((v, k) => {
           resHeaders[k] = v
         })
-        text = method === 'HEAD' ? null : (await res.text()).slice(0, 16_000)
+        // Scrubbed WHOLE, then cut — a secret straddling the cut never survives half-scrubbed.
+        text = method === 'HEAD' ? null : logScrub.text(await res.text()).slice(0, 16_000)
       } catch (err) {
         error =
           err instanceof Error
@@ -160,7 +163,8 @@ export async function probeApi(apiId: number, triggeredBy = 'probe'): Promise<Pr
         error: ok ? null : error,
         triggered_by: triggeredBy,
         request_headers: headers,
-        response_headers: resHeaders,
+        // Scrubbed of body secrets like every logged answer — fail closed on unreadable config.
+        response_headers: logScrub.headers(resHeaders),
         response_body: text
       })
     }

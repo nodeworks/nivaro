@@ -328,3 +328,50 @@ describe('POST /:id/test — body secrets', () => {
     await app.close()
   })
 })
+
+describe('POST /:id/call (SDK lookup) — the call log is scrubbed, fail closed', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  function echo() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response('{"echo":"S3CRET-TOKEN"}', {
+            status: 400,
+            headers: { 'content-type': 'application/json', 'x-echo': 'got S3CRET-TOKEN' }
+          })
+      )
+    )
+  }
+  const headersOf = (log: Record<string, unknown>) =>
+    (typeof log.response_headers === 'string'
+      ? JSON.parse(log.response_headers)
+      : log.response_headers) as Record<string, string>
+
+  it('an echoed secret is logged as its placeholder; the caller still gets the answer', async () => {
+    row.instance_overrides = null
+    echo()
+    const app = buildApp()
+    const res = await app.inject({ method: 'POST', url: '/3/call', payload: { path: '/s' } })
+    expect(res.statusCode).toBe(200)
+    expect(String(logInserts[0].response_body)).toBe('{"echo":"⟦nvr-secret:token⟧"}')
+    expect(headersOf(logInserts[0])['x-echo']).toBe('got ⟦nvr-secret:token⟧')
+    expect(JSON.stringify(logInserts[0])).not.toContain('S3CRET-TOKEN')
+    await app.close()
+  })
+
+  it('an unreadable auth_config logs the marker body and header names without values', async () => {
+    row.instance_overrides = null
+    row.auth_config = '{"body_secrets": {"token": "S3CRET-TOKEN"'
+    echo()
+    const app = buildApp()
+    await app.inject({ method: 'POST', url: '/3/call', payload: { path: '/s' } })
+    expect(logInserts[0].response_body).toBe('{"_scrub_failed":true}')
+    const h = headersOf(logInserts[0])
+    expect(Object.keys(h)).toEqual(expect.arrayContaining(['content-type', 'x-echo']))
+    expect(JSON.stringify(h)).not.toContain('S3CRET-TOKEN')
+    expect(JSON.stringify(logInserts[0])).not.toContain('S3CRET-TOKEN')
+    await app.close()
+  })
+})

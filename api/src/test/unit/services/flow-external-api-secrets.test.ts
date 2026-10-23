@@ -121,3 +121,78 @@ describe('flow external-api op — body secrets', () => {
     expect(JSON.stringify({ ...wire, auth: null })).not.toContain('S3CRET-TOKEN')
   })
 })
+
+describe('flow external-api op — the stored $error never carries an echoed secret', () => {
+  const ops = [
+    {
+      id: 'op-push',
+      flow: 'flow-1',
+      name: 'Push',
+      key: 'push',
+      type: 'external-api',
+      position_x: 0,
+      position_y: 0,
+      options: JSON.stringify({
+        mode: 'predefined',
+        api_id: 7,
+        method_override: 'POST',
+        path_override: '/status',
+        // No placeholder: an unreadable config would refuse one before anything is sent.
+        body: '{"a":1}'
+      }),
+      resolve: null,
+      reject: null
+    }
+  ]
+  const updates: Record<string, unknown>[] = []
+
+  async function runWith(apiRow: Record<string, unknown>, status: number, body: unknown) {
+    updates.length = 0
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((t: string) => {
+      const c = chainFor(t, ops)
+      if (t === 'nivaro_external_apis') c.first = vi.fn(async () => apiRow)
+      c.update = vi.fn(async (patch: Record<string, unknown>) => {
+        if (t === 'nivaro_flow_runs') updates.push(patch)
+        return 1
+      })
+      return c
+    })
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+    await executeFlow({
+      flowId: 'flow-1',
+      flowName: 'Test',
+      trigger: 'test',
+      payload: { collection: 'workflows', item: '1' },
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never
+    })
+    return String(updates.find((u) => 'error_message' in u)?.error_message ?? '')
+  }
+
+  it('a 4xx echoing the token: the error carries the placeholder', async () => {
+    const msg = await runWith(API_ROW, 400, { echo: 'S3CRET-TOKEN' })
+    expect(msg).toContain('HTTP 400')
+    expect(msg).toContain('⟦nvr-secret:token⟧')
+    expect(msg).not.toContain('S3CRET-TOKEN')
+  })
+
+  it('a 2xx refusal quoting the token: the message is built from the scrubbed body', async () => {
+    const msg = await runWith(API_ROW, 200, { status: 'ERROR', message: 'bad S3CRET-TOKEN' })
+    expect(msg).toContain('bad ⟦nvr-secret:token⟧')
+    expect(msg).not.toContain('S3CRET-TOKEN')
+  })
+
+  it('an unreadable auth_config: the marker text, never the excerpt', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const msg = await runWith({ ...API_ROW, auth_config: '{"body_secrets":' }, 400, {
+      echo: 'S3CRET-TOKEN'
+    })
+    expect(msg).toContain('HTTP 400: {"_scrub_failed":true}')
+    expect(msg).not.toContain('S3CRET-TOKEN')
+    warn.mockRestore()
+  })
+})

@@ -31,6 +31,7 @@ import {
   substituteBodySecrets
 } from '../../../services/body-secrets.js'
 import { callExternalApi } from '../../../services/external-apis.js'
+import { resolveObligation } from '../../../services/integration-obligations.js'
 import { previewErpActions, runTransitionActions } from '../../../services/workflow-actions.js'
 
 const REAL = '⟦nvr-secret:token⟧'
@@ -158,6 +159,52 @@ describe('erp_submit — the stored response fails closed when the secrets canno
     })
   const storedResponse = () =>
     inserts.find((i) => i.table === 'nivaro_erp_submissions')?.row.response as string | null
+  const storedError = () =>
+    inserts.find((i) => i.table === 'nivaro_erp_submissions')?.row.last_error as string | null
+  const obligationReason = () =>
+    (vi.mocked(resolveObligation).mock.calls.at(-1)?.[1] as { reason?: string | null }).reason
+  const withSecret = {
+    id: 5,
+    name: 'Partner',
+    auth_config: JSON.stringify({ body_secrets: { token: 'S3CRET' } })
+  }
+
+  it('a 4xx echoing the token: last_error and the obligation reason carry the placeholder', async () => {
+    wire(withSecret)
+    vi.mocked(callExternalApi).mockResolvedValueOnce({
+      status: 400,
+      body: { error: 'bad', echo: 'S3CRET' }
+    } as never)
+    await run()
+    expect(storedError()).toContain(REAL)
+    expect(storedError()).not.toContain('S3CRET')
+    expect(obligationReason()).toContain(REAL)
+    expect(obligationReason()).not.toContain('S3CRET')
+  })
+
+  it('a 2xx refusal quoting the token: the stored message is built from the scrubbed body', async () => {
+    wire(withSecret)
+    vi.mocked(callExternalApi).mockResolvedValueOnce({
+      status: 200,
+      body: { status: 'ERROR', message: 'token S3CRET rejected' }
+    } as never)
+    await run()
+    expect(storedError()).toBe(`token ${REAL} rejected`)
+    expect(obligationReason()).toBe(`token ${REAL} rejected`)
+  })
+
+  it('an unreadable auth_config: last_error and the reason are the marker text', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    wire({ id: 5, name: 'Partner', auth_config: '{"body_secrets":' })
+    vi.mocked(callExternalApi).mockResolvedValueOnce({
+      status: 400,
+      body: { echo: 'S3CRET' }
+    } as never)
+    await run()
+    expect(storedError()).toBe(`HTTP 400: ${SCRUB_FAILED_TEXT}`)
+    expect(obligationReason()).toBe(`HTTP 400: ${SCRUB_FAILED_TEXT}`)
+    warn.mockRestore()
+  })
 
   it('an unreadable auth_config stores the marker, never the echoed secret', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

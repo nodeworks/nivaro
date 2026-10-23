@@ -5,9 +5,8 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   BodySecretError,
-  bodySecretsOf,
   isRecord,
-  scrubSecretValues,
+  responseLogScrubber,
   substituteBodySecrets
 } from '../services/body-secrets.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
@@ -917,11 +916,12 @@ export async function externalApisRoutes(app: FastifyInstance) {
     const extraHeaders = req.body?.headers ?? {}
     const cfg = parseJson<Record<string, unknown>>(row.auth_config)
     const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
-    const secrets = bodySecretsOf(cfg)
-    // An echoed secret never reaches the log or the editor's response panel.
-    const scrub = (t: string): string => scrubSecretValues(t, secrets)
-    const scrubHeaders = (h: Record<string, string>): Record<string, string> =>
-      Object.fromEntries(Object.entries(h).map(([k, v]) => [k, scrub(v)]))
+    // An echoed secret never reaches the log or the editor's response panel; an unreadable
+    // auth_config fails closed (marker body, header values dropped).
+    const logScrub = responseLogScrubber(row.auth_config)
+    const secrets = logScrub.secrets
+    const scrub = logScrub.text
+    const scrubHeaders = logScrub.headers
     // An unknown body secret refuses the test before anything is sent.
     if (method !== 'GET' && method !== 'HEAD' && req.body?.body !== undefined) {
       try {
@@ -1434,6 +1434,9 @@ export async function externalApisRoutes(app: FastifyInstance) {
         }
       }
 
+      // What the log keeps of the answer is scrubbed of this API's body secrets — fail closed
+      // (marker body, header values dropped) when its auth_config cannot be read.
+      const logScrub = responseLogScrubber(resolveInstanceRow(api).auth_config)
       await writeApiCallLog({
         api_id: api.id,
         endpoint_id: endpoint.id,
@@ -1444,8 +1447,8 @@ export async function externalApisRoutes(app: FastifyInstance) {
         request_headers: headers,
         request_body: reqBodyStr,
         response_status: res.status,
-        response_headers: resHeaders,
-        response_body: text,
+        response_headers: logScrub.headers(resHeaders),
+        response_body: logScrub.text(text),
         duration_ms: durationMs,
         user_id: req.user?.id ?? null
       })
@@ -1562,6 +1565,8 @@ export async function externalApisRoutes(app: FastifyInstance) {
         }
       }
 
+      // Scrubbed like the endpoint route above (fail closed on an unreadable auth_config).
+      const logScrub = responseLogScrubber(resolveInstanceRow(api).auth_config)
       await writeApiCallLog({
         api_id: api.id,
         triggered_by: 'sdk',
@@ -1571,8 +1576,8 @@ export async function externalApisRoutes(app: FastifyInstance) {
         request_headers: headers,
         request_body: reqBodyStr,
         response_status: res.status,
-        response_headers: resHeaders,
-        response_body: text,
+        response_headers: logScrub.headers(resHeaders),
+        response_body: logScrub.text(text),
         duration_ms: durationMs,
         user_id: req.user?.id ?? null
       })

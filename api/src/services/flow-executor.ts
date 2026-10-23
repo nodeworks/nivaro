@@ -3,7 +3,11 @@ import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 import { errorText } from '../lib/db-refusal.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
-import { protectTemplatePlaceholders } from './body-secrets.js'
+import {
+  protectTemplatePlaceholders,
+  scrubbedBodyMessage,
+  scrubbedExcerpt
+} from './body-secrets.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { callExternalApi } from './external-apis.js'
@@ -614,6 +618,9 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
 
   let status: number
   let body: unknown
+  // The configured API a predefined call went to — its body secrets are scrubbed from the
+  // $error text below. A custom-URL call has no API, so nothing to scrub.
+  let scrubApi: string | number | null = null
 
   if (opts.mode === 'predefined') {
     const apiId = opts.api_id as string | number | undefined
@@ -669,6 +676,7 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
       }
     }
 
+    scrubApi = apiId
     try {
       const result = await callExternalApi(apiId, callOpts)
       status = result.status
@@ -765,7 +773,10 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
   const httpStatus = { __http_status: status }
 
   if (failOnError && status >= 400) {
-    const detail = typeof body === 'string' ? body : JSON.stringify(body ?? null)
+    const raw = typeof body === 'string' ? body : JSON.stringify(body ?? null)
+    // $error is stored (run log, obligation reason): scrubbed whole, then cut (fail closed).
+    const detail =
+      raw && raw !== 'null' && scrubApi != null ? await scrubbedExcerpt(scrubApi, raw, 300) : raw
     return {
       status: 'reject' as const,
       output: {
@@ -779,7 +790,10 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
   // A 2xx can still be a refusal — some partners answer 200 with an error
   // status in the body. That push did not land either.
   if (failOnError) {
-    const refusal = detectDefaultBodyRejection(body)
+    const refusal =
+      scrubApi != null
+        ? await scrubbedBodyMessage(scrubApi, body, detectDefaultBodyRejection)
+        : detectDefaultBodyRejection(body)
     if (refusal) {
       return {
         status: 'reject' as const,

@@ -421,7 +421,7 @@ describe('applySendOutcome — the stored response is scrubbed, and fails closed
       outcome: {
         status: 'rejected',
         external_ref: null,
-        error: 'HTTP 400',
+        error: 'HTTP 400: {"echo":"REAL-TOKEN"}',
         response: { echo: 'REAL-TOKEN' },
         http_status: 400
       },
@@ -438,8 +438,10 @@ describe('applySendOutcome — the stored response is scrubbed, and fails closed
     await send()
     const patch = sub.update.mock.calls[0][0] as Record<string, unknown>
     expect(patch.response).toBe(SCRUB_FAILED_TEXT)
+    expect(patch.last_error).toBe(SCRUB_FAILED_TEXT)
     const attempt = att.insert.mock.calls.map((c) => c[0] as Record<string, unknown>)[0]
     expect(attempt.response).toBe(SCRUB_FAILED_TEXT)
+    expect(attempt.error).toBe(SCRUB_FAILED_TEXT)
     expect(JSON.stringify([patch, attempt])).not.toContain('REAL-TOKEN')
     expect(warn).toHaveBeenCalled()
     expect(JSON.stringify(warn.mock.calls)).not.toContain('REAL-TOKEN')
@@ -453,9 +455,9 @@ describe('applySendOutcome — the stored response is scrubbed, and fails closed
       apiFirst: async () => ({ id: 5, name: 'MWF', auth_config: null })
     })
     await send()
-    expect((sub.update.mock.calls[0][0] as Record<string, unknown>).response).toBe(
-      SCRUB_FAILED_TEXT
-    )
+    const patch = sub.update.mock.calls[0][0] as Record<string, unknown>
+    expect(patch.response).toBe(SCRUB_FAILED_TEXT)
+    expect(patch.last_error).toBe(SCRUB_FAILED_TEXT)
     warn.mockRestore()
   })
 
@@ -465,9 +467,9 @@ describe('applySendOutcome — the stored response is scrubbed, and fails closed
       apiFirst: async () => ({ id: 5, name: 'MWF', auth_config: '{"client_id":"c"}' })
     })
     await send()
-    expect((sub.update.mock.calls[0][0] as Record<string, unknown>).response).toBe(
-      JSON.stringify({ echo: 'REAL-TOKEN' })
-    )
+    const patch = sub.update.mock.calls[0][0] as Record<string, unknown>
+    expect(patch.response).toBe(JSON.stringify({ echo: 'REAL-TOKEN' }))
+    expect(patch.last_error).toBe('HTTP 400: {"echo":"REAL-TOKEN"}')
   })
 
   it('the API has the secret: the echo is stored as its placeholder', async () => {
@@ -482,7 +484,9 @@ describe('applySendOutcome — the stored response is scrubbed, and fails closed
     await send()
     const patch = sub.update.mock.calls[0][0] as Record<string, unknown>
     expect(patch.response).toBe(JSON.stringify({ echo: '⟦nvr-secret:token⟧' }))
+    expect(patch.last_error).toBe('HTTP 400: {"echo":"⟦nvr-secret:token⟧"}')
     const attempt = att.insert.mock.calls.map((c) => c[0] as Record<string, unknown>)[0]
     expect(attempt.response).toBe(patch.response)
+    expect(attempt.error).toBe(patch.last_error)
   })
 })

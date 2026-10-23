@@ -25,9 +25,12 @@ import {
   isRecord,
   neutralizeSecretMarkers,
   protectTemplatePlaceholders,
+  responseLogScrubber,
   SCRUB_FAILED,
   SCRUB_FAILED_HEADER,
   SCRUB_FAILED_TEXT,
+  scrubbedBodyMessage,
+  scrubbedExcerpt,
   scrubSecretsFor,
   scrubSecretValues,
   secretPlaceholder,
@@ -506,5 +509,47 @@ describe('scrubSecretsFor fails closed', () => {
     expect(JSON.stringify(detail.response_headers)).not.toContain('S3CRET-TOKEN')
     // The caller still gets the real answer (ack parsing reads it).
     expect(res.body).toEqual({ echo: 'S3CRET-TOKEN' })
+  })
+})
+
+describe('scrubbedExcerpt / scrubbedBodyMessage / responseLogScrubber', () => {
+  it('scrubbedExcerpt scrubs the whole text before the cut', async () => {
+    const body = `${'x'.repeat(495)}S3CRET-TOKEN`
+    const out = await scrubbedExcerpt('MWF', body, 500)
+    expect(out).toBe(`${'x'.repeat(495)}⟦nvr-`)
+    expect(await scrubbedExcerpt('MWF', null)).toBe('null')
+  })
+
+  it('scrubbedBodyMessage looks nothing up when the body carries no message', async () => {
+    vi.mocked(db).mockClear()
+    expect(await scrubbedBodyMessage('MWF', { ok: true }, () => null)).toBeNull()
+    expect(db).not.toHaveBeenCalled()
+  })
+
+  it('both fail closed to SCRUB_FAILED_TEXT when the config read throws', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(db).mockImplementation((() => {
+      const chain: Record<string, unknown> = {}
+      chain.where = vi.fn(() => chain)
+      chain.first = vi.fn(async () => Promise.reject(new Error('pool timeout')))
+      return chain
+    }) as never)
+    expect(await scrubbedExcerpt('MWF', { echo: 'S3CRET-TOKEN' })).toBe(SCRUB_FAILED_TEXT)
+    expect(await scrubbedBodyMessage('MWF', { m: 'S3CRET-TOKEN' }, (b) => JSON.stringify(b))).toBe(
+      SCRUB_FAILED_TEXT
+    )
+    warn.mockRestore()
+  })
+
+  it('responseLogScrubber: readable scrubs, unreadable drops values, none passes through', () => {
+    const ok = responseLogScrubber(JSON.stringify({ body_secrets: { token: 'S3CRET-TOKEN' } }))
+    expect(ok.text('a S3CRET-TOKEN')).toBe(`a ${P('token')}`)
+    expect(ok.headers({ x: 'S3CRET-TOKEN' })).toEqual({ x: P('token') })
+    const bad = responseLogScrubber('{"body_secrets":')
+    expect(bad.unknown).toBe(true)
+    expect(bad.text('a S3CRET-TOKEN')).toBe(SCRUB_FAILED_TEXT)
+    expect(bad.headers({ x: 'S3CRET-TOKEN' })).toEqual({ x: SCRUB_FAILED_HEADER })
+    const none = responseLogScrubber(null)
+    expect(none.text('a b')).toBe('a b')
   })
 })

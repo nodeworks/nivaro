@@ -1,15 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
-import {
-  bodySecretsFromConfigText,
-  bodySecretsOf,
-  isRecord,
-  scrubFailedHeaders,
-  scrubFailedValue,
-  scrubSecretValues,
-  substituteBodySecrets
-} from './body-secrets.js'
+import { isRecord, responseLogScrubber, substituteBodySecrets } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { partnerChaosFetch, partnerFault, readChaosResponse } from './chaos/faults/partner.js'
 import {
@@ -700,13 +692,8 @@ export async function callExternalApi(
   // Without the flag a placeholder is sent as the literal text it is.
   // Strict read for the scrub below: an auth_config that does not parse leaves the secrets
   // UNKNOWN (not absent), so what we log of the answer fails closed.
-  let bodySecrets: Record<string, string> = bodySecretsOf(cfg)
-  let secretsUnknown = false
-  try {
-    bodySecrets = bodySecretsFromConfigText(row.auth_config)
-  } catch {
-    secretsUnknown = true
-  }
+  const logScrub = responseLogScrubber(row.auth_config)
+  const bodySecrets = logScrub.secrets // {} when unknown: a placeholder then refuses the call
   const wireBody =
     sendsBody && options.bodySecrets === true
       ? substituteBodySecrets(body, bodySecrets, row.name)
@@ -714,21 +701,8 @@ export async function callExternalApi(
   // A partner may echo a secret back: what we log / record of its answer is scrubbed (always —
   // a caller may have put a secret's value in the body some other way).
   // Secrets unknown → fail closed: the body becomes SCRUB_FAILED_TEXT, header values are dropped.
-  const hasSecrets = Object.keys(bodySecrets).length > 0
-  const logText = (t: string): string =>
-    secretsUnknown
-      ? (scrubFailedValue(t) as string)
-      : hasSecrets
-        ? scrubSecretValues(t, bodySecrets)
-        : t
-  const logHeaders = (h: Record<string, string>): Record<string, string> =>
-    secretsUnknown
-      ? scrubFailedHeaders(h)
-      : hasSecrets
-        ? Object.fromEntries(
-            Object.entries(h).map(([k, v]) => [k, scrubSecretValues(v, bodySecrets)])
-          )
-        : h
+  const logText = logScrub.text
+  const logHeaders = logScrub.headers
   const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
   const auth = await resolveAuth(row.auth_type, cfg, {
     apiId: row.id,
@@ -902,6 +876,7 @@ export async function callExternalApi(
   )
   // #604 — record mode: this live answer becomes a mock rule for this instance.
   if (mockRecordOn(stored)) {
+    // A failed scrub (unreadable auth_config) records SCRUB_FAILED_TEXT as the mock body.
     void recordMockAnswer(row.id, {
       method,
       path: suffix || '/',

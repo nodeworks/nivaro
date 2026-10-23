@@ -7,7 +7,13 @@ import {
   updateAsAction
 } from './action-writes.js'
 import { logActivity } from './activity.js'
-import { protectTemplatePlaceholders, scrubSecretsFor, secretPathsOf } from './body-secrets.js'
+import {
+  protectTemplatePlaceholders,
+  scrubbedBodyMessage,
+  scrubbedExcerpt,
+  scrubSecretsFor,
+  secretPathsOf
+} from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
@@ -1187,11 +1193,17 @@ export async function runTransitionActions(opts: {
         // without one, 2xx keeps meaning pending as before.
         // …else the generic check (status/api_status/result reads ERROR,
         // FAILED, "Bad Request"…, or success/ok/status is false).
-        const bodyError =
-          detectConfiguredBodyError(
-            action.response_error as ResponseErrorConfig | undefined,
-            res.body
-          ) ?? detectDefaultBodyRejection(res.body)
+        // The message quotes body fields and is stored (last_error, obligation reason), so it
+        // is rebuilt from the scrubbed body — fail closed to the marker text.
+        const bodyError = await scrubbedBodyMessage(
+          apiId,
+          res.body,
+          (b) =>
+            detectConfiguredBodyError(
+              action.response_error as ResponseErrorConfig | undefined,
+              b
+            ) ?? detectDefaultBodyRejection(b)
+        )
         if (bodyError) {
           error = bodyError
         } else {
@@ -1206,7 +1218,8 @@ export async function runTransitionActions(opts: {
             : 'pending'
         }
       } else {
-        error = `HTTP ${res.status}: ${JSON.stringify(res.body ?? null)?.slice(0, 500)}`
+        // Stored excerpt: the whole body text scrubbed first, then cut (fail closed).
+        error = `HTTP ${res.status}: ${await scrubbedExcerpt(apiId, JSON.stringify(res.body ?? null) ?? '', 500)}`
       }
     } catch (err) {
       // Keep every scrap of detail — fetch failures bury the real reason
