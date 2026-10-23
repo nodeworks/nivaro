@@ -4,9 +4,11 @@ import { utcNow } from '../dialect.js'
 /**
  * Partner payload templates. A template is the named, versioned body a sender builds for a
  * partner call: a field map or Liquid text, edited as a draft and published as an immutable
- * version. `draft_*` is the working copy (draft_rev = optimistic concurrency), `published_*` is
- * what senders use, and every publish also lands in nivaro_payload_template_versions.
- * Both tables are configuration: they ride config snapshots and promote between environments.
+ * version. `published_*` is what senders use, and every publish also lands in
+ * nivaro_payload_template_versions. The working copy lives in nivaro_payload_template_drafts
+ * (rev = optimistic concurrency) — its own table so editor autosaves never move the config
+ * epoch (it is not in config-epoch WATCHED). All three tables are configuration: they ride
+ * config snapshots and promote between environments.
  */
 export async function up(knex: Knex): Promise<void> {
   if (!(await knex.schema.hasTable('nivaro_payload_templates'))) {
@@ -24,13 +26,8 @@ export async function up(knex: Knex): Promise<void> {
       /** Registering extension id, NULL when created in the UI. */
       t.string('owner', 120).nullable()
       /** map | code */
-      t.string('draft_mode', 10).notNullable().defaultTo('map')
       t.string('published_mode', 10).nullable()
-      t.text('draft_body').nullable()
       t.text('published_body').nullable()
-      t.integer('draft_rev').notNullable().defaultTo(1)
-      t.uuid('draft_updated_by').nullable().references('id').inTable('nivaro_users')
-      t.dateTime('draft_updated_at').nullable()
       t.integer('published_version').nullable()
       t.dateTime('published_at').nullable()
       t.uuid('published_by').nullable().references('id').inTable('nivaro_users')
@@ -57,9 +54,27 @@ export async function up(knex: Knex): Promise<void> {
       t.unique(['template_id', 'version'])
     })
   }
+  if (!(await knex.schema.hasTable('nivaro_payload_template_drafts'))) {
+    await knex.schema.createTable('nivaro_payload_template_drafts', (t) => {
+      /** One working copy per template. */
+      t.integer('template_id')
+        .notNullable()
+        .primary()
+        .references('id')
+        .inTable('nivaro_payload_templates')
+      /** map | code */
+      t.string('mode', 10).notNullable()
+      t.text('body').notNullable()
+      /** Bumped on every draft write (optimistic concurrency). */
+      t.integer('rev').notNullable().defaultTo(1)
+      t.uuid('updated_by').nullable().references('id').inTable('nivaro_users')
+      t.dateTime('updated_at').nullable()
+    })
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTableIfExists('nivaro_payload_template_drafts')
   await knex.schema.dropTableIfExists('nivaro_payload_template_versions')
   await knex.schema.dropTableIfExists('nivaro_payload_templates')
 }
