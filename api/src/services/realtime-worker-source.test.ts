@@ -28,6 +28,15 @@ class FakeSocket {
     this.connected = true
     this.fire('connect')
   }
+  disconnect() {
+    this.connected = false
+    this.fire('disconnect', 'io client disconnect')
+  }
+  /** The server drops the socket (the zombie reaper does this to an unauthenticated one). */
+  serverDrop() {
+    this.connected = false
+    this.fire('disconnect', 'io server disconnect')
+  }
   /** The server's side: fire an event into the worker's listeners (and onAny). */
   fire(ev: string, ...args: unknown[]) {
     for (const cb of this.handlers.get(ev) ?? []) cb(...args)
@@ -71,6 +80,8 @@ function boot() {
     setInterval: vi.fn(() => 1),
     setTimeout: vi.fn(() => 1),
     clearTimeout: vi.fn(),
+    // the test realm's Date, so vi.setSystemTime moves the worker's clock (the watchdogs)
+    Date,
     console
   }
   scope.self = scope
@@ -125,32 +136,104 @@ describe('realtime shared worker source (#2475)', () => {
     expect(b.events('auth:ok').length).toBe(1)
   })
 
-  it('backs off when a signed-out tab has no token, and asks at once when a tab comes back', () => {
+  it('backs off when a tab has no token; focus never restarts the asking', () => {
     const { socket, scope, attach } = boot()
     const a = attach()
     a.send({ t: 'hello', app: 'admin' })
     socket.connect()
     const setTimeoutMock = scope.setTimeout as ReturnType<typeof vi.fn>
     const lastAsk = () => a.received.filter((m) => m.t === 'need-token').at(-1)?.req
+    const asks = () => a.received.filter((m) => m.t === 'need-token').length
     const answerEmpty = () => {
       a.send({ t: 'token', req: lastAsk(), token: null })
       return setTimeoutMock.mock.calls.at(-1) as [() => void, number]
     }
     const waits: number[] = []
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 11; i++) {
       const [retry, ms] = answerEmpty()
       waits.push(ms)
       retry()
     }
-    expect(waits).toEqual([1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000])
-    // the tab comes to the front (it may have signed in): ask now, and the wait starts over
-    const asked = a.received.filter((m) => m.t === 'need-token').length
+    expect(waits).toEqual([
+      1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 300000, 300000
+    ])
+    // the tab comes to the front: no ask, the wait does not start over (staging 2026-10-23)
+    const before = asks()
     a.send({ t: 'active' })
-    expect(a.received.filter((m) => m.t === 'need-token').length).toBe(asked + 1)
+    expect(asks()).toBe(before)
+    // a tab that heard a sign-in: ask now, and the wait starts over
+    a.send({ t: 'signed-in' })
+    expect(asks()).toBe(before + 1)
     expect(answerEmpty()[1]).toBe(1000)
     // a token signs the socket in
     a.send({ t: 'token', req: lastAsk(), token: 'ws-9' })
     expect(socket.sent('auth')).toEqual([{ token: 'ws-9' }])
+  })
+
+  it('parks when a tab says it is signed out: closes the socket, asks nothing, no watchdog', () => {
+    const { socket, scope, attach } = boot()
+    const a = attach()
+    a.send({ t: 'hello', app: 'admin' })
+    socket.connect()
+    const asks = () => a.received.filter((m) => m.t === 'need-token')
+    a.send({ t: 'token', req: asks().at(-1)?.req, token: null, signedOut: true })
+    expect(socket.connected).toBe(false)
+    // nothing revives it: not focus, not the stall watchdog, not the token timer
+    a.send({ t: 'active' })
+    const intervals = (scope.setInterval as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0] as () => void
+    )
+    vi.setSystemTime(Date.now() + 120_000)
+    a.send({ t: 'pong' }) // the tab is alive (it answers pings)
+    for (const tick of intervals) tick()
+    expect(socket.connected).toBe(false)
+    expect(asks().length).toBe(1)
+    // a tab signs in: connect again and ask
+    a.send({ t: 'signed-in' })
+    expect(socket.connected).toBe(true)
+    expect(asks().length).toBe(2)
+    a.send({ t: 'token', req: asks().at(-1)?.req, token: 'ws-2' })
+    expect(socket.sent('auth')).toEqual([{ token: 'ws-2' }])
+  })
+
+  it('a new tab wakes a parked worker once (a fresh page may be signed in)', () => {
+    const { socket, attach } = boot()
+    const a = attach()
+    a.send({ t: 'hello', app: 'admin' })
+    socket.connect()
+    const asked = (p: FakePort) => p.received.filter((m) => m.t === 'need-token')
+    a.send({ t: 'token', req: asked(a).at(-1)?.req, token: null, signedOut: true })
+    expect(socket.connected).toBe(false)
+    const b = attach()
+    b.send({ t: 'hello', app: 'admin' })
+    expect(socket.connected).toBe(true)
+    expect(asked(a).length + asked(b).length).toBe(2)
+  })
+
+  it('an unauthenticated socket the server drops waits for the backoff, not the watchdog', () => {
+    const { socket, scope, attach } = boot()
+    const a = attach()
+    a.send({ t: 'hello', app: 'admin' })
+    socket.connect()
+    const setTimeoutMock = scope.setTimeout as ReturnType<typeof vi.fn>
+    const asks = () => a.received.filter((m) => m.t === 'need-token')
+    // an older tab: a bare null (no signedOut flag) — the worker backs off
+    a.send({ t: 'token', req: asks().at(-1)?.req, token: null })
+    const [retry, wait] = setTimeoutMock.mock.calls.at(-1) as [() => void, number]
+    expect(wait).toBe(1000)
+    // the zombie reaper drops the socket; the stall watchdog must not reconnect it
+    socket.serverDrop()
+    const intervals = (scope.setInterval as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0] as () => void
+    )
+    vi.setSystemTime(Date.now() + 120_000)
+    a.send({ t: 'pong' }) // the tab is alive (it answers pings)
+    for (const tick of intervals) tick()
+    expect(socket.connected).toBe(false)
+    // the backoff timer brings it back, and the connect asks once
+    retry()
+    expect(socket.connected).toBe(true)
+    expect(asks().length).toBe(2)
   })
 
   it('joins a collection room once for two tabs and routes updates to the holders only', () => {

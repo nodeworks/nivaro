@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { __resetSignedOutGate, noteSignedIn, noteUnauthorized } from './signed-out'
 import { createSocketRealtime } from './socket-realtime'
 import {
   createWorkerSocket,
@@ -207,5 +208,89 @@ describe('createWorkerSocket (#2475)', () => {
     expect(realtime.status().state).toBe('live')
     off()
     expect(port.sent('emit').some((m) => m.event === 'collection:leave')).toBe(true)
+  })
+})
+
+describe('createWorkerSocket: signed-out tabs stop minting ws tokens (staging 2026-10-23)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    __resetSignedOutGate()
+    ports.length = 0
+    ;(window as any).SharedWorker = FakeSharedWorker
+    localStorage.removeItem(WORKER_SOCKET_PREF_KEY)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    ;(window as any).SharedWorker = undefined
+  })
+
+  it('backs off after a null token (1 s doubling, 5 min cap) without calling the host', async () => {
+    const authToken = vi.fn(async () => null)
+    const { port } = make({ authToken })
+    port.answer({ t: 'ready', proto: WORKER_SOCKET_PROTO })
+    let req = 0
+    const ask = async () => {
+      port.answer({ t: 'need-token', req: ++req })
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    await ask()
+    expect(authToken).toHaveBeenCalledTimes(1)
+    // the worker asks again and again (an old worker on focus): the tab answers null at once
+    for (let i = 0; i < 20; i++) await ask()
+    expect(authToken).toHaveBeenCalledTimes(1)
+    expect(port.sent('token').length).toBe(21)
+    expect(port.sent('token').every((m) => m.token === null)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await ask()
+    expect(authToken).toHaveBeenCalledTimes(2)
+    // after many refusals the wait sits at the 5 min cap
+    for (let i = 0; i < 12; i++) {
+      await vi.advanceTimersByTimeAsync(300_000)
+      await ask()
+    }
+    const calls = authToken.mock.calls.length
+    await vi.advanceTimersByTimeAsync(299_000)
+    await ask()
+    expect(authToken).toHaveBeenCalledTimes(calls)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await ask()
+    expect(authToken).toHaveBeenCalledTimes(calls + 1)
+  })
+
+  it('tells the worker it is signed out, and resumes at once on sign-in', async () => {
+    let token: string | null = null
+    const authToken = vi.fn(async () => token)
+    const { port } = make({ authToken })
+    port.answer({ t: 'ready', proto: WORKER_SOCKET_PROTO })
+    // a transient failure: a bare null (the worker only backs off)
+    port.answer({ t: 'need-token', req: 1 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(port.sent('token').at(-1)).toEqual({ t: 'token', req: 1, token: null, signedOut: false })
+    // the tab learned it is signed out: the worker may park
+    noteUnauthorized()
+    await vi.advanceTimersByTimeAsync(1_000)
+    port.answer({ t: 'need-token', req: 2 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(port.sent('token').at(-1)).toEqual({ t: 'token', req: 2, token: null, signedOut: true })
+    const asked = authToken.mock.calls.length
+    // signed in (here, or another tab via the gate's channel): the worker hears it now
+    token = 'ws-new'
+    noteSignedIn()
+    expect(port.sent('signed-in').length).toBe(1)
+    port.answer({ t: 'need-token', req: 3 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(authToken).toHaveBeenCalledTimes(asked + 1)
+    expect(port.sent('token').at(-1)).toEqual({ t: 'token', req: 3, token: 'ws-new' })
+  })
+
+  it('stops listening for sign-ins once disconnected', () => {
+    const { socket, port } = make()
+    port.answer({ t: 'ready', proto: WORKER_SOCKET_PROTO })
+    socket.disconnect()
+    noteUnauthorized()
+    noteSignedIn()
+    expect(port.sent('signed-in').length).toBe(0)
   })
 })

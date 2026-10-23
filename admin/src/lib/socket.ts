@@ -8,6 +8,7 @@ import {
   createWorkerSocket,
   deliveryAckFor,
   forgetSettledReads,
+  guardIdentityCall,
   measureClockOffset,
   type RealtimeAdapter,
   type RealtimeStatus,
@@ -258,14 +259,25 @@ function leaveSseMode() {
   closeSse()
 }
 
-async function authToken(): Promise<string | null> {
+/**
+ * Mint a one-time socket token. Through the signed-out gate (@nivaro/shared signed-out.ts): a
+ * signed-out tab asks once per backoff window (1 s doubling to 5 min), not on every connect —
+ * staging saw 2,116 ws-token 401s in an hour from tabs whose session had ended.
+ */
+export async function mintWsToken(): Promise<string | null> {
   try {
-    const r = await api.get<{ data?: { token?: string }; token?: string }>('/auth/ws-token')
-    return r.data.data?.token ?? r.data.token ?? null
+    return await guardIdentityCall(
+      async () => {
+        const r = await api.get<{ data?: { token?: string }; token?: string }>('/auth/ws-token')
+        return r.data.data?.token ?? r.data.token ?? null
+      },
+      () => null
+    )
   } catch {
     return null
   }
 }
+const authToken = mintWsToken
 
 // ── One socket per browser (#2475) ──────────────────────────────────────────
 const WORKER_URL = `${API_URL}/api/realtime/worker.js`

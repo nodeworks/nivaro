@@ -1,4 +1,5 @@
 import { bindClientChaosSocket } from './client-chaos'
+import { isSignedOut, onSignedIn, signedOutBackoff } from './signed-out'
 import type { SocketLike } from './socket-realtime'
 
 /**
@@ -49,7 +50,12 @@ export interface WorkerSocketOptions {
   features?: string[]
   /** Build fields for `client:hello` (client-version.ts `clientVersion()`). */
   version?: Record<string, unknown>
-  /** Mint a `/auth/ws-token` for the worker's socket (the worker asks one tab per connect). */
+  /**
+   * Mint a `/auth/ws-token` for the worker's socket (the worker asks one tab per connect). A
+   * null answer (signed out, or no token to be had) backs this tab off: the worker's next asks
+   * are answered null without calling this until the wait (1 s doubling to 5 min, jittered)
+   * passes, or the tab hears a sign-in (signed-out.ts).
+   */
   authToken: () => Promise<string | null>
   /** The host's own socket, created only when the worker cannot serve this tab. */
   fallback: () => FallbackSocket
@@ -81,6 +87,12 @@ export interface WorkerSocket extends FallbackSocket {
    * disconnect and connect.
    */
   chaosPause(down: boolean): void
+  /**
+   * The person signed in (a host that learns it outside the signed-out gate calls this; the gate's
+   * own `noteSignedIn` does it for every worker socket): the worker asks this tab for a token now
+   * instead of staying parked or waiting out its backoff.
+   */
+  signedIn(): void
   /** The transport the worker's socket uses (for status displays). */
   io: { engine: { transport: { name?: string }; once(ev: string, cb: () => void): void } }
 }
@@ -131,6 +143,10 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
   let silenceTimer: ReturnType<typeof setInterval> | null = null
   let closed = false
   let chaosDown = false
+  // ws-token backoff (staging 2026-10-23: signed-out tabs sent ~35 token 401s a minute).
+  let tokenFailures = 0
+  let tokenRetryAt = 0
+  let stopSignedIn: (() => void) | null = null
 
   const fire = (event: string, args: any[]) => {
     for (const cb of [...(listeners.get(event) ?? [])]) {
@@ -239,10 +255,11 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
         return
       }
       case 'need-token':
-        void opts
-          .authToken()
-          .catch(() => null)
-          .then((token) => post({ t: 'token', req: msg.req, token }))
+        // `signedOut` (worker proto 1, additive): this tab knows it is signed out, so the worker
+        // parks until a `signed-in`; a bare null only backs it off. Older workers ignore it.
+        void mintToken().then((token) =>
+          post({ t: 'token', req: msg.req, token, ...(token ? {} : { signedOut: isSignedOut() }) })
+        )
         return
       case 'ev': {
         // Socket gone for this tab (#2840): the worker's events are not this tab's to hear.
@@ -264,6 +281,20 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
       default:
         return
     }
+  }
+
+  /** The worker wants a token: ask the host, unless this tab is backing off after a refusal. */
+  const mintToken = async (): Promise<string | null> => {
+    if (Date.now() < tokenRetryAt) return null
+    const token = await opts.authToken().catch(() => null)
+    if (token) {
+      tokenFailures = 0
+      tokenRetryAt = 0
+      return token
+    }
+    tokenFailures += 1
+    tokenRetryAt = Date.now() + signedOutBackoff(tokenFailures)
+    return null
   }
 
   const start = () => {
@@ -350,8 +381,19 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
     },
     disconnect() {
       closed = true
+      stopSignedIn?.()
       stopWorker()
       real?.disconnect?.()
+    },
+    signedIn() {
+      tokenFailures = 0
+      tokenRetryAt = 0
+      if (mode !== 'worker' || closed) return
+      // The worker parked or backed off its token asks: ask again now. An older worker does not
+      // know `signed-in`; for it a visible tab's `active` restarts the asking.
+      post({ t: 'signed-in' })
+      if (typeof document === 'undefined' || document.visibilityState === 'visible')
+        post({ t: 'active' })
     },
     mode: () => mode,
     chaosPause(down) {
@@ -390,6 +432,9 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
       }
     }
   }
+
+  // Signed in again (here or in another tab): ask for a token now, not when the wait ends.
+  stopSignedIn = onSignedIn(() => socket.signedIn())
 
   start()
   bindClientChaosSocket(socket)

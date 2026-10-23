@@ -33,7 +33,9 @@ import {
   CHUNK_BYTES,
   type ChunkExtra,
   clearResume,
+  clipChunkFailure,
   type DrainOutcome,
+  errorStatus,
   isResumable,
   KEEPALIVE_CHUNK_BYTES,
   ORPHAN_TTL_MS,
@@ -146,10 +148,11 @@ function keepaliveSender(
 }
 
 /**
- * Upload events in size-bounded chunks, once — error-clip mode only. A 413
- * drops THAT chunk and keeps going (one lost snapshot beats a dead clip); a
- * 409 means the recording is closed or capped — stop for good. Full mode
- * goes through the resilient queue instead.
+ * Upload events in size-bounded chunks, once — error-clip mode only. A 413 /
+ * 400 drops THAT chunk and keeps going (one lost snapshot beats a dead clip);
+ * a 409 (closed or capped), 401 (signed out, View-as ended), 403 or 404 stops
+ * for good — every later chunk would be refused too (clipChunkFailure). Full
+ * mode goes through the resilient queue instead.
  */
 async function postEventChunks(
   client: NivaroClient,
@@ -170,10 +173,8 @@ async function postEventChunks(
         })
       )
     } catch (err) {
-      const status =
-        (err as { status?: number; response?: { status?: number } }).status ??
-        (err as { response?: { status?: number } }).response?.status
-      if (status === 409) return 'closed'
+      const status = errorStatus(err)
+      if (clipChunkFailure(status) === 'stop') return 'closed'
       if (status === 413) {
         console.warn(`[session-recorder] chunk ${seq} too large — dropped`)
       }
@@ -387,12 +388,19 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       }, delay)
     }
 
-    /** 409 (closed / capped) or a recording that will never take a chunk. */
+    /**
+     * 409 (closed / capped) or a recording that will never take a chunk (401
+     * signed out or View-as ended, 403, 404): stop recording, drop the queue
+     * and the buffer — nothing is retried, resumed or sent on pagehide.
+     */
     function kill() {
       state.dead = true
       state.stop?.()
+      state.stop = null
+      state.buffer = []
       clearRetry()
       uploader.discard()
+      uploader.stopped = true
       clearResume(storage, RESUME_KEY)
     }
 
@@ -621,8 +629,12 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
           )
           const id = started.data.id
           let clipSeq = 0
-          await postEventChunks(client, id, () => clipSeq++, events, { startRoute, build })
-          await client.request(endSessionRecording(id)).catch(() => {})
+          const sent = await postEventChunks(client, id, () => clipSeq++, events, {
+            startRoute,
+            build
+          })
+          // A refused clip (closed, signed out) takes no end call either.
+          if (sent === 'ok') await client.request(endSessionRecording(id)).catch(() => {})
           return { recording_id: id, offset_ms: offset }
         }
       }
