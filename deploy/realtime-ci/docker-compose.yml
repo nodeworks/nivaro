@@ -46,6 +46,9 @@ x-api-env: &api-env
   SHUTDOWN_DRAIN_DELAY_MS: '0'
   SOCKET_SWEEP_MS: '5000'
   GRAPHQL_WS_SIGNIN_CHECK_MS: '5000'
+  # on (default) | off — per-message deflate; the load suite measures both
+  # (RTCI_SOCKET_COMPRESSION=off rtci.sh compose up -d --force-recreate rt-1 rt-2).
+  SOCKET_COMPRESSION: ${RTCI_SOCKET_COMPRESSION:-on}
   METRICS_TOKEN: rtci-metrics-token-0123456789abcdef
   REALTIME_ACK_EVERY: '1'
   NIVARO_HEALTHCHECK_PATH: /api/ready

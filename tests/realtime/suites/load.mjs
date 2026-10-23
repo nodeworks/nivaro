@@ -17,7 +17,7 @@ import { cfg, directUrl, loadSeed, repoRoot, socketNodes, stateDir } from '../li
 import { fixture } from '../lib/fixture.mjs'
 import { pct, Suite, sleep } from '../lib/harness.mjs'
 import { LiveSocket } from '../lib/sock.mjs'
-import { dockerStats, socketCounts } from '../lib/stack.mjs'
+import { dockerStats, nodeMetrics, socketCounts } from '../lib/stack.mjs'
 
 export async function run({ only, args }) {
   const suite = new Suite('load', { only })
@@ -95,7 +95,7 @@ export async function run({ only, args }) {
       }
     })()
     const sampleOnce = async (phase) => {
-      const s = { at: Date.now(), phase, docker: dockerStats(), sockets: await socketCounts() }
+      const s = { at: Date.now(), phase, docker: dockerStats(), sockets: await socketCounts(), metrics: await nodeMetrics() }
       samples.push(s)
       return s
     }
@@ -118,7 +118,9 @@ export async function run({ only, args }) {
       '--ramp-minutes', String(rampMin),
       '--steps', String(steps),
       '--hold-minutes', String(holdMin),
-      '--out', out
+      '--out', out,
+      // Extra realtime-load.mjs flags, e.g. --load-args "--refetch-debounce-ms 1000"
+      ...(typeof args['load-args'] === 'string' ? args['load-args'].split(/\s+/).filter(Boolean) : [])
     ]
     const tLoad = Date.now()
     const code = await new Promise((res) => {
@@ -170,6 +172,23 @@ export async function run({ only, args }) {
       }
     }
     t.metric('memory', mem)
+    // Per process at its busiest sample: RSS / V8 heap / external (MiB), sockets, lag p99 (ms).
+    const atPeak = {}
+    for (const n of Object.keys(cfg.nodes)) {
+      const rows = samples.map((s) => s.metrics?.[n]).filter(Boolean)
+      if (!rows.length) continue
+      const peak = rows.reduce((a, b) => ((b.sockets ?? 0) > (a.sockets ?? 0) || ((b.sockets ?? 0) === (a.sockets ?? 0) && b.rss > a.rss) ? b : a))
+      atPeak[n] = {
+        at_peak_sockets: peak,
+        rss_max: Math.max(...rows.map((r) => r.rss ?? 0)),
+        heap_max: Math.max(...rows.map((r) => r.heap ?? 0)),
+        external_max: Math.max(...rows.map((r) => r.external ?? 0)),
+        lag_p99_max: Math.max(...rows.map((r) => r.lagP99 ?? 0)),
+        baseline: base.metrics?.[n] ?? null,
+        after: after.metrics?.[n] ?? null
+      }
+    }
+    t.metric('process_memory', atPeak)
     t.metric('sockets_peak', samples.reduce((a, s) => {
       for (const [n, v] of Object.entries(s.sockets)) a[n] = Math.max(a[n] ?? 0, v ?? 0)
       return a

@@ -106,7 +106,11 @@ export async function socketCounts() {
   for (const node of socketNodes()) {
     try {
       if (cfg.nodes[node].role === 'realtime') {
-        const r = await fetch(`${directUrl(node)}/api/health`, { signal: AbortSignal.timeout(3000) })
+        // The count is administrators-only since f406fd6e8 (public /health = verdict only).
+        const r = await fetch(`${directUrl(node)}/api/health`, {
+          headers: { authorization: `Bearer ${cfg.adminToken}` },
+          signal: AbortSignal.timeout(3000)
+        })
         out[node] = (await r.json())?.sockets ?? null
       } else {
         const r = await adminClient(directUrl(node)).get('/api/realtime/stats', { timeoutMs: 5000 })
@@ -140,4 +144,42 @@ export async function roster() {
 
 export function redis() {
   return new Redis(cfg.redisUrl, { maxRetriesPerRequest: 2 })
+}
+
+/**
+ * /api/metrics of every API process, straight to its port (METRICS_TOKEN): RSS, V8 heap,
+ * external memory (MiB), sockets, event-loop lag p99 (ms). Null for a process that did not answer.
+ */
+export async function nodeMetrics() {
+  const out = {}
+  for (const node of Object.keys(cfg.nodes)) {
+    try {
+      const r = await fetch(`${directUrl(node)}/api/metrics`, {
+        headers: { authorization: `Bearer ${cfg.metricsToken}` },
+        signal: AbortSignal.timeout(3000)
+      })
+      if (!r.ok) {
+        out[node] = null
+        continue
+      }
+      const text = await r.text()
+      const val = (re) => {
+        const m = text.match(re)
+        return m ? Number(m[1]) : null
+      }
+      const mib = (v) => (v == null ? null : Math.round((v / 1048576) * 10) / 10)
+      const lag = val(/^nodejs_eventloop_lag_seconds\{quantile="0\.99"\} (\S+)/m)
+      out[node] = {
+        rss: mib(val(/^process_resident_memory_bytes (\S+)/m)),
+        heap: mib(val(/^nodejs_heap_used_bytes (\S+)/m)),
+        heapTotal: mib(val(/^nodejs_heap_total_bytes (\S+)/m)),
+        external: mib(val(/^nodejs_external_memory_bytes (\S+)/m)),
+        sockets: val(/^nivaro_sockets_connected (\S+)/m),
+        lagP99: lag == null ? null : Math.round(lag * 1000)
+      }
+    } catch {
+      out[node] = null
+    }
+  }
+  return out
 }
