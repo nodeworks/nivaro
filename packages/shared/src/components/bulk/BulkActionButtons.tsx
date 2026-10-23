@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { endBulkProgress, newBulkProgressId, startBulkProgress } from '../../lib/bulk-progress'
 import { get, post } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { PushBulkButtons } from './PushBulkButtons'
@@ -299,7 +300,7 @@ export function BulkActionButtons({
       setReason('')
     } catch (err) {
       const resp = (err as { response?: { error?: string } }).response
-      toast.error(resp?.error ?? (err instanceof Error ? err.message : `${a.label} failed`))
+      toast.error(resp?.error ?? userErrorMessage(err, `${a.label} failed`))
     } finally {
       setRunning(null)
     }

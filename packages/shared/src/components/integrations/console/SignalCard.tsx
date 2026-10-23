@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useId, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth } from '../../../context'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { cn, titleCase } from '../../../lib/utils'
 import { ExplainButton } from '../../ai/ExplainButton'
 import { DrillTag, useDrillWindows } from '../../chaos/DrillTag'
@@ -218,7 +219,7 @@ function RowList({
     } catch (e) {
       const msg =
         (e as { response?: { error?: string } })?.response?.error ??
-        (e instanceof Error ? e.message : 'The action failed')
+        userErrorMessage(e, 'The action failed')
       setResults((prev) => {
         const next = { ...prev }
         for (const k of keys) next[k] = { key: k, ok: false, message: msg }
@@ -241,7 +242,7 @@ function RowList({
     } catch (e) {
       const msg =
         (e as { response?: { error?: string } })?.response?.error ??
-        (e instanceof Error ? e.message : 'Could not dismiss')
+        userErrorMessage(e, 'Could not dismiss')
       setResults((prev) => {
         const next = { ...prev }
         for (const k of keys) next[k] = { key: k, ok: false, message: msg }

@@ -9,6 +9,7 @@ import {
   runNotificationTarget
 } from '../lib/notification-target'
 import { useOptionalRealtime } from '../lib/realtime'
+import { userErrorMessage } from '../lib/safe-error'
 import { slaChip, withinDay } from '../lib/sla-chip'
 import { cn } from '../lib/utils'
 import { FirstWeekCard } from './ai/FirstWeekCard'
@@ -313,7 +314,7 @@ export function MyWorkView({
       setTaskNote(action === 'claim' ? 'It’s yours — it moved to My tasks.' : 'Reminder sent.')
       qc.invalidateQueries({ queryKey: ['my-work'] })
     },
-    onError: (e) => setTaskNote(e instanceof Error ? e.message : 'Failed')
+    onError: (e) => setTaskNote(userErrorMessage(e, 'Failed'))
   })
   const [taskNote, setTaskNote] = useState<string | null>(null)
   useEffect(() => {

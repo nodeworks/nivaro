@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@nivaro/shared'
 import { useMutation } from '@tanstack/react-query'
 import { AlertCircle, ArrowLeft, History, LayoutDashboard, Loader2, Sparkles } from 'lucide-react'
 import { useState } from 'react'
@@ -155,7 +156,7 @@ export function DashboardDraftPage() {
       toast.success('Dashboard created')
       navigate(`/dashboards/${id}`)
     },
-    onError: (err) => toast.error(err instanceof Error ? err.message : 'Could not create it')
+    onError: (err) => toast.error(userErrorMessage(err, 'Could not create it'))
   })
 
   const discard = useMutation({

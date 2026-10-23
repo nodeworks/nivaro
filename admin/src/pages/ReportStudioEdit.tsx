@@ -1,5 +1,10 @@
 import { createNivaro } from '@nivaro/sdk'
-import { NivaroProvider, QueryWidgetBody, usePublishAskContext } from '@nivaro/shared'
+import {
+  NivaroProvider,
+  QueryWidgetBody,
+  usePublishAskContext,
+  userErrorMessage
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -1328,7 +1333,7 @@ function AdvancedConfigEditor({
                 setErr(null)
                 onCommit(parsed as WidgetConfig)
               } catch (e) {
-                setErr(e instanceof Error ? e.message : 'Invalid JSON')
+                setErr(userErrorMessage(e, 'Invalid JSON'))
               }
             }}
           >

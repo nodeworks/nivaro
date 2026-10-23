@@ -1,3 +1,5 @@
+import { isCodeError, SOMETHING_WENT_WRONG } from './safe-error'
+
 /**
  * One plain sentence for a read that failed (#2858), whatever shape the error came in: an SDK
  * error (`status`), an axios error (`response.status`) or a fetch that never reached anything
@@ -18,8 +20,11 @@ export function loadErrorText(err: unknown, what = 'this'): string {
       (err as { name?: string } | null)?.name === 'TimeoutError'
     )
       return `Couldn’t load ${what}: it is taking too long to answer.`
-    if (err instanceof TypeError || /network|failed to fetch|load failed/i.test(msg))
+    if (/network|failed to fetch|load failed/i.test(msg))
       return 'Can’t reach the server. Check the connection.'
+    // A bug in our own code ("Cannot read properties of null") is not a
+    // connection problem — say so plainly; never its raw text.
+    if (isCodeError(err)) return SOMETHING_WENT_WRONG
     return `Couldn’t load ${what}.`
   }
   if (status === 502 || status === 503 || status === 504)

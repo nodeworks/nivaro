@@ -3,6 +3,7 @@ import { Loader2, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient, useParentDraft } from '../../context'
 import { get, post } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, titleCase } from '../../lib/utils'
 
 /** Config: `options.quick_create` on an M2O field. Renders a "＋ New" button next
@@ -117,7 +118,7 @@ export function QuickCreateButton({
       setOpen(false)
       setValues({})
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Create failed')
+      setError(userErrorMessage(err, 'Create failed'))
     } finally {
       setSaving(false)
     }

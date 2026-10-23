@@ -1577,7 +1577,9 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           if (missing.length > 0) throw notFoundError(name, missing)
         }
         try {
-          return await updateOne(ctx.user, name, id, data, ctx.req)
+          // Saved but now hidden from its writer: the id, never null (the
+          // same answer createOne gives for a hidden create).
+          return (await updateOne(ctx.user, name, id, data, ctx.req)) ?? { id }
         } catch (e) {
           wrapError(e)
         }
@@ -1695,7 +1697,11 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           const prior: Record<string, unknown> = {}
           for (const k of Object.keys(change.data))
             if (!k.startsWith('_') && k in before) prior[k] = before[k]
-          results.push(await updateOne(user, name, change.id, { ...change.data }, ctx.req))
+          results.push(
+            (await updateOne(user, name, change.id, { ...change.data }, ctx.req)) ?? {
+              id: change.id
+            }
+          )
           done.push({ id: change.id, prior })
         }
         return results

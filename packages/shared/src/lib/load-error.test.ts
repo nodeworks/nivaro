@@ -15,6 +15,10 @@ describe('loadErrorText (#2858)', () => {
     )
     expect(loadErrorText({ status: 404 }, 'this widget')).toBe('This widget no longer exists.')
     expect(loadErrorText(new Error('weird'))).toBe('Couldn’t load this.')
+    // A bug in our code is not "can't reach the server", and its text never shows.
+    expect(loadErrorText(new TypeError("Cannot read properties of null (reading 'id')"))).toBe(
+      'Something went wrong — it’s been reported'
+    )
   })
 })
 

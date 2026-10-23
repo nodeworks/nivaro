@@ -3,6 +3,7 @@ import { Brain, Check, X } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigation, useOptionalNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn } from '../../lib/utils'
 
 /**
@@ -63,7 +64,7 @@ export function AiMemorySuggestions({
       const data = (err as { response?: { data?: { error?: string; code?: string } } })?.response
         ?.data
       setError({
-        text: data?.error ?? (err instanceof Error ? err.message : 'Could not remember that'),
+        text: data?.error ?? userErrorMessage(err, 'Could not remember that'),
         // A full memory refuses — nothing is dropped; the person picks on Profile.
         full: data?.code === 'AI_MEMORY_FULL'
       })

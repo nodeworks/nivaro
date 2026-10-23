@@ -34,6 +34,7 @@ import {
   disableChatOutbox
 } from '../components/chat/chat-outbox'
 import { get, patch } from './commands'
+import { userErrorMessage } from './safe-error'
 
 const DB_NAME = 'nivaro-record-outbox'
 const STORE = 'entries'
@@ -717,7 +718,7 @@ async function replayOne(
     const msg =
       (err as { response?: { error?: string; message?: string } })?.response?.message ??
       (err as { response?: { error?: string } })?.response?.error ??
-      (err instanceof Error ? err.message : 'Could not save')
+      userErrorMessage(err, 'Could not save')
     const next = await updateEntry(e.id, { status: 'failed', error: msg })
     if (next) emitEvent({ type: 'failed', entry: next })
     return 'failed'

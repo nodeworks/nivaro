@@ -716,10 +716,26 @@ function batchReadQuery(query: Query<unknown> & { conditions?: unknown[] }, list
   return q
 }
 
+/**
+ * What a create / update answer says beside the row. `readable: false` = the
+ * write happened, but the writer's own read-back hides the record (a User
+ * Scope or row filter excludes it as written): `data` is then `{ id }` alone
+ * and `reason` says why ("no Zone set"). `link_failures` names many-to-many
+ * links the write carried that did not land.
+ */
+export interface ItemWriteMeta {
+  id?: string | number
+  readable?: false
+  reason?: string | null
+  link_failures?: string[]
+  upserted?: boolean
+  matched_id?: string | number
+}
+
 export function createItem<T = Record<string, unknown>>(
   collection: string,
   data: Partial<T>
-): Command<{ data: T }> {
+): Command<{ data: T; meta?: ItemWriteMeta }> {
   return cmd('POST', `/items/${collection}`, undefined, data)
 }
 
@@ -770,7 +786,7 @@ export function updateItem<T = Record<string, unknown>>(
   collection: string,
   id: string | number,
   data: Partial<T>
-): Command<{ data: T }> {
+): Command<{ data: T; meta?: ItemWriteMeta }> {
   return cmd('PATCH', `/items/${collection}/${id}`, undefined, data)
 }
 

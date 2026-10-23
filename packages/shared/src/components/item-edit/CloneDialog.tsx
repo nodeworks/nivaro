@@ -158,9 +158,15 @@ export function CloneDialog({ collection, itemId, fields, relations, currentValu
       const res = await client.request<{ data: { id: string | number } }>(
         post(`/items/${collection}/${itemId}/clone`, { field_overrides, exclude_fields, include_sub_rows })
       )
-      toast.success('Item cloned')
       setOpen(false)
-      onSuccess(res.data.id)
+      const newId = res?.data?.id
+      if (newId == null) {
+        // Cloned, but the copy came back without an id: say so, never crash.
+        toast.success('Item cloned — open it from the list')
+        return
+      }
+      toast.success('Item cloned')
+      onSuccess(newId)
     } catch {
       toast.error('Failed to clone item')
     } finally {

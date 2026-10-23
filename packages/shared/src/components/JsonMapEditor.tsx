@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get, patch, post } from '../lib/commands'
+import { userErrorMessage } from '../lib/safe-error'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 
 // Generic editor for records whose value columns are JSON DICTS keyed by
@@ -268,7 +269,7 @@ export function JsonMapEditor({
       })
       setStatus('Saved')
     } catch (err) {
-      setStatus(`Save failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+      setStatus(`Save failed: ${userErrorMessage(err, 'unknown error')}`)
     } finally {
       setSaving(false)
     }

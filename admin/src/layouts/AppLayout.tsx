@@ -82,6 +82,7 @@ import {
   HelpVideoRecordingProvider,
   HuddleCallLayer,
   IncidentBanner,
+  isCodeError,
   isRecordPopout,
   JobsTray,
   NavigationContext,
@@ -91,6 +92,7 @@ import {
   RealtimeContext,
   RealtimeStatusBanner,
   RecordOutboxHost,
+  SOMETHING_WENT_WRONG,
   useClientChaosGate,
   useLiveQueryBridge
 } from '@nivaro/shared'
@@ -166,7 +168,9 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
       return (
         <ErrorSurface
           variant='500'
-          detail={this.state.error.message}
+          // Never raw JS error text ("Cannot read properties of null…") — the
+          // real error went to the issue log in componentDidCatch.
+          detail={isCodeError(this.state.error) ? SOMETHING_WENT_WRONG : this.state.error.message}
           action={
             <button
               type='button'

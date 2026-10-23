@@ -12,6 +12,7 @@ import {
 } from '../context'
 import { get, post } from '../lib/commands'
 import { initialFilterSelection } from '../lib/query-filter-seed'
+import { userErrorMessage } from '../lib/safe-error'
 import { resolveSheetDef, type SheetDefInput, type SheetHeaderAsOf } from '../lib/sheet-def'
 import {
   effectiveScopeSeedIds,
@@ -74,7 +75,7 @@ function LoadingRows() {
 }
 
 function WidgetError({ error }: { error: unknown }) {
-  const msg = error instanceof Error ? error.message : 'Failed to load widget data'
+  const msg = userErrorMessage(error, 'Failed to load widget data')
   return (
     <div className='flex h-full items-center justify-center p-3 text-[12px] text-amber-600 dark:text-amber-500'>
       {msg}
@@ -1199,7 +1200,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
       // A run typically mutates what the widget shows — refresh it.
       void qcRef.invalidateQueries({ queryKey: ['page-renderer-query', cfg.query_slug] })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'unknown error'
+      const message = userErrorMessage(err, 'unknown error')
       setActionRun((cur) =>
         cur && cur.action === run.action
           ? { ...cur, phase: 'error', elapsedMs: Date.now() - startedAt, error: message }

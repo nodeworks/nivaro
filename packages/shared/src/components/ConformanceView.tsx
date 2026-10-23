@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../context'
 import { get, post, put } from '../lib/commands'
 import { useLiveEvent, useLiveWatchRoom } from '../lib/live'
+import { userErrorMessage } from '../lib/safe-error'
 import { cn } from '../lib/utils'
 import { PickList } from './imports/ServiceConfigBuilder'
 import { TipLayer } from './TipLayer'
@@ -345,7 +346,7 @@ export function ConformanceView({ className }: { className?: string }) {
       setActiveRunId(res.data.id)
       void qc.invalidateQueries({ queryKey: ['conformance-runs'] })
     } catch (err) {
-      setStartError(err instanceof Error ? err.message : 'Could not start the run')
+      setStartError(userErrorMessage(err, 'Could not start the run'))
     } finally {
       setStarting(false)
     }

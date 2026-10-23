@@ -3,6 +3,7 @@ import { ChevronRight, Loader2, X } from 'lucide-react'
 import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
+import { userErrorMessage } from '../lib/safe-error'
 import { cn } from '../lib/utils'
 import {
   type ChangeReasonChallenge,
@@ -301,7 +302,7 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
         setCrChallenge(challenge)
         setStatus(null)
       } else {
-        setStatus(`Save failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+        setStatus(`Save failed: ${userErrorMessage(err, 'unknown error')}`)
       }
     } finally {
       setSaving(false)
@@ -814,7 +815,7 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
     } catch (err) {
       const challenge = changeReasonChallenge(err)
       if (challenge) setCrChallenge(challenge)
-      else setStatus(`Save failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+      else setStatus(`Save failed: ${userErrorMessage(err, 'unknown error')}`)
     } finally {
       setSaving(false)
     }

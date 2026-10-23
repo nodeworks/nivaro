@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@nivaro/shared'
 import { useState } from 'react'
 import { useOptionalNivaroClient } from '../../context'
 import type { FieldComponentProps } from '../../types'
@@ -54,7 +55,7 @@ export function FileField({
             const result = await client.upload(file, { title: file.name })
             onChange(result.id)
           } catch (err) {
-            setUploadError(err instanceof Error ? err.message : 'Upload failed')
+            setUploadError(userErrorMessage(err, 'Upload failed'))
             // Reset the file input so it doesn't show the failed filename.
             setInputKey((k) => k + 1)
           } finally {

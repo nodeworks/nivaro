@@ -53,14 +53,6 @@ import {
 import { formatApiPayload } from '../lib/api-payload'
 import { del, get, patch, post, put } from '../lib/commands'
 import {
-  isEmptyValue,
-  isFolded,
-  planFieldGrid,
-  type RowGroup,
-  readGroupStructure,
-  stickyGroupKey
-} from '../lib/form-structure'
-import {
   deleteDraft,
   draftHasContent,
   draftKey,
@@ -71,6 +63,14 @@ import {
 import { entryConfigOf } from '../lib/entry-config'
 import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
+import {
+  isEmptyValue,
+  isFolded,
+  planFieldGrid,
+  type RowGroup,
+  readGroupStructure,
+  stickyGroupKey
+} from '../lib/form-structure'
 import {
   HEADER_BAND,
   HEADER_DOCK,
@@ -106,6 +106,7 @@ import {
 import { isRecordPopout, openRecordPopout } from '../lib/record-popout'
 import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
+import { reportCodeError, userErrorMessage } from '../lib/safe-error'
 import {
   normalizeSummaryModeRules,
   resolveSummaryMode,
@@ -222,6 +223,7 @@ import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-e
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
+import { foldStagedLinks, foldStagedRows } from './item-edit/staged-links'
 import { useFormUsageBeacon } from './item-edit/useFormUsageBeacon'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
@@ -254,7 +256,6 @@ import type {
   SummaryEntry
 } from './item-edit/types'
 import { DesignDropBody, DesignDropZone, designWrap } from './layout-editor/DesignNode'
-import { GridGuides } from './layout-editor/grid-guides'
 import { DesignCanvas } from './layout-editor/design-canvas'
 import {
   type DesignTarget,
@@ -262,6 +263,7 @@ import {
   revealGroupKey,
   useLayoutDesign
 } from './layout-editor/design-context'
+import { GridGuides } from './layout-editor/grid-guides'
 import {
   DESIGN_SUMMARY_MIN_CANVAS,
   readDesignSummaryCollapsed,
@@ -1010,6 +1012,25 @@ export interface M2MAliasInfo {
   stagingKey: string
 }
 
+/** A create/update answer: `meta.readable` false = written, but the writer's
+ *  own read-back hides it (api routes/items.ts outOfViewMeta). */
+interface WriteAnswer {
+  data?: { id?: string | number } | null
+  meta?: {
+    id?: string | number
+    readable?: boolean
+    reason?: string | null
+    link_failures?: unknown[]
+  }
+}
+
+/** An older server's create answer with no row and no id: created, id unknown. */
+class CreatedOutOfViewError extends Error {
+  constructor() {
+    super('created out of view')
+  }
+}
+
 export function resolveM2MAlias(
   relations: CMSRelation[] | null | undefined,
   collection: string,
@@ -1630,6 +1651,14 @@ function ItemEditFormView({
   // stops re-reading. Hidden by an access change (#1925): the form is
   // replaced by the access-lost panel and the record's cached data dropped.
   const [recordGone, setRecordGone] = useState<RecordGone | null>(null)
+  // The last save's side notes (see saveMut): written-but-hidden, links lost.
+  const saveNoticeRef = useRef<{
+    hidden: { reason: string | null } | null
+    linkProblems: string[]
+  }>({ hidden: null, linkProblems: [] })
+  // A create an older server answered with no row and no id: the record
+  // exists, so the form is replaced by a plain note — never a second Save.
+  const [createdOutOfView, setCreatedOutOfView] = useState<{ reason: string | null } | null>(null)
   // Another record on the same mount starts clean (RecordLiveSync, which
   // also resets it, is not mounted while the access-lost panel shows).
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset on identity only
@@ -2364,8 +2393,7 @@ function ItemEditFormView({
           {
             severity: 'error',
             rule: 'reimport-apply',
-            message:
-              err instanceof Error ? err.message : 'Duplicate match key in the imported lines.'
+            message: userErrorMessage(err, 'Duplicate match key in the imported lines.')
           }
         ])
         return
@@ -6775,20 +6803,84 @@ function ItemEditFormView({
   // ── Save / delete ──────────────────────────────────────────────────────────
   const saveMut = useMutation({
     mutationFn: async () => {
+      // Never raw JS error text on a save step: a code error reads as one plain
+      // sentence and goes to the issue log (lib/safe-error.ts).
       function errMsg(err: unknown): string {
-        const resp = (err as { response?: { data?: { error?: string } } })?.response
-        return resp?.data?.error ?? (err instanceof Error ? err.message : 'Failed')
+        reportCodeError(client, err)
+        return userErrorMessage(err)
+      }
+      // What a save did that the steps alone do not say: the record landed but
+      // its writer cannot see it (a User Scope hides it), or links it carried
+      // did not land. Read by onSuccess for the closing message.
+      saveNoticeRef.current = { hidden: null, linkProblems: [] }
+      function noteWriteAnswer(r: WriteAnswer | null | undefined) {
+        const meta = r?.meta
+        if (!meta) return
+        if (meta.readable === false) saveNoticeRef.current.hidden = { reason: meta.reason ?? null }
+        if (Array.isArray(meta.link_failures))
+          saveNoticeRef.current.linkProblems.push(...meta.link_failures.map(String))
       }
       // A change-reason 422 from any queued row PATCH pauses the save; the
       // dialog retries the whole mutation with the reason applied to every row.
       let flushChallenge: ChangeReasonChallenge | null = null
 
+      // Staged M2M/M2A/file links ride in the record's own create/update body
+      // (item-edit/staged-links.ts) — one write, so nothing after it can lose
+      // them. Only keys the body cannot express stay for the follow-up step.
+      const committedLinks = (key: string) => {
+        const info = [...m2mAliasFieldsForRules.values()].find((i) => i.stagingKey === key)
+        if (!info) return undefined
+        return qc.getQueryData<Record<string, unknown>[]>([
+          'm2m-items',
+          info.manyCollection,
+          info.manyField,
+          itemId
+        ])
+      }
+      const foldedLinkKeys = foldStagedLinks({
+        collection,
+        relations,
+        links: m2mLinks,
+        unlinks: m2mUnlinks,
+        payload: {},
+        isNew,
+        committed: committedLinks
+      })
+      const followLinks = [...m2mLinks.entries()].filter(([k]) => !foldedLinkKeys.has(k))
+      const followUnlinks = [...m2mUnlinks.entries()].filter(([k]) => !foldedLinkKeys.has(k))
       // Build step list from pending state
       const hasM2M =
-        [...m2mLinks.entries()].some(([, ids]) => ids.length > 0) ||
-        [...m2mUnlinks.entries()].some(([, ids]) => ids.size > 0)
+        followLinks.some(([, ids]) => ids.length > 0) ||
+        followUnlinks.some(([, ids]) => ids.size > 0)
+      // A new record's staged child rows ride in its create body too (one
+      // write: the server takes the record back out if a set fails). A set
+      // that breaks its unique-by rule stays for the step, which names it.
+      const rowBody: Record<string, unknown> = {}
+      const foldedRowKeys = isNew
+        ? foldStagedRows({
+            collection,
+            relations,
+            rows: pendingO2MRows,
+            payload: rowBody,
+            skip: new Set(
+              [...pendingO2MRows.entries()]
+                .filter(([k, rows]) => {
+                  const uniqueBy = o2mUniqueByMap.get(k)
+                  if (!uniqueBy?.length) return false
+                  const seen = new Set<string>()
+                  return rows.some((r) => {
+                    const uk = uniqueBy.map((f) => String(r[f] ?? '')).join('\x00')
+                    if (seen.has(uk)) return true
+                    seen.add(uk)
+                    return false
+                  })
+                })
+                .map(([k]) => k)
+            )
+          })
+        : new Set<string>()
       const newO2MKeys = [...pendingO2MRows.entries()]
-        .filter(([, r]) => r.length > 0)
+        .filter(([k, r]) => r.length > 0 && !foldedRowKeys.has(k))
         .map(([k]) => k)
       const editO2MKeys = [...pendingO2MEdits.entries()]
         .filter(([, e]) => e.size > 0)
@@ -6813,8 +6905,8 @@ function ItemEditFormView({
 
       let m2mAdds = 0,
         m2mRemoves = 0
-      for (const [, ids] of m2mLinks.entries()) m2mAdds += ids.length
-      for (const [, ids] of m2mUnlinks.entries()) m2mRemoves += ids.size
+      for (const [, ids] of followLinks) m2mAdds += ids.length
+      for (const [, ids] of followUnlinks) m2mRemoves += ids.size
       const m2mDetail = [
         m2mAdds > 0 ? `+${m2mAdds} linked` : '',
         m2mRemoves > 0 ? `-${m2mRemoves} unlinked` : ''
@@ -6946,6 +7038,18 @@ function ItemEditFormView({
           payload[key] = v
         }
       }
+      // Child rows folded above (create only), then every staged link the body
+      // can carry (same keys as foldedLinkKeys).
+      Object.assign(payload, rowBody)
+      foldStagedLinks({
+        collection,
+        relations,
+        links: m2mLinks,
+        unlinks: m2mUnlinks,
+        payload,
+        isNew,
+        committed: committedLinks
+      })
       if (changeReasonRef.current) payload._change_reason = changeReasonRef.current
       if (!isNew) {
         const base = baseRevisionOverrideRef.current ?? baseRevisionData?.latest ?? null
@@ -6955,12 +7059,19 @@ function ItemEditFormView({
       let savedId: string
       try {
         if (isNew) {
-          const r = await client.request<{ data: { id: string | number } }>(
-            post(`/items/${collection}`, payload)
-          )
-          savedId = String(r.data.id)
+          const r = await client.request<WriteAnswer>(post(`/items/${collection}`, payload))
+          // The id comes from the answer even when the creator cannot read
+          // the record back (data {id} + meta.readable false); an older server
+          // answered data null — the record exists, but its id is unknown.
+          const newId = r?.data?.id ?? r?.meta?.id
+          noteWriteAnswer(r)
+          if (newId == null) throw new CreatedOutOfViewError()
+          savedId = String(newId)
         } else if (Object.keys(payload).some((k) => !k.startsWith('_'))) {
-          await client.request(patch(`/items/${collection}/${itemId}`, payload))
+          const r = await client.request<WriteAnswer>(
+            patch(`/items/${collection}/${itemId}`, payload)
+          )
+          noteWriteAnswer(r)
           savedId = itemId
         } else {
           // No field changes — skip the PATCH. `_change_reason` / `_base_revision`
@@ -6971,6 +7082,11 @@ function ItemEditFormView({
         }
         updateStep('main', { status: 'done' })
       } catch (err) {
+        if (err instanceof CreatedOutOfViewError) {
+          // Created — never offer the same Save again (that made a duplicate).
+          updateStep('main', { status: 'done' })
+          return ''
+        }
         const challenge = changeReasonChallenge(err)
         if (challenge) {
           updateStep('main', { status: 'error', error: 'Waiting for a change reason' })
@@ -7063,7 +7179,7 @@ function ItemEditFormView({
             failed.push(`${what}: ${errMsg(err)}`)
           }
           const removals: Promise<unknown>[] = []
-          for (const [key, ids] of m2mUnlinks.entries()) {
+          for (const [key, ids] of followUnlinks) {
             if (!ids.size) continue
             const rel = findM2MRel(key)
             if (!rel) continue
@@ -7076,7 +7192,7 @@ function ItemEditFormView({
           }
           await Promise.all(removals)
           const additions: Promise<unknown>[] = []
-          for (const [key, ids] of m2mLinks.entries()) {
+          for (const [key, ids] of followLinks) {
             if (!ids.length) continue
             const rel = findM2MRel(key)
             if (!rel) continue
@@ -7106,9 +7222,11 @@ function ItemEditFormView({
           await Promise.all(additions)
           if (failed.length > 0) {
             updateStep('m2m', { status: 'error', error: [...new Set(failed)].join(' · ') })
+            saveNoticeRef.current.linkProblems.push(...new Set(failed))
           } else updateStep('m2m', { status: 'done' })
         } catch (err) {
           updateStep('m2m', { status: 'error', error: errMsg(err) })
+          saveNoticeRef.current.linkProblems.push(errMsg(err))
         }
       }
 
@@ -7282,6 +7400,7 @@ function ItemEditFormView({
           }
           if (nestedFailures > 0)
             problems.push(`${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed`)
+          if (problems.length > 0) saveNoticeRef.current.linkProblems.push(problems.join('. '))
           updateStep(
             stepId,
             problems.length > 0
@@ -7296,6 +7415,7 @@ function ItemEditFormView({
           // relation lookup) — nothing of this batch is known to have landed.
           remainingO2MRows.set(key, rowList)
           updateStep(stepId, { status: 'error', error: errMsg(err) })
+          saveNoticeRef.current.linkProblems.push(errMsg(err))
         }
       }
 
@@ -7498,6 +7618,18 @@ function ItemEditFormView({
       return savedId
     },
     onSuccess: (id) => {
+      if (isNew && !id) {
+        // Created, but an older server answered with no row and no id: the
+        // record exists, so the form must not offer the same Save again.
+        setIsDirty(false)
+        void deleteDraft(recoveryKey)
+        setM2mLinks(new Map())
+        setM2mUnlinks(new Map())
+        setPendingO2MRows(new Map())
+        setSaveDialogOpen(false)
+        setCreatedOutOfView({ reason: saveNoticeRef.current.hidden?.reason ?? null })
+        return
+      }
       formUsage.markSaved()
       // Save ceremony (#318): the button morphs to a check and each field the
       // user actually touched gets a one-time glow sweep. Purely cosmetic —
@@ -7634,10 +7766,28 @@ function ItemEditFormView({
           )
           .catch(() => {})
       }
+      const notice = saveNoticeRef.current
+      const noun = colMeta?.singular || titleCase(collection)
       // Auto-close dialog after brief success display
       setTimeout(() => {
         setSaveDialogOpen(false)
-        toast.success(isNew ? 'Record created' : 'Changes saved')
+        const why = notice.hidden?.reason ? ` (${notice.hidden.reason})` : ''
+        if (notice.hidden) {
+          toast.warning(
+            isNew
+              ? `${noun} ${id} was created, but it’s outside what you can see${why}.`
+              : `Saved, but this ${noun.toLowerCase()} is now outside what you can see${why}.`,
+            { duration: 15_000 }
+          )
+        } else toast.success(isNew ? 'Record created' : 'Changes saved')
+        if (notice.linkProblems.length > 0) {
+          toast.error(
+            `${isNew ? `${noun} ${id} was created` : 'Saved'}, but some parts did not save: ${[
+              ...new Set(notice.linkProblems)
+            ].join(' · ')}`,
+            { duration: 20_000 }
+          )
+        }
         onSaved?.(id)
       }, 1200)
     },
@@ -9803,6 +9953,33 @@ function ItemEditFormView({
   // ── Lost access while open (#1925, F7) ────────────────────────────────────
   // No fields, no cached values, no unsaved edits — RecordLiveSync dropped
   // the record's queries; only the reason and a way back remain.
+  // ── Created, but outside what this person can see (id unknown) ────────────
+  if (createdOutOfView) {
+    const noun = colMeta?.singular || titleCase(collection)
+    return (
+      <div className={cn('nvr-fade-in flex flex-1 min-h-0 flex-col overflow-y-auto', className)}>
+        <div
+          className='m-6 max-w-xl rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/30 dark:text-amber-200'
+          data-created-out-of-view
+        >
+          <p className='font-semibold'>The {noun.toLowerCase()} was created.</p>
+          <p className='mt-1'>
+            It’s outside what you can see
+            {createdOutOfView.reason ? ` (${createdOutOfView.reason})` : ''}, so it can’t open here.
+            Don’t create it again — ask an administrator if you need access to it.
+          </p>
+          <button
+            type='button'
+            onClick={onBack ?? (() => window.history.back())}
+            className='mt-3 inline-flex h-8 items-center rounded-md border border-amber-300 bg-white px-3 text-[13px] font-medium hover:bg-amber-100 dark:border-amber-700/60 dark:bg-transparent dark:hover:bg-amber-900/40'
+          >
+            Back
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   if (recordGone?.kind === 'access') {
     return (
       <div className={cn('nvr-fade-in flex flex-1 min-h-0 flex-col overflow-y-auto', className)}>
