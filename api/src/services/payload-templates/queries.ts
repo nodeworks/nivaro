@@ -1,10 +1,9 @@
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
-import { skipReason } from '../integration-obligations.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { isSystemCollection } from '../system-collections.js'
-import { buildContext } from '../workflow-actions.js'
-import { type ConditionRule, evalConditionRule } from '../workflow-conditions.js'
+import { buildContext, erpActionGate } from '../workflow-actions.js'
+import type { ConditionRule } from '../workflow-conditions.js'
 import {
   bustPayloadTemplateCache,
   type PayloadMode,
@@ -218,48 +217,6 @@ async function stateOf(stateId: string | null): Promise<Record<string, unknown> 
   }
 }
 
-/**
- * The gates previewErpActions applies before rendering (skip_when_empty, skip_unless_any, guard),
- * as a skip reason. Kept in this one function on purpose.
- * TODO(T7 merge): replace with erpActionGate(action, record, context) from workflow-actions.ts.
- */
-function gateReason(
-  action: ErpActionLike,
-  record: Record<string, unknown>,
-  context: Record<string, unknown>
-): string | null {
-  if (action.skip_when_empty) {
-    const gate = context[action.skip_when_empty]
-    if (gate == null || (Array.isArray(gate) && gate.length === 0)) {
-      return skipReason('skip_when_empty', action.skip_when_empty)
-    }
-  }
-  if (Array.isArray(action.skip_unless_any) && action.skip_unless_any.length > 0) {
-    const walk = (ref: string): unknown => {
-      let cur: unknown = { record, context }
-      for (const seg of ref.split('.')) {
-        if (cur == null || typeof cur !== 'object') return undefined
-        cur = (cur as Record<string, unknown>)[seg]
-      }
-      return cur
-    }
-    const anySet = action.skip_unless_any.some((ref) => {
-      const v = walk(ref)
-      return v != null && String(v).trim() !== ''
-    })
-    if (!anySet) return skipReason('skip_unless_any', action.skip_unless_any.join(', '))
-  }
-  const guard = Array.isArray(action.guard) ? action.guard : []
-  const failed = guard.find((r) => !evalConditionRule(r, record))
-  if (failed) {
-    return skipReason(
-      'guard',
-      `${failed.field} ${failed.op ?? 'eq'} ${JSON.stringify(failed.value ?? null)}`
-    )
-  }
-  return null
-}
-
 type BuildContextDefs = Parameters<typeof buildContext>[0]
 
 /** The template-level lookups (same shape as an action's `context`), resolved for one record. */
@@ -324,7 +281,8 @@ export async function scopeForRecord(
         response: null,
         acting_user: acting
       },
-      skipped: gateReason(ref.action, record, context)
+      // The push's own gate (not_configured, skip_when_empty, skip_unless_any, guard).
+      skipped: erpActionGate(ref.action as Parameters<typeof erpActionGate>[0], record, context)
     }
   }
   const def = registeredDef(row.key)

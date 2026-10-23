@@ -1,4 +1,9 @@
 import { db } from '../db/index.js'
+import {
+  getTemplate,
+  installTemplateDraft,
+  type PayloadTemplateBundle
+} from './payload-templates/index.js'
 
 /**
  * App blueprints — one installable artifact bundling everything that makes a
@@ -12,6 +17,11 @@ import { db } from '../db/index.js'
  * reinstall is a no-op; int-keyed rows match on natural keys and remap).
  * Data rows are deliberately NOT part of a blueprint — that's what content
  * promotion is for.
+ *
+ * Payload templates referenced by a transition action (`payload_template_key`)
+ * ride along with their PUBLISHED body; install brings them in as DRAFTS only
+ * (a missing one is created unpublished), so nothing a sender uses changes
+ * until someone publishes it on the receiving instance.
  */
 
 export interface Blueprint {
@@ -40,6 +50,8 @@ export interface Blueprint {
     sources: Array<Record<string, unknown>>
   }>
   rules: Array<Record<string, unknown>>
+  /** Templates the workflows' actions reference. Absent on blueprints made before them. */
+  payload_templates?: PayloadTemplateBundle[]
 }
 
 const PHYSICAL_TYPES = new Set([
@@ -145,6 +157,8 @@ export interface BlueprintDiff {
   layouts: { new: number; existing: number }
   queues: { new: number; existing: number }
   rules: { new: number; existing: number }
+  /** new = installs as an unpublished template; existing = only its draft would change. */
+  payload_templates: { new: number; existing: number }
 }
 
 /** What installing this blueprint would ADD to the live instance — the same
@@ -155,7 +169,8 @@ export async function diffBlueprintAgainstInstance(bp: Blueprint): Promise<Bluep
     workflows: { new: 0, existing: 0 },
     layouts: { new: 0, existing: 0 },
     queues: { new: 0, existing: 0 },
-    rules: { new: 0, existing: 0 }
+    rules: { new: 0, existing: 0 },
+    payload_templates: { new: 0, existing: 0 }
   }
 
   for (const col of bp.collections) {
@@ -200,6 +215,16 @@ export async function diffBlueprintAgainstInstance(bp: Blueprint): Promise<Bluep
       .first()
     if (existing) diff.rules.existing++
     else diff.rules.new++
+  }
+  for (const t of Array.isArray(bp.payload_templates) ? bp.payload_templates : []) {
+    let existing = false
+    try {
+      existing = !!(await getTemplate(String(t?.key ?? '')))
+    } catch {
+      existing = false
+    }
+    if (existing) diff.payload_templates.existing++
+    else diff.payload_templates.new++
   }
 
   return diff
@@ -307,6 +332,10 @@ export async function exportBlueprint(name: string, collections: string[]): Prom
     (await db('nivaro_rules').whereIn('collection', collections)) as Array<Record<string, unknown>>
   ).map((r) => strip(r, ['id', 'created_at', 'updated_at']))
 
+  const payload_templates = await bundleReferencedTemplates(
+    workflows.flatMap((w) => w.transitions.map((t) => t.actions))
+  )
+
   return {
     type: 'nivaro-blueprint',
     version: 1,
@@ -317,8 +346,54 @@ export async function exportBlueprint(name: string, collections: string[]): Prom
     workflows,
     layouts,
     queues,
-    rules
+    rules,
+    payload_templates
   }
+}
+
+/** Every `payload_template_key` named by the actions in these transition `actions` blobs. */
+function referencedTemplateKeys(actionBlobs: unknown[]): string[] {
+  const keys = new Set<string>()
+  for (const blob of actionBlobs) {
+    let actions: unknown
+    try {
+      actions = typeof blob === 'string' ? JSON.parse(blob) : blob
+    } catch {
+      continue
+    }
+    if (!Array.isArray(actions)) continue
+    for (const a of actions) {
+      const k = (a as { payload_template_key?: unknown } | null)?.payload_template_key
+      if (typeof k === 'string' && k.trim()) keys.add(k.trim())
+    }
+  }
+  return [...keys]
+}
+
+/** The published body + metadata of each referenced template; unpublished / missing ones are left out. */
+async function bundleReferencedTemplates(actionBlobs: unknown[]): Promise<PayloadTemplateBundle[]> {
+  const out: PayloadTemplateBundle[] = []
+  for (const key of referencedTemplateKeys(actionBlobs)) {
+    try {
+      const t = await getTemplate(key)
+      if (!t?.published_mode || t.published_body == null) continue
+      out.push({
+        key: t.key,
+        label: t.label,
+        description: t.description,
+        external_api: t.external_api,
+        endpoint_path: t.endpoint_path,
+        collection: t.collection,
+        mode: t.published_mode,
+        body: t.published_body,
+        locked_keys: t.locked_keys,
+        lookups: t.lookups
+      })
+    } catch {
+      /* templates table unreadable (pre-501 instance): nothing to bundle */
+    }
+  }
+  return out
 }
 
 // ─── Install ────────────────────────────────────────────────────────────────
@@ -332,6 +407,8 @@ export interface InstallReport {
   layouts: { created: number; skipped: number }
   queues: { created: number; skipped: number }
   rules: { created: number; skipped: number }
+  /** created = new and unpublished; drafted = an existing template's draft replaced. */
+  payload_templates: { created: number; drafted: number; skipped: number }
   errors: string[]
 }
 
@@ -363,6 +440,7 @@ export async function installBlueprint(
     layouts: { created: 0, skipped: 0 },
     queues: { created: 0, skipped: 0 },
     rules: { created: 0, skipped: 0 },
+    payload_templates: { created: 0, drafted: 0, skipped: 0 },
     errors: []
   }
   const now = new Date()
@@ -469,6 +547,22 @@ export async function installBlueprint(
       }
     } catch (e) {
       err(`relation: ${e instanceof Error ? e.message.slice(0, 120) : 'failed'}`)
+    }
+  }
+
+  // Payload templates before the workflows whose actions reference them — as drafts only
+  for (const t of Array.isArray(bp.payload_templates) ? bp.payload_templates : []) {
+    try {
+      const out = await installTemplateDraft(
+        t,
+        ownerId,
+        `Draft installed from blueprint ${bp.name}`
+      )
+      if (out === 'created') report.payload_templates.created++
+      else if (out === 'drafted') report.payload_templates.drafted++
+      else report.payload_templates.skipped++
+    } catch (e) {
+      err(`payload template ${t?.key}: ${e instanceof Error ? e.message.slice(0, 150) : 'failed'}`)
     }
   }
 

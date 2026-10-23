@@ -563,3 +563,80 @@ describe('renderPayloadTemplate', () => {
     expect(r.problems.some((p) => /token/.test(p.message))).toBe(true)
   })
 })
+
+describe('installTemplateDraft (blueprint install)', () => {
+  const bundle = (body = spec('record.label'), extra: Record<string, unknown> = {}) => ({
+    key: KEY,
+    label: 'MWF workflow status',
+    description: null,
+    external_api: 'MWF',
+    endpoint_path: '/update_workflow.php',
+    collection: 'workflows',
+    mode: 'map' as const,
+    body,
+    locked_keys: ['status'],
+    lookups: { wh: { collection: 'warehouses' } },
+    ...extra
+  })
+
+  it('creates a missing template unpublished, with the body as its draft', async () => {
+    const out = await svc.installTemplateDraft(bundle(), USER, 'Draft installed from blueprint X')
+    expect(out).toBe('created')
+    const row = await getTemplate(KEY)
+    expect(row?.published_version).toBeNull()
+    expect(row?.published_body).toBeNull()
+    expect(row?.draft_body).toBe(spec('record.label'))
+    expect(row?.draft_rev).toBe(1)
+    expect(row?.owner).toBeNull()
+    expect(row?.locked_keys).toEqual(['status'])
+    expect(row?.lookups).toEqual({ wh: { collection: 'warehouses' } })
+    expect(store.tables[V] ?? []).toHaveLength(0)
+    // Senders refuse it until someone publishes it here.
+    await expect(renderPayloadTemplate(KEY, { record: {} }, noSecrets)).rejects.toThrow(
+      "Payload template 'mwf-workflow-status' has no published version"
+    )
+  })
+
+  it('never overwrites a published template: only its draft changes', async () => {
+    await registerPayloadTemplate('efp-ops', def())
+    const before = await getTemplate(KEY)
+    const out = await svc.installTemplateDraft(bundle(spec('record.other')), USER)
+    expect(out).toBe('drafted')
+    const row = await getTemplate(KEY)
+    expect(row?.published_body).toBe(before?.published_body)
+    expect(row?.published_version).toBe(1)
+    expect(row?.draft_body).toBe(spec('record.other'))
+    expect(row?.draft_rev).toBe((before?.draft_rev ?? 0) + 1)
+    expect(row?.owner).toBe('efp-ops')
+    expect(store.tables[V]).toHaveLength(1)
+    // Installing the same body again writes nothing.
+    expect(await svc.installTemplateDraft(bundle(spec('record.other')), USER)).toBe('unchanged')
+    expect((await getTemplate(KEY))?.draft_rev).toBe(row?.draft_rev)
+  })
+
+  it('keeps the mode lock: map → code allowed, code → map refused', async () => {
+    await registerPayloadTemplate('efp-ops', def())
+    const code = '{"status":"{{ record.status }}"}'
+    expect(await svc.installTemplateDraft(bundle(code, { mode: 'code' }), USER)).toBe('drafted')
+    await expect(svc.installTemplateDraft(bundle(), USER)).rejects.toThrow(MODE_CHANGE_MESSAGE)
+  })
+
+  it('refuses an invalid bundle before touching the database', async () => {
+    await expect(svc.installTemplateDraft(bundle('{"v":1,"fields":"no"}'), USER)).rejects.toThrow(
+      PayloadTemplateError
+    )
+    await expect(
+      svc.installTemplateDraft(bundle(undefined, { key: 'Bad Key' }), USER)
+    ).rejects.toThrow(/key must be/)
+    await expect(
+      svc.installTemplateDraft(bundle(undefined, { collection: 'orders; drop' }), USER)
+    ).rejects.toThrow(/collection must be/)
+    expect(store.tables[T] ?? []).toHaveLength(0)
+  })
+
+  it('a failed activity log after the create still reports created', async () => {
+    vi.mocked(logActivity).mockRejectedValueOnce(new Error('activity down'))
+    await expect(svc.installTemplateDraft(bundle(), USER)).resolves.toBe('created')
+    expect(store.tables[T]).toHaveLength(1)
+  })
+})

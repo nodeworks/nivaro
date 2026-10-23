@@ -155,8 +155,9 @@ vi.mock('../../../services/body-secrets.js', () => ({
   hasBodySecret: vi.fn(async () => false)
 }))
 // The action context machinery (buildContext) runs real queries; here each
-// named context key answers with fixed rows.
-vi.mock('../../../services/workflow-actions.js', () => ({
+// named context key answers with fixed rows. The gate (erpActionGate) is the real one.
+vi.mock('../../../services/workflow-actions.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/workflow-actions.js')>()),
   buildContext: vi.fn(async (defs: Record<string, unknown> | undefined) => {
     const out: Record<string, unknown> = {}
     for (const k of Object.keys(defs ?? {})) out[k] = k === 'mwf_queue' ? [{ name: 'Q-7' }] : []

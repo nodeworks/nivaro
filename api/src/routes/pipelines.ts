@@ -2805,7 +2805,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       // (never `t.to_state`) — a re-run is not the transition happening again,
       // so the payload must reflect where the record actually sits.
       const state = inst.current_state
-        ? await db('nivaro_workflow_states').where({ id: inst.current_state }).first('key', 'label')
+        ? await db('nivaro_workflow_states')
+            .where({ id: inst.current_state })
+            .first('key', 'label', 'external_label')
         : null
       const before = (await db('nivaro_erp_submissions')
         .where({ collection, item: String(item) })
@@ -2817,7 +2819,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const { skippedReason } = await runTransitionActions({
         transition: t,
         instance: { collection, item: String(item) },
-        newStateObj: state ? { key: state.key, label: state.label } : null,
+        newStateObj: state
+          ? { key: state.key, label: state.label, external_label: state.external_label ?? null }
+          : null,
         userId: req.user?.id ?? null,
         onlyIndex: actionIndex,
         // The ledger should tell an on-demand resend apart from the push a
