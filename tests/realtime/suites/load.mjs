@@ -199,7 +199,13 @@ export async function run({ only, args }) {
     t.check('presence events missed = 0', (d?.missed ?? 1) === 0, d?.missed)
     t.check('record-event delivery p95 under 2 s (probe)', pl.p95 != null && pl.p95 < 2000, pl)
     t.check('no probe event lost', probeLat.filter((x) => x == null).length === 0, probeLat.filter((x) => x == null).length)
-    for (const [n, v] of Object.entries(rttPct)) t.check(`${n} event-loop RTT p99 under 1 s`, v.p99 != null && v.p99 < 1000, v)
+    // Server-side event-loop lag (nodejs_eventloop_lag_seconds p99 per scrape) is the verdict;
+    // the time:sync round trip also crosses Docker's port forwarding and this generator's own
+    // loop, so it is reported only.
+    for (const n of socketNodes()) {
+      const lag = atPeak[n]?.lag_p99_max
+      t.check(`${n} event-loop lag p99 (server metric) under 500 ms`, lag != null && lag < 500, { lag_p99_max: lag, rtt: rttPct[n] })
+    }
     const leftover = Object.values(after.sockets).reduce((a, b) => a + (b ?? 0), 0)
     t.check('sockets back to the probes only after the load left (no leaked sockets)', leftover <= probes.length + socketNodes().length + 2, after.sockets)
     for (const n of socketNodes()) {

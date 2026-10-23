@@ -95,7 +95,11 @@ export async function run({ only }) {
     t.check('record:signal reaches the other viewer', !!(await b.next('record:signal', (p) => p.kind === 'transition', { from: m2 })))
     await a.http.must('POST', '/api/comments', { collection: 'rt_items', item: String(id0), text: 'parity comment' })
     t.check('record:comment (POST /api/comments) reaches the room', !!(await b.next('record:comment', () => true, { from: m2 })))
-    const rv = await a.http.post('/api/presence/record-viewers', { pairs: [{ collection: 'rt_items', item_id: String(id0) }] })
+    let rv = null
+    await poll(async () => {
+      rv = await a.http.post('/api/presence/record-viewers', { pairs: [{ collection: 'rt_items', item_id: String(id0) }] })
+      return rv.json?.data?.[`rt_items:${id0}`] === 2
+    }, { timeoutMs: 8000, everyMs: 1000 })
     t.metric('record_viewers_rest', rv.json?.data)
     t.check('POST /api/presence/record-viewers counts both viewers', rv.json?.data?.[`rt_items:${id0}`] === 2, rv.json)
     const m3 = b.mark()
@@ -128,6 +132,14 @@ export async function run({ only }) {
   await suite.case('presence:changed on sign-in, idle and sign-out (counts per action)', async (t) => {
     t.cleanup(fx.closeAll)
     const bob = await fx.sock('bob')
+    // Earlier cases left alice online for a moment; a sign-in of someone already online
+    // broadcasts nothing (coalesced presence), so wait until she is offline first.
+    const wasOffline = await poll(async () => {
+      const r = await bob.http.get('/api/presence/online')
+      const row = (r.json?.data ?? []).find((u) => String(u.user_id).toUpperCase() === String(users.alice.id).toUpperCase())
+      return !row || row.state === 'offline'
+    }, { timeoutMs: 30_000, everyMs: 1000 })
+    t.check('alice offline before the test (her earlier sockets closed)', !!wasOffline)
     await sleep(1500)
     const m = bob.mark()
     const alice = await fx.sock('alice')
@@ -208,7 +220,8 @@ export async function run({ only }) {
     t.cleanup(fx.closeAll)
     const viewing = await fx.sock('bob')
     viewing.join('record:join', { collection: 'rt_items', item: id1 })
-    await sleep(800)
+    // With the tier, web learns who views what from the realtime board (published every 2 s).
+    await sleep(5000)
     const alice = await fx.browser('alice')
     // Several sends: the web process that judges "is bob viewing?" varies per request.
     const n = 4
@@ -233,7 +246,7 @@ export async function run({ only }) {
     const a = await fx.sock('alice')
     const path = `/rtci/here-${Date.now()}`
     a.emit('page:at', { path, app: 'rtci' })
-    await sleep(800)
+    await sleep(5000) // realtime board lag (tier)
     let seen = 0
     const n = 6
     for (let i = 0; i < n; i++) {
@@ -571,10 +584,11 @@ export async function run({ only }) {
     t.check('GET /socket.io/socket.io.min.js 200 (what the worker loads)', lib.status === 200, lib.status)
     await fx.sock('alice', { sharedWorker: true, features: ['coalesce'] })
     await sleep(500)
+    // Stats from the realtime board refresh every 10 s on a SOCKETS=off web process.
     const stats = await poll(async () => {
       const r = await admin.get('/api/realtime/stats')
-      return r.json?.data
-    })
+      return (r.json?.data?.socket_count ?? 0) > 0 ? r.json.data : null
+    }, { timeoutMs: 25_000, everyMs: 2000 })
     t.metric('stats_node_view', { socket_count: stats?.socket_count, shared_worker_count: stats?.shared_worker_count })
     t.check('GET /api/realtime/stats sees sockets (diagnostics parity)', (stats?.socket_count ?? 0) > 0, stats?.socket_count)
   })

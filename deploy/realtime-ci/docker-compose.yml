@@ -74,6 +74,11 @@ services:
   mssql:
     image: ${RTCI_MSSQL_IMAGE:-mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04}
     platform: ${RTCI_MSSQL_PLATFORM:-linux/amd64}
+    # Azure SQL Edge as its default non-root user sometimes fails its first start on a fresh
+    # volume ("The system directory [/.system] could not be created. Errno [13]"): run as root
+    # and let it retry.
+    user: root
+    restart: on-failure:5
     environment:
       ACCEPT_EULA: 'Y'
       MSSQL_SA_PASSWORD: Rtci_Passw0rd_2026!
