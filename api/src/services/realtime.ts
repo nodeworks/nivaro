@@ -1,5 +1,6 @@
 import type { Server as SocketIOServer } from 'socket.io'
 import {
+  isQuietPresenceWrite,
   type LiveMode,
   liveModeNow,
   liveModeOf,
@@ -86,7 +87,10 @@ export function broadcastCollectionUpdate(
     return journaledEmit(`collection:${collection}`, 'collection:update', payload)
   }
   // Not read yet in this process: this write goes out live as before while the mode loads.
-  const known = liveModeNow(collection)
+  // A presence heartbeat is `off` whatever the collection says (presence:changed covers it).
+  const known: LiveMode | null = isQuietPresenceWrite(collection, extra)
+    ? 'off'
+    : liveModeNow(collection)
   if (!known) void liveModeOf(collection).catch(() => {})
   const journaled = deliver(known ?? 'on')
   // GraphQL subscriptions hear the same minimal event, once it has its journal position: the

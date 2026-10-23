@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   addPresenceSocket,
+  hasPresenceSocket,
   isPresenceRefreshOwner,
   removePresenceSocket,
   resetPresenceSockets
@@ -39,5 +40,13 @@ describe('presence sockets', () => {
     expect(isPresenceRefreshOwner('u-1', 'b')).toBe(true)
     removePresenceSocket('u-1', 'b')
     expect(isPresenceRefreshOwner('u-1', 'b')).toBe(false)
+  })
+
+  it('says whether the person still has a socket here (a reconnect inside the grace)', () => {
+    addPresenceSocket('u-1', 'a')
+    removePresenceSocket('u-1', 'a')
+    expect(hasPresenceSocket('U-1')).toBe(false)
+    addPresenceSocket('u-1', 'b')
+    expect(hasPresenceSocket('U-1')).toBe(true)
   })
 })

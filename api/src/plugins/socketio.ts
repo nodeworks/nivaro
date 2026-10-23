@@ -2,6 +2,7 @@ import { createAdapter } from '@socket.io/redis-adapter'
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import { Redis } from 'ioredis'
+import type { Knex } from 'knex'
 import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -28,6 +29,7 @@ import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
+import { createPresenceChangedCoalescer } from '../services/presence-changed.js'
 import {
   distinctViewerIds,
   PRESENCE_WATCH_MAX,
@@ -36,7 +38,10 @@ import {
 } from '../services/presence-rows.js'
 import {
   addPresenceSocket,
+  hasPresenceSocket,
   isPresenceRefreshOwner,
+  PRESENCE_OFFLINE_GRACE_MS,
+  PRESENCE_ONLINE_WINDOW_MS,
   PRESENCE_REFRESH_MS,
   removePresenceSocket
 } from '../services/presence-sockets.js'
@@ -515,6 +520,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
     }
   }
+  // presence:changed goes out at most once per window per tenant, carrying every changed id
+  // (services/presence-changed.ts); the first change of a quiet tenant still goes out at once.
+  const presenceChanged = createPresenceChangedCoalescer((tenant, payload) =>
+    emitToTenant(tenant, 'presence:changed', payload as unknown as Record<string, unknown>)
+  )
+
   // socketId → where in the admin that user is right now (presence map;
   // per-node like recordViewers — same accepted Redis-adapter limitation)
   // Cloud: each entry carries its socket's tenant ('' self-hosted); every reader and every
@@ -1052,11 +1063,35 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      * the way out (userHasSocket).
      */
 
-    /** Presence writes must never take down a socket. */
-    const writePresence = async (userId: string, patch: Record<string, unknown>) => {
+    /**
+     * Presence writes must never take down a socket.
+     *
+     * `changedWhen` narrows the first update to rows whose visible state this write changes;
+     * when it matches nothing the row already said so (a second tab, a reconnect inside the
+     * online window) — the write still lands (last_seen) but nobody is told.
+     */
+    const writePresence = async (
+      userId: string,
+      patch: Record<string, unknown>,
+      changedWhen?: (qb: Knex.QueryBuilder) => void
+    ) => {
       try {
-        const updated = await db('user_presence').where({ user_id: userId }).update(patch)
+        let changed = true
+        let updated = 0
+        if (changedWhen) {
+          updated = await db('user_presence')
+            .where({ user_id: userId })
+            .where((qb) => void changedWhen(qb))
+            .update(patch)
+          if (updated === 0) {
+            changed = false
+            updated = await db('user_presence').where({ user_id: userId }).update(patch)
+          }
+        } else {
+          updated = await db('user_presence').where({ user_id: userId }).update(patch)
+        }
         if (updated === 0) {
+          changed = true
           await db('user_presence')
             .insert({ user_id: userId, ...patch })
             .catch(() => {
@@ -1064,11 +1099,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
               return db('user_presence').where({ user_id: userId }).update(patch)
             })
         }
+        if (!changed) return
         // Tell every viewer rather than making them poll. This is the whole
         // reason the list can feel instant instead of up to a minute stale.
         // Cloud: the socket's own tenant only (its `all` room); self-hosted: everyone.
+        // Coalesced per tenant: a burst of connects is one event with every id.
         const tenant = tenantNow()
-        if (tenant != null) emitToTenant(tenant, 'presence:changed', { user_id: userId })
+        if (tenant != null) presenceChanged.note(tenant, userId)
       } catch (err) {
         app.log.debug({ err, userId }, 'presence write failed')
       }
@@ -1082,14 +1119,33 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       // each reconnect as input reset the idle clock — people flipped from
       // "Idle · 12m" back to bare "Idle" every reconnect. The client's own
       // beats carry is_idle/last_active, the actual input claims.
-      await writePresence(userId, {
-        is_online: true,
-        last_seen: now
-      })
+      // Announced only when the row did not already read as online (offline, or outside the
+      // window /presence/online uses) — a reconnect blip inside it tells nobody.
+      const onlineSince = new Date(now.getTime() - PRESENCE_ONLINE_WINDOW_MS)
+      await writePresence(
+        userId,
+        {
+          is_online: true,
+          last_seen: now
+        },
+        (qb) =>
+          void qb
+            .where('is_online', false)
+            .orWhereNull('last_seen')
+            .orWhere('last_seen', '<', onlineSince)
+      )
     }
 
     const markOffline = async (userId: string, socketId: string) => {
       if (!removePresenceSocket(userId, socketId)) return // other tabs still open here
+      // A reconnect (network blip, laptop wake, deploy) usually lands within a few seconds:
+      // wait that long before saying they left, so a blip writes nothing and tells nobody —
+      // otherwise every reconnect cost an offline AND an online presence:changed.
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, PRESENCE_OFFLINE_GRACE_MS)
+        ;(t as { unref?: () => void }).unref?.()
+      })
+      if (hasPresenceSocket(userId)) return // back on this process
       // A tab on another replica still counts (this socket already left its rooms).
       if (await userHasSocket(io, userId)) return
       await writePresence(userId, { is_online: false, last_seen: new Date() })

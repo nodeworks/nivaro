@@ -14,6 +14,12 @@
 /** How often a live socket keeps its person's `last_seen` fresh. */
 export const PRESENCE_REFRESH_MS = 25_000
 
+/** A row reads as online while its last_seen is this fresh (GET /presence/online). */
+export const PRESENCE_ONLINE_WINDOW_MS = 70_000
+
+/** How long a person's last socket may be gone before they are written offline (reconnects). */
+export const PRESENCE_OFFLINE_GRACE_MS = 4_000
+
 const live = new Map<string, Set<string>>()
 
 const keyOf = (userId: string) => userId.toUpperCase()
@@ -33,6 +39,11 @@ export function removePresenceSocket(userId: string, socketId: string): boolean 
   if (set.size > 0) return false
   live.delete(key)
   return true
+}
+
+/** Has this person a live socket on this process right now? */
+export function hasPresenceSocket(userId: string): boolean {
+  return (live.get(keyOf(userId))?.size ?? 0) > 0
 }
 
 /**
