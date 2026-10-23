@@ -85,6 +85,8 @@ const lagSeconds = (ns: number) => Math.max(0, ns / 1e6 - LOOP_RESOLUTION_MS) / 
 
 export interface MetricsExtras {
   cronLeader?: boolean | null
+  /** Socket.io connections held by this process (null = no Socket.io server). */
+  sockets?: number | null
 }
 
 /** The whole exposition. Exported for tests. */
@@ -115,6 +117,12 @@ export function renderMetrics(extras: MetricsExtras = {}): string {
   out.push(`nodejs_heap_total_bytes ${mem.heapTotal}`)
   metric('nodejs_external_memory_bytes', 'gauge', 'Memory held outside the V8 heap.')
   out.push(`nodejs_external_memory_bytes ${mem.external}`)
+
+  // Post-mortem 3.3 — the realtime tier's load: connections per process (0 with SOCKETS=off).
+  if (extras.sockets != null) {
+    metric('nivaro_sockets_connected', 'gauge', 'Socket.io connections held by this process.')
+    out.push(`nivaro_sockets_connected ${extras.sockets}`)
+  }
 
   if (loopHist && loopHist.count > 0) {
     metric('nodejs_eventloop_lag_seconds', 'summary', 'Event-loop delay since the previous scrape.')
@@ -253,6 +261,7 @@ export const metricsPlugin = fp(async (app: FastifyInstance) => {
     }
     void reply.header('content-type', 'text/plain; version=0.0.4; charset=utf-8')
     void reply.header('cache-control', 'no-store')
-    return renderMetrics({ cronLeader })
+    const io = (app as unknown as { io?: { engine?: { clientsCount?: number } } }).io
+    return renderMetrics({ cronLeader, sockets: io?.engine?.clientsCount ?? null })
   })
 })

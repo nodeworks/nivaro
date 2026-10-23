@@ -34,4 +34,10 @@ describe('metrics exposition (#1088)', () => {
     observeRequest('GET', '/a"b\\c', 200, 0.001)
     expect(renderMetrics()).toContain('route="/a\\"b\\\\c"')
   })
+
+  it('reports the sockets a process holds (post-mortem 3.3), and nothing without Socket.io', () => {
+    expect(renderMetrics({ sockets: 412 })).toContain('nivaro_sockets_connected 412')
+    expect(renderMetrics({ sockets: 0 })).toContain('nivaro_sockets_connected 0')
+    expect(renderMetrics()).not.toContain('nivaro_sockets_connected')
+  })
 })

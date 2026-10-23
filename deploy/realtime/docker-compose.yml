@@ -1,0 +1,144 @@
+# Nivaro with a separate realtime tier (post-mortem 3.3) — web x4, realtime x2, worker x1.
+#
+# Sized for 200-250 people online at once (~400 sockets with extra tabs). See README.md beside
+# this file for the routing and sticky-session rules, the sizing and the load-test baseline.
+#
+#   docker compose -f deploy/realtime/docker-compose.yml up -d
+#
+# Traefik routes /socket.io, graphql-ws and the SSE streams to the realtime service (sticky by
+# cookie, for Socket.io long-polling) and everything else to web. Web and worker run SOCKETS=off,
+# so no live connection lands on them; what they emit reaches people through Redis.
+#
+# Swarm (docker stack deploy): move each service's `labels` under `deploy.labels` and switch the
+# Traefik provider to `--providers.swarm`.
+
+x-nivaro: &nivaro
+  image: nodeworks/nivaro:${NIVARO_VERSION:-latest}
+  env_file: .env
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+  # Covers SHUTDOWN_DRAIN_DELAY_MS + the 8 s drain (the proxy has routed around a stopping task
+  # before it closes its connections; clients reconnect to the other realtime task).
+  stop_grace_period: 30s
+
+x-env: &env
+  REDIS_URL: redis://redis:6379
+  PUBLIC_URL: https://${NIVARO_HOST:-nivaro.example.com}
+  ADMIN_URL: https://${NIVARO_HOST:-nivaro.example.com}
+  TRUST_PROXY: 'true'
+  COOKIE_SECURE: 'true'
+  SHUTDOWN_DRAIN_DELAY_MS: '10000'
+
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls=true
+      # Long-lived connections: no read timeout on the entrypoint (sockets and SSE stay open).
+      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=0
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  # Request handling: REST, GraphQL queries, the admin build. No sockets.
+  web:
+    <<: *nivaro
+    deploy:
+      replicas: 4
+    environment:
+      <<: *env
+      NIVARO_ROLE: web
+      SOCKETS: 'off'
+      CRON_TICKS: 'off'
+      VIDEO_RENDER: 'off'
+      DB_POOL_MAX: '25'
+      DB_POOL_BACKGROUND_MAX: '5'
+    volumes:
+      - ./extensions:/app/api/extensions
+      - uploads:/app/uploads
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.nivaro-web.rule=Host(`${NIVARO_HOST:-nivaro.example.com}`)
+      - traefik.http.routers.nivaro-web.entrypoints=websecure
+      - traefik.http.routers.nivaro-web.priority=1
+      - traefik.http.routers.nivaro-web.service=nivaro-web
+      - traefik.http.services.nivaro-web.loadbalancer.server.port=3055
+      - traefik.http.services.nivaro-web.loadbalancer.healthcheck.path=/api/ready
+      - traefik.http.services.nivaro-web.loadbalancer.healthcheck.interval=5s
+
+  # Live connections only: Socket.io, graphql-ws, the SSE streams. No REST, crons or migrations.
+  realtime:
+    <<: *nivaro
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 768M
+    environment:
+      <<: *env
+      NIVARO_ROLE: realtime
+      DB_POOL_MAX: '10'
+      DB_POOL_BACKGROUND_MAX: '0'
+      # Not needed (a realtime process never ticks or renders); kept explicit.
+      CRON_TICKS: 'off'
+      MEDIA_WORKER: 'off'
+      NODE_OPTIONS: --max-old-space-size=512
+    labels:
+      - traefik.enable=true
+      # Above the web catch-all. PathRegexp is Traefik v3 (v2: Path(`/api/events/views/{id:[^/]+}/stream`)).
+      - traefik.http.routers.nivaro-realtime.rule=Host(`${NIVARO_HOST:-nivaro.example.com}`) && (PathPrefix(`/socket.io/`) || Path(`/api/graphql-ws`) || Path(`/api/graphql/stream`) || Path(`/api/events/stream`) || PathRegexp(`^/api/events/views/[^/]+/stream$$`))
+      - traefik.http.routers.nivaro-realtime.entrypoints=websecure
+      - traefik.http.routers.nivaro-realtime.priority=100
+      - traefik.http.routers.nivaro-realtime.service=nivaro-realtime
+      - traefik.http.services.nivaro-realtime.loadbalancer.server.port=3055
+      - traefik.http.services.nivaro-realtime.loadbalancer.healthcheck.path=/api/ready
+      - traefik.http.services.nivaro-realtime.loadbalancer.healthcheck.interval=5s
+      # Sticky sessions: every long-polling request of one Socket.io session must reach the task
+      # that holds it. Websocket and SSE connections are one connection each and need none.
+      - traefik.http.services.nivaro-realtime.loadbalancer.sticky.cookie=true
+      - traefik.http.services.nivaro-realtime.loadbalancer.sticky.cookie.name=nvr_rt
+      - traefik.http.services.nivaro-realtime.loadbalancer.sticky.cookie.httponly=true
+      - traefik.http.services.nivaro-realtime.loadbalancer.sticky.cookie.secure=true
+      - traefik.http.services.nivaro-realtime.loadbalancer.sticky.cookie.samesite=lax
+
+  # Scheduled jobs, imports, media work. Not routed.
+  worker:
+    <<: *nivaro
+    deploy:
+      replicas: 1
+    environment:
+      <<: *env
+      NIVARO_ROLE: worker
+      SOCKETS: 'off'
+      CRON_TICKS: 'on'
+      DB_POOL_MAX: '15'
+      DB_POOL_BACKGROUND_MAX: '10'
+    volumes:
+      - ./extensions:/app/api/extensions
+      - uploads:/app/uploads
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  uploads:
+  redis_data:
