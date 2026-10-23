@@ -1,10 +1,109 @@
 {
-  "generated_at": "2026-10-23T18:36:37.817Z",
+  "generated_at": "2026-10-23T22:27:35.161Z",
   "releases": [
+    {
+      "version": "0.3.13",
+      "tag": "v0.3.13",
+      "date": "2026-10-23T18:27:16-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "items",
+              "text": "create scope guard behind CREATE_SCOPE_GUARD (default off)",
+              "hash": "41511b6ef"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "sticky force refresh, minimum client build, unsaved-work hold",
+              "hash": "6a88395e7"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "never show raw JavaScript error text",
+              "hash": "dc4d4649f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "picks ride in the create; hidden read-backs answer the id",
+              "hash": "58e968233"
+            },
+            {
+              "section": "Fixed",
+              "scope": "traffic-map",
+              "text": "stop samplers with their app; pin the ticker test clock",
+              "hash": "fb56ff68b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "reports",
+              "text": "bound and de-join the activity summary",
+              "hash": "ad5725bb4"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "presence",
+              "text": "scale the online list to 250 people",
+              "hash": "73e22620b"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "force refresh reaches tabs that were offline (sync)",
+              "hash": "200f32414"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "ops",
+              "text": "show CREATE_SCOPE_GUARD in the env viewers",
+              "hash": "8b63385cb"
+            },
+            {
+              "section": "Other",
+              "scope": "cron-locks",
+              "text": "read the build identity from a leaf module",
+              "hash": "28f042f25"
+            },
+            {
+              "section": "Other",
+              "scope": "integration-reconcile",
+              "text": "stub the after-sweep passes",
+              "hash": "dc1613f40"
+            }
+          ]
+        }
+      ],
+      "count": 11
+    },
     {
       "version": "0.3.12",
       "tag": "v0.3.12",
-      "date": "2026-10-23T14:36:10-04:00",
+      "date": "2026-10-23T14:36:37-04:00",
       "sections": [
         {
           "label": "Added",
