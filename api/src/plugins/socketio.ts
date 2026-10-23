@@ -1,3 +1,4 @@
+import { createServer } from 'node:http'
 import { createAdapter } from '@socket.io/redis-adapter'
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
@@ -53,6 +54,7 @@ import {
   TOPIC_SIGNAL_KINDS,
   topicViewers
 } from '../services/presence-topics.js'
+import { socketsServed } from '../services/process-role.js'
 import { emitToTenant } from '../services/record-events.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
 import {
@@ -460,7 +462,10 @@ function roomsLabel(rooms: unknown): string | null {
 }
 
 export const socketioPlugin = fp(async (app: FastifyInstance) => {
-  const io = new SocketIOServer(app.server, {
+  // Post-mortem 3.3 — SOCKETS=off (a web process beside a realtime tier): bound to an HTTP
+  // server that never listens, so this process serves no /socket.io, while what it emits still
+  // reaches the realtime processes' clients through the Redis adapter and the event stream.
+  const io = new SocketIOServer(socketsServed() ? app.server : createServer(), {
     cors: { origin: '*', credentials: true },
     transports: socketPollingAllowed() ? ['websocket', 'polling'] : ['websocket'],
     perMessageDeflate: socketCompressionOn() ? { threshold: 1024 } : false

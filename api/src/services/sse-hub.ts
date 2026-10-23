@@ -10,6 +10,7 @@
  * realtime.ts costs nothing on an instance with no SSE consumers.
  */
 
+import { collectionChangeOf, onJournalEntry } from './journal-listeners.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 export interface SseEvent {
@@ -65,4 +66,37 @@ export function sseEventForTenant(ev: SseEvent, tenant: string): Omit<SseEvent, 
 /** Diagnostics — how many streams are attached to this process. */
 export function sseListenerCount(): number {
   return listeners.size
+}
+
+let bridgeOff: (() => void) | null = null
+
+/**
+ * Post-mortem 3.3 — record changes written on OTHER replicas, for this process's streams. The
+ * writing process publishes its own changes (broadcastCollectionUpdate); without this a stream
+ * heard only writes made on the process it happened to connect to, and a realtime process
+ * (which makes no writes) heard nothing. Fed by the event stream reader (REALTIME_EVENT_STREAM);
+ * a collection set to batched live mode sends no per-record entry, so other replicas' streams
+ * miss those. Idempotent.
+ */
+export function startSseRemoteBridge(): void {
+  if (bridgeOff) return
+  bridgeOff = onJournalEntry((entry, origin) => {
+    if (origin !== 'remote' || listeners.size === 0) return
+    const c = collectionChangeOf(entry)
+    if (!c) return
+    const raw = entry.payload?.item
+    publishSseEvent({
+      collection: c.collection,
+      item: typeof raw === 'number' ? raw : c.item,
+      action: c.action ?? undefined,
+      changed_fields: c.changed_fields ?? undefined,
+      tenant: c.tenant
+    })
+  })
+}
+
+/** Tests. */
+export function stopSseRemoteBridge(): void {
+  bridgeOff?.()
+  bridgeOff = null
 }

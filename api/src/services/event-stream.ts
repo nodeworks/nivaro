@@ -209,7 +209,7 @@ async function readLoop(): Promise<void> {
           }
           // #1675 / #1680 — another replica's write, for pushed widgets and saved-view streams
           // (this replica's own writes reached them from journaledEmit).
-          if (d.node !== NODE) notifyJournalListeners(d.entry)
+          if (d.node !== NODE) notifyJournalListeners(d.entry, 'remote')
         }
       }
       if (afterPause) {

@@ -200,7 +200,8 @@ export async function buildServer() {
   await app.register(socketioPlugin)
   // Global io + journal wiring (realtime sprint): services with no app in
   // scope emit through the holder; the event journal (#266) shares the
-  // app Redis connection.
+  // app Redis connection. realtime-server.ts (NIVARO_ROLE=realtime) mirrors the parts the
+  // socket handlers need — a new one goes in both.
   {
     const { setAppRef, setIo } = await import('./services/io-holder.js')
     setIo(app.io)
@@ -248,6 +249,9 @@ export async function buildServer() {
       await initEventStream(app.redis)
       const { alignJournalSequence, flushJournal } = await import('./services/event-journal.js')
       void alignJournalSequence()
+      // Post-mortem 3.3 — /events/stream hears other replicas' record changes too.
+      const { startSseRemoteBridge } = await import('./services/sse-hub.js')
+      startSseRemoteBridge()
       const { flushRawWriteQueue } = await import('./services/raw-write-announcer.js')
       app.addHook('onClose', async () => {
         flushRawWriteQueue()
