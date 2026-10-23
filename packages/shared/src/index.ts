@@ -597,6 +597,7 @@ export {
   clientVersionHeader,
   noteApiVersion,
   noteApiVersionFrom,
+  obeyedReloads,
   setClientBuild
 } from './lib/client-version'
 export * from './lib/commands'
@@ -625,6 +626,7 @@ export {
   setFiscalStartMonth
 } from './lib/fiscal'
 export * from './lib/focus-mode'
+export { shouldObeyForceReload } from './lib/force-reload'
 export * from './lib/format-value'
 export {
   type GlossaryTerm,
@@ -883,6 +885,14 @@ export {
   resolveAccentColor,
   type ThemeAccent
 } from './lib/theme-accents'
+export {
+  hasUnsavedWork,
+  notifyUnsavedWorkChanged,
+  registerUnsavedWork,
+  subscribeUnsavedWork,
+  unsavedWorkLabels,
+  useUnsavedWork
+} from './lib/unsaved-work'
 export {
   type AiStreamHandle,
   type AiStreamHandlers,

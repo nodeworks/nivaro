@@ -192,20 +192,15 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
         app.log.warn({ err }, 'traffic-map cluster relay did not start on this realtime process')
       }
     }
-    const { startBoardPublisher, startBoardReader, withdrawBoard } = await import(
-      './services/realtime-board.js'
-    )
-    const stopBoard = startBoardPublisher(app.redis, () => collectLocalBoard(app.io))
-    // The other realtime processes' viewers, so `record:viewers` lists everyone on the record.
-    const stopPeers = startBoardReader(app.redis, { peers: true })
+    // Publishes once a reader or another realtime process is registered; reads the other
+    // realtime processes' viewers so `record:viewers` lists everyone on the record.
+    const { startBoard } = await import('./services/realtime-board.js')
+    const stopBoard = startBoard(app.redis, {
+      serves: true,
+      collect: () => collectLocalBoard(app.io)
+    })
     // Off the board as soon as the drain starts, so nobody trusts this process's viewers.
-    app.addHook('preClose', async () => {
-      await withdrawBoard()
-    })
-    app.addHook('onClose', async () => {
-      stopBoard()
-      stopPeers()
-    })
+    app.addHook('preClose', async () => stopBoard())
   }
 
   {

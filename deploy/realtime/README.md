@@ -105,14 +105,20 @@ not care. So:
   now-editing, skipping an in-app notification for someone looking at the record), who is on a
   page, the socket list and room sizes (Realtime console, Traffic Map, chaos steady state), the
   concurrency sample, and "is anyone watching?" before the traffic feed, AI call feed, flow
-  firehose and similar emits. Each realtime process publishes its share to Redis — the
-  **realtime board**, `nvr:rt:board:<slot>:<process>:live` every 1 s (10 s TTL) and `:stats`
-  every 10 s, listed in the registry `nvr:rt:board:<slot>:nodes` (a sorted set by last
-  publish) — and every `SOCKETS=off` process reads it back into memory (registry + one MGET, no
-  key scan), so these answers are at most ~2 s old (the socket list ~20 s) and no request waits
-  on another process. A process that serves sockets answers from its own, as before. An in-app
-  notification is skipped only on a board entry younger than 3 s (a deliver beats a wrong skip),
-  and a realtime process takes its entries off the board as its drain starts.
+  firehose and similar emits. Every process that serves sockets publishes its share to Redis —
+  the **realtime board**, `nvr:rt:board:<slot>:<process>:live` every 1 s (10 s TTL) and
+  `:stats` every 10 s, listed in the registry `nvr:rt:board:<slot>:nodes` (a sorted set by last
+  publish) — and reads the others' back into memory (registry + one MGET, no key scan); a
+  `SOCKETS=off` process only reads. A process merges the others with its own sockets, so these
+  answers cover every process and are at most ~2 s old for the others (the socket list ~20 s),
+  and no request waits on another process. This is not only the tier: several replicas that
+  all serve sockets (single role) share the board too. Every process registers itself every
+  5 s; a process publishes and reads only once another one is registered, so a lone process
+  costs one heartbeat. An in-app notification is skipped for another process's viewer only on
+  a board entry younger than 3 s (a deliver beats a wrong skip), and a process takes its
+  entries off the board as its drain starts. Self-hosted only.
+- The admin `/api/stream` also hears the writes made on the other processes (their journaled
+  record changes); before, it heard only the writes of the process it connected to.
 - Counts from `POST /api/presence/record-viewers` are given only for records the caller may
   read. The socket inspector (`/api/realtime/sockets/:id/inspect`) answers 409
   `SOCKET_ON_REALTIME` with the process name for a socket held by a realtime process.

@@ -76,7 +76,7 @@ describe('realtime board registry (second review)', () => {
     const redis = memRedis()
     startBoardPublisher(redis as never, () => empty)
     await vi.waitFor(() => expect(redis.kv.size).toBe(2))
-    startBoardReader(redis as never)
+    startBoardReader(redis as never, { includeOwn: true })
     const { boardLive } = await import('../../../services/realtime-board.js')
     await vi.waitFor(() => expect(boardLive().length).toBe(1))
     expect(redis.calls).not.toContain('scan')
@@ -234,5 +234,116 @@ describe('peer board changes re-tell viewer lists (harness parity)', () => {
     startBoardReader(redis as never, { peers: true })
     await vi.waitFor(() => expect(seen).toEqual([['record:projects:1']]))
     onPeerBoardChange(null)
+  })
+})
+
+describe('the board with several socket-serving replicas (single role)', () => {
+  afterEach(() => resetBoard())
+
+  it('a lone process only registers; it publishes and reads once another one shows up', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    try {
+      const { startBoard, boardMergeOn } = await import('../../../services/realtime-board.js')
+      const redis = memRedis()
+      const stop = startBoard(redis as never, { serves: true, collect: () => empty })
+      await vi.advanceTimersByTimeAsync(10)
+      expect(redis.calls).toContain('zadd')
+      expect([...redis.kv.keys()]).toEqual([])
+      expect(boardMergeOn()).toBe(false)
+      // A second replica registers.
+      await redis.zadd('nvr:rt:board:test:nodes', Date.now(), 'web-2')
+      await vi.advanceTimersByTimeAsync(5_100)
+      expect([...redis.kv.keys()].some((k) => k.endsWith(':live'))).toBe(true)
+      expect(boardMergeOn()).toBe(true)
+      await stop()
+      expect([...redis.kv.keys()]).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('merges the other replicas with this one: viewing, pages, viewer lists, concurrency', async () => {
+    const { setPeerBoardsForTests } = await import('../../../services/realtime-board.js')
+    const sock = await import('../../../plugins/socketio.js')
+    expect(sock.isUserViewing('projects', '5', 'bob')).toBe(false)
+    setPeerBoardsForTests([
+      {
+        node: 'web-2',
+        at: Date.now(),
+        sockets: 2,
+        users: ['bob', 'cy'],
+        viewers: { 'record:projects:5': [{ socket: 's-bob', id: 'bob', name: 'Bob' }] },
+        pages: [
+          {
+            socket: 's-cy',
+            user: { id: 'cy', name: 'Cy' },
+            path: '/journeys',
+            since: 10,
+            app: 'admin',
+            tenant: ''
+          }
+        ]
+      }
+    ])
+    expect(sock.isUserViewing('projects', '5', 'bob')).toBe(true)
+    expect(sock.getRecordViewerSnapshot()).toEqual([
+      { collection: 'projects', item: '5', viewers: [{ id: 'bob', name: 'Bob' }] }
+    ])
+    expect(sock.usersOnPath('/journeys')).toEqual([{ id: 'cy', name: 'Cy', since: 10 }])
+    expect(sock.usersOnPathPrefix(['/journeys'])).toEqual(['cy'])
+    expect(sock.getLocalConcurrency()).toEqual({ sockets: 2, users: 2 })
+    // A peer keeps its own socket list for the console (per process), unlike a SOCKETS=off reader.
+    expect(sock.getRealtimeStats().sockets).toEqual([])
+  })
+})
+
+describe('admin /api/stream hears the other processes (journal)', () => {
+  it('turns journaled record changes into stream events, one per record', async () => {
+    const { streamEventsOf } = await import('../../../routes/stream.js')
+    const one = streamEventsOf({
+      seq: 1,
+      room: 'collection:projects',
+      event: 'collection:update',
+      payload: { collection: 'projects', item: 7, action: 'update' }
+    })
+    expect(one.map(({ type, collection, id }) => ({ type, collection, id }))).toEqual([
+      { type: 'update', collection: 'projects', id: '7' }
+    ])
+    const batch = streamEventsOf({
+      seq: 2,
+      room: 'collection:readings',
+      event: 'collection:update',
+      payload: {
+        collection: 'readings',
+        item: null,
+        items: [1, 2],
+        action: 'create',
+        batched: true
+      }
+    })
+    expect(batch.map((e) => e.id)).toEqual(['1', '2'])
+    // A raw bulk write (no action, `*`) and other events: nothing, as on the writing process.
+    expect(
+      streamEventsOf({
+        seq: 3,
+        room: 'collection:x',
+        event: 'collection:update',
+        payload: { collection: 'x', item: '*', bulk: 40 }
+      })
+    ).toEqual([])
+    expect(
+      streamEventsOf({ seq: 4, room: 'user:1', event: 'notification:new', payload: {} })
+    ).toEqual([])
+  })
+
+  it('registering the stream listens to the journal', async () => {
+    const { journalListenerCount } = await import('../../../services/journal-listeners.js')
+    const before = journalListenerCount()
+    const { streamRoutes } = await import('../../../routes/stream.js')
+    const Fastify = (await import('fastify')).default
+    const app = Fastify()
+    await app.register(streamRoutes)
+    expect(journalListenerCount()).toBe(before + 1)
+    await app.close()
   })
 })

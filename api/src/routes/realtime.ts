@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
@@ -12,7 +13,7 @@ import {
 } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
-import { boardReaderOn } from '../services/realtime-board.js'
+import { boardMergeOn, boardStats } from '../services/realtime-board.js'
 import { visibleRecordIds } from '../services/socket-access.js'
 import { readSocketHealth, socketBufferState } from '../services/socket-health.js'
 import {
@@ -25,6 +26,22 @@ import {
   transportStats
 } from '../services/socket-transport.js'
 import { sseListenerCount } from '../services/sse-hub.js'
+import {
+  buildBelow,
+  clampSeconds,
+  cleanBuild,
+  clearMinBuild,
+  DEFAULT_MIN_BUILD_SECONDS,
+  forgetRemembered,
+  getMinBuild,
+  getMinBuilds,
+  listRemembered,
+  minBuildPayload,
+  rememberHours,
+  rememberMax,
+  rememberRefresh,
+  setMinBuild
+} from '../services/sticky-refresh.js'
 import type { User } from '../types.js'
 import { NIVARO_VERSION } from '../version.js'
 
@@ -169,9 +186,10 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
    */
   /** SOCKETS=off: the socket is held by a realtime process, which keeps its inspector ring. */
   const heldElsewhere = (id: string): string | null => {
-    if (!boardReaderOn()) return null
-    const s = getRealtimeStats().sockets.find((x) => x.id === id) as { node?: unknown } | undefined
-    return s ? String(s.node ?? 'unknown') : null
+    if (!boardMergeOn()) return null
+    // The other processes' socket lists (never this one's own: those inspect here).
+    for (const b of boardStats()) if (b.sockets?.some((x) => x.id === id)) return String(b.node)
+    return null
   }
   const inspectTarget = (id: string) => {
     const scope = tenantScope()
@@ -324,11 +342,21 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
     return { data: rows }
   })
 
+  // Sticky refresh: the Redis keys carry the caller's tenant (null = self-hosted).
+  const stickyTenant = () => tenantScope()
+  const userName = (u: {
+    first_name?: string | null
+    last_name?: string | null
+    email?: string | null
+  }) => `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || null
+
   // Remote client refresh (#285): every connected client shows a countdown
   // then reloads. For the deploy that must land NOW. Targeted form
   // (2026-09-25): `user_ids` reaches only those people (every open tab, any
   // app), `app` reaches only one client app's sockets on this node —
   // e.g. everyone on the portal after a portal-only fix.
+  // Sticky (2026-10-23): the instruction is also remembered (services/sticky-refresh.ts), so a
+  // tab that was asleep or offline gets it when its socket connects again.
   app.post<{
     Body: {
       seconds?: number
@@ -339,7 +367,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
       older?: boolean
     }
   }>('/force-refresh', async (req) => {
-    const seconds = Math.min(300, Math.max(5, Number(req.body?.seconds) || 30))
+    const seconds = clampSeconds(req.body?.seconds, 30)
     const message = String(req.body?.message ?? '').slice(0, 300)
     const userIds = Array.isArray(req.body?.user_ids)
       ? req.body.user_ids.map((u) => String(u)).filter((u) => /^[0-9a-f-]{36}$/i.test(u))
@@ -348,15 +376,30 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
       throw Object.assign(new Error('user_ids must name at least one user'), { statusCode: 400 })
     const appFilter = req.body?.app ? String(req.body.app).slice(0, 50) : null
     const older = req.body?.older === true
-    const hit = await emitForceRefresh({ userIds, app: appFilter, older }, { seconds, message })
+    const id = randomUUID()
+    const issuedAt = Date.now()
+    const hit = await emitForceRefresh(
+      { userIds, app: appFilter, older },
+      { seconds, message, id, issued_at: issuedAt, reason: 'push' }
+    )
     const names = userIds.length
       ? await db('nivaro_users')
           .whereIn('id', userIds)
           .select('first_name', 'last_name', 'email')
-          .then((rows) =>
-            rows.map((r) => `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || r.email)
-          )
+          .then((rows) => rows.map((r) => userName(r) ?? ''))
       : []
+    const remembered = await rememberRefresh(app.redis ?? null, stickyTenant(), {
+      id,
+      issued_at: issuedAt,
+      issuer: req.user?.id ?? null,
+      issuer_name: req.user ? userName(req.user) : null,
+      seconds,
+      message,
+      target: { app: appFilter, user_ids: userIds.map((u) => u.toUpperCase()), older },
+      ...(older
+        ? { builds: hit.builds, api: hit.api, settling: Object.keys(hit.settling ?? {}) }
+        : {})
+    })
     const who = userIds.length
       ? `to ${names.join(', ')}`
       : appFilter
@@ -366,9 +409,164 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
     await logActivity({
       action: 'client-force-refresh',
       user: req.user?.id,
-      comment: `${scope} — ${seconds}s${message ? ` — ${message}` : ''} (${hit.sockets} tabs${hit.partial ? ' on this node only — another replica did not answer' : ''})`,
+      comment: `${scope} — ${seconds}s${message ? ` — ${message}` : ''} (${hit.sockets} tabs${hit.partial ? ' on this node only — another replica did not answer' : ''})${remembered ? `; tabs that reconnect in the next ${rememberHours()} h get it too` : ''}`,
       req
     })
-    return { data: { sent: true, seconds, targets: userIds.length, older, ...hit } }
+    const { builds: _builds, api: _api, ...counts } = hit
+    return {
+      data: {
+        sent: true,
+        id,
+        seconds,
+        targets: userIds.length,
+        older,
+        remembered,
+        remember_hours: remembered ? rememberHours() : 0,
+        ...counts
+      }
+    }
+  })
+
+  /** Remembered instructions still being delivered to tabs that reconnect. */
+  app.get('/force-refresh/remembered', async () => {
+    const rows = await listRemembered(app.redis ?? null, stickyTenant())
+    return { data: { hours: rememberHours(), max: rememberMax(), instructions: rows } }
+  })
+
+  /** Stop delivering one remembered instruction (`:id`) or every one (`all`). */
+  app.delete<{ Params: { id: string } }>('/force-refresh/remembered/:id', async (req) => {
+    const id = String(req.params.id)
+    const removed = await forgetRemembered(
+      app.redis ?? null,
+      stickyTenant(),
+      id === 'all' ? null : id.slice(0, 80)
+    )
+    if (removed)
+      await logActivity({
+        action: 'client-force-refresh',
+        user: req.user?.id,
+        comment: `stopped delivering ${id === 'all' ? 'every remembered refresh' : 'a remembered refresh'} to tabs that reconnect (${removed})`,
+        req
+      })
+    return { data: { removed } }
+  })
+
+  // ── Minimum client build (sticky refresh): off until set, per app ─────────────────────────
+
+  /** How many open tabs (every replica) a minimum would reload right now. */
+  const belowNow = async (
+    groups: Awaited<ReturnType<typeof getClusterClientVersionGroups>>['groups'],
+    appName: string,
+    build: string,
+    setAt: number
+  ) => {
+    let tabs = 0
+    let users = 0
+    const people = new Set<string>()
+    for (const g of groups) {
+      if (g.app !== appName || !buildBelow(g.build, build, 0, setAt)) continue
+      tabs += g.sockets
+      users += g.users
+      for (const p of g.people ?? []) people.add(p.id)
+    }
+    // One person can sit in two groups (two builds): the named lists are exact (25 per group).
+    return { tabs, people: people.size || users }
+  }
+
+  app.get('/min-build', async () => {
+    const rules = await getMinBuilds(app.redis ?? null, stickyTenant())
+    const v = await getClusterClientVersionGroups(tenantScope())
+    // Per rule, the open tabs still below it (each is told when it connects again).
+    const below: Record<string, { tabs: number; people: number }> = {}
+    for (const r of rules) below[r.app] = await belowNow(v.groups, r.app, r.build, r.set_at)
+    // Per app, the builds its open tabs run, newest load first (suggestions for the input).
+    const builds: Record<string, string[]> = {}
+    const sorted = [...v.groups].sort((a, b) =>
+      String(b.newest_load ?? '').localeCompare(String(a.newest_load ?? ''))
+    )
+    for (const g of sorted) {
+      if (!g.app || !g.build || g.build === 'dev') continue
+      const list = builds[g.app] ?? []
+      if (!list.includes(g.build)) list.push(g.build)
+      builds[g.app] = list
+    }
+    return {
+      data: {
+        rules,
+        below,
+        builds,
+        partial: v.partial,
+        default_seconds: DEFAULT_MIN_BUILD_SECONDS
+      }
+    }
+  })
+
+  /** Preview: what a minimum would reload right now, before it is saved. */
+  app.get<{ Querystring: { app?: string; build?: string } }>('/min-build/preview', async (req) => {
+    const appName = cleanBuild(req.query.app, 50)
+    const build = cleanBuild(req.query.build)
+    if (!appName || !build) return { data: { tabs: 0, people: 0, partial: false } }
+    const v = await getClusterClientVersionGroups(tenantScope())
+    return {
+      data: { ...(await belowNow(v.groups, appName, build, Date.now())), partial: v.partial }
+    }
+  })
+
+  app.put<{
+    Params: { app: string }
+    Body: { build?: string; seconds?: number; message?: string }
+  }>('/min-build/:app', async (req) => {
+    const appName = cleanBuild(req.params.app, 50)
+    const build = cleanBuild(req.body?.build)
+    if (!appName) throw Object.assign(new Error('app is required'), { statusCode: 400 })
+    if (!build || build === 'dev' || build.startsWith('0.0.0'))
+      throw Object.assign(new Error('Give the minimum build (a dev build is never judged)'), {
+        statusCode: 400
+      })
+    if (!app.redis)
+      throw Object.assign(new Error('A minimum build needs Redis'), { statusCode: 503 })
+    const tenant = stickyTenant()
+    const prev = await getMinBuild(app.redis, tenant, appName)
+    const rule = {
+      app: appName,
+      build,
+      seconds: clampSeconds(req.body?.seconds, DEFAULT_MIN_BUILD_SECONDS),
+      message: String(req.body?.message ?? '').slice(0, 300),
+      set_at: Date.now(),
+      set_by: req.user?.id ?? null,
+      set_by_name: req.user ? userName(req.user) : null
+    }
+    await setMinBuild(app.redis, tenant, rule)
+    // Tabs open below it now are told now; the rest when they connect.
+    const hit = await emitForceRefresh(
+      {
+        app: appName,
+        match: (c) => buildBelow(c.version?.build, rule.build, c.version?.loaded, rule.set_at)
+      },
+      minBuildPayload(rule)
+    )
+    const was = prev ? `changed the minimum ${appName} build from ${prev.build} to` : null
+    await logActivity({
+      action: 'client-min-build',
+      user: req.user?.id,
+      comment: `${was ?? `set the minimum ${appName} build to`} ${build} — ${rule.seconds}s${rule.message ? ` — ${rule.message}` : ''} (${hit.sockets} open tabs below it told to reload${hit.partial ? '; another replica did not answer' : ''})`,
+      req
+    })
+    return { data: { rule, sockets: hit.sockets, users: hit.users, partial: hit.partial } }
+  })
+
+  app.delete<{ Params: { app: string } }>('/min-build/:app', async (req) => {
+    const appName = cleanBuild(req.params.app, 50)
+    if (!appName) throw Object.assign(new Error('app is required'), { statusCode: 400 })
+    if (!app.redis) return { data: { cleared: false } }
+    const prev = await clearMinBuild(app.redis, stickyTenant(), appName)
+    if (prev)
+      await logActivity({
+        action: 'client-min-build',
+        user: req.user?.id,
+        comment: `turned off the minimum ${appName} build (was ${prev.build})`,
+        req
+      })
+    return { data: { cleared: !!prev } }
   })
 }

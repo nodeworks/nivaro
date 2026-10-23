@@ -14,6 +14,7 @@ import { type ClientVersion, clientVersionFromHello } from '../services/client-v
 import {
   CLIENT_DATA_KEY,
   type ClientData,
+  type ClusterClient,
   groupClientVersions,
   listClusterClients,
   listClusterClientsCached,
@@ -64,6 +65,7 @@ import { emitterOnlyAdapter, socketsServed } from '../services/process-role.js'
 import {
   boardConcurrency,
   boardIsViewing,
+  boardMergeOn,
   boardPeerViewers,
   boardReaderOn,
   boardRealtimeStats,
@@ -124,6 +126,7 @@ import {
   splitTenantRoom
 } from '../services/socket-transport.js'
 import { attachSocketVerification } from '../services/socket-verify.js'
+import { type RefreshPayload, refreshOwedOnConnect } from '../services/sticky-refresh.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import { registerWidgetLive } from '../services/widget-live.js'
 
@@ -132,9 +135,15 @@ let pagePresenceReader:
   | null = null
 /** Users whose latest page ping is `path` (this replica's sockets). */
 export function usersOnPath(path: string): Array<{ id: string; name: string; since: number }> {
-  // Post-mortem 3.3 — SOCKETS=off: the realtime processes' board (services/realtime-board.ts).
-  if (boardReaderOn()) return boardUsersOnPath(path, currentTenantKey())
-  return pagePresenceReader ? pagePresenceReader(path) : []
+  const local = pagePresenceReader ? pagePresenceReader(path) : []
+  // Post-mortem 3.3 — the other processes' page pings (services/realtime-board.ts).
+  if (!boardMergeOn()) return local
+  const seen = new Map(local.map((u) => [u.id, u]))
+  for (const u of boardUsersOnPath(path, currentTenantKey())) {
+    const cur = seen.get(u.id)
+    if (!cur || u.since < cur.since) seen.set(u.id, u)
+  }
+  return [...seen.values()]
 }
 
 let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
@@ -143,8 +152,9 @@ let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
  * replica's sockets): who an auto-record signal about a route reaches.
  */
 export function usersOnPathPrefix(prefixes: string[]): string[] {
-  if (boardReaderOn()) return boardUsersOnPathPrefix(prefixes, currentTenantKey())
-  return pagePrefixReader ? pagePrefixReader(prefixes) : []
+  const local = pagePrefixReader ? pagePrefixReader(prefixes) : []
+  if (!boardMergeOn()) return local
+  return [...new Set([...local, ...boardUsersOnPathPrefix(prefixes, currentTenantKey())])]
 }
 
 import { noteSocket } from '../services/traffic-map.js'
@@ -182,11 +192,10 @@ const recordViewers = new Map<string, Map<string, { id: string; name: string }>>
 export function isUserViewing(collection: string, item: string, userId: string): boolean {
   // Cloud: record rooms are per tenant — the caller's tenant (its request context).
   const room = tenantScopedRoom(`record:${collection}:${item}`)
-  if (boardReaderOn()) return boardIsViewing(room, userId)
   const map = recordViewers.get(room)
-  if (!map) return false
-  for (const v of map.values()) if (v.id === userId) return true
-  return false
+  for (const v of map?.values() ?? []) if (v.id === userId) return true
+  // Post-mortem 3.3 — viewing on another process (the board, entries younger than 3 s).
+  return boardMergeOn() && boardIsViewing(room, userId)
 }
 
 /** Per-socket connection metadata for the realtime diagnostics page (#270). */
@@ -210,8 +219,9 @@ let _ioRef: SocketIOServer | null = null
 
 /** The person a socket authenticated as on THIS node (null before auth or elsewhere). */
 export function socketUserOf(socketId: string): { id: string; name: string } | null {
-  if (boardReaderOn()) return boardSocketUser(socketId)
-  return socketMeta.get(socketId)?.user ?? null
+  const own = socketMeta.get(socketId)
+  if (own) return own.user ?? null
+  return boardMergeOn() ? boardSocketUser(socketId) : null
 }
 
 /**
@@ -226,17 +236,27 @@ export function socketUserOf(socketId: string): { id: string; name: string } | n
  * reached.
  */
 export async function emitForceRefresh(
-  target: { userIds?: string[]; app?: string | null; older?: boolean },
-  payload: { seconds: number; message: string }
+  target: {
+    userIds?: string[]
+    app?: string | null
+    older?: boolean
+    /** Sticky refresh: only tabs this says yes to (minimum build). Sends per socket. */
+    match?: (c: ClusterClient) => boolean
+  },
+  payload: RefreshPayload
 ): Promise<{
   sockets: number
   users: number
   nodes: number
   partial: boolean
   settling: Record<string, string>
+  /** Sticky refresh: app → the build judged current, and the API version, when sent. */
+  builds: Record<string, string>
+  api: string | null
 }> {
   const io = _ioRef
-  if (!io) return { sockets: 0, users: 0, nodes: 0, partial: false, settling: {} }
+  if (!io)
+    return { sockets: 0, users: 0, nodes: 0, partial: false, settling: {}, builds: {}, api: null }
   const userIds = (target.userIds ?? []).map((u) => String(u).toUpperCase())
   const app = target.app ? String(target.app).slice(0, 50) : null
   const older = target.older === true
@@ -248,7 +268,7 @@ export async function emitForceRefresh(
   // whose deploy is still rolling is settling and none of its tabs are reloaded.
   const judge = makeBuildJudge(cluster.clients, { roster: cluster.roster })
   const olderIds = older ? olderClientIds(cluster.clients, judge) : null
-  const filtered = !!app || older
+  const filtered = !!app || older || !!target.match
   let sockets = 0
   const users = new Set<string>()
   for (const c of cluster.clients) {
@@ -256,6 +276,7 @@ export async function emitForceRefresh(
     if (wanted.size && !wanted.has(uid)) continue
     if (app && c.app !== app) continue
     if (olderIds && !olderIds.has(c.id)) continue
+    if (target.match && !target.match(c)) continue
     sockets++
     users.add(uid)
     // Filtered sends go to each matching socket (local or remote); the others use rooms
@@ -273,7 +294,9 @@ export async function emitForceRefresh(
     users: users.size,
     nodes: cluster.nodes,
     partial: cluster.partial,
-    settling: older ? Object.fromEntries(judge.settling) : {}
+    settling: older ? Object.fromEntries(judge.settling) : {},
+    builds: Object.fromEntries(judge.current),
+    api: judge.api
   }
 }
 
@@ -401,10 +424,12 @@ function socketTenantKey(socketId: string): string | null {
 
 /** Local concurrency snapshot for the sampling cron (#275). */
 export function getLocalConcurrency(): { sockets: number; users: number } {
-  if (boardReaderOn()) return boardConcurrency()
   const users = new Set<string>()
   for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
-  return { sockets: _ioRef?.engine?.clientsCount ?? socketMeta.size, users: users.size }
+  const sockets = _ioRef?.engine?.clientsCount ?? socketMeta.size
+  // Post-mortem 3.3 — every process's sockets (the board), people counted once.
+  if (boardMergeOn()) return boardConcurrency({ sockets, users })
+  return { sockets, users: users.size }
 }
 
 /**
@@ -481,12 +506,18 @@ export function getRecordViewerSnapshot(): Array<{
   }> = []
   // Cloud: only the caller's tenant's record rooms (viewer names must not cross tenants).
   const tenant = currentTenantKey()
-  if (boardReaderOn()) return boardRecordViewers(tenant)
   for (const [scoped, map] of recordViewers) {
     const { tenant: roomTenant, room } = splitTenantRoom(scoped)
     if (roomTenant !== tenant) continue
     const m = room.match(/^record:([^:]+):(.+)$/)
     if (m) out.push({ collection: m[1], item: m[2], viewers: [...map.values()] })
+  }
+  if (!boardMergeOn()) return out
+  // Post-mortem 3.3 — viewers on the other processes (the board).
+  for (const r of boardRecordViewers(tenant)) {
+    const hit = out.find((o) => o.collection === r.collection && o.item === r.item)
+    if (hit) hit.viewers.push(...r.viewers)
+    else out.push(r)
   }
   return out
 }
@@ -768,6 +799,27 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const data: ClientData = { app: m.app, version: m.version, user: m.user, node: INSTANCE_ID }
       socket.data[CLIENT_DATA_KEY] = data
     }
+    // Sticky force refresh (services/sticky-refresh.ts): once signed in AND the tab said which
+    // build it runs (either order), send a reload it still owes — a remembered instruction it was
+    // not connected for, or a minimum build it is below. Once per socket.
+    let obeyed: string[] = []
+    let stickyChecked = false
+    const checkStickyRefresh = () => {
+      const m = socketMeta.get(socket.id)
+      if (stickyChecked || !m?.user || !m.version) return
+      stickyChecked = true
+      const client = { user_id: m.user.id, app: m.app, version: m.version, obeyed }
+      void (async () => {
+        const t = process.env.CLOUD_META_DB_URL ? await socketTenant(socket) : null
+        if (process.env.CLOUD_META_DB_URL && !t) return
+        const owed = await refreshOwedOnConnect(
+          app.redis ?? null,
+          t ? String(t.tenantId || t.slug) : null,
+          client
+        )
+        if (owed && socket.connected) socket.emit('client:force-refresh', owed)
+      })().catch((err) => app.log.debug({ err }, 'sticky refresh check failed'))
+    }
     socket.conn?.on?.('upgrade', (t: { name?: string }) => {
       const meta = socketMeta.get(socket.id)
       if (meta) meta.transport = t?.name ?? meta.transport
@@ -991,6 +1043,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const version = clientVersionFromHello(payload)
         if (version.build || version.api || version.tab) meta.version = version
         publishClient()
+        const said = (payload as { obeyed?: unknown })?.obeyed
+        if (Array.isArray(said))
+          obeyed = said
+            .slice(0, 30)
+            .map((v) => String(v).slice(0, 80))
+            .filter(Boolean)
+        checkStickyRefresh()
         // #2460 — this tab was closed for falling too far behind: reload, never replay.
         if (meta.user && version.tab) {
           void takeResync(meta.user.id, version.tab).then((owed) => {
@@ -1150,6 +1209,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
         }
       publishClient()
+      checkStickyRefresh()
       socket.join(`user:${user.id}`)
       // A revoke publishes to these rooms, which reach the socket on every replica.
       if (bind.kind === 'session') socket.join(sessionRoom(bind.sid))

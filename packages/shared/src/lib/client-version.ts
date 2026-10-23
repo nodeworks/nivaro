@@ -25,6 +25,8 @@ export interface ClientVersion {
   api: string | null
   tab: string
   loaded: number
+  /** Force-reload instruction ids this tab already reloaded for (absent = none). */
+  obeyed?: string[]
 }
 
 const loaded = Date.now()
@@ -75,14 +77,64 @@ export function noteApiVersion(value: string | null | undefined): void {
   if (v) api = v
 }
 
+/** The build fields, plus `obeyed` (the sticky-refresh marker) when this tab has one. */
 export function clientVersion(): ClientVersion {
+  const obeyed = obeyedReloads()
+  return obeyed.length ? { ...baseVersion(), obeyed } : baseVersion()
+}
+
+function baseVersion(): ClientVersion {
   return { build, api, tab: tabId(), loaded }
+}
+
+// ─── Force-reload marker (sticky refresh) ─────────────────────────────────────
+// Per tab (sessionStorage, like the tab id): the force-reload instructions this tab already
+// reloaded for, and how often. client:hello carries the ids (`obeyed`) so the server never
+// sends a remembered instruction again, and the banner refuses one past its cap — a tab whose
+// reload still lands on the old bundle (a cached one) must not reload forever.
+const RELOADS_KEY = 'nvr-fr-obeyed'
+const RELOADS_KEPT = 30
+
+function readReloads(): Record<string, number> {
+  try {
+    const raw = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(RELOADS_KEY) : null
+    const v = raw ? (JSON.parse(raw) as unknown) : null
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, number>) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Instruction ids this tab reloaded for (newest last). */
+export function obeyedReloads(): string[] {
+  return Object.keys(readReloads())
+}
+
+/** How many times this tab already reloaded for `id`. */
+export function reloadCountFor(id: string): number {
+  return Number(readReloads()[id]) || 0
+}
+
+/** Called right before the tab reloads for `id`. */
+export function markReloadFor(id: string): void {
+  try {
+    const all = readReloads()
+    const prev = Number(all[id]) || 0
+    delete all[id]
+    const next = { ...all, [id]: prev + 1 }
+    const keys = Object.keys(next)
+    for (const k of keys.slice(0, Math.max(0, keys.length - RELOADS_KEPT))) delete next[k]
+    sessionStorage.setItem(RELOADS_KEY, JSON.stringify(next))
+  } catch {
+    /* private mode: the server's own per-tab cap still holds */
+  }
 }
 
 /** `build=…; api=…; tab=…; loaded=…` — null until the host set a build. */
 export function clientVersionHeader(): string | null {
   if (!build) return null
-  const v = clientVersion()
+  // Every request carries this: no sessionStorage read for the marker (client:hello has it).
+  const v = baseVersion()
   return [`build=${v.build}`, v.api ? `api=${v.api}` : null, `tab=${v.tab}`, `loaded=${v.loaded}`]
     .filter(Boolean)
     .join('; ')

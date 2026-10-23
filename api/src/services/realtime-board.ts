@@ -25,8 +25,12 @@ import { INSTANCE_ID } from './instance-roster.js'
  * socket plugin's getters stay synchronous and no request waits on another process (no
  * fetchSockets quorum). A realtime process that stopped publishing drops out with its TTL; one
  * that stops gracefully withdraws its keys at once (withdrawBoard).
- * Only realtime processes publish and only SOCKETS=off processes (and realtime peers, for
- * viewer lists) read: a deployment without the tier never touches these keys.
+ * Who takes part (startBoard): every process with Redis registers in the registry every 5 s.
+ * A process that serves sockets starts publishing — and reading the others as a peer, merging
+ * them with its own sockets — only once the registry shows another process (a second replica,
+ * a realtime peer, a SOCKETS=off reader); a lone process never does more than that heartbeat.
+ * So a single-role deployment with several replicas gets cluster-wide viewers, page presence and
+ * notification suppression too, not only the realtime tier.
  */
 
 // 1 s, not 2: an entry is then at most ~2 s old when read (publish + read interval), inside the
@@ -110,6 +114,7 @@ let liveBoards: BoardLive[] = []
 let statsBoards: BoardStats[] = []
 let liveReadAt = 0
 let readerOn = false
+let peersOn = false
 let peerChange: ((rooms: string[]) => void) | null = null
 
 /**
@@ -206,12 +211,20 @@ export async function withdrawBoard(): Promise<void> {
   }
 }
 
-async function readAll<T>(redis: BoardRedis, part: 'live' | 'stats'): Promise<T[]> {
-  const nodes = (await redis.zrangebyscore(
-    registryKey(),
-    Date.now() - REGISTRY_KEEP_MS,
-    '+inf'
-  )) as string[]
+/** Registry members that are readers (SOCKETS=off), not publishers. */
+const READER_PREFIX = 'reader:'
+
+async function readAll<T>(
+  redis: BoardRedis,
+  part: 'live' | 'stats',
+  includeOwn = false
+): Promise<T[]> {
+  const nodes = (
+    (await redis.zrangebyscore(registryKey(), Date.now() - REGISTRY_KEEP_MS, '+inf')) as string[]
+  ).filter(
+    // This process's own sockets are read live, never from its own (older) board entry.
+    (n) => !n.startsWith(READER_PREFIX) && (includeOwn || n !== INSTANCE_ID)
+  )
   if (nodes.length === 0) return []
   const out: T[] = []
   for (const v of await redis.mget(nodes.slice(0, 200).map((n) => partKey(n, part)))) {
@@ -231,13 +244,18 @@ async function readAll<T>(redis: BoardRedis, part: 'live' | 'stats'): Promise<T[
  * `record:viewers` broadcasts — its getters keep answering from its own sockets.
  * Idempotent; returns the stop function.
  */
-export function startBoardReader(redis: BoardRedis, opts: { peers?: boolean } = {}): () => void {
+export function startBoardReader(
+  redis: BoardRedis,
+  /** `includeOwn`: tests that run publisher and reader in one process. */
+  opts: { peers?: boolean; includeOwn?: boolean } = {}
+): () => void {
   stopBoardReader()
   readerOn = !opts.peers
+  peersOn = !!opts.peers
   const live = async () => {
     try {
       const before = liveBoards
-      liveBoards = await readAll<BoardLive>(redis, 'live')
+      liveBoards = await readAll<BoardLive>(redis, 'live', opts.includeOwn)
       liveReadAt = Date.now()
       if (opts.peers && peerChange) {
         const rooms = changedPeerRooms(before, liveBoards)
@@ -249,7 +267,7 @@ export function startBoardReader(redis: BoardRedis, opts: { peers?: boolean } = 
   }
   const stats = async () => {
     try {
-      statsBoards = await readAll<BoardStats>(redis, 'stats')
+      statsBoards = await readAll<BoardStats>(redis, 'stats', opts.includeOwn)
     } catch {
       /* keep the last read */
     }
@@ -265,6 +283,76 @@ export function stopBoardReader(): void {
   for (const t of reader) clearInterval(t)
   reader = []
   readerOn = false
+  peersOn = false
+}
+
+const DISCOVER_MS = 5_000
+/** Another process counts as present while its registry entry is this fresh. */
+const PRESENT_MS = 15_000
+/** With nobody else for this long, a publishing process goes back to the heartbeat only. */
+const IDLE_OFF_MS = 60_000
+
+/**
+ * Take part in the board (see the header). `serves`: this process holds sockets. Returns the
+ * stop function (also withdraws this process's entries). Never in cloud mode.
+ */
+export function startBoard(
+  redis: BoardRedis,
+  opts: { serves: boolean; collect?: () => LocalBoard }
+): () => Promise<void> {
+  if (!opts.serves) {
+    const beat = () =>
+      void redis.zadd(registryKey(), Date.now(), `${READER_PREFIX}${INSTANCE_ID}`).catch(() => {})
+    beat()
+    const t = setInterval(beat, DISCOVER_MS)
+    t.unref?.()
+    startBoardReader(redis)
+    return async () => {
+      clearInterval(t)
+      stopBoardReader()
+      await redis.zrem(registryKey(), `${READER_PREFIX}${INSTANCE_ID}`).catch(() => 0)
+    }
+  }
+  let active = false
+  let lastOthers = 0
+  const tick = async () => {
+    try {
+      const now = Date.now()
+      if (!active) await redis.zadd(registryKey(), now, INSTANCE_ID)
+      const present = (
+        (await redis.zrangebyscore(registryKey(), now - PRESENT_MS, '+inf')) as string[]
+      ).filter((n) => n !== INSTANCE_ID)
+      if (present.length > 0) lastOthers = now
+      if (present.length > 0 && !active && opts.collect) {
+        active = true
+        startBoardPublisher(redis, opts.collect)
+        startBoardReader(redis, { peers: true })
+      } else if (active && now - lastOthers > IDLE_OFF_MS) {
+        active = false
+        stopBoardReader()
+        liveBoards = []
+        statsBoards = []
+        await withdrawBoard()
+        await redis.zadd(registryKey(), now, INSTANCE_ID)
+      }
+    } catch {
+      /* Redis away — the next tick tries again */
+    }
+  }
+  void tick()
+  const t = setInterval(() => void tick(), DISCOVER_MS)
+  t.unref?.()
+  return async () => {
+    clearInterval(t)
+    stopBoardReader()
+    await withdrawBoard()
+    await redis.zrem(registryKey(), INSTANCE_ID).catch(() => 0)
+  }
+}
+
+/** Is this process merging the board — a SOCKETS=off reader, or a socket-serving peer? */
+export function boardMergeOn(): boolean {
+  return readerOn || peersOn
 }
 
 /** Is this process reading the board (a SOCKETS=off process with Redis)? */
@@ -291,6 +379,15 @@ export function setBoardsForTests(live: BoardLive[], stats: BoardStats[] = [], a
   statsBoards = stats
   liveReadAt = at
   readerOn = true
+}
+
+/** Tests: load the other processes' boards as a socket-serving peer would have. */
+export function setPeerBoardsForTests(live: BoardLive[], stats: BoardStats[] = []) {
+  liveBoards = live
+  statsBoards = stats
+  liveReadAt = Date.now()
+  readerOn = false
+  peersOn = true
 }
 
 /** Tests: forget everything. */
@@ -448,13 +545,15 @@ export function roomListeners(
   room: string
 ): number {
   const local = io?.sockets?.adapter?.rooms?.get(room)?.size ?? 0
-  return readerOn ? local + boardRoomSize(room) : local
+  return readerOn || peersOn ? local + boardRoomSize(room) : local
 }
 
-/** Sockets and signed-in people across the realtime processes. */
-export function boardConcurrency(): { sockets: number; users: number } {
-  let sockets = 0
-  const users = new Set<string>()
+/** Sockets and signed-in people across the other processes, plus this one's (`own`). */
+export function boardConcurrency(
+  own: { sockets: number; users: Iterable<string> } = { sockets: 0, users: [] }
+): { sockets: number; users: number } {
+  let sockets = own.sockets
+  const users = new Set<string>(own.users)
   for (const b of liveBoards) {
     sockets += Number(b.sockets) || 0
     for (const u of b.users ?? []) users.add(u)

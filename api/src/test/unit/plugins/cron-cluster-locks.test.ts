@@ -4,6 +4,9 @@ vi.mock('../../../services/job-runs.js', () => ({
   startJobRun: async () => ({ complete: async () => {}, fail: async () => {} })
 }))
 
+// A leaf module: importing it through extensions/loader.js loaded the loader's whole module
+// graph inside the test's 5 s timeout (~4 s alone on a busy machine, past 5 s in a full run).
+import { resolveExtensionBuild } from '../../../extensions/build-identity.js'
 import { CronManager, JobBusyError } from '../../../plugins/cron.js'
 
 /** In-memory Redis with the calls the cluster locks use. */
@@ -122,7 +125,6 @@ describe('extension build identity (#1089)', () => {
     const { mkdtempSync, writeFileSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
-    const { resolveExtensionBuild } = await import('../../../extensions/loader.js')
     const d = mkdtempSync(join(tmpdir(), 'nvr-ext-'))
     expect(resolveExtensionBuild(undefined, d)).toBeNull()
     writeFileSync(join(d, '.release-sha'), 'abc12345\n')
