@@ -1,8 +1,9 @@
-import type { FastifyInstance, FastifyReply } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
+import { outOfViewReason } from '../services/access-explain.js'
 import { logActivity } from '../services/activity.js'
 import {
   type AutoIdToken,
@@ -29,7 +30,9 @@ import { instanceAccessAllowed } from '../services/instance-guard.js'
 import {
   aggregateItems,
   CollectionNotFoundError,
+  type CreateOutcome,
   createOne,
+  createOneReported,
   deleteOne,
   ForbiddenError,
   readItems,
@@ -57,6 +60,22 @@ import { evaluateTransitionRequirements } from '../services/transition-requireme
 import { runUnit } from '../services/unit-of-work.js'
 import type { ItemsQuery, User } from '../types.js'
 import { registerBulkFieldsRoute } from './bulk-fields.js'
+
+/**
+ * A write whose own read-back the writer cannot see (a User Scope or row
+ * filter excludes the record as written — a workflow with no Zone yet): the
+ * write DID happen, so the answer carries the id and says why it is hidden
+ * instead of a bare null that clients read as a failure (and retried into a
+ * duplicate). Shared by every create/update answer in this file.
+ */
+async function outOfViewMeta(
+  req: FastifyRequest,
+  collection: string,
+  id: string | number
+): Promise<{ id: string | number; readable: false; reason: string | null }> {
+  const reason = await outOfViewReason(req.user!, !!req.isAdmin, collection, id)
+  return { id, readable: false, reason }
+}
 
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof CollectionNotFoundError) {
@@ -1090,17 +1109,29 @@ export async function itemsRoutes(app: FastifyInstance) {
       id?: unknown
       data?: unknown
       error?: string
+      readable?: false
+      link_failures?: string[]
     }> = []
     for (const [i, row] of creates.entries()) {
       try {
-        const item = (await createOne(
+        // A row the creator cannot read back was still created: report its
+        // id (never "failed" — a retry would make it twice).
+        const made = await createOneReported(
           req.user!,
           collection,
           row,
           req,
           req.workspaceId ?? undefined
-        )) as Record<string, unknown>
-        results.push({ op: 'create', index: i, ok: true, id: item.id, data: item })
+        )
+        results.push({
+          op: 'create',
+          index: i,
+          ok: true,
+          id: made.id,
+          data: made.item ?? { id: made.id },
+          ...(made.readable ? {} : { readable: false }),
+          ...(made.linkFailures.length ? { link_failures: made.linkFailures } : {})
+        })
       } catch (err) {
         results.push({
           op: 'create',
@@ -1125,8 +1156,15 @@ export async function itemsRoutes(app: FastifyInstance) {
           patch,
           req,
           req.workspaceId ?? undefined
-        )) as Record<string, unknown>
-        results.push({ op: 'update', index: i, ok: true, id: rowId, data: item })
+        )) as Record<string, unknown> | null
+        results.push({
+          op: 'update',
+          index: i,
+          ok: true,
+          id: rowId,
+          data: item ?? { id: rowId },
+          ...(item ? {} : { readable: false })
+        })
       } catch (err) {
         results.push({
           op: 'update',
@@ -1167,6 +1205,8 @@ export async function itemsRoutes(app: FastifyInstance) {
     code?: string
     /** A create the collection's natural key routed to an existing record. */
     upserted?: boolean
+    /** Written, but the writer's own read-back hides it (User Scope / row filter). */
+    readable?: false
   }
 
   function rowError(err: unknown): { status: number; error: string; code?: string } {
@@ -1238,26 +1278,36 @@ export async function itemsRoutes(app: FastifyInstance) {
               patch,
               opts.req,
               opts.workspaceId
-            )) as Record<string, unknown>
-            results.push({ index, op, status: 200, id, ...(opts.slim ? {} : { data: item }) })
+            )) as Record<string, unknown> | null
+            results.push({
+              index,
+              op,
+              status: 200,
+              id,
+              ...(item ? {} : { readable: false }),
+              ...(opts.slim ? {} : { data: item ?? { id } })
+            })
           } else {
-            const item = (await createOne(
+            // A row the writer cannot read back still landed — its id comes
+            // from the create itself, so a rollback and the answer both see it.
+            const made = await createOneReported(
               user,
               collection,
               { ...row },
               opts.req,
               opts.workspaceId
-            )) as Record<string, unknown>
-            const upsert = upsertInfoOf(item)
+            )
+            const upsert = made.upserted
             // A row the natural key matched was an update: nothing to take back.
-            if (!upsert) created.push(item.id)
+            if (!upsert && made.id != null) created.push(made.id)
             results.push({
               index,
               op: upsert ? 'update' : op,
               status: upsert ? 200 : 201,
-              id: item.id,
+              id: made.id,
               ...(upsert ? { upserted: true } : {}),
-              ...(opts.slim ? {} : { data: item })
+              ...(made.readable ? {} : { readable: false }),
+              ...(opts.slim ? {} : { data: made.item ?? { id: made.id } })
             })
           }
         } catch (err) {
@@ -1514,13 +1564,14 @@ export async function itemsRoutes(app: FastifyInstance) {
       }
     }
     try {
-      const item = await createOne(
+      const made = await createOneReported(
         req.user!,
         collection,
         req.body as Record<string, unknown>,
         req,
         req.workspaceId ?? undefined
       )
+      const item = made.item
       if (parentCollection && parentId) {
         await logActivity({
           action: 'o2m-create',
@@ -1529,19 +1580,31 @@ export async function itemsRoutes(app: FastifyInstance) {
           item: parentId,
           comment: JSON.stringify({
             child_collection: collection,
-            child_id: String((item as Record<string, unknown>).id),
+            child_id: String(made.id),
             snapshot: item
           }),
           req
         })
       }
+      // Links the create carried that did not land — named, never silent.
+      const linkMeta = made.linkFailures.length ? { link_failures: made.linkFailures } : {}
+      // Created, but the creator's own read-back hides it: `data` is the id
+      // alone (clients that read data.id keep working) and meta says why.
+      if (!made.readable && made.id != null) {
+        const meta = await outOfViewMeta(req, collection, made.id)
+        return reply.code(201).send({ data: { id: made.id }, meta: { ...meta, ...linkMeta } })
+      }
       // A create the natural key routed to an existing record says so.
       const upsert = upsertInfoOf(item)
       if (upsert) {
         reply.header('x-nivaro-upserted', String(upsert.matched_id))
-        return reply.code(201).send({ data: item, meta: { upserted: true, ...upsert } })
+        return reply
+          .code(201)
+          .send({ data: item, meta: { upserted: true, ...upsert, ...linkMeta } })
       }
-      return reply.code(201).send({ data: item })
+      return reply
+        .code(201)
+        .send({ data: item, ...(made.linkFailures.length ? { meta: linkMeta } : {}) })
     } catch (err) {
       return handleError(err, reply)
     }
@@ -1558,13 +1621,15 @@ export async function itemsRoutes(app: FastifyInstance) {
       return reply.code(sim.code).send(sim.body)
     }
     try {
+      const outcome: CreateOutcome = {}
       const item = await updateOne(
         req.user!,
         collection,
         id,
         req.body as Record<string, unknown>,
         req,
-        req.workspaceId ?? undefined
+        req.workspaceId ?? undefined,
+        { outcome }
       )
       if (parentCollection && parentId) {
         await logActivity({
@@ -1576,7 +1641,14 @@ export async function itemsRoutes(app: FastifyInstance) {
           req
         })
       }
-      return reply.send({ data: item })
+      const linkMeta = outcome.linkFailures?.length ? { link_failures: outcome.linkFailures } : {}
+      // Saved, but the edit moved the record outside what the writer can see
+      // (their own Zone removed): the id alone, and meta says why.
+      if (item == null && outcome.readable === false) {
+        const meta = await outOfViewMeta(req, collection, id)
+        return reply.send({ data: { id }, meta: { ...meta, ...linkMeta } })
+      }
+      return reply.send({ data: item, ...(outcome.linkFailures?.length ? { meta: linkMeta } : {}) })
     } catch (err) {
       return handleError(err, reply)
     }

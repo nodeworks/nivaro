@@ -111,3 +111,42 @@ export async function explainAccess(
 
   return { access: reasons.length === 0, reasons }
 }
+
+/** The plain-words form of explainAccess reasons ("no Zone set"). */
+export function outOfViewPhrase(reasons: AccessReason[]): string | null {
+  const parts = reasons.map((r) => {
+    if (r.type === 'scope' || r.type === 'scope_strict') {
+      const label = r.dimension_label ?? 'access'
+      const vals = r.record_values ?? []
+      return vals.length === 0
+        ? `no ${label} set`
+        : `its ${label} (${vals.join(', ')}) is not one of yours`
+    }
+    if (r.type === 'row_filter') return 'a rule on your role hides it'
+    if (r.type === 'permission') return 'your role cannot view these records'
+    return null
+  })
+  const said = [...new Set(parts.filter((p): p is string => !!p))]
+  return said.length > 0 ? said.join('; ') : null
+}
+
+/**
+ * Why a record the caller JUST wrote is outside what they can see, in a few
+ * plain words ("no Zone set", "its Zone (Zone 4) is not one of yours"). A
+ * create or update whose own read-back comes back empty answers with this
+ * instead of a bare null — the writer chose those values, so naming them
+ * reveals nothing new. Null when no gate explains it or the explain fails.
+ */
+export async function outOfViewReason(
+  user: User,
+  actingAdmin: boolean,
+  collection: string,
+  id: string | number
+): Promise<string | null> {
+  try {
+    const { reasons } = await explainAccess(user, actingAdmin, collection, String(id))
+    return outOfViewPhrase(reasons)
+  } catch {
+    return null
+  }
+}

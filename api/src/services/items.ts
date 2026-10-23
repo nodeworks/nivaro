@@ -4493,13 +4493,15 @@ const sameLink = (a: AliasLink, b: AliasLink) =>
  * (the record's rendered name), stored rollups, activity, queue
  * materialization. Adds skip pairs that exist; removals and `set` delete
  * through deleteOne (trash, history). Never throws — a failed link must not
- * fail the record write that carried it.
+ * fail the record write that carried it; each failure is named in `failures`
+ * (when given) so the caller can say which links did not land.
  */
 async function applyAliasM2MWrites(
   user: User,
   recordId: string | number,
   writes: AliasM2MWrite[],
-  req?: FastifyRequest
+  req?: FastifyRequest,
+  failures?: string[]
 ): Promise<void> {
   for (const w of writes) {
     try {
@@ -4533,6 +4535,7 @@ async function applyAliasM2MWrites(
       for (const h of gone) await deleteOne(user, w.junction, h.junctionId, req)
     } catch (err) {
       console.warn(`alias m2m write failed for ${w.junction}.${w.field}:`, err)
+      failures?.push(`${w.field}: ${(err as Error)?.message ?? 'could not be linked'}`)
     }
   }
 }
@@ -4766,15 +4769,18 @@ async function applyAliasO2MWrites(
       let last: Record<string, unknown> | null = null
       for (let i = 0; i < w.rows.length; i++) {
         try {
+          // The outcome carries the id even when the writer cannot read the
+          // row back — an undo must still find every row this set made.
+          const outcome: CreateOutcome = {}
           const row = (await createOne(
             user,
             w.collection,
             { ...w.rows[i], [w.fk]: parentId },
             req,
             workspaceId,
-            { skipRollupRecalc: true }
+            { skipRollupRecalc: true, outcome }
           )) as Record<string, unknown> | null
-          const rid = row?.id as string | number | undefined
+          const rid = (row?.id as string | number | undefined) ?? outcome.id
           if (rid != null && !preExisting.has(String(rid)))
             created.push({ collection: w.collection, id: rid })
           if (row) last = row
@@ -5107,13 +5113,84 @@ export async function rehearseCreate(
   }
 }
 
+/**
+ * What a create leaves behind that its return value cannot say: the new id
+ * when the creator's own read-back hides the record (a User Scope or row
+ * filter excludes it, so createOne returns null), and the alias links that did
+ * not land. Pass an empty object as `opts.outcome` and createOne fills it in.
+ */
+export interface CreateOutcome {
+  id?: string | number
+  readable?: boolean
+  linkFailures?: string[]
+  /** The natural key matched an existing record: this "create" updated it. */
+  upserted?: boolean
+}
+
+const outOfView = new WeakSet<object>()
+
+/**
+ * createOne never answers null: a record its writer cannot read back (a User
+ * Scope or row filter hides it as written) comes back as `{ id }` alone,
+ * marked here. Every caller that reads `.id` off a create — routes, imports,
+ * inbound mappings, GraphQL, flows — therefore gets the id of the row it made
+ * instead of crashing or reporting "failed" for a row that exists (a retry
+ * then made it twice). `isOutOfView` tells the two apart.
+ */
+function markOutOfView(id: string | number): Record<string, unknown> {
+  const stub = { id }
+  outOfView.add(stub)
+  return stub
+}
+
+/** True for createOne's `{ id }` stand-in for a row its writer cannot read. */
+export function isOutOfView(item: unknown): boolean {
+  return !!item && typeof item === 'object' && outOfView.has(item as object)
+}
+
+/** createOne, plus the new record's id even when the creator cannot read it
+ *  back, and the links that did not land — for every route that answers a
+ *  create (a null read-back must never turn into "failed" or a crash). */
+export async function createOneReported(
+  user: User,
+  collection: string,
+  data: Record<string, unknown>,
+  req?: FastifyRequest,
+  workspaceId?: string
+): Promise<{
+  item: Record<string, unknown> | null
+  id: string | number | null
+  readable: boolean
+  linkFailures: string[]
+  upserted: boolean
+}> {
+  const outcome: CreateOutcome = {}
+  const item = (await createOne(user, collection, data, req, workspaceId, { outcome })) as Record<
+    string,
+    unknown
+  > | null
+  const hidden = item == null || isOutOfView(item)
+  const id = (item?.id as string | number | undefined) ?? outcome.id ?? null
+  return {
+    item: hidden ? null : item,
+    id,
+    readable: !hidden,
+    linkFailures: outcome.linkFailures ?? [],
+    upserted: outcome.upserted === true
+  }
+}
+
 export async function createOne(
   user: User,
   collection: string,
   data: Record<string, unknown>,
   req?: FastifyRequest,
   workspaceId?: string,
-  opts?: { skipRollupRecalc?: boolean; dryRun?: { insert: boolean } }
+  opts?: {
+    skipRollupRecalc?: boolean
+    dryRun?: { insert: boolean }
+    outcome?: CreateOutcome
+  }
 ) {
   await assertServable(user, collection, 'create')
   const dry = opts?.dryRun ?? null
@@ -5193,13 +5270,17 @@ export async function createOne(
         ? data
         : { ...data, _change_reason: 'Natural-key upsert (create matched an existing record)' }
     const updated = await updateOne(user, collection, upsertTarget, patch, req, workspaceId)
-    if (updated && typeof updated === 'object') {
-      upsertMarks.set(updated, {
-        matched_id: upsertTarget,
-        keys: upsertKeysOf(col as { upsert_keys?: string | null })
-      })
+    if (opts?.outcome) {
+      opts.outcome.id = upsertTarget
+      opts.outcome.readable = updated != null
+      opts.outcome.upserted = true
     }
-    return updated
+    const answer = (updated as Record<string, unknown> | null) ?? markOutOfView(upsertTarget)
+    upsertMarks.set(answer, {
+      matched_id: upsertTarget,
+      keys: upsertKeysOf(col as { upsert_keys?: string | null })
+    })
+    return answer
   }
 
   // Change reason on CREATE (config on_create): judged on the caller's raw
@@ -5427,7 +5508,8 @@ export async function createOne(
     // Alias M2M links BEFORE the read-back — the junction creates recompute any
     // auto-id fields drawing on them, so the response already carries the
     // rendered name/prefix the caller asked for.
-    await applyAliasM2MWrites(user, returnedId as string | number, aliasWrites, req)
+    const linkFailures: string[] = []
+    await applyAliasM2MWrites(user, returnedId as string | number, aliasWrites, req, linkFailures)
 
     // Nested child sets (lines, forecasts…) — before the read-back so stored
     // rollups over them are already in the response, and before the after-hooks
@@ -5449,6 +5531,11 @@ export async function createOne(
     }
 
     const result = await readOne(user, collection, returnedId as string | number)
+    if (opts?.outcome) {
+      opts.outcome.id = returnedId as string | number
+      opts.outcome.readable = result != null
+      opts.outcome.linkFailures = linkFailures
+    }
 
     // Recalc any stored rollups this new row contributes to (never throws). Callers
     // that create many rows in one batch (e.g. import execute) can opt out and run
@@ -5491,7 +5578,8 @@ export async function createOne(
       })
     )
 
-    return result
+    // Hidden from its own writer: the id, never null (see markOutOfView).
+    return result ?? markOutOfView(returnedId as string | number)
   })
 }
 
@@ -5529,7 +5617,8 @@ export async function updateOne(
   id: string | number,
   data: Record<string, unknown>,
   req?: FastifyRequest,
-  workspaceId?: string
+  workspaceId?: string,
+  opts?: { outcome?: CreateOutcome }
 ) {
   await assertServable(user, collection, 'update')
   assertRecordId(id)
@@ -5792,12 +5881,18 @@ export async function updateOne(
     })
   }
   // Alias M2M links (additive) before the read-back — see extractAliasM2MWrites
-  await applyAliasM2MWrites(user, id, aliasWrites, req)
+  const linkFailures: string[] = []
+  await applyAliasM2MWrites(user, id, aliasWrites, req, linkFailures)
+  if (opts?.outcome) opts.outcome.linkFailures = linkFailures
   // Nested child sets are ADDED to the record (rows without an id only).
   if (nestedWrites.length > 0)
     await applyAliasO2MWrites(user, id, nestedWrites, req, workspaceId, false)
 
   const result = await span('read-back', () => readOne(user, collection, id, workspaceId))
+  if (opts?.outcome) {
+    opts.outcome.id = id
+    opts.outcome.readable = result != null
+  }
 
   // Recalc any stored rollups this row contributes to — both the previous and
   // new parent when an FK field changed (never throws)
