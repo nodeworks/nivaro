@@ -166,7 +166,10 @@ export async function rebuildGraphQLSchema(): Promise<void> {
   }
 }
 
-export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
+export async function graphqlPlugin(
+  app: import('fastify').FastifyInstance,
+  opts: { streamsOnly?: boolean } = {}
+) {
   /**
    * Who a graphql-ws connection signed in as, resolved once per connection: a one-shot stream
    * ticket in connectionParams (`{ ticket }` from GET /api/events/ticket — sessions, View-as and
@@ -339,6 +342,13 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       )
     if (config.NODE_ENV !== 'development') await build
   })
+
+  // Post-mortem 3.3 — a realtime process (NIVARO_ROLE=realtime) carries the subscription
+  // transports only; queries, mutations and the admin routes stay on the web processes.
+  if (opts.streamsOnly) {
+    app.log.info('GraphQL subscriptions registered (graphql-ws, /api/graphql/stream)')
+    return
+  }
 
   // ── GraphiQL explorer ────────────────────────────────────────────────────
   app.get('/graphql', async (_req, reply) => {

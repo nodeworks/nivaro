@@ -200,7 +200,8 @@ export async function buildServer() {
   await app.register(socketioPlugin)
   // Global io + journal wiring (realtime sprint): services with no app in
   // scope emit through the holder; the event journal (#266) shares the
-  // app Redis connection.
+  // app Redis connection. realtime-server.ts (NIVARO_ROLE=realtime) mirrors the parts the
+  // socket handlers need — a new one goes in both.
   {
     const { setAppRef, setIo } = await import('./services/io-holder.js')
     setIo(app.io)
@@ -248,6 +249,9 @@ export async function buildServer() {
       await initEventStream(app.redis)
       const { alignJournalSequence, flushJournal } = await import('./services/event-journal.js')
       void alignJournalSequence()
+      // Post-mortem 3.3 — /events/stream hears other replicas' record changes too.
+      const { startSseRemoteBridge } = await import('./services/sse-hub.js')
+      startSseRemoteBridge()
       const { flushRawWriteQueue } = await import('./services/raw-write-announcer.js')
       app.addHook('onClose', async () => {
         flushRawWriteQueue()
@@ -1240,7 +1244,17 @@ export async function buildServer() {
       app.cron.schedule('concurrency-sample', '*/5 * * * *', async () => {
         const { db } = await import('./db/index.js')
         const { getLocalConcurrency } = await import('./plugins/socketio.js')
-        const { sockets, users } = getLocalConcurrency()
+        let { sockets, users } = getLocalConcurrency()
+        // Post-mortem 3.3 — with SOCKETS=off (a realtime tier) this process holds none: count
+        // the signed-in sockets the realtime processes hold, across the adapter.
+        const { socketsServed } = await import('./services/process-role.js')
+        if (!socketsServed()) {
+          const { listClusterClients } = await import('./services/client-versions-cluster.js')
+          const { getIo } = await import('./services/io-holder.js')
+          const { clients } = await listClusterClients(getIo(), null)
+          sockets = clients.length
+          users = new Set(clients.map((c) => c.user?.id).filter(Boolean)).size
+        }
         await db('nivaro_concurrency_samples')
           .insert({
             sampled_at: new Date(),

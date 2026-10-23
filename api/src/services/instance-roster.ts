@@ -3,6 +3,7 @@ import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { NIVARO_VERSION } from '../version.js'
 import { instanceKey } from './instance-key.js'
+import { socketsServed } from './process-role.js'
 
 /**
  * Instance roster (#297): every API process registers itself in Redis
@@ -31,6 +32,8 @@ async function beat(): Promise<void> {
         // "2 web + 1 worker" and the mixed-version check compares like with like.
         instance: instanceKey(),
         role: process.env.NIVARO_ROLE?.trim() || null,
+        // Post-mortem 3.3 — false on a web process with SOCKETS=off (a realtime tier holds them).
+        sockets: socketsServed(),
         node: process.version,
         started_at: new Date(Date.now() - process.uptime() * 1000).toISOString(),
         uptime_seconds: Math.round(process.uptime()),

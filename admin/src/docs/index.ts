@@ -48,7 +48,6 @@ export * from './sections/infrastructure-inventory.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
-export * from './sections/payload-templates.js'
 export * from './sections/layout-editor.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-lists.js'
@@ -62,10 +61,12 @@ export * from './sections/offline-popout.js'
 export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
+export * from './sections/payload-templates.js'
 export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
 export * from './sections/quality-checks.js'
 export * from './sections/queues.js'
+export * from './sections/realtime-tier.js'
 export * from './sections/record-insights.js'
 export * from './sections/record-integrations.js'
 export * from './sections/release-image.js'
@@ -285,7 +286,6 @@ import {
   integrationsSyncJobs
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
-import { payloadTemplates } from './sections/payload-templates.js'
 import { layoutEditor } from './sections/layout-editor.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { collabLiveLists } from './sections/live-lists.js'
@@ -365,6 +365,7 @@ import {
   userUsersRoles,
   whatIsNivaro
 } from './sections/overview.js'
+import { payloadTemplates } from './sections/payload-templates.js'
 import {
   aiContentValidation,
   aiDuplicateDetection,
@@ -398,6 +399,7 @@ import { qualityChecksDocs } from './sections/quality-checks.js'
 import { queuesGuide } from './sections/queues.js'
 import { realtimeLoadTest } from './sections/realtime-load-test.js'
 import { realtimePresenceLoad } from './sections/realtime-presence-load.js'
+import { realtimeTierDocs } from './sections/realtime-tier.js'
 import { realtimeTransport } from './sections/realtime-transport.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
@@ -960,7 +962,8 @@ export const navSections: NavGroup[] = [
       infrastructureEdgeDocs,
       infrastructureHostGuide,
       infrastructureDriftDocs,
-      releaseImageDocs
+      releaseImageDocs,
+      realtimeTierDocs
     ]
   },
   {

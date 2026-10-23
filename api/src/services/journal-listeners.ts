@@ -14,7 +14,9 @@ import type { JournalEntry } from './event-journal.js'
  */
 
 export type JournalListenerEntry = Omit<JournalEntry, 'seq'> & { seq: number | null }
-type JournalListener = (entry: JournalListenerEntry) => void
+/** 'local' = a write this process made (journaledEmit); 'remote' = another replica's (stream). */
+export type JournalOrigin = 'local' | 'remote'
+type JournalListener = (entry: JournalListenerEntry, origin: JournalOrigin) => void
 
 const listeners = new Set<JournalListener>()
 
@@ -25,11 +27,14 @@ export function onJournalEntry(fn: JournalListener): () => void {
   }
 }
 
-export function notifyJournalListeners(entry: JournalListenerEntry): void {
+export function notifyJournalListeners(
+  entry: JournalListenerEntry,
+  origin: JournalOrigin = 'local'
+): void {
   if (listeners.size === 0) return
   for (const fn of listeners) {
     try {
-      fn(entry)
+      fn(entry, origin)
     } catch {
       /* a listener never affects delivery */
     }

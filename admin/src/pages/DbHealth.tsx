@@ -551,10 +551,12 @@ export function DbHealthPage() {
 
           <Panel title='Instance roster' sub='Every API process registered in Redis (#297)'>
             <MiniTable
-              head={['Host', 'PID', 'Version', 'Started', 'RSS']}
+              head={['Host', 'PID', 'Role', 'Version', 'Started', 'RSS']}
               rows={(roster.data?.data ?? []).map((r) => [
                 String(r.host ?? ''),
                 String(r.pid ?? ''),
+                // NIVARO_ROLE; "no sockets" = SOCKETS=off (a realtime process holds them)
+                `${String(r.role ?? '—')}${r.sockets === false ? ' (no sockets)' : ''}`,
                 String(r.version ?? ''),
                 new Date(String(r.started_at)).toLocaleString(),
                 `${r.memory_rss_mb} MB`
