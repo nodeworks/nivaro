@@ -136,6 +136,8 @@ export interface TemplateDetail {
   locked_keys: string[]
   lookups: unknown
   used_by: UsedBy[]
+  /** `context.<key>` names a render can read (first referencing action's context + own lookups). */
+  context_keys: string[]
   newer_default: boolean
   /** The registrar ships a file default for this key (Reset to file default). */
   has_default?: boolean
@@ -212,6 +214,7 @@ function normalizeDetail(raw: TemplateDetail): TemplateDetail {
     locked_keys: Array.isArray(locked) ? locked.map(String) : [],
     lookups: parseMaybeJson(raw.lookups),
     used_by: Array.isArray(raw.used_by) ? raw.used_by : [],
+    context_keys: Array.isArray(raw.context_keys) ? raw.context_keys.map(String) : [],
     newer_default: !!raw.newer_default
   }
 }

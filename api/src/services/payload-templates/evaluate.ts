@@ -294,6 +294,11 @@ async function rawValue(ctx: Ctx, spec: ValueSpec, at: At): Promise<Got> {
       return got
     case 'path': {
       const path = String(spec.path ?? '')
+      // A draft may hold a row whose field is not picked yet (drafts always save).
+      if (!path.trim()) {
+        addProblem(ctx, at, 'No field chosen for this value yet', 'error')
+        return got
+      }
       const r = resolvePath(ctx, path)
       got.value = r.value
       got.source = path
@@ -509,7 +514,22 @@ function coerce(ctx: Ctx, type: string, got: Got, at: At): { value: unknown; fai
 
 // ─── Fields ──────────────────────────────────────────────────────────────────
 
+function readsSecret(v: unknown): boolean {
+  if (!isObj(v)) return false
+  if (v.source === 'secret') return true
+  if (v.source !== 'switch') return false
+  return (
+    (Array.isArray(v.cases) && v.cases.some((c) => isObj(c) && readsSecret(c.value))) ||
+    readsSecret(v.else)
+  )
+}
+
 async function scalarValue(ctx: Ctx, field: Field, at: At, itemDefault: unknown): Promise<unknown> {
+  // Publish refuses this (validateSpec); a draft may hold it while someone retypes the row.
+  if (field.type !== 'text' && readsSecret(field.value)) {
+    addProblem(ctx, at, 'A secret can only be sent as text — set this field to Text', 'error')
+    return null
+  }
   const got: Got = isObj(field.value)
     ? await evalValue(ctx, field.value, at)
     : { value: itemDefault ?? null, missing: null, source: null, formula: false }
@@ -591,6 +611,9 @@ async function listValue(ctx: Ctx, field: Field, at: At): Promise<unknown[]> {
     if (typeof ls.sort === 'string' && ls.sort.trim()) items = sortItems(ctx, items, ls.sort, alias)
 
     const children = Array.isArray(field.children) ? field.children : []
+    if (ls.scalar && children.length !== 1) {
+      addProblem(ctx, at, 'A plain-values list needs exactly one field', 'error')
+    }
     const out: unknown[] = []
     for (let i = 0; i < items.length; i++) {
       frame.item = items[i]

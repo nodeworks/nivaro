@@ -141,6 +141,20 @@ export async function usedBy(key: string): Promise<TemplateUse[]> {
   return out
 }
 
+/**
+ * The `context.<key>` names a render of this template can read: the first referencing
+ * transition action's `context` (the one previews use) plus the template's own lookups.
+ * Sorted, each once.
+ */
+export async function contextKeys(row: Pick<TemplateRow, 'key' | 'lookups'>): Promise<string[]> {
+  const keys = new Set<string>()
+  const [ref] = await referencingTransitions(row.key)
+  if (ref && isObj(ref.action.context)) for (const k of Object.keys(ref.action.context)) keys.add(k)
+  const own = typeof row.lookups === 'string' ? parseJson(row.lookups) : row.lookups
+  if (isObj(own)) for (const k of Object.keys(own)) keys.add(k)
+  return [...keys].sort((a, b) => a.localeCompare(b))
+}
+
 /** How many transitions name the key (registrar senders not counted). */
 export async function transitionUseCount(key: string): Promise<number> {
   return new Set((await referencingTransitions(key)).map((r) => r.transition_id)).size

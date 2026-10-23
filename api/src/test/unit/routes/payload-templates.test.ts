@@ -224,7 +224,7 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
     ) => {
       const r = need(key)
       if (input.mode === 'map') {
-        const v = validateSpec(JSON.parse(input.body))
+        const v = validateSpec(JSON.parse(input.body), { mode: 'draft' })
         if (!v.ok) throw new PayloadTemplateError('invalid', v.errors.join('; '))
       }
       // Mode lock, as the service: only Convert (map → code) changes it.
@@ -502,6 +502,47 @@ describe('payload template routes', () => {
     expect(res.body.data.newer_default).toBe(true)
     expect(res.body.data.default_body).toBe(SPEC)
     expect((await call('GET', '/nope')).status).toBe(404)
+  })
+
+  it("lists the context keys a render can read: the first action's context + own lookups", async () => {
+    const row = svc.rows.get('mwf-ir-order')
+    if (row) row.lookups = { shipping_location: { collection: 'locations' } }
+    const res = await call('GET', '/mwf-ir-order')
+    expect(res.body.data.context_keys).toEqual(['mwf_queue', 'shipping_location'])
+  })
+
+  it('a half-built draft saves and previews with problems instead of a 400', async () => {
+    const half = JSON.stringify({
+      v: 1,
+      fields: [
+        {
+          id: 'h1',
+          key: 'workflow_id',
+          type: 'text',
+          include: 'always',
+          value: { source: 'path', path: '' }
+        },
+        {
+          id: 'h2',
+          key: 'lines',
+          type: 'list',
+          include: 'always',
+          list: { source: '', item: 'line' },
+          children: []
+        }
+      ]
+    })
+    const saved = await call('PUT', '/mwf-ir-order/draft', { mode: 'map', body: half, base_rev: 3 })
+    expect(saved.status).toBe(200)
+    const pv = await call('POST', '/mwf-ir-order/preview', {
+      id: '11',
+      which: 'draft',
+      draft: { mode: 'map', body: half }
+    })
+    expect(pv.status).toBe(200)
+    const ids = (pv.body.problems as Array<{ field_id: string }>).map((p) => p.field_id)
+    expect(ids).toContain('h1')
+    expect(ids).toContain('h2')
   })
 
   it('saves a draft, refuses a stale base_rev with the current row, and refuses a bad spec', async () => {

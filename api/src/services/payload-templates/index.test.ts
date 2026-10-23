@@ -387,6 +387,40 @@ describe('draft and publish', () => {
     expect(store.tables[D][0].rev).toBe(1)
   })
 
+  it('a half-built draft saves; publishing it refuses with the errors', async () => {
+    await registerPayloadTemplate('efp-ops', def())
+    const half = JSON.stringify({
+      v: 1,
+      fields: [
+        {
+          id: 'f1',
+          key: 'status',
+          type: 'text',
+          include: 'always',
+          value: { source: 'path', path: '' }
+        },
+        { id: 'f2', key: '', type: 'text', include: 'always' },
+        {
+          id: 'f3',
+          key: 'lines',
+          type: 'list',
+          include: 'always',
+          list: { source: '', item: 'line' },
+          children: []
+        }
+      ]
+    })
+    expect(await saveDraft(KEY, { mode: 'map', body: half, base_rev: 1 }, USER)).toEqual({
+      ok: true,
+      rev: 2
+    })
+    const err = await publishDraft(KEY, { base_rev: 2, note: '' }, USER).catch((e) => e)
+    expect(err).toMatchObject({ code: 'invalid' })
+    expect(String(err.message)).toMatch(/path must be a path/)
+    expect(String(err.message)).toMatch(/a list needs list.source/)
+    expect((await getTemplate(KEY))?.published_version).toBe(1)
+  })
+
   it('saveDraft on an unknown key throws unknown_key before checking the body', async () => {
     await expect(
       saveDraft('nope', { mode: 'map', body: '{not json', base_rev: 1 }, USER)
