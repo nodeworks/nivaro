@@ -48,6 +48,7 @@ export * from './sections/infrastructure-inventory.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
+export * from './sections/payload-templates.js'
 export * from './sections/layout-editor.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-lists.js'
@@ -284,6 +285,7 @@ import {
   integrationsSyncJobs
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
+import { payloadTemplates } from './sections/payload-templates.js'
 import { layoutEditor } from './sections/layout-editor.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { collabLiveLists } from './sections/live-lists.js'
@@ -844,6 +846,7 @@ export const navSections: NavGroup[] = [
     items: [
       integrationsConsole,
       integrationsErp,
+      payloadTemplates,
       integrationObligations,
       recordIntegrations,
       integrationsEvents,

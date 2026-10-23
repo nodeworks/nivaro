@@ -479,6 +479,7 @@
         <div class="docs-nav-items" id="group-int">
           <a class="docs-nav-item" data-section="integrations-console" href="#integrations-console">Integrations Console</a>
           <a class="docs-nav-item" data-section="erp-submissions" href="#erp-submissions">ERP Submission Status</a>
+          <a class="docs-nav-item" data-section="payload-templates" href="#payload-templates">Partner Payload Templates</a>
           <a class="docs-nav-item" data-section="integration-obligations" href="#integration-obligations">Integration Obligations</a>
           <a class="docs-nav-item" data-section="integration-events" href="#integration-events">Integration Events &amp; Replay</a>
           <a class="docs-nav-item" data-section="sync-jobs" href="#sync-jobs">Bi-Directional Sync Jobs</a>
@@ -15490,6 +15491,100 @@ export default {
           <p class="doc-p">An extension cannot import <code class="doc-code">api/src</code> (rootDir), so it mirrors the <code class="doc-code">IntegrationSignal</code> / <code class="doc-code">SignalRow</code> / <code class="doc-code">SignalAction</code> / <code class="doc-code">SignalActionHandler</code> shapes locally rather than importing them — the same leaf-module convention used everywhere else in the extension architecture. A signal id keeps the same <code class="doc-code">owner:name</code> rule core's does (<code class="doc-code">payments-sync:reconcile-lag</code>, not a bare name).</p>
           <div class="doc-note">Every <code class="doc-code">callExternalApi</code> call made from inside an extension now always lands in that API's Call Logs — the caller's own trigger (e.g. <code class="doc-code">cron:&lt;job id&gt;</code>, when the writer names one explicitly) is kept if given, otherwise it defaults to <code class="doc-code">extension:&lt;extension id&gt;</code>. A partner's Recent calls tab therefore shows an extension's scheduled syncs and polls without the extension writer doing anything extra to log them.</div>
           <!-- /SYNC:integrations-console -->
+        </div>
+
+        <!-- PARTNER PAYLOAD TEMPLATES -->
+        <div class="doc-section" id="s-payload-templates" data-toc='[{"id":"payload-templates","label":"Partner Payload Templates"},{"id":"pt-lifecycle","label":"Draft, publish, versions"},{"id":"pt-field-map","label":"The field map"},{"id":"pt-code","label":"Code mode and Convert"},{"id":"pt-preview","label":"Preview and Check recent records"},{"id":"pt-push-checks","label":"What happens at push time"},{"id":"pt-body-secrets","label":"Body secrets"},{"id":"pt-erp-submit","label":"Using a template from a pipeline action"},{"id":"pt-extension-api","label":"Extension API"},{"id":"pt-routes","label":"REST routes"},{"id":"pt-environments","label":"Environments and promotion"}]'>
+          <!-- SYNC:payload-templates -->
+          <h1 class="doc-h1" id="payload-templates">Partner Payload Templates</h1>
+          <p class="doc-p">A payload template is the named, versioned JSON body Nivaro sends to a partner API. You edit a **draft**, check it against real records, then **publish** it; a push only ever sends the published version. Templates live on the External API they belong to (External APIs → the API → **Payloads** card) and open in a full-width editor at <code class="doc-code">/external-apis/:id/payloads/:key</code>. Changing a field no longer needs a code push or a go-live script.</p>
+          <h2 class="doc-h2" id="pt-lifecycle">Draft, publish, versions</h2>
+          <ul class="doc-ul">
+            <li>**Draft** — the working copy. Autosaves; it never reaches a partner. The header shows an amber "Draft — not live" chip while it differs from the live version.</li>
+            <li>**Publish** — needs a note and shows a before/after payload diff for a real record. If recent records would fail, the panel asks you to confirm ("Publish anyway — N records would fail"). Every publish is an immutable version.</li>
+            <li>**History** — any version can be restored as the draft. **Reset to default** restores the file default an extension registered.</li>
+            <li>**Conflicts** — drafts use a revision counter; saving over someone else's newer draft, or over a version published since you opened the page, is refused with a conflict banner (HTTP 409) so you can reload.</li>
+            <li>**Sharing** — one template can be used by many transitions and code pushes. The header lists them under "Used by".</li>
+          </ul>
+          <h2 class="doc-h2" id="pt-field-map">The field map</h2>
+          <p class="doc-p">The default editor builds the JSON from rows, never typed text, so the body is always valid JSON with the right types. Each row is a key, a type, a value source, an include rule and optional checks.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Part</th><th>Options</th></tr></thead>
+            <tbody><tr><tr><td>Type</td><td>text, number, boolean, date (<code class="doc-code">YYYY-MM-DD</code>), object, list, json</td></tr>
+              <tr><td>Value source</td><td>Fixed value · Record field (a path, e.g. <code class="doc-code">record.shipping_location.inventory_org</code>) · Related (data lookups) · Built-in (<code class="doc-code">today</code>, <code class="doc-code">now</code>, <code class="doc-code">acting_user.email|name|employee_id</code>, <code class="doc-code">list.number</code>, <code class="doc-code">state.label</code>, <code class="doc-code">state.external_label</code>) · API secret · If/then (switch on conditions, with an else) · Formula (Liquid)</td></tr>
+              <tr><td>Transforms</td><td>trim, upper, lower, truncate, prefix, suffix, pad start, replace, date format, add days, at least N days out, next open day (respects blackout dates), editor text, join. Applied in order; they skip empty values.</td></tr>
+              <tr><td>Fallbacks</td><td>An "else …" chain: the first candidate whose transformed result is non-empty wins. Each candidate has its own transforms.</td></tr>
+              <tr><td>Include</td><td>Always · Only when not empty (drops the key for null, empty text or an empty list) · Only when conditions match</td></tr>
+              <tr><td>Checks</td><td>required, max length, min / max, allowed values, regex pattern (at most 200 characters, tested against the first 10,000 characters of the value)</td></tr>
+              <tr><td>Groups and lists</td><td>An object nests rows. A list repeats its rows for each item of a source (<code class="doc-code">where</code>, <code class="doc-code">sort</code>, a numbering alias for the 1-based index after filtering); a scalar list produces plain values.</td></tr>
+              <tr><td>Locked keys</td><td>Keys Nivaro reads back from stored payloads (obligation reconciliation, drift checks) show a lock. They cannot be removed, renamed or retyped; their value source can still change. A locked key may be <code class="doc-code">not_empty</code> (it need not appear in every body).</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">The client never evaluates a template. Values shown in the editor come from the server preview, so the editor, the preview and a real push cannot disagree.</div>
+          <h2 class="doc-h2" id="pt-code">Code mode and Convert</h2>
+          <p class="doc-p">A template can be in **code** mode: Liquid text that renders to JSON, with the same engine, filters and scope as an inline erp_submit <code class="doc-code">payload_template</code>, plus the locked-key and rule checks on the parsed result. A map template's **Code** tab shows the spec JSON (schema-validated on save) and **Convert to Liquid**. Convert generates Liquid, renders the map and the Liquid against the recent-records set and refuses unless every body is identical, listing the differing paths. Conversion is one way: a code template has no field map. A draft's mode changes only through Convert.</p>
+          <div class="doc-note doc-warn">Code mode is JSON assembled from text. A value containing a quote can break the body unless the template runs it through <code class="doc-code">jsonify</code>; the editor warns about unescaped output and duplicate keys. Prefer the field map.</div>
+          <h2 class="doc-h2" id="pt-preview">Preview and Check recent records</h2>
+          <ul class="doc-ul">
+            <li>**Preview** — pick any record of the template's collection (search by id or name; newest by default). The JSON pane toggles **Draft · Live · Diff**. The preview builds the record scope exactly as the push does.</li>
+            <li>**Problems** list under the rows and the JSON: unknown path on this record, duplicate or empty key, type mismatch, rule failure, missing body secret, list source that is not a list, Liquid errors with the message.</li>
+            <li>**Check recent records** — renders the newest 20 records (in chunks, with an N / M counter) and lists which fail and why. A record the sender would skip is not counted as a failure.</li>
+            <li>**Data** tab — the lookups the template can read. An erp_submit template shows the referencing action's context read-only plus its own editable lookups; a code-built template shows the registrar's description of its variables.</li>
+          </ul>
+          <h2 class="doc-h2" id="pt-push-checks">What happens at push time</h2>
+          <p class="doc-p">After the published template renders, locked keys and per-field checks run. A failure is a recorded failed submission (message names the key and rule) and the obligation resolves failed; nothing is sent. A template that has never been published also blocks the push. Pushes that already stored a body re-send that stored body on retry.</p>
+          <h2 class="doc-h2" id="pt-body-secrets">Body secrets</h2>
+          <p class="doc-p">Some partners take their credential inside the JSON body, not in a header. Store it once on the External API: **Body secrets** card, saved in <code class="doc-code">auth_config.body_secrets</code> as <code class="doc-code">{name: value}</code>. Values are masked on every read, kept when a masked value is re-saved, and an instance override (<code class="doc-code">instance_overrides.&lt;instance&gt;.auth_config.body_secrets</code>) is deep-merged per name, so production can override just one secret.</p>
+          <p class="doc-p">Templates, previews, stored submissions and call logs only ever hold the placeholder <code class="doc-code">⟦nvr-secret:&lt;name&gt;⟧</code> (the "API secret" value source, or <code class="doc-code">secrets.&lt;name&gt;</code> / <code class="doc-code">| secret</code> in code mode). <code class="doc-code">callExternalApi</code> swaps the real value in after the body is final and before it is serialised and signed, only when the caller passes <code class="doc-code">bodySecrets: true</code>. erp_submit sends and retries, the flow <code class="doc-code">external-api</code> operation, the API's Test call and extension calls for a registered template do. A missing secret refuses the call with "&lt;API&gt; API has no body secret '&lt;name&gt;'" and sends nothing; mock mode never substitutes.</p>
+          <div class="doc-note doc-warn">Never type a credential into a template or a flow body. Record, trigger and response data is neutralised (a zero-width space is inserted into any <code class="doc-code">⟦nvr-secret:</code> it contains), so only text an administrator wrote can pull a secret in. Echoed secrets are scrubbed from stored responses and logs. Stored submissions carry <code class="doc-code">secret_paths</code>; a retry substitutes only at those paths, and a row without them fails closed.</div>
+          <h2 class="doc-h2" id="pt-erp-submit">Using a template from a pipeline action</h2>
+          <p class="doc-p">An <code class="doc-code">erp_submit</code> transition action takes a <code class="doc-code">payload_template_key</code>. When set it wins over the inline <code class="doc-code">payload_template</code>, and the action is configured when either exists. In the pipeline editor the action's **Payload** field is a Combobox of the templates for the action's External API ("MWF workflow status · Live v7") with **Open template**; "Custom (inline Liquid)" keeps the old textarea. A template belongs to one External API: pointing an action at another API's template records a failed push and shows a preview problem. Template-level lookups merge into <code class="doc-code">context</code>; the action's own context wins on a key clash. Exporting a transition that names a template key bundles the template into a blueprint.</p>
+          <h2 class="doc-h2" id="pt-extension-api">Extension API</h2>
+          <pre class="doc-pre"><code>// register() — seeded once; an existing template is never overwritten
+await ctx.payloadTemplates.register({
+  key: 'mwf-ir-order',                   // ^[a-z0-9-]+$, at most 120
+  label: 'MWF inventory request order',
+  external_api: 'MWF',                    // callExternalApi name
+  endpoint_path: '/update_workflow.php',  // display + preview only
+  collection: 'inventory_request',
+  default: { mode: 'map', body: specJson },
+  locked_keys: ['workflow_id', 'order_id'],
+  lookups: {},                            // same shape as erp_submit context
+  scope: (id) =&gt; buildScope(id),          // the SAME builder the push uses
+  recent: (limit) =&gt; newestIds(limit),
+  senders: ['efp-ops: Submit to Warehouse']
+})
+
+// render() — PUBLISHED version; rejects with problems when nothing is publishable
+const { body, problems, version } = await ctx.payloadTemplates.render(key, scope)
+await ctx.callExternalApi('MWF', { method: 'POST', body, bodySecrets: true })
+
+// Skip a push when the credential is not configured
+if (!(await ctx.payloadTemplates.hasBodySecret('MWF', 'token'))) return</code></pre>
+          <p class="doc-p">Validate before side effects: a throw inside a <code class="doc-code">register()</code> call kills the extension's whole register. The seed is hashed; when the shipped default later differs, the editor shows "ships a newer default" with a diff and **Use as draft**. File changes never go live by themselves. A registered template cannot be deleted from the UI. Types are mirrored in <code class="doc-code">@nivaro/extension-kit</code>.</p>
+          <h2 class="doc-h2" id="pt-routes">REST routes</h2>
+          <p class="doc-p">All under <code class="doc-code">/api/payload-templates</code>, administrators only. Responses include a <code class="doc-code">warning</code> string when <code class="doc-code">PAYLOAD_EDIT_WARNING</code> is set.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>Purpose</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">GET /?external_api=</code></td><td>List with status (live / draft changes / unpublished), version, used-by count, newer-default flag</td></tr>
+              <tr><td><code class="doc-code">GET /:key</code></td><td>One template with draft, published version, used-by, default info</td></tr>
+              <tr><td><code class="doc-code">POST /</code></td><td>Create <code class="doc-code">{key, label, external_api, endpoint_path, collection, mode, body}</code></td></tr>
+              <tr><td><code class="doc-code">DELETE /:key</code></td><td>Refused (409) when an extension registers it or transitions still use it</td></tr>
+              <tr><td><code class="doc-code">PUT /:key/draft</code></td><td><code class="doc-code">{mode, body, base_rev, base_published_version?}</code>; 409 <code class="doc-code">stale</code> returns the current row</td></tr>
+              <tr><td><code class="doc-code">PUT /:key/lookups</code></td><td>Template-level lookups, validated like erp_submit context</td></tr>
+              <tr><td><code class="doc-code">POST /:key/preview</code></td><td><code class="doc-code">{id, which: draft|published, draft?}</code> render one record with problems</td></tr>
+              <tr><td><code class="doc-code">GET /:key/recent</code></td><td>The newest record ids Check renders</td></tr>
+              <tr><td><code class="doc-code">POST /:key/check</code></td><td><code class="doc-code">{which, limit?, ids?}</code> render recent records (default 20) and list failures</td></tr>
+              <tr><td><code class="doc-code">GET /:key/record-search?q=</code></td><td>Record picker for previews</td></tr>
+              <tr><td><code class="doc-code">POST /:key/publish</code></td><td><code class="doc-code">{base_rev, note}</code> (note required)</td></tr>
+              <tr><td><code class="doc-code">GET /:key/versions</code>, <code class="doc-code">GET /:key/versions/:v</code></td><td>History</td></tr>
+              <tr><td><code class="doc-code">POST /:key/versions/:v/restore</code></td><td>Restore a version as the draft</td></tr>
+              <tr><td><code class="doc-code">POST /:key/reset-default</code></td><td>Reset the draft to the registered default</td></tr>
+              <tr><td><code class="doc-code">POST /:key/convert</code></td><td><code class="doc-code">{base_rev}</code> map to Liquid; 422 with differing paths when not identical</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Collections whose names start with <code class="doc-code">nivaro_</code> or <code class="doc-code">directus_</code> can never be a template's record type or a lookup. <code class="doc-code">/payload-templates/:key</code> in the admin redirects to the owning API's editor, which is where config search links.</p>
+          <h2 class="doc-h2" id="pt-environments">Environments and promotion</h2>
+          <p class="doc-p">Templates, versions and drafts are configuration: they ride config snapshots, Config Diff and promotion between environments. Where a nightly promotion replaces them, set <code class="doc-code">PAYLOAD_EDIT_WARNING</code> (for example "Payload templates here are replaced every night from development. Make lasting changes on development.") to show a banner on the list, the API's Payloads card and the editor. Editing drafts does not move the config epoch; publish, restore and reset do.</p>
+          <!-- /SYNC:payload-templates -->
         </div>
 
         <!-- ERP SUBMISSION STATUS -->
