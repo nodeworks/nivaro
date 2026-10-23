@@ -5,6 +5,7 @@ import {
   GraphQLObjectType,
   GraphQLSchema,
   GraphQLString,
+  parse,
   specifiedDirectives
 } from 'graphql'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -336,5 +337,35 @@ describe('GraphQL over SSE (#1749)', () => {
       'SESSION_ENDED',
       'complete'
     ])
+  })
+})
+
+describe('graphql-ws / stream execution refuses mutations (post-mortem 3.3 review)', () => {
+  it('answers a mutation with the POST /api/graphql message and never runs it', async () => {
+    const touched = vi.fn(() => 'x')
+    const s = new GraphQLSchema({
+      query: new GraphQLObjectType({ name: 'Q', fields: { a: { type: GraphQLString } } }),
+      mutation: new GraphQLObjectType({
+        name: 'M',
+        fields: { touch: { type: GraphQLString, resolve: touched } }
+      })
+    })
+    const r = (await executeOrLive({
+      schema: s,
+      document: parse('mutation { touch }'),
+      contextValue: { user: { id: 'u' } }
+    })) as { errors?: Array<{ message: string }> }
+    expect(r.errors?.[0]?.message).toBe(
+      'Send mutations to POST /api/graphql; this stream only reads'
+    )
+    expect(touched).not.toHaveBeenCalled()
+    // A document with a query and a mutation: the chosen operation decides.
+    const q = (await executeOrLive({
+      schema: s,
+      document: parse('query Read { a } mutation Write { touch }'),
+      operationName: 'Read',
+      contextValue: { user: { id: 'u' } }
+    })) as { errors?: unknown[] }
+    expect(q.errors).toBeUndefined()
   })
 })

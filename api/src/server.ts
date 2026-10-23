@@ -200,7 +200,8 @@ export async function buildServer() {
   await app.register(socketioPlugin)
   // Global io + journal wiring (realtime sprint): services with no app in
   // scope emit through the holder; the event journal (#266) shares the
-  // app Redis connection.
+  // app Redis connection. realtime-server.ts (NIVARO_ROLE=realtime) mirrors the parts the
+  // socket handlers need — a new one goes in both.
   {
     const { setAppRef, setIo } = await import('./services/io-holder.js')
     setIo(app.io)
@@ -248,6 +249,27 @@ export async function buildServer() {
       await initEventStream(app.redis)
       const { alignJournalSequence, flushJournal } = await import('./services/event-journal.js')
       void alignJournalSequence()
+      // Post-mortem 3.3 — /events/stream hears other replicas' record changes too.
+      const { startSseRemoteBridge } = await import('./services/sse-hub.js')
+      startSseRemoteBridge()
+      const { wireJournalFallback } = await import('./services/event-journal.js')
+      const stopFallback = wireJournalFallback(app.redis)
+      app.addHook('onClose', async () => stopFallback())
+      // Post-mortem 3.3 — the realtime board: what every process's sockets know (viewers, page
+      // pings, socket lists), shared once a second process is around (services/realtime-board.ts):
+      // replicas that all serve sockets, a realtime tier, SOCKETS=off readers. A lone process
+      // only registers itself every 5 s. Self-hosted only (cloud keeps per-process answers).
+      if (!process.env.CLOUD_META_DB_URL && app.redis) {
+        const { socketsServed } = await import('./services/process-role.js')
+        const { startBoard } = await import('./services/realtime-board.js')
+        const { localBoardCollector } = await import('./plugins/socketio.js')
+        const stopBoard = startBoard(app.redis, {
+          serves: socketsServed(),
+          collect: localBoardCollector(app.io)
+        })
+        // Off the board as soon as the drain starts, so nobody trusts this process's viewers.
+        app.addHook('preClose', async () => stopBoard())
+      }
       const { flushRawWriteQueue } = await import('./services/raw-write-announcer.js')
       app.addHook('onClose', async () => {
         flushRawWriteQueue()
@@ -661,6 +683,10 @@ export async function buildServer() {
       )
       registerCoreIntegrationSignals()
     }
+    const { connectionHandlerCount, refuseExtensionSocketHandlers } = await import(
+      './services/process-role.js'
+    )
+    const coreSocketHandlers = connectionHandlerCount(app.io as never)
     await bootPhase('Extensions', () =>
       loadExtensions({
         app,
@@ -669,6 +695,8 @@ export async function buildServer() {
         callExternalApi
       })
     )
+    // Post-mortem 3.3 — with SOCKETS=off an extension's socket handler would never run.
+    refuseExtensionSocketHandlers(coreSocketHandlers, connectionHandlerCount(app.io as never))
     await bootPhase('Scheduled flows', () => loadScheduledFlows(app))
     // #530 — fingerprint what each extension registered this boot; a changed
     // ledger becomes a new version so "when did this check appear?" has an answer.
@@ -1240,6 +1268,10 @@ export async function buildServer() {
       app.cron.schedule('concurrency-sample', '*/5 * * * *', async () => {
         const { db } = await import('./db/index.js')
         const { getLocalConcurrency } = await import('./plugins/socketio.js')
+        // Post-mortem 3.3 — with SOCKETS=off the figures are the realtime processes' (the
+        // board); a board nobody refreshed lately would record a false zero, so skip the sample.
+        const { boardFresh, boardReaderOn } = await import('./services/realtime-board.js')
+        if (boardReaderOn() && !boardFresh()) return
         const { sockets, users } = getLocalConcurrency()
         await db('nivaro_concurrency_samples')
           .insert({

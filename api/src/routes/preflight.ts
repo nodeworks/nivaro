@@ -3,7 +3,10 @@ import { config } from '../config.js'
 import { db, migrationSource } from '../db/index.js'
 import { extensionRegistry, missingExtensionEnv } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { streamEnabled } from '../services/event-stream.js'
 import { hasFfmpeg } from '../services/ffmpeg.js'
+import { instanceKey } from '../services/instance-key.js'
+import { listInstances } from '../services/instance-roster.js'
 import {
   type HandoffRedis,
   handoffBacklog,
@@ -11,7 +14,9 @@ import {
   readMediaWorker
 } from '../services/media-handoff.js'
 import { hasLocalChromium } from '../services/pdf-layout.js'
+import { judgeRealtimeTier, probeRealtimeRouting, socketsServed } from '../services/process-role.js'
 import {
+  canaryLenient,
   imageVariant,
   judgeRenderSetup,
   probeRenderPeer,
@@ -264,6 +269,26 @@ async function checkMediaWorker(app: FastifyInstance): Promise<Check> {
   return { id: 'media-worker', status: v.status, summary: v.summary, detail: { variant, local } }
 }
 
+/** Post-mortem 3.3 — SOCKETS=off needs a realtime process (NIVARO_ROLE=realtime) alive. */
+async function checkRealtime(app: FastifyInstance): Promise<Check> {
+  const served = socketsServed()
+  const v = judgeRealtimeTier({
+    served,
+    redis: !!(app as unknown as { redis?: unknown }).redis,
+    roster: served ? [] : await listInstances(),
+    instance: instanceKey(),
+    stream: streamEnabled(),
+    routed: served ? null : await probeRealtimeRouting(config.PUBLIC_URL)
+  })
+  const c = canaryLenient(v)
+  return {
+    id: 'realtime',
+    status: c.status,
+    summary: c.summary,
+    detail: { sockets_served: served, realtime_processes: v.realtime }
+  }
+}
+
 async function checkRender(): Promise<Check> {
   const local = { chromium: await hasLocalChromium(), ffmpeg: await hasFfmpeg() }
   const peer = await probeRenderPeer()
@@ -304,11 +329,12 @@ async function checkConnectivity(app: FastifyInstance): Promise<Check[]> {
 
 export async function preflightRoutes(app: FastifyInstance) {
   app.get('/preflight', { preHandler: requireAdmin }, async (_req, reply) => {
-    const [migrations, connectivity, render, media] = await Promise.all([
+    const [migrations, connectivity, render, media, realtime] = await Promise.all([
       checkMigrations(),
       checkConnectivity(app),
       checkRender(),
-      checkMediaWorker(app)
+      checkMediaWorker(app),
+      checkRealtime(app)
     ])
 
     const checks: Check[] = [
@@ -317,7 +343,8 @@ export async function preflightRoutes(app: FastifyInstance) {
       checkExtensions(),
       checkVersion(),
       render,
-      media
+      media,
+      realtime
     ]
     const status = worst(checks)
 

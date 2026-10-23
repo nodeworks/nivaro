@@ -3,6 +3,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import { cronTicksEnabled } from './cron-ticks.js'
 import { instanceKey } from './instance-key.js'
 import { listInstances } from './instance-roster.js'
+import { judgeRealtimeTier, probeRealtimeRouting, socketsServed } from './process-role.js'
 import { type ReadinessResult, registerReadinessCheck } from './readiness.js'
 
 /**
@@ -154,6 +155,30 @@ export function registerDeployReadinessChecks(): void {
       // Several deployments can share one Redis (dev:db); compare like with like.
       const mine = all.filter((e) => !e.instance || e.instance === self)
       return judgeMixedVersions(mine)
+    }
+  })
+  registerReadinessCheck({
+    id: 'realtime-tier',
+    label: 'Live updates have a process to reach people through',
+    group: 'Deploy',
+    description:
+      'A web process with SOCKETS=off serves no live connections: a realtime process (NIVARO_ROLE=realtime) holds them, and what the web process emits reaches it through Redis. Fails when this deployment has no realtime process that beat in the last 45 s, when REALTIME_EVENT_STREAM=off, or when PUBLIC_URL/api/events/stream is not answered by a realtime process (the proxy route); warns with only one realtime process (a restart drops every connection). Passes on a process that serves sockets itself.',
+    run: async () => {
+      const served = socketsServed()
+      const { getApp } = await import('./io-holder.js')
+      const { streamEnabled } = await import('./event-stream.js')
+      const { config } = await import('../config.js')
+      const v = judgeRealtimeTier({
+        served,
+        redis: !!getApp()?.redis,
+        roster: served ? [] : ((await listInstances()) as RosterEntry[]),
+        instance: instanceKey(),
+        stream: streamEnabled(),
+        routed: served ? null : await probeRealtimeRouting(config.PUBLIC_URL)
+      })
+      const { canaryLenient } = await import('./render-peer.js')
+      const c = canaryLenient(v)
+      return { status: c.status === 'ok' ? 'pass' : c.status, detail: c.summary }
     }
   })
   registerReadinessCheck({

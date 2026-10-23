@@ -1,3 +1,4 @@
+import { createServer } from 'node:http'
 import { createAdapter } from '@socket.io/redis-adapter'
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
@@ -52,6 +53,7 @@ import {
   cleanSignalState,
   isPresenceTopic,
   isSelectionTopic,
+  localTopicViewerEntries,
   RECORD_SIGNAL_KINDS,
   removeSocketFromTopics,
   removeTopicViewer,
@@ -59,6 +61,25 @@ import {
   TOPIC_SIGNAL_KINDS,
   topicViewers
 } from '../services/presence-topics.js'
+import { emitterOnlyAdapter, socketsServed } from '../services/process-role.js'
+import {
+  type BoardCollector,
+  boardConcurrency,
+  boardIsViewing,
+  boardMergeOn,
+  boardPeerViewers,
+  boardReaderOn,
+  boardRealtimeStats,
+  boardRecordViewers,
+  boardSocketUser,
+  boardUsersOnPath,
+  boardUsersOnPathPrefix,
+  isGateRoom,
+  type LocalBoard,
+  onPeerBoardChange,
+  PAGE_AT_KEY,
+  type PageAtData
+} from '../services/realtime-board.js'
 import { emitToTenant } from '../services/record-events.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
 import {
@@ -88,6 +109,7 @@ import {
   takeResync,
   trackSocket
 } from '../services/socket-health.js'
+import { joinsSettled, trackJoins } from '../services/socket-join-tracker.js'
 import { inSocketTenant, socketTenant, socketTrafficStore } from '../services/socket-tenant.js'
 import {
   type Coalescer,
@@ -114,7 +136,15 @@ let pagePresenceReader:
   | null = null
 /** Users whose latest page ping is `path` (this replica's sockets). */
 export function usersOnPath(path: string): Array<{ id: string; name: string; since: number }> {
-  return pagePresenceReader ? pagePresenceReader(path) : []
+  const local = pagePresenceReader ? pagePresenceReader(path) : []
+  // Post-mortem 3.3 — the other processes' page pings (services/realtime-board.ts).
+  if (!boardMergeOn()) return local
+  const seen = new Map(local.map((u) => [u.id, u]))
+  for (const u of boardUsersOnPath(path, currentTenantKey())) {
+    const cur = seen.get(u.id)
+    if (!cur || u.since < cur.since) seen.set(u.id, u)
+  }
+  return [...seen.values()]
 }
 
 let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
@@ -123,7 +153,9 @@ let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
  * replica's sockets): who an auto-record signal about a route reaches.
  */
 export function usersOnPathPrefix(prefixes: string[]): string[] {
-  return pagePrefixReader ? pagePrefixReader(prefixes) : []
+  const local = pagePrefixReader ? pagePrefixReader(prefixes) : []
+  if (!boardMergeOn()) return local
+  return [...new Set([...local, ...boardUsersOnPathPrefix(prefixes, currentTenantKey())])]
 }
 
 import { noteSocket } from '../services/traffic-map.js'
@@ -160,10 +192,11 @@ const recordViewers = new Map<string, Map<string, { id: string; name: string }>>
  *  RIGHT NOW (joined its record room on this node)? */
 export function isUserViewing(collection: string, item: string, userId: string): boolean {
   // Cloud: record rooms are per tenant — the caller's tenant (its request context).
-  const map = recordViewers.get(tenantScopedRoom(`record:${collection}:${item}`))
-  if (!map) return false
-  for (const v of map.values()) if (v.id === userId) return true
-  return false
+  const room = tenantScopedRoom(`record:${collection}:${item}`)
+  const map = recordViewers.get(room)
+  for (const v of map?.values() ?? []) if (v.id === userId) return true
+  // Post-mortem 3.3 — viewing on another process (the board, entries younger than 3 s).
+  return boardMergeOn() && boardIsViewing(room, userId)
 }
 
 /** Per-socket connection metadata for the realtime diagnostics page (#270). */
@@ -187,7 +220,9 @@ let _ioRef: SocketIOServer | null = null
 
 /** The person a socket authenticated as on THIS node (null before auth or elsewhere). */
 export function socketUserOf(socketId: string): { id: string; name: string } | null {
-  return socketMeta.get(socketId)?.user ?? null
+  const own = socketMeta.get(socketId)
+  if (own) return own.user ?? null
+  return boardMergeOn() ? boardSocketUser(socketId) : null
 }
 
 /**
@@ -272,11 +307,26 @@ function tenantSocketsRoom(tenant: string): string {
   return tenantScopedRoom('all', tenant)
 }
 
-export function getRealtimeStats(): {
+export function getRealtimeStats(): ReturnType<typeof localRealtimeStats> {
+  // Post-mortem 3.3 — SOCKETS=off: every realtime process's sockets (the board).
+  if (boardReaderOn())
+    return boardRealtimeStats() as unknown as ReturnType<typeof localRealtimeStats>
+  return localRealtimeStats()
+}
+
+/**
+ * This process's own sockets, never the board — for per-node figures another process merges
+ * (Traffic Map cluster snapshots), which would otherwise count a realtime process's sockets
+ * once on it and again on every SOCKETS=off process.
+ */
+export function getLocalRealtimeStats(): ReturnType<typeof localRealtimeStats> {
+  return localRealtimeStats()
+}
+
+function localRealtimeStats(io: SocketIOServer | null = _ioRef): {
   sockets: Array<SocketMeta & { id: string; tenant: string | null; rooms: string[] }>
   rooms: Array<{ room: string; size: number }>
 } {
-  const io = _ioRef
   const sockets: Array<SocketMeta & { id: string; tenant: string | null; rooms: string[] }> = []
   if (io) {
     for (const [id, sock] of io.sockets.sockets) {
@@ -377,7 +427,101 @@ function socketTenantKey(socketId: string): string | null {
 export function getLocalConcurrency(): { sockets: number; users: number } {
   const users = new Set<string>()
   for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
-  return { sockets: _ioRef?.engine?.clientsCount ?? socketMeta.size, users: users.size }
+  const sockets = _ioRef?.engine?.clientsCount ?? socketMeta.size
+  // Post-mortem 3.3 — every process's sockets (the board), people counted once.
+  if (boardMergeOn()) return boardConcurrency({ sockets, users })
+  return { sockets, users: users.size }
+}
+
+/**
+ * Post-mortem 3.3 — this process's share of the realtime board (services/realtime-board.ts),
+ * published by a realtime process for the SOCKETS=off processes.
+ */
+export function localBoardCollector(io: SocketIOServer | null = _ioRef): BoardCollector {
+  return { live: () => collectLocalLive(io), stats: () => collectLocalStats(io) }
+}
+
+/** The live part (every second): counts, viewers, page pings, gate rooms, topic viewers. */
+function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
+  const users = new Set<string>()
+  for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
+  const viewers: LocalBoard['live']['viewers'] = {}
+  for (const [room, map] of recordViewers)
+    viewers[room] = [...map].map(([socket, v]) => ({ socket, id: v.id, name: v.name }))
+  const rooms: Record<string, number> = {}
+  for (const [room, set] of io?.sockets.adapter.rooms ?? [])
+    if (isGateRoom(room)) rooms[room] = set.size
+  const pages: LocalBoard['live']['pages'] = []
+  for (const [id, sock] of io?.sockets.sockets ?? []) {
+    const at = sock.data?.[PAGE_AT_KEY] as PageAtData | undefined
+    if (at) pages.push({ ...at, socket: id })
+  }
+  return {
+    sockets: io?.engine?.clientsCount ?? socketMeta.size,
+    users: [...users],
+    viewers,
+    pages,
+    rooms,
+    topics: localTopicViewerEntries()
+  }
+}
+
+/** The socket list and room sizes (every 10 s): the expensive part, built only then. */
+function collectLocalStats(io: SocketIOServer | null): LocalBoard['stats'] {
+  const stats = localRealtimeStats(io)
+  return {
+    sockets: stats.sockets as unknown as LocalBoard['stats']['sockets'],
+    rooms: stats.rooms
+  }
+}
+
+/**
+ * `record:viewers` (and `presence:rows` for lists watching the row) for one record room: this
+ * process's viewers, current, plus — with several realtime processes — the others' from the
+ * board (a second or two old). `local`: to this process's sockets only.
+ */
+function emitRecordViewers(io: SocketIOServer, room: string, local: boolean): void {
+  const viewers = [
+    ...(recordViewers.get(room)?.values() ?? []),
+    ...boardPeerViewers(room).map(({ id, name }) => ({ id, name }))
+  ]
+  const m = /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room)
+  const to = (r: string) => (local ? io.local.to(r) : io.to(r))
+  to(room).emit('record:viewers', {
+    collection: m?.[1] ?? null,
+    item: m?.[2] ?? null,
+    viewers
+  })
+  // #2486 — lists watching this row (ids only; names come from /presence/people).
+  if (m)
+    to(rowsRoomName(room)).emit('presence:rows', {
+      collection: m[1],
+      item: m[2],
+      user_ids: distinctViewerIds(viewers)
+    })
+}
+
+/**
+ * Exported for tests: which rooms a board change re-tells on this process — a record room with
+ * members here, or with list pages here watching that row (`presence:rows`); an ops topic room
+ * with members here.
+ */
+export function peerChangeTargets(
+  rooms: string[],
+  here: (room: string) => boolean
+): Array<{ kind: 'record'; room: string } | { kind: 'ops'; room: string; topic: string }> {
+  const out: Array<
+    { kind: 'record'; room: string } | { kind: 'ops'; room: string; topic: string }
+  > = []
+  for (const room of rooms) {
+    const name = splitTenantRoom(room).room
+    if (name.startsWith('record:')) {
+      if (here(room) || here(rowsRoomName(room))) out.push({ kind: 'record', room })
+    } else if (name.startsWith('ops:') && here(room)) {
+      out.push({ kind: 'ops', room, topic: name.slice(4) })
+    }
+  }
+  return out
 }
 
 /** Now-editing pulse (#273): per-node record-room viewers snapshot. */
@@ -398,6 +542,13 @@ export function getRecordViewerSnapshot(): Array<{
     if (roomTenant !== tenant) continue
     const m = room.match(/^record:([^:]+):(.+)$/)
     if (m) out.push({ collection: m[1], item: m[2], viewers: [...map.values()] })
+  }
+  if (!boardMergeOn()) return out
+  // Post-mortem 3.3 — viewers on the other processes (the board).
+  for (const r of boardRecordViewers(tenant)) {
+    const hit = out.find((o) => o.collection === r.collection && o.item === r.item)
+    if (hit) hit.viewers.push(...r.viewers)
+    else out.push(r)
   }
   return out
 }
@@ -480,7 +631,10 @@ function roomsLabel(rooms: unknown): string | null {
 }
 
 export const socketioPlugin = fp(async (app: FastifyInstance) => {
-  const io = new SocketIOServer(app.server, {
+  // Post-mortem 3.3 — SOCKETS=off (a web process beside a realtime tier): bound to an HTTP
+  // server that never listens, so this process serves no /socket.io, while what it emits still
+  // reaches the realtime processes' clients through the Redis adapter and the event stream.
+  const io = new SocketIOServer(socketsServed() ? app.server : createServer(), {
     cors: { origin: '*', credentials: true },
     transports: socketPollingAllowed() ? ['websocket', 'polling'] : ['websocket'],
     perMessageDeflate: socketCompressionOn() ? { threshold: 1024 } : false
@@ -514,9 +668,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   // REDIS_CHANNEL_PREFIX keeps them apart; unset = the historic channel names.
   io.adapter(
     createAdapter(pubClient, subClient, {
-      key: `${process.env.REDIS_CHANNEL_PREFIX ?? ''}socket.io`
+      key: `${process.env.REDIS_CHANNEL_PREFIX ?? ''}socket.io`,
+      // Answers to a fetchSockets go to the asker's own channel, not to every process.
+      publishOnSpecificResponseChannel: true
     })
   )
+  // Post-mortem 3.3 — SOCKETS=off: publish only. This process decodes no broadcasts and stays
+  // out of the request quorum, so a busy request thread never slows another's fetchSockets.
+  if (!socketsServed())
+    void emitterOnlyAdapter(io.of('/').adapter, subClient, (msg, err) => app.log.warn({ err }, msg))
   // #1730 — byte accounting per room: every broadcast (local or relayed from another replica)
   // writes to its sockets inside adapter.apply, so the room in flight is known there.
   {
@@ -641,6 +801,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
   io.on('connection', (socket) => {
     app.log.debug({ socketId: socket.id }, 'Socket connected')
+    // Joins still in flight when `catchup` arrives are awaited first (socket-join-tracker.ts).
+    const pendingJoins = trackJoins(socket as never)
     // #1104: every inbound event is a counter bump on the Traffic Map's socket lane (no event
     // object, no emit) — the map stays free while nobody watches it.
     noteSocket('connect')
@@ -957,6 +1119,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           return
         }
         try {
+          // A reconnect re-sends its joins and then this at once: replay once they have landed.
+          await joinsSettled(pendingJoins)
           const { replaySince } = await import('../services/event-journal.js')
           const rooms = new Set([...socket.rooms].filter((r) => r !== socket.id))
           const result = await replaySince(cursor, rooms)
@@ -1545,22 +1709,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // and a bare `{viewers}` was applied by EVERY tab's hook — two people
     // sharing one background tab each saw the other "also viewing" the record
     // they actually had open (2026-09-14).
-    const broadcastViewers = (room: string) => {
-      const viewers = [...(recordViewers.get(room)?.values() ?? [])]
-      const m = /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room)
-      io.to(room).emit('record:viewers', {
-        collection: m?.[1] ?? null,
-        item: m?.[2] ?? null,
-        viewers
-      })
-      // #2486 — lists watching this row (ids only; names come from /presence/people).
-      if (m)
-        io.to(rowsRoomName(room)).emit('presence:rows', {
-          collection: m[1],
-          item: m[2],
-          user_ids: distinctViewerIds(viewers)
-        })
-    }
+    const broadcastViewers = (room: string) => emitRecordViewers(io, room, false)
     /** `{collection, item}` of a record room, so a record-room event names its record and a
      *  client holding several records on one socket (#2475) can route it. */
     const recordOf = (room: string | null): { collection: string | null; item: string | null } => {
@@ -1743,13 +1892,17 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const { path, app: pageApp } = ping
       const existing = pagePresence.get(socket.id)
       const changed = existing?.path !== path
-      pagePresence.set(socket.id, {
+      const at: PageAtData = {
         user: { id: user.id, name: displayName(user) },
         path,
         since: changed ? Date.now() : existing.since,
         app: pageApp,
         tenant
-      })
+      }
+      pagePresence.set(socket.id, at)
+      // Post-mortem 3.3 — on socket.data too, so a SOCKETS=off process can ask across the
+      // adapter who is on a page (services/socket-cluster-presence.ts).
+      socket.data[PAGE_AT_KEY] = at
       if (changed) {
         void closeJourneyRow(socket.id).then(() =>
           openJourneyRow(socket.id, user.id, path, pageApp)
@@ -1873,6 +2026,20 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (gone && pagePresence.delete(socket.id)) broadcastPresenceMap(gone.tenant)
       app.log.debug({ socketId: socket.id }, 'Socket disconnected')
     })
+  })
+
+  // Post-mortem 3.3 — the other realtime processes' viewers changed on the board: tell this
+  // process's own sockets in those rooms the current list (a join or leave elsewhere, or two
+  // joins at the same moment, otherwise never converge). Local emit: every process tells its own.
+  onPeerBoardChange((rooms) => {
+    const here = (r: string) => (io.sockets.adapter.rooms.get(r)?.size ?? 0) > 0
+    for (const t of peerChangeTargets(rooms, here)) {
+      if (t.kind === 'record') emitRecordViewers(io, t.room, true)
+      else
+        io.local
+          .to(t.room)
+          .emit('ops:changed', { topic: t.topic, viewers: topicViewers(t.room), at: Date.now() })
+    }
   })
 
   // #1720 — another replica asked for a room re-check; run this node's share.

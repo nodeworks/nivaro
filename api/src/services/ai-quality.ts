@@ -3,6 +3,7 @@ import type { AiSettingsRow } from './ai-client.js'
 import { costOf, featureFromRoute, setPriceOverrides } from './ai-log.js'
 import { normalizeRouting, type RoutingConfig } from './ai-routing.js'
 import { getIo } from './io-holder.js'
+import { roomListeners } from './realtime-board.js'
 import { currentTraceMeta } from './request-trace.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
@@ -659,7 +660,7 @@ export function emitAiCallLive(call: LiveAiCall): void {
   // Cloud outside a tenant request has no safe room: skip rather than broadcast globally.
   if (process.env.CLOUD_META_DB_URL && !currentTenantKey()) return
   const room = tenantScopedRoom('watch:ai-calls')
-  const watchers = io.sockets?.adapter?.rooms?.get(room)?.size ?? 0
+  const watchers = roomListeners(io, room)
   if (!watchers) return
   void (async () => {
     const user_name = call.user ? await nameOf(call.user) : null

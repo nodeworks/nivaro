@@ -27,6 +27,8 @@ import {
 } from 'graphql'
 import { pubsub, topics } from '../graphql/pubsub.js'
 import type { User } from '../types.js'
+import { isRealtimeRole } from './process-role.js'
+import { withReadGate } from './read-gate.js'
 
 /**
  * Live GraphQL queries (#2126).
@@ -475,7 +477,7 @@ export function liveQuery(args: LiveQueryArgs): AsyncIterableIterator<ExecutionR
         finish(ended())
         return
       }
-      const result = (await inTenant(async () =>
+      const runOnce = async () =>
         execute({
           schema: args.schema,
           document: plan.document,
@@ -483,6 +485,10 @@ export function liveQuery(args: LiveQueryArgs): AsyncIterableIterator<ExecutionR
           operationName: args.operationName ?? undefined,
           contextValue: { user: who.user, isAdmin: who.isAdmin }
         })
+      // Post-mortem 3.3 — on a realtime process the re-runs share the heavy-read gate, so a burst
+      // of writes cannot let @live queries take the small database pool from sign-ins.
+      const result = (await inTenant(async () =>
+        isRealtimeRole() ? withReadGate(String(who.user.id), runOnce, { label: 'live' }) : runOnce()
       )) as ExecutionResult
       if (stopped || finishing) return
       touched = touchedIds(result.data, plan.recordTypes)

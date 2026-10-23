@@ -1,0 +1,210 @@
+# Realtime tier (NIVARO_ROLE=realtime)
+
+A realtime process holds the live connections and nothing else, so connections scale apart
+from request handling and delivery never waits behind a busy request thread. The web processes
+turn sockets off (`SOCKETS=off`); what they emit reaches people through Redis (the Socket.io
+Redis adapter and the record-event stream). `docker-compose.yml` here runs web x4, realtime x2
+and worker x1 behind Traefik.
+
+Nothing set = one process does everything, sockets included. The tier is self-hosted only: a
+realtime process refuses to boot in cloud mode, and cloud mode ignores `SOCKETS`.
+
+## Roles
+
+| Role | Env | Serves |
+|---|---|---|
+| web | `NIVARO_ROLE=web SOCKETS=off` | REST, GraphQL queries, the admin build, `/api/events/ticket`, the admin `/api/stream`, MCP |
+| realtime | `NIVARO_ROLE=realtime` | Socket.io, graphql-ws, the SSE streams, `/api/version`, `/api/ready`, `/api/health`, `/api/metrics` |
+| worker | `NIVARO_ROLE=worker SOCKETS=off CRON_TICKS=on` | scheduled jobs, imports, media work; not routed |
+
+A realtime process runs no migrations, crons, hooks, extensions, event flows or media work,
+and answers every other path with a 404 that says to route it to web. It needs the same
+`REDIS_URL`, `REDIS_CHANNEL_PREFIX`, `SESSION_SECRET`, `COOKIE_*`, `CORS_ORIGINS` and `DB_*`
+as web: sockets sign in with the one-shot ws token web mints into Redis, and streams read the
+session cookie, a Bearer token or a stream ticket. Give it `DB_POOL_MAX=20` and
+`DB_POOL_BACKGROUND_MAX=0`: after a restart moves every socket to the surviving task, sign-ins,
+room gates, presence writes, journeys, replays, pushed widgets and GraphQL live re-runs all land
+at once. Live re-runs share the heavy-read gate on a realtime process (`HEAVY_READ_CONCURRENCY`),
+and pushed widgets their own cap (3 at a time, `WIDGET_LIVE_MAX_PER_MIN`).
+
+GraphQL over the subscription transports (graphql-ws, `/api/graphql/stream`) only reads, on
+every process: a mutation there is refused with "Send mutations to POST /api/graphql".
+
+## Routing
+
+Send these to the realtime service, everything else to web:
+
+| Path | What |
+|---|---|
+| `/socket.io/` (prefix) | Socket.io: websocket, and the long-polling fallback |
+| `/api/graphql-ws` | GraphQL subscriptions over websocket |
+| `/api/graphql/stream` | GraphQL subscriptions and live queries over SSE (GET and POST) |
+| `/api/events/stream` | record changes over SSE |
+| `/api/events/views/<id>/stream` | saved-view change stream over SSE |
+
+Stay on web: `/api/events/ticket` (either works, tickets live in Redis), `/api/auth/ws-token`,
+the admin `/api/stream` (it reports the writes of the process it runs on), MCP live sessions
+(`/api/mcp?live=1`), the shared-worker script `/api/realtime/worker.js`.
+
+Traefik v3 rule (give it a priority above the web catch-all):
+
+```
+Host(`nivaro.example.com`) && (PathPrefix(`/socket.io/`) || Path(`/api/graphql-ws`)
+  || Path(`/api/graphql/stream`) || Path(`/api/events/stream`)
+  || PathRegexp(`^/api/events/views/[^/]+/stream$`))
+```
+
+Traefik v2 has no `PathRegexp`: use ``Path(`/api/events/views/{id:[^/]+}/stream`)``.
+
+Keep long-lived connections open: no read timeout on the entrypoint (Traefik
+`respondingTimeouts.readTimeout=0`), and for nginx `proxy_read_timeout 1h`,
+`proxy_buffering off` on the SSE paths, `proxy_http_version 1.1` with the
+`Upgrade`/`Connection` headers on `/socket.io/` and `/api/graphql-ws`.
+
+## Sticky sessions
+
+Socket.io's long-polling fallback sends a session's requests as separate HTTP requests; every
+one must reach the realtime task that holds that session, or the task answers `400 Session ID
+unknown` and the client reconnects in a loop. Websockets and SSE are one connection each and do
+not care. So:
+
+- **Traefik**: a sticky cookie on the realtime service only —
+  `loadbalancer.sticky.cookie=true`, `.cookie.name=nvr_rt` (any name: the EFP stack's own
+  deploy config uses `efp_rt_srv`; the two are separate configs), `.cookie.httponly=true`,
+  `.cookie.secure=true`, `.cookie.samesite=lax`. The first polling request gets the cookie; the
+  browser sends it on the rest (same origin).
+- **nginx (open source)**: no cookie stickiness — `ip_hash;` (or `hash $remote_addr consistent;`)
+  on the realtime upstream. People behind one corporate NAT then land on one task; that is fine
+  for polling, which only the clients that cannot open a websocket use.
+- **No stickiness needed** when long-polling is off (`SOCKET_POLLING=off` on the realtime
+  processes): every client must then reach the API over websockets.
+- When a sticky task goes away its cookie points nowhere; Traefik picks a live task and resets
+  the cookie, and the client reconnects (the event journal replays what it missed).
+
+## Readiness
+
+- `/api/ready` on a realtime process requires boot and Redis; the database only warns (a slow
+  database during a reconnect storm must not pull the last realtime task out of the proxy). On
+  web it is unchanged and does not depend on the realtime tier.
+- `/api/preflight` check `realtime` and the readiness check `realtime-tier`: a web or worker
+  process with `SOCKETS=off` **fails** when no realtime process of its own deployment slot beat
+  in the last 45 s, when `REALTIME_EVENT_STREAM=off` (realtime streams hear record changes on
+  the stream), or when an unauthenticated `GET PUBLIC_URL/api/events/stream` is answered by a
+  process without the `X-Nivaro-Role: realtime` header (the proxy route is missing); it **warns**
+  with one realtime process and passes with two. A deploy canary (`NIVARO_ROLE=canary`) only
+  warns.
+- `/api/health` on a realtime process shows its socket count to administrators only.
+- The instance roster (Database → Overview, and the mixed-version readiness check) shows the
+  role, e.g. "4 web, 2 realtime, 1 worker"; entries carry `sockets: false` with `SOCKETS=off`.
+- `/api/metrics` on every process has `nivaro_sockets_connected`; scrape each realtime task
+  directly (`METRICS_TOKEN`) for it and `nodejs_eventloop_lag_max_seconds`.
+
+## Who is viewing what, and extensions
+
+- Several answers come from the sockets: who is viewing a record (the "N viewing" chip,
+  now-editing, skipping an in-app notification for someone looking at the record), who is on a
+  page, the socket list and room sizes (Realtime console, Traffic Map, chaos steady state), the
+  concurrency sample, and "is anyone watching?" before the traffic feed, AI call feed, flow
+  firehose and similar emits. Every process that serves sockets publishes its share to Redis —
+  the **realtime board**, `nvr:rt:board:<slot>:<process>:live` every 1 s (10 s TTL) and
+  `:stats` every 10 s, listed in the registry `nvr:rt:board:<slot>:nodes` (a sorted set by last
+  publish) — and reads the others' back into memory (registry + one MGET, no key scan); a
+  `SOCKETS=off` process only reads. A process merges the others with its own sockets, so these
+  answers cover every process and are at most ~2 s old for the others (the socket list ~20 s),
+  and no request waits on another process. This is not only the tier: several replicas that
+  all serve sockets (single role) share the board too. Every process registers itself every
+  5 s; a process publishes and reads only once another one is registered, so a lone process
+  costs one heartbeat. An in-app notification is skipped for another process's viewer only on
+  a board entry younger than 3 s (a deliver beats a wrong skip), and a process takes its
+  entries off the board as its drain starts. Self-hosted only.
+- The admin `/api/stream` also hears the writes made on the other processes (their journaled
+  record changes, stamped with the write time); before, it heard only the writes of the
+  process it connected to. An admin API key narrowed to named collections sees only those.
+  Gaps: a collection with live updates off journals nothing (its writes elsewhere do not
+  show), and a trash restore shows from other processes but not from the one that restored.
+- If Redis stops answering, every process falls back to its own sockets within 6 s (no frozen
+  viewers from the last good read). In development each API port is its own board slot, so a
+  throwaway API beside the dev API never joins its board.
+- Counts from `POST /api/presence/record-viewers` are given only for records the caller may
+  read. The socket inspector (`/api/realtime/sockets/:id/inspect`) answers 409
+  `SOCKET_ON_REALTIME` with the process name for a socket held by a realtime process.
+- A realtime process rebuilds its GraphQL schema after a configuration change elsewhere only
+  when collections, fields, relations or pipeline bindings changed (a fingerprint of those rows),
+  one check at a time.
+- A `SOCKETS=off` process publishes through the Redis adapter but leaves its broadcast feed and
+  request channel: it decodes no broadcasts and never sits in another process's `fetchSockets`
+  quorum (if leaving the request channel fails it says so in the log and stays in). Answers to a
+  `fetchSockets` go to the asker's own channel only.
+- Record changes reach the realtime processes on the event stream; if an entry goes out by the
+  adapter instead (stream append failed), it is also relayed on the Redis channel
+  `nvr:journal-fallback` (behind `REDIS_CHANNEL_PREFIX`) to every other process's saved-view,
+  SSE and MCP live streams. Batched-mode collections reach SSE consumers on every process too.
+- A reconnecting client re-sends its joins and then asks to catch up at once; the server now
+  waits (up to 3 s) for those joins to land before replaying, so events written during the
+  reconnect are no longer lost.
+- A realtime process loads no extensions. A web or worker process with `SOCKETS=off` therefore
+  **refuses to start** when an extension registers a Socket.io connection handler
+  (`app.io.on('connection')`, any namespace): the handler would never run. Move that work to an
+  event the API emits, or keep sockets on.
+
+Deploy order: realtime first (it needs no migrations, but the web/worker roll runs them), then
+web and worker with `SOCKETS=off`. Roll realtime one task at a time, the new one started first
+(swarm `update_config: {parallelism: 1, order: start-first}`, in the compose file): plain
+`docker compose up -d` recreates both replicas at once and drops every connection. To switch
+back, unset `SOCKETS` on web and drop the realtime router; clients reconnect to web.
+
+`/api/events/stream` on a deployment with several processes now hears record changes written on
+any of them (before, only the writes of the process the stream connected to).
+
+## Sizing: 200-250 people online
+
+About 400 sockets with extra tabs (fewer where browsers share one socket per app through the
+shared worker, `REALTIME_SHARED_WORKER`).
+
+| | Count | Why |
+|---|---|---|
+| realtime | **2** | ~200 sockets each; either one must carry all ~400 alone through a rolling restart or a crash |
+| web | 4 | request handling (the 2026-10-23 load was HTTP handler CPU, not connections) |
+| worker | 1 | crons, imports, media |
+
+Per realtime task: one core; memory limit **1 GiB** with `--max-old-space-size=512`.
+Measured by the realtime CI stack (2026-10-23, 250 people, ~1.6 tabs each, every socket signed
+in, presence and record events flowing):
+
+| | sockets | RSS idle → peak | heap (max) | external (max) | per socket |
+|---|---|---|---|---|---|
+| one task, compression on (default) | 374 | 214 → 367 MiB | 145 MiB | 17 MiB | ~0.41 MiB |
+| one task, `SOCKET_COMPRESSION=off` | 322 | 207 → 274 MiB | 151 MiB | 11 MiB | ~0.21 MiB |
+| two tasks sharing ~400 (compression on) | 199–207 each | 305–312 MiB | ≤137 MiB | ≤15 MiB | |
+
+About half of a socket's cost with compression on is per-message-deflate state outside the V8
+heap. All ~400 sockets on one task (the other restarting) is ~380 MiB RSS: 1 GiB leaves room for
+slow-consumer send buffers (`SOCKET_BUFFER_SOFT_BYTES` 1 MB / hard 8 MB per socket) and a
+reconnect storm; 768 MiB with `--max-old-space-size=384` also holds it, at about half the limit.
+`SOCKET_COMPRESSION=off` halves the per-socket cost for more bandwidth. Watch `nivaro_sockets_connected`, event-loop lag (keep p99
+under 100 ms) and the delivery SLO (Realtime console, 95% under 2 s).
+
+Database connections: realtime 2 x 20, web 4 x (25 + 5), worker 15 + 10 = 185 at most; check
+that against the server's connection limit and lower web's pool before raising replicas.
+
+## Load-test baseline: one tier vs two
+
+`scripts/realtime-load.mjs` drives N signed-in sessions (sockets, presence pings, refetches)
+and reports delivery latency, missed events and server lag per step. Same build, same staging
+host, same tokens, run each layout twice:
+
+1. One tier — web x4 with sockets (no `SOCKETS`, no realtime router):
+
+   ```
+   node scripts/realtime-load.mjs --target https://<staging> --tokens-file ~/load-tokens.txt \
+     --admin-token "$ADMIN_BEARER" --people 250 --two-tab-share 0.6 \
+     --ramp-minutes 10 --steps 5 --hold-minutes 5 --out /tmp/rt-one-tier.json
+   ```
+
+2. Two tiers — realtime x2 up, the realtime router on, web and worker with `SOCKETS=off`;
+   the same command with `--out /tmp/rt-two-tier.json`.
+
+Compare per step: delivery p95/p99 and the share within 2 s, missed events, `/presence/online`
+p95, and event-loop lag. The script's server samples come from `/api/ops-runtime/runtime`, which
+the proxy sends to web; read the realtime tasks' lag and socket counts from their `/api/metrics`
+during the run (or the Traffic Map, whose role panel lists the realtime processes).

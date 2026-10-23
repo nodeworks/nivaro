@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Server as SocketIOServer } from 'socket.io'
+import { boardHasUser, boardMergeOn, boardReaderOn } from './realtime-board.js'
 
 /**
  * How a streamed AI answer reaches the caller (#688). Two transports carry
@@ -45,6 +46,9 @@ export async function userHasSocket(
   if (!io) return false
   const room = `user:${userId}`
   if ((io.sockets.adapter.rooms.get(room)?.size ?? 0) > 0) return true
+  // Post-mortem 3.3 — SOCKETS=off: the realtime processes' board answers without a round trip.
+  if (boardMergeOn() && boardHasUser(userId)) return true
+  if (boardReaderOn()) return false
   try {
     const sockets = await Promise.race([
       io.in(room).fetchSockets(),

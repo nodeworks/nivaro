@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
-import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { checkApiKeyScope, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import {
   emitForceRefresh,
   getClusterClientVersionGroups,
@@ -13,6 +13,8 @@ import {
 } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
+import { boardMergeOn, boardStats } from '../services/realtime-board.js'
+import { visibleRecordIds } from '../services/socket-access.js'
 import { readSocketHealth, socketBufferState } from '../services/socket-health.js'
 import {
   INSPECT_RING,
@@ -40,6 +42,7 @@ import {
   rememberRefresh,
   setMinBuild
 } from '../services/sticky-refresh.js'
+import type { User } from '../types.js'
 import { NIVARO_VERSION } from '../version.js'
 
 /**
@@ -60,8 +63,36 @@ export async function recordViewersRoutes(app: FastifyInstance): Promise<void> {
       const pairs = (req.body?.pairs ?? []).slice(0, 200)
       const snapshot = getRecordViewerSnapshot()
       const out: Record<string, number> = {}
+      // Only records the caller may read (the record-room gate, one batched read per
+      // collection): a count for any other record would say it exists and is being worked on.
+      const byCollection = new Map<string, Set<string>>()
       for (const p of pairs) {
         if (!p?.collection || p.item_id == null) continue
+        const hit = snapshot.find(
+          (v) => v.collection === p.collection && String(v.item) === String(p.item_id)
+        )
+        if (!hit?.viewers.length) continue
+        let ids = byCollection.get(p.collection)
+        if (!ids) {
+          ids = new Set()
+          byCollection.set(p.collection, ids)
+        }
+        ids.add(String(p.item_id))
+      }
+      const readable = new Set<string>()
+      const user = req.user as User
+      // An API key narrows even an administrator: its collection scopes first, then the full
+      // read gate (never the admin short cut) so its row restrictions apply too.
+      const keyNarrowed = !!(user.api_key_scopes || user.api_key_scope_restrictions?.length)
+      const admin = !!req.isAdmin && !keyNarrowed
+      for (const [collection, ids] of byCollection) {
+        if (!checkApiKeyScope(req, 'read', collection)) continue
+        for (const id of await visibleRecordIds(user, collection, [...ids], admin))
+          readable.add(`${collection}:${id}`)
+      }
+      for (const p of pairs) {
+        if (!p?.collection || p.item_id == null) continue
+        if (!readable.has(`${p.collection}:${p.item_id}`)) continue
         const hit = snapshot.find(
           (v) => v.collection === p.collection && String(v.item) === String(p.item_id)
         )
@@ -153,6 +184,13 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
    * switches itself off when nobody reads it for 10 minutes. This node's sockets, the caller's
    * tenant only; sign-in rooms are never listed.
    */
+  /** SOCKETS=off: the socket is held by a realtime process, which keeps its inspector ring. */
+  const heldElsewhere = (id: string): string | null => {
+    if (!boardMergeOn()) return null
+    // The other processes' socket lists (never this one's own: those inspect here).
+    for (const b of boardStats()) if (b.sockets?.some((x) => x.id === id)) return String(b.node)
+    return null
+  }
   const inspectTarget = (id: string) => {
     const scope = tenantScope()
     const sock = scopeRealtimeStats(getRealtimeStats(), scope).sockets.find((s) => s.id === id)
@@ -179,7 +217,19 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
     }
   }
 
+  const refuseElsewhere = (id: string, reply: import('fastify').FastifyReply) => {
+    const node = heldElsewhere(id)
+    if (!node) return null
+    return reply.code(409).send({
+      error: `This client is connected to realtime process ${node}; the inspector records on the process that holds the socket.`,
+      code: 'SOCKET_ON_REALTIME',
+      node
+    })
+  }
+
   app.get<{ Params: { id: string } }>('/sockets/:id/inspect', async (req, reply) => {
+    const elsewhere = refuseElsewhere(String(req.params.id), reply)
+    if (elsewhere) return elsewhere
     const view = inspectView(String(req.params.id))
     if (!view) return reply.code(404).send({ error: 'Client not connected to this node' })
     return { data: view }
@@ -187,6 +237,8 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { id: string } }>('/sockets/:id/inspect', async (req, reply) => {
     const id = String(req.params.id)
+    const elsewhere = refuseElsewhere(id, reply)
+    if (elsewhere) return elsewhere
     const hit = inspectTarget(id)
     if (!hit) return reply.code(404).send({ error: 'Client not connected to this node' })
     if (!startInspect(id, hit.scope))
@@ -196,6 +248,8 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>('/sockets/:id/inspect', async (req, reply) => {
     const id = String(req.params.id)
+    const elsewhere = refuseElsewhere(id, reply)
+    if (elsewhere) return elsewhere
     if (!inspectTarget(id))
       return reply.code(404).send({ error: 'Client not connected to this node' })
     stopInspect(id)

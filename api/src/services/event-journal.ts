@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import {
   flushDurable,
@@ -147,7 +148,25 @@ export async function journaledEmit(
     }
   }
   // No sequence, no stream, or the append failed: the adapter's pub/sub as before.
-  if (path === 'adapter') io.to(room).emit(event, out)
+  if (path === 'adapter') {
+    io.to(room).emit(event, out)
+    // Post-mortem 3.3 — the other processes' journal listeners (saved-view and SSE streams,
+    // pushed widgets, MCP live sessions) hear stream entries only; on this path they hear it on
+    // a plain Redis channel every process subscribes to (SOCKETS=off ones included).
+    if (seq != null && typeof _redis?.publish === 'function')
+      void Promise.resolve()
+        .then(() =>
+          _redis?.publish(
+            fallbackChannel(),
+            JSON.stringify({
+              node: FALLBACK_NODE,
+              at: Date.now(),
+              entry: { seq, room, event, payload }
+            })
+          )
+        )
+        .catch(() => {})
+  }
   // #1675 / #1680 — pushed widgets and saved-view streams hear this process's own writes here.
   if (!opts.selfViaStream) notifyJournalListeners({ seq, room, event, payload })
   if (observer) {
@@ -158,6 +177,54 @@ export async function journaledEmit(
     }
   }
   return { seq, path, room }
+}
+
+/** Redis channel carrying journal entries that went out without the event stream. */
+export const fallbackChannel = () => `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:journal-fallback`
+const FALLBACK_NODE = randomUUID()
+
+/** One fallback message for this process's listeners (its own messages are skipped). */
+export function receiveJournalFallback(raw: string): void {
+  let msg: { node?: unknown; at?: unknown; entry?: Partial<JournalEntry> } | null = null
+  try {
+    msg = JSON.parse(raw)
+  } catch {
+    return
+  }
+  const entry = msg?.entry
+  if (!entry || msg?.node === FALLBACK_NODE) return
+  if (typeof entry.room !== 'string' || typeof entry.event !== 'string') return
+  notifyJournalListeners(
+    {
+      seq: typeof entry.seq === 'number' ? entry.seq : null,
+      room: entry.room,
+      event: entry.event,
+      payload: (entry.payload as Record<string, unknown>) ?? {}
+    },
+    'remote',
+    typeof msg?.at === 'number' ? msg.at : undefined
+  )
+}
+
+let fallbackSub: Redis | null = null
+
+/** Subscribe this process to the fallback channel. Idempotent; returns the stop function. */
+export function wireJournalFallback(redis: Redis | null | undefined): () => Promise<void> {
+  if (!redis || fallbackSub) return async () => {}
+  const sub = redis.duplicate()
+  fallbackSub = sub
+  sub.on('error', () => {
+    /* reconnects on its own; the stream is the main path */
+  })
+  sub.on('message', (channel: string, raw: string) => {
+    if (channel === fallbackChannel()) receiveJournalFallback(raw)
+  })
+  void sub.subscribe(fallbackChannel()).catch(() => {})
+  return async () => {
+    if (fallbackSub !== sub) return
+    fallbackSub = null
+    await sub.quit().catch(() => sub.disconnect())
+  }
 }
 
 /** Replay events after `cursor` for the given rooms. */

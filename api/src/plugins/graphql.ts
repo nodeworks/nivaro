@@ -4,6 +4,7 @@ import {
   execute,
   GraphQLError,
   type GraphQLSchema,
+  getOperationAST,
   Kind,
   parse,
   subscribe,
@@ -166,7 +167,10 @@ export async function rebuildGraphQLSchema(): Promise<void> {
   }
 }
 
-export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
+export async function graphqlPlugin(
+  app: import('fastify').FastifyInstance,
+  opts: { streamsOnly?: boolean } = {}
+) {
   /**
    * Who a graphql-ws connection signed in as, resolved once per connection: a one-shot stream
    * ticket in connectionParams (`{ ticket }` from GET /api/events/ticket — sessions, View-as and
@@ -339,6 +343,13 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       )
     if (config.NODE_ENV !== 'development') await build
   })
+
+  // Post-mortem 3.3 — a realtime process (NIVARO_ROLE=realtime) carries the subscription
+  // transports only; queries, mutations and the admin routes stay on the web processes.
+  if (opts.streamsOnly) {
+    app.log.info('GraphQL subscriptions registered (graphql-ws, /api/graphql/stream)')
+    return
+  }
 
   // ── GraphiQL explorer ────────────────────────────────────────────────────
   app.get('/graphql', async (_req, reply) => {
@@ -605,6 +616,16 @@ function costRefusal(document: DocumentNode, user: User | undefined): GraphQLErr
  * (#2126) as the subscriber; anything else executes once.
  */
 export function executeOrLive(args: ExecutionArgs) {
+  // Post-mortem 3.3 review — the subscription transports only read. A mutation here would
+  // skip the request pipeline (and on a realtime process every hook, extension and webhook).
+  if (getOperationAST(args.document, args.operationName)?.operation === 'mutation')
+    return {
+      errors: [
+        new GraphQLError('Send mutations to POST /api/graphql; this stream only reads', {
+          extensions: { code: 'MUTATION_NOT_ALLOWED' }
+        })
+      ]
+    }
   const ctx = (args.contextValue ?? {}) as WsContext
   const refused = costRefusal(args.document, ctx.user)
   if (refused) return { errors: [refused] }

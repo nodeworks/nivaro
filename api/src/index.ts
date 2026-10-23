@@ -18,6 +18,7 @@ import { registerQueueMaterializationHooks } from './hooks/queue-materialization
 import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
 import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
 import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
+import { buildRealtimeServer } from './realtime-server.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
 import {
@@ -35,9 +36,17 @@ import {
 } from './services/boot-phases.js'
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
 import { installProcessGuards } from './services/process-guards.js'
+import { isRealtimeRole } from './services/process-role.js'
 import { NIVARO_VERSION } from './version.js'
 
 async function main() {
+  // Post-mortem 3.3 — NIVARO_ROLE=realtime holds live connections only (realtime-server.ts):
+  // no hooks, no migrations, no event flows. Self-hosted only.
+  const realtime = isRealtimeRole()
+  if (realtime && process.env.CLOUD_META_DB_URL) {
+    console.error('NIVARO_ROLE=realtime is self-hosted only — unset it in cloud mode.')
+    process.exit(1)
+  }
   // After a host reboot the database and Redis may come back after this
   // process: wait for them with backoff rather than crash-looping until the
   // orchestrator's restart budget runs out (services/boot-dependencies.ts).
@@ -60,7 +69,8 @@ async function main() {
 
   // Hook registrations query the DB immediately at startup — skip in cloud mode.
   // In cloud mode, per-tenant hooks fire per-request via the tenant middleware.
-  if (!process.env.CLOUD_META_DB_URL) {
+  // A realtime process writes no records through the items service: no hooks.
+  if (!process.env.CLOUD_META_DB_URL && !realtime) {
     registerActivityHooks()
     registerFieldWatchHooks()
     registerNotificationSubscriptionHooks()
@@ -85,6 +95,10 @@ async function main() {
   // /api/ready still reports any pending files.
   if (process.env.SKIP_BOOT_MIGRATIONS === '1') {
     console.log('Migrations: skipped (SKIP_BOOT_MIGRATIONS=1)')
+  } else if (realtime) {
+    console.log(
+      'Migrations: skipped (NIVARO_ROLE=realtime — the web and worker processes run them)'
+    )
   } else if (!process.env.CLOUD_META_DB_URL) {
     // #2803 — a config restore point first when anything is pending (time-boxed, never fails boot).
     await bootPhase('Config snapshot before migrations', async () => {
@@ -127,13 +141,15 @@ async function main() {
     }
   }
 
-  const app = await bootPhase('Server: plugins, routes, extensions', () => buildServer())
+  const app = realtime
+    ? await bootPhase('Realtime server: sockets and streams', () => buildRealtimeServer())
+    : await bootPhase('Server: plugins, routes, extensions', () => buildServer())
   // A stray rejected promise (e.g. a Redis command flushed while Redis restarts) is logged,
   // never a crash of a serving process.
   installProcessGuards(app.log)
 
-  // These all query the static DB at startup — skip in cloud mode.
-  if (!process.env.CLOUD_META_DB_URL) {
+  // These all query the static DB at startup — skip in cloud mode (and on a realtime process).
+  if (!process.env.CLOUD_META_DB_URL && !realtime) {
     await bootPhase('Event flows', () => loadEventFlows(app))
     setFieldWatchApp(app)
     setSubscriptionApp(app)
