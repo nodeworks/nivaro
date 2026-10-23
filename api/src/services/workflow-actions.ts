@@ -26,8 +26,8 @@ import {
   registerPayloadFilters
 } from './payload-filters.js'
 import {
-  getTemplate,
   PayloadTemplateError,
+  publishedTemplateInfo,
   registeredDef,
   renderPayloadTemplate
 } from './payload-templates/index.js'
@@ -496,19 +496,20 @@ async function actingUser(
 type TemplateInfo = { lookups: Record<string, unknown> | null; external_api: string | null }
 
 /**
- * The registrar's in-process def answers first; a template without one (created in the UI,
- * installed from a blueprint) is read from its row. Null = unknown or unreadable (the render
- * then reports it).
+ * A push reads only what is PUBLISHED: the template row's published lookups (cached, never the
+ * draft's), whoever created it. A registered template whose row is not readable falls back to
+ * the registrar's declared lookups (the ones it seeds as published). Null = unknown or
+ * unreadable (the render then reports it).
  */
 async function templateInfo(key: string): Promise<TemplateInfo | null> {
-  const def = registeredDef(key)
-  if (def) return { lookups: def.lookups ?? null, external_api: def.external_api ?? null }
   try {
-    const row = await getTemplate(key)
-    return row ? { lookups: row.lookups, external_api: row.external_api } : null
+    const published = await publishedTemplateInfo(key)
+    if (published) return published
   } catch {
-    return null
+    /* fall through to the registrar's declaration */
   }
+  const def = registeredDef(key)
+  return def ? { lookups: def.lookups ?? null, external_api: def.external_api ?? null } : null
 }
 
 /**

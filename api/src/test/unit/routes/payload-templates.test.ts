@@ -183,6 +183,7 @@ type FakeRow = {
   published_version: number | null
   locked_keys: string[]
   lookups: Record<string, unknown> | null
+  draft_lookups: Record<string, unknown> | null
   default_hash: string | null
 }
 const svc = vi.hoisted(() => ({
@@ -238,6 +239,15 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
       })
       return { ok: true, rev: r.draft_rev }
     },
+    saveDraftLookups: async (
+      key: string,
+      input: { lookups: Record<string, unknown> | null; base_rev: number }
+    ) => {
+      const r = need(key)
+      if (r.draft_rev !== input.base_rev) return { ok: false, current: structuredClone(r) }
+      Object.assign(r, { draft_lookups: input.lookups, draft_rev: r.draft_rev + 1 })
+      return { ok: true, rev: r.draft_rev }
+    },
     publishDraft: async (key: string, input: { base_rev: number; note: string }) => {
       const r = need(key)
       if (r.draft_rev !== input.base_rev) return { ok: false, current: structuredClone(r) }
@@ -245,7 +255,8 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
       Object.assign(r, {
         published_mode: r.draft_mode,
         published_body: r.draft_body,
-        published_version: version
+        published_version: version,
+        lookups: r.draft_lookups
       })
       return { ok: true, version }
     },
@@ -346,6 +357,7 @@ const tpl = (over: Partial<FakeRow>): FakeRow => ({
   published_version: 2,
   locked_keys: [],
   lookups: null,
+  draft_lookups: null,
   default_hash: null,
   ...over
 })
@@ -743,7 +755,8 @@ describe('payload template routes', () => {
   it('builds the plain-record scope with the template lookups when nothing else applies', async () => {
     fake.tables.nivaro_workflow_transitions = []
     const row = svc.rows.get('mwf-ir-order') as FakeRow
-    row.lookups = { mwf_queue: { collection: 'mwf_queue', filter: { ir: '$id' } } }
+    // A draft preview reads the draft's lookups.
+    row.draft_lookups = { mwf_queue: { collection: 'mwf_queue', filter: { ir: '$id' } } }
     const res = await call('POST', '/mwf-ir-order/preview', { id: '11', which: 'draft' })
     expect(res.status).toBe(200)
     // Raw row, lookups as context, no state.
@@ -823,5 +836,145 @@ describe('payload template routes', () => {
     const res = await call('GET', '/mwf-ir-order/record-search?q=WF')
     expect(res.status).toBe(403)
     expect(res.body).toEqual({ error: 'search_failed', message: 'Forbidden' })
+  })
+
+  it('answers the recent-records set and checks exactly the ids given', async () => {
+    const recent = await call('GET', '/mwf-ir-order/recent?limit=20')
+    expect(recent.status).toBe(200)
+    expect(recent.body).toEqual({ ids: ['12', '11'] })
+    expect((await call('GET', '/mwf-ir-order/recent?limit=1')).body).toEqual({ ids: ['12'] })
+
+    const one = await call('POST', '/mwf-ir-order/check', { which: 'draft', ids: ['11'] })
+    expect(one.status).toBe(200)
+    expect(one.body.results).toEqual([
+      expect.objectContaining({ id: '11', label: 'IR-11', ok: true })
+    ])
+    expect(withReadGate).toHaveBeenCalledTimes(1)
+
+    const tooMany = await call('POST', '/mwf-ir-order/check', {
+      which: 'draft',
+      ids: Array.from({ length: 51 }, (_, i) => String(i))
+    })
+    expect(tooMany.status).toBe(400)
+    expect((await call('POST', '/mwf-ir-order/check', { ids: [{}] })).status).toBe(400)
+  })
+
+  it('never answers recent ids for a system collection', async () => {
+    svc.rows.set('sys', tpl({ id: 50, key: 'sys', collection: 'nivaro_users' }))
+    fake.reads.length = 0
+    const res = await call('GET', '/sys/recent')
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('collection_refused')
+    expect(fake.reads).not.toContain('nivaro_users')
+  })
+
+  it('saves lookups to the draft under the revision guard; publish makes them live', async () => {
+    const lookups = {
+      lines: {
+        collection: 'materials',
+        filter: { workflow: '$id' },
+        sort: '-id',
+        limit: 50,
+        expand: { item: { collection: 'items', fields: ['code'] } }
+      }
+    }
+    const row = svc.rows.get('mwf-ir-order') as FakeRow
+    const ok = await call('PUT', '/mwf-ir-order/lookups', { lookups, base_rev: 3 })
+    expect(ok.status).toBe(200)
+    expect(ok.body).toEqual({ rev: 4, data: { lookups } })
+    // Only the draft moved: pushes still read the published (none).
+    expect(row.draft_lookups).toEqual(lookups)
+    expect(row.lookups).toBeNull()
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'payload-template-lookups', item: 'mwf-ir-order' })
+    )
+    // Different lookups = something to publish, even with the same body.
+    const listed = await call('GET', '?external_api=MWF')
+    expect(listed.body.data.find((t: Row) => t.key === 'mwf-ir-order').status).toBe('draft')
+
+    const stale = await call('PUT', '/mwf-ir-order/lookups', { lookups: null, base_rev: 3 })
+    expect(stale.status).toBe(409)
+    expect(stale.body.error).toBe('stale')
+    expect(stale.body.current.draft_rev).toBe(4)
+    expect(row.draft_lookups).toEqual(lookups)
+
+    // Someone published since the editor loaded (it saw v1; live is v2): stale too.
+    const moved = await call('PUT', '/mwf-ir-order/lookups', {
+      lookups: null,
+      base_rev: 4,
+      base_published_version: 1
+    })
+    expect(moved.status).toBe(409)
+    expect(moved.body.current.published_version).toBe(2)
+    expect(row.draft_lookups).toEqual(lookups)
+    const seen = await call('PUT', '/mwf-ir-order/lookups', {
+      lookups,
+      base_rev: 4,
+      base_published_version: 2
+    })
+    expect(seen.body.rev).toBe(5)
+
+    const published = await call('POST', '/mwf-ir-order/publish', { base_rev: 5, note: 'lines' })
+    expect(published.status).toBe(200)
+    expect(row.lookups).toEqual(lookups)
+    const after = await call('GET', '?external_api=MWF')
+    expect(after.body.data.find((t: Row) => t.key === 'mwf-ir-order').status).toBe('live')
+  })
+
+  it('previews the draft with its lookups, the published version with the published ones', async () => {
+    fake.tables.nivaro_workflow_transitions = []
+    const row = svc.rows.get('mwf-ir-order') as FakeRow
+    row.draft_lookups = { mwf_queue: { collection: 'mwf_queue', filter: { ir: '$id' } } }
+    const draft = await call('POST', '/mwf-ir-order/preview', { id: '11', which: 'draft' })
+    expect(draft.body.body.queue).toBe('Q-7')
+    const live = await call('POST', '/mwf-ir-order/preview', { id: '11', which: 'published' })
+    expect(live.body.body.queue).toBeUndefined()
+    // Lookups sent with a preview are checked like saved ones.
+    const sys = await call('POST', '/mwf-ir-order/preview', {
+      id: '11',
+      which: 'draft',
+      draft: { mode: 'map', body: SPEC, lookups: { a: { collection: 'nivaro_users' } } }
+    })
+    expect(sys.status).toBe(400)
+    const sent = await call('POST', '/mwf-ir-order/preview', {
+      id: '11',
+      which: 'draft',
+      draft: { mode: 'map', body: SPEC, lookups: null }
+    })
+    expect(sent.body.body.queue).toBeUndefined()
+  })
+
+  it('refuses bad lookups, system collections and a registrar’s lookups', async () => {
+    const bad = await call('PUT', '/mwf-ir-order/lookups', {
+      base_rev: 3,
+      lookups: {
+        a: { collection: 'nivaro_users' },
+        b: { collection: 'items', expand: { u: { collection: 'directus_users', fields: ['x'] } } },
+        c: { collection: 'items', limit: 0, sort: 'id; drop', extra: 1 },
+        '1x': { collection: 'items' }
+      }
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.body.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^a\.collection: 'nivaro_users' is a system collection/),
+        expect.stringMatching(/^b\.expand\.u\.collection: 'directus_users' is a system/),
+        'c.extra is not a lookup setting',
+        expect.stringMatching(/^c\.limit/),
+        expect.stringMatching(/^c\.sort/),
+        expect.stringMatching(/^'1x'/)
+      ])
+    )
+    expect((svc.rows.get('mwf-ir-order') as FakeRow).draft_lookups).toBeNull()
+    expect((await call('PUT', '/mwf-ir-order/lookups', {})).status).toBe(400)
+    expect((await call('PUT', '/mwf-ir-order/lookups', { lookups: null })).status).toBe(400)
+
+    const owned = await call('PUT', '/fusion-transfer-order/lookups', {
+      lookups: null,
+      base_rev: 3
+    })
+    expect(owned.status).toBe(409)
+    expect(owned.body.error).toBe('registered')
+    expect((await call('PUT', '/nope/lookups', { lookups: null, base_rev: 1 })).status).toBe(404)
   })
 })

@@ -1,5 +1,5 @@
 import { TipLayer } from '@nivaro/shared'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ArrowRight,
@@ -8,11 +8,11 @@ import {
   History,
   ListChecks,
   MoreHorizontal,
-  RotateCcw,
-  X
+  RotateCcw
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
@@ -24,8 +24,12 @@ import {
   detailStatus,
   draftOf,
   errorMessage,
+  fetchTemplate,
   formatEt,
   httpStatus,
+  payloadKeys,
+  publishedOf,
+  sameBody,
   staleCurrent,
   type TemplateDetail,
   useDebounced,
@@ -35,12 +39,27 @@ import {
   useTemplate,
   useTemplates
 } from './api'
+import { CheckRecentPanel } from './CheckRecentPanel'
+import { ConflictPanel, conflictText } from './ConflictPanel'
+import { DefaultPanel, useTakeDefault } from './DefaultPanel'
 import { type EditorTab, EditorTabs } from './EditorTabs'
+import { PayloadEditorContext, type PayloadEditorCtx } from './editor-context'
+import { HistoryPanel } from './HistoryPanel'
 import { PreviewPane, type PreviewView } from './PreviewPane'
+import { PublishPanel } from './PublishPanel'
+import {
+  defaultLookupsOf,
+  defaultOf,
+  draftLookupsOf,
+  liveLookupsOf,
+  sameLookups,
+  serverErrors
+} from './panel-api'
+import { OUTLINE_BTN } from './panel-parts'
 import { TemplateList } from './TemplateList'
 
-/** What the preview column shows instead of the preview (Task 12 fills these). */
-export type EditorPanel = 'publish' | 'check' | 'history' | 'default'
+/** What the preview column shows instead of the preview. */
+export type EditorPanel = 'publish' | 'check' | 'history' | 'default' | 'conflict'
 
 const AUTOSAVE_MS = 800
 const PREVIEW_DEBOUNCE_MS = 300
@@ -70,7 +89,7 @@ type SaveState =
   | { kind: 'pending' }
   | { kind: 'saving' }
   | { kind: 'saved'; at: string }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; errors: string[] }
   | { kind: 'conflict'; current: TemplateDetail }
 
 /**
@@ -80,7 +99,7 @@ type SaveState =
  * and stops autosave until the person reloads or keeps their draft. Switching
  * templates or leaving the page flushes a pending save immediately.
  */
-function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) {
+export function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) {
   const save = useSaveDraft()
   // The mutation result is a new object every render; run() must stay stable.
   const saveRef = useRef(save)
@@ -96,9 +115,25 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const keyRef = useRef(key)
   keyRef.current = key
+  /** The save in flight, so saveNow can wait for it. */
+  const current = useRef<Promise<void> | null>(null)
+  /** Whether the last save attempt failed (cleared by the next success). */
+  const failed = useRef(false)
+  const [rev, setRev] = useState<number | null>(null)
 
-  const run = useCallback(async () => {
-    if (inFlight.current || blocked.current || !pending.current) return
+  // The save loop lives in a ref, refreshed every render, so `run` stays stable and never calls
+  // a stale closure.
+  const runOnceRef = useRef<() => Promise<void>>(async () => {})
+  const run = useCallback((): Promise<void> => {
+    if (inFlight.current) return current.current ?? Promise.resolve()
+    if (blocked.current || !pending.current) return Promise.resolve()
+    const p = runOnceRef.current()
+    current.current = p
+    return p
+  }, [])
+
+  runOnceRef.current = async function runOnce() {
+    if (!pending.current) return
     const job = pending.current
     pending.current = null
     inFlight.current = true
@@ -113,27 +148,49 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
         base_published_version: loadedVersions.current[job.key] ?? null
       })
       revs.current[job.key] = res.rev
+      failed.current = false
+      if (keyRef.current === job.key) setRev(res.rev)
       if (keyRef.current === job.key && !pending.current)
         setState({ kind: 'saved', at: new Date().toISOString() })
     } catch (e) {
-      const current = staleCurrent(e)
-      if (current) {
+      failed.current = true
+      const stale = staleCurrent(e)
+      if (stale) {
         blocked.current = true
         // Keep the newest local edit queued so "Keep my draft" sends it.
         pending.current = pending.current ?? job
-        if (keyRef.current === job.key) setState({ kind: 'conflict', current })
+        if (keyRef.current === job.key) setState({ kind: 'conflict', current: stale })
       } else {
         if (!pending.current) {
           pending.current = job
           waitForRetry = true
         }
         if (keyRef.current === job.key)
-          setState({ kind: 'error', message: errorMessage(e, 'The draft was not saved') })
+          setState({
+            kind: 'error',
+            message: errorMessage(e, 'The draft was not saved'),
+            errors: serverErrors(e)
+          })
       }
     } finally {
       inFlight.current = false
+      current.current = null
       if (pending.current && !blocked.current && !waitForRetry) void run()
     }
+  }
+
+  /** A draft write made outside autosave (the lookups) moved the rev to `r`. */
+  const bumpRev = useCallback((k: string, r: number) => {
+    revs.current[k] = r
+    if (keyRef.current === k) setRev(r)
+  }, [])
+
+  /** The published version template `k` was loaded at (what draft writes are based on). */
+  const getLoadedVersion = useCallback((k: string) => loadedVersions.current[k] ?? null, [])
+
+  /** Our own publish moved the live version: later saves are not conflicts with it. */
+  const markPublished = useCallback((k: string, version: number) => {
+    loadedVersions.current[k] = version
   }, [])
 
   const flush = useCallback(() => {
@@ -141,6 +198,43 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
     timer.current = null
     void run()
   }, [run])
+
+  /**
+   * Send the waiting edit now and wait until nothing is waiting or in flight.
+   * True = the draft on the server is the local draft; false = a save failed or a conflict
+   * blocks saving (the state says which).
+   */
+  const saveNow = useCallback(async (): Promise<boolean> => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    // Bounded: each pass either finishes a save or stops on a failure.
+    for (let i = 0; i < 10; i++) {
+      if (blocked.current) return false
+      if (inFlight.current) {
+        await current.current
+        continue
+      }
+      if (!pending.current) return !failed.current
+      await run()
+      if (failed.current) return false
+    }
+    return !pending.current && !failed.current
+  }, [run])
+
+  /** Drop the waiting edit and wait out a save in flight (the server is about to replace the draft). */
+  const discardPending = useCallback(async () => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    pending.current = null
+    if (inFlight.current) await current.current
+    pending.current = null
+  }, [])
+
+  /** A 409 seen by publish / convert: stop autosave and show the conflict banner. */
+  const raiseConflict = useCallback((stale: TemplateDetail) => {
+    blocked.current = true
+    if (keyRef.current === stale.key) setState({ kind: 'conflict', current: stale })
+  }, [])
 
   // Start from the stored draft the first time a template's row arrives.
   useEffect(() => {
@@ -151,6 +245,8 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
     // A conflicted edit of another template is never sent behind the person's back.
     if (blocked.current && pending.current && pending.current.key !== key) pending.current = null
     blocked.current = false
+    failed.current = false
+    setRev(detail.draft_rev)
     setLocal({ key, draft: draftOf(detail) })
     setState({ kind: 'idle' })
   }, [detail, key, local?.key])
@@ -187,8 +283,10 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
   const reload = useCallback((current: TemplateDetail) => {
     pending.current = null
     blocked.current = false
+    failed.current = false
     revs.current[current.key] = current.draft_rev
     loadedVersions.current[current.key] = current.published_version ?? null
+    if (keyRef.current === current.key) setRev(current.draft_rev)
     setLocal({ key: current.key, draft: draftOf(current) })
     setState({ kind: 'idle' })
   }, [])
@@ -205,14 +303,31 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
     [local, flush]
   )
 
+  const getRev = useCallback(
+    () => (keyRef.current ? (revs.current[keyRef.current] ?? null) : null),
+    []
+  )
+
   const draft = local && local.key === key ? local.draft : null
-  return { draft, change, state, reload, keepMine, retry: flush }
+  return {
+    draft,
+    change,
+    state,
+    reload,
+    keepMine,
+    retry: flush,
+    saveNow,
+    discardPending,
+    raiseConflict,
+    markPublished,
+    bumpRev,
+    getLoadedVersion,
+    rev,
+    getRev
+  }
 }
 
 // ─── Header pieces ───────────────────────────────────────────────────────────
-
-const OUTLINE_BTN =
-  'inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
 
 function SaveStatus({ state, onRetry }: { state: SaveState; onRetry: () => void }) {
   if (state.kind === 'idle' || state.kind === 'conflict') return null
@@ -364,31 +479,94 @@ const PANEL_TITLES: Record<EditorPanel, string> = {
   publish: 'Publish',
   check: 'Check recent records',
   history: 'History',
-  default: 'File default'
+  default: 'File default',
+  conflict: 'Review the diff'
 }
 
-/** STUB — Task 12 swaps in CheckRecentPanel / PublishPanel / HistoryPanel here. */
-function PanelArea({ panel, onClose }: { panel: EditorPanel; onClose: () => void }) {
+/** The preview column's place, taken by Publish / Check / History / File default / the 409 diff. */
+function PanelArea({
+  panel,
+  template,
+  draft,
+  conflict,
+  nothingToPublish,
+  warning,
+  recordId,
+  onRecordChange,
+  onPreview,
+  onOpenPanel,
+  onReload,
+  onKeep,
+  onClose
+}: {
+  panel: EditorPanel
+  template: TemplateDetail
+  draft: DraftBody
+  conflict: TemplateDetail | null
+  nothingToPublish: boolean
+  warning: string | null
+  recordId: string | null
+  onRecordChange: (id: string) => void
+  onPreview: (id: string) => void
+  onOpenPanel: (p: EditorPanel) => void
+  onReload: (current: TemplateDetail) => void
+  onKeep: (current: TemplateDetail) => void
+  onClose: () => void
+}) {
+  if (panel === 'publish')
+    return (
+      <PublishPanel
+        template={template}
+        draft={draft}
+        nothingToPublish={nothingToPublish}
+        warning={warning}
+        recordId={recordId}
+        onRecordChange={onRecordChange}
+        onPreview={onPreview}
+        onClose={onClose}
+      />
+    )
+  if (panel === 'check')
+    return <CheckRecentPanel template={template} onClose={onClose} onPreview={onPreview} />
+  if (panel === 'history')
+    return (
+      <HistoryPanel
+        template={template}
+        draft={draft}
+        recordId={recordId}
+        onRecordChange={onRecordChange}
+        onOpenDefault={() => onOpenPanel('default')}
+        onClose={onClose}
+      />
+    )
+  if (panel === 'default')
+    return (
+      <DefaultPanel
+        template={template}
+        draft={draft}
+        recordId={recordId}
+        onRecordChange={onRecordChange}
+        onClose={onClose}
+      />
+    )
+  if (!conflict) return null
   return (
-    <div className='flex min-h-0 flex-1 flex-col' data-payload-panel={panel}>
-      <div className='flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
-        <p className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
-          {PANEL_TITLES[panel]}
-        </p>
-        <span className='flex-1' />
-        <button
-          type='button'
-          onClick={onClose}
-          className='inline-flex items-center gap-1 rounded px-1.5 py-1 text-[12px] text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-muted dark:hover:text-foreground'
-        >
-          <X className='h-3.5 w-3.5' />
-          Back to preview
-        </button>
-      </div>
-      <p className='px-4 py-4 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-        This panel arrives with Task 12.
-      </p>
-    </div>
+    <ConflictPanel
+      loaded={template}
+      current={conflict}
+      draft={draft}
+      recordId={recordId}
+      onRecordChange={onRecordChange}
+      onReload={() => {
+        onReload(conflict)
+        onClose()
+      }}
+      onKeep={() => {
+        onKeep(conflict)
+        onClose()
+      }}
+      onClose={onClose}
+    />
   )
 }
 
@@ -449,29 +627,24 @@ function ConflictBanner({
   current,
   loaded,
   onReload,
-  onKeep
+  onKeep,
+  onReview
 }: {
   current: TemplateDetail
   loaded: TemplateDetail
   onReload: () => void
   onKeep: () => void
+  onReview: () => void
 }) {
-  const published =
-    current.published_version != null &&
-    current.published_version !== (loaded.published_version ?? null)
-  const who = (published ? current.published_by_name : current.draft_updated_by_name) || 'Someone'
+  const link =
+    'h-7 rounded-md px-2.5 font-medium underline underline-offset-2 hover:bg-amber-100 dark:hover:bg-amber-500/15'
   return (
     <div
       className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-[12.5px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
       role='alert'
       data-payload-conflict
     >
-      <p className='min-w-0 flex-1'>
-        {published
-          ? `${who} published v${current.published_version} while you edited.`
-          : `${who} saved this draft while you edited.`}{' '}
-        Reload, or keep your draft and review the diff.
-      </p>
+      <p className='min-w-0 flex-1'>{conflictText(current, loaded)}</p>
       <button
         type='button'
         onClick={onReload}
@@ -479,13 +652,73 @@ function ConflictBanner({
       >
         Reload
       </button>
-      <button
-        type='button'
-        onClick={onKeep}
-        className='h-7 rounded-md px-2.5 font-medium underline underline-offset-2 hover:bg-amber-100 dark:hover:bg-amber-500/15'
-      >
+      <button type='button' onClick={onKeep} className={link}>
         Keep my draft
       </button>
+      <button type='button' onClick={onReview} className={link} data-payload-conflict-review>
+        Review the diff
+      </button>
+    </div>
+  )
+}
+
+/** "<owner> ships a newer default" + Use as draft (straight away when nothing would be lost). */
+function NewerDefaultBanner({
+  template,
+  draft,
+  onReview
+}: {
+  template: TemplateDetail
+  draft: DraftBody
+  onReview: () => void
+}) {
+  const owner = template.owner ?? 'The extension'
+  const { take, pending } = useTakeDefault(template)
+  const def = defaultOf(template)
+  const live = publishedOf(template)
+  const draftLk = draftLookupsOf(template)
+  const holdsDefault =
+    !!def && sameBody(def, draft) && sameLookups(defaultLookupsOf(template), draftLk)
+  // Nothing unpublished and no mode switch → nothing to lose, so no extra step.
+  const direct =
+    !!def &&
+    !!live &&
+    sameBody(draft, live) &&
+    sameLookups(draftLk, liveLookupsOf(template)) &&
+    def.mode === draft.mode
+  const use = async () => {
+    if (!direct) return onReview()
+    const err = await take()
+    if (err) toast.error(err)
+  }
+  return (
+    <div
+      className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-200 bg-white px-5 py-2 text-[12.5px] text-slate-700 dark:border-border dark:bg-card dark:text-slate-200'
+      data-payload-newer-default
+    >
+      <p className='min-w-0 flex-1'>
+        {holdsDefault
+          ? `The draft holds the newer ${owner} default. Publish it to make it live.`
+          : `${owner} ships a newer default`}
+      </p>
+      <button
+        type='button'
+        onClick={onReview}
+        className='font-medium text-slate-600 underline underline-offset-2 hover:text-slate-900 dark:text-slate-300 dark:hover:text-foreground'
+      >
+        See what changed
+      </button>
+      {!holdsDefault && (
+        <button
+          type='button'
+          onClick={() => void use()}
+          disabled={pending}
+          className={cn(OUTLINE_BTN, 'h-7 px-2.5')}
+          data-payload-use-default
+        >
+          {pending ? 'Copying…' : 'Use as draft'}
+        </button>
+      )}
     </div>
   )
 }
@@ -607,9 +840,77 @@ export function PayloadTemplateEditorPage() {
     navigate(`/external-apis/${a.id}/payloads`, { replace: true })
   const newPayload = () => apiId != null && navigate(`/external-apis/${apiId}#new-payload`)
 
-  const status = template ? detailStatus(template, editor.draft) : null
+  // Lookups publish with the body: the same body with different lookups is still a draft.
+  const bodyStatus = template ? detailStatus(template, editor.draft) : null
+  const status =
+    template &&
+    bodyStatus === 'live' &&
+    !sameLookups(draftLookupsOf(template), liveLookupsOf(template))
+      ? 'draft'
+      : bodyStatus
   const nothingToPublish = status === 'live'
   const conflict = editor.state.kind === 'conflict' ? editor.state.current : null
+  // The diff review only makes sense while the conflict stands.
+  useEffect(() => {
+    if (panel === 'conflict' && !conflict) setPanel(null)
+  }, [panel, conflict])
+
+  const qc = useQueryClient()
+  const { reload } = editor
+  /** A server-side draft change (restore, reset, convert): make the stored draft the editor's. */
+  const adoptServerDraft = useCallback(async () => {
+    if (!key) return
+    const fresh = await qc.fetchQuery({
+      queryKey: payloadKeys.detail(key),
+      queryFn: () => fetchTemplate(key),
+      staleTime: 0
+    })
+    reload(fresh.data)
+  }, [key, qc, reload])
+
+  const saveState = editor.state
+  const editorCtx = useMemo<PayloadEditorCtx>(
+    () => ({
+      saveNow: editor.saveNow,
+      discardPending: editor.discardPending,
+      adoptServerDraft,
+      raiseConflict: editor.raiseConflict,
+      markPublished: editor.markPublished,
+      bumpRev: editor.bumpRev,
+      getLoadedVersion: editor.getLoadedVersion,
+      conflicted: saveState.kind === 'conflict',
+      saveError:
+        saveState.kind === 'error'
+          ? { message: saveState.message, errors: saveState.errors }
+          : null,
+      rev: editor.rev,
+      getRev: editor.getRev,
+      saving: saveState.kind === 'pending' || saveState.kind === 'saving',
+      recordId
+    }),
+    [
+      editor.saveNow,
+      editor.discardPending,
+      editor.raiseConflict,
+      editor.markPublished,
+      editor.bumpRev,
+      editor.getLoadedVersion,
+      editor.rev,
+      editor.getRev,
+      adoptServerDraft,
+      saveState,
+      recordId
+    ]
+  )
+  const closePanel = useCallback(() => setPanel(null), [])
+  const previewRecord = useCallback(
+    (rid: string) => {
+      setRecordId(rid)
+      setView('draft')
+      setPanel(null)
+    },
+    [setRecordId]
+  )
 
   let main: React.ReactNode
   if (apisQ.isLoading) {
@@ -743,24 +1044,15 @@ export function PayloadTemplateEditorPage() {
               void tplQ.refetch()
             }}
             onKeep={() => editor.keepMine(conflict)}
+            onReview={() => setPanel('conflict')}
           />
         )}
         {template.newer_default && (
-          <div
-            className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-200 bg-white px-5 py-2 text-[12.5px] text-slate-700 dark:border-border dark:bg-card dark:text-slate-200'
-            data-payload-newer-default
-          >
-            <p className='min-w-0 flex-1'>
-              {template.owner ?? 'The extension'} ships a newer default for this payload.
-            </p>
-            <button
-              type='button'
-              onClick={() => setPanel('default')}
-              className='font-medium text-slate-900 underline underline-offset-2 dark:text-foreground'
-            >
-              Review it
-            </button>
-          </div>
+          <NewerDefaultBanner
+            template={template}
+            draft={editor.draft}
+            onReview={() => setPanel('default')}
+          />
         )}
 
         <div
@@ -797,7 +1089,24 @@ export function PayloadTemplateEditorPage() {
             aria-label={panel ? PANEL_TITLES[panel] : 'Preview'}
           >
             {panel ? (
-              <PanelArea panel={panel} onClose={() => setPanel(null)} />
+              <PanelArea
+                panel={panel}
+                template={template}
+                draft={editor.draft}
+                conflict={conflict}
+                nothingToPublish={nothingToPublish}
+                warning={warning}
+                recordId={recordId}
+                onRecordChange={setRecordId}
+                onPreview={previewRecord}
+                onOpenPanel={setPanel}
+                onReload={(c) => {
+                  editor.reload(c)
+                  void tplQ.refetch()
+                }}
+                onKeep={(c) => editor.keepMine(c)}
+                onClose={closePanel}
+              />
             ) : (
               <PreviewPane
                 templateKey={template.key}
@@ -848,7 +1157,7 @@ export function PayloadTemplateEditorPage() {
             previewBeside && 'overflow-hidden'
           )}
         >
-          {main}
+          <PayloadEditorContext.Provider value={editorCtx}>{main}</PayloadEditorContext.Provider>
         </main>
       </div>
     </div>

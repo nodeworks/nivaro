@@ -19,7 +19,9 @@ import {
   renderPayloadTemplate,
   resetToDefault,
   restoreVersion,
+  sameLookups,
   saveDraft,
+  saveDraftLookups,
   type TemplateRow
 } from '../services/payload-templates/index.js'
 import {
@@ -35,6 +37,7 @@ import {
   useCount,
   usedBy,
   usedByCounts,
+  validateLookups,
   withPeopleNames
 } from '../services/payload-templates/queries.js'
 import { blockingProblems } from '../services/payload-templates/render.js'
@@ -60,13 +63,18 @@ const EMPTY_MAP = JSON.stringify({ v: 1, fields: [] })
 
 type Which = 'draft' | 'published'
 type Body = { mode: PayloadMode; body: string }
+/** A preview's unsaved draft; `lookups` (when present) replaces the saved draft's for this render. */
+type PreviewDraft = Body & { lookups?: unknown }
 
 const warning = () => config.PAYLOAD_EDIT_WARNING ?? null
 const isMode = (m: unknown): m is PayloadMode => m === 'map' || m === 'code'
 
 function statusOf(row: TemplateRow): 'live' | 'draft' | 'unpublished' {
   if (row.published_version == null || row.published_body == null) return 'unpublished'
-  return row.draft_mode !== row.published_mode || row.draft_body !== row.published_body
+  // Lookups are published with the body: different lookups = something to publish.
+  return row.draft_mode !== row.published_mode ||
+    row.draft_body !== row.published_body ||
+    !sameLookups(row.draft_lookups, row.lookups)
     ? 'draft'
     : 'live'
 }
@@ -132,11 +140,19 @@ async function renderFor(
   row: TemplateRow,
   id: string,
   which: Which,
-  draft: Body | undefined,
+  draft: PreviewDraft | undefined,
   user: User,
   memo?: Map<string, Promise<unknown>>
 ) {
-  const { scope, skipped } = await scopeForRecord(row, id, user, memo)
+  // Published = what a push reads (published lookups); a draft render reads the draft's, or the
+  // lookups the preview sent (already validated).
+  const lookupsFrom =
+    which === 'published'
+      ? ('published' as const)
+      : draft && draft.lookups !== undefined
+        ? { lookups: (draft.lookups ?? null) as Record<string, unknown> | null }
+        : ('draft' as const)
+  const { scope, skipped } = await scopeForRecord(row, id, user, memo, lookupsFrom)
   let draftBody: Body | undefined
   if (which === 'published') {
     if (row.published_version == null || row.published_body == null || !row.published_mode) {
@@ -172,6 +188,21 @@ async function sendStale(reply: FastifyReply, current: TemplateRow) {
 }
 
 const parseWhich = (w: unknown): Which => (w === 'published' ? 'published' : 'draft')
+
+/** `limit` in 1..CHECK_MAX (default CHECK_DEFAULT). */
+function clampLimit(raw: unknown): number {
+  const n = Math.floor(Number(raw ?? CHECK_DEFAULT))
+  return Math.min(CHECK_MAX, Math.max(1, Number.isFinite(n) ? n : CHECK_DEFAULT))
+}
+
+/** Explicit record ids for /check: up to CHECK_MAX, each a plain id. Null = none given. */
+function parseIds(raw: unknown): string[] | null | 'invalid' {
+  if (raw === undefined || raw === null) return null
+  if (!Array.isArray(raw) || raw.length > CHECK_MAX) return 'invalid'
+  const ids = raw.map((x) => (typeof x === 'number' || typeof x === 'string' ? String(x) : ''))
+  if (ids.some((x) => !x || x.length > 64)) return 'invalid'
+  return [...new Set(ids)]
+}
 
 export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
@@ -209,7 +240,13 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
         used_by: await usedBy(row.key),
         newer_default: hasNewerDefault(row),
         has_default: !!def,
-        ...(def ? { default_mode: def.default.mode, default_body: def.default.body } : {})
+        ...(def
+          ? {
+              default_mode: def.default.mode,
+              default_body: def.default.body,
+              default_lookups: def.lookups ?? null
+            }
+          : {})
       },
       warning: warning()
     }
@@ -256,7 +293,7 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
   // ── preview one record ──
   app.post<{
     Params: { key: string }
-    Body: { id?: string | number; which?: Which; draft?: Body }
+    Body: { id?: string | number; which?: Which; draft?: PreviewDraft }
   }>('/:key/preview', async (req, reply) => {
     markConfigRead(req)
     const b = req.body ?? {}
@@ -265,6 +302,12 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     if (b.draft !== undefined) {
       const errors = bodyErrors(b.draft)
       if (errors) return reply.code(400).send({ error: 'invalid', errors })
+      // Lookups sent with a preview (an older version's, the default's) pass the same checks a
+      // saved draft's do — the system-collection guard included.
+      if (b.draft && b.draft.lookups !== undefined) {
+        const v = validateLookups(b.draft.lookups)
+        if (!v.ok) return reply.code(400).send({ error: 'invalid', errors: v.errors })
+      }
     }
     const row = await loadReadable(req.params.key, reply)
     if (!row) return reply
@@ -276,62 +319,137 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
   })
 
   // ── check recent records ──
-  app.post<{ Params: { key: string }; Body: { which?: Which; limit?: number } }>(
-    '/:key/check',
+  // ── the recent-records set Check and Convert use (registrar recent() or newest records) ──
+  app.get<{ Params: { key: string }; Querystring: { limit?: string } }>(
+    '/:key/recent',
     async (req, reply) => {
-      markConfigRead(req)
-      const b = req.body ?? {}
-      const n = Math.floor(Number(b.limit ?? CHECK_DEFAULT))
-      const limit = Math.min(CHECK_MAX, Math.max(1, Number.isFinite(n) ? n : CHECK_DEFAULT))
-      const which = parseWhich(b.which)
       const row = await loadReadable(req.params.key, reply)
       if (!row) return reply
-      if (which === 'published' && row.published_version == null) {
-        return reply.code(409).send({ error: 'unpublished', message: 'Nothing is published yet' })
+      try {
+        return { ids: await recentIds(row, clampLimit(req.query.limit)) }
+      } catch (e) {
+        return sendError(reply, e)
       }
-      const user = reader(req)
-      const results = await withReadGate(
-        req.user?.id,
-        async () => {
-          const ids = await recentIds(row, limit)
-          const memo = new Map<string, Promise<unknown>>()
-          const labels = ids.length
-            ? await getLabels(new Map([[row.collection, new Set(ids)]])).catch(
-                () => ({}) as Record<string, string>
-              )
-            : {}
-          const out: Array<{
-            id: string
-            label: string
-            ok: boolean
-            problems: Problem[]
-            skipped: string | null
-          }> = []
-          for (const id of ids) {
-            const label = labels[`${row.collection}:${id}`] ?? id
-            try {
-              const r = await renderFor(row, id, which, undefined, user, memo)
-              // A record the sender would skip is not a failure: it never sends.
-              const ok = !!r.skipped || blockingProblems(r.problems).length === 0
-              out.push({ id, label, ok, problems: r.problems, skipped: r.skipped })
-            } catch (e) {
-              const message = e instanceof Error ? e.message : String(e)
-              out.push({
-                id,
-                label,
-                ok: false,
-                problems: [{ field_id: '', path: '', message, severity: 'error' }],
-                skipped: null
-              })
-            }
-          }
-          return out
-        },
-        { label: `payload-templates:check:${row.key}` }
-      )
-      return { results }
     }
   )
+
+  // ── check recent records (or exactly `ids`, so the editor can check in chunks) ──
+  app.post<{
+    Params: { key: string }
+    Body: { which?: Which; limit?: number; ids?: Array<string | number> }
+  }>('/:key/check', async (req, reply) => {
+    markConfigRead(req)
+    const b = req.body ?? {}
+    const limit = clampLimit(b.limit)
+    const given = parseIds(b.ids)
+    if (given === 'invalid') {
+      return reply.code(400).send({
+        error: 'invalid',
+        message: `ids must be a list of at most ${CHECK_MAX} record ids`
+      })
+    }
+    const which = parseWhich(b.which)
+    const row = await loadReadable(req.params.key, reply)
+    if (!row) return reply
+    if (which === 'published' && row.published_version == null) {
+      return reply.code(409).send({ error: 'unpublished', message: 'Nothing is published yet' })
+    }
+    const user = reader(req)
+    const results = await withReadGate(
+      req.user?.id,
+      async () => {
+        const ids = given ?? (await recentIds(row, limit))
+        const memo = new Map<string, Promise<unknown>>()
+        const labels = ids.length
+          ? await getLabels(new Map([[row.collection, new Set(ids)]])).catch(
+              () => ({}) as Record<string, string>
+            )
+          : {}
+        const out: Array<{
+          id: string
+          label: string
+          ok: boolean
+          problems: Problem[]
+          skipped: string | null
+        }> = []
+        for (const id of ids) {
+          const label = labels[`${row.collection}:${id}`] ?? id
+          try {
+            const r = await renderFor(row, id, which, undefined, user, memo)
+            // A record the sender would skip is not a failure: it never sends.
+            const ok = !!r.skipped || blockingProblems(r.problems).length === 0
+            out.push({ id, label, ok, problems: r.problems, skipped: r.skipped })
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e)
+            out.push({
+              id,
+              label,
+              ok: false,
+              problems: [{ field_id: '', path: '', message, severity: 'error' }],
+              skipped: null
+            })
+          }
+        }
+        return out
+      },
+      { label: `payload-templates:check:${row.key}` }
+    )
+    return { results }
+  })
+
+  // ── the template's own lookups (UI-created templates; a registrar's follow its code) ──
+  app.put<{
+    Params: { key: string }
+    Body: {
+      lookups?: unknown
+      base_rev?: number
+      /** The published version the editor last saw; someone publishing since = stale. */
+      base_published_version?: number | null
+    }
+  }>('/:key/lookups', async (req, reply) => {
+    const row = await loadOr404(req.params.key, reply)
+    if (!row) return reply
+    if (row.owner || registeredDef(row.key)) {
+      return reply.code(409).send({
+        error: 'registered',
+        message: `${row.owner ?? 'An extension'} sets this payload's lookups in code; change them there`
+      })
+    }
+    const b = req.body ?? {}
+    if (!('lookups' in b))
+      return reply.code(400).send({ error: 'invalid', errors: ['lookups is required'] })
+    const baseRev = Number(b.base_rev)
+    if (b.base_rev == null || !Number.isInteger(baseRev) || baseRev < 0) {
+      return reply.code(400).send({ error: 'invalid', errors: ['base_rev is required'] })
+    }
+    const v = validateLookups(b.lookups)
+    if (!v.ok) return reply.code(400).send({ error: 'invalid', errors: v.errors })
+    // Same publish check as PUT draft: an edit based on an older live version is stale.
+    if (b.base_published_version !== undefined) {
+      const seen = b.base_published_version == null ? null : Number(b.base_published_version)
+      if (seen !== row.published_version) return sendStale(reply, row)
+    }
+    try {
+      // Saved to the DRAFT under the draft's revision guard; pushes keep the published ones
+      // until this draft is published.
+      const r = await saveDraftLookups(
+        row.key,
+        { lookups: v.value, base_rev: baseRev },
+        req.user?.id ?? null
+      )
+      if (!r.ok) return sendStale(reply, r.current)
+      await logActivity({
+        action: 'payload-template-lookups',
+        user: req.user?.id ?? null,
+        collection: TABLE,
+        item: row.key,
+        comment: `Changed the draft lookups of payload template ${row.label}`
+      })
+      return { rev: r.rev, data: { lookups: v.value } }
+    } catch (e) {
+      return sendError(reply, e)
+    }
+  })
 
   // ── publish ──
   app.post<{ Params: { key: string }; Body: { base_rev?: number; note?: string } }>(
