@@ -100,6 +100,54 @@ function resolveSecrets(node: unknown, nonce: string): { value: unknown; used: S
   return { value: walk(node), used }
 }
 
+/** Keys repeated inside one object of valid JSON text (JSON.parse keeps the last silently). */
+function duplicateKeys(text: string): string[] {
+  const dups: string[] = []
+  type Frame = { keys: Set<string> | null; expectKey: boolean }
+  const stack: Frame[] = []
+  let i = 0
+  while (i < text.length) {
+    const c = text[i]
+    if (c === '"') {
+      let j = i + 1
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1
+      const top = stack[stack.length - 1]
+      if (top?.keys && top.expectKey) {
+        const key = JSON.parse(text.slice(i, j + 1)) as string
+        if (top.keys.has(key)) dups.push(key)
+        top.keys.add(key)
+        top.expectKey = false
+      }
+      i = j + 1
+      continue
+    }
+    if (c === '{') stack.push({ keys: new Set(), expectKey: true })
+    else if (c === '[') stack.push({ keys: null, expectKey: false })
+    else if (c === '}' || c === ']') stack.pop()
+    else if (c === ',') {
+      const top = stack[stack.length - 1]
+      if (top?.keys) top.expectKey = true
+    }
+    i++
+  }
+  return dups
+}
+
+/** Output tags whose filter chain does not end in jsonify (secrets are exempt). */
+function unjsonifiedOutputs(body: string): string[] {
+  const out: string[] = []
+  for (const m of body.matchAll(/\{\{-?([\s\S]*?)-?\}\}/g)) {
+    const expr = m[1].trim()
+    if (!expr) continue
+    const parts = expr.split('|').map((x) => x.trim())
+    const last = parts[parts.length - 1].split(':')[0].trim()
+    if (parts.length > 1 && (last === 'jsonify' || last === 'secret')) continue
+    if (parts.length === 1 && /^secrets(\.[\w-]+|\[\s*(['"])[\w.-]+\2\s*\])$/.test(expr)) continue
+    out.push(expr)
+  }
+  return out
+}
+
 async function renderCode(
   body: string,
   scope: Record<string, unknown>,
@@ -118,6 +166,14 @@ async function renderCode(
     [NONCE_VAR]: nonce,
     [USED_VAR]: used
   }
+  for (const expr of unjsonifiedOutputs(body)) {
+    problems.push({
+      field_id: '',
+      path: '',
+      message: `Output '${expr}' is not passed through | jsonify — record text with quotes can break the payload`,
+      severity: 'warning'
+    })
+  }
   let text: string
   try {
     text = String(await payloadLiquid().parseAndRender(body, renderScope))
@@ -135,6 +191,15 @@ async function renderCode(
   if (!isObj(parsed)) {
     problems.push(err('', '', 'The template must render a JSON object'))
     return { body: null, problems, values: {} }
+  }
+  for (const k of new Set(duplicateKeys(text))) {
+    problems.push(
+      err(
+        '',
+        k,
+        `Duplicate key '${k}' in rendered JSON (a record value may contain unescaped quotes — use | jsonify)`
+      )
+    )
   }
   const { value, used: tokens } = resolveSecrets(parsed, nonce)
   if (opts.secretNames) {

@@ -15,7 +15,7 @@ describe('renderBody code mode', () => {
   it('code mode parses Liquid output as JSON', async () => {
     const r = await renderBody(
       'code',
-      '{"a": "{{ record.x }}", "n": 2}',
+      '{"a": {{ record.x | jsonify }}, "n": 2}',
       { record: { x: 'hi' } },
       {}
     )
@@ -114,7 +114,7 @@ describe('renderBody map mode', () => {
           value: { source: 'path', path: 'record.po' }
         })
       ]),
-      {},
+      { record: { po: null } },
       { lockedKeys: ['po_number'] }
     )
     expect(r.body).toEqual({})
@@ -200,5 +200,45 @@ describe('renderBody map mode', () => {
     const r = await renderBody('map', '{nope', {}, {})
     expect(r.body).toBeNull()
     expect(r.problems).toHaveLength(1)
+  })
+})
+
+describe('renderBody code mode JSON injection', () => {
+  it('a record value with quotes that injects a key is a duplicate-key error', async () => {
+    const r = await renderBody(
+      'code',
+      '{"a": "{{ record.x }}", "injected": "real"}',
+      { record: { x: 'x", "injected": "y' } },
+      {}
+    )
+    const dup = r.problems.find((p) => p.message.includes("Duplicate key 'injected'"))
+    expect(dup?.severity).toBe('error')
+    expect(dup?.message).toMatch(/jsonify/)
+  })
+
+  it('nested objects may reuse a key; the same object may not', async () => {
+    const ok = await renderBody(
+      'code',
+      '{"a": {"k": 1}, "b": {"k": 2}, "c": [{"k": 1}, {"k": 2}]}',
+      {},
+      {}
+    )
+    expect(ok.problems.filter((p) => p.severity === 'error')).toEqual([])
+    const bad = await renderBody('code', '{"a": 1, "a": 2}', {}, {})
+    expect(bad.problems.some((p) => p.message.includes("Duplicate key 'a'"))).toBe(true)
+  })
+
+  it('warns on an output tag not passed through jsonify', async () => {
+    const r = await renderBody(
+      'code',
+      '{"a": "{{ record.x }}", "b": {{ record.y | jsonify }}, "t": "{{ secrets.token }}", "u": "{{ \'k\' | secret }}"}',
+      { record: { x: 'ok', y: 'ok' } },
+      { secretNames: ['token', 'k'] }
+    )
+    const warns = r.problems.filter((p) => p.severity === 'warning')
+    expect(warns).toHaveLength(1)
+    expect(warns[0].message).toBe(
+      "Output 'record.x' is not passed through | jsonify — record text with quotes can break the payload"
+    )
   })
 })
