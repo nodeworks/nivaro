@@ -5,6 +5,7 @@ import { Redis } from 'ioredis'
 import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { userHasSocket } from '../services/ai-stream-delivery.js'
 import { chaosRedisClient, chaosRedisSubscriber } from '../services/chaos/redis-hook.js'
 import { canSeeRoom } from '../services/chat.js'
 import {
@@ -25,6 +26,12 @@ import {
   parseWatchItems,
   rowsRoomName
 } from '../services/presence-rows.js'
+import {
+  addPresenceSocket,
+  isPresenceRefreshOwner,
+  PRESENCE_REFRESH_MS,
+  removePresenceSocket
+} from '../services/presence-sockets.js'
 import {
   addTopicViewer,
   cleanSelectionKey,
@@ -1025,9 +1032,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      * still open.
      *
      * A SET of socket ids, not a count, because multiple tabs are normal and one
-     * closing must not report the person gone.
+     * closing must not report the person gone. The set is process-wide
+     * (services/presence-sockets.ts); another replica's sockets are asked for on
+     * the way out (userHasSocket).
      */
-    const liveSockets = new Map<string, Set<string>>()
 
     /** Presence writes must never take down a socket. */
     const writePresence = async (userId: string, patch: Record<string, unknown>) => {
@@ -1052,9 +1060,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     }
 
     const markOnline = async (userId: string, socketId: string) => {
-      const set = liveSockets.get(userId) ?? new Set<string>()
-      set.add(socketId)
-      liveSockets.set(userId, set)
+      addPresenceSocket(userId, socketId)
       const now = new Date()
       // A connection asserts ONLINE-ness only. It must not stamp activity: the
       // socket reconnects on its own (network blips, laptop wake), and treating
@@ -1068,13 +1074,34 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     }
 
     const markOffline = async (userId: string, socketId: string) => {
-      const set = liveSockets.get(userId)
-      if (!set) return
-      set.delete(socketId)
-      if (set.size > 0) return // other tabs still open
-      liveSockets.delete(userId)
+      if (!removePresenceSocket(userId, socketId)) return // other tabs still open here
+      // A tab on another replica still counts (this socket already left its rooms).
+      if (await userHasSocket(io, userId)) return
       await writePresence(userId, { is_online: false, last_seen: new Date() })
     }
+
+    // A live socket keeps last_seen fresh itself. The tab's own beat runs on a
+    // page timer, and a hidden idle tab's timers are throttled to about one wake a
+    // minute — staging logged 72-73 s gaps against the 70 s online window, so idle
+    // people dropped off and came back every minute or two. Server timers are not
+    // throttled, and a frozen or closed tab loses its socket (ping timeout), which
+    // stops this. Quiet on purpose: last_seen moving changes nobody's list, so no
+    // presence:changed broadcast; is_idle/last_active stay the tab's own claims.
+    const presenceRefreshTimer = setInterval(
+      inSocketTenant(socket, async () => {
+        const user = authenticatedUser
+        if (!user || !socket.connected || !isPresenceRefreshOwner(user.id, socket.id)) return
+        try {
+          await db('user_presence')
+            .where({ user_id: user.id })
+            .update({ is_online: true, last_seen: new Date() })
+        } catch (err) {
+          app.log.debug({ err, userId: user.id }, 'presence refresh failed')
+        }
+      }),
+      PRESENCE_REFRESH_MS
+    )
+    presenceRefreshTimer.unref?.()
 
     const onAuth = async (payload: { token?: string }) => {
       const token = payload?.token?.trim()
@@ -1712,6 +1739,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       buffer.dispose()
       if (tenantKey) noteTenantSocket(tenantKey, -1)
       clearInterval(rttTimer)
+      clearInterval(presenceRefreshTimer)
       socketMeta.delete(socket.id)
       if (authenticatedUser) void markOffline(authenticatedUser.id, socket.id)
       leaveRecordRoom()
