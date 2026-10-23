@@ -157,8 +157,20 @@ export async function runGate({ name, token, request, before, readinessTolerance
     return { ok: failures.length === 0, lines, failures, authed: false }
   }
 
-  const pre = await request('GET', '/api/preflight', { auth: true })
-  step('/api/preflight', pre.status === 0 ? { ok: false, detail: pre.error ?? 'no answer' } : judgePreflight(pre.status, pre.body))
+  // During a rolling update an old task can still answer: it sees the new
+  // build's migrations as "missing files" and fails. One re-read after
+  // `settleMs` before calling it a failure.
+  const readPreflight = async () => {
+    const pre = await request('GET', '/api/preflight', { auth: true })
+    return pre.status === 0 ? { ok: false, detail: pre.error ?? 'no answer' } : judgePreflight(pre.status, pre.body)
+  }
+  let pre = await readPreflight()
+  if (!pre.ok && !pre.refused && sleep) {
+    lines.push(`     ${name} /api/preflight ${pre.detail} — re-reading in ${Math.round(settleMs / 1000)}s`)
+    await sleep(settleMs)
+    pre = await readPreflight()
+  }
+  step('/api/preflight', pre)
 
   const smoke = await request('POST', '/api/ops-runtime/smoke?strict=1', { auth: true })
   step('smoke', smoke.status === 0 ? { ok: false, detail: smoke.error ?? 'no answer' } : judgeSmoke(smoke.status, smoke.body))

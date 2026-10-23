@@ -144,6 +144,27 @@ test('runGate without a token checks /api/ready only and says what it skipped', 
   assert.match(res.lines.at(-1), /NOT checked/)
 })
 
+test('runGate re-reads a failed preflight once after settling (an old task mid-rollout)', async () => {
+  const stale = {
+    status: 503,
+    body: { data: { status: 'fail', checks: [{ id: 'migrations', status: 'fail', summary: 'The database has 1 migration(s) this build does not contain.' }] } }
+  }
+  const answers = [stale, healthy['GET /api/preflight']]
+  const routes = { ...healthy }
+  const request = async (method, path, opts) => {
+    if (`${method} ${path}` === 'GET /api/preflight') return answers.shift() ?? stale
+    return fakeApi(routes)(method, path, opts)
+  }
+  let slept = 0
+  const res = await runGate({ name: 's', token: 't', request, before: null, sleep: async (ms) => { slept += ms } })
+  assert.equal(res.ok, true)
+  assert.equal(slept, 60_000)
+
+  const stuck = await runGate({ name: 's', token: 't', request: fakeApi({ ...healthy, 'GET /api/preflight': stale }), before: null, sleep: async () => {} })
+  assert.equal(stuck.ok, false)
+  assert.match(stuck.failures[0], /does not contain/)
+})
+
 test('runGate fails on a refused token, a failed smoke check and a readiness drop', async () => {
   const refusedToken = await runGate({
     name: 's',
