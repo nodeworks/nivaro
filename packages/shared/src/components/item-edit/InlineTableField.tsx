@@ -138,6 +138,7 @@ import { numericIntlOptions } from '../../lib/format-value'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordReader } from '../../lib/record-loader'
 import type { RuleProvenance } from '../../lib/rule-provenance'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { formulaInputsChanged } from '../../lib/write-formula'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
@@ -1367,7 +1368,7 @@ function AutoAllocateButton({
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       qc.invalidateQueries({ queryKey: ['match-agg'] })
     } catch (err) {
-      setSummary(`Auto-allocate failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+      setSummary(`Auto-allocate failed: ${userErrorMessage(err, 'unknown error')}`)
     } finally {
       setRunning(false)
     }

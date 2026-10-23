@@ -1,5 +1,6 @@
 import { BellOff, EyeOff, Loader2 } from 'lucide-react'
 import { useState } from 'react'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { useSnooze } from './api'
@@ -102,7 +103,7 @@ export function SnoozeMenu({
         },
         onError: (e: unknown) => {
           const resp = (e as { response?: { error?: string } })?.response
-          setError(resp?.error ?? (e instanceof Error ? e.message : 'Could not snooze'))
+          setError(resp?.error ?? userErrorMessage(e, 'Could not snooze'))
         }
       }
     )

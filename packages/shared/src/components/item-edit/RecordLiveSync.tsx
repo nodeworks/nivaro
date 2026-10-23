@@ -14,6 +14,7 @@ import {
 } from '../../lib/live'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
+import { userErrorMessage } from '../../lib/safe-error'
 import { formatRelative } from '../../lib/utils'
 
 /** Why an open record can no longer be saved (#1871 deleted, #1925 access). */
@@ -479,7 +480,7 @@ export function RecordLiveSync({
       invalidate([['item', collection, itemId]])
       toast.success('Record restored')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Restore failed')
+      toast.error(userErrorMessage(err, 'Restore failed'))
     } finally {
       setRestoring(false)
     }

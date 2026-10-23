@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get, patch, post } from '../lib/commands'
 import { evaluateNumeric } from '../lib/expression'
+import { userErrorMessage } from '../lib/safe-error'
 import { cn } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { colorPair } from './QueryTable'
@@ -648,7 +649,7 @@ export function MatrixEditor({
       await qc.invalidateQueries({ queryKey: ['matrix-targets', config.target_collection] })
       setStatus(`Saved — ${updated} updated, ${created} created`)
     } catch (err) {
-      setStatus(`Save failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+      setStatus(`Save failed: ${userErrorMessage(err, 'unknown error')}`)
     } finally {
       setSaving(false)
     }

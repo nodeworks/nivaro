@@ -10,7 +10,7 @@ import {
   parseChildren,
   parseNestedError
 } from './inbound-mapping-bench.js'
-import { createOne, readItems, rehearseCreate, updateOne } from './items.js'
+import { createOne, isOutOfView, readItems, rehearseCreate, updateOne } from './items.js'
 
 // ─── #88 — inbound mappings ─────────────────────────────────────────────────
 // An integration POSTs its own payload shape to /api/inbound/<key>; the
@@ -339,7 +339,9 @@ export async function applyInboundMapping(
             req
           )) as Record<string, unknown> | null
           results.push({ ...base, action: 'created', id: (rec?.id as string) ?? null })
-          records.push(rec)
+          // A row the caller cannot read back is the id alone — the response
+          // template still gets what was sent (as the update branch does).
+          records.push(isOutOfView(rec) ? { ...values, id: rec?.id } : rec)
           created += 1
         }
       } catch (err) {

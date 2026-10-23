@@ -13,6 +13,7 @@ import { useItemNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { transitionRequirementsFromError } from '../panels/PipelinePanel'
 import {
@@ -180,7 +181,7 @@ export function QueueItemSheet({
         }))
         return
       }
-      toast.error(err instanceof Error ? err.message : 'Transition failed')
+      toast.error(userErrorMessage(err, 'Transition failed'))
     }
   })
 

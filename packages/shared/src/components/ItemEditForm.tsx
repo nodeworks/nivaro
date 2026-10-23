@@ -2392,8 +2392,7 @@ function ItemEditFormView({
           {
             severity: 'error',
             rule: 'reimport-apply',
-            message:
-              err instanceof Error ? err.message : 'Duplicate match key in the imported lines.'
+            message: userErrorMessage(err, 'Duplicate match key in the imported lines.')
           }
         ])
         return

@@ -850,6 +850,12 @@ export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from '.
 export { rumRouteChange, rumWidget, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
 export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition'
+export {
+  isCodeError,
+  reportCodeError,
+  SOMETHING_WENT_WRONG,
+  userErrorMessage
+} from './lib/safe-error'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
 export * from './lib/search-log'
 export {

@@ -3,6 +3,7 @@ import { Brain, Check, History, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, patch } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { AiHistorySwitch } from '../ai/AiHistorySwitch'
 import { SectionCard } from './primitives'
 
@@ -59,7 +60,7 @@ export function AiMemoryCard() {
     onError: (err) =>
       setError(
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
-          (err instanceof Error ? err.message : 'Could not save')
+          userErrorMessage(err, 'Could not save')
       )
   })
 

@@ -24,6 +24,7 @@ import {
 import { createPortal } from 'react-dom'
 import { useNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { type AiStreamSubscribe, useAiStream } from '../../lib/use-ai-stream'
 import { cn } from '../../lib/utils'
 import { AiFeedbackButtons } from './AiFeedbackButtons'
@@ -257,7 +258,7 @@ function AskPanelBody({
         const doc = json.data
         setDocs((prev) => [...prev, doc])
       } catch (err) {
-        setError(err instanceof Error ? err.message : `Could not read ${file.name}`)
+        setError(userErrorMessage(err, `Could not read ${file.name}`))
       } finally {
         setUploading((n) => n - 1)
       }

@@ -6,6 +6,7 @@ import {
   type LayoutOp,
   type PlacementRow
 } from '../../../lib/layout-ops'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { cn } from '../../../lib/utils'
 import { Skeleton } from '../../ui/skeleton'
 import type { DesignTarget, SelectOptions } from '../design-context'
@@ -467,5 +468,5 @@ function ZoneRows({
 function errorText(e: unknown): string {
   const body = (e as { response?: { data?: { error?: unknown } } })?.response?.data?.error
   if (typeof body === 'string') return body
-  return e instanceof Error ? e.message : 'Something went wrong'
+  return userErrorMessage(e, 'Something went wrong')
 }

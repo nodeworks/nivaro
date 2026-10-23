@@ -4,8 +4,9 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
+import { userErrorMessage } from '../../lib/safe-error'
+import { cn } from '../../lib/utils'
 import { useChatConfig, useUserSearch } from './chat-core'
 import { useRoomRecord } from './chat-hooks'
 
@@ -222,7 +223,7 @@ export function SlashForm({
       return 'Poll posted'
     },
     onSuccess: (msg) => done(msg),
-    onError: (e) => fail(e, e instanceof Error ? e.message : 'That did not work')
+    onError: (e) => fail(e, userErrorMessage(e, 'That did not work'))
   })
 
   const title = { task: 'New task', remind: 'Remind me', poll: 'New poll', note: 'Add a note' }[

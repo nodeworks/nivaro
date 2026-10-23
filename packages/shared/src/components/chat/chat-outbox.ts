@@ -2,6 +2,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { post } from '../../lib/commands'
 import { useOptionalRealtime } from '../../lib/realtime'
+import { userErrorMessage } from '../../lib/safe-error'
 import type { ChatMessage, MessagesPage } from './chat-core'
 
 /**
@@ -486,7 +487,7 @@ async function sendOne(c: OutboxClient, o: OutboxItem): Promise<'sent' | 'offlin
     const body = (err as { response?: { error?: string } })?.response
     await update(o.client_id, {
       status: 'failed',
-      error: body?.error ?? (err instanceof Error ? err.message : 'Could not send')
+      error: body?.error ?? userErrorMessage(err, 'Could not send')
     })
     return 'failed'
   }

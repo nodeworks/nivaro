@@ -4,7 +4,9 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn } from '../../lib/utils'
+import type { ItemActionChooseMeta } from '../panels/ItemActionChoices'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   type AvailableBulkAction,
@@ -13,7 +15,6 @@ import {
   bulkActionEnabled,
   useAvailableBulkActions
 } from './BulkActionButtons'
-import type { ItemActionChooseMeta } from '../panels/ItemActionChoices'
 
 /**
  * #620 — integration pushes over a selection, rendered inside
@@ -209,7 +210,7 @@ export function PushBulkButtons({
         void qc.invalidateQueries({ queryKey: [key] })
     } catch (err) {
       const resp = (err as { response?: { error?: string } }).response
-      toast.error(resp?.error ?? (err instanceof Error ? err.message : `${labelOf(op)} failed`))
+      toast.error(resp?.error ?? userErrorMessage(err, `${labelOf(op)} failed`))
     } finally {
       setRunning(null)
     }

@@ -1,5 +1,6 @@
 import { X } from 'lucide-react'
 import { useState } from 'react'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '../../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 
@@ -150,7 +151,7 @@ export function CascadeRuleRow({
                 setSwapErr(null)
                 onChange({ ...rule, on_unavailable: parsed })
               } catch (err) {
-                setSwapErr(err instanceof Error ? err.message : 'Invalid JSON')
+                setSwapErr(userErrorMessage(err, 'Invalid JSON'))
               }
             }}
             rows={9}

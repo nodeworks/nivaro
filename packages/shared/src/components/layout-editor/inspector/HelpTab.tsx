@@ -3,6 +3,7 @@ import { PlayCircle, Plus, StickyNote, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { cn } from '../../../lib/utils'
 import { fetchHelpVideo, helpVideoApi, useHelpVideosForForm } from '../../help-videos/api'
 import type { HelpVideoContext, HelpVideoDto } from '../../help-videos/types'
@@ -160,7 +161,7 @@ export function HelpVideoSetting({
       await helpVideoApi(client).setContexts(videoId, attach ? [...rest, here] : rest)
       await qc.invalidateQueries({ queryKey: ['help-videos'] })
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not change the video')
+      setError(userErrorMessage(e, 'Could not change the video'))
     } finally {
       setBusy(false)
     }

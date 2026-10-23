@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@nivaro/shared'
 import { ShieldCheck } from 'lucide-react'
 import { memo, useState } from 'react'
 import { Popover, PopoverTrigger } from '@/components/ui/popover'
@@ -81,7 +82,7 @@ function RulesPopoverImpl({
     try {
       new RegExp(r.pattern)
     } catch (e) {
-      patternError = e instanceof Error ? e.message : 'Not a valid pattern'
+      patternError = userErrorMessage(e, 'Not a valid pattern')
     }
   }
   return (

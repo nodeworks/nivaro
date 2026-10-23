@@ -85,6 +85,7 @@ import { prefetchRecord, useIdleNextPage } from '../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../lib/presence-hooks'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
+import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
 import {
   effectiveScopeSeedIds,
@@ -917,7 +918,7 @@ export function RowActionsMenu({
       invalidateCbvRowQueries(qc, collection)
       onAfterTransition?.()
     },
-    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : 'Transition failed')
+    onError: (err: unknown) => toast.error(userErrorMessage(err, 'Transition failed'))
   })
 
   // One-record run of a registry action — the same endpoints the selection
@@ -961,7 +962,7 @@ export function RowActionsMenu({
     },
     onError: (err: unknown) => {
       const resp = (err as { response?: { error?: string } }).response
-      toast.error(resp?.error ?? (err instanceof Error ? err.message : 'Action failed'))
+      toast.error(resp?.error ?? userErrorMessage(err, 'Action failed'))
     }
   })
 
@@ -992,7 +993,7 @@ export function RowActionsMenu({
     },
     onError: (err: unknown) => {
       const resp = (err as { response?: { error?: string } }).response
-      toast.error(resp?.error ?? (err instanceof Error ? err.message : 'Push failed'))
+      toast.error(resp?.error ?? userErrorMessage(err, 'Push failed'))
     }
   })
 
@@ -3302,7 +3303,7 @@ function RecordMergeForm({
     } catch (e) {
       setErr(
         (e as { response?: { error?: string } })?.response?.error ??
-          (e instanceof Error ? e.message : 'Merge failed')
+          userErrorMessage(e, 'Merge failed')
       )
     } finally {
       setBusy(false)
@@ -3409,7 +3410,7 @@ function MessageStakeholdersForm({
       )
       onDone(`Messaged ${res.sent} stakeholder(s) across ${res.records} record(s)`)
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to send')
+      setErr(userErrorMessage(e, 'Failed to send'))
       setBusy(false)
     }
   }
@@ -3628,7 +3629,7 @@ function BulkBar({
       onClear()
       setMode('actions')
     } catch (e) {
-      setNote(e instanceof Error ? e.message : 'Bulk action failed')
+      setNote(userErrorMessage(e, 'Bulk action failed'))
     } finally {
       endBulkProgress(progress)
       setBusy(false)
@@ -5818,9 +5819,7 @@ export function CollectionBrowserView({
         })
       )
       .then(() => toast.info(`Exporting “${name}” in the background — follow it in the Jobs tray`))
-      .catch((e: unknown) =>
-        toast.error(e instanceof Error ? e.message : 'Could not start the export')
-      )
+      .catch((e: unknown) => toast.error(userErrorMessage(e, 'Could not start the export')))
   }
 
   const saveView = useMutation({
@@ -7781,7 +7780,7 @@ export function CollectionBrowserView({
       {error != null && (
         <div className='mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700 dark:border-red-900/40 dark:bg-red-900/10 dark:text-red-400'>
           <span className='min-w-0 flex-1'>
-            {error instanceof Error ? error.message : 'Failed to load records'}
+            {userErrorMessage(error, 'Failed to load records')}
           </span>
           {(error as { status?: number })?.status === 403 && (
             <button

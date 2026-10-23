@@ -3,6 +3,7 @@ import { Check, ChevronsUpDown, Search, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { applyDisplayTemplate } from './helpers'
@@ -186,7 +187,7 @@ export function MembershipSetField({
       await fn()
     } catch (e) {
       const resp = (e as { response?: { error?: string } })?.response
-      setError(resp?.error ?? (e instanceof Error ? e.message : 'Could not save'))
+      setError(resp?.error ?? userErrorMessage(e, 'Could not save'))
     } finally {
       setBusy(null)
       refresh()

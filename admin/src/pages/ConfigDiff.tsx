@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ChevronDown, ChevronRight, Download, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
@@ -128,7 +129,7 @@ function ApplyControls({
         setPreview(res.data.preview)
         setConfirming(false)
       }
-      setErr(res?.data?.error ?? (e instanceof Error ? e.message : 'Apply failed'))
+      setErr(res?.data?.error ?? userErrorMessage(e, 'Apply failed'))
     } finally {
       setBusy(false)
     }
@@ -504,7 +505,7 @@ export function ConfigDiffPage() {
       setUploadedSnapshot(unwrapped)
       compare.mutate(unwrapped)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not read that file as JSON')
+      setError(userErrorMessage(e, 'Could not read that file as JSON'))
     }
   }
 

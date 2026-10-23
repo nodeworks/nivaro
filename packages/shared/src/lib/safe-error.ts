@@ -3,10 +3,12 @@ import { reportClientCrash } from './client-crash'
 /**
  * No raw JavaScript error text on screen, ever. "Cannot read properties of
  * null (reading 'id')" told a person nothing and invited them to press Save
- * again (2026-10-23: a duplicate workflow). A code error (TypeError,
- * ReferenceError, RangeError, SyntaxError that is not a network failure and
- * carries no HTTP status) shows one plain sentence instead, and the real error
- * goes to the issue log through the client crash report.
+ * again (2026-10-23: a duplicate workflow). A code error (a TypeError,
+ * ReferenceError or RangeError that is not a network failure and carries no
+ * HTTP status) shows one plain sentence instead, and the real error goes to
+ * the issue log through the client crash report. A SyntaxError is left alone:
+ * at runtime it comes from JSON.parse / RegExp on what a person typed, and its
+ * text tells them what to fix.
  */
 
 export const SOMETHING_WENT_WRONG = 'Something went wrong — it’s been reported'
@@ -25,12 +27,7 @@ export function isCodeError(err: unknown): boolean {
   if (statusOf(err) != null) return false
   if ((err as { response?: unknown }).response != null) return false
   if (NETWORKISH.test(err.message)) return false
-  return (
-    err instanceof TypeError ||
-    err instanceof ReferenceError ||
-    err instanceof RangeError ||
-    err instanceof SyntaxError
-  )
+  return err instanceof TypeError || err instanceof ReferenceError || err instanceof RangeError
 }
 
 /** The server's own `{error}` text, through the SDK (`response.error`) or axios (`response.data.error`). */

@@ -65,6 +65,7 @@ import { rowPresenceKey, useRowPresence } from '../../lib/presence-hooks'
 import { buildGroups } from '../../lib/queue-grouping'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
+import { userErrorMessage } from '../../lib/safe-error'
 import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
 import {
@@ -1084,7 +1085,7 @@ export function QueueWorklist({
         )
         void qc.invalidateQueries({ queryKey: ['queue-view-subs', queueId] })
       })
-      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Failed'))
+      .catch((err: unknown) => toast.error(userErrorMessage(err, 'Failed')))
   }
 
   // Drillable aggregates (#394): which aggregate cell is open.
@@ -1134,7 +1135,7 @@ export function QueueWorklist({
       })
       .catch((err: unknown) => {
         const resp = (err as { response?: { error?: string } }).response
-        toast.error(resp?.error ?? (err instanceof Error ? err.message : `${a.label} failed`))
+        toast.error(resp?.error ?? userErrorMessage(err, `${a.label} failed`))
       })
   }
 
@@ -1161,7 +1162,7 @@ export function QueueWorklist({
         void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
         void qc.invalidateQueries({ queryKey: ['queue-triage-labels', queueId] })
       })
-      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Label failed'))
+      .catch((err: unknown) => toast.error(userErrorMessage(err, 'Label failed')))
   }
 
   type QueueItemsPage = {
@@ -1333,7 +1334,7 @@ export function QueueWorklist({
       qc.invalidateQueries({ queryKey: ['queue-items', queueId, scope] })
     },
     onError: (err: unknown) => {
-      toast.error(err instanceof Error ? err.message : 'Failed to move item')
+      toast.error(userErrorMessage(err, 'Failed to move item'))
       qc.invalidateQueries({ queryKey: ['queue-items', queueId, scope] })
     }
   })
@@ -2865,9 +2866,7 @@ export function QueueWorklist({
                   toast.success('Moved to trash')
                   void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
                 })
-                .catch((err: unknown) =>
-                  toast.error(err instanceof Error ? err.message : 'Delete failed')
-                )
+                .catch((err: unknown) => toast.error(userErrorMessage(err, 'Delete failed')))
             }}
             onAfterTransition={() =>
               void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
