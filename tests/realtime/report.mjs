@@ -147,6 +147,53 @@ export function buildMatrix(dirs, outFile) {
   return md
 }
 
+/**
+ * Load runs side by side (each dir holds a load.json): delivery, web pressure, per-process memory.
+ * `label` per dir defaults to its folder name.
+ */
+export function buildLoadTable(dirs) {
+  const rows = []
+  for (const dir of dirs) {
+    let r
+    try {
+      r = JSON.parse(readFileSync(resolve(dir, 'load.json'), 'utf8'))
+    } catch {
+      continue
+    }
+    const c = r.cases?.[0]
+    if (!c) continue
+    const m = c.metrics ?? {}
+    const steps = m.load_steps ?? []
+    const hold = steps.find((s) => s.label === 'hold') ?? steps.at(-1) ?? {}
+    const webNodes = Object.values(hold.server?.nodes ?? {})
+    const pm = m.process_memory ?? {}
+    const web = ['web-1', 'web-2'].map((n) => pm[n]).filter(Boolean)
+    const rts = Object.entries(pm).filter(([n]) => n.startsWith('rt-') && pm[n]?.at_peak_sockets?.sockets)
+    rows.push({
+      run: `${r.mode ?? '?'} / ${basename(dir)}`,
+      sockets: `${hold.sockets ?? '?'} (peak ${Object.values(m.sockets_peak ?? {}).reduce((a, b) => a + (b ?? 0), 0)})`,
+      presence: m.load_delivery ? `p50 ${m.load_delivery.p50_ms} / p95 ${m.load_delivery.p95_ms} / p99 ${m.load_delivery.p99_ms} ms, ${m.load_delivery.within_target_pct}% ≤2 s, missed ${m.load_delivery.missed}` : '—',
+      record: m.probe_delivery_ms ? `p50 ${m.probe_delivery_ms.p50} / p95 ${m.probe_delivery_ms.p95} / p99 ${m.probe_delivery_ms.p99} ms, lost ${m.probe_delivery_ms.lost}` : '—',
+      online: (() => {
+        const o = (m.load_routes ?? []).find((x) => /presence\/online/.test(x.route))
+        return o ? `${o.rps} req/s, p95 ${o.p95_ms} ms, errors ${o.errors}` : '—'
+      })(),
+      webPool: webNodes.length ? `used ${Math.max(...webNodes.map((n) => n.pool_used_max ?? 0))}/${webNodes[0].pool_max}, waiting ≤${Math.max(...webNodes.map((n) => n.pool_waiting_max ?? 0))}, lag ≤${Math.max(...webNodes.map((n) => n.lag_max_ms ?? 0))} ms` : '—',
+      webHeap: web.length ? `heap ≤${Math.max(...web.map((w) => w.heap_max))} MiB, RSS ≤${Math.max(...web.map((w) => w.rss_max))} → after ${Math.max(...web.map((w) => w.after?.rss ?? 0))} MiB` : '—',
+      realtime: rts.length ? rts.map(([n, v]) => `${n}: ${v.at_peak_sockets.sockets} sockets, RSS ${v.rss_max} / heap ${v.heap_max} / ext ${v.external_max} MiB, lag p99 ≤${v.lag_p99_max} ms`).join('; ') : '—',
+      machine: `${(m.machine_load_start ?? []).join(' ')} → ${(m.machine_load_end ?? []).join(' ')}`
+    })
+  }
+  const cols = ['run', 'sockets', 'presence', 'record', 'online', 'webPool', 'webHeap', 'realtime', 'machine']
+  const head = ['Run', 'Sockets (hold)', 'Presence delivery', 'Record delivery (probe, from write response)', '/presence/online (whole run)', 'Web pool / lag', 'Web memory', 'Realtime tasks at peak', 'Host load (1/5/15 min)']
+  return [`| ${head.join(' | ')} |`, `|${head.map(() => '---').join('|')}|`, ...rows.map((r) => `| ${cols.map((k) => esc(r[k])).join(' | ')} |`)].join('\n')
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--load-table') {
+  console.log(buildLoadTable(process.argv.slice(3).map((d) => resolve(d))))
+  process.exit(0)
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--matrix') {
   const rest = process.argv.slice(3)
   const oi = rest.indexOf('--out')

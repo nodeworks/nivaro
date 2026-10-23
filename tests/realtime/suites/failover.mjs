@@ -265,7 +265,14 @@ export async function run({ only, args }) {
     t.metric('partitioned_ready_status', ready)
     const { ids } = await loop
     await toxics.enable(cfg.nodes[victim].redis, true)
+    // Real traffic goes on after the heal: the next event in the room shows the clients that
+    // their room counter skipped (#2462 gap detection → catchup:room).
+    await sleep(2000)
+    const after = await writeLoop(2000, 500, 'part-after')
+    ids.push(...after.ids)
     const miss = await missing(socks, ids, 20_000)
+    t.metric('room_gaps_seen', socks.reduce((a, s) => a + s.roomGaps.length, 0))
+    t.metric('room_catchups', socks.reduce((a, s) => a + s.roomCatchups.length, 0))
     const lost = miss.reduce((a, m) => a + m.missing, 0)
     t.metric('disconnects', socks.filter((s) => s.disconnects.some((d) => d.at >= since)).length)
     t.metric('missed', miss.filter((m) => m.missing))

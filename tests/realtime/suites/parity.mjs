@@ -502,10 +502,11 @@ export async function run({ only }) {
     const m = s.mark()
     // Several writes of each: a stream may only hear the writes of its own process (see the
     // cross-replica case), and this case is about the filter.
-    for (let i = 0; i < 4; i++) {
+    // Consecutive writes of each kind (not alternating): Traefik round-robins requests, and an
+    // alternating pattern sent every rt_items write to the same web process.
+    for (let i = 0; i < 4; i++)
       await admin.must('PATCH', `/api/items/rt_secret/${fx.seed.secret}`, { title: `x ${Date.now()}` })
-      await admin.must('PATCH', `/api/items/rt_items/${id0}`, { n: 7 + i })
-    }
+    for (let i = 0; i < 4; i++) await admin.must('PATCH', `/api/items/rt_items/${id0}`, { n: 7 + i })
     await s.next((e) => e.data?.collection === 'rt_items', { from: m })
     t.check('no rt_secret frame', s.events.slice(m).every((e) => e.data?.collection !== 'rt_secret'))
     t.check('rt_items frame arrived', s.events.slice(m).some((e) => e.data?.collection === 'rt_items'))

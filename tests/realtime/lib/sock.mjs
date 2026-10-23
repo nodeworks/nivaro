@@ -38,6 +38,10 @@ export class LiveSocket {
     this.userId = null
     this.waiters = new Set()
     this.closed = false
+    /** Per-room counters for gap detection; gaps seen and room catch-ups answered. */
+    this.rooms = new Map()
+    this.roomGaps = []
+    this.roomCatchups = []
   }
 
   /** Connect and wait for auth:ok (resolves with this). */
@@ -70,6 +74,7 @@ export class LiveSocket {
     s.on('connect_error', (err) => this.connectErrors.push({ message: err?.message, at: Date.now() }))
     s.on('auth:ok', (p) => {
       this.userId = p?.userId ?? null
+      this.rooms.clear() // a new server socket: room counters start over
       const reconnect = this.authCount > 0
       this.authCount++
       for (const [ev, payload] of this.joins) s.emit(ev, payload)
@@ -92,7 +97,17 @@ export class LiveSocket {
       }
     })
     s.on('nvr:ping', (p) => s.emit('nvr:pong', p))
+    // #2462, like packages/shared/src/lib/room-gaps.ts (simplified): a room counter (_rseq) that
+    // skips while connected → after a 1.5 s grace, `catchup:room` for that room alone.
+    s.on('catchup:room:events', (p) => {
+      this.roomCatchups.push({ room: p?.room, full: !!p?.full, n: p?.events?.length ?? 0, at: Date.now() })
+      for (const e of p?.events ?? []) {
+        if (typeof e.seq === 'number' && e.seq > this.lastSeq) this.lastSeq = e.seq
+        this.record(e.event, { ...e.payload, _seq: e.seq }, true)
+      }
+    })
     s.onAny((ev, p) => {
+      if (this.o.roomGaps !== false) this.observeRoom(p)
       const seq = p?._seq
       if (typeof seq === 'number' && seq > this.lastSeq) this.lastSeq = seq
       if (this.o.ack && typeof p?._seq === 'number' && typeof p?._st === 'number')
@@ -123,6 +138,28 @@ export class LiveSocket {
       if (e.status !== 401 && e.status !== 403 && attempt < 6 && this.s?.connected && !this.closed)
         setTimeout(() => void this.authenticate(attempt + 1), 300 * 2 ** attempt)
     }
+  }
+
+  observeRoom(p) {
+    if (!p || typeof p._room !== 'string' || typeof p._rseq !== 'number') return
+    const room = p._room
+    const hi = p._rseq
+    const lo = typeof p._rseq_min === 'number' ? p._rseq_min : hi
+    const seq = typeof p._seq === 'number' ? p._seq : 0
+    const st = this.rooms.get(room)
+    if (!st || hi < st.rseq) {
+      this.rooms.set(room, { rseq: hi, seq })
+      return
+    }
+    if (lo > st.rseq + 1) {
+      const cursor = st.seq
+      const missed = lo - st.rseq - 1
+      this.roomGaps.push({ room, missed, at: Date.now() })
+      setTimeout(() => {
+        if (this.s?.connected) this.s.emit('catchup:room', { room, cursor, missed })
+      }, 1500)
+    }
+    if (hi > st.rseq) this.rooms.set(room, { rseq: hi, seq: Math.max(st.seq, seq) })
   }
 
   waitAuth(timeoutMs = 15_000) {
