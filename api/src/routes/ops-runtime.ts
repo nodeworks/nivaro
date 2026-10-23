@@ -1,3 +1,4 @@
+import { hostname } from 'node:os'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { configEpochState } from '../db/config-epoch.js'
@@ -9,7 +10,7 @@ import { bustEverywhere, listCaches } from '../services/cache-registry.js'
 import { registerConfigStamps } from '../services/config-stamps.js'
 import { registerDeployReadinessChecks } from '../services/deploy-readiness.js'
 import { clusterInflight } from '../services/inflight-cluster.js'
-import { listInstances } from '../services/instance-roster.js'
+import { INSTANCE_ID, listInstances } from '../services/instance-roster.js'
 import { probeSmtp } from '../services/mail.js'
 import { currentTraceMeta } from '../services/request-trace.js'
 import { runtimeStats } from '../services/runtime-monitor.js'
@@ -40,6 +41,10 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
     return reply.send({
       data: {
         ...runtimeStats(),
+        // Which process answered: behind a load balancer each call may land on another
+        // replica (the realtime load script reports lag per node from these).
+        instance_id: INSTANCE_ID,
+        host: hostname(),
         pool: poolStats('main'),
         // #1321 — null when background work shares the main pool
         background_pool: bg.max > 0 ? bg : null
