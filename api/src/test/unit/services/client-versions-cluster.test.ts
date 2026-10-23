@@ -125,6 +125,50 @@ describe('makeBuildJudge — rolling deploys', () => {
     expect(groups.every((g) => g.settling && !g.older && !g.current)).toBe(true)
   })
 
+  it('while settling, a build older than both contested ones is old straight away', () => {
+    // Staging 2026-10-23: the portal rolled d0c99403 → 823fdb4c; tabs still on last night's
+    // 8f0a6841 must not hide behind the rollout.
+    const list = [
+      client('s1', 'rob', 'efp-new', '823fdb4c', NOW - 90_000),
+      client('s2', 'ken', 'efp-new', 'd0c99403', NOW - 3 * 60_000),
+      client('s3', 'tim', 'efp-new', 'd0c99403', NOW - 50 * 60_000),
+      client('s4', 'andrew', 'efp-new', '8f0a6841', NOW - 2 * 3600_000)
+    ]
+    const j = judge(list)
+    expect(j.settling.has('efp-new')).toBe(true)
+    expect([...olderClientIds(list, j)]).toEqual(['s4'])
+    const stale = staleBuildsByUser(list, j)
+    expect([...stale.keys()]).toEqual(['ANDREW'])
+    // Mid-rollout the current build is not named (the newest load may be the old copy).
+    expect(stale.get('ANDREW')?.[0]).toMatchObject({ build: '8f0a6841', current_build: null })
+    const groups = groupClientVersions(list, j)
+    const byBuild = Object.fromEntries(groups.map((g) => [g.build, g]))
+    expect(byBuild['8f0a6841']).toMatchObject({ older: 'build', settling: null, current: false })
+    expect(byBuild['823fdb4c'].settling).toMatch(/both loaded/)
+    expect(byBuild.d0c99403).toMatchObject({ older: null, current: false })
+    expect(byBuild.d0c99403.settling).toMatch(/both loaded/)
+  })
+
+  it('admin mid-deploy: a version neither replica serves is old', () => {
+    const list = [
+      client('s1', 'ana', 'admin', '0.3.10', T0),
+      client('s2', 'bob', 'admin', '0.3.9', T0, '0.3.9'),
+      client('s3', 'cat', 'admin', '0.3.8', T0, '0.3.8')
+    ]
+    const j = judge(list, ['0.3.9', '0.3.10'])
+    expect([...olderClientIds(list, j)]).toEqual(['s3'])
+  })
+
+  it('admin: a roster that names no admin build does not judge admin by it', () => {
+    const list = [
+      client('s1', 'ana', 'admin', 'a1', T0),
+      client('s2', 'bob', 'admin', 'a2', T0 + 9)
+    ]
+    const j = judge(list, ['0.3.9', '0.3.10'])
+    expect(j.settling.has('admin')).toBe(false)
+    expect(j.current.get('admin')).toBe('a2')
+  })
+
   it('…and judged again once only one build has loaded for the window', () => {
     const list = [
       client('s1', 'ana', 'efp-new', 'new', NOW - 60_000),

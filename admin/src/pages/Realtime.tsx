@@ -393,7 +393,9 @@ function ForceRefreshControl() {
                     (partial
                       ? ' — another API replica did not answer, so only this one was reached'
                       : '') +
-                    (skipped.length ? ` — ${skipped.join(', ')} still deploying, left alone` : '')
+                    (skipped.length
+                      ? ` — tabs on the builds ${skipped.join(', ')} is rolling out were left alone`
+                      : '')
                   toast.success(
                     who === 'everyone'
                       ? 'Refresh pushed to every connected client'
@@ -441,7 +443,7 @@ function scopeText(scope: VersionsScope | undefined): string {
   const settling = Object.entries(scope.settling ?? {})
   if (settling.length)
     parts.push(
-      `Still deploying, so not judged and not reloaded: ${settling.map(([app, why]) => `${app} (${why})`).join('; ')}.`
+      `Still deploying — tabs on the builds being rolled out are not judged or reloaded; older builds are: ${settling.map(([app, why]) => `${app} (${why})`).join('; ')}.`
     )
   return parts.join(' ')
 }

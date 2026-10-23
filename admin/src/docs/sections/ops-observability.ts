@@ -441,7 +441,7 @@ GET /api/environments/env-presence         → every registered API, compared`
     },
     {
       type: 'p',
-      text: 'Which build is current survives a rolling deploy. Admin is served by the API itself, so its current build is the one version every API replica serves (the instance roster) once a tab reports it; while replicas serve two versions, admin and the "loaded before the API update" reason are not judged. Any other app takes its newest page load, but while two of its builds have loaded within 10 minutes it reads "Deploy in progress" and is not judged. Force client refresh → Old versions reloads only tabs on another build, or loaded before the API update, on every replica, and leaves an app that is still deploying alone (the toast says so). The Traffic Map’s Old tabs tile still counts per process over its window.'
+      text: 'Which build is current survives a rolling deploy. Admin is served by the API itself, so its current build is the one version every API replica serves (the instance roster) once a tab reports it; while replicas serve two versions, tabs on either of them are not judged and the "loaded before the API update" reason is off. Any other app takes its newest page load, but while two of its builds have loaded within 10 minutes those two read "Deploy in progress" and are not judged. Only the builds being rolled out are shielded: a tab on any older build of that app is old straight away. Force client refresh → Old versions reloads only tabs on another build, or loaded before the API update, on every replica, and leaves tabs on builds still rolling out alone (the toast says so). The Traffic Map’s Old tabs tile still counts per process over its window.'
     },
     {
       type: 'p',

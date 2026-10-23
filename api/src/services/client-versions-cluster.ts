@@ -15,11 +15,13 @@
  * serve pages side by side and the newest page load can come from the old copy:
  *   - admin is served by the API itself, so once the instance roster shows ONE version and some
  *     admin tab reports it, that version is current (whatever loaded last);
- *   - while the roster shows two versions, admin and the "loaded against an older API" reason
- *     are not judged at all (settling);
+ *   - while the roster shows two versions, admin is settling between those two and the "loaded
+ *     against an older API" reason is off;
  *   - any other app (a headless frontend with its own replicas) takes its newest page load, but
- *     while another build has also loaded within SETTLE_MS the app is settling and not judged.
- * A settling app's tabs are never called old: no badge, and "Old versions" leaves them alone.
+ *     while two of its builds have loaded within SETTLE_MS the app is settling between them.
+ * Settling shields only the contested builds (the ones being served right now): a tab on one of
+ * them is never called old — no badge, and "Old versions" leaves it alone. A tab on any OTHER
+ * build of a settling app is older than both and is judged old straight away.
  *
  * Admin routes only (and the admin-only presence badge). Never throws into a request.
  */
@@ -159,12 +161,16 @@ type Judged = Pick<ClientData, 'app' | 'version' | 'user'>
 export interface BuildJudge {
   /** app → its current build (absent = unknown, or settling). */
   current: Map<string, string>
-  /** app → why it is not judged right now (a deploy is still rolling). */
+  /** app → why it is not fully judged right now (a deploy is still rolling). */
   settling: Map<string, string>
+  /** app → the builds a rolling deploy is serving side by side (shielded while settling). */
+  contested: Map<string, Set<string>>
   /** The API version every replica serves; null while replicas disagree (not judged). */
   api: string | null
-  /** Why this tab counts as old; null = current, unknown or settling. */
+  /** Why this tab counts as old; null = current, unknown or on a contested build. */
   older(c: Pick<ClientData, 'app' | 'version'>): 'build' | 'api' | null
+  /** The settling reason when this tab runs one of its app's contested builds, else null. */
+  settlingOf(c: Pick<ClientData, 'app' | 'version'>): string | null
 }
 
 /** See the file header for the rules. `roster` = distinct API versions serving now. */
@@ -200,10 +206,15 @@ export function makeBuildJudge(
 
   const current = new Map<string, string>()
   const settling = new Map<string, string>()
+  const contested = new Map<string, Set<string>>()
   for (const app of new Set([...reported.keys(), ...byApp.keys()])) {
     if (app === API_SERVED_APP) {
-      if (mixedApi) {
+      // Only when admin's builds are API versions (some tab reports one): otherwise the roster
+      // says nothing about admin and the load rule below decides.
+      const seen = reported.get(app)
+      if (mixedApi && opts.roster.some((v) => seen?.has(v))) {
         settling.set(app, `API replicas serve ${opts.roster.join(' and ')}`)
+        contested.set(app, new Set(opts.roster))
         continue
       }
       // Served by the API: the roster's one version is current once a tab reports it.
@@ -216,20 +227,36 @@ export function makeBuildJudge(
     if (!a) continue
     if (a.recent.size > 1) {
       settling.set(app, `${[...a.recent].join(' and ')} both loaded in the last 10 minutes`)
+      contested.set(app, a.recent)
       continue
     }
     current.set(app, a.build)
   }
 
+  const settlingOf = (c: Pick<ClientData, 'app' | 'version'>): string | null => {
+    const app = c.app ?? 'app'
+    const why = settling.get(app)
+    if (!why) return null
+    const build = c.version?.build
+    // A tab that never named a judgeable build is not judged either way.
+    if (!judgeable(build) || contested.get(app)?.has(build)) return why
+    return null
+  }
+
   return {
     current,
     settling,
+    contested,
     api,
+    settlingOf,
     older(c) {
       const v = c.version
       if (!v) return null
       const app = c.app ?? 'app'
-      if (settling.has(app)) return null
+      if (settling.has(app)) {
+        // Mid-deploy: the contested builds are shielded; any other build is older than both.
+        return settlingOf(c) ? null : 'build'
+      }
       const cur = current.get(app)
       if (judgeable(v.build) && cur && v.build !== cur) return 'build'
       if (api && judgeable(v.api) && v.api !== api) return 'api'
@@ -287,7 +314,7 @@ export function groupClientVersions(clients: Judged[], judge?: BuildJudge): Vers
         sockets: 0,
         current: false,
         older,
-        settling: j.settling.get(c.app ?? 'app') ?? null,
+        settling: j.settlingOf(c),
         people: new Map(),
         loaded: null
       }
