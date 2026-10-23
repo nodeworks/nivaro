@@ -1,10 +1,109 @@
 {
-  "generated_at": "2026-10-23T15:34:08.133Z",
+  "generated_at": "2026-10-23T18:36:37.817Z",
   "releases": [
+    {
+      "version": "0.3.12",
+      "tag": "v0.3.12",
+      "date": "2026-10-23T14:36:10-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "presence load script + event-loop, route-jump and per-node delivery monitors",
+              "hash": "46229bbd8"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "signed-out tabs stop asking who they are; dead recordings stop posting",
+              "hash": "ca59bbeb2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "stop the presence refetch storm",
+              "hash": "707ea3a5b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "non-admin 403s on cascade/AI review/pipeline reads; in-flight leak",
+              "hash": "d4207bde6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "config-inventory",
+              "text": "classify nine tables staging reported as new",
+              "hash": "b560ed4e2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tables",
+              "text": "keep row lines in pinned columns",
+              "hash": "aa46c9ee8"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "presence",
+              "text": "stop scanning Redis on every presence ping",
+              "hash": "66ae40b92"
+            },
+            {
+              "section": "Performance",
+              "scope": "traffic-map",
+              "text": "one delta batch per second, nothing for hidden tabs",
+              "hash": "eeb8d3981"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "presence load test and stall alerts on the docs site",
+              "hash": "d7f1fd901"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "traffic-map",
+              "text": "start every page test from a clean address bar",
+              "hash": "3d0693018"
+            },
+            {
+              "section": "Other",
+              "scope": "ai-settings",
+              "text": "mock authenticate for the admin GET",
+              "hash": "eea67c9c5"
+            }
+          ]
+        }
+      ],
+      "count": 11
+    },
     {
       "version": "0.3.11",
       "tag": "v0.3.11",
-      "date": "2026-10-23T11:33:51-04:00",
+      "date": "2026-10-23T11:34:08-04:00",
       "sections": [
         {
           "label": "Added",
