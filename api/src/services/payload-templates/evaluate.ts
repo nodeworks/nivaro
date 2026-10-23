@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import type { Template } from 'liquidjs'
 import { instanceTimezone } from '../liquid-dates.js'
 import {
@@ -11,6 +10,7 @@ import {
   padStart,
   payloadLiquid
 } from '../payload-filters.js'
+import { makeSecretTokens, neutralizeSecretMarkers, SECRET_PLACEHOLDER } from '../secret-markers.js'
 import { type ConditionRule, evalConditionRule } from '../workflow-conditions.js'
 import type { Field, MapSpec, Problem, Transform, ValueSpec } from './types.js'
 
@@ -44,64 +44,7 @@ export { validateSpec } from './validate.js'
 // decoded on the way, fixed text, formula output) and only then swaps the
 // tokens for the real placeholders.
 
-/** The placeholder a body secret renders as; the sender swaps in the value. */
-export const SECRET_PLACEHOLDER = (name: string): string => `⟦nvr-secret:${name}⟧`
-
-const MARKER = '⟦nvr-secret:'
-const NEUTRAL = '⟦nvr-secret\u200b:'
-
-const neutralString = (s: string): string =>
-  s.includes(MARKER) ? s.split(MARKER).join(NEUTRAL) : s
-
-/** Deep copy with `fn` applied to every string — values and object keys. */
-function mapStrings(value: unknown, fn: (s: string) => string): unknown {
-  const seen = new WeakMap<object, unknown>()
-  const walk = (v: unknown): unknown => {
-    if (typeof v === 'string') return fn(v)
-    if (v === null || typeof v !== 'object') return v
-    if (v instanceof Date) return new Date(v.getTime())
-    // Binary and keyed collections are opaque (JSON has no form for them).
-    if (v instanceof Map || v instanceof Set || v instanceof ArrayBuffer || ArrayBuffer.isView(v)) {
-      return v
-    }
-    const hit = seen.get(v)
-    if (hit !== undefined) return hit
-    if (Array.isArray(v)) {
-      const out: unknown[] = []
-      seen.set(v, out)
-      for (const x of v) out.push(walk(x))
-      return out
-    }
-    // Plain records and class instances alike: own enumerable keys.
-    const out: Record<string, unknown> =
-      Object.getPrototypeOf(v) === null ? Object.create(null) : {}
-    seen.set(v, out)
-    for (const k of Object.keys(v)) {
-      const key = fn(k)
-      const x = walk((v as Record<string, unknown>)[k])
-      if (key === '__proto__') {
-        Object.defineProperty(out, key, {
-          value: x,
-          enumerable: true,
-          writable: true,
-          configurable: true
-        })
-      } else out[key] = x
-    }
-    return out
-  }
-  return walk(value)
-}
-
-/**
- * A deep copy of `value` in which no string — value or object key — can pass
- * for a secret placeholder: every `⟦nvr-secret:` gets a zero-width space
- * before its colon. Pure (no imports), so the code-mode render and
- * body-secrets can share it.
- */
-export function neutralizeSecretMarkers(value: unknown): unknown {
-  return mapStrings(value, neutralString)
-}
+export { neutralizeSecretMarkers, SECRET_PLACEHOLDER }
 
 type Frame = { alias: string; numberAs: string; item: unknown; number: number }
 
@@ -115,10 +58,8 @@ type Ctx = {
   values: Record<string, unknown>
   skip: WeakSet<object>
   json: Map<string, unknown>
-  /** Secret names behind the private tokens, by index. */
-  secrets: string[]
-  /** Per-call random digits: record data cannot guess a token. */
-  nonce: string
+  /** Per-call secret token factory (secret-markers.ts). */
+  tokens: ReturnType<typeof makeSecretTokens>
 }
 
 type At = { fieldId: string; path: string }
@@ -372,8 +313,7 @@ async function rawValue(ctx: Ctx, spec: ValueSpec, at: At): Promise<Got> {
         addProblem(ctx, at, `${name} is not a body secret on this API`, 'error')
       }
       // A private token; finalize() swaps it for SECRET_PLACEHOLDER(name).
-      ctx.secrets.push(name)
-      got.value = `\u0001${ctx.nonce}:${ctx.secrets.length - 1}\u0001`
+      got.value = ctx.tokens.token(name)
       return got
     }
     case 'switch': {
@@ -790,8 +730,7 @@ export async function evaluateMap(
     values: {},
     skip: new WeakSet(),
     json: new Map(),
-    secrets: [],
-    nonce: BigInt(`0x${randomBytes(16).toString('hex')}`).toString()
+    tokens: makeSecretTokens()
   }
   const fields = isObj(spec) && Array.isArray(spec.fields) ? spec.fields : null
   if (!fields) {
@@ -805,28 +744,11 @@ export async function evaluateMap(
   } catch (err) {
     addProblem(ctx, { fieldId: '', path: '' }, `Could not evaluate: ${errMsg(err)}`, 'error')
   }
-  const fin = finalizer(ctx)
-  for (const p of ctx.problems) p.message = fin(p.message)
+  const fin = ctx.tokens.finish
+  for (const p of ctx.problems) p.message = fin(p.message) as string
   return {
-    body: mapStrings(body, fin) as Record<string, unknown>,
+    body: fin(body) as Record<string, unknown>,
     problems: ctx.problems,
-    values: mapStrings(ctx.values, fin) as Record<string, unknown>
-  }
-}
-
-/**
- * The one final pass over every leaf and key: neutralize any placeholder the
- * data spelled (including JSON text decoded along the way), then swap this
- * call's private tokens for the real placeholders.
- */
-function finalizer(ctx: Ctx): (s: string) => string {
-  const token = new RegExp(`\\u0001${ctx.nonce}:(\\d+)\\u0001`, 'g')
-  return (s) => {
-    const safe = neutralString(s)
-    if (!safe.includes('\u0001')) return safe
-    return safe.replace(token, (m, i: string) => {
-      const name = ctx.secrets[Number(i)]
-      return name === undefined ? m : SECRET_PLACEHOLDER(name)
-    })
+    values: fin(ctx.values) as Record<string, unknown>
   }
 }
