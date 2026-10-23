@@ -138,10 +138,15 @@ async function readAll<T>(redis: BoardRedis, part: 'live' | 'stats'): Promise<T[
   return out
 }
 
-/** SOCKETS=off processes: keep the board in memory. Idempotent; returns the stop function. */
-export function startBoardReader(redis: BoardRedis): () => void {
+/**
+ * SOCKETS=off processes: keep the board in memory; the socket plugin's getters answer from it.
+ * `peers`: a realtime process reading the OTHER realtime processes' viewers for its own
+ * `record:viewers` broadcasts — its getters keep answering from its own sockets.
+ * Idempotent; returns the stop function.
+ */
+export function startBoardReader(redis: BoardRedis, opts: { peers?: boolean } = {}): () => void {
   stopBoardReader()
-  readerOn = true
+  readerOn = !opts.peers
   const live = async () => {
     try {
       liveBoards = await readAll<BoardLive>(redis, 'live')
@@ -208,6 +213,15 @@ export function resetBoard(): void {
 // ── Views over the board (the socket plugin's getters fall back to these) ───────────────────
 
 const TENANT_ROOM = /^t:([^:]+):(.+)$/
+
+/** Viewers of a (tenant-scoped) record room held by OTHER realtime processes. */
+export function boardPeerViewers(
+  room: string
+): Array<{ socket: string; id: string; name: string }> {
+  const out: Array<{ socket: string; id: string; name: string }> = []
+  for (const b of liveBoards) if (b.node !== INSTANCE_ID) out.push(...(b.viewers?.[room] ?? []))
+  return out
+}
 
 /** Is `userId` in the (tenant-scoped) record room on any realtime process? */
 export function boardIsViewing(room: string, userId: string): boolean {

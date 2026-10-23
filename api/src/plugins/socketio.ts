@@ -58,6 +58,7 @@ import { emitterOnlyAdapter, socketsServed } from '../services/process-role.js'
 import {
   boardConcurrency,
   boardIsViewing,
+  boardPeerViewers,
   boardReaderOn,
   boardRealtimeStats,
   boardRecordViewers,
@@ -1515,7 +1516,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // sharing one background tab each saw the other "also viewing" the record
     // they actually had open (2026-09-14).
     const broadcastViewers = (room: string) => {
-      const viewers = [...(recordViewers.get(room)?.values() ?? [])]
+      // Post-mortem 3.3 — with several realtime processes, the others' viewers come from the
+      // board (a few seconds old); this process's own are current. Single process: none.
+      const viewers = [
+        ...(recordViewers.get(room)?.values() ?? []),
+        ...boardPeerViewers(room).map(({ id, name }) => ({ id, name }))
+      ]
       const m = /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room)
       io.to(room).emit('record:viewers', {
         collection: m?.[1] ?? null,

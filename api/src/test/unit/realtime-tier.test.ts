@@ -396,6 +396,27 @@ describe('realtime tier (NIVARO_ROLE=realtime + SOCKETS=off)', () => {
         }
       ])
       expect(sock.getLocalConcurrency()).toEqual({ sockets: 3, users: 3 })
+      // A realtime process merges the OTHER processes' viewers into its own broadcasts.
+      const { INSTANCE_ID } = await import('../../services/instance-roster.js')
+      board.setBoardsForTests([
+        {
+          node: INSTANCE_ID,
+          at: Date.now(),
+          sockets: 1,
+          users: ['me'],
+          viewers: { 'record:projects:42': [{ socket: 's0', id: 'me', name: 'Me' }] },
+          pages: []
+        },
+        {
+          node: 'rt-b',
+          at: Date.now(),
+          sockets: 1,
+          users: ['u-3'],
+          viewers: { 'record:projects:42': [{ socket: 's3', id: 'u-3', name: 'Cy' }] },
+          pages: []
+        }
+      ])
+      expect(board.boardPeerViewers('record:projects:42').map((v) => v.id)).toEqual(['u-3'])
     } finally {
       board.resetBoard()
     }

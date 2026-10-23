@@ -163,9 +163,14 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     const pc = await import('./services/permission-cache.js')
     if (pc.permissionCacheEnabled()) pc.setPermissionCacheRedis(app.redis)
     // What this process's sockets know, for the SOCKETS=off processes (services/realtime-board.ts).
-    const { startBoardPublisher } = await import('./services/realtime-board.js')
+    const { startBoardPublisher, startBoardReader } = await import('./services/realtime-board.js')
     const stopBoard = startBoardPublisher(app.redis, () => collectLocalBoard(app.io))
-    app.addHook('onClose', async () => stopBoard())
+    // The other realtime processes' viewers, so `record:viewers` lists everyone on the record.
+    const stopPeers = startBoardReader(app.redis, { peers: true })
+    app.addHook('onClose', async () => {
+      stopBoard()
+      stopPeers()
+    })
   }
 
   {
