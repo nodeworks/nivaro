@@ -2,6 +2,7 @@ import type { ServerResponse } from 'node:http'
 import type { FastifyInstance } from 'fastify'
 import { hooks } from '../hooks/registry.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { type JournalListenerEntry, onJournalEntry } from '../services/journal-listeners.js'
 import { trackSse } from '../services/traffic-taps/realtime.js'
 
 /**
@@ -10,6 +11,11 @@ import { trackSse } from '../services/traffic-taps/realtime.js'
  * GET /api/stream → emits `data: {"type","collection","id","timestamp"}`
  * events for every create/update/delete across all collections.
  * Heartbeat comment every 25s keeps proxies from closing idle connections.
+ *
+ * Fed by this process's after-hooks (its own writes) and — post-mortem 3.3 — by the record
+ * changes the other processes journal (the event stream), so a stream opened on any replica
+ * hears every replica's writes. A collection whose live updates are switched off journals
+ * nothing, so its writes on other processes do not show here.
  */
 
 const clients = new Set<ServerResponse>()
@@ -36,6 +42,14 @@ function registerStreamHooks() {
   if (hooksRegistered) return
   hooksRegistered = true
 
+  // Other processes' writes (their own streams heard them from their hooks). Self-hosted only:
+  // the hook feed above is not tenant-filtered either, and cloud keeps it per process.
+  if (!process.env.CLOUD_META_DB_URL)
+    onJournalEntry((entry, origin) => {
+      if (origin !== 'remote' || clients.size === 0) return
+      for (const ev of streamEventsOf(entry)) broadcast(ev)
+    })
+
   for (const action of ['create', 'update', 'delete'] as const) {
     hooks.after('*', action, async (ctx) => {
       broadcast({
@@ -46,6 +60,37 @@ function registerStreamHooks() {
       })
     })
   }
+}
+
+const ACTIONS = new Set(['create', 'update', 'delete'])
+
+/**
+ * Exported for tests: the admin stream events a journaled record change stands for — one per
+ * record (a batched-mode entry lists several); none for a raw bulk write (`*`, no action), which
+ * the writing process's own hooks never saw either.
+ */
+export function streamEventsOf(entry: JournalListenerEntry): Array<{
+  type: string
+  collection: string
+  id: string | null
+  timestamp: string
+}> {
+  if (entry.event !== 'collection:update') return []
+  const m = /^(?:t:[^:]+:)?collection:(.+)$/.exec(entry.room)
+  if (!m) return []
+  const p = entry.payload ?? {}
+  if (typeof p.action !== 'string' || !ACTIONS.has(p.action)) return []
+  const collection = typeof p.collection === 'string' ? p.collection : m[1]
+  const ids =
+    p.batched === true && Array.isArray(p.items)
+      ? (p.items as unknown[])
+      : p.item != null
+        ? [p.item]
+        : []
+  const timestamp = new Date().toISOString()
+  return ids
+    .filter((id) => id != null && String(id) !== '*')
+    .map((id) => ({ type: p.action as string, collection, id: String(id), timestamp }))
 }
 
 export async function streamRoutes(app: FastifyInstance) {

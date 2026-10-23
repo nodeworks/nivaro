@@ -255,12 +255,20 @@ export async function buildServer() {
       const { wireJournalFallback } = await import('./services/event-journal.js')
       const stopFallback = wireJournalFallback(app.redis)
       app.addHook('onClose', async () => stopFallback())
-      // SOCKETS=off: what the realtime processes' sockets know (viewers, pages, socket list).
-      const { socketsServed } = await import('./services/process-role.js')
-      if (!socketsServed()) {
-        const { startBoardReader } = await import('./services/realtime-board.js')
-        const stopBoard = startBoardReader(app.redis)
-        app.addHook('onClose', async () => stopBoard())
+      // Post-mortem 3.3 — the realtime board: what every process's sockets know (viewers, page
+      // pings, socket lists), shared once a second process is around (services/realtime-board.ts):
+      // replicas that all serve sockets, a realtime tier, SOCKETS=off readers. A lone process
+      // only registers itself every 5 s. Self-hosted only (cloud keeps per-process answers).
+      if (!process.env.CLOUD_META_DB_URL && app.redis) {
+        const { socketsServed } = await import('./services/process-role.js')
+        const { startBoard } = await import('./services/realtime-board.js')
+        const { collectLocalBoard } = await import('./plugins/socketio.js')
+        const stopBoard = startBoard(app.redis, {
+          serves: socketsServed(),
+          collect: () => collectLocalBoard(app.io)
+        })
+        // Off the board as soon as the drain starts, so nobody trusts this process's viewers.
+        app.addHook('preClose', async () => stopBoard())
       }
       const { flushRawWriteQueue } = await import('./services/raw-write-announcer.js')
       app.addHook('onClose', async () => {

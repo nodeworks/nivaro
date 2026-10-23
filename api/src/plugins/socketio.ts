@@ -64,6 +64,7 @@ import { emitterOnlyAdapter, socketsServed } from '../services/process-role.js'
 import {
   boardConcurrency,
   boardIsViewing,
+  boardMergeOn,
   boardPeerViewers,
   boardReaderOn,
   boardRealtimeStats,
@@ -132,9 +133,15 @@ let pagePresenceReader:
   | null = null
 /** Users whose latest page ping is `path` (this replica's sockets). */
 export function usersOnPath(path: string): Array<{ id: string; name: string; since: number }> {
-  // Post-mortem 3.3 — SOCKETS=off: the realtime processes' board (services/realtime-board.ts).
-  if (boardReaderOn()) return boardUsersOnPath(path, currentTenantKey())
-  return pagePresenceReader ? pagePresenceReader(path) : []
+  const local = pagePresenceReader ? pagePresenceReader(path) : []
+  // Post-mortem 3.3 — the other processes' page pings (services/realtime-board.ts).
+  if (!boardMergeOn()) return local
+  const seen = new Map(local.map((u) => [u.id, u]))
+  for (const u of boardUsersOnPath(path, currentTenantKey())) {
+    const cur = seen.get(u.id)
+    if (!cur || u.since < cur.since) seen.set(u.id, u)
+  }
+  return [...seen.values()]
 }
 
 let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
@@ -143,8 +150,9 @@ let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
  * replica's sockets): who an auto-record signal about a route reaches.
  */
 export function usersOnPathPrefix(prefixes: string[]): string[] {
-  if (boardReaderOn()) return boardUsersOnPathPrefix(prefixes, currentTenantKey())
-  return pagePrefixReader ? pagePrefixReader(prefixes) : []
+  const local = pagePrefixReader ? pagePrefixReader(prefixes) : []
+  if (!boardMergeOn()) return local
+  return [...new Set([...local, ...boardUsersOnPathPrefix(prefixes, currentTenantKey())])]
 }
 
 import { noteSocket } from '../services/traffic-map.js'
@@ -182,11 +190,10 @@ const recordViewers = new Map<string, Map<string, { id: string; name: string }>>
 export function isUserViewing(collection: string, item: string, userId: string): boolean {
   // Cloud: record rooms are per tenant — the caller's tenant (its request context).
   const room = tenantScopedRoom(`record:${collection}:${item}`)
-  if (boardReaderOn()) return boardIsViewing(room, userId)
   const map = recordViewers.get(room)
-  if (!map) return false
-  for (const v of map.values()) if (v.id === userId) return true
-  return false
+  for (const v of map?.values() ?? []) if (v.id === userId) return true
+  // Post-mortem 3.3 — viewing on another process (the board, entries younger than 3 s).
+  return boardMergeOn() && boardIsViewing(room, userId)
 }
 
 /** Per-socket connection metadata for the realtime diagnostics page (#270). */
@@ -210,8 +217,9 @@ let _ioRef: SocketIOServer | null = null
 
 /** The person a socket authenticated as on THIS node (null before auth or elsewhere). */
 export function socketUserOf(socketId: string): { id: string; name: string } | null {
-  if (boardReaderOn()) return boardSocketUser(socketId)
-  return socketMeta.get(socketId)?.user ?? null
+  const own = socketMeta.get(socketId)
+  if (own) return own.user ?? null
+  return boardMergeOn() ? boardSocketUser(socketId) : null
 }
 
 /**
@@ -401,10 +409,12 @@ function socketTenantKey(socketId: string): string | null {
 
 /** Local concurrency snapshot for the sampling cron (#275). */
 export function getLocalConcurrency(): { sockets: number; users: number } {
-  if (boardReaderOn()) return boardConcurrency()
   const users = new Set<string>()
   for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
-  return { sockets: _ioRef?.engine?.clientsCount ?? socketMeta.size, users: users.size }
+  const sockets = _ioRef?.engine?.clientsCount ?? socketMeta.size
+  // Post-mortem 3.3 — every process's sockets (the board), people counted once.
+  if (boardMergeOn()) return boardConcurrency({ sockets, users })
+  return { sockets, users: users.size }
 }
 
 /**
@@ -481,12 +491,18 @@ export function getRecordViewerSnapshot(): Array<{
   }> = []
   // Cloud: only the caller's tenant's record rooms (viewer names must not cross tenants).
   const tenant = currentTenantKey()
-  if (boardReaderOn()) return boardRecordViewers(tenant)
   for (const [scoped, map] of recordViewers) {
     const { tenant: roomTenant, room } = splitTenantRoom(scoped)
     if (roomTenant !== tenant) continue
     const m = room.match(/^record:([^:]+):(.+)$/)
     if (m) out.push({ collection: m[1], item: m[2], viewers: [...map.values()] })
+  }
+  if (!boardMergeOn()) return out
+  // Post-mortem 3.3 — viewers on the other processes (the board).
+  for (const r of boardRecordViewers(tenant)) {
+    const hit = out.find((o) => o.collection === r.collection && o.item === r.item)
+    if (hit) hit.viewers.push(...r.viewers)
+    else out.push(r)
   }
   return out
 }

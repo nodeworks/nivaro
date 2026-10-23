@@ -12,7 +12,7 @@ import {
 } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
-import { boardReaderOn } from '../services/realtime-board.js'
+import { boardMergeOn, boardStats } from '../services/realtime-board.js'
 import { visibleRecordIds } from '../services/socket-access.js'
 import { readSocketHealth, socketBufferState } from '../services/socket-health.js'
 import {
@@ -169,9 +169,10 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
    */
   /** SOCKETS=off: the socket is held by a realtime process, which keeps its inspector ring. */
   const heldElsewhere = (id: string): string | null => {
-    if (!boardReaderOn()) return null
-    const s = getRealtimeStats().sockets.find((x) => x.id === id) as { node?: unknown } | undefined
-    return s ? String(s.node ?? 'unknown') : null
+    if (!boardMergeOn()) return null
+    // The other processes' socket lists (never this one's own: those inspect here).
+    for (const b of boardStats()) if (b.sockets?.some((x) => x.id === id)) return String(b.node)
+    return null
   }
   const inspectTarget = (id: string) => {
     const scope = tenantScope()
