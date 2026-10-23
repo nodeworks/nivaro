@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { isSumCapRule, type SumCapRule } from '../hooks/aggregate-caps.js'
 import {
@@ -6,11 +6,13 @@ import {
   type AiCollectionSettings,
   invalidateAiSettingsCache
 } from '../hooks/ai-validation.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isSystemCollection } from '../services/system-collections.js'
 
 // Per-collection AI feature configuration (content validation + duplicate detection).
-// Registered under /api/ai-settings; admin only.
+// Registered under /api/ai-settings; admin only, except that GET answers any
+// signed-in person with `{ review_enabled }` alone.
 
 // validation_rules is a mixed array: legacy free-text rule strings evaluated by
 // the AI validator, plus typed rule objects (e.g. sum_cap) evaluated by their
@@ -67,12 +69,34 @@ function parseLoose<T>(raw: unknown, fallback: T): T {
   }
 }
 
+/** What a non-admin may read of a collection's AI settings. */
+export function publicAiSettings(row: Record<string, unknown> | undefined | null): {
+  review_enabled: boolean
+} {
+  return { review_enabled: row?.review_enabled === true || row?.review_enabled === 1 }
+}
+
+/** requireAdmin's answer without the throw: an admin, on a key not limited to named collections. */
+function isFullReader(req: FastifyRequest): boolean {
+  return !!req.isAdmin && !req.user?.api_key_scopes
+}
+
 export async function aiSettingsRoutes(app: FastifyInstance) {
+  // Admins read the whole row. Any other signed-in person reads only whether
+  // the "Review with AI" button is on (record pages decide whether to offer
+  // it) — never the rules, hints, thresholds or the other switches.
   app.get<{ Params: { collection: string } }>(
     '/:collection',
-    { preHandler: requireAdmin },
+    { preHandler: authenticate },
     async (req, reply) => {
       const { collection } = req.params
+      if (!isFullReader(req)) {
+        if (isSystemCollection(collection)) return reply.send({ data: { review_enabled: false } })
+        const row = await db('nivaro_ai_collection_settings')
+          .where({ collection })
+          .first('review_enabled')
+        return reply.send({ data: publicAiSettings(row) })
+      }
       const row = await db('nivaro_ai_collection_settings').where({ collection }).first()
       return reply.send({ data: formatRow(collection, row) })
     }

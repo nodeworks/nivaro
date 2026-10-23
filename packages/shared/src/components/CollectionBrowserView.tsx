@@ -5234,8 +5234,10 @@ export function CollectionBrowserView({
     retry: false
   })
   const templateId = pipelineData?.binding?.template
+  // Admins read the whole template; everyone else its outline (states + the
+  // transitions their role may run) — GET /pipelines/:id answers them 403.
   const { data: pipelineTemplate } = useQuery({
-    queryKey: ['cbv-pipeline-template', templateId],
+    queryKey: ['cbv-pipeline-template', templateId, isAdmin ? 'full' : 'outline'],
     queryFn: () =>
       client
         .request<{
@@ -5243,7 +5245,7 @@ export function CollectionBrowserView({
             transitions: Array<{ id: string; label: string }>
             states?: Array<{ id: string; key: string; label: string; color?: string | null }>
           }
-        }>(get(`/pipelines/${templateId}`))
+        }>(get(isAdmin ? `/pipelines/${templateId}` : `/pipelines/${templateId}/outline`))
         .then((r) => r.data),
     enabled: !!templateId,
     retry: false

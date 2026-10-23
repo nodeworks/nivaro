@@ -39,6 +39,10 @@ interface Entry {
   n: number
   ms: number
   rows: number
+  /** Inside `authenticate` right now (set and cleared by inflightAuth). */
+  inAuth: boolean
+  /** Epoch ms the client closed the connection before the response finished; null = still there. */
+  goneAt: number | null
 }
 
 /** What a finished request carries for the taps (`req.__nvrSql`). */
@@ -79,12 +83,44 @@ export function inflightStart(req: unknown): void {
       running: new Map(),
       n: 0,
       ms: 0,
-      rows: 0
+      rows: 0,
+      inAuth: false,
+      goneAt: null
     })
     byReq.set(req, id)
   } catch {
     /* never */
   }
+}
+
+function entryOf(req: unknown): Entry | undefined {
+  if (!req || typeof req !== 'object') return undefined
+  const id = byReq.get(req)
+  return id ? byTrace.get(id) : undefined
+}
+
+/** `authenticate` started (true) or ended (false) for this request — the in-flight 'auth' phase. */
+export function inflightAuth(req: unknown, on: boolean): void {
+  if (byTrace.size === 0) return
+  const e = entryOf(req)
+  if (e) e.inAuth = on
+}
+
+/**
+ * The client closed the connection before the response finished. When the client leaves AFTER
+ * its whole body arrived, Fastify fires neither onRequestAbort (the request was complete) nor
+ * onResponse (the response never finishes): without this the entry sat in the list for an hour,
+ * its age growing (a signed-out POST /api/presence/ping read "stuck in auth for 6 minutes" on
+ * staging, 2026-10-23). `replied` = the reply was already handed over — nothing more will run,
+ * so the entry ends now; otherwise it is marked gone and ends when the handler replies (onSend).
+ */
+export function inflightClientGone(req: unknown, replied: boolean): void {
+  if (replied) {
+    inflightEnd(req)
+    return
+  }
+  const e = entryOf(req)
+  if (e && e.goneAt == null) e.goneAt = Date.now()
 }
 
 /** The response went out (or the client left): stamp the SQL figures, drop the entry. */
@@ -185,8 +221,11 @@ export interface InflightRow {
   running: Array<{ sql: string; age_ms: number }>
   /** The signed-in person (#2761); null for anonymous / key callers. Names resolve at read. */
   user_id: string | null
-  /** auth = not signed in yet · sql = a statement is out · handler = running app code. */
+  /** sql = a statement is out · auth = inside `authenticate` · handler = anything else (hooks,
+   *  body read, app code). Public routes (no authenticate) never read 'auth'. */
   phase: 'auth' | 'sql' | 'handler'
+  /** The client already closed the connection; the server is still finishing its work. */
+  client_gone?: boolean
 }
 
 function callerOf(req: unknown): string {
@@ -235,11 +274,8 @@ export function listInflight(opts: { exclude?: string | null; limit?: number } =
       rows: e.rows,
       running,
       user_id: userIdOf(e.req),
-      phase: running.length
-        ? 'sql'
-        : userIdOf(e.req) || callerOf(e.req) !== 'anon'
-          ? 'handler'
-          : 'auth'
+      phase: running.length ? 'sql' : e.inAuth ? 'auth' : 'handler',
+      ...(e.goneAt != null ? { client_gone: true } : {})
     })
   }
   rows.sort((a, b) => b.age_ms - a.age_ms)

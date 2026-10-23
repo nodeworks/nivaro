@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
+import { withAuthDeadline } from '../services/auth-deadline.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { mcpOAuthEnabled, oauthAudienceRefusal, oauthScopeRefusal } from '../services/mcp-config.js'
@@ -10,6 +11,7 @@ import { notePrincipalKind } from '../services/permission-cache.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser, span } from '../services/request-trace.js'
 import { callerBreakerCheck } from '../services/traffic-breaker.js'
+import { inflightAuth } from '../services/traffic-inflight.js'
 import type { Role, User } from '../types.js'
 
 export interface ApiKeyScope {
@@ -111,11 +113,15 @@ export async function enforceRateLimit(
   const resetAt = windowStart + KEY_WINDOW_SECONDS
   let count = 0
   try {
-    const results = await req.server.redis
-      .multi()
-      .incrby(`nvr:keyrl:${bucket}:${windowStart}`, cost)
-      .expire(`nvr:keyrl:${bucket}:${windowStart}`, KEY_WINDOW_SECONDS + 5)
-      .exec()
+    // A counter that does not answer lets the request through, like one that errors.
+    const results = await withAuthDeadline(
+      req.server.redis
+        .multi()
+        .incrby(`nvr:keyrl:${bucket}:${windowStart}`, cost)
+        .expire(`nvr:keyrl:${bucket}:${windowStart}`, KEY_WINDOW_SECONDS + 5)
+        .exec(),
+      'the rate-limit counter'
+    )
     count = Number(results?.[0]?.[1] ?? 0)
   } catch {
     return
@@ -259,7 +265,7 @@ async function authenticateApiKey(req: FastifyRequest, reply: FastifyReply, toke
  */
 async function authenticateSimulatedKey(req: FastifyRequest, reply: FastifyReply, token: string) {
   req.authMethod = 'key_sim'
-  const raw = await req.server.redis.get(`keysim:${token}`)
+  const raw = await withAuthDeadline(req.server.redis.get(`keysim:${token}`), 'the key store')
   if (!raw) throw httpError(401, 'The run-as-key session expired', 'KEY_SIM_EXPIRED')
   let payload: { key_id?: string | number; admin_id?: string }
   try {
@@ -392,7 +398,13 @@ function principalKind(req: FastifyRequest): string {
 
 export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   // Timed as its own phase (Traffic Map latency split, #1151); a pass-through outside a request.
-  return span('auth', () => authenticateRequest(req, reply))
+  // The in-flight list reads 'auth' only while this runs (a no-op when nothing is tracked).
+  inflightAuth(req, true)
+  try {
+    return await span('auth', () => authenticateRequest(req, reply))
+  } finally {
+    inflightAuth(req, false)
+  }
 }
 
 async function authenticateRequest(req: FastifyRequest, reply: FastifyReply) {
@@ -430,7 +442,10 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
       // Masquerade token — admin-issued, Redis-backed, resolves to the target user
       if (token.startsWith('nvm_')) {
         req.authMethod = 'masquerade'
-        const raw = await req.server.redis.get(`masq:${token}`)
+        const raw = await withAuthDeadline(
+          req.server.redis.get(`masq:${token}`),
+          'the masquerade store'
+        )
         if (!raw) throw httpError(401, 'Masquerade session expired', 'MASQUERADE_EXPIRED')
         let payload: { user_id?: string; admin_id?: string }
         try {
@@ -454,7 +469,9 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
       // connection ends at once; the account must still be active.
       if (token.startsWith(ACCESS_PREFIX)) {
         req.authMethod = 'oauth'
-        const rec = mcpOAuthEnabled() ? await resolveAccessToken(req.server.redis, token) : null
+        const rec = mcpOAuthEnabled()
+          ? await withAuthDeadline(resolveAccessToken(req.server.redis, token), 'the token store')
+          : null
         if (!rec) throw httpError(401, 'The access token is invalid or expired', 'TOKEN_INVALID')
         const user = await db<User>('nivaro_users')
           .where({ id: rec.user_id, status: 'active' })
