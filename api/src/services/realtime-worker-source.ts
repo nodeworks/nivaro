@@ -39,6 +39,12 @@ var ORIGIN = self.location.origin
 var PING_MS = 5000
 var DEAD_AFTER_MS = 16000
 var TOKEN_WAIT_MS = 5000
+/* A tab that answers with no token is signed out (401) or cannot mint one: ask again with a
+   doubling wait, not every second (one signed-out tab sent 16,000 401s in 8 hours). A new or
+   focused tab, or a sign-in, asks again at once. */
+var TOKEN_RETRY_MIN_MS = 1000
+var TOKEN_RETRY_MAX_MS = 60000
+var tokenRetryMs = TOKEN_RETRY_MIN_MS
 
 importScripts(ORIGIN + '/socket.io/socket.io.min.js')
 
@@ -251,6 +257,12 @@ function requestToken() {
   }, TOKEN_WAIT_MS)
 }
 
+/* A tab arrived or came to the front while signed out: it may have just signed in. */
+function retryTokenNow() {
+  tokenRetryMs = TOKEN_RETRY_MIN_MS
+  requestToken()
+}
+
 function sendHello() {
   if (!hello) return
   var features = ['coalesce'].concat(hello.features || []).filter(function (f, i, a) { return a.indexOf(f) === i })
@@ -304,6 +316,7 @@ function ensureSocket() {
   })
   socket.on('auth:ok', function () {
     authed = true
+    tokenRetryMs = TOKEN_RETRY_MIN_MS
     sendHello()
     rejoinAll()
     if (everAuthed && lastSeq > 0) emitRaw('catchup', { cursor: lastSeq })
@@ -423,6 +436,7 @@ function onMessage(port, ev) {
       if (socket && socket.connected) {
         post(port, { t: 'ev', event: 'connect', args: [] })
         if (authed) post(port, { t: 'ev', event: 'auth:ok', args: [] })
+        else retryTokenNow()
       }
       return
     case 'pong':
@@ -430,6 +444,7 @@ function onMessage(port, ev) {
     case 'active':
       activePort = port
       if (st.pageAt && authed) emitRaw('page:at', st.pageAt)
+      if (!authed && socket && socket.connected) retryTokenNow()
       return
     case 'token':
       if (msg.req !== tokenReq.id) return
@@ -437,10 +452,12 @@ function onMessage(port, ev) {
       tokenReq.timer = null
       if (msg.token && socket && socket.connected) socket.emit('auth', { token: msg.token })
       else if (!msg.token) {
+        var wait = tokenRetryMs
+        tokenRetryMs = Math.min(tokenRetryMs * 2, TOKEN_RETRY_MAX_MS)
         tokenReq.timer = setTimeout(function () {
           tokenReq.timer = null
           if (!authed && socket && socket.connected) requestToken()
-        }, 1000)
+        }, wait)
       }
       return
     case 'emit':

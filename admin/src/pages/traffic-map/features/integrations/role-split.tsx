@@ -15,7 +15,10 @@ interface Group {
   req: number
   error: number
   p95: number
+  /** Cron ticks + import runs. */
   background: number
+  /** Sockets, live streams, MCP calls (absent from older servers). */
+  live?: number
   pool: { peak_used: number; max: number; saturated_pct: number; wait_p95_ms: number } | null
 }
 interface RoleSplit {
@@ -50,7 +53,8 @@ function RoleSplitPanel() {
               <th className={th}>Requests</th>
               <th className={th}>Errors</th>
               <th className={th}>p95</th>
-              <th className={th}>Background calls</th>
+              <th className={th}>Job runs</th>
+              <th className={th}>Live + MCP calls</th>
               <th className={th}>Pool busiest</th>
             </tr>
           </thead>
@@ -65,6 +69,7 @@ function RoleSplitPanel() {
                 </td>
                 <td className={td}>{fmtLag(g.p95)}</td>
                 <td className={td}>{fmtCount(g.background)}</td>
+                <td className={td}>{fmtCount(g.live ?? 0)}</td>
                 <td className={td}>
                   {g.pool ? `${g.pool.peak_used} of ${g.pool.max}` : '—'}
                   {g.pool && g.pool.saturated_pct > 0 ? (

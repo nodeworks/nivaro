@@ -125,6 +125,34 @@ describe('realtime shared worker source (#2475)', () => {
     expect(b.events('auth:ok').length).toBe(1)
   })
 
+  it('backs off when a signed-out tab has no token, and asks at once when a tab comes back', () => {
+    const { socket, scope, attach } = boot()
+    const a = attach()
+    a.send({ t: 'hello', app: 'admin' })
+    socket.connect()
+    const setTimeoutMock = scope.setTimeout as ReturnType<typeof vi.fn>
+    const lastAsk = () => a.received.filter((m) => m.t === 'need-token').at(-1)?.req
+    const answerEmpty = () => {
+      a.send({ t: 'token', req: lastAsk(), token: null })
+      return setTimeoutMock.mock.calls.at(-1) as [() => void, number]
+    }
+    const waits: number[] = []
+    for (let i = 0; i < 8; i++) {
+      const [retry, ms] = answerEmpty()
+      waits.push(ms)
+      retry()
+    }
+    expect(waits).toEqual([1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000])
+    // the tab comes to the front (it may have signed in): ask now, and the wait starts over
+    const asked = a.received.filter((m) => m.t === 'need-token').length
+    a.send({ t: 'active' })
+    expect(a.received.filter((m) => m.t === 'need-token').length).toBe(asked + 1)
+    expect(answerEmpty()[1]).toBe(1000)
+    // a token signs the socket in
+    a.send({ t: 'token', req: lastAsk(), token: 'ws-9' })
+    expect(socket.sent('auth')).toEqual([{ token: 'ws-9' }])
+  })
+
   it('joins a collection room once for two tabs and routes updates to the holders only', () => {
     const { socket, attach } = boot()
     const a = attach()

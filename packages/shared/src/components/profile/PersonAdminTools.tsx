@@ -24,7 +24,7 @@ export function ForceReloadCard({ profile: p }: { profile: PersonProfile }) {
   const push = useMutation({
     mutationFn: () =>
       client
-        .request<{ data: { sockets: number; users: number } }>(
+        .request<{ data: { sockets: number; users: number; nodes?: number; partial?: boolean } }>(
           post('/realtime/force-refresh', {
             user_ids: [p.id],
             seconds: Number(seconds) || 15,
@@ -32,11 +32,17 @@ export function ForceReloadCard({ profile: p }: { profile: PersonProfile }) {
           })
         )
         .then((r) => r.data),
-    onSuccess: ({ sockets }) =>
+    // The reload rides the person's room on every server; only the tab count can fall short.
+    // A server without `nodes` counts only the tabs on the server that took this request.
+    onSuccess: ({ sockets, nodes, partial }) =>
       toast.success(
         sockets > 0
-          ? `Reload pushed to ${sockets} open tab${sockets === 1 ? '' : 's'}`
-          : 'Reload sent — they have no tab connected to this node right now'
+          ? `Reload pushed to ${sockets} open tab${sockets === 1 ? '' : 's'}${partial ? ' (another server did not answer — there may be more)' : ''}`
+          : partial
+            ? 'Reload sent — another server did not answer, so their open tabs could not be counted'
+            : nodes != null
+              ? 'Reload sent — they have no tab open right now'
+              : 'Reload sent to every tab they have open (tabs on other servers are not counted)'
       ),
     onError: (e) => toast.error(errorText(e, 'Failed to push the reload'))
   })

@@ -108,13 +108,36 @@ describe('business events (#2189)', () => {
 })
 
 describe('web vs worker split (#2198)', () => {
-  const snap = (req: number, background: number, pool?: object): TrafficSnapshot =>
+  const snap = (req: number, jobRuns: number, pool?: object, live = 0): TrafficSnapshot =>
     ({
       totals: { req, error: 1, p95: req },
-      sources: background
-        ? [{ id: 'cron:x', label: 'x', kind: 'cron', req: background, error: 0 }]
-        : [],
-      ext: pool ? { pool } : undefined
+      sources: [
+        // a job's writes land in the core rows too; only the tap's run count is judged
+        ...(jobRuns ? [{ id: 'cron:x', label: 'x', kind: 'cron', req: 99, error: 0 }] : []),
+        ...(live
+          ? [{ id: 'socket', label: 'Browser sockets', kind: 'socket', req: live, error: 0 }]
+          : [])
+      ],
+      ext: {
+        ...(pool ? { pool } : {}),
+        ...(jobRuns
+          ? {
+              sources: {
+                sources: {
+                  'cron:x': {
+                    label: 'x',
+                    kind: 'cron',
+                    runs: jobRuns,
+                    errors: 0,
+                    p95_ms: 1,
+                    last: null
+                  },
+                  'flow:y': { label: 'y', kind: 'flow', runs: 7, errors: 0, p95_ms: 1, last: null }
+                }
+              }
+            }
+          : {})
+      }
     }) as unknown as TrafficSnapshot
   it('groups nodes by roster role and sums them', () => {
     const snaps = new Map([
@@ -134,13 +157,40 @@ describe('web vs worker split (#2198)', () => {
     expect(out.groups.find((g) => g.role === 'worker')?.background).toBe(40)
     expect(out.note).toBeNull()
   })
-  it('names a node with no role "unset" and warns when web carries the jobs', () => {
+  it('never counts sockets, streams or MCP on the web processes as background jobs', () => {
+    const snaps = new Map([
+      ['a', snap(100, 0, undefined, 500)],
+      ['c', snap(5, 0)]
+    ])
+    const roles = new Map([
+      ['a', 'web'],
+      ['c', 'worker']
+    ])
+    const out = splitByRole(snaps, roles, 60)
+    expect(out.groups.find((g) => g.role === 'web')).toMatchObject({ background: 0, live: 500 })
+    expect(out.note).toBeNull()
+  })
+  it('names a node with no role "unset" and warns when web runs the jobs', () => {
     expect(roleOf(null)).toBe('unset')
     expect(roleOf('Worker ')).toBe('worker')
     expect(roleOf('bad role!')).toBe('unset')
+    const snaps = new Map([
+      ['a', snap(100, 3)],
+      ['c', snap(5, 0)]
+    ])
+    const out = splitByRole(
+      snaps,
+      new Map([
+        ['a', 'web'],
+        ['c', 'worker']
+      ]),
+      60
+    )
+    expect(out.groups.find((g) => g.role === 'web')?.background).toBe(3)
+    expect(out.note).toMatch(/web processes/)
     const note = roleNote([
-      { role: 'web', nodes: 1, req: 1, error: 0, p95: 1, background: 30, pool: null },
-      { role: 'worker', nodes: 1, req: 1, error: 0, p95: 1, background: 0, pool: null }
+      { role: 'web', nodes: 1, req: 1, error: 0, p95: 1, background: 30, live: 0, pool: null },
+      { role: 'worker', nodes: 1, req: 1, error: 0, p95: 1, background: 0, live: 0, pool: null }
     ])
     expect(note).toMatch(/web processes/)
   })
