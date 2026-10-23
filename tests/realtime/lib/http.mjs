@@ -6,8 +6,10 @@ export class Client {
   /**
    * @param {{ base?: string, bearer?: string | null, name?: string }} [opts]
    */
-  constructor({ base = cfg.base, bearer = null, name = 'client' } = {}) {
+  constructor({ base = cfg.base, bearer = null, name = 'client', extraHeaders = {} } = {}) {
     this.base = base.replace(/\/$/, '')
+    /** Sent on every request (cloud suite: X-Tenant-Host). */
+    this.extraHeaders = extraHeaders
     this.bearer = bearer
     this.name = name
     /** @type {Map<string, string>} */
@@ -19,7 +21,7 @@ export class Client {
   }
 
   headers(extra = {}) {
-    const h = { ...extra }
+    const h = { ...this.extraHeaders, ...extra }
     if (this.bearer) h.authorization = `Bearer ${this.bearer}`
     const c = this.cookieHeader()
     if (c) h.cookie = c

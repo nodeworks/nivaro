@@ -32,9 +32,7 @@ export async function run({ only, args }) {
       try {
         await waitReady(n, 2000)
       } catch {
-        try {
-          start(n)
-        } catch {}
+        await start(n).catch(() => {})
         await waitReady(n, 240_000)
       }
     }
@@ -109,8 +107,8 @@ export async function run({ only, args }) {
       const since = Date.now()
       const loop = writeLoop(9000, 200, `loss-${how.slice(0, 4)}`)
       await sleep(1000)
-      if (how === 'SIGKILL') kill(victim)
-      else stop(victim, 15)
+      const stopP = how === 'SIGKILL' ? kill(victim) : stop(victim, 15)
+      await stopP
       const stopMs = Date.now() - since
       const { ids, failed } = await loop
       const recon = socks.map((s) => ({ s, d: s.disconnects.find((x) => x.at >= since) }))
@@ -127,7 +125,10 @@ export async function run({ only, args }) {
       t.metric('detect_ms', pct(moved.map((r) => r.d.at - since - 1000)))
       t.metric('reconnect_ms', pct(reauth))
       t.metric('writes', { ok: ids.length, failed: failed.length })
-      t.check('every socket on the lost replica noticed (no hang)', moved.length >= onVictim, { moved: moved.length, onVictim })
+      // onVictim is the process's own count (it may include sockets another run left behind);
+      // the fleet itself must have lost some and every one of the 16 must be signed in again.
+      t.check('the lost replica held some of the fleet and they noticed (no hang)', moved.length > 0, { moved: moved.length, onVictim })
+      t.check('every fleet socket is connected and signed in again', socks.every((s) => s.connected), socks.filter((s) => !s.connected).length)
       t.check('every disconnected socket signed in again', reauth.every((x) => x != null), reauth)
       t.check('reconnect p95 under 10 s', (pct(reauth).p95 ?? 1e9) < 10_000, pct(reauth))
       const after = await socketCounts()
@@ -157,11 +158,12 @@ export async function run({ only, args }) {
     t.cleanup(() => streams.forEach((s) => s.close()))
     const victim = nodes[0]
     const since = Date.now()
-    stop(victim, 15)
+    const stopP = stop(victim, 15)
     const ended = await poll(() => (streams.filter((s) => s.ended).length > 0 ? streams.filter((s) => s.ended) : null), { timeoutMs: 15_000 })
     t.metric('streams_ended', streams.map((s) => (s.ended ? s.ended.at - since : null)))
     t.check('streams on the stopped replica ended within the drain window', (ended?.length ?? 0) > 0)
     t.check('no stream outlived the stop by more than 12 s', streams.every((s) => !s.ended || s.ended.at - since < 12_000))
+    await stopP
   }, { timeoutMs: 120_000 })
 
   await suite.case('new connections during a replica loss all succeed (Traefik health check)', async (t) => {
@@ -169,7 +171,7 @@ export async function run({ only, args }) {
       fx.closeAll()
       await ensureAllUp()
     })
-    kill(nodes[0])
+    await kill(nodes[0])
     await sleep(500)
     const t0 = Date.now()
     const socks = []
@@ -280,8 +282,8 @@ export async function run({ only, args }) {
     const socks = await fleet(10)
     const since = Date.now()
     for (const w of ['web-1', 'web-2']) {
-      stop(w, 15)
-      start(w)
+      await stop(w, 15)
+      await start(w)
       await waitReady(w, 240_000)
       await sleep(3000)
     }
@@ -300,11 +302,11 @@ export async function run({ only, args }) {
     async (t) => {
       t.cleanup(async () => {
         fx.closeAll()
-        recreate('web-2', {})
+        await recreate('web-2', {})
         await waitReady('web-2', 240_000)
         await ensureAllUp()
       })
-      recreate('web-2', { RTCI_IMAGE_WEB2: altImage })
+      await recreate('web-2', { RTCI_IMAGE_WEB2: altImage })
       await waitReady('web-2', 240_000)
       const v1 = (await (await fetch(`${directUrl('web-1')}/api/version`)).json()).version
       const v2 = (await (await fetch(`${directUrl('web-2')}/api/version`)).json()).version
@@ -369,7 +371,9 @@ export async function run({ only, args }) {
     t.cleanup(fx.closeAll)
     const healthy = await fx.sock('bob')
     healthy.join('chat:join', { room: 'global' })
-    const stalled = await rawStalledSocket(await fx.browser('carol'), 'global')
+    // Straight to a socket process: Traefik and toxiproxy would otherwise absorb the backlog in
+    // their own buffers and the server would never see a slow reader.
+    const stalled = await rawStalledSocket(await fx.browser('carol'), 'global', directUrl(nodes[0]))
     t.cleanup(() => stalled.close())
     t.check('raw stalled socket signed in', stalled.authed, stalled.log.slice(0, 5))
     await sleep(500)
@@ -377,7 +381,7 @@ export async function run({ only, args }) {
     const m = healthy.mark()
     const poster = await fx.browser('alice')
     const big = () => Buffer.from(Array.from({ length: 6000 }, () => Math.floor(Math.random() * 256))).toString('base64')
-    const n = 400
+    const n = Number(args?.['slow-messages'] ?? 1500)
     const t0 = Date.now()
     let sent = 0
     for (let i = 0; i < n; i += 20) {
@@ -404,9 +408,9 @@ export async function run({ only, args }) {
  * A socket.io client on a raw `ws` connection whose reading can be paused (the TCP window then
  * fills and the server's send buffer grows) — what a frozen tab or a dead mobile link looks like.
  */
-async function rawStalledSocket(browser, room) {
+async function rawStalledSocket(browser, room, base = cfg.base) {
   const token = await browser.wsToken()
-  const url = `${cfg.base.replace(/^http/, 'ws')}/socket.io/?EIO=4&transport=websocket`
+  const url = `${base.replace(/^http/, 'ws')}/socket.io/?EIO=4&transport=websocket`
   const ws = new WS(url, { perMessageDeflate: false })
   const out = { authed: false, log: [], events: [], frames: 0, closedAt: null }
   ws.on('message', (data) => {

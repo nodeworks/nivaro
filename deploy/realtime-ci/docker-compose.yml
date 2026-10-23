@@ -256,5 +256,68 @@ services:
     depends_on:
       - toxiproxy
 
+  # ── Cloud mode (profile cloud, `node tests/realtime/run.mjs --suite cloud`) ─────────────────
+  # Two tenants on Postgres (as the shared/Neon tiers run), tenant resolved per request and per
+  # socket from X-Tenant-Host / Host, two API replicas on one Redis (channel prefix of their own).
+  # The realtime role refuses cloud mode, so these are single-role processes: this checks that
+  # no event crosses tenants through the Redis adapter or the event stream.
+  pg:
+    image: postgres:16-alpine
+    profiles: ['cloud']
+    environment:
+      POSTGRES_USER: rtci
+      POSTGRES_PASSWORD: rtci_pg_pw
+      POSTGRES_DB: postgres
+    volumes:
+      - ./cloud-init.sql:/docker-entrypoint-initdb.d/cloud-init.sql:ro
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - '127.0.0.1:${RTCI_PG_PORT:-24432}:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U rtci -d cloud_meta']
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  cloud-1: &cloud
+    image: ${RTCI_IMAGE:-nivaro-rtci:local}
+    profiles: ['cloud']
+    restart: 'no'
+    depends_on:
+      pg:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: &cloud-env
+      NODE_ENV: production
+      PORT: '3055'
+      CLOUD_META_DB_URL: postgres://rtci:rtci_pg_pw@pg:5432/cloud_meta
+      PROVISION_SECRET: rtci-provision-secret
+      REDIS_URL: redis://redis:6379
+      REDIS_CHANNEL_PREFIX: 'rtci-cloud:'
+      SESSION_SECRET: realtime-ci-session-secret-0123456789abcdef
+      COOKIE_SECURE: 'false'
+      OIDC_ENABLED: 'false'
+      PUBLIC_URL: http://localhost:${RTCI_CLOUD1_PORT:-24131}
+      ADMIN_URL: http://localhost:${RTCI_CLOUD1_PORT:-24131}
+      CRON_TICKS: 'off'
+      CACHE_WARM: 'off'
+      SOCKET_SWEEP_MS: '5000'
+      LOG_LEVEL: ${RTCI_LOG_LEVEL:-info}
+    ports:
+      - '127.0.0.1:${RTCI_CLOUD1_PORT:-24131}:3055'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3055/api/ready >/dev/null || exit 1']
+      interval: 3s
+      timeout: 3s
+      retries: 200
+      start_period: 10s
+
+  cloud-2:
+    <<: *cloud
+    ports:
+      - '127.0.0.1:${RTCI_CLOUD2_PORT:-24132}:3055'
+
 volumes:
   mssql-data:
+  pg-data:

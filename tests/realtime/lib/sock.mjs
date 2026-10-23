@@ -44,7 +44,11 @@ export class LiveSocket {
   async open({ timeoutMs = 15_000 } = {}) {
     // No session cookie on the socket: like a browser on another origin, it signs in with the
     // ws-token. The engine's own cookie jar (withCredentials) keeps Traefik's sticky cookie.
-    const extraHeaders = { 'user-agent': `rtci-socket/${this.id}` }
+    const extraHeaders = {
+      'user-agent': `rtci-socket/${this.id}`,
+      ...(this.client?.extraHeaders ?? {}),
+      ...(this.o.extraHeaders ?? {})
+    }
     this.s = io(this.base, {
       path: '/socket.io/',
       transports: this.o.transports,
@@ -69,7 +73,14 @@ export class LiveSocket {
       const reconnect = this.authCount > 0
       this.authCount++
       for (const [ev, payload] of this.joins) s.emit(ev, payload)
-      if (reconnect && this.o.catchup && this.lastSeq > 0) s.emit('catchup', { cursor: this.lastSeq })
+      // The shipped client sends `catchup` right after the rejoins (catchupDelayMs 0); a delay
+      // lets the suites tell a rejoin/catch-up race from a journal that lacks the events.
+      const cursor = this.lastSeq
+      if (reconnect && this.o.catchup && cursor > 0) {
+        const delay = this.o.catchupDelayMs ?? Number(process.env.RTCI_CATCHUP_DELAY_MS ?? 0)
+        if (delay > 0) setTimeout(() => s.emit('catchup', { cursor }), delay)
+        else s.emit('catchup', { cursor })
+      }
     })
     s.on('catchup:cursor', (p) => {
       if (this.lastSeq === 0 && typeof p?.seq === 'number') this.lastSeq = p.seq

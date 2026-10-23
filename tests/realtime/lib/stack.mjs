@@ -1,6 +1,6 @@
 // Driving the stack: docker compose (through rtci.sh, which knows the running mode and image),
 // toxiproxy toxics, per-node socket counts and process samples.
-import { spawnSync } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { cfg, directUrl, Redis, socketNodes, stackDir } from './config.mjs'
 import { adminClient, waitHttp } from './http.mjs'
@@ -13,23 +13,25 @@ export function compose(...args) {
   return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
 }
 
-export function composeOk(...args) {
-  const r = compose(...args)
-  if (r.status !== 0) throw new Error(`compose ${args.join(' ')}: ${r.out.slice(-800)}`)
-  return r.out
+/**
+ * Async `docker compose …` — never spawnSync while sockets are open: a blocked event loop would
+ * delay every disconnect/reconnect the suite is timing (a `docker stop` takes the drain window).
+ */
+export function composeAsync(args, env = {}) {
+  return new Promise((resolveP, reject) => {
+    execFile(rtci, ['compose', ...args], { encoding: 'utf8', env: { ...process.env, ...env } }, (err, stdout, stderr) => {
+      if (err) reject(new Error(`compose ${args.join(' ')}: ${`${stdout}${stderr}`.slice(-800)}`))
+      else resolveP(`${stdout}${stderr}`)
+    })
+  })
 }
 
-export const kill = (svc, signal = 'SIGKILL') => composeOk('kill', '-s', signal, svc)
-export const stop = (svc, t = 15) => composeOk('stop', '-t', String(t), svc)
-export const start = (svc) => composeOk('start', svc)
+export const kill = (svc, signal = 'SIGKILL') => composeAsync(['kill', '-s', signal, svc])
+export const stop = (svc, t = 15) => composeAsync(['stop', '-t', String(t), svc])
+export const start = (svc) => composeAsync(['start', svc])
 /** Recreate one service (picks up RTCI_IMAGE_* overrides in env). */
-export const recreate = (svc, env = {}) => {
-  const r = spawnSync(rtci, ['compose', 'up', '-d', '--no-deps', '--force-recreate', svc], {
-    encoding: 'utf8',
-    env: { ...process.env, ...env }
-  })
-  if (r.status !== 0) throw new Error(`recreate ${svc}: ${r.stderr.slice(-800)}`)
-}
+export const recreate = (svc, env = {}) =>
+  composeAsync(['up', '-d', '--no-deps', '--force-recreate', svc], env)
 
 export async function waitReady(node, timeoutMs = 180_000) {
   return waitHttp(`${directUrl(node)}/api/ready`, { timeoutMs, everyMs: 1000 })

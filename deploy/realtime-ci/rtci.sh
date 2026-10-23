@@ -114,7 +114,7 @@ case "$cmd" in
     node "$ROOT/tests/realtime/seed.mjs" "$@"
     ;;
   down)
-    RTCI_MODE=tier RTCI_V2=1 dc down -v --remove-orphans
+    RTCI_MODE=tier RTCI_V2=1 dc --profile cloud --profile tools down -v --remove-orphans
     rm -rf "$STATE"
     ;;
   ps)

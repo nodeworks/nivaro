@@ -28,7 +28,7 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
-const SUITES = ['parity', 'auth', 'failover', 'load']
+const SUITES = ['parity', 'auth', 'failover', 'load', 'cloud']
 const want = String(args.suite ?? 'parity')
 const list = want === 'all' ? ['parity', 'auth', 'failover'] : want.split(',')
 for (const s of list) if (!SUITES.includes(s)) throw new Error(`unknown suite ${s} (${SUITES.join(', ')})`)
