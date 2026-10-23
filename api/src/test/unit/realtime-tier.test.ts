@@ -467,6 +467,35 @@ describe('realtime tier (NIVARO_ROLE=realtime + SOCKETS=off)', () => {
     expect(sock.isUserViewing('projects', '42', 'u-1')).toBe(false)
   })
 
+  it('force refresh and the minimum-build preview from a SOCKETS=off process reach realtime tabs', async () => {
+    const { CLIENT_DATA_KEY } = await import('../../services/client-versions-cluster.js')
+    const sock = await import('../../plugins/socketio.js')
+    const { ws, events } = await connect(realtimePort)
+    try {
+      await waitFor(() => realtime.io.sockets.sockets.size > 0)
+      const held = [...realtime.io.sockets.sockets.values()].at(-1)
+      if (!held) throw new Error('no socket')
+      held.data[CLIENT_DATA_KEY] = {
+        app: 'admin',
+        version: { build: 'b-old', api: null, tab: 't1', loaded: Date.now() },
+        user: { id: 'u-9', name: 'Tab Owner' },
+        node: 'rt'
+      }
+      // The emit side used by POST /realtime/force-refresh and the sticky/min-build routes.
+      const sent = await sock.emitForceRefresh(
+        { match: (c) => c.id === held.id },
+        { seconds: 5, message: 'Update ready', reason: 'min-build' }
+      )
+      expect(sent.sockets).toBe(1)
+      await waitFor(() => events.some(([e]) => e === 'client:force-refresh'))
+      // GET /realtime/min-build/preview counts tabs from the same cluster read.
+      const v = await sock.getClusterClientVersionGroups(null)
+      expect(JSON.stringify(v.groups)).toContain('b-old')
+    } finally {
+      ws.close()
+    }
+  })
+
   it('keeps the SOCKETS=off process out of the adapter quorum and off the broadcast feed', async () => {
     const adapter = web.io.of('/').adapter as unknown as {
       requestChannel: string
