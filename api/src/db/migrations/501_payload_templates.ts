@@ -50,7 +50,7 @@ export async function up(knex: Knex): Promise<void> {
       t.integer('template_id').notNullable().references('id').inTable('nivaro_payload_templates')
       t.integer('version').notNullable()
       t.string('mode', 10).notNullable()
-      t.text('body').nullable()
+      t.text('body').notNullable()
       t.string('note', 1000).notNullable()
       t.uuid('published_by').nullable().references('id').inTable('nivaro_users')
       t.dateTime('published_at').notNullable().defaultTo(utcNow(knex))
