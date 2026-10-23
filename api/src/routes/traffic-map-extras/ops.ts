@@ -38,13 +38,22 @@ import {
 } from '../../services/traffic-inflight.js'
 import { currentTrafficSec } from '../../services/traffic-map.js'
 import { callerCost, validCallerKey } from '../../services/traffic-taps/caller-cost.js'
-import { capacityReport, startCapacitySampling } from '../../services/traffic-taps/capacity.js'
+import {
+  capacityReport,
+  startCapacitySampling,
+  stopCapacitySampling
+} from '../../services/traffic-taps/capacity.js'
 import {
   changeMarkers,
   recordBootVersion,
-  startEpochMarkers
+  startEpochMarkers,
+  stopEpochMarkers
 } from '../../services/traffic-taps/change-markers.js'
-import { nodeHealth, startNodeHealth } from '../../services/traffic-taps/node-health.js'
+import {
+  nodeHealth,
+  startNodeHealth,
+  stopNodeHealth
+} from '../../services/traffic-taps/node-health.js'
 import { screensFor, screensReport } from '../../services/traffic-taps/screens.js'
 
 const WINDOWS = new Set([60, 300, 900])
@@ -62,7 +71,16 @@ export async function trafficOpsRoutes(app: FastifyInstance): Promise<void> {
     startCapacitySampling()
     startEpochMarkers()
     // Which version this boot ran (for deploy markers) — once the app reference is set.
-    setTimeout(() => void recordBootVersion(), 10_000).unref?.()
+    const bootVersion = setTimeout(() => void recordBootVersion(), 10_000)
+    bootVersion.unref?.()
+    // The samplers are process-wide intervals: they live exactly as long as the app that
+    // started them (a closed app must not leave one ticking against a torn-down database).
+    app.addHook('onClose', async () => {
+      clearTimeout(bootVersion)
+      stopCapacitySampling()
+      stopEpochMarkers()
+      stopNodeHealth()
+    })
   }
 
   const badWindow = { error: 'window must be 60, 300 or 900', code: 'WINDOW_INVALID' }

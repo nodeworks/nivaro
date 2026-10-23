@@ -143,7 +143,7 @@ export function startNodeHealth(): void {
   timer.unref?.()
 }
 
-/** Test hook. */
+/** Stop sampling (the owning app closed; tests). */
 export function stopNodeHealth(): void {
   if (timer) clearInterval(timer)
   timer = null
@@ -151,7 +151,11 @@ export function stopNodeHealth(): void {
   hist = null
   observer?.disconnect()
   observer = null
-  setJournalObserver(null)
+  try {
+    setJournalObserver(null)
+  } catch {
+    /* as in start: no journal figures to detach */
+  }
   started = false
   samples.length = 0
   heapPoints.length = 0

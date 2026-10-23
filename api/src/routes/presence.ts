@@ -472,16 +472,41 @@ export async function visibleToViewer(
 ): Promise<Set<string>> {
   const all = new Set(ids.map((i) => String(i).toUpperCase()))
   if (isAdmin || all.size === 0) return all
-  const viewerRestrictions = new Map<string, Set<string>>()
+  const viewerRestrictions = await viewerRestrictionsOf(viewer.id)
+  if (viewerRestrictions.size === 0) return all
+  const out = visibleUnderRestrictions(
+    viewerRestrictions,
+    [...all],
+    await listedRestrictions([...all])
+  )
+  // The viewer always sees themself.
+  const me = String(viewer.id).toUpperCase()
+  if (all.has(me)) out.add(me)
+  return out
+}
+
+/** A viewer's own restrictions: dimension → allowed values (dimensions with no values left out). */
+export async function viewerRestrictionsOf(viewerId: string): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>()
   const own = (await db('nivaro_user_scopes')
-    .where({ user: viewer.id, mode: 'restrict' })
+    .where({ user: viewerId, mode: 'restrict' })
     .select('dimension', 'values')) as Array<Record<string, unknown>>
   for (const r of own) {
     const vals = parseScopeValues(r.values)
-    if (vals.length > 0) viewerRestrictions.set(String(r.dimension), new Set(vals))
+    if (vals.length > 0) out.set(String(r.dimension), new Set(vals))
   }
-  if (viewerRestrictions.size === 0) return all
-  const listedIds = [...all]
+  return out
+}
+
+/** What the visibility rule needs about the LISTED people: who is an admin, their restrictions. */
+export interface ListedRestrictions {
+  admins: Set<string>
+  /** upper-cased user id → dimension → their restricted values */
+  theirs: Map<string, Map<string, Set<string>>>
+}
+
+async function listedRestrictions(listedIds: string[]): Promise<ListedRestrictions> {
+  if (listedIds.length === 0) return { admins: new Set(), theirs: new Map() }
   const [adminRows, scopeRows] = await Promise.all([
     db('nivaro_users as u')
       .join('nivaro_roles as ro', 'ro.id', 'u.role')
@@ -501,14 +526,28 @@ export async function visibleToViewer(
     perDim.set(String(r.dimension), new Set(parseScopeValues(r.values)))
     theirs.set(key, perDim)
   }
-  const me = String(viewer.id).toUpperCase()
+  return { admins, theirs }
+}
+
+/**
+ * The visibility rule for a RESTRICTED viewer, given nothing about the viewer but their
+ * restrictions — so two viewers restricted the same way get the same set (each viewer's own
+ * row is added by the caller). Listed admins are visible to everyone; anyone else must be
+ * restricted on every dimension the viewer restricts, overlapping it. Ids upper-cased.
+ */
+export function visibleUnderRestrictions(
+  viewerRestrictions: Map<string, Set<string>>,
+  listedIds: string[],
+  listed: ListedRestrictions
+): Set<string> {
   const out = new Set<string>()
-  for (const uid of listedIds) {
-    if (uid === me || admins.has(uid)) {
+  for (const raw of listedIds) {
+    const uid = String(raw).toUpperCase()
+    if (listed.admins.has(uid)) {
       out.add(uid)
       continue
     }
-    const perDim = theirs.get(uid)
+    const perDim = listed.theirs.get(uid)
     if (!perDim) continue
     let ok = true
     for (const [dim, allowed] of viewerRestrictions) {
@@ -521,6 +560,24 @@ export async function visibleToViewer(
     if (ok) out.add(uid)
   }
   return out
+}
+
+/**
+ * The visibility signature: everything about a viewer that decides WHO they see in presence.
+ * Admins see everyone, an unrestricted viewer sees everyone, a restricted viewer sees what their
+ * restrictions (dimension → values, order-free) allow. Two viewers with one signature see the
+ * same people, apart from each always seeing themself.
+ */
+export function visibilitySignature(
+  isAdmin: boolean,
+  restrictions: Map<string, Set<string>>
+): string {
+  if (isAdmin) return 'admin'
+  if (restrictions.size === 0) return 'open'
+  const parts = [...restrictions.entries()]
+    .map(([dim, vals]) => [dim, [...vals].sort()] as const)
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  return `r:${JSON.stringify(parts)}`
 }
 
 function parseScopeValues(raw: unknown): string[] {
@@ -551,17 +608,24 @@ function awayOverride(prefs: Record<string, unknown>): boolean {
   return true
 }
 
-// ── GET /presence/online — shared base + per-viewer answer, both briefly cached ──────────────
+// ── GET /presence/online — shared base, shared signature answer, thin per-person step ────────
 //
 // Every open browser re-read this on each presence event; with ~45 people that was ~40 req/s
-// of a ~250 ms, ~12-query handler and it pegged the event loop (staging 2026-10-23). The answer
-// splits in two:
+// of a ~250 ms, ~12-query handler and it pegged the event loop (staging 2026-10-23). At 250
+// people (≈ 400 tabs) a per-USER answer cache missed almost every time (load test 2026-10-23:
+// 170–190 req/s, pool full). The answer is built in three layers:
 //   - the BASE: who is online and everything about them that does not depend on who asks
-//     (statuses, scopes, huddles, masquerades, stuck minutes). One per tenant per ONLINE_TTL_MS,
-//     single-flight, so a burst of viewers shares one computation.
-//   - the VIEWER answer: who this viewer may see (visibleToViewer), page labels through their
-//     own read access, stuck only where they may know it, admin-only fields. Cached per
-//     tenant + viewer + role + admin flag for the same short window, also single-flight.
+//     (statuses, scopes, huddles, masquerades, stuck minutes, managers, who is an admin and how
+//     each person is restricted). One per tenant per ONLINE_TTL_MS, single-flight.
+//   - the SIGNATURE answer: the rows a visibility signature may see, built once per signature
+//     (visibilitySignature: 'admin', 'open', or the viewer's restrictions). Admin-only fields
+//     (current_path, recording_id, stale_build) live only in the 'admin' signature's rows. Same
+//     TTL, single-flight — every viewer restricted the same way shares one computation.
+//   - the PERSON step, the only work per caller: their own row (a viewer always sees themself),
+//     page labels through their OWN read access (row filters can name $CURRENT_USER, so labels
+//     are never shared), and stuck only where they may know it (admins, the person's manager —
+//     from the base, no query). The whole per-person answer is still cached per viewer for the
+//     same short window so one person's tabs share it.
 // Visibility is always applied per viewer on top of the base — the base is never sent.
 const ONLINE_TTL_MS = 1500
 const ONLINE_WINDOW_MS = PRESENCE_ONLINE_WINDOW_MS
@@ -580,6 +644,10 @@ interface PresenceBase {
   adminNames: Map<string, string>
   /** Stuck minutes for EVERYONE listed; each viewer sees only the people they may know about. */
   stuckMinutesByUser: Map<string, number>
+  /** Listed person → their manager (upper-cased ids), for "stuck is shown to the manager". */
+  managerByUser: Map<string, string>
+  /** Who is an admin and how each listed person is restricted — read once, on first need. */
+  listed: () => Promise<ListedRestrictions>
 }
 
 interface PresenceAdminExtras {
@@ -596,6 +664,23 @@ interface OnlineAnswer {
   }
 }
 
+/** One base row, built for a signature; `page`, `state` and `stuck` are filled per person. */
+interface BuiltRow {
+  uid: string
+  row: Record<string, unknown>
+  idle: boolean
+  out: Record<string, unknown>
+}
+
+interface SignatureAnswer {
+  base: PresenceBase
+  admin: boolean
+  /** Every base row, built for this signature (admin fields only when `admin`). */
+  built: BuiltRow[]
+  /** Upper-cased ids this signature may see; null = everyone. */
+  visible: Set<string> | null
+}
+
 const baseCache = createShortCache<PresenceBase>('presence-online-base', ONLINE_TTL_MS, {
   max: 200
 })
@@ -603,6 +688,16 @@ const adminExtrasCache = createShortCache<PresenceAdminExtras>(
   'presence-online-admin',
   ONLINE_TTL_MS,
   { max: 200 }
+)
+const signatureCache = createShortCache<SignatureAnswer>(
+  'presence-online-signature',
+  ONLINE_TTL_MS,
+  { max: 2000 }
+)
+const restrictionsCache = createShortCache<Map<string, Set<string>>>(
+  'presence-online-restrictions',
+  ONLINE_TTL_MS,
+  { max: 5000 }
 )
 const viewerCache = createShortCache<OnlineAnswer>('presence-online-viewer', ONLINE_TTL_MS, {
   max: 2000
@@ -612,8 +707,13 @@ const viewerCache = createShortCache<OnlineAnswer>('presence-online-viewer', ONL
 export function resetPresenceOnlineCache(): void {
   baseCache.forget()
   adminExtrasCache.forget()
+  signatureCache.forget()
+  restrictionsCache.forget()
   viewerCache.forget()
 }
+
+/** Tests / benchmarks: how many signature answers were computed (cache misses). */
+export const presenceOnlineCounters = { signatures: 0, persons: 0 }
 
 const upper = (v: unknown) => String(v ?? '').toUpperCase()
 
@@ -635,6 +735,20 @@ function readOnlineRows(): Promise<Array<Record<string, unknown>>> {
         .limit(200) as Promise<Array<Record<string, unknown>>>,
     { retries: 1 }
   )
+}
+
+/** A promise memo that forgets a failure, so the next caller retries instead of re-failing. */
+function memo<T>(load: () => Promise<T>): () => Promise<T> {
+  let p: Promise<T> | null = null
+  return () => {
+    if (!p) {
+      p = load()
+      p.catch(() => {
+        p = null
+      })
+    }
+    return p
+  }
 }
 
 async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
@@ -689,17 +803,23 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
     }
   }
 
-  // Custom statuses (#33) and "appear away", from user preferences.
+  // Custom statuses (#33), "appear away" and managers, from the user rows.
   const statusByUser = new Map<string, { text: string; emoji: string | null }>()
   const awayByUser = new Set<string>()
+  const managerByUser = new Map<string, string>()
   if (userIds.length > 0) {
     try {
       const prefRows = (await db('nivaro_users')
         .whereIn('id', userIds)
-        .select('id', 'preferences')) as Array<{ id: string; preferences: unknown }>
+        .select('id', 'preferences', 'manager_id')) as Array<{
+        id: string
+        preferences: unknown
+        manager_id?: string | null
+      }>
       for (const pr of prefRows) {
-        const prefs = parsePrefs(pr.preferences)
         const uid = String(pr.id).toUpperCase()
+        if (pr.manager_id) managerByUser.set(uid, String(pr.manager_id).toUpperCase())
+        const prefs = parsePrefs(pr.preferences)
         if (awayOverride(prefs)) awayByUser.add(uid)
         const cs = prefs.custom_status as
           | { text?: string; emoji?: string | null; expires_at?: string | null }
@@ -713,7 +833,7 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
         })
       }
     } catch {
-      /* decoration only */
+      /* decoration only — no manager known means stuck stays with admins */
     }
   }
 
@@ -750,7 +870,7 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
   }
 
   // #1394 — stuck: at the keyboard, same route, nothing saved for ten minutes. Worked out for
-  // everyone listed; shown only to admins and the person's own manager (viewer step).
+  // everyone listed; shown only to admins and the person's own manager (person step).
   const stuckMinutesByUser = new Map<string, number>()
   try {
     const people = rows.map((r) => ({
@@ -789,7 +909,10 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
     huddling,
     masqByUser,
     adminNames,
-    stuckMinutesByUser
+    stuckMinutesByUser,
+    managerByUser,
+    // Only restricted viewers need it; read once per base for all of them.
+    listed: memo(() => listedRestrictions([...new Set(userIds.map(upper))]))
   }
 }
 
@@ -829,14 +952,81 @@ async function loadAdminExtras(base: PresenceBase): Promise<PresenceAdminExtras>
   return { recordingByUser, staleBuilds }
 }
 
-/** One viewer's answer on top of the shared base. */
-async function onlineAnswerFor(
+/** Every base row, built for one signature — nothing in it depends on the individual viewer. */
+function buildRows(base: PresenceBase, isAdmin: boolean, extras: PresenceAdminExtras): BuiltRow[] {
+  const { awayByUser, statusByUser, huddling, scopesByUser, masqByUser, adminNames } = base
+  return base.rows.map((r) => {
+    const uid = upper(r.user_id)
+    const idle = presenceRowIdle(r, awayByUser.has(uid))
+    const out: Record<string, unknown> = {
+      user_id: r.user_id,
+      display_name: r.display_name,
+      role_name: r.role_name,
+      // The raw route can carry a record id the viewer may not read; everyone gets `page`
+      // (labelled only through their own read access). Administrators keep the route.
+      current_path: isAdmin ? r.current_path : undefined,
+      last_seen: r.last_seen,
+      // Reported by the client: the heartbeat alone cannot tell a person
+      // at their desk from a tab left open. Older rows (written before the
+      // column existed, or by a client that does not report it) read as
+      // active rather than guessing at idle.
+      // The flag is a client's claim; last_active is when it last saw real
+      // input. Trusting the flag alone left people idle forever whenever a
+      // client wrote presence without reporting it — the row said idle and
+      // nothing ever said otherwise. Recent activity wins.
+      // "Appear away" beats activity: the person asked to read as away.
+      away: awayByUser.has(uid),
+      is_idle: idle,
+      // #1394 — 'active' | 'idle' | 'stuck'; stuck only for viewers who
+      // may know it (admins, the person's manager), else active/idle. Set per person.
+      state: idle ? 'idle' : 'active',
+      stuck: null,
+      // How long they've been away from the keyboard, for the "Idle · 12m"
+      // label — null while active or unknown.
+      idle_minutes: (() => {
+        if (awayByUser.has(uid)) return null
+        const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
+        if (!active) return null
+        const mins = Math.floor((Date.now() - active) / 60_000)
+        return mins >= Math.floor(IDLE_AFTER_MS / 60_000) ? mins : null
+      })(),
+      last_active: r.last_active ?? null,
+      // Rendered per person (labels go through the viewer's own read access): the panel has
+      // neither the display template nor the row.
+      page: null,
+      app: (r.app as string | null) ?? null,
+      typing_room: r.typing_room,
+      // Flat list for the subtitle line, keyed map for grouping.
+      custom_status: statusByUser.get(uid) ?? null,
+      in_huddle: huddling.has(uid),
+      scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
+      scopes_by_dimension: Object.fromEntries(scopesByUser.get(uid) ?? []),
+      recording_id: extras.recordingByUser.get(uid) ?? null,
+      ...(extras.staleBuilds.has(uid) ? { stale_build: extras.staleBuilds.get(uid) } : {}),
+      // Set while an admin is masquerading as this user — the row is
+      // theirs, the person behind it is someone else.
+      masquerade: masqByUser.has(uid)
+        ? {
+            admin_id: masqByUser.get(uid) ?? null,
+            admin_name: adminNames.get(masqByUser.get(uid) ?? '') ?? 'an administrator'
+          }
+        : null
+    }
+    return { uid, row: r, idle, out }
+  })
+}
+
+const NO_EXTRAS: PresenceAdminExtras = { recordingByUser: new Map(), staleBuilds: new Map() }
+
+/** The rows one visibility signature may see, built once and shared by every viewer with it. */
+async function signatureAnswer(
   base: PresenceBase,
-  viewer: User,
   isAdmin: boolean,
+  restrictions: Map<string, Set<string>>,
   tenant: string
-): Promise<OnlineAnswer> {
-  // ── Who this viewer may see ──────────────────────────────────────────
+): Promise<SignatureAnswer> {
+  presenceOnlineCounters.signatures++
+  // ── Who this signature may see ──────────────────────────────────────
   // A restricted user sees only people restricted the SAME way, plus admins
   // (who are visible to everyone). Each dimension the VIEWER restricts must
   // overlap: a Zone-1 viewer sees Zone-1 people; a Zone-1 + BLT viewer sees
@@ -848,116 +1038,55 @@ async function onlineAnswerFor(
   // (The raw user_presence collection is still readable through /items for
   // anyone with read permission — sealing that needs a row filter on the
   // collection, which this does not attempt.)
-  const visibleIds = await visibleToViewer(
-    viewer,
-    isAdmin,
-    base.rows.map((r) => String(r.user_id)).filter(Boolean)
-  )
-  const visibleRows = base.rows.filter((row) => visibleIds.has(upper(row.user_id)))
-  const userIds = visibleRows.map((r) => String(r.user_id)).filter(Boolean)
-
-  const extras: PresenceAdminExtras =
-    isAdmin && userIds.length > 0
+  const listedIds = base.rows.map((r) => upper(r.user_id)).filter(Boolean)
+  const visible =
+    isAdmin || restrictions.size === 0 || listedIds.length === 0
+      ? null
+      : visibleUnderRestrictions(restrictions, listedIds, await base.listed())
+  const extras =
+    isAdmin && listedIds.length > 0
       ? await adminExtrasCache.get(tenant, () => loadAdminExtras(base))
-      : { recordingByUser: new Map(), staleBuilds: new Map() }
+      : NO_EXTRAS
+  return { base, admin: isAdmin, built: buildRows(base, isAdmin, extras), visible }
+}
+
+/** One viewer's answer on top of their signature's: own row, labels, stuck. */
+async function personAnswer(sig: SignatureAnswer, viewer: User): Promise<OnlineAnswer> {
+  presenceOnlineCounters.persons++
+  const { base } = sig
+  const me = upper(viewer.id)
+  // The viewer always sees themself, whatever their signature shows.
+  const visible = sig.visible
+  const entries = sig.built.filter(
+    (e) => e.uid !== '' && (!visible || visible.has(e.uid) || e.uid === me)
+  )
 
   const recordLabels = await resolveRecordLabels(
-    visibleRows.map((r) => (r.current_path as string | null) ?? null),
+    entries.map((e) => (e.row.current_path as string | null) ?? null),
     viewer
   )
-  const pageLabel = (path: string | null | undefined) => presencePageLabel(path, recordLabels)
 
   // #1394 — stuck reads their request log, which is more than the page they are on: shown to
   // admins and to the person's own manager only.
   const stuckByUser = new Map<string, { minutes: number; label: string | null }>()
-  try {
-    const stuckVisible = visibleRows.filter((r) => base.stuckMinutesByUser.has(upper(r.user_id)))
-    if (stuckVisible.length > 0) {
-      let mayKnow: Set<string> | null = null
-      if (!isAdmin) {
-        const mine = (await db('nivaro_users')
-          .whereIn(
-            'id',
-            stuckVisible.map((r) => String(r.user_id))
-          )
-          .where('manager_id', viewer.id)
-          .select('id')) as Array<{ id: string }>
-        mayKnow = new Set(mine.map((m) => String(m.id).toUpperCase()))
-      }
-      for (const r of stuckVisible) {
-        const uid = upper(r.user_id)
-        if (mayKnow && !mayKnow.has(uid)) continue
-        stuckByUser.set(uid, {
-          minutes: base.stuckMinutesByUser.get(uid) as number,
-          label: stuckLabel(r.current_path as string | null, recordLabels)
-        })
-      }
-    }
-  } catch {
-    /* decoration only */
+  for (const e of entries) {
+    const minutes = base.stuckMinutesByUser.get(e.uid)
+    if (minutes == null) continue
+    if (!sig.admin && base.managerByUser.get(e.uid) !== me) continue
+    stuckByUser.set(e.uid, {
+      minutes,
+      label: stuckLabel(e.row.current_path as string | null, recordLabels)
+    })
   }
 
-  const { awayByUser, statusByUser, huddling, scopesByUser, masqByUser, adminNames } = base
   return {
-    data: visibleRows.map((r) => {
-      const uid = upper(r.user_id)
+    data: entries.map((e) => {
+      const stuck = stuckByUser.get(e.uid) ?? null
       return {
-        user_id: r.user_id,
-        display_name: r.display_name,
-        role_name: r.role_name,
-        // The raw route can carry a record id the viewer may not read; everyone gets `page`
-        // (labelled only through their own read access). Administrators keep the route.
-        current_path: isAdmin ? r.current_path : undefined,
-        last_seen: r.last_seen,
-        // Reported by the client: the heartbeat alone cannot tell a person
-        // at their desk from a tab left open. Older rows (written before the
-        // column existed, or by a client that does not report it) read as
-        // active rather than guessing at idle.
-        // The flag is a client's claim; last_active is when it last saw real
-        // input. Trusting the flag alone left people idle forever whenever a
-        // client wrote presence without reporting it — the row said idle and
-        // nothing ever said otherwise. Recent activity wins.
-        // "Appear away" beats activity: the person asked to read as away.
-        away: awayByUser.has(uid),
-        is_idle: presenceRowIdle(r, awayByUser.has(uid)),
-        // #1394 — 'active' | 'idle' | 'stuck'; stuck only for viewers who
-        // may know it (admins, the person's manager), else active/idle.
-        state: presenceRowIdle(r, awayByUser.has(uid))
-          ? 'idle'
-          : stuckByUser.has(uid)
-            ? 'stuck'
-            : 'active',
-        stuck: stuckByUser.get(uid) ?? null,
-        // How long they've been away from the keyboard, for the "Idle · 12m"
-        // label — null while active or unknown.
-        idle_minutes: (() => {
-          if (awayByUser.has(uid)) return null
-          const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
-          if (!active) return null
-          const mins = Math.floor((Date.now() - active) / 60_000)
-          return mins >= Math.floor(IDLE_AFTER_MS / 60_000) ? mins : null
-        })(),
-        last_active: r.last_active ?? null,
-        // Rendered here because only the server can: the panel has neither
-        // the display template nor the row.
-        page: pageLabel(r.current_path as string | null),
-        app: (r.app as string | null) ?? null,
-        typing_room: r.typing_room,
-        // Flat list for the subtitle line, keyed map for grouping.
-        custom_status: statusByUser.get(uid) ?? null,
-        in_huddle: huddling.has(uid),
-        scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
-        scopes_by_dimension: Object.fromEntries(scopesByUser.get(uid) ?? []),
-        recording_id: extras.recordingByUser.get(uid) ?? null,
-        ...(extras.staleBuilds.has(uid) ? { stale_build: extras.staleBuilds.get(uid) } : {}),
-        // Set while an admin is masquerading as this user — the row is
-        // theirs, the person behind it is someone else.
-        masquerade: masqByUser.has(uid)
-          ? {
-              admin_id: masqByUser.get(uid) ?? null,
-              admin_name: adminNames.get(masqByUser.get(uid) ?? '') ?? 'an administrator'
-            }
-          : null
+        ...e.out,
+        state: e.idle ? 'idle' : stuck ? 'stuck' : 'active',
+        stuck,
+        page: presencePageLabel(e.row.current_path as string | null, recordLabels)
       }
     }),
     config: {
@@ -970,8 +1099,10 @@ async function onlineAnswerFor(
 }
 
 /**
- * The viewer half of the cache key: everything the per-viewer step reads about the caller.
- * null = do not cache (an API-key caller carries key scopes that change what labels it may read).
+ * The per-person cache key: everything the person step reads about the caller (labels go
+ * through their read access, which follows their id and role).
+ * null = do not cache (an API-key caller carries key scopes that change what labels it may
+ * read). The signature step is shared either way — visibility never reads key scopes.
  */
 function viewerKey(user: User, isAdmin: boolean): string | null {
   if (user.api_key_scopes || user.api_key_scope_restrictions) return null
@@ -985,13 +1116,23 @@ export async function presenceOnlineFor(
   isAdmin: boolean
 ): Promise<OnlineAnswer> {
   const tenant = currentTenantKey()
-  const compute = async () =>
-    onlineAnswerFor(
-      await baseCache.get(tenant, () => loadPresenceBase(app)),
-      viewer,
-      isAdmin,
-      tenant
+  const compute = async () => {
+    const restrictions = isAdmin
+      ? new Map<string, Set<string>>()
+      : await restrictionsCache.get(`${tenant}|${upper(viewer.id)}`, () =>
+          viewerRestrictionsOf(viewer.id)
+        )
+    const sigKey = visibilitySignature(isAdmin, restrictions)
+    const sig = await signatureCache.get(`${tenant}|${sigKey}`, async () =>
+      signatureAnswer(
+        await baseCache.get(tenant, () => loadPresenceBase(app)),
+        isAdmin,
+        restrictions,
+        tenant
+      )
     )
+    return personAnswer(sig, viewer)
+  }
   const vk = viewerKey(viewer, isAdmin)
   return vk == null ? compute() : viewerCache.get(`${tenant}|${vk}`, compute)
 }
