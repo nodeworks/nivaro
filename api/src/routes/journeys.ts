@@ -379,10 +379,8 @@ export async function journeyRoutes(app: FastifyInstance) {
       const path = String(req.query.path ?? '').slice(0, 200)
       if (!/^\/(?!\/)[A-Za-z0-9/_\-?=&.%~]*$/.test(path))
         return reply.code(400).send({ error: 'Bad path' })
-      // Post-mortem 3.3 — the realtime processes' sockets when this one serves none.
-      const { usersOnPathAnywhere } = await import('../services/socket-cluster-presence.js')
-      const { users, partial } = await usersOnPathAnywhere(path)
-      return { data: users, ...(partial ? { partial: true } : {}) }
+      const { usersOnPath } = await import('../plugins/socketio.js')
+      return { data: usersOnPath(path) }
     }
   )
   // GET /journeys/user/:id?date=YYYY-MM-DD&app=  (defaults to today, every app)

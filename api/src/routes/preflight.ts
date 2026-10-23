@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db, migrationSource } from '../db/index.js'
 import { extensionRegistry, missingExtensionEnv } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { streamEnabled } from '../services/event-stream.js'
 import { hasFfmpeg } from '../services/ffmpeg.js'
 import { instanceKey } from '../services/instance-key.js'
 import { listInstances } from '../services/instance-roster.js'
@@ -13,7 +14,7 @@ import {
   readMediaWorker
 } from '../services/media-handoff.js'
 import { hasLocalChromium } from '../services/pdf-layout.js'
-import { judgeRealtimeTier, socketsServed } from '../services/process-role.js'
+import { judgeRealtimeTier, probeRealtimeRouting, socketsServed } from '../services/process-role.js'
 import {
   canaryLenient,
   imageVariant,
@@ -275,7 +276,9 @@ async function checkRealtime(app: FastifyInstance): Promise<Check> {
     served,
     redis: !!(app as unknown as { redis?: unknown }).redis,
     roster: served ? [] : await listInstances(),
-    instance: instanceKey()
+    instance: instanceKey(),
+    stream: streamEnabled(),
+    routed: served ? null : await probeRealtimeRouting(config.PUBLIC_URL)
   })
   const c = canaryLenient(v)
   return {

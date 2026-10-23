@@ -4,6 +4,7 @@ import {
   execute,
   GraphQLError,
   type GraphQLSchema,
+  getOperationAST,
   Kind,
   parse,
   subscribe,
@@ -615,6 +616,16 @@ function costRefusal(document: DocumentNode, user: User | undefined): GraphQLErr
  * (#2126) as the subscriber; anything else executes once.
  */
 export function executeOrLive(args: ExecutionArgs) {
+  // Post-mortem 3.3 review — the subscription transports only read. A mutation here would
+  // skip the request pipeline (and on a realtime process every hook, extension and webhook).
+  if (getOperationAST(args.document, args.operationName)?.operation === 'mutation')
+    return {
+      errors: [
+        new GraphQLError('Send mutations to POST /api/graphql; this stream only reads', {
+          extensions: { code: 'MUTATION_NOT_ALLOWED' }
+        })
+      ]
+    }
   const ctx = (args.contextValue ?? {}) as WsContext
   const refused = costRefusal(args.document, ctx.user)
   if (refused) return { errors: [refused] }

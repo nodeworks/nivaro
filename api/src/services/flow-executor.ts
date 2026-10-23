@@ -14,6 +14,7 @@ import { callExternalApi } from './external-apis.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
 import { NOTIFY_CATEGORIES, NOTIFY_CATEGORY_LABELS, notifyUser } from './notification-channels.js'
+import { roomListeners } from './realtime-board.js'
 import { announceAutomation, flowRecordOf } from './record-events.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 import { noteTrafficSourceRun, type TrafficSource, withTrafficSource } from './traffic-source.js'
@@ -1883,8 +1884,7 @@ function emitWatch(room: string, event: string, payload: Record<string, unknown>
     .then(({ getIo }) => {
       const io = getIo()
       if (!io) return
-      const r = io.sockets?.adapter?.rooms?.get(name)
-      if (!r || r.size === 0) return
+      if (roomListeners(io, name) === 0) return
       io.to(name).emit(event, { ...payload, at: new Date().toISOString() })
     })
     .catch(() => {})

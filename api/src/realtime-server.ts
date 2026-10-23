@@ -3,14 +3,17 @@ import fastify, { type FastifyInstance } from 'fastify'
 import { registerSession } from './auth/session.js'
 import { config } from './config.js'
 import { db } from './db/index.js'
+import { authenticate } from './middleware/authenticate.js'
 import { resolveWorkspace } from './middleware/workspace.js'
-import { graphqlPlugin } from './plugins/graphql.js'
+import { apiLoggerPlugin } from './plugins/api-logger.js'
+import { graphqlPlugin, rebuildGraphQLSchema } from './plugins/graphql.js'
 import { metricsPlugin } from './plugins/metrics.js'
 import { redisPlugin } from './plugins/redis.js'
-import { socketioPlugin } from './plugins/socketio.js'
+import { collectLocalBoard, socketioPlugin } from './plugins/socketio.js'
 import { eventsStreamRoutes } from './routes/events-stream.js'
 import { viewStreamRoutes } from './routes/view-stream.js'
 import { bootState } from './services/boot-phases.js'
+import { trackError } from './services/error-tracking.js'
 import { instanceKey } from './services/instance-key.js'
 import { INSTANCE_ID } from './services/instance-roster.js'
 import {
@@ -111,8 +114,15 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
   )
 
   await app.register(redisPlugin)
+  // The request log (stream opens, health) and Prometheus, as on web.
+  await app.register(apiLoggerPlugin)
   await app.register(metricsPlugin)
   await registerSession(app)
+  // Traffic Map circuit breakers every replica honours.
+  {
+    const { startBreakerSync } = await import('./services/traffic-breaker.js')
+    startBreakerSync(app.redis as never)
+  }
 
   await app.register(socketioPlugin)
   {
@@ -140,6 +150,8 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     void alignJournalSequence()
     const { startSseRemoteBridge } = await import('./services/sse-hub.js')
     startSseRemoteBridge()
+    const { wireJournalFallback } = await import('./services/event-journal.js')
+    wireJournalFallback(app.io)
     app.addHook('onClose', async () => {
       await flushJournal().catch(() => {})
       await closeEventStream()
@@ -150,6 +162,10 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     // same Redis versions as every other process (PERMISSION_CACHE is all-or-nothing).
     const pc = await import('./services/permission-cache.js')
     if (pc.permissionCacheEnabled()) pc.setPermissionCacheRedis(app.redis)
+    // What this process's sockets know, for the SOCKETS=off processes (services/realtime-board.ts).
+    const { startBoardPublisher } = await import('./services/realtime-board.js')
+    const stopBoard = startBoardPublisher(app.redis, () => collectLocalBoard(app.io))
+    app.addHook('onClose', async () => stopBoard())
   }
 
   {
@@ -161,12 +177,36 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
       './db/config-epoch.js'
     )
     const { bustAllCaches } = await import('./services/cache-registry.js')
+    // A configuration change elsewhere: drop caches and rebuild the GraphQL schema the
+    // subscriptions run on (a web process rebuilds its own on the write; this one never writes).
+    let schemaTimer: ReturnType<typeof setTimeout> | null = null
+    const rebuildSchemaSoon = () => {
+      if (schemaTimer) return
+      schemaTimer = setTimeout(() => {
+        schemaTimer = null
+        void rebuildGraphQLSchema().catch((err) =>
+          app.log.warn({ err }, 'GraphQL schema rebuild after a configuration change failed')
+        )
+      }, 2_000)
+      schemaTimer.unref?.()
+    }
+    app.addHook('onClose', async () => {
+      if (schemaTimer) clearTimeout(schemaTimer)
+    })
     onEpoch(CONFIG_EPOCH, () => {
       bustAllCaches()
+      rebuildSchemaSoon()
     })
+    const restored = (why: string) => {
+      const names = bustAllCaches()
+      rebuildSchemaSoon()
+      app.log.warn({ caches: names.length, why }, 'Database restored underneath — caches cleared')
+    }
     onEpochReset((e) => {
-      if (e.backwards) bustAllCaches()
+      if (e.backwards) restored('configuration number went backwards')
     })
+    const { onMetadataL2IdentityChange } = await import('./db/metadata-l2.js')
+    onMetadataL2IdentityChange(() => restored('database incarnation changed'))
     startEpochWatch(Number(process.env.CACHE_EPOCH_POLL_MS ?? 5000))
     app.addHook('onClose', async () => stopEpochWatch())
     const { startInstanceRoster } = await import('./services/instance-roster.js')
@@ -185,6 +225,21 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
   }
 
   app.addHook('preHandler', resolveWorkspace)
+
+  // 5xx → the issue log, as on web (without the request sketch: no request bodies here).
+  app.setErrorHandler((err: Error & { statusCode?: number; code?: string }, req, reply) => {
+    const status = err.statusCode ?? 500
+    if (status >= 500)
+      void trackError({
+        source: 'server',
+        route: `${req.method} ${req.routeOptions?.url ?? req.url} (realtime)`,
+        message: err.message,
+        stack: err.stack,
+        userId: req.user?.id ?? null
+      }).catch(() => {})
+    req.log.error(err)
+    return reply.code(status).send({ statusCode: status, error: err.name, message: err.message })
+  })
 
   await app.register(realtimeHealthRoutes, { prefix: '/api' })
   await app.register(eventsStreamRoutes, { prefix: '/api/events' })
@@ -218,18 +273,26 @@ async function realtimeHealthRoutes(app: FastifyInstance): Promise<void> {
       return reply
         .code(503)
         .send(judgeReady([{ id: 'boot', ok: false, summary: 'Shutting down — draining.' }]))
-    const checks: ReadyCheck[] = [
-      { id: 'boot', ok: state.ready, summary: state.ready ? 'Boot finished.' : 'Still booting.' },
-      ...(await Promise.all([
-        timedCheck('database', 'Database', DB_BUDGET_MS, () => db.raw('SELECT 1')),
-        timedCheck('redis', 'Redis', REDIS_BUDGET_MS, () => app.redis.ping())
-      ]))
-    ]
-    const report = judgeReady(checks)
-    return reply.code(report.ready ? 200 : 503).send(report)
+    const boot: ReadyCheck = {
+      id: 'boot',
+      ok: state.ready,
+      summary: state.ready ? 'Boot finished.' : 'Still booting.'
+    }
+    const [database, redis] = await Promise.all([
+      timedCheck('database', 'Database', DB_BUDGET_MS, () => db.raw('SELECT 1')),
+      timedCheck('redis', 'Redis', REDIS_BUDGET_MS, () => app.redis.ping())
+    ])
+    // Redis carries every event a realtime process delivers: without it, it is not ready. A slow
+    // database (sign-ins after a restart moved every socket here) only warns: pulling the last
+    // realtime process out of the proxy would take every live connection down with it.
+    const report = judgeReady([boot, redis])
+    return reply.code(report.ready ? 200 : 503).send({
+      ...report,
+      checks: [boot, database.ok ? database : { ...database, ok: true, warn: true }, redis]
+    })
   })
 
-  app.get('/health', async (_req, reply) => {
+  app.get('/health', async (req, reply) => {
     const [dbOk, redisOk] = await Promise.all([
       db
         .raw('SELECT 1')
@@ -241,11 +304,15 @@ async function realtimeHealthRoutes(app: FastifyInstance): Promise<void> {
         .catch(() => false)
     ])
     const ok = dbOk && redisOk
+    // The socket count is for administrators, like the host details on web's /api/health.
+    const admin = await authenticate(req, reply)
+      .then(() => !!req.isAdmin)
+      .catch(() => false)
     return reply.code(ok ? 200 : 503).send({
       status: ok ? 'ok' : 'degraded',
       version: NIVARO_VERSION,
       role: 'realtime',
-      sockets: app.io.engine?.clientsCount ?? 0,
+      ...(admin ? { sockets: app.io.engine?.clientsCount ?? 0 } : {}),
       db: { status: dbOk ? 'connected' : 'disconnected' },
       redis: { status: redisOk ? 'connected' : 'disconnected' },
       ts: new Date().toISOString()

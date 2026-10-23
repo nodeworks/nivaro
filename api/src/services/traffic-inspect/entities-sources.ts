@@ -13,12 +13,12 @@
 import { db } from '../../db/index.js'
 import { extensionRoutes } from '../../extensions/loader.js'
 import { hasColumn } from '../../lib/column-probe.js'
+import { usersOnPath } from '../../plugins/socketio.js'
 import { customQueryDependents } from '../custom-query-dependents.js'
 import { capturedPlanFor } from '../custom-query-plans.js'
 import { cachedDefinition } from '../definition-cache.js'
 import { cacheStats, lastQueryError } from '../query-cache-stats.js'
 import { queryFreshness } from '../query-freshness.js'
-import { usersOnPathAnywhere } from '../socket-cluster-presence.js'
 import {
   applyHistoryNarrowing,
   downNodeHistory,
@@ -387,7 +387,7 @@ export async function pageDetail(id: string, ctx: InspectCtx): Promise<unknown |
     }))
   // Presence knows real paths, not patterns: a pattern with no id segment is a real path.
   const literal = !page.path.includes(':')
-  const present = literal ? (await usersOnPathAnywhere(page.path)).users : []
+  const present = literal ? usersOnPath(page.path) : []
   const tabsTap = trafficTaps().find((t) => t.id === 'stale-tabs')
   let builds: unknown = null
   try {

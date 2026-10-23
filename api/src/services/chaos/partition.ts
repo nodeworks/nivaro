@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import { journaledEmit } from '../event-journal.js'
 import { getApp, getIo } from '../io-holder.js'
+import { roomListeners } from '../realtime-board.js'
 import { tenantScopedRoom } from '../tenant-rooms.js'
 import { ChaosError } from './gate.js'
 import {
@@ -138,7 +139,7 @@ export async function partitionReport(probeId: string): Promise<PartitionReport>
   }
   const room = tenantScopedRoom(`${PARTITION_ROOM_PREFIX}${id}`)
   const io = getIo()
-  const members = io?.of('/').adapter.rooms.get(room)?.size ?? 0
+  const members = roomListeners(io, room)
   // The origin emitted to its own sockets locally (journaledEmit), never through its reader.
   const delivered = local ? [...expected] : partitionDeliveries(id)
   return {

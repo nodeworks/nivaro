@@ -10,7 +10,10 @@
 # so no live connection lands on them; what they emit reaches people through Redis.
 #
 # Swarm (docker stack deploy): move each service's `labels` under `deploy.labels` and switch the
-# Traefik provider to `--providers.swarm`.
+# Traefik provider to `--providers.swarm`. Only swarm honours `update_config` (one task at a
+# time, the new one started before the old one stops): plain `docker compose up -d` recreates
+# every replica of a service at once, so a realtime update there drops every live connection
+# for the restart. Roll realtime with swarm (or by hand, one replica at a time) in production.
 
 x-nivaro: &nivaro
   image: nodeworks/nivaro:${NIVARO_VERSION:-latest}
@@ -55,6 +58,9 @@ services:
     <<: *nivaro
     deploy:
       replicas: 4
+      update_config:
+        parallelism: 1
+        order: start-first
     environment:
       <<: *env
       NIVARO_ROLE: web
@@ -81,18 +87,25 @@ services:
     <<: *nivaro
     deploy:
       replicas: 2
+      update_config:
+        parallelism: 1
+        order: start-first
       resources:
         limits:
-          memory: 768M
+          # Provisional until measured with 400 signed-in sockets receiving traffic: per-message
+          # deflate (SOCKET_COMPRESSION, on by default) keeps zlib state outside the heap.
+          memory: 1280M
     environment:
       <<: *env
       NIVARO_ROLE: realtime
-      DB_POOL_MAX: '10'
+      # Sign-ins, room gates, presence writes, pushed widgets and @live re-runs after a restart
+      # moved every socket to the survivor. @live re-runs share the heavy-read gate here.
+      DB_POOL_MAX: '20'
       DB_POOL_BACKGROUND_MAX: '0'
       # Not needed (a realtime process never ticks or renders); kept explicit.
       CRON_TICKS: 'off'
       MEDIA_WORKER: 'off'
-      NODE_OPTIONS: --max-old-space-size=512
+      NODE_OPTIONS: --max-old-space-size=768
     labels:
       - traefik.enable=true
       # Above the web catch-all. PathRegexp is Traefik v3 (v2: Path(`/api/events/views/{id:[^/]+}/stream`)).

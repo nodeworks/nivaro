@@ -26,6 +26,8 @@ vi.hoisted(() => {
 const bus = vi.hoisted(() => {
   const { EventEmitter } = require('node:events') as typeof import('node:events')
   const clients = new Set<any>()
+  /** One key space for every client (string values only; TTLs are not modelled). */
+  const kv = new Map<string, string>()
   /** Anything not modelled: a chainable, awaitable no-op (resolves to null). */
   const noop: any = new Proxy(() => {}, {
     get: (_t, k) =>
@@ -35,7 +37,11 @@ const bus = vi.hoisted(() => {
         : noop,
     apply: () => noop
   })
-  const V4_OR_CLUSTER = new Set([
+  /** Absent on the fake: node-redis v4 / cluster probes (so the adapter takes its ioredis path)
+   *  and `getter`/`setter` (Fastify's decorate would read a function there as an accessor). */
+  const ABSENT = new Set([
+    'getter',
+    'setter',
     'pSubscribe',
     'pUnsubscribe',
     'sSubscribe',
@@ -64,11 +70,29 @@ const bus = vi.hoisted(() => {
       for (const x of c.flat()) if (typeof x === 'string') this.channels.add(x)
       return c.flat().length
     }
-    async punsubscribe() {
-      this.patterns.clear()
+    async punsubscribe(...p: string[]) {
+      if (p.length === 0) this.patterns.clear()
+      for (const x of p) this.patterns.delete(x)
     }
-    async unsubscribe() {
-      this.channels.clear()
+    async unsubscribe(...c: string[]) {
+      if (c.length === 0) this.channels.clear()
+      for (const x of c) this.channels.delete(x)
+    }
+    async set(key: string, value: string) {
+      kv.set(key, value)
+      return 'OK'
+    }
+    async mget(...keys: Array<string | string[]>) {
+      return keys.flat().map((k) => kv.get(k) ?? null)
+    }
+    async scan(_cursor: string, _m: string, pattern: string) {
+      const re = new RegExp(
+        `^${pattern
+          .split('*')
+          .map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+          .join('.*')}$`
+      )
+      return ['0', [...kv.keys()].filter((k) => re.test(k))]
     }
     async publish(channel: string, msg: string | Buffer) {
       const m = Buffer.isBuffer(msg) ? msg : Buffer.from(msg)
@@ -111,15 +135,14 @@ const bus = vi.hoisted(() => {
     return new Proxy(new BusClient(opts), {
       get(t, k, r) {
         if (k in t) return Reflect.get(t, k, r)
-        // node-redis v4 / cluster probes: absent, so the adapter takes its ioredis path.
-        if (typeof k === 'string' && V4_OR_CLUSTER.has(k)) return undefined
+        if (typeof k === 'string' && ABSENT.has(k)) return undefined
         return noop
       }
     })
   } as unknown as new (
     opts?: Record<string, unknown>
   ) => any
-  return { FakeRedis, clients }
+  return { FakeRedis, clients, kv }
 })
 
 vi.mock('ioredis', () => ({ Redis: bus.FakeRedis, default: bus.FakeRedis }))
@@ -287,48 +310,116 @@ describe('realtime tier (NIVARO_ROLE=realtime + SOCKETS=off)', () => {
     }
   })
 
-  it('answers "is this person viewing the record" and "who is on this page" from the realtime process', async () => {
+  it('carries what the realtime sockets know to the SOCKETS=off process on the board', async () => {
+    const board = await import('../../services/realtime-board.js')
+    const sock = await import('../../plugins/socketio.js')
     const { ws } = await connect(realtimePort)
     try {
-      const { CLIENT_DATA_KEY } = await import('../../services/client-versions-cluster.js')
-      const presence = await import('../../services/socket-cluster-presence.js')
-      // What the socket plugin publishes once a socket signed in, joined a record and pinged a page.
       await waitFor(() => realtime.io.sockets.sockets.size > 0)
-      const held = [...realtime.io.sockets.sockets.values()].at(-1)!
-      held.data[CLIENT_DATA_KEY] = {
-        app: 'admin',
-        version: null,
-        user: { id: 'u-1', name: 'Ada' },
-        node: 'rt'
-      }
-      held.data[presence.PAGE_AT_KEY] = {
+      const held = [...realtime.io.sockets.sockets.values()].at(-1)
+      if (!held) throw new Error('no socket')
+      // What the socket plugin writes on a page ping, and an admin watching the traffic feed.
+      held.data[board.PAGE_AT_KEY] = {
         user: { id: 'u-1', name: 'Ada' },
         path: '/collections/projects',
         since: 1000,
         app: 'admin',
         tenant: ''
       }
-      held.join('record:projects:42')
+      held.join('watch:traffic')
 
-      // The SOCKETS=off web process asks across the adapter.
-      const off = { io: web.io, served: false }
-      expect(await presence.isUserViewingAnywhere('projects', '42', 'u-1', off)).toBe(true)
-      expect(await presence.isUserViewingAnywhere('projects', '42', 'u-2', off)).toBe(false)
-      expect(await presence.isUserViewingAnywhere('projects', '43', 'u-1', off)).toBe(false)
-      presence.resetClusterPagesCache()
-      const on = await presence.usersOnPathAnywhere('/collections/projects', off)
-      expect(on).toEqual({ users: [{ id: 'u-1', name: 'Ada', since: 1000 }], partial: false })
-      expect((await presence.usersOnPathAnywhere('/users', off)).users).toEqual([])
-      expect(await presence.usersOnPathPrefixAnywhere(['/collections'], off)).toEqual(['u-1'])
+      // Before the reader runs: the historic, local answers (this test process holds no pages).
+      expect(sock.usersOnPath('/collections/projects')).toEqual([])
 
-      // A process that serves sockets keeps its own (local) answer, as before the tier.
-      const served = { io: web.io, served: true }
-      expect(await presence.isUserViewingAnywhere('projects', '42', 'u-1', served)).toBe(false)
-      expect((await presence.usersOnPathAnywhere('/collections/projects', served)).users).toEqual(
-        []
+      // The realtime process publishes; the SOCKETS=off process reads.
+      board.startBoardPublisher(realtime.redis as never, () => sock.collectLocalBoard(realtime.io))
+      board.startBoardReader(web.redis as never)
+      await waitFor(
+        () => board.boardFresh() && sock.usersOnPath('/collections/projects').length > 0
       )
+      await waitFor(() => sock.getRealtimeStats().sockets.length > 0)
+
+      expect(sock.usersOnPath('/collections/projects')).toEqual([
+        { id: 'u-1', name: 'Ada', since: 1000 }
+      ])
+      expect(sock.usersOnPath('/users')).toEqual([])
+      expect(sock.usersOnPathPrefix(['/collections'])).toEqual(['u-1'])
+      expect(sock.getRealtimeStats().sockets.some((x) => x.id === held.id)).toBe(true)
+      expect(sock.getLocalConcurrency().sockets).toBeGreaterThanOrEqual(1)
+      // "Is anyone watching?" gates in front of an emit see the realtime process's watchers.
+      expect(board.roomListeners(web.io, 'watch:traffic')).toBeGreaterThanOrEqual(1)
+      expect(board.roomListeners(web.io, 'watch:jobs')).toBe(0)
     } finally {
       ws.close()
+      board.resetBoard()
     }
+  })
+
+  it('answers record viewers from the board, per tenant, and locally without it', async () => {
+    const board = await import('../../services/realtime-board.js')
+    const sock = await import('../../plugins/socketio.js')
+    expect(sock.isUserViewing('projects', '42', 'u-1')).toBe(false)
+    board.setBoardsForTests([
+      {
+        node: 'rt-a',
+        at: Date.now(),
+        sockets: 2,
+        users: ['u-1', 'u-2'],
+        viewers: {
+          'record:projects:42': [{ socket: 's1', id: 'u-1', name: 'Ada' }],
+          't:acme:record:projects:42': [{ socket: 's2', id: 'u-2', name: 'Bo' }]
+        },
+        pages: []
+      },
+      {
+        node: 'rt-b',
+        at: Date.now(),
+        sockets: 1,
+        users: ['u-3'],
+        viewers: { 'record:projects:42': [{ socket: 's3', id: 'u-3', name: 'Cy' }] },
+        pages: []
+      }
+    ])
+    try {
+      expect(sock.isUserViewing('projects', '42', 'u-1')).toBe(true)
+      expect(sock.isUserViewing('projects', '42', 'u-3')).toBe(true)
+      // Another tenant's viewer never shows in this (self-hosted '') tenant's answers.
+      expect(sock.isUserViewing('projects', '42', 'u-2')).toBe(false)
+      expect(sock.getRecordViewerSnapshot()).toEqual([
+        {
+          collection: 'projects',
+          item: '42',
+          viewers: [
+            { id: 'u-1', name: 'Ada' },
+            { id: 'u-3', name: 'Cy' }
+          ]
+        }
+      ])
+      expect(sock.getLocalConcurrency()).toEqual({ sockets: 3, users: 3 })
+    } finally {
+      board.resetBoard()
+    }
+    expect(sock.isUserViewing('projects', '42', 'u-1')).toBe(false)
+  })
+
+  it('keeps the SOCKETS=off process out of the adapter quorum and off the broadcast feed', async () => {
+    const adapter = web.io.of('/').adapter as unknown as {
+      requestChannel: string
+      channel: string
+      serverCount(): Promise<number>
+    }
+    const subscribed = (c: string) =>
+      [...bus.clients].filter((x: any) => (x.channels as Set<string>).has(c)).length
+    const patterned = (p: string) =>
+      [...bus.clients].filter((x: any) => (x.patterns as Set<string>).has(p)).length
+    // Only the realtime process answers requests and decodes broadcasts.
+    expect(subscribed(adapter.requestChannel)).toBe(1)
+    expect(patterned(`${adapter.channel}*`)).toBe(1)
+    // The web process still counts itself when it asks (the adapter subtracts the requester).
+    expect(await adapter.serverCount()).toBe(2)
+    // The realtime process asks nobody but itself: no waiting on a busy web process.
+    const t0 = Date.now()
+    await realtime.io.fetchSockets()
+    expect(Date.now() - t0).toBeLessThan(200)
   })
 })

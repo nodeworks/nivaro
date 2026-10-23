@@ -180,7 +180,7 @@ export function pagePrefixesFor(target: string): string[] {
 export interface SignalDeps {
   store?: AutoStore | null
   emit?: (userId: string, payload: { signal: AutoSignal; minutes: number; token: string }) => void
-  usersOnPrefixes?: (prefixes: string[]) => string[] | Promise<string[]>
+  usersOnPrefixes?: (prefixes: string[]) => string[]
   now?: number
 }
 
@@ -202,7 +202,7 @@ export async function fireReplaySignal(
     let onPages: string[] = []
     if (target.pathPrefixes?.length) {
       const reader = deps.usersOnPrefixes ?? (await socketReader())
-      onPages = reader ? await reader(target.pathPrefixes) : []
+      onPages = reader ? reader(target.pathPrefixes) : []
     }
     // Ids as stored (the socket's user room is `user:<id>`), deduped case-blind.
     const byKey = new Map<string, string>()
@@ -248,11 +248,10 @@ async function socketEmit(): Promise<SignalDeps['emit'] | null> {
   }
 }
 
-async function socketReader(): Promise<((prefixes: string[]) => Promise<string[]>) | null> {
+async function socketReader(): Promise<((prefixes: string[]) => string[]) | null> {
   try {
-    // Post-mortem 3.3 — the realtime processes' sockets when this one serves none.
-    const { usersOnPathPrefixAnywhere } = await import('./socket-cluster-presence.js')
-    return (prefixes) => usersOnPathPrefixAnywhere(prefixes)
+    const { usersOnPathPrefix } = await import('../plugins/socketio.js')
+    return (prefixes) => usersOnPathPrefix(prefixes)
   } catch {
     return null
   }

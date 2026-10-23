@@ -451,9 +451,8 @@ export async function decideDelivery(
   // subjects always land. Per-node presence, same accepted limitation.
   if (inapp && !critical && !opts.always_inbox && !opts.replay && opts.collection && opts.item) {
     try {
-      // Post-mortem 3.3 — across the cluster when this process serves no sockets.
-      const { isUserViewingAnywhere } = await import('./socket-cluster-presence.js')
-      if (await isUserViewingAnywhere(opts.collection, String(opts.item), userId)) {
+      const { isUserViewing } = await import('../plugins/socketio.js')
+      if (isUserViewing(opts.collection, String(opts.item), userId)) {
         inapp = false
         reasons.push({
           code: 'presence_viewing',

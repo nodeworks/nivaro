@@ -74,14 +74,19 @@ let bridgeOff: (() => void) | null = null
  * Post-mortem 3.3 — record changes written on OTHER replicas, for this process's streams. The
  * writing process publishes its own changes (broadcastCollectionUpdate); without this a stream
  * heard only writes made on the process it happened to connect to, and a realtime process
- * (which makes no writes) heard nothing. Fed by the event stream reader (REALTIME_EVENT_STREAM);
- * a collection set to batched live mode sends no per-record entry, so other replicas' streams
- * miss those. Idempotent.
+ * (which makes no writes) heard nothing. Fed by the event stream reader (REALTIME_EVENT_STREAM)
+ * and, when an entry went out by the adapter instead, by the journal fallback. A collection in
+ * batched live mode sends one merged entry per window: each id in it becomes one event here
+ * (`*` when the batch was too big to list). Idempotent.
  */
 export function startSseRemoteBridge(): void {
   if (bridgeOff) return
   bridgeOff = onJournalEntry((entry, origin) => {
     if (origin !== 'remote' || listeners.size === 0) return
+    if (entry.payload?.batched === true) {
+      publishBatched(entry)
+      return
+    }
     const c = collectionChangeOf(entry)
     if (!c) return
     const raw = entry.payload?.item
@@ -93,6 +98,24 @@ export function startSseRemoteBridge(): void {
       tenant: c.tenant
     })
   })
+}
+
+/** A merged batched-mode entry (#2490) as one SSE event per record. */
+function publishBatched(entry: Parameters<typeof collectionChangeOf>[0]): void {
+  if (entry.event !== 'collection:update') return
+  const m = /^(?:t:([^:]+):)?collection:(.+)$/.exec(entry.room)
+  if (!m) return
+  const p = entry.payload
+  const collection = typeof p.collection === 'string' ? p.collection : m[2]
+  const action =
+    p.action === 'create' || p.action === 'update' || p.action === 'delete' ? p.action : undefined
+  const changed_fields = Array.isArray(p.changed_fields)
+    ? p.changed_fields.map(String).slice(0, 50)
+    : undefined
+  const tenant = m[1] ?? ''
+  const items = Array.isArray(p.items) ? (p.items as Array<string | number>) : null
+  for (const item of items ?? ['*'])
+    publishSseEvent({ collection, item, action, changed_fields, tenant })
 }
 
 /** Tests. */

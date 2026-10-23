@@ -147,7 +147,16 @@ export async function journaledEmit(
     }
   }
   // No sequence, no stream, or the append failed: the adapter's pub/sub as before.
-  if (path === 'adapter') io.to(room).emit(event, out)
+  if (path === 'adapter') {
+    io.to(room).emit(event, out)
+    // Post-mortem 3.3 — the other processes' journal listeners (saved-view and SSE streams,
+    // pushed widgets) hear stream entries only; on this path they hear it from the adapter.
+    try {
+      io.serverSideEmit?.(JOURNAL_FALLBACK_EVENT, { seq, room, event, payload })
+    } catch {
+      /* the adapter is away too — nothing else can carry it */
+    }
+  }
   // #1675 / #1680 — pushed widgets and saved-view streams hear this process's own writes here.
   if (!opts.selfViaStream) notifyJournalListeners({ seq, room, event, payload })
   if (observer) {
@@ -158,6 +167,31 @@ export async function journaledEmit(
     }
   }
   return { seq, path, room }
+}
+
+/** serverSideEmit event carrying a journal entry that went out without the event stream. */
+export const JOURNAL_FALLBACK_EVENT = 'nvr:journal-fallback'
+
+let fallbackWired = false
+
+/** Hand journal entries other processes sent by the adapter path to this process's listeners. */
+export function wireJournalFallback(
+  io: { on(event: string, fn: (entry: JournalEntry) => void): unknown } | null | undefined
+): void {
+  if (!io || fallbackWired) return
+  fallbackWired = true
+  io.on(JOURNAL_FALLBACK_EVENT, (entry: JournalEntry) => {
+    if (!entry || typeof entry.room !== 'string' || typeof entry.event !== 'string') return
+    notifyJournalListeners(
+      {
+        seq: typeof entry.seq === 'number' ? entry.seq : null,
+        room: entry.room,
+        event: entry.event,
+        payload: entry.payload ?? {}
+      },
+      'remote'
+    )
+  })
 }
 
 /** Replay events after `cursor` for the given rooms. */

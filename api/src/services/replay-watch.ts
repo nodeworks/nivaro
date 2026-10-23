@@ -108,7 +108,19 @@ export function registerReplayWatch(
   }
 
   async function members(key: string): Promise<RoomSocket[]> {
-    return (await io.in(replayRoom(key)).fetchSockets()) as unknown as RoomSocket[]
+    // Time-boxed: a replica that does not answer must not hold the roster (it is skipped and
+    // the next change sends a fresh one).
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return (await Promise.race([
+        io.in(replayRoom(key)).fetchSockets(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('fetchSockets timed out')), 2_000)
+        })
+      ])) as unknown as RoomSocket[]
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   async function broadcastRoster(key: string) {
