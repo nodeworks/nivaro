@@ -91,13 +91,22 @@ export const realtimeTierDocs: DocSection = {
       type: 'p',
       text: 'About 400 sockets with extra tabs. Run two realtime processes, about 200 sockets each, so either can carry all of them through a restart; four web and one worker. Give each realtime process one core and a 768 MB limit with `--max-old-space-size=512`: at rest it holds about 185 MB of heap, and a signed-in socket costs roughly 250 KB with its rooms, presence and send buffer (about 100 MB at 400). Keep event-loop lag p99 under 100 ms and the delivery target (95% under 2 s) green.'
     },
+    { type: 'h2', id: 'realtime-tier-presence', text: 'Who is viewing what' },
+    {
+      type: 'p',
+      text: 'Two answers come from the sockets themselves: whether someone is looking at a record right now (an in-app notification about it is then skipped) and who is on a page. A process that serves sockets answers from its own, as before. A process with `SOCKETS=off` asks the realtime processes through Redis: the record room’s members for the first, each socket’s latest page for the second (kept a few seconds). A realtime process that does not answer within about a second is left out: the notification is delivered, and the page list says `partial`.'
+    },
+    { type: 'h2', id: 'realtime-tier-extensions', text: 'Extensions and sockets' },
+    {
+      type: 'p',
+      text: "A realtime process loads no extensions, so an extension that listens for socket connections (`app.io.on('connection')`, on any namespace) would never hear one on a deployment with `SOCKETS=off`. Rather than fail silently, a web or worker process with `SOCKETS=off` refuses to start when an extension registers such a handler, and the error names the setting. Move that work to an event the API emits, or keep sockets on."
+    },
     { type: 'h2', id: 'realtime-tier-limits', text: 'Limits' },
     {
       type: 'ul',
       items: [
-        'What a process knows about its own sockets stays with the process that holds them. With `SOCKETS=off` the web processes hold none, so notifications are no longer skipped for someone who is looking at the record, and "who is on this page" lists read only the processes that hold sockets.',
-        "Extension code that listens for `app.io.on('connection')` runs only where sockets are served, and a realtime process loads no extensions.",
-        'The GraphQL schema is built when a process starts; a realtime process picks up a schema change at its next restart, as every web process does today.'
+        'The GraphQL schema is built when a process starts; a realtime process picks up a schema change at its next restart, as every web process does today.',
+        'The Traffic Map’s room and socket detail panels show the sockets of the process that answers the request.'
       ]
     }
   ]

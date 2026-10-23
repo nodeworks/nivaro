@@ -74,6 +74,7 @@ import {
   userWithApiKey,
   visibleRecordIds
 } from '../services/socket-access.js'
+import { PAGE_AT_KEY, type PageAtData } from '../services/socket-cluster-presence.js'
 import {
   type EngineConnLike,
   instrumentHandlers,
@@ -1642,13 +1643,17 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const { path, app: pageApp } = ping
       const existing = pagePresence.get(socket.id)
       const changed = existing?.path !== path
-      pagePresence.set(socket.id, {
+      const at: PageAtData = {
         user: { id: user.id, name: displayName(user) },
         path,
         since: changed ? Date.now() : existing.since,
         app: pageApp,
         tenant
-      })
+      }
+      pagePresence.set(socket.id, at)
+      // Post-mortem 3.3 — on socket.data too, so a SOCKETS=off process can ask across the
+      // adapter who is on a page (services/socket-cluster-presence.ts).
+      socket.data[PAGE_AT_KEY] = at
       if (changed) {
         void closeJourneyRow(socket.id).then(() =>
           openJourneyRow(socket.id, user.id, path, pageApp)

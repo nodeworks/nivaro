@@ -660,6 +660,10 @@ export async function buildServer() {
       )
       registerCoreIntegrationSignals()
     }
+    const { connectionHandlerCount, refuseExtensionSocketHandlers } = await import(
+      './services/process-role.js'
+    )
+    const coreSocketHandlers = connectionHandlerCount(app.io as never)
     await bootPhase('Extensions', () =>
       loadExtensions({
         app,
@@ -668,6 +672,8 @@ export async function buildServer() {
         callExternalApi
       })
     )
+    // Post-mortem 3.3 — with SOCKETS=off an extension's socket handler would never run.
+    refuseExtensionSocketHandlers(coreSocketHandlers, connectionHandlerCount(app.io as never))
     await bootPhase('Scheduled flows', () => loadScheduledFlows(app))
     // #530 — fingerprint what each extension registered this boot; a changed
     // ledger becomes a new version so "when did this check appear?" has an answer.

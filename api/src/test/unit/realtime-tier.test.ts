@@ -286,4 +286,49 @@ describe('realtime tier (NIVARO_ROLE=realtime + SOCKETS=off)', () => {
       ws.close()
     }
   })
+
+  it('answers "is this person viewing the record" and "who is on this page" from the realtime process', async () => {
+    const { ws } = await connect(realtimePort)
+    try {
+      const { CLIENT_DATA_KEY } = await import('../../services/client-versions-cluster.js')
+      const presence = await import('../../services/socket-cluster-presence.js')
+      // What the socket plugin publishes once a socket signed in, joined a record and pinged a page.
+      await waitFor(() => realtime.io.sockets.sockets.size > 0)
+      const held = [...realtime.io.sockets.sockets.values()].at(-1)!
+      held.data[CLIENT_DATA_KEY] = {
+        app: 'admin',
+        version: null,
+        user: { id: 'u-1', name: 'Ada' },
+        node: 'rt'
+      }
+      held.data[presence.PAGE_AT_KEY] = {
+        user: { id: 'u-1', name: 'Ada' },
+        path: '/collections/projects',
+        since: 1000,
+        app: 'admin',
+        tenant: ''
+      }
+      held.join('record:projects:42')
+
+      // The SOCKETS=off web process asks across the adapter.
+      const off = { io: web.io, served: false }
+      expect(await presence.isUserViewingAnywhere('projects', '42', 'u-1', off)).toBe(true)
+      expect(await presence.isUserViewingAnywhere('projects', '42', 'u-2', off)).toBe(false)
+      expect(await presence.isUserViewingAnywhere('projects', '43', 'u-1', off)).toBe(false)
+      presence.resetClusterPagesCache()
+      const on = await presence.usersOnPathAnywhere('/collections/projects', off)
+      expect(on).toEqual({ users: [{ id: 'u-1', name: 'Ada', since: 1000 }], partial: false })
+      expect((await presence.usersOnPathAnywhere('/users', off)).users).toEqual([])
+      expect(await presence.usersOnPathPrefixAnywhere(['/collections'], off)).toEqual(['u-1'])
+
+      // A process that serves sockets keeps its own (local) answer, as before the tier.
+      const served = { io: web.io, served: true }
+      expect(await presence.isUserViewingAnywhere('projects', '42', 'u-1', served)).toBe(false)
+      expect((await presence.usersOnPathAnywhere('/collections/projects', served)).users).toEqual(
+        []
+      )
+    } finally {
+      ws.close()
+    }
+  })
 })

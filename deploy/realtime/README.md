@@ -64,7 +64,8 @@ unknown` and the client reconnects in a loop. Websockets and SSE are one connect
 not care. So:
 
 - **Traefik**: a sticky cookie on the realtime service only —
-  `loadbalancer.sticky.cookie=true`, `.cookie.name=nvr_rt` (any name), `.cookie.httponly=true`,
+  `loadbalancer.sticky.cookie=true`, `.cookie.name=nvr_rt` (any name: the EFP stack's own
+  deploy config uses `efp_rt_srv`; the two are separate configs), `.cookie.httponly=true`,
   `.cookie.secure=true`, `.cookie.samesite=lax`. The first polling request gets the cookie; the
   browser sends it on the rest (same origin).
 - **nginx (open source)**: no cookie stickiness — `ip_hash;` (or `hash $remote_addr consistent;`)
@@ -88,6 +89,18 @@ not care. So:
   role, e.g. "4 web, 2 realtime, 1 worker"; entries carry `sockets: false` with `SOCKETS=off`.
 - `/api/metrics` on every process has `nivaro_sockets_connected`; scrape each realtime task
   directly (`METRICS_TOKEN`) for it and `nodejs_eventloop_lag_max_seconds`.
+
+## Who is viewing what, and extensions
+
+- "Is this person looking at the record" (an in-app notification is then skipped) and "who is on
+  this page" come from the sockets. A process with `SOCKETS=off` asks the realtime processes
+  through Redis (`fetchSockets`, time-boxed; page lists cached 3 s): a replica that does not
+  answer is left out, the notification is delivered, and the page list says `partial`. A
+  process that serves sockets answers from its own, as before.
+- A realtime process loads no extensions. A web or worker process with `SOCKETS=off` therefore
+  **refuses to start** when an extension registers a Socket.io connection handler
+  (`app.io.on('connection')`, any namespace): the handler would never run. Move that work to an
+  event the API emits, or keep sockets on.
 
 Deploy order: realtime first (it needs no migrations, but the web/worker roll runs them), then
 web and worker with `SOCKETS=off`. To switch back, unset `SOCKETS` on web and drop the realtime

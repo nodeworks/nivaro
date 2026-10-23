@@ -125,3 +125,37 @@ export function judgeRealtimeTier(ctx: {
     realtime: mine.length
   }
 }
+
+interface NamespaceLike {
+  listenerCount(event: string): number
+}
+
+/**
+ * Connection handlers on every namespace: the core's, plus any extension's
+ * `app.io.on('connection')` / `app.io.of('/x').on('connection')`.
+ */
+export function connectionHandlerCount(io: {
+  of(name: string): NamespaceLike
+  _nsps?: Map<string, NamespaceLike>
+}): number {
+  const spaces = io._nsps instanceof Map ? [...io._nsps.values()] : [io.of('/')]
+  let n = 0
+  for (const ns of spaces) n += ns.listenerCount('connection') + ns.listenerCount('connect')
+  return n
+}
+
+/**
+ * An extension that listens for socket connections would never hear one on a process that
+ * serves no sockets, and a realtime process loads no extensions: with SOCKETS=off, an extension
+ * adding a connection handler stops the boot instead of failing silently.
+ */
+export function refuseExtensionSocketHandlers(
+  before: number,
+  after: number,
+  served: boolean = socketsServed()
+): void {
+  if (served || after <= before) return
+  throw new Error(
+    `SOCKETS=off, but an extension registered ${after - before} Socket.io connection handler(s) (app.io.on('connection')). Sockets are served by the realtime processes, which load no extensions, so the handler would never run. Move that work to an event the API emits, or run this deployment without SOCKETS=off.`
+  )
+}
