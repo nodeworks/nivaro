@@ -82,6 +82,29 @@ export function forgetLiveMode(collection?: string): void {
   for (const k of cache.keys()) if (k.endsWith(`\u0000${collection}`)) cache.delete(k)
 }
 
+// ── Presence heartbeats ─────────────────────────────────────────────────────
+
+/**
+ * `user_presence` rows are rewritten by every open tab's heartbeat (PATCH /items/user_presence
+ * every ~25 s, idle flips, page changes). Each write went out as a `collection:update` to every
+ * browser holding the collection room, and every one of those browsers re-read the online list —
+ * staging 2026-10-23: 95 broadcasts/min x 25 members, the main amplifier of a refetch storm.
+ * Who is online is announced by the socket server's own coalesced `presence:changed`
+ * (plugins/socketio.ts), so heartbeat writes send nothing live. Changes a reader still needs
+ * the moment they land — `typing_room` (chat typing indicators) — and deletes still go out.
+ */
+const PRESENCE_COLLECTION = 'user_presence'
+const PRESENCE_LIVE_FIELDS = new Set(['typing_room'])
+
+export function isQuietPresenceWrite(
+  collection: string,
+  extra?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }
+): boolean {
+  if (collection !== PRESENCE_COLLECTION) return false
+  if (extra?.action === 'delete') return false
+  return !extra?.changed_fields?.some((f) => PRESENCE_LIVE_FIELDS.has(f))
+}
+
 // ── Batched mode ────────────────────────────────────────────────────────────
 
 interface Batch {

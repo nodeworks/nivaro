@@ -104,3 +104,21 @@ export function presenceWord(p: {
   if (p.away) return 'away'
   return (p.idle_minutes ?? 0) >= 5 ? 'idle' : 'online'
 }
+
+/**
+ * Does a `presence:changed` payload concern `userId`? The server coalesces changes per tenant
+ * into one event: `{ user_id, user_ids: [...] }` (`many: true` = the list was cut, treat it as
+ * everyone). An older server sends `{ user_id }` alone. Ids compare case-insensitively.
+ */
+export function presenceChangeTouches(
+  payload: unknown,
+  userId: string | null | undefined
+): boolean {
+  if (!userId) return false
+  const p = (payload ?? {}) as { user_id?: unknown; user_ids?: unknown; many?: unknown }
+  if (p.many === true) return true
+  const want = String(userId).toUpperCase()
+  if (Array.isArray(p.user_ids) && p.user_ids.some((id) => String(id).toUpperCase() === want))
+    return true
+  return String(p.user_id ?? '').toUpperCase() === want
+}

@@ -45,6 +45,14 @@ import { SummaryStrip } from './SummaryStrip'
 import TrafficMap from './TrafficMap'
 
 const T0 = 1_800_000_000
+
+// The page writes its view (selection, window, filters) into the address bar 250 ms after a
+// change (#1166) and reads it back on mount. jsdom keeps ONE location for the whole file, so a
+// test that ran past those 250 ms (any test on a loaded machine, e.g. the full suite) handed its
+// selection to the next test's mount: 'SQL Server' selected instead of the busiest entity.
+beforeEach(() => {
+  window.history.replaceState(null, '', '/')
+})
 const snapshot = {
   instance: 'test-node',
   node_scope: 'this API process only',
@@ -254,6 +262,66 @@ describe('TrafficMap page', () => {
       'aria-pressed',
       'true'
     )
+  })
+
+  it('applies a batch (post-mortem 3.1) and asks for a key batch when a delta has no base', async () => {
+    const { adminRealtime } = await import('@/lib/socket')
+    mockApi()
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
+    act(() => {
+      handlers.get('traffic-map:batch')?.({
+        v: 2,
+        key: true,
+        frames: [{ ...emptyFrame(T0 + 1, 2, 5), ext: { mix: { a: 1 } } }]
+      })
+    })
+    await waitFor(() => expect(screen.getByTestId('tm-strip-sockets').textContent).toBe('5'))
+    expect(adminRealtime.emit).not.toHaveBeenCalledWith('traffic-map:resync', {})
+    act(() => {
+      const { instance: _i, node_scope: _n, ...rest } = emptyFrame(T0 + 2, 3, 6)
+      handlers.get('traffic-map:batch')?.({
+        v: 2,
+        frames: [{ ...rest, same: ['instance', 'node_scope'], ext_same: ['mix', 'other'] }]
+      })
+    })
+    await waitFor(() => expect(screen.getByTestId('tm-strip-sockets').textContent).toBe('6'))
+    expect(adminRealtime.emit).toHaveBeenCalledWith('traffic-map:resync', {})
+  })
+
+  it('a hidden tab leaves the watch room and rejoins + re-seeds when visible again', async () => {
+    const { joinWatchRoom } = await import('@/lib/socket')
+    const join = vi.mocked(joinWatchRoom)
+    const leave = vi.fn()
+    join.mockClear()
+    join.mockImplementation(() => leave)
+    let hidden = false
+    const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden')
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+    try {
+      mockApi()
+      renderPage()
+      await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
+      expect(join).toHaveBeenCalledTimes(1)
+      const snaps = () =>
+        getMock.mock.calls.filter((c) => String(c[0]).includes('/snapshot')).length
+      const before = snaps()
+      hidden = true
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      expect(leave).toHaveBeenCalledTimes(1)
+      hidden = false
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      expect(join).toHaveBeenCalledTimes(2)
+      await waitFor(() => expect(snaps()).toBeGreaterThan(before))
+    } finally {
+      delete (document as { hidden?: boolean }).hidden
+      if (desc) Object.defineProperty(Document.prototype, 'hidden', desc)
+      join.mockImplementation(() => vi.fn())
+    }
   })
 
   it('refetches the snapshot when the socket re-authenticates (R23)', async () => {
@@ -644,6 +712,8 @@ describe('inspector history — down nodes and live', () => {
     await waitFor(() =>
       expect(screen.getByTestId('tm-inspector-name').textContent).toBe('SQL Server')
     )
+    // #1166: the selection reaches the address bar (and the next test must not inherit it)
+    await waitFor(() => expect(window.location.search).toContain('sel=down%3Adb'))
     expect(historyCalls()).toBe(0)
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: '6h' }))

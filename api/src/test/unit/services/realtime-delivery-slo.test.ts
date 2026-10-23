@@ -9,7 +9,9 @@ import {
   burnVerdict,
   computeDeliverySlo,
   deliveryBucket,
+  deliveryByNodeRecent,
   figuresOf,
+  judgeDeliveryByNode,
   noteDeliverySample,
   setDeliveryRedis,
   takeAckToken
@@ -202,6 +204,67 @@ describe('realtime delivery SLO (#2477)', () => {
       await noteDeliverySample('probe', 100, { redis, node: 'n' })
       expect(redis.hashes.size).toBe(0)
       expect(await computeDeliverySlo(targets, { redis })).toBeNull()
+    } finally {
+      delete process.env.CLOUD_META_DB_URL
+    }
+  })
+
+  it('judges delivery per node: one replica under target fails the monitor (3.2)', async () => {
+    const redis = fakeRedis()
+    const now = Date.UTC(2026, 9, 23, 16, 12, 0)
+    // web-1 stalls: 30 of 100 deliveries take 3.5 s; web-2 delivers in 300 ms.
+    for (let i = 0; i < 100; i++) {
+      await noteDeliverySample('client', i < 30 ? 3500 : 300, {
+        redis,
+        node: 'staging · web-1',
+        at: now - i * 2000
+      })
+      await noteDeliverySample('client', 300, {
+        redis,
+        node: 'staging · web-2',
+        at: now - i * 2000
+      })
+    }
+    // An old stall outside the window is not counted.
+    for (let i = 0; i < 50; i++)
+      await noteDeliverySample('client', 9000, {
+        redis,
+        node: 'staging · web-2',
+        at: now - 3 * 3_600_000
+      })
+    const rows = await deliveryByNodeRecent(15, 2000, { redis, now })
+    expect(rows?.map((r) => [r.node, r.samples, r.good_pct])).toEqual([
+      ['staging · web-1', 100, 70],
+      ['staging · web-2', 100, 100]
+    ])
+    const v = judgeDeliveryByNode(
+      rows ?? [],
+      { target_ms: 2000, good_pct: 95, min_samples: 20 },
+      15
+    )
+    expect(v.status).toBe('failing')
+    expect(v.metric).toBe(70)
+    expect(v.detail.split('Within target:')[0]).toContain('web-1')
+    expect(v.detail.split('Within target:')[0]).not.toContain('web-2')
+
+    const quiet = judgeDeliveryByNode(
+      rows ?? [],
+      { target_ms: 2000, good_pct: 95, min_samples: 500 },
+      15
+    )
+    expect(quiet.status).toBe('unknown')
+    const fine = judgeDeliveryByNode(
+      (rows ?? []).filter((r) => r.node.endsWith('web-2')),
+      { target_ms: 2000, good_pct: 95, min_samples: 20 },
+      15
+    )
+    expect(fine.status).toBe('ok')
+  })
+
+  it('per-node delivery is off in cloud mode', async () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    try {
+      expect(await deliveryByNodeRecent(15, 2000, { redis: fakeRedis() })).toBeNull()
     } finally {
       delete process.env.CLOUD_META_DB_URL
     }

@@ -13,7 +13,12 @@ import {
   setWideTables
 } from '../services/request-trace.js'
 import { flushTraceExport, setTraceExportInstance } from '../services/trace-export.js'
-import { attachInflightQueries, inflightEnd, inflightStart } from '../services/traffic-inflight.js'
+import {
+  attachInflightQueries,
+  inflightClientGone,
+  inflightEnd,
+  inflightStart
+} from '../services/traffic-inflight.js'
 
 /**
  * Scopes a phase-timing context to every /api/* request. Pairs with
@@ -75,7 +80,7 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
     app.addHook('onClose', async () => clearInterval(t))
   })
 
-  app.addHook('onRequest', async (req) => {
+  app.addHook('onRequest', async (req, reply) => {
     const path = (req.raw.url ?? req.url).split('?')[0]
     // Tracing the trace reader would be circular and would evict real traces
     // from the ring buffer every time the page polled.
@@ -90,9 +95,15 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
     // and the response header all carry it, so one id joins them.
     req.requestId = currentTraceMeta()?.id
     inflightStart(req)
+    // A client that leaves after its whole body arrived gets neither onRequestAbort nor
+    // onResponse: the response's own close (before it finished) is the only signal.
+    const res = reply.raw
+    res.once('close', () => {
+      if (!res.writableFinished) inflightClientGone(req, reply.sent)
+    })
   })
 
-  // A client that went away never gets an onResponse — the in-flight entry ends here instead.
+  // A client that went away mid-body never gets an onResponse — the in-flight entry ends here.
   app.addHook('onRequestAbort', async (req) => {
     inflightEnd(req)
   })
@@ -106,6 +117,8 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
   })
   app.addHook('onSend', (req, reply, payload, done) => {
     markSerializeEnd(req)
+    // The handler replied after the client left: no onResponse will follow.
+    if (reply.raw.destroyed) inflightEnd(req)
     // Lets the browser's own network tab correlate a call with its trace / log row.
     if (req.requestId) reply.header(REQUEST_ID_HEADER, req.requestId)
     done(null, payload)

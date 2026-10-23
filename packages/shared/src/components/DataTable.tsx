@@ -1109,7 +1109,16 @@ export function DataTable<T = Record<string, unknown>>({
               )}
               style={minBodyHeight ? { minHeight: minBodyHeight } : undefined}
             >
-              <Table data-copy-cells=''>
+              {/* Separate borders, drawn per cell: a collapsed row border is
+                  painted by the table, and on fractional row heights a pinned
+                  (sticky, composited) cell covers it, so some rows lost their
+                  line in the pinned columns. Each row's border classes still
+                  pick the colour; the cells inherit it. The last body row stays
+                  borderless, as TableBody's last-child rule has it. */}
+              <Table
+                data-copy-cells=''
+                className='border-separate border-spacing-0 [&>tbody>tr.border-b:not(:last-child)>td]:border-b [&>tbody>tr.border-b:not(:last-child)>td]:[border-bottom-color:inherit] [&>thead>tr.border-b>th]:border-b [&>thead>tr.border-b>th]:[border-bottom-color:inherit]'
+              >
                 <TableHeader>
                   <TableRow className='border-b border-slate-200 hover:bg-transparent'>
                     {onSelectionChange && (

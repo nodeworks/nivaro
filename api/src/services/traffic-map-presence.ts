@@ -12,6 +12,8 @@
  */
 import type { Socket, Server as SocketIOServer } from 'socket.io'
 import { socketUserOf } from '../plugins/socketio.js'
+import { trafficStoreOfRoom } from './traffic-map.js'
+import { requestBatchKey, TRAFFIC_MAP_RESYNC_EVENT } from './traffic-map-batch.js'
 
 export const PRESENCE_EVENT = 'traffic-map:presence'
 export const BYE_EVENT = 'traffic-map:bye'
@@ -62,6 +64,13 @@ export function attachTrafficPresence(io: SocketIOServer): void {
     socket.on(BYE_EVENT, (p: { tab?: unknown }) => {
       const tab = typeof p?.tab === 'string' && TAB_RE.test(p.tab) ? p.tab : null
       if (tab) announce({ tab, gone: true })
+    })
+    // Post-mortem 3.1: a batch page that met a delta it has no base for asks for full frames
+    // (only for the room it joined; requests closer than 2 s share one key batch).
+    socket.on(TRAFFIC_MAP_RESYNC_EVENT, () => {
+      const room = trafficRoomOf(socket.rooms)
+      const store = room ? trafficStoreOfRoom(room) : null
+      if (store) requestBatchKey(store)
     })
     // rooms are still readable while disconnecting (they are gone at 'disconnect')
     socket.on('disconnecting', () => {

@@ -447,3 +447,105 @@ export async function deliverySloMetric(
   if (metric === 'good_pct') return slo.overall.good_pct
   return slo.overall.p95_ms
 }
+
+// ─── Per-node alert ────────────────────────────────────────────────────────────
+
+export interface NodeDeliveryRow extends DeliveryFigures {
+  node: string
+  source: DeliverySource
+}
+
+/**
+ * Delivery per node × source over the last `windowMinutes` (whole 5-minute buckets, the current
+ * one included). Null without Redis and in cloud mode (the histograms are not kept per tenant).
+ */
+export async function deliveryByNodeRecent(
+  windowMinutes: number,
+  targetMs: number,
+  opts: { redis?: Redis | null; now?: number } = {}
+): Promise<NodeDeliveryRow[] | null> {
+  if (process.env.CLOUD_META_DB_URL) return null
+  const redis = redisOf(opts.redis)
+  if (!redis) return null
+  const now = opts.now ?? Date.now()
+  const n = Math.min(24 * 12, Math.max(1, Math.ceil(windowMinutes / 5)))
+  const mNow = Math.floor(now / FIVE_MIN_MS)
+  let minutes: Array<Record<string, string>>
+  try {
+    minutes = await readHashes(
+      redis,
+      Array.from({ length: n }, (_, i) => `${MINUTE_KEY}${mNow - i}`)
+    )
+  } catch {
+    return null
+  }
+  const all: Counts = new Map()
+  for (const h of minutes) addHash(all, h)
+  const pairs = new Set<string>()
+  for (const k of all.keys()) {
+    const [source, node] = k.split('|')
+    if (node) pairs.add(`${source}|${node}`)
+  }
+  return [...pairs]
+    .map((sn) => {
+      const [source, node] = sn.split('|') as [DeliverySource, string]
+      return { node, source, ...figuresOf(all, targetMs, (s, nd) => s === source && nd === node) }
+    })
+    .sort((a, b) => b.samples - a.samples)
+}
+
+export interface NodeDeliveryJudgeConfig {
+  target_ms: number
+  good_pct: number
+  /** A node needs at least this many samples in the window before it is judged. */
+  min_samples: number
+}
+
+/**
+ * The `delivery_node` monitor's verdict (pure, post-mortem 2026-10-23 3.2): failing when any
+ * node (per source) with enough samples delivers fewer than `good_pct` % of its events within
+ * `target_ms`. The overall SLO can sit at target while one replica — the one whose event loop
+ * stalls — misses it; this names that replica.
+ */
+export function judgeDeliveryByNode(
+  rows: NodeDeliveryRow[],
+  cfg: NodeDeliveryJudgeConfig,
+  windowMinutes: number
+): { status: 'ok' | 'failing' | 'unknown'; detail: string; metric?: number } {
+  const judged = rows.filter((r) => r.samples >= cfg.min_samples && r.good_pct != null)
+  if (judged.length === 0) {
+    const most = rows.reduce((m, r) => Math.max(m, r.samples), 0)
+    return {
+      status: 'unknown',
+      detail: `Too few deliveries to judge in the last ${windowMinutes} minutes (busiest node ${most}, needs ${cfg.min_samples})`
+    }
+  }
+  const line = (r: NodeDeliveryRow) =>
+    `${r.node} (${r.source}): ${r.good_pct}% within ${cfg.target_ms} ms, p95 ${
+      r.p95_ms == null ? 'n/a' : `${r.p95_ms} ms`
+    }, ${r.samples} samples${r.missed ? `, ${r.missed} missed` : ''}`
+  const under = judged.filter((r) => (r.good_pct as number) < cfg.good_pct)
+  const worst = Math.min(...judged.map((r) => r.good_pct as number))
+  if (under.length) {
+    const fine = judged.filter((r) => !under.includes(r))
+    return {
+      status: 'failing',
+      metric: worst,
+      detail: [
+        `Realtime delivery under ${cfg.good_pct}% within ${cfg.target_ms} ms on ${under.length} node${
+          under.length === 1 ? '' : 's'
+        } (last ${windowMinutes} minutes):`,
+        ...under.map((r) => `  ${line(r)}`),
+        ...(fine.length ? ['Within target:', ...fine.map((r) => `  ${line(r)}`)] : [])
+      ].join('\n')
+    }
+  }
+  return {
+    status: 'ok',
+    metric: worst,
+    detail: [
+      `Every node delivers at least ${cfg.good_pct}% within ${cfg.target_ms} ms (last ${windowMinutes} minutes):`,
+      ...judged.map((r) => `  ${line(r)}`)
+    ].join('\n')
+  }
+}

@@ -8,6 +8,7 @@ import {
   createWorkerSocket,
   deliveryAckFor,
   forgetSettledReads,
+  guardIdentityCall,
   measureClockOffset,
   type RealtimeAdapter,
   type RealtimeStatus,
@@ -258,14 +259,25 @@ function leaveSseMode() {
   closeSse()
 }
 
-async function authToken(): Promise<string | null> {
+/**
+ * Mint a one-time socket token. Through the signed-out gate (@nivaro/shared signed-out.ts): a
+ * signed-out tab asks once per backoff window (1 s doubling to 5 min), not on every connect —
+ * staging saw 2,116 ws-token 401s in an hour from tabs whose session had ended.
+ */
+export async function mintWsToken(): Promise<string | null> {
   try {
-    const r = await api.get<{ data?: { token?: string }; token?: string }>('/auth/ws-token')
-    return r.data.data?.token ?? r.data.token ?? null
+    return await guardIdentityCall(
+      async () => {
+        const r = await api.get<{ data?: { token?: string }; token?: string }>('/auth/ws-token')
+        return r.data.data?.token ?? r.data.token ?? null
+      },
+      () => null
+    )
   } catch {
     return null
   }
 }
+const authToken = mintWsToken
 
 // ── One socket per browser (#2475) ──────────────────────────────────────────
 const WORKER_URL = `${API_URL}/api/realtime/worker.js`
@@ -369,7 +381,7 @@ export function getSocket(): Socket {
     // the server emitting to a tab that never relays it). The leader holds every tab's joins.
     if (!leaderHandle || leaderHandle.isLeader()) {
       for (const room of new Set([...leaderWatchRefs.keys(), ...localWatchRefs.keys()]))
-        socket?.emit('admin:join', { room })
+        socket?.emit('admin:join', watchJoinPayload(room))
     }
     // Live operations pages (ops:join) ride the leader's socket like the watch rooms.
     if (!leaderHandle || leaderHandle.isLeader()) {
@@ -532,6 +544,7 @@ const RELAYED_EVENTS = new Set([
   'traffic:request',
   'ai:call',
   'traffic-map:frame',
+  'traffic-map:batch',
   'traffic-map:viewer',
   'lock:requested',
   'lock:response',
@@ -570,7 +583,7 @@ function ensureLeaderSocket() {
       leaderWatchRefs.clear()
       for (const [r, n] of localWatchRefs) {
         leaderWatchRefs.set(r, n)
-        if (s.connected) s.emit('admin:join', { room: r })
+        if (s.connected) s.emit('admin:join', watchJoinPayload(r))
       }
       leaderOpsRefs.clear()
       for (const [r, n] of localOpsRefs) {
@@ -590,7 +603,7 @@ function ensureLeaderSocket() {
         } else if (event === '__join_watch') {
           const r = String(payload)
           leaderWatchRefs.set(r, (leaderWatchRefs.get(r) ?? 0) + 1)
-          if (so.connected) so.emit('admin:join', { room: r })
+          if (so.connected) so.emit('admin:join', watchJoinPayload(r))
         } else if (event === '__join_ops' || event === '__leave_ops') {
           const r = String(payload)
           const n = (leaderOpsRefs.get(r) ?? 0) + (event === '__join_ops' ? 1 : -1)
@@ -707,6 +720,16 @@ export const adminRealtime: RealtimeAdapter = {
   joinWatch(room) {
     return joinWatchRoom(room)
   }
+}
+
+/**
+ * The `admin:join` payload for a watch room. The Traffic Map page reads `traffic-map:batch`
+ * (one delta-encoded batch per second, api traffic-map-batch.ts), so it says so on join; a server
+ * without batches ignores the flag and keeps sending `traffic-map:frame`, which the page also
+ * reads. Twin: packages/shared socket-realtime.ts (the SharedWorker path).
+ */
+export function watchJoinPayload(room: string): { room: string; frames?: 'batch' } {
+  return room === 'traffic-map' ? { room, frames: 'batch' } : { room }
 }
 
 /** Join an admin watch room (traffic/jobs/monitors); returns leave fn. */

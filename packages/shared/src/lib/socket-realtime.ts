@@ -170,7 +170,9 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     }
   )
   const watch = new RoomRefs(
-    (r) => send('admin:join', { room: r }),
+    // The Traffic Map page reads batched frames (api traffic-map-batch.ts); twin: admin
+    // lib/socket.ts watchJoinPayload.
+    (r) => send('admin:join', r === 'traffic-map' ? { room: r, frames: 'batch' } : { room: r }),
     (r) => send('admin:leave', { room: r })
   )
   const ops = new RoomRefs(

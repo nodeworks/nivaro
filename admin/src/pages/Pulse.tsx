@@ -5,6 +5,7 @@ import { io } from 'socket.io-client'
 import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { mintWsToken } from '@/lib/socket'
 import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -67,12 +68,7 @@ export function PulsePage() {
     socket.on('connect', async () => {
       let token = user?.static_token ?? null
       if (!token) {
-        try {
-          const r = await api.get<{ data?: { token?: string }; token?: string }>('/auth/ws-token')
-          token = r.data.data?.token ?? r.data.token ?? null
-        } catch {
-          token = null
-        }
+        token = await mintWsToken()
       }
       if (token) socket.emit('auth', { token })
     })

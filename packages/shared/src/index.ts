@@ -711,6 +711,12 @@ export {
   useTyping
 } from './lib/presence-hooks'
 export {
+  PRESENCE_ONLINE_KEY,
+  PRESENCE_POLL_BACKSTOP_MS,
+  usePresenceOnlineLive,
+  usePresenceOnlinePoll
+} from './lib/presence-live'
+export {
   applySignal,
   expirePeers,
   type RecordSignalKind,
@@ -726,7 +732,7 @@ export {
   useTopicPresence,
   whoText
 } from './lib/presence-signals'
-export { type StuckState, stuckText } from './lib/presence-state'
+export { presenceChangeTouches, type StuckState, stuckText } from './lib/presence-state'
 export * from './lib/query-stats'
 export * from './lib/queue-grouping'
 export {
@@ -853,6 +859,18 @@ export {
   serverNow,
   setServerClockOffset
 } from './lib/server-clock'
+export {
+  claimIdentityCall,
+  guardIdentityCall,
+  isSignedOut,
+  isSignedOutError,
+  noteCredentialChanged,
+  noteSignedIn,
+  noteUnauthorized,
+  onSignedIn,
+  SIGNED_OUT_MAX_MS,
+  signedOutBackoff
+} from './lib/signed-out'
 export * from './lib/socket-realtime'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'

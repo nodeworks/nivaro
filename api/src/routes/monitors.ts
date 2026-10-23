@@ -16,7 +16,10 @@ const TYPES = [
   'journey',
   'ssl_cert',
   'traffic',
-  'realtime'
+  'realtime',
+  'event_loop',
+  'route_spike',
+  'delivery_node'
 ] as const
 
 function parseJsonSafe<T>(raw: unknown): T | null {

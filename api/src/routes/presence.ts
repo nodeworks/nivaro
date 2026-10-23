@@ -1,15 +1,19 @@
 import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { withDeadlockRetry } from '../services/deadlock-retry.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
+import { PRESENCE_ONLINE_WINDOW_MS } from '../services/presence-sockets.js'
 import {
   presencePageLabel,
   presenceRowIdle,
   stuckLabel,
   stuckMinutes
 } from '../services/presence-stuck.js'
+import { createShortCache } from '../services/short-cache.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 
@@ -102,6 +106,29 @@ async function getActiveSessions(
     }
   } while (cursor !== '0')
   return sessions.sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
+}
+
+/** How long pings and disconnects are gathered into one admin-room broadcast. */
+export const PRESENCE_BROADCAST_COALESCE_MS = 2000
+/** Tenants with a broadcast already scheduled (tenant-keyed: one process serves every tenant). */
+const broadcastPending = new Set<string>()
+
+/**
+ * Tell the admin room the session list changed — at most once per window per tenant, after the
+ * request has answered. Each ping used to SCAN the whole Redis keyspace and broadcast inline, so
+ * every client's 10 s ping cost a full scan on the request (staging demo 2026-10-23, under
+ * event-loop stalls). The periodic sweep still sends the full list on its own interval.
+ */
+export function schedulePresenceBroadcast(app: FastifyInstance, tenant = currentTenantKey()): void {
+  if (!app.io || !app.redis || broadcastPending.has(tenant)) return
+  broadcastPending.add(tenant)
+  const timer = setTimeout(() => {
+    broadcastPending.delete(tenant)
+    getActiveSessions(app, tenant)
+      .then((sessions) => app.io?.to(adminRoom(tenant)).emit('presence:update', { sessions }))
+      .catch(() => {})
+  }, PRESENCE_BROADCAST_COALESCE_MS)
+  timer.unref?.()
 }
 
 /** Tenants with live presence sessions ('' self-hosted). */
@@ -313,11 +340,7 @@ export async function presencePublicRoutes(app: FastifyInstance) {
 
       const { ttl } = await getPresenceCfg()
       await app.redis.setex(key, ttl, JSON.stringify(session))
-
-      if (app.io) {
-        const sessions = await getActiveSessions(app)
-        app.io.to(adminRoom()).emit('presence:update', { sessions })
-      }
+      schedulePresenceBroadcast(app)
 
       return reply.code(204).send()
     }
@@ -329,10 +352,7 @@ export async function presencePublicRoutes(app: FastifyInstance) {
       const sessionId = sanitizeId(req.body.sessionId)
       if (sessionId) {
         await app.redis.del(sessionKeyPrefix() + sessionId)
-        if (app.io) {
-          const sessions = await getActiveSessions(app)
-          app.io.to(adminRoom()).emit('presence:update', { sessions })
-        }
+        schedulePresenceBroadcast(app)
       }
     }
     return reply.code(204).send()
@@ -531,304 +551,465 @@ function awayOverride(prefs: Record<string, unknown>): boolean {
   return true
 }
 
-export async function presenceOnlineRoutes(app: FastifyInstance) {
-  app.get('/online', { preHandler: requireAuth }, async (req, reply) => {
-    // A live socket is the authoritative signal: it ends the moment the tab
-    // closes, where the timestamp window can only expire slowly. The window
-    // stays as a fallback for a host with no socket, and covers the seconds
-    // between an HTTP heartbeat and a socket connecting.
-    // last_seen freshness is the ONLY authority for being online: the socket
-    // flips is_online on disconnect, but its bookkeeping is per-process
-    // memory, so every API restart stranded is_online=true bits and those
-    // rows read as online FOREVER (the reported ghost-online bug). Beats
-    // re-assert is_online=true every ~25s, so a false bit self-heals in one
-    // beat while a closed tab (socket flip + no more beats) drops instantly.
-    const windowMs = 70_000
-    const since = new Date(Date.now() - windowMs)
-    const rows = (await db('user_presence')
-      .where('last_seen', '>=', since)
-      .where((qb) => void qb.where('is_online', true).orWhereNull('is_online'))
-      .orderBy('last_seen', 'desc')
-      .limit(200)) as Array<Record<string, unknown>>
+// ── GET /presence/online — shared base + per-viewer answer, both briefly cached ──────────────
+//
+// Every open browser re-read this on each presence event; with ~45 people that was ~40 req/s
+// of a ~250 ms, ~12-query handler and it pegged the event loop (staging 2026-10-23). The answer
+// splits in two:
+//   - the BASE: who is online and everything about them that does not depend on who asks
+//     (statuses, scopes, huddles, masquerades, stuck minutes). One per tenant per ONLINE_TTL_MS,
+//     single-flight, so a burst of viewers shares one computation.
+//   - the VIEWER answer: who this viewer may see (visibleToViewer), page labels through their
+//     own read access, stuck only where they may know it, admin-only fields. Cached per
+//     tenant + viewer + role + admin flag for the same short window, also single-flight.
+// Visibility is always applied per viewer on top of the base — the base is never sent.
+const ONLINE_TTL_MS = 1500
+const ONLINE_WINDOW_MS = PRESENCE_ONLINE_WINDOW_MS
 
-    // ── Who this viewer may see ──────────────────────────────────────────
-    // A restricted user sees only people restricted the SAME way, plus admins
-    // (who are visible to everyone). Each dimension the VIEWER restricts must
-    // overlap: a Zone-1 viewer sees Zone-1 people; a Zone-1 + BLT viewer sees
-    // only people who are both. Someone with NO restriction on a dimension the
-    // viewer restricts is broader than the viewer and is therefore not shown —
-    // that is what makes more restrictions mean a narrower view.
-    //
-    // Enforced here rather than in the client: this is a visibility boundary.
-    // (The raw user_presence collection is still readable through /items for
-    // anyone with read permission — sealing that needs a row filter on the
-    // collection, which this does not attempt.)
-    const visibleIds = await visibleToViewer(
-      req.user!,
-      !!req.isAdmin,
-      rows.map((r) => String(r.user_id)).filter(Boolean)
-    )
-    const visibleRows = rows.filter((row) =>
-      visibleIds.has(String(row.user_id ?? '').toUpperCase())
-    )
+interface PresenceBase {
+  /** user_presence rows inside the online window, in display order (name, then id). */
+  rows: Array<Record<string, unknown>>
+  fields: string[]
+  dimensions: string[]
+  dimensionMeta: Array<{ name: string; label: string }>
+  scopesByUser: Map<string, Map<string, string[]>>
+  statusByUser: Map<string, { text: string; emoji: string | null }>
+  awayByUser: Set<string>
+  huddling: Set<string>
+  masqByUser: Map<string, string>
+  adminNames: Map<string, string>
+  /** Stuck minutes for EVERYONE listed; each viewer sees only the people they may know about. */
+  stuckMinutesByUser: Map<string, number>
+}
 
-    let cfg: { fields?: string[]; scope_dimensions?: string[] } | null = null
+interface PresenceAdminExtras {
+  recordingByUser: Map<string, string>
+  staleBuilds: Map<string, unknown[]>
+}
+
+interface OnlineAnswer {
+  data: Array<Record<string, unknown>>
+  config: {
+    fields: string[]
+    scope_dimensions: string[]
+    dimensions: Array<{ name: string; label: string }>
+  }
+}
+
+const baseCache = createShortCache<PresenceBase>('presence-online-base', ONLINE_TTL_MS, {
+  max: 200
+})
+const adminExtrasCache = createShortCache<PresenceAdminExtras>(
+  'presence-online-admin',
+  ONLINE_TTL_MS,
+  { max: 200 }
+)
+const viewerCache = createShortCache<OnlineAnswer>('presence-online-viewer', ONLINE_TTL_MS, {
+  max: 2000
+})
+
+/** Tests: drop every cached presence answer. */
+export function resetPresenceOnlineCache(): void {
+  baseCache.forget()
+  adminExtrasCache.forget()
+  viewerCache.forget()
+}
+
+const upper = (v: unknown) => String(v ?? '').toUpperCase()
+
+/**
+ * The online rows. Advisory data read on every presence event, so it must never lose a lock
+ * fight against the heartbeat writes it reports on (staging logged 500s as the deadlock victim):
+ * SQL Server reads without shared locks (NOLOCK — a row mid-update reads either way, both fine
+ * here), and any dialect retries a deadlock once.
+ */
+function readOnlineRows(): Promise<Array<Record<string, unknown>>> {
+  const since = new Date(Date.now() - ONLINE_WINDOW_MS)
+  return withDeadlockRetry(
+    () =>
+      db
+        .from(isMssql(db) ? db.raw('?? WITH (NOLOCK)', ['user_presence']) : 'user_presence')
+        .where('last_seen', '>=', since)
+        .where((qb) => void qb.where('is_online', true).orWhereNull('is_online'))
+        .orderBy('last_seen', 'desc')
+        .limit(200) as Promise<Array<Record<string, unknown>>>,
+    { retries: 1 }
+  )
+}
+
+async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
+  // A live socket is the authoritative signal: it ends the moment the tab
+  // closes, where the timestamp window can only expire slowly. The window
+  // stays as a fallback for a host with no socket, and covers the seconds
+  // between an HTTP heartbeat and a socket connecting.
+  // last_seen freshness is the ONLY authority for being online: the socket
+  // flips is_online on disconnect, but its bookkeeping is per-process
+  // memory, so every API restart stranded is_online=true bits and those
+  // rows read as online FOREVER (the reported ghost-online bug). Beats
+  // re-assert is_online=true every ~25s, so a false bit self-heals in one
+  // beat while a closed tab (socket flip + no more beats) drops instantly.
+  const rows = await readOnlineRows()
+
+  let cfg: { fields?: string[]; scope_dimensions?: string[] } | null = null
+  try {
+    const settings = (await db('nivaro_settings').where({ id: 1 }).first()) as
+      | Record<string, unknown>
+      | undefined
+    cfg = settings?.presence_display ? JSON.parse(String(settings.presence_display)) : null
+  } catch {
+    cfg = null
+  }
+  const fields = cfg?.fields?.length ? cfg.fields : ['role', 'page']
+  const dimensions = cfg?.scope_dimensions ?? []
+  let dimensionMeta: Array<{ name: string; label: string }> = []
+  if (dimensions.length > 0) {
     try {
-      const settings = (await db('nivaro_settings').where({ id: 1 }).first()) as
-        | Record<string, unknown>
-        | undefined
-      cfg = settings?.presence_display ? JSON.parse(String(settings.presence_display)) : null
+      const { listScopeDimensions } = await import('../services/user-scopes.js')
+      dimensionMeta = (await listScopeDimensions())
+        .filter((d) => dimensions.includes(d.name))
+        .map((d) => ({ name: d.name, label: d.label }))
     } catch {
-      cfg = null
+      dimensionMeta = dimensions.map((n) => ({ name: n, label: n }))
     }
-    const fields = cfg?.fields?.length ? cfg.fields : ['role', 'page']
-    const dimensions = cfg?.scope_dimensions ?? []
-    let dimensionMeta: Array<{ name: string; label: string }> = []
-    if (dimensions.length > 0) {
-      try {
-        const { listScopeDimensions } = await import('../services/user-scopes.js')
-        dimensionMeta = (await listScopeDimensions())
-          .filter((d) => dimensions.includes(d.name))
-          .map((d) => ({ name: d.name, label: d.label }))
-      } catch {
-        dimensionMeta = dimensions.map((n) => ({ name: n, label: n }))
-      }
-    }
+  }
 
-    // Scope labels: one query per dimension for every listed user, not per user.
-    const userIds = visibleRows.map((r) => String(r.user_id)).filter(Boolean)
-    const scopesByUser = new Map<string, Map<string, string[]>>()
-    if (fields.includes('scopes') && dimensions.length > 0 && userIds.length > 0) {
-      try {
-        const { resolveScopeLabelsForUsers } = await import('../services/user-scopes.js')
-        const resolved = await resolveScopeLabelsForUsers(userIds, dimensions)
-        for (const [uid, perDim] of resolved) scopesByUser.set(uid.toUpperCase(), perDim)
-      } catch {
-        // Scope labels are decoration — never fail the online list over them.
-      }
-    }
+  // Everything below is about the listed PERSON, never the viewer, so it is read once for
+  // everyone listed; each viewer's answer keeps only the people they may see.
+  const userIds = rows.map((r) => String(r.user_id ?? '')).filter(Boolean)
 
-    // Live recordings, admin only (replay is an admin surface).
-    const recordingByUser = new Map<string, string>()
-    if (req.isAdmin && userIds.length > 0) {
-      try {
-        const recs = (await db('nivaro_session_recordings')
-          .whereIn('user', userIds)
-          .whereNull('ended_at')
-          .orderBy('last_event_at', 'desc')
-          .select('id', 'user')) as Array<{ id: string; user: string }>
-        for (const r of recs) {
-          const key = String(r.user).toUpperCase()
-          if (!recordingByUser.has(key)) recordingByUser.set(key, String(r.id))
-        }
-      } catch {
-        // Recording may be disabled entirely — absence just hides the action.
-      }
-    }
-
-    // Custom statuses (#33) and "appear away", from user preferences.
-    const statusByUser = new Map<string, { text: string; emoji: string | null }>()
-    const awayByUser = new Set<string>()
-    if (userIds.length > 0) {
-      try {
-        const prefRows = (await db('nivaro_users')
-          .whereIn('id', userIds)
-          .select('id', 'preferences')) as Array<{ id: string; preferences: unknown }>
-        for (const pr of prefRows) {
-          const prefs = parsePrefs(pr.preferences)
-          const uid = String(pr.id).toUpperCase()
-          if (awayOverride(prefs)) awayByUser.add(uid)
-          const cs = prefs.custom_status as
-            | { text?: string; emoji?: string | null; expires_at?: string | null }
-            | null
-            | undefined
-          if (!cs?.text) continue
-          if (cs.expires_at && new Date(cs.expires_at).getTime() < Date.now()) continue
-          statusByUser.set(uid, {
-            text: String(cs.text),
-            emoji: cs.emoji ? String(cs.emoji) : null
-          })
-        }
-      } catch {
-        /* decoration only */
-      }
-    }
-
-    // #2852 — in a huddle right now (a transient mark beside any status they set).
-    let huddling = new Set<string>()
+  // Scope labels: one query per dimension for every listed user, not per user.
+  const scopesByUser = new Map<string, Map<string, string[]>>()
+  if (fields.includes('scopes') && dimensions.length > 0 && userIds.length > 0) {
     try {
-      const { huddlingUsers } = await import('../services/huddle-presence.js')
-      huddling = await huddlingUsers(
-        app.redis as unknown as Parameters<typeof huddlingUsers>[0],
-        currentTenantKey() || null,
-        userIds
+      const { resolveScopeLabelsForUsers } = await import('../services/user-scopes.js')
+      const resolved = await resolveScopeLabelsForUsers(userIds, dimensions)
+      for (const [uid, perDim] of resolved) scopesByUser.set(uid.toUpperCase(), perDim)
+    } catch {
+      // Scope labels are decoration — never fail the online list over them.
+    }
+  }
+
+  // Custom statuses (#33) and "appear away", from user preferences.
+  const statusByUser = new Map<string, { text: string; emoji: string | null }>()
+  const awayByUser = new Set<string>()
+  if (userIds.length > 0) {
+    try {
+      const prefRows = (await db('nivaro_users')
+        .whereIn('id', userIds)
+        .select('id', 'preferences')) as Array<{ id: string; preferences: unknown }>
+      for (const pr of prefRows) {
+        const prefs = parsePrefs(pr.preferences)
+        const uid = String(pr.id).toUpperCase()
+        if (awayOverride(prefs)) awayByUser.add(uid)
+        const cs = prefs.custom_status as
+          | { text?: string; emoji?: string | null; expires_at?: string | null }
+          | null
+          | undefined
+        if (!cs?.text) continue
+        if (cs.expires_at && new Date(cs.expires_at).getTime() < Date.now()) continue
+        statusByUser.set(uid, {
+          text: String(cs.text),
+          emoji: cs.emoji ? String(cs.emoji) : null
+        })
+      }
+    } catch {
+      /* decoration only */
+    }
+  }
+
+  // #2852 — in a huddle right now (a transient mark beside any status they set).
+  let huddling = new Set<string>()
+  try {
+    const { huddlingUsers } = await import('../services/huddle-presence.js')
+    huddling = await huddlingUsers(
+      app.redis as unknown as Parameters<typeof huddlingUsers>[0],
+      currentTenantKey() || null,
+      userIds
+    )
+  } catch {
+    /* decoration only */
+  }
+
+  // Who is really at the keyboard: an admin masquerading as this user
+  // refreshes a short-lived marker on every request (masquerade-marker.ts).
+  const masqByUser = await activeMasquerades(app.redis, userIds.map(String))
+  const adminNames = new Map<string, string>()
+  if (masqByUser.size) {
+    try {
+      const admins = (await db('nivaro_users')
+        .whereIn('id', [...new Set(masqByUser.values())])
+        .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
+      for (const a of admins)
+        adminNames.set(
+          String(a.id).toUpperCase(),
+          [a.first_name, a.last_name].filter(Boolean).join(' ') || String(a.email ?? '')
+        )
+    } catch {
+      /* decoration only */
+    }
+  }
+
+  // #1394 — stuck: at the keyboard, same route, nothing saved for ten minutes. Worked out for
+  // everyone listed; shown only to admins and the person's own manager (viewer step).
+  const stuckMinutesByUser = new Map<string, number>()
+  try {
+    const people = rows.map((r) => ({
+      id: String(r.user_id ?? ''),
+      idle: presenceRowIdle(r, awayByUser.has(upper(r.user_id))),
+      lastActive: r.last_active ? new Date(r.last_active as string).getTime() : null
+    }))
+    if (people.length > 0) {
+      const stuck = await stuckMinutes(people)
+      for (const [uid, minutes] of stuck) stuckMinutesByUser.set(uid.toUpperCase(), minutes)
+    }
+  } catch {
+    /* decoration only */
+  }
+
+  // A stable order (name, then id). The query reads the 200 freshest rows, but last_seen
+  // moves on every heartbeat, so an answer in that order reshuffled the list each poll.
+  rows.sort((a, b) => {
+    const an = String(a.display_name ?? '').trim()
+    const bn = String(b.display_name ?? '').trim()
+    if (!an !== !bn) return an ? -1 : 1
+    return (
+      an.localeCompare(bn, undefined, { sensitivity: 'base' }) ||
+      String(a.user_id ?? '').localeCompare(String(b.user_id ?? ''))
+    )
+  })
+
+  return {
+    rows,
+    fields,
+    dimensions,
+    dimensionMeta,
+    scopesByUser,
+    statusByUser,
+    awayByUser,
+    huddling,
+    masqByUser,
+    adminNames,
+    stuckMinutesByUser
+  }
+}
+
+/** Administrator-only decoration, the same for every administrator of a tenant. */
+async function loadAdminExtras(base: PresenceBase): Promise<PresenceAdminExtras> {
+  const userIds = base.rows.map((r) => String(r.user_id ?? '')).filter(Boolean)
+  // Live recordings (replay is an admin surface).
+  const recordingByUser = new Map<string, string>()
+  if (userIds.length > 0) {
+    try {
+      const recs = (await db('nivaro_session_recordings')
+        .whereIn('user', userIds)
+        .whereNull('ended_at')
+        .orderBy('last_event_at', 'desc')
+        .select('id', 'user')) as Array<{ id: string; user: string }>
+      for (const r of recs) {
+        const key = String(r.user).toUpperCase()
+        if (!recordingByUser.has(key)) recordingByUser.set(key, String(r.id))
+      }
+    } catch {
+      // Recording may be disabled entirely — absence just hides the action.
+    }
+  }
+  // #1048 — which apps each person still has open on an old build (every replica's sockets,
+  // judged against each app's newest page load). Absent for people whose every tab is current.
+  let staleBuilds = new Map<string, unknown[]>()
+  if (userIds.length > 0) {
+    try {
+      const { getClusterStaleBuilds } = await import('../plugins/socketio.js')
+      staleBuilds = await getClusterStaleBuilds(
+        process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
       )
     } catch {
       /* decoration only */
     }
+  }
+  return { recordingByUser, staleBuilds }
+}
 
-    // Who is really at the keyboard: an admin masquerading as this user
-    // refreshes a short-lived marker on every request (masquerade-marker.ts).
-    const masqByUser = await activeMasquerades(app.redis, userIds.map(String))
-    const adminNames = new Map<string, string>()
-    if (masqByUser.size) {
-      try {
-        const admins = (await db('nivaro_users')
-          .whereIn('id', [...new Set(masqByUser.values())])
-          .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
-        for (const a of admins)
-          adminNames.set(
-            String(a.id).toUpperCase(),
-            [a.first_name, a.last_name].filter(Boolean).join(' ') || String(a.email ?? '')
-          )
-      } catch {
-        /* decoration only */
-      }
-    }
+/** One viewer's answer on top of the shared base. */
+async function onlineAnswerFor(
+  base: PresenceBase,
+  viewer: User,
+  isAdmin: boolean,
+  tenant: string
+): Promise<OnlineAnswer> {
+  // ── Who this viewer may see ──────────────────────────────────────────
+  // A restricted user sees only people restricted the SAME way, plus admins
+  // (who are visible to everyone). Each dimension the VIEWER restricts must
+  // overlap: a Zone-1 viewer sees Zone-1 people; a Zone-1 + BLT viewer sees
+  // only people who are both. Someone with NO restriction on a dimension the
+  // viewer restricts is broader than the viewer and is therefore not shown —
+  // that is what makes more restrictions mean a narrower view.
+  //
+  // Enforced here rather than in the client: this is a visibility boundary.
+  // (The raw user_presence collection is still readable through /items for
+  // anyone with read permission — sealing that needs a row filter on the
+  // collection, which this does not attempt.)
+  const visibleIds = await visibleToViewer(
+    viewer,
+    isAdmin,
+    base.rows.map((r) => String(r.user_id)).filter(Boolean)
+  )
+  const visibleRows = base.rows.filter((row) => visibleIds.has(upper(row.user_id)))
+  const userIds = visibleRows.map((r) => String(r.user_id)).filter(Boolean)
 
-    // #1048 — administrators only: which apps each person still has open on an old build
-    // (every replica's sockets, judged against each app's newest page load). Absent for
-    // everyone else, and for people whose every tab is current.
-    let staleBuilds = new Map<string, unknown[]>()
-    if (req.isAdmin && userIds.length > 0) {
-      try {
-        const { getClusterStaleBuilds } = await import('../plugins/socketio.js')
-        staleBuilds = await getClusterStaleBuilds(
-          process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
-        )
-      } catch {
-        /* decoration only */
-      }
-    }
+  const extras: PresenceAdminExtras =
+    isAdmin && userIds.length > 0
+      ? await adminExtrasCache.get(tenant, () => loadAdminExtras(base))
+      : { recordingByUser: new Map(), staleBuilds: new Map() }
 
-    const recordLabels = await resolveRecordLabels(
-      visibleRows.map((r) => (r.current_path as string | null) ?? null),
-      req.user!
-    )
-    const pageLabel = (path: string | null | undefined) => presencePageLabel(path, recordLabels)
+  const recordLabels = await resolveRecordLabels(
+    visibleRows.map((r) => (r.current_path as string | null) ?? null),
+    viewer
+  )
+  const pageLabel = (path: string | null | undefined) => presencePageLabel(path, recordLabels)
 
-    // #1394 — stuck: at the keyboard, same route, nothing saved for ten
-    // minutes. Shown to admins and to the person's own manager only: it reads
-    // their request log, which is more than the page they are on.
-    const stuckByUser = new Map<string, { minutes: number; label: string | null }>()
-    try {
+  // #1394 — stuck reads their request log, which is more than the page they are on: shown to
+  // admins and to the person's own manager only.
+  const stuckByUser = new Map<string, { minutes: number; label: string | null }>()
+  try {
+    const stuckVisible = visibleRows.filter((r) => base.stuckMinutesByUser.has(upper(r.user_id)))
+    if (stuckVisible.length > 0) {
       let mayKnow: Set<string> | null = null
-      if (!req.isAdmin) {
-        const mine = userIds.length
-          ? ((await db('nivaro_users')
-              .whereIn('id', userIds)
-              .where('manager_id', req.user!.id)
-              .select('id')) as Array<{ id: string }>)
-          : []
+      if (!isAdmin) {
+        const mine = (await db('nivaro_users')
+          .whereIn(
+            'id',
+            stuckVisible.map((r) => String(r.user_id))
+          )
+          .where('manager_id', viewer.id)
+          .select('id')) as Array<{ id: string }>
         mayKnow = new Set(mine.map((m) => String(m.id).toUpperCase()))
       }
-      const people = visibleRows
-        .filter((r) => !mayKnow || mayKnow.has(String(r.user_id ?? '').toUpperCase()))
-        .map((r) => ({
-          id: String(r.user_id ?? ''),
-          idle: presenceRowIdle(r, awayByUser.has(String(r.user_id ?? '').toUpperCase())),
-          lastActive: r.last_active ? new Date(r.last_active as string).getTime() : null
-        }))
-      if (people.length > 0) {
-        const stuck = await stuckMinutes(people)
-        for (const r of visibleRows) {
-          const uid = String(r.user_id ?? '').toUpperCase()
-          const minutes = stuck.get(uid)
-          if (minutes != null)
-            stuckByUser.set(uid, {
-              minutes,
-              label: stuckLabel(r.current_path as string | null, recordLabels)
-            })
-        }
+      for (const r of stuckVisible) {
+        const uid = upper(r.user_id)
+        if (mayKnow && !mayKnow.has(uid)) continue
+        stuckByUser.set(uid, {
+          minutes: base.stuckMinutesByUser.get(uid) as number,
+          label: stuckLabel(r.current_path as string | null, recordLabels)
+        })
       }
-    } catch {
-      /* decoration only */
     }
+  } catch {
+    /* decoration only */
+  }
 
-    // A stable order (name, then id). The query reads the 200 freshest rows, but last_seen
-    // moves on every heartbeat, so an answer in that order reshuffled the list each poll.
-    visibleRows.sort((a, b) => {
-      const an = String(a.display_name ?? '').trim()
-      const bn = String(b.display_name ?? '').trim()
-      if (!an !== !bn) return an ? -1 : 1
-      return (
-        an.localeCompare(bn, undefined, { sensitivity: 'base' }) ||
-        String(a.user_id ?? '').localeCompare(String(b.user_id ?? ''))
-      )
-    })
+  const { awayByUser, statusByUser, huddling, scopesByUser, masqByUser, adminNames } = base
+  return {
+    data: visibleRows.map((r) => {
+      const uid = upper(r.user_id)
+      return {
+        user_id: r.user_id,
+        display_name: r.display_name,
+        role_name: r.role_name,
+        // The raw route can carry a record id the viewer may not read; everyone gets `page`
+        // (labelled only through their own read access). Administrators keep the route.
+        current_path: isAdmin ? r.current_path : undefined,
+        last_seen: r.last_seen,
+        // Reported by the client: the heartbeat alone cannot tell a person
+        // at their desk from a tab left open. Older rows (written before the
+        // column existed, or by a client that does not report it) read as
+        // active rather than guessing at idle.
+        // The flag is a client's claim; last_active is when it last saw real
+        // input. Trusting the flag alone left people idle forever whenever a
+        // client wrote presence without reporting it — the row said idle and
+        // nothing ever said otherwise. Recent activity wins.
+        // "Appear away" beats activity: the person asked to read as away.
+        away: awayByUser.has(uid),
+        is_idle: presenceRowIdle(r, awayByUser.has(uid)),
+        // #1394 — 'active' | 'idle' | 'stuck'; stuck only for viewers who
+        // may know it (admins, the person's manager), else active/idle.
+        state: presenceRowIdle(r, awayByUser.has(uid))
+          ? 'idle'
+          : stuckByUser.has(uid)
+            ? 'stuck'
+            : 'active',
+        stuck: stuckByUser.get(uid) ?? null,
+        // How long they've been away from the keyboard, for the "Idle · 12m"
+        // label — null while active or unknown.
+        idle_minutes: (() => {
+          if (awayByUser.has(uid)) return null
+          const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
+          if (!active) return null
+          const mins = Math.floor((Date.now() - active) / 60_000)
+          return mins >= Math.floor(IDLE_AFTER_MS / 60_000) ? mins : null
+        })(),
+        last_active: r.last_active ?? null,
+        // Rendered here because only the server can: the panel has neither
+        // the display template nor the row.
+        page: pageLabel(r.current_path as string | null),
+        app: (r.app as string | null) ?? null,
+        typing_room: r.typing_room,
+        // Flat list for the subtitle line, keyed map for grouping.
+        custom_status: statusByUser.get(uid) ?? null,
+        in_huddle: huddling.has(uid),
+        scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
+        scopes_by_dimension: Object.fromEntries(scopesByUser.get(uid) ?? []),
+        recording_id: extras.recordingByUser.get(uid) ?? null,
+        ...(extras.staleBuilds.has(uid) ? { stale_build: extras.staleBuilds.get(uid) } : {}),
+        // Set while an admin is masquerading as this user — the row is
+        // theirs, the person behind it is someone else.
+        masquerade: masqByUser.has(uid)
+          ? {
+              admin_id: masqByUser.get(uid) ?? null,
+              admin_name: adminNames.get(masqByUser.get(uid) ?? '') ?? 'an administrator'
+            }
+          : null
+      }
+    }),
+    config: {
+      fields: base.fields,
+      scope_dimensions: base.dimensions,
+      // Human labels so a "Group by" control can offer "Zone" not "division".
+      dimensions: base.dimensionMeta
+    }
+  }
+}
 
+/**
+ * The viewer half of the cache key: everything the per-viewer step reads about the caller.
+ * null = do not cache (an API-key caller carries key scopes that change what labels it may read).
+ */
+function viewerKey(user: User, isAdmin: boolean): string | null {
+  if (user.api_key_scopes || user.api_key_scope_restrictions) return null
+  return `${upper(user.id)}|${user.role ?? ''}|${isAdmin ? 1 : 0}`
+}
+
+/** The /presence/online answer for one viewer (cached briefly; see the block comment above). */
+export async function presenceOnlineFor(
+  app: FastifyInstance,
+  viewer: User,
+  isAdmin: boolean
+): Promise<OnlineAnswer> {
+  const tenant = currentTenantKey()
+  const compute = async () =>
+    onlineAnswerFor(
+      await baseCache.get(tenant, () => loadPresenceBase(app)),
+      viewer,
+      isAdmin,
+      tenant
+    )
+  const vk = viewerKey(viewer, isAdmin)
+  return vk == null ? compute() : viewerCache.get(`${tenant}|${vk}`, compute)
+}
+
+export async function presenceOnlineRoutes(app: FastifyInstance) {
+  app.get('/online', { preHandler: requireAuth }, async (req, reply) => {
+    const answer = await presenceOnlineFor(app, req.user!, !!req.isAdmin)
     return reply.send({
-      data: visibleRows.map((r) => {
-        const uid = String(r.user_id ?? '').toUpperCase()
-        return {
-          user_id: r.user_id,
-          display_name: r.display_name,
-          role_name: r.role_name,
-          // The raw route can carry a record id the viewer may not read; everyone gets `page`
-          // (labelled only through their own read access). Administrators keep the route.
-          current_path: req.isAdmin ? r.current_path : undefined,
-          last_seen: r.last_seen,
-          // Reported by the client: the heartbeat alone cannot tell a person
-          // at their desk from a tab left open. Older rows (written before the
-          // column existed, or by a client that does not report it) read as
-          // active rather than guessing at idle.
-          // The flag is a client's claim; last_active is when it last saw real
-          // input. Trusting the flag alone left people idle forever whenever a
-          // client wrote presence without reporting it — the row said idle and
-          // nothing ever said otherwise. Recent activity wins.
-          // "Appear away" beats activity: the person asked to read as away.
-          away: awayByUser.has(uid),
-          is_idle: presenceRowIdle(r, awayByUser.has(uid)),
-          // #1394 — 'active' | 'idle' | 'stuck'; stuck only for viewers who
-          // may know it (admins, the person's manager), else active/idle.
-          state: presenceRowIdle(r, awayByUser.has(uid))
-            ? 'idle'
-            : stuckByUser.has(uid)
-              ? 'stuck'
-              : 'active',
-          stuck: stuckByUser.get(uid) ?? null,
-          // How long they've been away from the keyboard, for the "Idle · 12m"
-          // label — null while active or unknown.
-          idle_minutes: (() => {
-            if (awayByUser.has(uid)) return null
-            const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
-            if (!active) return null
-            const mins = Math.floor((Date.now() - active) / 60_000)
-            return mins >= Math.floor(IDLE_AFTER_MS / 60_000) ? mins : null
-          })(),
-          last_active: r.last_active ?? null,
-          // Rendered here because only the server can: the panel has neither
-          // the display template nor the row.
-          page: pageLabel(r.current_path as string | null),
-          app: (r.app as string | null) ?? null,
-          typing_room: r.typing_room,
-          // Flat list for the subtitle line, keyed map for grouping.
-          custom_status: statusByUser.get(uid) ?? null,
-          in_huddle: huddling.has(uid),
-          scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
-          scopes_by_dimension: Object.fromEntries(scopesByUser.get(uid) ?? []),
-          recording_id: recordingByUser.get(uid) ?? null,
-          ...(staleBuilds.has(uid) ? { stale_build: staleBuilds.get(uid) } : {}),
-          // Set while an admin is masquerading as this user — the row is
-          // theirs, the person behind it is someone else.
-          masquerade: masqByUser.has(uid)
-            ? {
-                admin_id: masqByUser.get(uid) ?? null,
-                admin_name: adminNames.get(masqByUser.get(uid) ?? '') ?? 'an administrator'
-              }
-            : null
-        }
-      }),
+      data: answer.data,
       config: {
-        fields,
-        scope_dimensions: dimensions,
+        fields: answer.config.fields,
+        scope_dimensions: answer.config.scope_dimensions,
         // Where session replay lives. A headless host is served from its own
         // origin, so a relative link would hit ITS router and 404 — the admin
         // SPA is served by the API, so hand back an absolute URL and any host
         // can offer the action without hardcoding an environment.
         admin_url: adminBaseUrl(),
-        // Human labels so a "Group by" control can offer "Zone" not "division".
-        dimensions: dimensionMeta
+        dimensions: answer.config.dimensions
       }
     })
   })

@@ -47,6 +47,7 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
+import { usePresenceOnlinePoll } from '../../lib/presence-live'
 import { fullHref, presencePlaceHref, type StuckState, stuckText } from '../../lib/presence-state'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { userCardQuery } from '../../lib/user-cards'
@@ -3998,6 +3999,8 @@ function usePresenceExtras(): {
   loaded: boolean
 } {
   const client = useNivaroClient()
+  // presence:changed refreshes the list (one listener per tab); the poll is a backstop.
+  const poll = usePresenceOnlinePoll(15_000)
   const { data, isFetched } = useQuery({
     queryKey: ['presence-online'],
     queryFn: () =>
@@ -4009,9 +4012,9 @@ function usePresenceExtras(): {
           dimensions?: Array<{ name: string; label: string }>
         }
       }>(get('/presence/online')),
-    // Matches the presence heartbeat cadence — the page someone is on should
-    // track them around the app, not lag a minute behind.
-    refetchInterval: 15_000,
+    // Matches the presence heartbeat cadence without a live socket — the page someone is on
+    // should track them around the app. Live, presence:changed carries it and this is 60 s.
+    refetchInterval: poll,
     staleTime: 5_000
   })
   const byUser = useMemo(() => {

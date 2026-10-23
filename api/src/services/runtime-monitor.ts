@@ -1,4 +1,5 @@
 import { trackError } from './error-tracking.js'
+import { noteLagSample } from './ops-signals.js'
 
 /**
  * Runtime health monitor (#234): event-loop lag + memory, sampled in-process.
@@ -25,6 +26,8 @@ export function startRuntimeMonitor(): void {
     const lag = Math.max(0, now - lastSample - SAMPLE_MS)
     lastSample = now
     recentLags.push(lag)
+    // Per-minute peaks for the event-loop stall monitor (ops-signals.ts), every node.
+    noteLagSample(lag, now)
     if (recentLags.length > 120) recentLags = recentLags.slice(-120)
     maxLag1m = Math.max(...recentLags)
 

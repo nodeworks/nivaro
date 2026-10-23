@@ -10,7 +10,10 @@
  * a socket.io-shaped object so every existing consumer keeps working.
  *
  * What the worker owns (and tabs no longer do):
- * - sign-in: it asks one live tab for a `/auth/ws-token` and sends `auth {token}`;
+ * - sign-in: it asks one live tab for a `/auth/ws-token` and sends `auth {token}`. A tab that
+ *   answers no token backs it off (1 s doubling to 5 min); a tab that answers `signedOut: true`
+ *   parks it: the socket closes and nothing is asked until a tab sends `signed-in` or a new tab
+ *   says hello (a fresh page may be signed in). Focus never restarts the asking;
  * - rooms: per-port membership, one server join when the first tab enters a room, one leave
  *   when the last tab leaves, every held room re-joined after each `auth:ok`;
  * - the catch-up: one `lastSeq`, one `catchup {cursor}` per reconnect, replayed events fan out
@@ -39,12 +42,22 @@ var ORIGIN = self.location.origin
 var PING_MS = 5000
 var DEAD_AFTER_MS = 16000
 var TOKEN_WAIT_MS = 5000
-/* A tab that answers with no token is signed out (401) or cannot mint one: ask again with a
-   doubling wait, not every second (one signed-out tab sent 16,000 401s in 8 hours). A new or
-   focused tab, or a sign-in, asks again at once. */
+/* A tab that answers with no token cannot mint one (signed out, or a failed request): ask again
+   with a doubling wait, not every second (one signed-out tab sent 16,000 401s in 8 hours; staging
+   2026-10-23 saw 2,116 ws-token 401s an hour). A tab that knows it is signed out says so
+   (signedOut: true): the worker parks — closes the socket and asks nothing — until a tab sends
+   'signed-in' or a new tab says hello. Focus ('active') never restarts the asking: the zombie
+   reaper (45 s) plus the stall watchdog used to turn that into a loop. */
 var TOKEN_RETRY_MIN_MS = 1000
-var TOKEN_RETRY_MAX_MS = 60000
+var TOKEN_RETRY_MAX_MS = 300000
 var tokenRetryMs = TOKEN_RETRY_MIN_MS
+/* Parked: a tab said it is signed out. */
+var tokenParked = false
+/* A backoff wait is running: a (re)connect leaves the asking to its timer. */
+var tokenBackoff = false
+/* The socket is down on purpose (parked, or the server dropped it unauthenticated): the stall
+   watchdog leaves it alone; the backoff timer or a wake connects it again. */
+var tokenIdle = false
 
 importScripts(ORIGIN + '/socket.io/socket.io.min.js')
 
@@ -243,6 +256,9 @@ function watchRows(port, payload, on) {
 
 function requestToken() {
   if (tokenReq.timer) clearTimeout(tokenReq.timer)
+  tokenReq.timer = null
+  tokenBackoff = false
+  if (tokenParked) return
   var candidates = []
   if (activePort && ports.has(activePort)) candidates.push(activePort)
   ports.forEach(function (st, port) { if (candidates.indexOf(port) < 0) candidates.push(port) })
@@ -257,10 +273,47 @@ function requestToken() {
   }, TOKEN_WAIT_MS)
 }
 
-/* A tab arrived or came to the front while signed out: it may have just signed in. */
-function retryTokenNow() {
-  tokenRetryMs = TOKEN_RETRY_MIN_MS
-  requestToken()
+/* No token: wait (doubling) and ask again — connecting first when the socket is idle. */
+function scheduleTokenRetry() {
+  if (tokenReq.timer) clearTimeout(tokenReq.timer)
+  var wait = tokenRetryMs
+  tokenRetryMs = Math.min(tokenRetryMs * 2, TOKEN_RETRY_MAX_MS)
+  tokenBackoff = true
+  tokenReq.timer = setTimeout(function () {
+    tokenReq.timer = null
+    tokenBackoff = false
+    if (authed || tokenParked || !socket) return
+    if (socket.connected) requestToken()
+    else if (tokenIdle) {
+      tokenIdle = false
+      socket.connect()
+    }
+  }, wait)
+}
+
+/* A tab knows it is signed out: stop asking and close the unauthenticated socket. */
+function parkToken() {
+  tokenParked = true
+  tokenBackoff = false
+  if (tokenReq.timer) clearTimeout(tokenReq.timer)
+  tokenReq.timer = null
+  tokenIdle = true
+  if (socket && socket.connected && !authed) socket.disconnect()
+}
+
+/* Ask now: a new tab (a fresh page may be signed in) or a tab that heard a sign-in (reset = the
+   wait starts over). A parked or idle socket connects again; its connect asks. */
+function wakeToken(reset) {
+  if (reset) tokenRetryMs = TOKEN_RETRY_MIN_MS
+  tokenParked = false
+  if (authed || !socket) return
+  if (socket.connected) return requestToken()
+  if (!tokenIdle) return
+  tokenIdle = false
+  tokenBackoff = false
+  if (tokenReq.timer) clearTimeout(tokenReq.timer)
+  tokenReq.timer = null
+  socket.connect()
 }
 
 function sendHello() {
@@ -291,9 +344,10 @@ function ensureSocket() {
     downSince = 0
     reconnects += 1
     authed = false
+    tokenIdle = false
     deliver('connect', [])
     broadcast(status())
-    requestToken()
+    if (!tokenParked && !tokenBackoff) requestToken()
   })
   socket.on('connect_error', function (err) {
     connectFailures += 1
@@ -309,8 +363,15 @@ function ensureSocket() {
     }
   })
   socket.on('disconnect', function (reason) {
+    var wasAuthed = authed
     authed = false
     downSince = Date.now()
+    /* Dropped by the server before signing in (the 45 s zombie reaper): no reconnect until a
+       token is likely — the backoff timer, a new tab or a sign-in brings it back. */
+    if (!wasAuthed && reason === 'io server disconnect') {
+      tokenIdle = true
+      if (!tokenParked && !tokenBackoff) scheduleTokenRetry()
+    }
     deliver('disconnect', [reason])
     broadcast(status())
   })
@@ -436,15 +497,17 @@ function onMessage(port, ev) {
       if (socket && socket.connected) {
         post(port, { t: 'ev', event: 'connect', args: [] })
         if (authed) post(port, { t: 'ev', event: 'auth:ok', args: [] })
-        else retryTokenNow()
-      }
+        else wakeToken(false)
+      } else if (socket && tokenIdle) wakeToken(false)
       return
     case 'pong':
       return
     case 'active':
       activePort = port
       if (st.pageAt && authed) emitRaw('page:at', st.pageAt)
-      if (!authed && socket && socket.connected) retryTokenNow()
+      return
+    case 'signed-in':
+      wakeToken(true)
       return
     case 'token':
       if (msg.req !== tokenReq.id) return
@@ -452,12 +515,8 @@ function onMessage(port, ev) {
       tokenReq.timer = null
       if (msg.token && socket && socket.connected) socket.emit('auth', { token: msg.token })
       else if (!msg.token) {
-        var wait = tokenRetryMs
-        tokenRetryMs = Math.min(tokenRetryMs * 2, TOKEN_RETRY_MAX_MS)
-        tokenReq.timer = setTimeout(function () {
-          tokenReq.timer = null
-          if (!authed && socket && socket.connected) requestToken()
-        }, wait)
+        if (msg.signedOut === true) parkToken()
+        else scheduleTokenRetry()
       }
       return
     case 'emit':
@@ -487,7 +546,7 @@ self.onconnect = function (e) {
    was seen sitting disconnected with no further attempts while plain tabs recovered. A socket
    down with no attempt starting or ending for STALL_MS gets a fresh connect. */
 setInterval(function () {
-  if (!socket || socket.connected || !downSince || !ports.size) return
+  if (!socket || socket.connected || tokenIdle || !downSince || !ports.size) return
   var now = Date.now()
   if (now - Math.max(downSince, lastAttemptAt) < STALL_MS) return
   lastAttemptAt = now
