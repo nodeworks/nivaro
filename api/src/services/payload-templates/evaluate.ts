@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import type { Template } from 'liquidjs'
 import { instanceTimezone } from '../liquid-dates.js'
 import {
@@ -13,6 +14,8 @@ import {
 import { type ConditionRule, evalConditionRule } from '../workflow-conditions.js'
 import type { Field, MapSpec, Problem, Transform, ValueSpec } from './types.js'
 
+export { validateSpec } from './validate.js'
+
 // ─── Field-map evaluator ─────────────────────────────────────────────────────
 // Walks a map-mode payload template (types.ts) and builds the request body as a
 // JS object — never by concatenating strings — so the body is always valid
@@ -20,11 +23,12 @@ import type { Field, MapSpec, Problem, Transform, ValueSpec } from './types.js'
 // is a formula). Every problem is collected, never thrown, so a preview shows
 // them all at once.
 //
-// Paths: `a.b[0].c` and `a.b.0.c`. The first segment is looked up in this
-// order: a list alias or number alias (innermost list first), a top-level
-// scope key, a field of the current list item, a field of `scope.record`. So
-// inside a list `line.quantity` and `quantity` read the same value, and
-// outside one `cost_type` reads `record.cost_type`. A string that holds JSON
+// Paths: `a.b[0].c` and `a.b.0.c`. The first segment resolves lexically: a
+// list alias or number alias (innermost list first), then a field of the list
+// item (innermost first), then a top-level scope key, then a field of
+// `scope.record`. So inside a list `line.quantity` and `quantity` read the
+// same value — and an item column named `state` shadows `scope.state` — while
+// outside a list `cost_type` reads `record.cost_type`. A string that holds JSON
 // (an MSSQL JSON text column) is parsed when the path walks into it.
 //
 // Condition rules (`include.when`, `list.where`, `switch` cases) use the
@@ -32,6 +36,13 @@ import type { Field, MapSpec, Problem, Transform, ValueSpec } from './types.js'
 // path rules and handed to the evaluator as a one-key record, so dotted paths
 // work. Related-row ops (`child:fk` fields) read the pre-resolved counts on
 // `scope.record`.
+//
+// Secrets: only the `secret` source may put a real placeholder in the body.
+// While evaluating it emits a private token (a per-call random nonce, digits
+// only so upper/lower leave it alone); a final pass over every leaf and key
+// of the built body neutralizes any `⟦nvr-secret:` (record text, JSON text
+// decoded on the way, fixed text, formula output) and only then swaps the
+// tokens for the real placeholders.
 
 /** The placeholder a body secret renders as; the sender swaps in the value. */
 export const SECRET_PLACEHOLDER = (name: string): string => `⟦nvr-secret:${name}⟧`
@@ -39,19 +50,20 @@ export const SECRET_PLACEHOLDER = (name: string): string => `⟦nvr-secret:${nam
 const MARKER = '⟦nvr-secret:'
 const NEUTRAL = '⟦nvr-secret\u200b:'
 
-/**
- * A deep copy of `value` in which no string can pass for a secret placeholder:
- * every `⟦nvr-secret:` gets a zero-width space before its colon. Record and
- * scope data go through it so only the `secret` value source emits a real
- * placeholder (record text cannot make the sender substitute a secret). Pure —
- * no imports — so the code-mode render and body-secrets can share it.
- */
-export function neutralizeSecretMarkers(value: unknown): unknown {
+const neutralString = (s: string): string =>
+  s.includes(MARKER) ? s.split(MARKER).join(NEUTRAL) : s
+
+/** Deep copy with `fn` applied to every string — values and object keys. */
+function mapStrings(value: unknown, fn: (s: string) => string): unknown {
   const seen = new WeakMap<object, unknown>()
   const walk = (v: unknown): unknown => {
-    if (typeof v === 'string') return v.includes(MARKER) ? v.split(MARKER).join(NEUTRAL) : v
+    if (typeof v === 'string') return fn(v)
     if (v === null || typeof v !== 'object') return v
     if (v instanceof Date) return new Date(v.getTime())
+    // Binary and keyed collections are opaque (JSON has no form for them).
+    if (v instanceof Map || v instanceof Set || v instanceof ArrayBuffer || ArrayBuffer.isView(v)) {
+      return v
+    }
     const hit = seen.get(v)
     if (hit !== undefined) return hit
     if (Array.isArray(v)) {
@@ -60,25 +72,35 @@ export function neutralizeSecretMarkers(value: unknown): unknown {
       for (const x of v) out.push(walk(x))
       return out
     }
-    const proto = Object.getPrototypeOf(v)
-    // Only plain records are copied; anything else (Buffer, Map) is opaque.
-    if (proto !== Object.prototype && proto !== null) return v
-    const out: Record<string, unknown> = proto === null ? Object.create(null) : {}
+    // Plain records and class instances alike: own enumerable keys.
+    const out: Record<string, unknown> =
+      Object.getPrototypeOf(v) === null ? Object.create(null) : {}
     seen.set(v, out)
     for (const k of Object.keys(v)) {
+      const key = fn(k)
       const x = walk((v as Record<string, unknown>)[k])
-      if (k === '__proto__') {
-        Object.defineProperty(out, k, {
+      if (key === '__proto__') {
+        Object.defineProperty(out, key, {
           value: x,
           enumerable: true,
           writable: true,
           configurable: true
         })
-      } else out[k] = x
+      } else out[key] = x
     }
     return out
   }
   return walk(value)
+}
+
+/**
+ * A deep copy of `value` in which no string — value or object key — can pass
+ * for a secret placeholder: every `⟦nvr-secret:` gets a zero-width space
+ * before its colon. Pure (no imports), so the code-mode render and
+ * body-secrets can share it.
+ */
+export function neutralizeSecretMarkers(value: unknown): unknown {
+  return mapStrings(value, neutralString)
 }
 
 type Frame = { alias: string; numberAs: string; item: unknown; number: number }
@@ -93,6 +115,10 @@ type Ctx = {
   values: Record<string, unknown>
   skip: WeakSet<object>
   json: Map<string, unknown>
+  /** Secret names behind the private tokens, by index. */
+  secrets: string[]
+  /** Per-call random digits: record data cannot guess a token. */
+  nonce: string
 }
 
 type At = { fieldId: string; path: string }
@@ -106,8 +132,6 @@ type Got = {
   source: string | null
   /** The value is formula output (a `json` row parses it). */
   formula: boolean
-  /** The value came from the `secret` source (the only one that may carry a placeholder). */
-  secret?: boolean
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -206,11 +230,12 @@ function resolvePath(ctx: Ctx, path: string): { value: unknown; parentMissing: b
     if (fr.alias === root) return walk(ctx, fr.item, segs, 1)
     if (fr.numberAs === root) return walk(ctx, fr.number, segs, 1)
   }
-  if (Object.hasOwn(ctx.scope, root)) return walk(ctx, ctx.scope[root], segs, 1)
-  const inner = ctx.frames[ctx.frames.length - 1]
-  if (inner && isObj(inner.item) && Object.hasOwn(inner.item, root)) {
-    return walk(ctx, inner.item, segs, 0)
+  // Lexical: the item's own columns before the top-level scope.
+  for (let i = ctx.frames.length - 1; i >= 0; i--) {
+    const item = ctx.frames[i].item
+    if (isObj(item) && Object.hasOwn(item, root)) return walk(ctx, item, segs, 0)
   }
+  if (Object.hasOwn(ctx.scope, root)) return walk(ctx, ctx.scope[root], segs, 1)
   const record = ctx.scope.record
   if (isObj(record) && Object.hasOwn(record, root)) return walk(ctx, record, segs, 0)
   // Nothing by that name: a one-segment path is just empty; a longer one is
@@ -346,8 +371,9 @@ async function rawValue(ctx: Ctx, spec: ValueSpec, at: At): Promise<Got> {
       if (ctx.secretNames && !ctx.secretNames.has(name)) {
         addProblem(ctx, at, `${name} is not a body secret on this API`, 'error')
       }
-      got.value = SECRET_PLACEHOLDER(name)
-      got.secret = true
+      // A private token; finalize() swaps it for SECRET_PLACEHOLDER(name).
+      ctx.secrets.push(name)
+      got.value = `\u0001${ctx.nonce}:${ctx.secrets.length - 1}\u0001`
       return got
     }
     case 'switch': {
@@ -373,11 +399,19 @@ async function rawValue(ctx: Ctx, spec: ValueSpec, at: At): Promise<Got> {
 }
 
 async function evalValue(ctx: Ctx, spec: ValueSpec, at: At): Promise<Got> {
-  let got = await rawValue(ctx, spec, at)
+  const transforms =
+    Array.isArray(spec.transforms) && spec.transforms.length ? spec.transforms : null
+  const transformed = async (g: Got): Promise<Got> => {
+    if (transforms) g.value = await applyTransforms(ctx, g.value, transforms, at)
+    return g
+  }
+  // The row's transforms apply to each candidate, and the first candidate
+  // non-empty AFTER them wins — so '   ' with trim falls through.
+  let got = await transformed(await rawValue(ctx, spec, at))
   if (isEmpty(got.value) && Array.isArray(spec.fallbacks)) {
     for (const fb of spec.fallbacks) {
       if (!isObj(fb)) continue
-      const next = await evalValue(ctx, fb, at)
+      const next = await transformed(await evalValue(ctx, fb, at))
       if (!isEmpty(next.value)) {
         // The winner's path is the one that counts; the primary's empty
         // parent no longer matters.
@@ -385,9 +419,6 @@ async function evalValue(ctx: Ctx, spec: ValueSpec, at: At): Promise<Got> {
         break
       }
     }
-  }
-  if (Array.isArray(spec.transforms) && spec.transforms.length) {
-    got.value = await applyTransforms(ctx, got.value, spec.transforms, at)
   }
   return got
 }
@@ -416,8 +447,10 @@ async function applyTransforms(
   let v = value
   for (const t of list) {
     if (!isObj(t)) continue
-    // A missing value stays missing (so `not_empty` and `required` still see
-    // it) — except at_least_days_out, where a missing date means "none yet".
+    // Deliberate: a missing value skips the transforms and stays missing, so
+    // `not_empty`, `required` and fallbacks still see it (pad_start would
+    // otherwise turn null into '', prefix into 'US'). The one exception is
+    // at_least_days_out, where a missing date means "none yet" → today + n.
     if (v == null && t.op !== 'at_least_days_out') continue
     switch (t.op) {
       case 'trim':
@@ -540,9 +573,6 @@ async function scalarValue(ctx: Ctx, field: Field, at: At, itemDefault: unknown)
   const got: Got = isObj(field.value)
     ? await evalValue(ctx, field.value, at)
     : { value: itemDefault ?? null, missing: null, source: null, formula: false }
-  // Fixed text, formula output and transforms can spell a placeholder too;
-  // only a secret row keeps one.
-  if (!got.secret) got.value = neutralizeSecretMarkers(got.value)
   const { value, failed } = coerce(ctx, field.type, got, at)
   if (!failed && isEmpty(value)) {
     if (field.rules?.required) {
@@ -716,7 +746,7 @@ function checkKeys(ctx: Ctx, fields: unknown, prefix: string): void {
       continue
     }
     keys.add(key)
-    if (/^(0|[1-9]\d{0,8})$/.test(key)) {
+    if (/^(0|[1-9]\d*)$/.test(key) && Number(key) <= 4294967294) {
       addProblem(
         ctx,
         at,
@@ -751,8 +781,7 @@ export async function evaluateMap(
     /* fallback zone */
   }
   const ctx: Ctx = {
-    // A copy in which record data cannot forge a secret placeholder.
-    scope: isObj(scope) ? (neutralizeSecretMarkers(scope) as Record<string, unknown>) : {},
+    scope: isObj(scope) ? scope : {},
     frames: [],
     zone,
     secretNames: Array.isArray(opts.secretNames) ? new Set(opts.secretNames) : null,
@@ -760,7 +789,9 @@ export async function evaluateMap(
     seen: new Set(),
     values: {},
     skip: new WeakSet(),
-    json: new Map()
+    json: new Map(),
+    secrets: [],
+    nonce: BigInt(`0x${randomBytes(16).toString('hex')}`).toString()
   }
   const fields = isObj(spec) && Array.isArray(spec.fields) ? spec.fields : null
   if (!fields) {
@@ -774,208 +805,28 @@ export async function evaluateMap(
   } catch (err) {
     addProblem(ctx, { fieldId: '', path: '' }, `Could not evaluate: ${errMsg(err)}`, 'error')
   }
-  return { body, problems: ctx.problems, values: ctx.values }
-}
-
-// ─── Schema check (draft saves) ──────────────────────────────────────────────
-
-const TYPES = new Set(['text', 'number', 'boolean', 'date', 'object', 'list', 'json'])
-const BUILTINS = new Set([
-  'today',
-  'now',
-  'acting_user.email',
-  'acting_user.name',
-  'acting_user.employee_id',
-  'list.number',
-  'state.label',
-  'state.external_label'
-])
-const TRANSFORM_PARAMS: Record<string, Array<[string, 'number' | 'string']>> = {
-  trim: [],
-  upper: [],
-  lower: [],
-  next_open_day: [],
-  editor_text: [],
-  truncate: [['n', 'number']],
-  prefix: [['text', 'string']],
-  suffix: [['text', 'string']],
-  pad_start: [
-    ['n', 'number'],
-    ['char', 'string']
-  ],
-  replace: [
-    ['from', 'string'],
-    ['to', 'string']
-  ],
-  date: [['format', 'string']],
-  add_days: [['n', 'number']],
-  at_least_days_out: [['n', 'number']],
-  join: [['sep', 'string']]
-}
-
-function checkRuleList(rules: unknown, at: string, errors: string[]): void {
-  if (!Array.isArray(rules)) {
-    errors.push(`${at} must be a list of rules`)
-    return
-  }
-  rules.forEach((r, i) => {
-    if (!isObj(r) || typeof r.field !== 'string' || typeof r.op !== 'string') {
-      errors.push(`${at}[${i}] must be a rule { field, op, value }`)
-    }
-  })
-}
-
-function checkValueSpec(v: unknown, at: string, errors: string[]): void {
-  if (!isObj(v)) {
-    errors.push(`${at} must be an object`)
-    return
-  }
-  switch (v.source) {
-    case 'fixed':
-      if (v.value !== null && !['string', 'number', 'boolean'].includes(typeof v.value)) {
-        errors.push(`${at}.value must be text, a number, true/false or null`)
-      }
-      break
-    case 'path':
-      if (typeof v.path !== 'string' || !v.path.trim()) errors.push(`${at}.path must be a path`)
-      break
-    case 'builtin':
-      if (typeof v.name !== 'string' || !BUILTINS.has(v.name)) {
-        errors.push(`${at}.name: unknown built-in '${String(v.name)}'`)
-      }
-      break
-    case 'secret':
-      if (typeof v.name !== 'string' || !v.name.trim()) errors.push(`${at}.name must name a secret`)
-      break
-    case 'switch':
-      if (!Array.isArray(v.cases)) errors.push(`${at}.cases must be a list`)
-      else {
-        v.cases.forEach((c, i) => {
-          if (!isObj(c)) {
-            errors.push(`${at}.cases[${i}] must be an object`)
-            return
-          }
-          checkRuleList(c.when, `${at}.cases[${i}].when`, errors)
-          checkValueSpec(c.value, `${at}.cases[${i}].value`, errors)
-        })
-      }
-      if (v.else !== undefined) checkValueSpec(v.else, `${at}.else`, errors)
-      break
-    case 'formula':
-      if (typeof v.liquid !== 'string') errors.push(`${at}.liquid must be text`)
-      break
-    default:
-      errors.push(`${at}.source: unknown source '${String(v.source)}'`)
-  }
-  if (v.transforms !== undefined) {
-    if (!Array.isArray(v.transforms)) errors.push(`${at}.transforms must be a list`)
-    else {
-      v.transforms.forEach((t, i) => {
-        const tAt = `${at}.transforms[${i}]`
-        if (!isObj(t) || typeof t.op !== 'string' || !(t.op in TRANSFORM_PARAMS)) {
-          errors.push(`${tAt}: unknown transform '${String(isObj(t) ? t.op : t)}'`)
-          return
-        }
-        for (const [name, kind] of TRANSFORM_PARAMS[t.op]) {
-          const ok = kind === 'number' ? Number.isFinite(t[name]) : typeof t[name] === 'string'
-          if (!ok) errors.push(`${tAt}.${name} must be ${kind === 'number' ? 'a number' : 'text'}`)
-        }
-      })
-    }
-  }
-  if (v.fallbacks !== undefined) {
-    if (!Array.isArray(v.fallbacks)) errors.push(`${at}.fallbacks must be a list`)
-    else {
-      for (const [i, fb] of v.fallbacks.entries())
-        checkValueSpec(fb, `${at}.fallbacks[${i}]`, errors)
-    }
+  const fin = finalizer(ctx)
+  for (const p of ctx.problems) p.message = fin(p.message)
+  return {
+    body: mapStrings(body, fin) as Record<string, unknown>,
+    problems: ctx.problems,
+    values: mapStrings(ctx.values, fin) as Record<string, unknown>
   }
 }
 
-function checkField(f: unknown, at: string, ids: Set<string>, errors: string[]): void {
-  if (!isObj(f)) {
-    errors.push(`${at} must be an object`)
-    return
+/**
+ * The one final pass over every leaf and key: neutralize any placeholder the
+ * data spelled (including JSON text decoded along the way), then swap this
+ * call's private tokens for the real placeholders.
+ */
+function finalizer(ctx: Ctx): (s: string) => string {
+  const token = new RegExp(`\\u0001${ctx.nonce}:(\\d+)\\u0001`, 'g')
+  return (s) => {
+    const safe = neutralString(s)
+    if (!safe.includes('\u0001')) return safe
+    return safe.replace(token, (m, i: string) => {
+      const name = ctx.secrets[Number(i)]
+      return name === undefined ? m : SECRET_PLACEHOLDER(name)
+    })
   }
-  if (typeof f.id !== 'string' || !f.id.trim()) errors.push(`${at}.id must be a non-empty string`)
-  else if (ids.has(f.id)) errors.push(`${at}.id: duplicate id '${f.id}'`)
-  else ids.add(f.id)
-  if (typeof f.key !== 'string') errors.push(`${at}.key must be text`)
-  if (typeof f.type !== 'string' || !TYPES.has(f.type)) {
-    errors.push(`${at}.type: unknown type '${String(f.type)}'`)
-  }
-  const inc = f.include
-  if (isObj(inc) && Array.isArray(inc.when)) checkRuleList(inc.when, `${at}.include.when`, errors)
-  else if (inc !== 'always' && inc !== 'not_empty') {
-    errors.push(`${at}.include must be always, not_empty or { when: [...] }`)
-  }
-  if (f.value !== undefined) checkValueSpec(f.value, `${at}.value`, errors)
-  if (f.children !== undefined) {
-    if (!Array.isArray(f.children)) errors.push(`${at}.children must be a list`)
-    else {
-      for (const [i, c] of f.children.entries()) checkField(c, `${at}.children[${i}]`, ids, errors)
-    }
-  }
-  if (f.type === 'list') {
-    const l = f.list
-    if (!isObj(l) || typeof l.source !== 'string' || !l.source.trim()) {
-      errors.push(`${at}.list: a list needs list.source`)
-    } else {
-      if (l.item !== undefined && typeof l.item !== 'string')
-        errors.push(`${at}.list.item must be text`)
-      if (l.where !== undefined) checkRuleList(l.where, `${at}.list.where`, errors)
-      if (l.sort !== undefined && typeof l.sort !== 'string')
-        errors.push(`${at}.list.sort must be text`)
-      if (l.number_as !== undefined && typeof l.number_as !== 'string') {
-        errors.push(`${at}.list.number_as must be text`)
-      }
-      if (l.scalar !== undefined && l.scalar !== true) errors.push(`${at}.list.scalar must be true`)
-    }
-  }
-  if (f.rules !== undefined) {
-    const r = f.rules
-    if (!isObj(r)) errors.push(`${at}.rules must be an object`)
-    else {
-      if (r.required !== undefined && typeof r.required !== 'boolean') {
-        errors.push(`${at}.rules.required must be true or false`)
-      }
-      for (const k of ['max_length', 'min', 'max']) {
-        if (r[k] !== undefined && !Number.isFinite(r[k]))
-          errors.push(`${at}.rules.${k} must be a number`)
-      }
-      if (
-        r.allowed !== undefined &&
-        (!Array.isArray(r.allowed) || r.allowed.some((x) => typeof x !== 'string'))
-      ) {
-        errors.push(`${at}.rules.allowed must be a list of text`)
-      }
-      if (r.pattern !== undefined) {
-        if (typeof r.pattern !== 'string') errors.push(`${at}.rules.pattern must be text`)
-        else {
-          try {
-            new RegExp(r.pattern)
-          } catch (err) {
-            errors.push(`${at}.rules.pattern: ${errMsg(err)}`)
-          }
-        }
-      }
-    }
-  }
-  if (f.locked !== undefined && f.locked !== true) errors.push(`${at}.locked must be true`)
-  if (f.note !== undefined && typeof f.note !== 'string') errors.push(`${at}.note must be text`)
-}
-
-/** Schema check for a stored field map (the draft route refuses on errors). */
-export function validateSpec(
-  spec: unknown
-): { ok: true; spec: MapSpec } | { ok: false; errors: string[] } {
-  if (!isObj(spec)) return { ok: false, errors: ['spec must be an object'] }
-  const errors: string[] = []
-  if (spec.v !== 1) errors.push('v must be 1')
-  if (!Array.isArray(spec.fields)) errors.push('fields must be a list')
-  else {
-    const ids = new Set<string>()
-    for (const [i, f] of spec.fields.entries()) checkField(f, `fields[${i}]`, ids, errors)
-  }
-  return errors.length ? { ok: false, errors } : { ok: true, spec: spec as unknown as MapSpec }
 }
