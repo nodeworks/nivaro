@@ -212,6 +212,7 @@ function collectionAllowed(name: string | undefined): name is string {
   return !/^(nivaro|directus)_/i.test(name) || CONTEXT_SAFE_SYSTEM.has(name)
 }
 
+/** The action `context` lookups for one record (also used by payload template previews). */
 export async function buildContext(
   defs: TransitionActionDef['context'],
   itemId: string,

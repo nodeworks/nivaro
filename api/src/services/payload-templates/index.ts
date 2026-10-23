@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
+import { bodySecretNames } from '../body-secrets.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import { validateSpec } from './evaluate.js'
@@ -858,20 +859,7 @@ async function cachedPublished(key: string): Promise<PublishedTemplate | null> {
 
 // ─── render ──────────────────────────────────────────────────────────────────
 
-// Body secrets (Task 6) live in ../body-secrets.ts; looked up lazily so this module works
-// with or without it. A variable specifier keeps tsc from requiring the file.
-const BODY_SECRETS_MODULE = '../body-secrets.js'
-let bodySecretNamesFn: Promise<SecretNamesResolver | null> | null = null
-
-const defaultSecretNames: SecretNamesResolver = async (apiName) => {
-  bodySecretNamesFn ??= import(BODY_SECRETS_MODULE)
-    .then((m: Record<string, unknown>) =>
-      typeof m?.bodySecretNames === 'function' ? (m.bodySecretNames as SecretNamesResolver) : null
-    )
-    .catch(() => null)
-  const fn = await bodySecretNamesFn
-  return fn ? fn(apiName) : undefined
-}
+const defaultSecretNames: SecretNamesResolver = (apiName) => bodySecretNames(apiName)
 
 async function secretNamesFor(
   apiName: string | null,
@@ -881,7 +869,11 @@ async function secretNamesFor(
   try {
     const names = await resolver(apiName)
     return Array.isArray(names) ? names : undefined
-  } catch {
+  } catch (e) {
+    // biome-ignore lint/suspicious/noConsole: a failed secret lookup must be visible in the server log
+    console.warn(
+      `[payload-templates] could not read body secrets of '${apiName}': ${e instanceof Error ? e.message : e}`
+    )
     return undefined
   }
 }

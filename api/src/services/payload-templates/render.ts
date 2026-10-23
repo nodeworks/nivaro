@@ -1,6 +1,6 @@
-import { randomBytes } from 'node:crypto'
 import { payloadLiquid } from '../payload-filters.js'
-import { evaluateMap, neutralizeSecretMarkers, SECRET_PLACEHOLDER } from './evaluate.js'
+import { makeSecretTokens, neutralizeSecretMarkers, SECRET_NAME_RE } from '../secret-markers.js'
+import { evaluateMap } from './evaluate.js'
 import type { Field, MapSpec, Problem } from './types.js'
 
 // ─── Render entry ────────────────────────────────────────────────────────────
@@ -42,17 +42,15 @@ export function blockingProblems(problems: Problem[]): Problem[] {
 }
 
 // ─── Code mode: secrets ──────────────────────────────────────────────────────
-// `secrets.<name>` and `'<name>' | secret` emit a per-render nonce token, never
-// the real placeholder. After JSON.parse the nonce tokens become placeholders
+// `secrets.<name>` and `'<name>' | secret` emit a per-render private token, never
+// the real placeholder. After JSON.parse the tokens become placeholders
 // and every other string is neutralized, so record text cannot forge one.
 
-const NONCE_VAR = '__secret_nonce'
+const TOKEN_VAR = '__secret_token'
 const USED_VAR = '__secret_used'
-const NAME_RE = /^[A-Za-z0-9_.-]+$/
-const nonceToken = (nonce: string, name: string): string => `⟦nvr-nonce:${nonce}:${name}⟧`
 
 // Registered once on the shared engine at first use. Safe: the filter is inert
-// (returns '') unless the render scope carries this render's nonce variable, so
+// (returns '') unless the render scope carries this render's token factory, so
 // other users of the shared engine never see a placeholder from it.
 let filterRegistered = false
 function ensureSecretFilter(): void {
@@ -60,11 +58,12 @@ function ensureSecretFilter(): void {
   filterRegistered = true
   payloadLiquid().registerFilter('secret', function (this: any, v: unknown) {
     const name = String(v ?? '')
-    const nonce = this?.context?.getSync?.([NONCE_VAR])
-    if (typeof nonce !== 'string' || !NAME_RE.test(name)) return ''
+    const minter = this?.context?.getSync?.([TOKEN_VAR])
+    if (typeof minter?.token !== 'function') return ''
+    // Recorded even when invalid, so renderCode can report it instead of a silent ''.
     const used = this.context.getSync([USED_VAR])
     if (Array.isArray(used)) used.push(name)
-    return nonceToken(nonce, name)
+    return SECRET_NAME_RE.test(name) ? minter.token(name) : ''
   })
 }
 
@@ -73,31 +72,6 @@ function scanSecretNames(body: string): string[] {
   for (const m of body.matchAll(/\bsecrets\.([A-Za-z0-9_-]+)/g)) names.add(m[1])
   for (const m of body.matchAll(/\bsecrets\[\s*(['"])([A-Za-z0-9_.-]+)\1\s*\]/g)) names.add(m[2])
   return [...names]
-}
-
-function resolveSecrets(node: unknown, nonce: string): { value: unknown; used: Set<string> } {
-  const used = new Set<string>()
-  const re = new RegExp(`⟦nvr-nonce:${nonce}:([A-Za-z0-9_.-]+)⟧`, 'g')
-  const walk = (v: unknown): unknown => {
-    if (typeof v === 'string') {
-      const swapped = v.replace(/⟦nvr-secret:/g, '⟦nvr-secret​:')
-      return swapped.replace(re, (_m, name: string) => {
-        used.add(name)
-        return SECRET_PLACEHOLDER(name)
-      })
-    }
-    if (Array.isArray(v)) return v.map(walk)
-    if (isObj(v)) {
-      const out: Record<string, unknown> = {}
-      for (const k of Object.keys(v)) {
-        const nk = k.replace(/⟦nvr-secret:/g, '⟦nvr-secret​:').replace(re, '')
-        out[nk] = walk(v[k])
-      }
-      return out
-    }
-    return v
-  }
-  return { value: walk(node), used }
 }
 
 /** Keys repeated inside one object of valid JSON text (JSON.parse keeps the last silently). */
@@ -154,16 +128,16 @@ async function renderCode(
   opts: RenderOpts
 ): Promise<RenderResult> {
   const problems: Problem[] = []
-  const nonce = randomBytes(12).toString('hex')
+  const tokens = makeSecretTokens()
   const names = new Set([...(opts.secretNames ?? []), ...scanSecretNames(body)])
   const secrets: Record<string, string> = {}
-  for (const n of names) secrets[n] = nonceToken(nonce, n)
+  for (const n of names) secrets[n] = tokens.token(n)
   const used: string[] = []
   ensureSecretFilter()
   const renderScope = {
     ...(neutralizeSecretMarkers(isObj(scope) ? scope : {}) as Record<string, unknown>),
     secrets,
-    [NONCE_VAR]: nonce,
+    [TOKEN_VAR]: { token: tokens.token },
     [USED_VAR]: used
   }
   for (const expr of unjsonifiedOutputs(body)) {
@@ -201,11 +175,19 @@ async function renderCode(
       )
     )
   }
-  const { value, used: tokens } = resolveSecrets(parsed, nonce)
+  const value = tokens.finish(parsed)
+  const landed = tokens.used()
+  const asked = new Set([...used, ...landed, ...scanSecretNames(body)])
+  for (const n of asked) {
+    if (!SECRET_NAME_RE.test(n)) {
+      problems.push(err('', '', `Secret name '${n}': Secret names use letters, digits, - and _`))
+    }
+  }
   if (opts.secretNames) {
     const have = new Set(opts.secretNames)
-    for (const n of new Set([...used, ...tokens, ...scanSecretNames(body)])) {
-      if (!have.has(n)) problems.push(err('', '', `This API has no \`${n}\` secret yet`))
+    for (const n of asked) {
+      if (SECRET_NAME_RE.test(n) && !have.has(n))
+        problems.push(err('', '', `This API has no \`${n}\` secret yet`))
     }
   }
   return { body: value as Record<string, unknown>, problems, values: {} }

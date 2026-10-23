@@ -1,3 +1,4 @@
+import { SECRET_NAME_RE } from '../secret-markers.js'
 import type { MapSpec } from './types.js'
 
 // Schema check for a stored field map (types.ts). The draft route refuses a
@@ -57,6 +58,16 @@ function checkRuleList(rules: unknown, at: string, errors: string[]): void {
   })
 }
 
+function usesSecret(v: unknown): boolean {
+  if (!isObj(v)) return false
+  if (v.source === 'secret') return true
+  if (v.source !== 'switch') return false
+  return (
+    (Array.isArray(v.cases) && v.cases.some((c) => isObj(c) && usesSecret(c.value))) ||
+    usesSecret(v.else)
+  )
+}
+
 function checkValueSpec(v: unknown, at: string, errors: string[]): void {
   if (!isObj(v)) {
     errors.push(`${at} must be an object`)
@@ -78,6 +89,9 @@ function checkValueSpec(v: unknown, at: string, errors: string[]): void {
       break
     case 'secret':
       if (typeof v.name !== 'string' || !v.name.trim()) errors.push(`${at}.name must name a secret`)
+      else if (!SECRET_NAME_RE.test(v.name)) {
+        errors.push(`${at}.name: Secret names use letters, digits, - and _`)
+      }
       break
     case 'switch':
       if (!Array.isArray(v.cases)) errors.push(`${at}.cases must be a list`)
@@ -142,6 +156,9 @@ function checkField(f: unknown, at: string, ids: Set<string>, errors: string[]):
     errors.push(`${at}.include must be always, not_empty or { when: [...] }`)
   }
   if (f.value !== undefined) checkValueSpec(f.value, `${at}.value`, errors)
+  if (f.type !== 'text' && usesSecret(f.value)) {
+    errors.push(`${at}.value: A secret can only be sent as text`)
+  }
   if (f.children !== undefined) {
     if (!Array.isArray(f.children)) errors.push(`${at}.children must be a list`)
     else {
