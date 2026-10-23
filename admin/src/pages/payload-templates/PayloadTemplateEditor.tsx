@@ -1,0 +1,905 @@
+import { TipLayer } from '@nivaro/shared'
+import { useQuery } from '@tanstack/react-query'
+import {
+  AlertTriangle,
+  ArrowRight,
+  Code2,
+  GitBranch,
+  History,
+  ListChecks,
+  MoreHorizontal,
+  RotateCcw,
+  X
+} from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { api } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
+import { cn } from '@/lib/utils'
+import type { ExternalApi } from '../ExternalApis'
+import {
+  bodySecretNames,
+  type DraftBody,
+  detailStatus,
+  draftOf,
+  errorMessage,
+  formatEt,
+  httpStatus,
+  staleCurrent,
+  type TemplateDetail,
+  useExternalApis,
+  usePreview,
+  useSaveDraft,
+  useTemplate,
+  useTemplates
+} from './api'
+import { type EditorTab, EditorTabs } from './EditorTabs'
+import { PreviewPane, type PreviewView } from './PreviewPane'
+import { TemplateList } from './TemplateList'
+
+/** What the preview column shows instead of the preview (Task 12 fills these). */
+export type EditorPanel = 'publish' | 'check' | 'history' | 'default'
+
+const AUTOSAVE_MS = 800
+const PREVIEW_DEBOUNCE_MS = 300
+/** Page width below which the payload list sits above the editor. */
+const LIST_BESIDE_MIN = 760
+/** Page width at which the preview sits beside the editor instead of under it. */
+const PREVIEW_BESIDE_MIN = 1100
+
+// ─── Small hooks ─────────────────────────────────────────────────────────────
+
+function useElementWidth<T extends HTMLElement>() {
+  const ref = useRef<T>(null)
+  const [width, setWidth] = useState(0)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    setWidth(Math.floor(el.getBoundingClientRect().width))
+    const ro = new ResizeObserver(([e]) => setWidth(Math.floor(e.contentRect.width)))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return [ref, width] as const
+}
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return v
+}
+
+type SaveState =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | { kind: 'saving' }
+  | { kind: 'saved'; at: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'conflict'; current: TemplateDetail }
+
+/**
+ * The editor's local draft + autosave. Edits are kept locally and PUT ~800 ms
+ * after the last change with `base_rev`; saves never overlap (a change made
+ * while one is in flight is sent right after it). A 409 keeps the local draft
+ * and stops autosave until the person reloads or keeps their draft. Switching
+ * templates or leaving the page flushes a pending save immediately.
+ */
+function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) {
+  const save = useSaveDraft()
+  // The mutation result is a new object every render; run() must stay stable.
+  const saveRef = useRef(save)
+  saveRef.current = save
+  const [local, setLocal] = useState<{ key: string; draft: DraftBody } | null>(null)
+  const [state, setState] = useState<SaveState>({ kind: 'idle' })
+  const revs = useRef<Record<string, number>>({})
+  const pending = useRef<{ key: string; draft: DraftBody } | null>(null)
+  const inFlight = useRef(false)
+  const blocked = useRef(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const keyRef = useRef(key)
+  keyRef.current = key
+
+  const run = useCallback(async () => {
+    if (inFlight.current || blocked.current || !pending.current) return
+    const job = pending.current
+    pending.current = null
+    inFlight.current = true
+    if (keyRef.current === job.key) setState({ kind: 'saving' })
+    // A failed save waits for "Try again" or the next edit instead of retrying in a loop.
+    let waitForRetry = false
+    try {
+      const res = await saveRef.current.mutateAsync({
+        key: job.key,
+        draft: job.draft,
+        base_rev: revs.current[job.key] ?? 0
+      })
+      revs.current[job.key] = res.rev
+      if (keyRef.current === job.key && !pending.current)
+        setState({ kind: 'saved', at: new Date().toISOString() })
+    } catch (e) {
+      const current = staleCurrent(e)
+      if (current) {
+        blocked.current = true
+        // Keep the newest local edit queued so "Keep my draft" sends it.
+        pending.current = pending.current ?? job
+        if (keyRef.current === job.key) setState({ kind: 'conflict', current })
+      } else {
+        if (!pending.current) {
+          pending.current = job
+          waitForRetry = true
+        }
+        if (keyRef.current === job.key)
+          setState({ kind: 'error', message: errorMessage(e, 'The draft was not saved') })
+      }
+    } finally {
+      inFlight.current = false
+      if (pending.current && !blocked.current && !waitForRetry) void run()
+    }
+  }, [])
+
+  const flush = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    void run()
+  }, [run])
+
+  // Start from the stored draft the first time a template's row arrives.
+  useEffect(() => {
+    if (!detail || !key || detail.key !== key) return
+    if (local?.key === key) return
+    revs.current[key] = detail.draft_rev
+    blocked.current = false
+    setLocal({ key, draft: draftOf(detail) })
+    setState({ kind: 'idle' })
+  }, [detail, key, local?.key])
+
+  // Leaving a template (or the page) sends what is waiting.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the template changes
+  useEffect(() => () => flush(), [key, flush])
+
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (pending.current || inFlight.current) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [])
+
+  const change = useCallback(
+    (next: DraftBody) => {
+      if (!key) return
+      setLocal({ key, draft: next })
+      pending.current = { key, draft: next }
+      if (blocked.current) return
+      setState({ kind: 'pending' })
+      if (timer.current) clearTimeout(timer.current)
+      timer.current = setTimeout(() => {
+        timer.current = null
+        void run()
+      }, AUTOSAVE_MS)
+    },
+    [key, run]
+  )
+
+  /** Conflict → drop local edits and start again from the server's row. */
+  const reload = useCallback((current: TemplateDetail) => {
+    pending.current = null
+    blocked.current = false
+    revs.current[current.key] = current.draft_rev
+    setLocal({ key: current.key, draft: draftOf(current) })
+    setState({ kind: 'idle' })
+  }, [])
+
+  /** Conflict → save the local draft over the newer one. */
+  const keepMine = useCallback(
+    (current: TemplateDetail) => {
+      revs.current[current.key] = current.draft_rev
+      blocked.current = false
+      if (local?.key === current.key) pending.current = { key: current.key, draft: local.draft }
+      flush()
+    },
+    [local, flush]
+  )
+
+  const draft = local && local.key === key ? local.draft : null
+  return { draft, change, state, reload, keepMine, retry: flush }
+}
+
+// ─── Header pieces ───────────────────────────────────────────────────────────
+
+const OUTLINE_BTN =
+  'inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
+
+function SaveStatus({ state, onRetry }: { state: SaveState; onRetry: () => void }) {
+  if (state.kind === 'idle' || state.kind === 'conflict') return null
+  if (state.kind === 'error')
+    return (
+      <span className='inline-flex items-center gap-1.5 text-[11.5px] text-red-600 dark:text-red-400'>
+        {state.message}
+        <button
+          type='button'
+          onClick={onRetry}
+          className='font-medium underline underline-offset-2'
+        >
+          Try again
+        </button>
+      </span>
+    )
+  return (
+    <span
+      className='text-[11.5px] text-slate-400'
+      aria-live='polite'
+      data-payload-save={state.kind}
+    >
+      {state.kind === 'saved' ? `Draft saved ${formatEt(state.at, true)}` : 'Saving draft…'}
+    </span>
+  )
+}
+
+function UsedByPopover({ template }: { template: TemplateDetail }) {
+  const n = template.used_by.length
+  const transitions = template.used_by.filter((u) => u.kind === 'transition')
+  const code = template.used_by.filter((u) => u.kind === 'code')
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type='button' className={OUTLINE_BTN} data-payload-used-by>
+          <GitBranch className='h-3.5 w-3.5 text-slate-400' />
+          {n > 0 ? `Used by ${n}` : 'Not used yet'}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-[320px] p-0'>
+        {n === 0 ? (
+          <p className='px-3 py-3 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+            Nothing sends this payload yet. Pick it on an erp_submit action in a pipeline to use it.
+          </p>
+        ) : (
+          <div className='max-h-[320px] overflow-y-auto py-1.5'>
+            {transitions.length > 0 && (
+              <div>
+                <p className='px-3 pb-1 pt-1.5 text-[11.5px] font-medium text-slate-500 dark:text-muted-foreground'>
+                  Pipeline transitions
+                </p>
+                <ul>
+                  {transitions.map((u) => (
+                    <li key={`${u.template_id}:${u.transition_id}:${u.label}`}>
+                      {u.template_id ? (
+                        <Link
+                          to={`/pipelines/${u.template_id}`}
+                          className='flex items-center gap-2 px-3 py-1.5 text-[12.5px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-muted'
+                        >
+                          <span className='min-w-0 flex-1 truncate'>{u.label}</span>
+                          <ArrowRight className='h-3 w-3 shrink-0 text-slate-400' />
+                        </Link>
+                      ) : (
+                        <span className='block truncate px-3 py-1.5 text-[12.5px] text-slate-700 dark:text-slate-200'>
+                          {u.label}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {code.length > 0 && (
+              <div
+                className={cn(transitions.length > 0 && 'mt-1 border-t pt-1 dark:border-border')}
+              >
+                <p className='px-3 pb-1 pt-1.5 text-[11.5px] font-medium text-slate-500 dark:text-muted-foreground'>
+                  Code pushes{template.owner ? ` (${template.owner})` : ''}
+                </p>
+                <ul>
+                  {code.map((u) => (
+                    <li
+                      key={u.label}
+                      className='flex items-center gap-2 px-3 py-1.5 text-[12.5px] text-slate-700 dark:text-slate-200'
+                    >
+                      <Code2 className='h-3 w-3 shrink-0 text-slate-400' />
+                      <span className='min-w-0 truncate'>{u.label}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function MoreMenu({
+  template,
+  onOpenPanel
+}: {
+  template: TemplateDetail
+  onOpenPanel: (p: EditorPanel) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const item =
+    'flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted focus-visible:bg-muted focus-visible:outline-none dark:text-slate-200'
+  const pick = (p: EditorPanel) => {
+    setOpen(false)
+    onOpenPanel(p)
+  }
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          aria-label='More actions'
+          className={cn(OUTLINE_BTN, 'w-8 justify-center px-0')}
+          data-payload-more
+        >
+          <MoreHorizontal className='h-4 w-4' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-[240px] p-1'>
+        <button type='button' className={item} onClick={() => pick('history')}>
+          <History className='h-3.5 w-3.5 text-slate-400' />
+          History
+        </button>
+        {template.owner && (
+          <button type='button' className={item} onClick={() => pick('default')}>
+            <RotateCcw className='h-3.5 w-3.5 text-slate-400' />
+            Reset to file default
+          </button>
+        )}
+        {template.newer_default && (
+          <button type='button' className={item} onClick={() => pick('default')}>
+            <ArrowRight className='h-3.5 w-3.5 text-slate-400' />
+            Use {template.owner ?? 'the'} default
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+const PANEL_TITLES: Record<EditorPanel, string> = {
+  publish: 'Publish',
+  check: 'Check recent records',
+  history: 'History',
+  default: 'File default'
+}
+
+/** STUB — Task 12 swaps in CheckRecentPanel / PublishPanel / HistoryPanel here. */
+function PanelArea({ panel, onClose }: { panel: EditorPanel; onClose: () => void }) {
+  return (
+    <div className='flex min-h-0 flex-1 flex-col' data-payload-panel={panel}>
+      <div className='flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
+        <p className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+          {PANEL_TITLES[panel]}
+        </p>
+        <span className='flex-1' />
+        <button
+          type='button'
+          onClick={onClose}
+          className='inline-flex items-center gap-1 rounded px-1.5 py-1 text-[12px] text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-muted dark:hover:text-foreground'
+        >
+          <X className='h-3.5 w-3.5' />
+          Back to preview
+        </button>
+      </div>
+      <p className='px-4 py-4 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+        This panel arrives with Task 12.
+      </p>
+    </div>
+  )
+}
+
+// ─── States ──────────────────────────────────────────────────────────────────
+
+function Bar({ w, h = 'h-3' }: { w: string; h?: string }) {
+  return (
+    <div
+      className={cn(h, 'animate-pulse rounded bg-[hsl(var(--nvr-skeleton))]')}
+      style={{ width: w }}
+    />
+  )
+}
+
+function MainSkeleton() {
+  return (
+    <div className='flex min-h-0 flex-1 flex-col' aria-hidden data-payload-loading>
+      <div className='space-y-2.5 border-b border-slate-200 bg-white px-5 py-4 dark:border-border dark:bg-card'>
+        <Bar w='220px' h='h-4' />
+        <Bar w='340px' />
+      </div>
+      <div className='space-y-3 px-5 py-5'>
+        {['70%', '55%', '62%', '48%', '66%'].map((w) => (
+          <Bar key={w} w={w} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function Notice({ title, children }: { title: string; children?: React.ReactNode }) {
+  return (
+    <div className='px-6 py-10'>
+      <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>{title}</p>
+      {children && (
+        <div className='mt-1 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EditWarning({ text }: { text: string }) {
+  return (
+    <div
+      className='flex shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2 text-[12.5px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+      role='note'
+      data-payload-edit-warning
+    >
+      <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' />
+      <p>{text}</p>
+    </div>
+  )
+}
+
+function ConflictBanner({
+  current,
+  loaded,
+  onReload,
+  onKeep
+}: {
+  current: TemplateDetail
+  loaded: TemplateDetail
+  onReload: () => void
+  onKeep: () => void
+}) {
+  const published =
+    current.published_version != null &&
+    current.published_version !== (loaded.published_version ?? null)
+  const who =
+    (published ? current.published_by_name : current.draft_updated_by_name) || 'Someone else'
+  return (
+    <div
+      className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-[12.5px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+      role='alert'
+      data-payload-conflict
+    >
+      <p className='min-w-0 flex-1'>
+        {published
+          ? `${who} published v${current.published_version} while you edited.`
+          : `${who} saved this draft while you edited.`}{' '}
+        Reload, or keep your draft and review the diff.
+      </p>
+      <button
+        type='button'
+        onClick={onReload}
+        className='h-7 rounded-md border border-amber-300 bg-white px-2.5 font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:hover:bg-amber-500/15'
+      >
+        Reload
+      </button>
+      <button
+        type='button'
+        onClick={onKeep}
+        className='h-7 rounded-md px-2.5 font-medium underline underline-offset-2 hover:bg-amber-100 dark:hover:bg-amber-500/15'
+      >
+        Keep my draft
+      </button>
+    </div>
+  )
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
+
+/**
+ * `/external-apis/:id/payloads/:key?` — the full-width payload template
+ * editor: this API's payloads on the left, the template's header, the editor
+ * tabs, and the record preview (or a Publish / Check / History panel).
+ * `:id` is the API id; an API name (older links) is replaced by its id.
+ */
+export function PayloadTemplateEditorPage() {
+  const { id = '', key: keyParam } = useParams<{ id: string; key?: string }>()
+  const key = keyParam ?? null
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [pageRef, width] = useElementWidth<HTMLDivElement>()
+  const listBeside = width >= LIST_BESIDE_MIN
+  const previewBeside = width >= PREVIEW_BESIDE_MIN
+
+  const apisQ = useExternalApis()
+  const apis = apisQ.data ?? []
+  const currentApi =
+    apis.find((a) => String(a.id) === id) ?? apis.find((a) => a.name === id) ?? null
+  const apiId = currentApi?.id ?? null
+  const goBack = useGoBack(apiId != null ? `/external-apis/${apiId}` : '/external-apis')
+
+  // Older links name the API instead of its id.
+  useEffect(() => {
+    if (currentApi && String(currentApi.id) !== id)
+      navigate(
+        `/external-apis/${currentApi.id}/payloads${key ? `/${encodeURIComponent(key)}` : ''}`,
+        {
+          replace: true
+        }
+      )
+  }, [currentApi, id, key, navigate])
+
+  const apiRow = useQuery<ExternalApi>({
+    queryKey: ['external-api', String(apiId)],
+    queryFn: () =>
+      api.get<{ data: ExternalApi }>(`/external-apis/${apiId}`).then((r) => r.data.data),
+    enabled: apiId != null
+  })
+  const secretNames = useMemo(() => bodySecretNames(apiRow.data), [apiRow.data])
+
+  const listQ = useTemplates(currentApi?.name)
+  const templates = listQ.data?.data ?? []
+
+  // No template in the URL → open the first one.
+  useEffect(() => {
+    if (!key && apiId != null && templates.length)
+      navigate(`/external-apis/${apiId}/payloads/${encodeURIComponent(templates[0].key)}`, {
+        replace: true
+      })
+  }, [key, apiId, templates, navigate])
+
+  const tplQ = useTemplate(key)
+  const template = tplQ.data?.data
+  const warning = tplQ.data?.warning ?? listQ.data?.warning ?? null
+
+  // A template opened under the wrong API moves to its own.
+  useEffect(() => {
+    if (!template || !currentApi || !template.external_api) return
+    if (template.external_api === currentApi.name) return
+    const own = apis.find((a) => a.name === template.external_api)
+    if (own)
+      navigate(`/external-apis/${own.id}/payloads/${encodeURIComponent(template.key)}`, {
+        replace: true
+      })
+  }, [template, currentApi, apis, navigate])
+
+  const editor = useDraftEditor(key, template)
+  const previewDraft = useDebounced(
+    editor.draft && key ? { key, draft: editor.draft } : null,
+    PREVIEW_DEBOUNCE_MS
+  )
+  // Until the debounce settles on a template, render its draft as loaded (same body → same request).
+  const draftForPreview =
+    previewDraft && previewDraft.key === key ? previewDraft.draft : editor.draft
+
+  const recordId = searchParams.get('record')
+  const setRecordId = useCallback(
+    (rid: string) =>
+      setSearchParams(
+        (p) => {
+          const n = new URLSearchParams(p)
+          n.set('record', rid)
+          return n
+        },
+        { replace: true }
+      ),
+    [setSearchParams]
+  )
+
+  const [tab, setTab] = useState<EditorTab>('map')
+  const [view, setView] = useState<PreviewView>('draft')
+  const [panel, setPanel] = useState<EditorPanel | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset per template
+  useEffect(() => {
+    setPanel(null)
+    setView('draft')
+    setTab('map')
+  }, [key])
+
+  // Same args as PreviewPane's draft render → one shared request; feeds the field map.
+  const draftPreview = usePreview(key, {
+    which: 'draft',
+    recordId,
+    draft: draftForPreview,
+    enabled: !!draftForPreview
+  })
+
+  const selectTemplate = (k: string) =>
+    apiId != null &&
+    navigate(`/external-apis/${apiId}/payloads/${encodeURIComponent(k)}`, { replace: true })
+  const switchApi = (a: ExternalApi) =>
+    navigate(`/external-apis/${a.id}/payloads`, { replace: true })
+  const newPayload = () => apiId != null && navigate(`/external-apis/${apiId}#new-payload`)
+
+  const status = template ? detailStatus(template, editor.draft) : null
+  const nothingToPublish = status === 'live'
+  const conflict = editor.state.kind === 'conflict' ? editor.state.current : null
+
+  let main: React.ReactNode
+  if (apisQ.isLoading) {
+    main = <MainSkeleton />
+  } else if (apisQ.isError) {
+    main = <Notice title='External APIs could not load'>{errorMessage(apisQ.error)}</Notice>
+  } else if (!currentApi) {
+    main = (
+      <Notice title={`No external API “${id}”`}>
+        It may have been renamed or removed.{' '}
+        <Link
+          to='/external-apis'
+          className='font-medium text-slate-900 underline underline-offset-2 dark:text-foreground'
+        >
+          All external APIs
+        </Link>
+      </Notice>
+    )
+  } else if (!key) {
+    main = listQ.isLoading ? (
+      <MainSkeleton />
+    ) : (
+      <Notice title={`No payloads on ${currentApi.name} yet`}>
+        Create one from the Payloads card on the API page.
+      </Notice>
+    )
+  } else if (tplQ.isError) {
+    main =
+      httpStatus(tplQ.error) === 404 ? (
+        <Notice title={`No payload “${key}”`}>
+          Pick one from the list, or create it on the API page.
+        </Notice>
+      ) : (
+        <Notice title='This payload could not load'>
+          {errorMessage(tplQ.error)}{' '}
+          <button
+            type='button'
+            onClick={() => void tplQ.refetch()}
+            className='font-medium underline underline-offset-2'
+          >
+            Try again
+          </button>
+        </Notice>
+      )
+  } else if (!template || !editor.draft) {
+    main = <MainSkeleton />
+  } else {
+    main = (
+      <div className={cn('flex flex-1 flex-col', previewBeside && 'min-h-0 overflow-hidden')}>
+        <header className='shrink-0 border-b border-slate-200 bg-white px-5 py-3 dark:border-border dark:bg-card'>
+          <div className='flex flex-wrap items-start gap-x-4 gap-y-2'>
+            <div className='min-w-0 flex-1'>
+              <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
+                <h1 className='min-w-0 truncate text-[16px] font-semibold tracking-[-0.005em] text-slate-900 dark:text-foreground'>
+                  {template.label}
+                </h1>
+                {status === 'draft' ? (
+                  <span
+                    className='rounded bg-amber-50 px-1.5 py-px text-[11px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
+                    data-tip={
+                      template.published_version != null
+                        ? `Pushes still send live v${template.published_version} until you publish`
+                        : undefined
+                    }
+                  >
+                    Draft — not live
+                  </span>
+                ) : status === 'unpublished' ? (
+                  <span className='rounded bg-slate-100 px-1.5 py-px text-[11px] font-medium text-slate-600 dark:bg-muted dark:text-muted-foreground'>
+                    Not published
+                  </span>
+                ) : (
+                  <span className='rounded bg-emerald-50 px-1.5 py-px text-[11px] font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'>
+                    Live v{template.published_version}
+                  </span>
+                )}
+                <SaveStatus state={editor.state} onRetry={editor.retry} />
+              </div>
+              <p className='mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+                <span>{currentApi.name}</span>
+                {template.endpoint_path && (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className='break-all font-mono text-[11.5px] text-slate-600 dark:text-slate-300'>
+                      {template.endpoint_path}
+                    </span>
+                  </>
+                )}
+                <span aria-hidden>·</span>
+                <span>
+                  one per <span className='font-mono text-[11.5px]'>{template.collection}</span>{' '}
+                  record
+                </span>
+              </p>
+            </div>
+            <div className='flex shrink-0 flex-wrap items-center gap-2'>
+              <UsedByPopover template={template} />
+              <button
+                type='button'
+                onClick={() => setPanel('check')}
+                aria-pressed={panel === 'check'}
+                className={cn(OUTLINE_BTN, panel === 'check' && 'bg-slate-100 dark:bg-muted')}
+                data-payload-check
+              >
+                <ListChecks className='h-3.5 w-3.5 text-slate-400' />
+                Check recent records
+              </button>
+              <span data-tip={nothingToPublish ? 'Nothing to publish' : undefined}>
+                <button
+                  type='button'
+                  disabled={nothingToPublish}
+                  onClick={() => setPanel('publish')}
+                  aria-pressed={panel === 'publish'}
+                  className='inline-flex h-8 items-center rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 dark:focus-visible:ring-offset-background'
+                  data-payload-publish
+                >
+                  Publish
+                </button>
+              </span>
+              <MoreMenu template={template} onOpenPanel={setPanel} />
+            </div>
+          </div>
+        </header>
+
+        {conflict && (
+          <ConflictBanner
+            current={conflict}
+            loaded={template}
+            onReload={() => {
+              editor.reload(conflict)
+              void tplQ.refetch()
+            }}
+            onKeep={() => editor.keepMine(conflict)}
+          />
+        )}
+        {template.newer_default && (
+          <div
+            className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-200 bg-white px-5 py-2 text-[12.5px] text-slate-700 dark:border-border dark:bg-card dark:text-slate-200'
+            data-payload-newer-default
+          >
+            <p className='min-w-0 flex-1'>
+              {template.owner ?? 'The extension'} ships a newer default for this payload.
+            </p>
+            <button
+              type='button'
+              onClick={() => setPanel('default')}
+              className='font-medium text-slate-900 underline underline-offset-2 dark:text-foreground'
+            >
+              Review it
+            </button>
+          </div>
+        )}
+
+        <div
+          className={cn(
+            'flex flex-1',
+            previewBeside ? 'min-h-0 flex-row overflow-hidden' : 'flex-col'
+          )}
+        >
+          <section
+            className={cn(
+              'flex min-w-0 flex-col bg-white dark:bg-card',
+              previewBeside ? 'min-h-0 flex-1' : 'min-h-[360px]'
+            )}
+            aria-label='Editor'
+          >
+            <EditorTabs
+              tab={tab}
+              onTabChange={setTab}
+              template={template}
+              draft={editor.draft}
+              onDraftChange={editor.change}
+              values={draftPreview.data?.values ?? {}}
+              problems={draftPreview.data?.problems ?? []}
+              secretNames={secretNames}
+            />
+          </section>
+          <section
+            className={cn(
+              'flex flex-col border-slate-200 dark:border-border',
+              previewBeside
+                ? 'min-h-0 w-[42%] min-w-[360px] max-w-[580px] shrink-0 border-l'
+                : 'min-h-[440px] border-t'
+            )}
+            aria-label={panel ? PANEL_TITLES[panel] : 'Preview'}
+          >
+            {panel ? (
+              <PanelArea panel={panel} onClose={() => setPanel(null)} />
+            ) : (
+              <PreviewPane
+                templateKey={template.key}
+                draft={draftForPreview}
+                recordId={recordId}
+                onRecordChange={setRecordId}
+                view={view}
+                onViewChange={setView}
+                collection={template.collection}
+                liveVersion={template.published_version}
+                externalApiId={apiId}
+              />
+            )}
+          </section>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div ref={pageRef} className='flex flex-1 min-h-0 flex-col' data-payload-editor>
+      <TipLayer />
+      {warning && <EditWarning text={warning} />}
+      <div
+        className={cn(
+          'flex min-h-0 flex-1',
+          listBeside ? 'overflow-hidden' : 'flex-col overflow-y-auto'
+        )}
+      >
+        <TemplateList
+          apis={apis}
+          currentApi={currentApi}
+          onBack={goBack}
+          onSwitchApi={switchApi}
+          templates={templates}
+          loading={apisQ.isLoading || listQ.isLoading}
+          error={listQ.isError ? errorMessage(listQ.error, 'Payloads could not load') : null}
+          selectedKey={key}
+          onSelect={selectTemplate}
+          onNew={newPayload}
+          stacked={!listBeside}
+        />
+        <main
+          className={cn(
+            'flex min-w-0 flex-1 flex-col bg-slate-50 dark:bg-background',
+            listBeside && 'min-h-0',
+            listBeside && !previewBeside && 'overflow-y-auto',
+            previewBeside && 'overflow-hidden'
+          )}
+        >
+          {main}
+        </main>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * `/payload-templates/:key` — a link that only knows the template (config
+ * search): finds the template's API and replaces itself with the editor URL.
+ */
+export function PayloadTemplateRedirectPage() {
+  const { key = '' } = useParams<{ key: string }>()
+  const navigate = useNavigate()
+  const tplQ = useTemplate(key)
+  const apisQ = useExternalApis()
+  const apiName = tplQ.data?.data.external_api ?? null
+  const target = apiName ? (apisQ.data ?? []).find((a) => a.name === apiName) : null
+
+  useEffect(() => {
+    if (target)
+      navigate(`/external-apis/${target.id}/payloads/${encodeURIComponent(key)}`, { replace: true })
+  }, [target, key, navigate])
+
+  if (tplQ.isError)
+    return (
+      <Notice
+        title={
+          httpStatus(tplQ.error) === 404 ? `No payload “${key}”` : 'This payload could not load'
+        }
+      >
+        {httpStatus(tplQ.error) === 404 ? 'It may have been deleted.' : errorMessage(tplQ.error)}
+      </Notice>
+    )
+  if (tplQ.data && !apiName)
+    return (
+      <Notice title={`“${tplQ.data.data.label}” is not attached to an external API`}>
+        Payloads are edited from their API's page.
+      </Notice>
+    )
+  if (tplQ.data && apisQ.data && !target)
+    return (
+      <Notice title={`No external API “${apiName}”`}>
+        The payload names an API that no longer exists.{' '}
+        <Link
+          to='/external-apis'
+          className='font-medium text-slate-900 underline underline-offset-2 dark:text-foreground'
+        >
+          All external APIs
+        </Link>
+      </Notice>
+    )
+  return <MainSkeleton />
+}

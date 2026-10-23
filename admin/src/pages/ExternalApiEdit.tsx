@@ -52,6 +52,8 @@ import { api, type ExternalApiCallLog, type ExternalApiEndpoint } from '@/lib/ap
 import { useGoBack } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 import type { ExternalApi } from './ExternalApis'
+import { BodySecretsCard } from './external-api/BodySecretsCard'
+import { PayloadsCard } from './external-api/PayloadsCard'
 
 type AuthType = ExternalApi['auth_type']
 
@@ -105,6 +107,12 @@ const EMPTY: FormState = {
   skip_grace_minutes: '',
   agreed_p95_ms: '',
   agreed_uptime_pct: ''
+}
+
+/** auth_config minus `body_secrets` — only BodySecretsCard writes those (the server keeps them). */
+function withoutBodySecrets<T extends Record<string, unknown>>(cfg: T): T {
+  const { body_secrets: _bodySecrets, ...rest } = cfg
+  return rest as T
 }
 
 export function ExternalApiEditPage() {
@@ -202,7 +210,8 @@ export function ExternalApiEditPage() {
             : null,
         description: form.description || null,
         auth_type: form.auth_type,
-        auth_config: form.auth_type === 'none' ? null : form.auth_config,
+        // Body secrets belong to the Body secrets card; leaving them out keeps the stored ones.
+        auth_config: form.auth_type === 'none' ? null : withoutBodySecrets(form.auth_config),
         headers: Object.keys(headersObj).length ? headersObj : null,
         enabled: form.enabled,
         integration_type: form.integration_type || null,
@@ -600,6 +609,24 @@ export function ExternalApiEditPage() {
       </Card>
 
       {!isNew && data && <EndpointsCard apiId={data.id} />}
+      {!isNew && data && <PayloadsCard apiId={data.id} apiName={data.name} />}
+      {!isNew && data && (
+        <BodySecretsCard
+          apiId={data.id}
+          apiName={data.name}
+          authConfig={data.auth_config}
+          instanceOverrides={
+            (
+              data as {
+                instance_overrides?: Record<
+                  string,
+                  { auth_config?: Record<string, unknown> }
+                > | null
+              }
+            ).instance_overrides
+          }
+        />
+      )}
       {!isNew && data && (
         <MockModeCard
           apiId={data.id}
@@ -1667,7 +1694,8 @@ function InstanceOverridesCard({
     for (const [k, v] of Object.entries(data.instance_overrides ?? {})) {
       next[k] = {
         base_url: v?.base_url ?? '',
-        auth: Object.entries(v?.auth_config ?? {}).map(([key, value]) => ({
+        // body_secrets is a nested map owned by the Body secrets card — never a flat pair here.
+        auth: Object.entries(withoutBodySecrets(v?.auth_config ?? {})).map(([key, value]) => ({
           key,
           value: String(value ?? '')
         })),
@@ -1689,7 +1717,9 @@ function InstanceOverridesCard({
         for (const p of d.headers) if (p.key.trim()) headers[p.key.trim()] = p.value
         body[k] = {
           base_url: d.base_url.trim() || undefined,
-          auth_config: Object.keys(auth).length ? auth : undefined,
+          // Always an object (even empty): the server keeps this instance's body_secrets only
+          // when an auth_config arrives, and an empty one is not stored.
+          auth_config: auth,
           headers: Object.keys(headers).length ? headers : undefined
         }
       }
