@@ -63,6 +63,8 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_external_apis',
   'nivaro_external_api_endpoints',
   'nivaro_external_api_schemas',
+  'nivaro_payload_templates', //       partner payload templates (migration 501)
+  'nivaro_payload_template_versions',
   'nivaro_integration_signal_settings',
   // imports
   'nivaro_import_definitions',
