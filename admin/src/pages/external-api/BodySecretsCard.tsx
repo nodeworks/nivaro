@@ -81,21 +81,42 @@ export function BodySecretsCard({
       refetchOnWindowFocus: false
     }))
   })
-  const usedBy = useMemo(() => {
-    const out: Record<string, string[]> = {}
+  // Live = the published body reads it (pushes depend on it now); draft = only the unpublished draft.
+  const { usedLive, usedDraft } = useMemo(() => {
+    const live: Record<string, string[]> = {}
+    const draft: Record<string, string[]> = {}
     for (const d of details) {
       const t = d.data?.data
       if (!t) continue
-      const draft = secretsUsedBy(draftOf(t))
-      const live = secretsUsedBy(publishedOf(t))
-      for (const n of new Set([...draft, ...live])) {
-        out[n] = out[n] ?? []
-        out[n].push(t.label)
+      const liveNames = new Set(secretsUsedBy(publishedOf(t)))
+      for (const n of liveNames) {
+        live[n] = live[n] ?? []
+        live[n].push(t.label)
+      }
+      for (const n of secretsUsedBy(draftOf(t))) {
+        if (liveNames.has(n)) continue
+        draft[n] = draft[n] ?? []
+        draft[n].push(t.label)
       }
     }
-    return out
+    return { usedLive: live, usedDraft: draft }
   }, [details])
-  const missing = Object.keys(usedBy).filter((n) => !(n in secrets))
+  const missing = [...new Set([...Object.keys(usedLive), ...Object.keys(usedDraft)])].filter(
+    (n) => !(n in secrets)
+  )
+  /** What depends on secret `n`, in words. */
+  const impact = (n: string): string => {
+    const parts: string[] = []
+    if (usedLive[n]?.length)
+      parts.push(
+        `${usedLive[n].join(', ')} ${usedLive[n].length === 1 ? 'uses' : 'use'} it — their pushes are refused until it is set`
+      )
+    if (usedDraft[n]?.length)
+      parts.push(
+        `the draft of ${usedDraft[n].join(', ')} uses it — publishing ${usedDraft[n].length === 1 ? 'it' : 'them'} will fail until the secret is set`
+      )
+    return parts.join('; ')
+  }
 
   const overridden = useMemo(() => {
     const out: Record<string, string[]> = {}
@@ -190,8 +211,7 @@ export function BodySecretsCard({
               className='flex flex-wrap items-center gap-x-2 rounded-md bg-red-50 px-3 py-2 text-[12.5px] text-red-800 dark:bg-red-500/10 dark:text-red-200'
             >
               <span>
-                <span className='font-mono'>{n}</span> is used by {usedBy[n].join(', ')} but is not
-                set — their pushes are refused until it is.
+                <span className='font-mono'>{n}</span> is not set: {impact(n)}.
               </span>
               <button
                 type='button'
@@ -221,9 +241,11 @@ export function BodySecretsCard({
                     {secrets[n] ? MASK : 'empty'}
                   </span>
                   <span className='min-w-0 flex-1 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
-                    {usedBy[n]?.length
-                      ? `Used by ${usedBy[n].join(', ')}`
-                      : 'Not used by a payload'}
+                    {usedLive[n]?.length
+                      ? `Used by ${usedLive[n].join(', ')}`
+                      : usedDraft[n]?.length
+                        ? `Used by the draft of ${usedDraft[n].join(', ')}`
+                        : 'Not used by a payload'}
                     {overridden[n] ? ` · overridden on ${overridden[n].join(', ')}` : ''}
                   </span>
                   {replacing !== n && removing !== n && (
@@ -290,9 +312,7 @@ export function BodySecretsCard({
                 {removing === n && (
                   <div className='mt-2 flex flex-wrap items-center gap-2 pl-6 text-[12.5px]'>
                     <span className='text-slate-700 dark:text-slate-200'>
-                      {usedBy[n]?.length
-                        ? `Remove ${n}? ${usedBy[n].join(', ')} ${usedBy[n].length === 1 ? 'uses' : 'use'} it — those pushes are refused until it is added back.`
-                        : `Remove ${n}?`}
+                      {impact(n) ? `Remove ${n}? ${impact(n)}.` : `Remove ${n}?`}
                     </span>
                     <button
                       type='button'

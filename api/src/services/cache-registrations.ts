@@ -14,6 +14,7 @@ import { bustContractCache } from './integration-contracts.js'
 import { bustMailTemplateOverrides } from './mail.js'
 import { bustMailBrandingCache } from './mail-branding.js'
 import { bustNotificationTemplateCache } from './notification-templates.js'
+import { bustPayloadTemplateCache } from './payload-templates/index.js'
 import { clearPermissionCache, onPermissionCacheReset } from './permission-cache.js'
 import { clearPickerRuleCache } from './picker-rules.js'
 import { bustOwnerGroupCache } from './pipeline-engine.js'
@@ -133,6 +134,11 @@ export function registerKnownCaches(): void {
   registerCache('integration-contracts', 'Inbound payload contracts', bustContractCache)
   registerCache('notification-templates', 'In-app notification templates', () =>
     bustNotificationTemplateCache()
+  )
+  registerCache(
+    'payload-templates',
+    'Published partner payload templates per tenant (60s TTL, busted on publish)',
+    bustPayloadTemplateCache
   )
   registerCache('encrypted-fields', 'Which fields are stored encrypted', () =>
     clearEncryptedFieldCache()

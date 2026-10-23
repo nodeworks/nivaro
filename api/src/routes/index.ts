@@ -189,6 +189,7 @@ import { opsRuntimeRoutes } from './ops-runtime.js'
 import { opsTaskRoutes } from './ops-tasks.js'
 import { pagesRoutes } from './pages.js'
 import { partnerDependencyRoutes } from './partner-dependencies.js'
+import { payloadTemplateRoutes } from './payload-templates.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
 import { personSummaryRoutes } from './person-summary.js'
@@ -585,6 +586,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(presenceOnlineRoutes, { prefix: '/presence' })
   await app.register(externalApisRoutes, { prefix: '/external-apis' })
   await app.register(externalApiObservabilityRoutes, { prefix: '/external-apis' })
+  await app.register(payloadTemplateRoutes, { prefix: '/payload-templates' })
   await app.register(webhooksRoutes, { prefix: '/webhooks' })
   await app.register(searchRoutes, { prefix: '/search' })
   await app.register(searchAnalyticsRoutes, { prefix: '/search-analytics' })

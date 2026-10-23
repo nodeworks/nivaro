@@ -18,7 +18,8 @@ import type {
   ExtensionCronMeta,
   ExtensionCronOpts,
   ExtensionEventHandler,
-  ExtensionSettingValue
+  ExtensionSettingValue,
+  PayloadTemplateDef
 } from './context.js'
 import {
   deprecationMessage,
@@ -427,6 +428,7 @@ export interface TestContext extends ExtensionContext {
     eventHandlers: Array<{ eventType: string; fn: ExtensionEventHandler }>
     bulkActions: BulkActionDef[]
     itemActions: ItemActionDef[]
+    payloadTemplates: PayloadTemplateDef[]
     notificationChannels: NotificationChannelDef[]
     notificationSources: NotificationSourceProvider[]
     noteSources: RelatedNoteProvider[]
@@ -565,6 +567,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     eventHandlers: [],
     bulkActions: [],
     itemActions: [],
+    payloadTemplates: [],
     notificationChannels: [],
     notificationSources: [],
     noteSources: [],
@@ -747,6 +750,13 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     },
     bulkActions: { register: (d) => registered.bulkActions.push(d) },
     itemActions: { register: (d) => registered.itemActions.push(d) },
+    payloadTemplates: {
+      register: async (d) => {
+        registered.payloadTemplates.push(d)
+      },
+      render: async () => ({ body: {}, problems: [], version: 1 }),
+      hasBodySecret: async () => false
+    },
     notificationChannels: { register: (d) => registered.notificationChannels.push(d) },
     notificationSources: { register: (p) => registered.notificationSources.push(p) },
     notes: {

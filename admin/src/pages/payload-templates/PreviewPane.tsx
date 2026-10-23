@@ -375,23 +375,15 @@ export function PreviewPane({
           value={recordId}
           onChange={onRecordChange}
         />
-        <div
-          className='inline-flex shrink-0 rounded-md border border-slate-200 p-0.5 dark:border-border'
-          role='tablist'
-          aria-label='Preview view'
-        >
+        <fieldset className='inline-flex shrink-0 rounded-md border border-slate-200 p-0.5 dark:border-border'>
+          <legend className='sr-only'>Preview view</legend>
           {VIEWS.map(({ v, label }) => {
             const off = v !== 'draft' && !hasLive
             return (
-              <span
-                key={v}
-                role='presentation'
-                data-tip={off ? 'Nothing is published yet' : undefined}
-              >
+              <span key={v} data-tip={off ? 'Nothing is published yet' : undefined}>
                 <button
                   type='button'
-                  role='tab'
-                  aria-selected={view === v}
+                  aria-pressed={view === v}
                   disabled={off}
                   onClick={() => onViewChange?.(v)}
                   className={cn(
@@ -407,7 +399,7 @@ export function PreviewPane({
               </span>
             )
           })}
-        </div>
+        </fieldset>
       </div>
 
       {skipped && (

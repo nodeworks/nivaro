@@ -7,6 +7,7 @@ import {
   updateAsAction
 } from './action-writes.js'
 import { logActivity } from './activity.js'
+import { protectTemplatePlaceholders, scrubSecretsFor, secretPathsOf } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
@@ -24,6 +25,12 @@ import {
   payloadLiquid,
   registerPayloadFilters
 } from './payload-filters.js'
+import {
+  getTemplate,
+  PayloadTemplateError,
+  registeredDef,
+  renderPayloadTemplate
+} from './payload-templates/index.js'
 import { announceRecordAspect } from './record-events.js'
 import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 
@@ -40,6 +47,7 @@ import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 //       "lines": { "collection": "order_lines", "filter": { "order": "$id" }, "limit": 500 }
 //     },
 //     "payload_template": "{ ...liquid producing JSON... }",
+//     "payload_template_key": "mwf-workflow-status",  // a saved payload template; wins over payload_template
 //     "on_success": { "set": { "order_number": "{{ response.salesOrderNumber }}" } },
 //     "on_failure": { "set": { "erp_status": "error" } }
 //   }
@@ -71,7 +79,7 @@ interface ContextQueryDef {
   sort?: string
 }
 
-interface TransitionActionDef {
+export interface TransitionActionDef {
   type: string
   external_api: number | string
   endpoint_path: string
@@ -79,6 +87,10 @@ interface TransitionActionDef {
   guard?: ConditionRule[]
   context?: Record<string, ContextQueryDef>
   payload_template: string
+  /** A saved payload template (services/payload-templates) — wins over the inline
+   *  `payload_template`. Its `lookups` (context query defs) join `context`; the
+   *  action's own keys win. */
+  payload_template_key?: string
   on_success?: { set?: Record<string, string> }
   /** Child-row writebacks applied after a successful call — e.g. autofill each
    *  submitted line's order id from the returned order number. `only_empty`
@@ -191,16 +203,17 @@ export function validateRerunBody(
   return { ok: true, transitionId, actionIndex }
 }
 
-// nivaro_users is the ONLY system collection reachable from context queries —
-// submissions routinely need requester/contact emails. Fields are always an
-// explicit identifier-checked list, never *.
+// nivaro_users is the ONLY system collection (nivaro_* / directus_*) reachable
+// from context queries — submissions routinely need requester/contact emails.
+// Fields are always an explicit identifier-checked list, never *.
 const CONTEXT_SAFE_SYSTEM = new Set(['nivaro_users'])
 function collectionAllowed(name: string | undefined): name is string {
   if (!name || !IDENTIFIER_RE.test(name)) return false
-  return !/^nivaro_/i.test(name) || CONTEXT_SAFE_SYSTEM.has(name)
+  return !/^(nivaro|directus)_/i.test(name) || CONTEXT_SAFE_SYSTEM.has(name)
 }
 
-async function buildContext(
+/** The action `context` lookups for one record (also used by payload template previews). */
+export async function buildContext(
   defs: TransitionActionDef['context'],
   itemId: string,
   record: Record<string, unknown>,
@@ -339,6 +352,247 @@ async function resolveExternalApiId(ref: number | string): Promise<number | null
     return null
   }
 }
+
+// ─── Payload body (inline Liquid or a saved payload template) ──────────────────
+
+/** The saved payload template an action names, or null (blank / not a string = none). */
+function templateKeyOf(action: Partial<TransitionActionDef>): string | null {
+  const k = action.payload_template_key
+  return typeof k === 'string' && k.trim() !== '' ? k.trim() : null
+}
+
+/** True when the action can produce a body at all (the `not_configured` gate). */
+const hasPayload = (action: Partial<TransitionActionDef>): boolean =>
+  templateKeyOf(action) != null || !!action.payload_template
+
+/** The action field that keeps it from producing a push, or null. `apiId` = the resolved external
+ *  API (null = did not resolve); omitted, the action's own `external_api` is judged. */
+function notConfiguredField(
+  action: Partial<TransitionActionDef>,
+  apiId?: number | null
+): 'external_api' | 'endpoint_path' | 'payload_template' | null {
+  if (apiId === undefined ? !action.external_api : !apiId) return 'external_api'
+  if (!action.endpoint_path) return 'endpoint_path'
+  if (!hasPayload(action)) return 'payload_template'
+  return null
+}
+
+/** The first guard rule the record fails (every rule must pass), or undefined. */
+function failedGuardRule(
+  action: Partial<TransitionActionDef>,
+  record: Record<string, unknown>
+): ConditionRule | undefined {
+  const guard = Array.isArray(action.guard) ? action.guard : []
+  return guard.find((r) => !evalConditionRule(r, record))
+}
+
+export type ErpActionGateKind = 'not_configured' | 'skip_when_empty' | 'skip_unless_any' | 'guard'
+
+export interface ErpActionGateResult {
+  kind: ErpActionGateKind
+  /** Exactly the text the push records (skipReason). */
+  reason: string
+  /** kind 'guard': the rule that failed. */
+  rule?: ConditionRule
+}
+
+/**
+ * Why an erp_submit action would not push for this record, in the order the push checks:
+ * not_configured, skip_when_empty, skip_unless_any, guard. Null = every gate passes. The push,
+ * the preview and anything else that predicts a push use this one function so they cannot
+ * drift. What each outcome does to the obligation ledger is the push's business:
+ * skip_when_empty / skip_unless_any mean "not for this record" (nothing opened);
+ * not_configured and guard are recorded refusals.
+ */
+export function erpActionGateDetail(
+  action: Partial<TransitionActionDef>,
+  record: Record<string, unknown>,
+  context: Record<string, unknown>,
+  opts: { apiId?: number | null } = {}
+): ErpActionGateResult | null {
+  const missing = notConfiguredField(action, opts.apiId)
+  if (missing) return { kind: 'not_configured', reason: skipReason('not_configured', missing) }
+  if (action.skip_when_empty) {
+    const gate = context[action.skip_when_empty]
+    if (gate == null || (Array.isArray(gate) && gate.length === 0)) {
+      return {
+        kind: 'skip_when_empty',
+        reason: skipReason('skip_when_empty', action.skip_when_empty)
+      }
+    }
+  }
+  if (Array.isArray(action.skip_unless_any) && action.skip_unless_any.length > 0) {
+    const walk = (ref: string): unknown => {
+      let cur: unknown = { record, context }
+      for (const seg of ref.split('.')) {
+        if (cur == null || typeof cur !== 'object') return undefined
+        cur = (cur as Record<string, unknown>)[seg]
+      }
+      return cur
+    }
+    const anySet = action.skip_unless_any.some((ref) => {
+      const v = walk(ref)
+      return v != null && String(v).trim() !== ''
+    })
+    if (!anySet) {
+      return {
+        kind: 'skip_unless_any',
+        reason: skipReason('skip_unless_any', action.skip_unless_any.join(', '))
+      }
+    }
+  }
+  const rule = failedGuardRule(action, record)
+  if (rule) {
+    return {
+      kind: 'guard',
+      reason: skipReason(
+        'guard',
+        `${rule.field} ${rule.op ?? 'eq'} ${JSON.stringify(rule.value ?? null)}`
+      ),
+      rule
+    }
+  }
+  return null
+}
+
+/** erpActionGateDetail's reason text, or null when the action would push. */
+export function erpActionGate(
+  action: Partial<TransitionActionDef>,
+  record: Record<string, unknown>,
+  context: Record<string, unknown>,
+  opts: { apiId?: number | null } = {}
+): string | null {
+  return erpActionGateDetail(action, record, context, opts)?.reason ?? null
+}
+
+/** The person performing a transition, for the `acting_user.*` values a payload can carry; null
+ *  when there is none (automatic transitions) or the row cannot be read. */
+async function actingUser(
+  userId: string | null | undefined
+): Promise<Record<string, unknown> | null> {
+  if (!userId) return null
+  try {
+    const u = (await db('nivaro_users')
+      .where({ id: userId })
+      .first('id', 'email', 'first_name', 'last_name', 'employee_id')) as
+      | Record<string, unknown>
+      | undefined
+    if (!u) return null
+    const name = [u.first_name, u.last_name].filter((x) => x != null && x !== '').join(' ')
+    return {
+      id: u.id ?? userId,
+      email: u.email ?? null,
+      first_name: u.first_name ?? null,
+      last_name: u.last_name ?? null,
+      name: name || null,
+      employee_id: u.employee_id ?? null
+    }
+  } catch {
+    return null
+  }
+}
+
+/** What the action path needs from a referenced template: its lookups and its external API. */
+type TemplateInfo = { lookups: Record<string, unknown> | null; external_api: string | null }
+
+/**
+ * The registrar's in-process def answers first; a template without one (created in the UI,
+ * installed from a blueprint) is read from its row. Null = unknown or unreadable (the render
+ * then reports it).
+ */
+async function templateInfo(key: string): Promise<TemplateInfo | null> {
+  const def = registeredDef(key)
+  if (def) return { lookups: def.lookups ?? null, external_api: def.external_api ?? null }
+  try {
+    const row = await getTemplate(key)
+    return row ? { lookups: row.lookups, external_api: row.external_api } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The context query defs an action runs: its own `context`, over the referenced template's
+ * `lookups` (same shape) — the action's keys win on a clash.
+ */
+async function contextDefsFor(
+  action: TransitionActionDef
+): Promise<TransitionActionDef['context']> {
+  const key = templateKeyOf(action)
+  if (!key) return action.context
+  const lookups = (await templateInfo(key))?.lookups
+  if (!lookups || typeof lookups !== 'object' || Array.isArray(lookups)) return action.context
+  return { ...(lookups as Record<string, ContextQueryDef>), ...(action.context ?? {}) }
+}
+
+const apiKey = (name: string): string => name.trim().toLowerCase()
+
+/**
+ * A template is written for one external API; an action that sends it somewhere else is a
+ * configuration mistake, never a push. Compared by name, case-insensitively, after resolving the
+ * action's api id. A template with no API set (or an unknown template) is not checked here.
+ */
+async function assertTemplateApi(
+  key: string,
+  action: TransitionActionDef,
+  apiId: number
+): Promise<void> {
+  const templateApi = (await templateInfo(key))?.external_api
+  if (!templateApi?.trim()) return
+  let actionApi: string | null = null
+  try {
+    const row = (await db('nivaro_external_apis').where({ id: apiId }).first('name')) as
+      | { name?: string | null }
+      | undefined
+    actionApi = row?.name ?? null
+  } catch {
+    actionApi = null
+  }
+  actionApi ??= typeof action.external_api === 'string' ? action.external_api : `#${apiId}`
+  if (apiKey(templateApi) !== apiKey(actionApi)) {
+    throw new PayloadTemplateError(
+      'invalid',
+      `Payload template '${key}' is for ${templateApi.trim()}, but this action sends to ${actionApi.trim()}`
+    )
+  }
+}
+
+/**
+ * Render an action's request body. A saved template (payload_template_key) wins over the inline
+ * Liquid: it must be for the action's API, and its published render already neutralizes record /
+ * context data, so only the template's own secret slots hold a real placeholder. Inline: only the
+ * template text's own placeholders stay real — whatever record / context / response data renders
+ * (JSON-escaped markers included) is neutralized after the parse. The push and the preview both
+ * render here, so the preview's payload signature matches the real push. Throws on any failure.
+ */
+async function renderActionBody(
+  action: TransitionActionDef,
+  scope: Record<string, unknown>,
+  apiId: number
+): Promise<Record<string, unknown>> {
+  const key = templateKeyOf(action)
+  if (key) {
+    await assertTemplateApi(key, action, apiId)
+    const r = await renderPayloadTemplate(key, scope)
+    if (!r.body || typeof r.body !== 'object' || Array.isArray(r.body)) {
+      throw new PayloadTemplateError(
+        'invalid',
+        `Payload template '${key}' did not produce a JSON object`,
+        r.problems
+      )
+    }
+    return r.body
+  }
+  const tpl = protectTemplatePlaceholders(action.payload_template)
+  const rendered = await engine.parseAndRender(tpl.text, scope)
+  return tpl.finish(JSON.parse(rendered)) as Record<string, unknown>
+}
+
+/** What a render failure records on the submission: a template error already names its key. */
+const renderErrorText = (err: unknown): string =>
+  err instanceof PayloadTemplateError
+    ? err.message
+    : `payload template error: ${err instanceof Error ? err.message : String(err)}`
 
 export class TransitionBlockedError extends Error {
   statusCode = 422
@@ -555,7 +809,7 @@ export function detectBodyAcceptance(
 export async function runTransitionActions(opts: {
   transition: { id: string; label: string; actions: string | null }
   instance: { collection: string; item: string }
-  newStateObj: { key: string; label: string } | null
+  newStateObj: { key: string; label: string; external_label?: string | null } | null
   userId: string | null
   /** 'blocking' runs only blocking:true actions (pre-transition; a failure
    *  returns blockedError), 'post' runs the rest. Default runs everything —
@@ -650,6 +904,8 @@ export async function runTransitionActions(opts: {
   // caller runs exactly one action (onlyIndex): "no submission" always means
   // one of the `continue`s below fired, and this is which.
   let skippedReason: string | null = null
+  // The acting user's row, read once per run on the first push that renders.
+  let acting: { user: Record<string, unknown> | null } | undefined
   for (const action of actions) {
     if (action.type !== 'erp_submit' && action.type !== 'create_record') continue
     void import('./flow-executor.js')
@@ -703,8 +959,7 @@ export async function runTransitionActions(opts: {
 
     if (action.type === 'create_record') {
       // Guard: every rule must pass or the action is skipped
-      const guard = Array.isArray(action.guard) ? action.guard : []
-      const failedRule = guard.find((r) => !evalConditionRule(r, record))
+      const failedRule = failedGuardRule(action, record)
       if (failedRule) {
         skippedReason = skipReason(
           'guard',
@@ -726,70 +981,48 @@ export async function runTransitionActions(opts: {
     }
 
     const apiId = await resolveExternalApiId(action.external_api)
-    if (!apiId || !action.endpoint_path || !action.payload_template) {
-      skippedReason = skipReason(
-        'not_configured',
-        !apiId ? 'external_api' : !action.endpoint_path ? 'endpoint_path' : 'payload_template'
-      )
-      // A misconfigured action IS worth a recorded no — someone must fix it.
-      await resolveObligation(await openObligation(), { outcome: 'skipped', reason: skippedReason })
+    // A misconfigured action skips its context queries (it cannot push anyway).
+    const context = notConfiguredField(action, apiId)
+      ? {}
+      : await buildContext(await contextDefsFor(action), item, record, opts.userId)
+    const gate = erpActionGateDetail(action, record, context, { apiId })
+    if (gate) {
+      skippedReason = gate.reason
+      // skip_when_empty / skip_unless_any: not for this record — no obligation. A misconfigured
+      // action IS worth a recorded no (someone must fix it), and so is a guard refusal.
+      if (gate.kind === 'not_configured' || gate.kind === 'guard') {
+        await resolveObligation(await openObligation(), {
+          outcome: 'skipped',
+          reason: skippedReason
+        })
+      }
       continue
     }
-
-    const context = await buildContext(action.context, item, record, opts.userId)
-    if (action.skip_when_empty) {
-      const gate = context[action.skip_when_empty]
-      if (gate == null || (Array.isArray(gate) && gate.length === 0)) {
-        skippedReason = skipReason('skip_when_empty', action.skip_when_empty)
-        continue
-      }
-    }
-    if (Array.isArray(action.skip_unless_any) && action.skip_unless_any.length > 0) {
-      const walk = (ref: string): unknown => {
-        let cur: unknown = { record, context }
-        for (const seg of ref.split('.')) {
-          if (cur == null || typeof cur !== 'object') return undefined
-          cur = (cur as Record<string, unknown>)[seg]
-        }
-        return cur
-      }
-      const anySet = action.skip_unless_any.some((ref) => {
-        const v = walk(ref)
-        return v != null && String(v).trim() !== ''
-      })
-      if (!anySet) {
-        skippedReason = skipReason('skip_unless_any', action.skip_unless_any.join(', '))
-        continue
-      }
+    // The gate refused a missing api / endpoint already; this only narrows the types — and
+    // still records why, rather than leaving silently.
+    if (!apiId || !action.endpoint_path) {
+      skippedReason = skipReason('not_configured', !apiId ? 'external_api' : 'endpoint_path')
+      continue
     }
 
     // The action applies to this record: from here on every way out is a
     // recorded outcome on the partner's ledger.
     const obligationId = await openObligation()
 
-    // Guard: every rule must pass or the action is skipped
-    const guard = Array.isArray(action.guard) ? action.guard : []
-    const failedRule = guard.find((r) => !evalConditionRule(r, record))
-    if (failedRule) {
-      skippedReason = skipReason(
-        'guard',
-        `${failedRule.field} ${failedRule.op ?? 'eq'} ${JSON.stringify(failedRule.value ?? null)}`
-      )
-      await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
-      continue
-    }
+    acting ??= { user: await actingUser(opts.userId) }
     const scope = {
       record,
       context,
       state: opts.newStateObj,
+      acting_user: acting.user,
       responses,
       response: responses[responses.length - 1] ?? null
     }
 
     let body: Record<string, unknown>
     try {
-      const rendered = await engine.parseAndRender(action.payload_template, scope)
-      body = JSON.parse(rendered) as Record<string, unknown>
+      // Sent with bodySecrets: true — see renderActionBody for which placeholders stay real.
+      body = await renderActionBody(action, scope, apiId)
     } catch (err) {
       const submissionId = await recordSubmission(
         collection,
@@ -798,7 +1031,7 @@ export async function runTransitionActions(opts: {
         action.endpoint_path,
         null,
         'failed',
-        `payload template error: ${err instanceof Error ? err.message : String(err)}`,
+        renderErrorText(err),
         undefined,
         undefined,
         undefined,
@@ -934,6 +1167,7 @@ export async function runTransitionActions(opts: {
         method: (action.method as 'POST' | 'PUT') ?? 'POST',
         path: action.endpoint_path,
         body,
+        bodySecrets: true,
         // `timeout_ms` on the action config wins; the default is generous
         // because a partner that validates each line (Fusion IIP) answers a
         // 30-line push in minutes, and a timeout here reads as a failed push.
@@ -1387,8 +1621,13 @@ export async function recordSubmission(
         status,
         attempts: 1,
         last_error: error,
-        payload: JSON.stringify({ endpoint_path: endpointPath, body }),
-        response: serializeResponseBody(responseBody),
+        // secret_paths: where the template's real placeholders sit — a resend honours only those.
+        payload: JSON.stringify({
+          endpoint_path: endpointPath,
+          body,
+          secret_paths: body ? secretPathsOf(body) : []
+        }),
+        response: await scrubSecretsFor(externalApi, serializeResponseBody(responseBody)),
         change_signature: signature ?? null,
         ...requesterFields,
         ...(await chainFields('nivaro_erp_submissions')),
@@ -1539,7 +1778,7 @@ async function lastLandedSubmission(
 export async function previewErpActions(opts: {
   transition: { id: string; label: string; actions: string | null }
   instance: { collection: string; item: string }
-  newStateObj: { key: string; label: string } | null
+  newStateObj: { key: string; label: string; external_label?: string | null } | null
   userId: string | null
   /** Shared across several transitions of one record: the record and each
    *  distinct context query set are read once, not once per transition. */
@@ -1588,71 +1827,38 @@ export async function previewErpActions(opts: {
     if (action.on_success?.set || action.on_success_children?.length) earlierWriteback = true
     const apiId = action.external_api ? await resolveExternalApiId(action.external_api) : null
     base.api_id = apiId
-    if (!apiId || !action.endpoint_path || !action.payload_template) {
+    let context: Record<string, unknown> = {}
+    if (!notConfiguredField(action, apiId)) {
+      const ctxDefs = await contextDefsFor(action)
+      context = await cached(`ctx:${JSON.stringify(ctxDefs ?? {})}`, () =>
+        buildContext(ctxDefs, item, record, opts.userId)
+      )
+    }
+    const gate = erpActionGateDetail(action, record, context, { apiId })
+    if (gate && gate.kind !== 'guard') {
       out.push({
         ...base,
-        status: 'not_configured',
-        reason: skipReason(
-          'not_configured',
-          !apiId ? 'external_api' : !action.endpoint_path ? 'endpoint_path' : 'payload_template'
-        )
+        status: gate.kind === 'not_configured' ? 'not_configured' : 'not_applicable',
+        reason: gate.reason
       })
       continue
     }
-    const context = await cached(`ctx:${JSON.stringify(action.context ?? {})}`, () =>
-      buildContext(action.context, item, record, opts.userId)
+    // Past not_configured, so the api and endpoint are set.
+    const endpointPath = action.endpoint_path as string
+    base.last = await cached(`last:${apiId}:${endpointPath}`, () =>
+      lastLandedSubmission(collection, item, apiId as number, endpointPath)
     )
-    if (action.skip_when_empty) {
-      const gate = context[action.skip_when_empty]
-      if (gate == null || (Array.isArray(gate) && gate.length === 0)) {
-        out.push({
-          ...base,
-          status: 'not_applicable',
-          reason: skipReason('skip_when_empty', action.skip_when_empty)
-        })
-        continue
-      }
-    }
-    if (Array.isArray(action.skip_unless_any) && action.skip_unless_any.length > 0) {
-      const walk = (ref: string): unknown => {
-        let cur: unknown = { record, context }
-        for (const seg of ref.split('.')) {
-          if (cur == null || typeof cur !== 'object') return undefined
-          cur = (cur as Record<string, unknown>)[seg]
-        }
-        return cur
-      }
-      const anySet = action.skip_unless_any.some((ref) => {
-        const v = walk(ref)
-        return v != null && String(v).trim() !== ''
-      })
-      if (!anySet) {
-        out.push({
-          ...base,
-          status: 'not_applicable',
-          reason: skipReason('skip_unless_any', action.skip_unless_any.join(', '))
-        })
-        continue
-      }
-    }
-    base.last = await cached(`last:${apiId}:${action.endpoint_path}`, () =>
-      lastLandedSubmission(collection, item, apiId, action.endpoint_path as string)
-    )
-    const guard = Array.isArray(action.guard) ? action.guard : []
-    const failedRule = guard.find((r) => !evalConditionRule(r, record))
-    if (failedRule) {
+    if (gate?.rule) {
+      const rule = gate.rule
       out.push({
         ...base,
         status: 'guard',
-        reason: skipReason(
-          'guard',
-          `${failedRule.field} ${failedRule.op ?? 'eq'} ${JSON.stringify(failedRule.value ?? null)}`
-        ),
+        reason: gate.reason,
         guard_failed: {
-          field: failedRule.field,
-          op: String(failedRule.op ?? 'eq'),
-          value: failedRule.value ?? null,
-          actual: record[failedRule.field] ?? null
+          field: rule.field,
+          op: String(rule.op ?? 'eq'),
+          value: rule.value ?? null,
+          actual: record[rule.field] ?? null
         }
       })
       continue
@@ -1661,13 +1867,14 @@ export async function previewErpActions(opts: {
       record,
       context,
       state: opts.newStateObj,
+      acting_user: await cached(`acting:${opts.userId ?? ''}`, () => actingUser(opts.userId)),
       responses: [],
       response: null
     }
     let body: Record<string, unknown>
     try {
-      const rendered = await engine.parseAndRender(action.payload_template, scope)
-      body = JSON.parse(rendered) as Record<string, unknown>
+      // The same render as the real push, so the payload signature matches.
+      body = await renderActionBody(action, scope, apiId as number)
     } catch (err) {
       out.push({
         ...base,
