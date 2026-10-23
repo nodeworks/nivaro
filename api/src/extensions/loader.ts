@@ -14,7 +14,7 @@ import { authenticate, requireAdmin, requireAuth } from '../middleware/authentic
 import { logActivity } from '../services/activity.js'
 import { registerPortalLinks } from '../services/app-links.js'
 import { registerBriefLine } from '../services/approval-brief-lines.js'
-import { hasBodySecret, scrubSecretsFor } from '../services/body-secrets.js'
+import { hasBodySecret, scrubFailedValue, scrubSecretsFor } from '../services/body-secrets.js'
 import { currentChain } from '../services/chain.js'
 import { type ChainTable, chainFields } from '../services/chain-columns.js'
 import { beginChainRoot } from '../services/chain-roots.js'
@@ -135,13 +135,17 @@ async function extensionHasBodySecret(apiName: string, name: string): Promise<bo
 }
 
 /** A partner answer with every body secret of that API (instance-resolved) put back as its
- *  placeholder — what an extension STORES from a response. The value unchanged when it cannot
- *  tell; never throws. */
+ *  placeholder — what an extension STORES from a response. Fails CLOSED: when core cannot tell
+ *  (the API's config cannot be read) it returns `{ _scrub_failed: true }` (a string value gets
+ *  that marker as JSON text), never the raw value. Never throws. */
 async function extensionScrubResponse<T>(apiName: string, value: T): Promise<T> {
   try {
-    return await scrubSecretsFor(String(apiName), value)
+    // scrubSecretsFor already fails closed; the cast is the kit's `Promise<T>` contract, whose
+    // docstring names the marker.
+    return (await scrubSecretsFor(String(apiName), value)) as T
   } catch {
-    return value
+    // Defensive only (scrubSecretsFor never throws): still never the raw value.
+    return scrubFailedValue(value) as T
   }
 }
 

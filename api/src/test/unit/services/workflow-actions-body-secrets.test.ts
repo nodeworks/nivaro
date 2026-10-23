@@ -10,7 +10,9 @@ vi.mock('../../../services/integration-remediation.js', () => ({
   classifyError: vi.fn(() => 'unknown')
 }))
 vi.mock('../../../services/external-apis.js', () => ({
-  callExternalApi: vi.fn(async () => ({ status: 200, body: { status: 'SUCCESS' }, ok: true }))
+  callExternalApi: vi.fn(async () => ({ status: 200, body: { status: 'SUCCESS' }, ok: true })),
+  // The response scrub resolves the API's instance row (no overrides in these tests).
+  resolveInstanceRow: vi.fn((row: unknown) => row)
 }))
 vi.mock('../../../services/integration-obligations.js', async (importOriginal) => {
   const actual =
@@ -23,7 +25,11 @@ vi.mock('../../../services/integration-obligations.js', async (importOriginal) =
 })
 
 import { db } from '../../../db/index.js'
-import { secretPathsOf, substituteBodySecrets } from '../../../services/body-secrets.js'
+import {
+  SCRUB_FAILED_TEXT,
+  secretPathsOf,
+  substituteBodySecrets
+} from '../../../services/body-secrets.js'
 import { callExternalApi } from '../../../services/external-apis.js'
 import { previewErpActions, runTransitionActions } from '../../../services/workflow-actions.js'
 
@@ -75,10 +81,10 @@ function fakeDb(tables: Record<string, Array<Record<string, unknown>>>) {
   return fn
 }
 
-function wire() {
+function wire(apiRow: Record<string, unknown> = { id: 5, name: 'Partner' }) {
   inserts = []
   const fake = fakeDb({
-    nivaro_external_apis: [{ id: 5, name: 'Partner' }],
+    nivaro_external_apis: [apiRow],
     nivaro_action_journal: [],
     nivaro_erp_submissions: [],
     orders: [RECORD]
@@ -139,5 +145,44 @@ describe('erp_submit payload_template — record data cannot forge a secret plac
     })
     expect(out).toHaveLength(1)
     assertOnlyTemplatePlaceholder(out[0].body as Record<string, unknown>)
+  })
+})
+
+describe('erp_submit — the stored response fails closed when the secrets cannot be read', () => {
+  const run = () =>
+    runTransitionActions({
+      transition: { id: 't1', label: 'Submit', actions: JSON.stringify([action]) } as never,
+      instance: { collection: 'orders', item: 'o1' },
+      newStateObj: { key: 'submitted', label: 'Submitted' },
+      userId: null
+    })
+  const storedResponse = () =>
+    inserts.find((i) => i.table === 'nivaro_erp_submissions')?.row.response as string | null
+
+  it('an unreadable auth_config stores the marker, never the echoed secret', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    wire({ id: 5, name: 'Partner', auth_config: '{"body_secrets":' })
+    vi.mocked(callExternalApi).mockResolvedValueOnce({
+      status: 200,
+      body: { status: 'SUCCESS', echo: 'S3CRET' }
+    } as never)
+    await run()
+    expect(storedResponse()).toBe(SCRUB_FAILED_TEXT)
+    warn.mockRestore()
+  })
+
+  it('readable with the secret: the echo is stored as its placeholder', async () => {
+    wire({
+      id: 5,
+      name: 'Partner',
+      auth_config: JSON.stringify({ body_secrets: { token: 'S3CRET' } })
+    })
+    vi.mocked(callExternalApi).mockResolvedValueOnce({
+      status: 200,
+      body: { status: 'SUCCESS', echo: 'S3CRET' }
+    } as never)
+    await run()
+    expect(storedResponse()).toContain(REAL)
+    expect(storedResponse()).not.toContain('S3CRET')
   })
 })

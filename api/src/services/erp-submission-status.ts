@@ -217,22 +217,34 @@ async function recordAttempt(row: AttemptRow): Promise<void> {
   }
 }
 
-/** The serialized response with the submission's API body secrets scrubbed (never throws). */
+/**
+ * The serialized response with the submission's API body secrets scrubbed. Fails CLOSED: when the
+ * submission's API cannot be read it is SCRUB_FAILED_TEXT, never the raw text. Never throws.
+ */
 async function scrubbedResponse(
   submissionId: number,
   serialized: string | null
 ): Promise<string | null> {
   if (serialized == null) return serialized
+  const { SCRUB_FAILED_TEXT, scrubSecretsFor } = await import('./body-secrets.js')
+  let externalApi: number | null | undefined
   try {
     const row = (await db('nivaro_erp_submissions')
       .where({ id: submissionId })
       .first('external_api')) as { external_api?: number | null } | undefined
-    if (row?.external_api == null) return serialized
-    const { scrubSecretsFor } = await import('./body-secrets.js')
-    return await scrubSecretsFor(row.external_api, serialized)
-  } catch {
-    return serialized
+    externalApi = row?.external_api
+  } catch (err) {
+    // The error text only: the response may hold the very secret the scrub was for.
+    console.warn(
+      `erp-submissions: response for submission ${submissionId} not stored — secret scrub failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`.slice(0, 300)
+    )
+    return SCRUB_FAILED_TEXT
   }
+  // A submission without an API has no body secrets to scrub.
+  if (externalApi == null) return serialized
+  return await scrubSecretsFor(externalApi, serialized)
 }
 
 /**

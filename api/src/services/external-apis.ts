@@ -2,8 +2,11 @@ import { createHash, createHmac } from 'node:crypto'
 import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import {
+  bodySecretsFromConfigText,
   bodySecretsOf,
   isRecord,
+  scrubFailedHeaders,
+  scrubFailedValue,
   scrubSecretValues,
   substituteBodySecrets
 } from './body-secrets.js'
@@ -695,21 +698,37 @@ export async function callExternalApi(
   // goes on the wire — before any token fetch, serialization or signing. An unknown name refuses
   // the call (nothing is sent). `body` itself (the logged / recorded copy) keeps the placeholders.
   // Without the flag a placeholder is sent as the literal text it is.
-  const bodySecrets = bodySecretsOf(cfg)
+  // Strict read for the scrub below: an auth_config that does not parse leaves the secrets
+  // UNKNOWN (not absent), so what we log of the answer fails closed.
+  let bodySecrets: Record<string, string> = bodySecretsOf(cfg)
+  let secretsUnknown = false
+  try {
+    bodySecrets = bodySecretsFromConfigText(row.auth_config)
+  } catch {
+    secretsUnknown = true
+  }
   const wireBody =
     sendsBody && options.bodySecrets === true
       ? substituteBodySecrets(body, bodySecrets, row.name)
       : body
   // A partner may echo a secret back: what we log / record of its answer is scrubbed (always —
   // a caller may have put a secret's value in the body some other way).
+  // Secrets unknown → fail closed: the body becomes SCRUB_FAILED_TEXT, header values are dropped.
   const hasSecrets = Object.keys(bodySecrets).length > 0
-  const logText = (t: string): string => (hasSecrets ? scrubSecretValues(t, bodySecrets) : t)
+  const logText = (t: string): string =>
+    secretsUnknown
+      ? (scrubFailedValue(t) as string)
+      : hasSecrets
+        ? scrubSecretValues(t, bodySecrets)
+        : t
   const logHeaders = (h: Record<string, string>): Record<string, string> =>
-    hasSecrets
-      ? Object.fromEntries(
-          Object.entries(h).map(([k, v]) => [k, scrubSecretValues(v, bodySecrets)])
-        )
-      : h
+    secretsUnknown
+      ? scrubFailedHeaders(h)
+      : hasSecrets
+        ? Object.fromEntries(
+            Object.entries(h).map(([k, v]) => [k, scrubSecretValues(v, bodySecrets)])
+          )
+        : h
   const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
   const auth = await resolveAuth(row.auth_type, cfg, {
     apiId: row.id,

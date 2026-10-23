@@ -25,6 +25,9 @@ import {
   isRecord,
   neutralizeSecretMarkers,
   protectTemplatePlaceholders,
+  SCRUB_FAILED,
+  SCRUB_FAILED_HEADER,
+  SCRUB_FAILED_TEXT,
   scrubSecretsFor,
   scrubSecretValues,
   secretPlaceholder,
@@ -426,5 +429,82 @@ describe('instance overrides', () => {
       n: 1
     })
     expect(await scrubSecretsFor(5, null)).toBe(null)
+  })
+})
+
+describe('scrubSecretsFor fails closed', () => {
+  it('the config read throws: strings get SCRUB_FAILED_TEXT, objects the marker, logged without the value', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(db).mockImplementation((() => {
+      const chain: Record<string, unknown> = {}
+      chain.where = vi.fn(() => chain)
+      chain.first = vi.fn(async () => Promise.reject(new Error('pool timeout')))
+      return chain
+    }) as never)
+    expect(await scrubSecretsFor('MWF', '{"echo":"S3CRET-TOKEN"}')).toBe(SCRUB_FAILED_TEXT)
+    expect(await scrubSecretsFor(5, { echo: ['S3CRET-TOKEN'] })).toEqual(SCRUB_FAILED)
+    expect(await scrubSecretsFor(5, null)).toBeNull()
+    expect(await scrubSecretsFor(5, 42)).toBe(42)
+    expect(warn).toHaveBeenCalled()
+    expect(JSON.stringify(warn.mock.calls)).toContain('pool timeout')
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('S3CRET-TOKEN')
+    warn.mockRestore()
+  })
+
+  it('an unreadable auth_config is "cannot tell", not "no secrets"', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    apiRow.auth_config = '{"body_secrets": {"token": "S3CRET-TOKEN"'
+    expect(await scrubSecretsFor('MWF', 'echo S3CRET-TOKEN')).toBe(SCRUB_FAILED_TEXT)
+    // The lenient readers keep answering "none" for it.
+    expect(await bodySecretNames('MWF')).toEqual([])
+    warn.mockRestore()
+  })
+
+  it('found with no body secrets, or no such API: unchanged (no false redaction)', async () => {
+    apiRow.auth_config = JSON.stringify({ client_id: 'c' })
+    expect(await scrubSecretsFor('MWF', '{"echo":"anything"}')).toBe('{"echo":"anything"}')
+    apiRow.auth_config = null
+    const obj = { echo: 'anything' }
+    expect(await scrubSecretsFor('MWF', obj)).toBe(obj)
+    apiRow = undefined as never
+    expect(await scrubSecretsFor('Missing', 'x')).toBe('x')
+  })
+
+  it('found with the secret: an echo is scrubbed', async () => {
+    expect(await scrubSecretsFor('MWF', '{"echo":"S3CRET-TOKEN"}')).toBe(`{"echo":"${P('token')}"}`)
+  })
+
+  it('callExternalApi with an unreadable auth_config: the call log keeps header names, drops values and the body', async () => {
+    vi.mocked(outboundDetailFields).mockClear()
+    apiRow.auth_config = '{"body_secrets": {"token": "S3CRET-TOKEN"'
+    fetchMock.mockResolvedValueOnce(
+      new Response('{"echo":"S3CRET-TOKEN"}', {
+        status: 400,
+        headers: { 'content-type': 'application/json', 'x-echo': 'got S3CRET-TOKEN' }
+      })
+    )
+    const res = await callExternalApi('MWF', {
+      method: 'POST',
+      path: '/status',
+      body: { note: 'S3CRET-TOKEN' },
+      _log: { triggeredBy: 'erp-submission' }
+    })
+    const log = logInserts[0]
+    expect(log.response_body).toBe(SCRUB_FAILED_TEXT)
+    const headers =
+      typeof log.response_headers === 'string'
+        ? (JSON.parse(log.response_headers) as Record<string, string>)
+        : (log.response_headers as Record<string, string>)
+    expect(Object.keys(headers)).toEqual(expect.arrayContaining(['content-type', 'x-echo']))
+    for (const v of Object.values(headers)) expect(v).toBe(SCRUB_FAILED_HEADER)
+    await vi.waitFor(() => expect(outboundDetailFields).toHaveBeenCalled())
+    const detail = vi.mocked(outboundDetailFields).mock.calls.at(-1)?.[1] as {
+      response_body: string
+      response_headers: Record<string, string>
+    }
+    expect(detail.response_body).toBe(SCRUB_FAILED_TEXT)
+    expect(JSON.stringify(detail.response_headers)).not.toContain('S3CRET-TOKEN')
+    // The caller still gets the real answer (ack parsing reads it).
+    expect(res.body).toEqual({ echo: 'S3CRET-TOKEN' })
   })
 })

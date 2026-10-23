@@ -357,6 +357,10 @@ async function refireFromPrior(
   return { detail: `re-sent: ${outcome.status}${outcome.error ? ` — ${outcome.error}` : ''}` }
 }
 
+/** What Send now did. `code: 'no_body'` = the submission it would resend has no body (the route
+ *  answers 409). */
+export type SendNowResult = { detail: string; code?: 'no_body' }
+
 /**
  * A person clicked "Send now" on one obligation. When the obligation has a
  * submission of its own, that gets re-sent (the ordinary failed/overdue
@@ -373,10 +377,6 @@ async function refireFromPrior(
  * prior request is CLONED into a fresh row (`refireFromPrior`) rather than
  * rewritten, because it is someone else's history.
  */
-/** What Send now did. `code: 'no_body'` = the submission it would resend has no body (the route
- *  answers 409). */
-export type SendNowResult = { detail: string; code?: 'no_body' }
-
 export async function sendNow(obligationId: number, userId: string | null): Promise<SendNowResult> {
   if (!(await remediationEnabled())) {
     return { detail: 'remediation is off for this deployment' }
@@ -542,7 +542,15 @@ export async function runRetryPass(
     }
     if (due > now) continue
     const sent = await resendSubmission(r.id, r.submission_id, null)
-    if (sent.code === 'no_body') continue
+    if (sent.code === 'no_body') {
+      // Nothing to send, ever: classify it 'validation' (as runErpAutoRetries does) so this
+      // pass stops selecting it — otherwise it is revisited on every tick forever.
+      await db('nivaro_erp_submissions')
+        .where({ id: r.submission_id })
+        .update({ error_class: 'validation' })
+        .catch(() => {})
+      continue
+    }
     retried++
   }
   return { retried, gaveUp }

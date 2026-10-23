@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
+import { SCRUB_FAILED_TEXT } from '../../../services/body-secrets.js'
 import { startChain } from '../../../services/chain.js'
 import { resetChainColumnProbe } from '../../../services/chain-columns.js'
 import { resetRequesterColumnProbe } from '../../../services/erp-requester-columns.js'
@@ -69,7 +70,12 @@ describe('propagateSubmissionStatus', () => {
 const mockedDb = () => vi.mocked(db as unknown as (table: string) => unknown)
 
 function updateChain() {
-  const c = { where: vi.fn(), update: vi.fn().mockResolvedValue(1) }
+  // `first` answers the response scrub's submission lookup: no row → no API → nothing to scrub.
+  const c = {
+    where: vi.fn(),
+    update: vi.fn().mockResolvedValue(1),
+    first: vi.fn().mockResolvedValue(undefined)
+  }
   c.where.mockReturnValue(c)
   return c
 }
@@ -379,5 +385,104 @@ describe('applySendOutcome — the requester columns are missing on this databas
     }
     // The submission row's own update still happens too.
     expect(sub.update).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─── applySendOutcome — echoed body secrets fail CLOSED ────────────────────
+
+describe('applySendOutcome — the stored response is scrubbed, and fails closed', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  function wire(opts: { subFirst: () => Promise<unknown>; apiFirst: () => Promise<unknown> }) {
+    const sub = { where: vi.fn(), update: vi.fn().mockResolvedValue(1), first: vi.fn() }
+    sub.where.mockReturnValue(sub)
+    sub.first.mockImplementation(opts.subFirst)
+    const api = { where: vi.fn(), first: vi.fn() }
+    api.where.mockReturnValue(api)
+    api.first.mockImplementation(opts.apiFirst)
+    const att = {
+      where: vi.fn(),
+      first: vi.fn().mockResolvedValue(undefined),
+      insert: vi.fn().mockResolvedValue([1])
+    }
+    att.where.mockReturnValue(att)
+    mockedDb().mockImplementation(((table: string) =>
+      table === 'nivaro_external_apis'
+        ? api
+        : table === 'nivaro_erp_submission_attempts'
+          ? att
+          : sub) as never)
+    return { sub, att }
+  }
+
+  const send = () =>
+    applySendOutcome({
+      submissionId: 9,
+      outcome: {
+        status: 'rejected',
+        external_ref: null,
+        error: 'HTTP 400',
+        response: { echo: 'REAL-TOKEN' },
+        http_status: 400
+      },
+      priorExternalRef: null,
+      priorAttempts: 0
+    })
+
+  it('the API config read throws: the row and the attempt store the marker, never the echo', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { sub, att } = wire({
+      subFirst: async () => ({ external_api: 5 }),
+      apiFirst: async () => Promise.reject(new Error('pool timeout'))
+    })
+    await send()
+    const patch = sub.update.mock.calls[0][0] as Record<string, unknown>
+    expect(patch.response).toBe(SCRUB_FAILED_TEXT)
+    const attempt = att.insert.mock.calls.map((c) => c[0] as Record<string, unknown>)[0]
+    expect(attempt.response).toBe(SCRUB_FAILED_TEXT)
+    expect(JSON.stringify([patch, attempt])).not.toContain('REAL-TOKEN')
+    expect(warn).toHaveBeenCalled()
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('REAL-TOKEN')
+    warn.mockRestore()
+  })
+
+  it('the submission lookup itself throws: still the marker', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { sub } = wire({
+      subFirst: async () => Promise.reject(new Error('db hiccup')),
+      apiFirst: async () => ({ id: 5, name: 'MWF', auth_config: null })
+    })
+    await send()
+    expect((sub.update.mock.calls[0][0] as Record<string, unknown>).response).toBe(
+      SCRUB_FAILED_TEXT
+    )
+    warn.mockRestore()
+  })
+
+  it('the API has no body secrets: the response is stored unchanged', async () => {
+    const { sub } = wire({
+      subFirst: async () => ({ external_api: 5 }),
+      apiFirst: async () => ({ id: 5, name: 'MWF', auth_config: '{"client_id":"c"}' })
+    })
+    await send()
+    expect((sub.update.mock.calls[0][0] as Record<string, unknown>).response).toBe(
+      JSON.stringify({ echo: 'REAL-TOKEN' })
+    )
+  })
+
+  it('the API has the secret: the echo is stored as its placeholder', async () => {
+    const { sub, att } = wire({
+      subFirst: async () => ({ external_api: 5 }),
+      apiFirst: async () => ({
+        id: 5,
+        name: 'MWF',
+        auth_config: JSON.stringify({ body_secrets: { token: 'REAL-TOKEN' } })
+      })
+    })
+    await send()
+    const patch = sub.update.mock.calls[0][0] as Record<string, unknown>
+    expect(patch.response).toBe(JSON.stringify({ echo: '⟦nvr-secret:token⟧' }))
+    const attempt = att.insert.mock.calls.map((c) => c[0] as Record<string, unknown>)[0]
+    expect(attempt.response).toBe(patch.response)
   })
 })

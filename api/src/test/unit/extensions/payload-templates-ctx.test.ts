@@ -14,18 +14,24 @@ vi.mock('../../../db/index.js', () => {
   return { db }
 })
 
-vi.mock('../../../services/body-secrets.js', () => ({
-  hasBodySecret: vi.fn(async (api: string, name: string) => {
-    if (api === 'Broken') throw new Error('config unreadable')
-    return api === 'MWF' && name === 'token'
-  }),
-  scrubSecretsFor: vi.fn(async (api: string, value: unknown) => {
-    if (api === 'Broken') throw new Error('config unreadable')
-    return api === 'MWF'
-      ? JSON.parse(JSON.stringify(value).replaceAll('S3CRET', '⟦nvr-secret:token⟧'))
-      : value
-  })
-}))
+// hasBodySecret is faked; scrubSecretsFor is faked for MWF and REAL for every other API, so a
+// lookup there hits the throwing db above — the "cannot tell" path end to end.
+vi.mock('../../../services/body-secrets.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../services/body-secrets.js')>()
+  return {
+    ...actual,
+    hasBodySecret: vi.fn(async (api: string, name: string) => {
+      if (api === 'Broken') throw new Error('config unreadable')
+      return api === 'MWF' && name === 'token'
+    }),
+    scrubSecretsFor: vi.fn(async (api: string, value: unknown) => {
+      if (api === 'Throws') throw new Error('unexpected')
+      return api === 'MWF'
+        ? JSON.parse(JSON.stringify(value).replaceAll('S3CRET', '⟦nvr-secret:token⟧'))
+        : actual.scrubSecretsFor(api, value)
+    })
+  }
+})
 
 const svc = vi.hoisted(() => ({
   register: vi.fn(async (_owner: string, def: { key?: string }) => {
@@ -44,6 +50,7 @@ vi.mock('../../../services/payload-templates/index.js', () => ({
 }))
 
 import { registrationMembers } from '../../../extensions/loader.js'
+import { SCRUB_FAILED, SCRUB_FAILED_TEXT } from '../../../services/body-secrets.js'
 
 const def = {
   key: 'mwf-ir-order',
@@ -106,13 +113,25 @@ describe('ctx.payloadTemplates', () => {
     await expect(m.payloadTemplates.hasBodySecret('Broken', 'token')).resolves.toBe(false)
   })
 
-  it('scrubs a response for storage through core, the value unchanged when it cannot tell', async () => {
+  it('scrubs a response for storage through core; the marker, never the value, when it cannot tell', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { m } = members()
     await expect(m.payloadTemplates.scrubResponse('MWF', { echo: 'x S3CRET' })).resolves.toEqual({
       echo: 'x ⟦nvr-secret:token⟧'
     })
-    await expect(m.payloadTemplates.scrubResponse('Broken', { echo: 'S3CRET' })).resolves.toEqual({
-      echo: 'S3CRET'
-    })
+    // The API config read throws (no database here): the marker, for objects and strings.
+    await expect(m.payloadTemplates.scrubResponse('Broken', { echo: 'S3CRET' })).resolves.toEqual(
+      SCRUB_FAILED
+    )
+    await expect(m.payloadTemplates.scrubResponse('Broken', '{"echo":"S3CRET"}')).resolves.toBe(
+      SCRUB_FAILED_TEXT
+    )
+    // Even a throw inside core never hands the raw value back.
+    await expect(m.payloadTemplates.scrubResponse('Throws', { echo: 'S3CRET' })).resolves.toEqual(
+      SCRUB_FAILED
+    )
+    await expect(m.payloadTemplates.scrubResponse('Broken', null)).resolves.toBeNull()
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('S3CRET')
+    warn.mockRestore()
   })
 })

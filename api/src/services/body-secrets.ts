@@ -144,23 +144,103 @@ function scrubDeep(v: unknown, secrets: Record<string, string>): unknown {
 }
 
 /**
- * `value` with every body secret of this API (instance-resolved) put back as its placeholder —
- * for what gets STORED from a partner's answer (nivaro_erp_submissions.response, attempt rows).
- * Never use it on the body handed back to a caller (ack parsing reads that). A failed lookup
- * returns the value unchanged; it never throws.
+ * What is STORED in place of a partner answer whose body secrets could not be checked (the API's
+ * config could not be read at that moment): never the raw value, which may echo a credential.
  */
-export async function scrubSecretsFor<T>(apiNameOrId: string | number, value: T): Promise<T> {
+export const SCRUB_FAILED: Readonly<{ _scrub_failed: true }> = Object.freeze({
+  _scrub_failed: true as const
+})
+export type ScrubFailed = { _scrub_failed: true }
+/** SCRUB_FAILED as stored in a text column (`{"_scrub_failed":true}`). */
+export const SCRUB_FAILED_TEXT = JSON.stringify(SCRUB_FAILED)
+/** A logged response header's value when the scrub could not run: names stay, values never do. */
+export const SCRUB_FAILED_HEADER = '[not stored: secret scrub failed]'
+
+/**
+ * The fail-closed stand-in for `value`: a string becomes SCRUB_FAILED_TEXT, an object / array /
+ * anything else that can carry text becomes a fresh `{ _scrub_failed: true }`. null / undefined,
+ * numbers, booleans and bigints cannot hold a secret's text and pass through.
+ */
+export function scrubFailedValue<T>(value: T): T | ScrubFailed {
   if (value === null || value === undefined) return value
-  try {
-    const secrets = await resolvedSecrets(apiNameOrId)
-    if (Object.keys(secrets).length === 0) return value
-    return scrubDeep(value, secrets) as T
-  } catch {
+  if (typeof value === 'string') return SCRUB_FAILED_TEXT as T
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint')
     return value
+  return { ...SCRUB_FAILED }
+}
+
+/** Response headers to log when the scrub could not run: every name kept, every value dropped. */
+export function scrubFailedHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.keys(headers).map((k) => [k, SCRUB_FAILED_HEADER]))
+}
+
+/** An API's auth_config text could not be read, so its body secrets are unknown. */
+export class BodySecretsUnreadableError extends Error {
+  constructor() {
+    super('auth_config is not readable JSON')
+    this.name = 'BodySecretsUnreadableError'
   }
 }
 
-async function resolvedSecrets(apiNameOrId: string | number): Promise<Record<string, string>> {
+/**
+ * The body secrets in an auth_config TEXT, strictly: empty / absent config = none; text that
+ * does not parse throws BodySecretsUnreadableError (the secrets are unknown, not absent).
+ */
+export function bodySecretsFromConfigText(text: string | null | undefined): Record<string, string> {
+  if (text == null || String(text).trim() === '') return {}
+  let cfg: unknown
+  try {
+    cfg = JSON.parse(String(text))
+  } catch {
+    throw new BodySecretsUnreadableError()
+  }
+  return bodySecretsOf(isRecord(cfg) ? cfg : null)
+}
+
+/**
+ * `value` with every body secret of this API (instance-resolved) put back as its placeholder —
+ * for what gets STORED from a partner's answer (nivaro_erp_submissions.response, attempt rows).
+ * Never use it on the body handed back to a caller (ack parsing reads that).
+ *
+ * Fails CLOSED: when the API's secrets cannot be resolved (the config read throws, or its
+ * auth_config is unreadable) it returns the SCRUB_FAILED stand-in (scrubFailedValue) and logs
+ * the failure without the value. An API that is found and has no body secrets (or no such API)
+ * returns the value unchanged. Never throws.
+ */
+export async function scrubSecretsFor(apiNameOrId: string | number, value: string): Promise<string>
+export async function scrubSecretsFor(
+  apiNameOrId: string | number,
+  value: string | null
+): Promise<string | null>
+export async function scrubSecretsFor<T>(
+  apiNameOrId: string | number,
+  value: T
+): Promise<T | ScrubFailed>
+export async function scrubSecretsFor<T>(
+  apiNameOrId: string | number,
+  value: T
+): Promise<T | ScrubFailed> {
+  if (value === null || value === undefined) return value
+  let secrets: Record<string, string>
+  try {
+    secrets = await resolvedSecrets(apiNameOrId, true)
+  } catch (err) {
+    // The error text only: the value may hold the very secret the scrub was for.
+    console.warn(
+      `body-secrets: response for API ${String(apiNameOrId).slice(0, 100)} not stored — secret scrub failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`.slice(0, 300)
+    )
+    return scrubFailedValue(value)
+  }
+  if (Object.keys(secrets).length === 0) return value
+  return scrubDeep(value, secrets) as T
+}
+
+async function resolvedSecrets(
+  apiNameOrId: string | number,
+  strict = false
+): Promise<Record<string, string>> {
   const byId = typeof apiNameOrId === 'number' || /^\d+$/.test(String(apiNameOrId))
   const stored = await db('nivaro_external_apis')
     .where(byId ? { id: Number(apiNameOrId) } : { name: apiNameOrId })
@@ -169,13 +249,12 @@ async function resolvedSecrets(apiNameOrId: string | number): Promise<Record<str
   // Lazy: external-apis.ts imports this module.
   const { resolveInstanceRow } = await import('./external-apis.js')
   const row = resolveInstanceRow(stored)
-  let cfg: Record<string, unknown> | null = null
+  if (strict) return bodySecretsFromConfigText(row.auth_config)
   try {
-    cfg = row.auth_config ? JSON.parse(row.auth_config) : null
+    return bodySecretsFromConfigText(row.auth_config)
   } catch {
-    cfg = null
+    return {}
   }
-  return bodySecretsOf(cfg)
 }
 
 /** Names of the body secrets this API has on THIS instance (overrides folded in). Never values. */

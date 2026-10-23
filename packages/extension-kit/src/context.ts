@@ -295,8 +295,11 @@ export interface ExtensionContext {
     hasBodySecret(apiName: string, name: string): Promise<boolean>
     /** A partner's answer with every body secret of that API (instance-resolved) put back as
      *  its `⟦nvr-secret:<name>⟧` placeholder — for what an extension STORES from a response
-     *  (a partner may echo the token). Never for the value ack parsing reads. Returns the value
-     *  unchanged when it cannot tell; never throws. Absent on cores before it shipped. */
+     *  (a partner may echo the token). Never for the value ack parsing reads. Never returns the
+     *  raw value when it cannot tell (the API's config cannot be read): returns
+     *  `{ _scrub_failed: true }` instead (a string value gets it as JSON text,
+     *  `'{"_scrub_failed":true}'`). An API with no body secrets gets the value unchanged. Never
+     *  throws. Absent on cores before it shipped. */
     scrubResponse<T>(apiName: string, value: T): Promise<T>
   }
   /** Custom notification delivery channels (SMS, Slack, Teams…). */
