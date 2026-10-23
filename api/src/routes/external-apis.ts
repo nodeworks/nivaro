@@ -217,6 +217,28 @@ function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unk
 }
 
 /**
+ * The first body-secret name in an auth_config / instance overrides that breaks SECRET_NAME_RE.
+ * Only names being SET are judged: a removal (null / '' / non-string) and a masked echo of a
+ * stored name pass, so an old bad name can always be cleaned up.
+ */
+function badBodySecretName(authConfig: unknown, overrides: unknown): string | null {
+  const names = (cfg: unknown): string[] =>
+    isRecord(cfg) && isRecord(cfg.body_secrets)
+      ? Object.entries(cfg.body_secrets)
+          .filter(([, v]) => typeof v === 'string' && v !== '' && v !== MASK)
+          .map(([n]) => n)
+      : []
+  const all = [...names(authConfig)]
+  if (isRecord(overrides)) {
+    for (const o of Object.values(overrides)) all.push(...names(isRecord(o) ? o.auth_config : null))
+  }
+  const bad = all.find((n) => !SECRET_NAME_RE.test(n))
+  return bad === undefined
+    ? null
+    : `Secret name '${bad}': Secret names use letters, digits, - and _`
+}
+
+/**
  * The body_secrets map to store after an edit (undefined = store none):
  * - an object: per name, a still-masked value keeps the stored secret, a mask with nothing
  *   stored behind it is dropped (never saved as the mask), a name absent — or set to null / '' /
@@ -225,19 +247,6 @@ function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unk
  * - anything else (absent, or a string — the instance-override editor flattens nested objects to
  *   text) keeps the stored map, so an unrelated auth edit never wipes the body secrets.
  */
-/** The first body-secret name in an auth_config / instance overrides that breaks SECRET_NAME_RE. */
-function badBodySecretName(authConfig: unknown, overrides: unknown): string | null {
-  const names = (cfg: unknown): string[] =>
-    isRecord(cfg) && isRecord(cfg.body_secrets) ? Object.keys(cfg.body_secrets) : []
-  const all = [...names(authConfig)]
-  if (isRecord(overrides))
-    for (const o of Object.values(overrides)) all.push(...names(isRecord(o) ? o.auth_config : null))
-  const bad = all.find((n) => !SECRET_NAME_RE.test(n))
-  return bad === undefined
-    ? null
-    : `Secret name '${bad}': Secret names use letters, digits, - and _`
-}
-
 function nextBodySecrets(
   incoming: unknown,
   existing: unknown

@@ -123,6 +123,42 @@ describe('external API body secrets — read masking', () => {
 })
 
 describe('external API body secrets — PATCH', () => {
+  it('PATCH lets a bad name be removed (null / empty / masked echo) but not set', async () => {
+    const app = buildApp()
+    for (const v of [null, '', MASK]) {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/3',
+        payload: { auth_config: { body_secrets: { 'old name': v } } }
+      })
+      expect(res.statusCode).toBe(200)
+    }
+    const bad = await app.inject({
+      method: 'PATCH',
+      url: '/3',
+      payload: {
+        instance_overrides: { production: { auth_config: { body_secrets: { 'a b': 'x' } } } }
+      }
+    })
+    expect(bad.statusCode).toBe(400)
+    await app.close()
+  })
+  it('POST refuses a body secret name outside letters, digits, - and _', async () => {
+    const app = buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/',
+      payload: {
+        name: 'X',
+        base_url: 'https://x.test',
+        auth_config: { body_secrets: { 'a b': 'x' } }
+      }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toContain('Secret names use letters, digits, - and _')
+    await app.close()
+  })
+
   it('PATCH refuses a body secret name outside letters, digits, - and _', async () => {
     const app = buildApp()
     const res = await app.inject({

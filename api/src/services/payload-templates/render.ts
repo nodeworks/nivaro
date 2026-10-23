@@ -1,5 +1,5 @@
 import { payloadLiquid } from '../payload-filters.js'
-import { makeSecretTokens, neutralizeSecretMarkers } from '../secret-markers.js'
+import { makeSecretTokens, neutralizeSecretMarkers, SECRET_NAME_RE } from '../secret-markers.js'
 import { evaluateMap } from './evaluate.js'
 import type { Field, MapSpec, Problem } from './types.js'
 
@@ -48,7 +48,6 @@ export function blockingProblems(problems: Problem[]): Problem[] {
 
 const TOKEN_VAR = '__secret_token'
 const USED_VAR = '__secret_used'
-const NAME_RE = /^[A-Za-z0-9_.-]+$/
 
 // Registered once on the shared engine at first use. Safe: the filter is inert
 // (returns '') unless the render scope carries this render's token factory, so
@@ -60,10 +59,11 @@ function ensureSecretFilter(): void {
   payloadLiquid().registerFilter('secret', function (this: any, v: unknown) {
     const name = String(v ?? '')
     const minter = this?.context?.getSync?.([TOKEN_VAR])
-    if (typeof minter?.token !== 'function' || !NAME_RE.test(name)) return ''
+    if (typeof minter?.token !== 'function') return ''
+    // Recorded even when invalid, so renderCode can report it instead of a silent ''.
     const used = this.context.getSync([USED_VAR])
     if (Array.isArray(used)) used.push(name)
-    return minter.token(name)
+    return SECRET_NAME_RE.test(name) ? minter.token(name) : ''
   })
 }
 
@@ -177,10 +177,17 @@ async function renderCode(
   }
   const value = tokens.finish(parsed)
   const landed = tokens.used()
+  const asked = new Set([...used, ...landed, ...scanSecretNames(body)])
+  for (const n of asked) {
+    if (!SECRET_NAME_RE.test(n)) {
+      problems.push(err('', '', `Secret name '${n}': Secret names use letters, digits, - and _`))
+    }
+  }
   if (opts.secretNames) {
     const have = new Set(opts.secretNames)
-    for (const n of new Set([...used, ...landed, ...scanSecretNames(body)])) {
-      if (!have.has(n)) problems.push(err('', '', `This API has no \`${n}\` secret yet`))
+    for (const n of asked) {
+      if (SECRET_NAME_RE.test(n) && !have.has(n))
+        problems.push(err('', '', `This API has no \`${n}\` secret yet`))
     }
   }
   return { body: value as Record<string, unknown>, problems, values: {} }
