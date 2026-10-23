@@ -16,7 +16,7 @@ export const payloadTemplates: DocSection = {
         '**Draft** — the working copy. Autosaves; it never reaches a partner. The header shows an amber "Draft — not live" chip while it differs from the live version.',
         '**Publish** — needs a note and shows a before/after payload diff for a real record. If recent records would fail, the panel asks you to confirm ("Publish anyway — N records would fail"). Every publish is an immutable version.',
         '**History** — any version can be restored as the draft. **Reset to default** restores the file default an extension registered.',
-        '**Conflicts** — drafts use a revision counter; saving over someone else\'s newer draft, or over a version published since you opened the page, is refused with a conflict banner (HTTP 409) so you can reload.',
+        "**Conflicts** — drafts use a revision counter; saving over someone else's newer draft, or over a version published since you opened the page, is refused with a conflict banner (HTTP 409) so you can reload.",
         '**Sharing** — one template can be used by many transitions and code pushes. The header lists them under "Used by".'
       ]
     },
@@ -67,7 +67,7 @@ export const payloadTemplates: DocSection = {
     { type: 'h2', id: 'pt-code', text: 'Code mode and Convert' },
     {
       type: 'p',
-      text: 'A template can be in **code** mode: Liquid text that renders to JSON, with the same engine, filters and scope as an inline erp_submit `payload_template`, plus the locked-key and rule checks on the parsed result. A map template\'s **Code** tab shows the spec JSON (schema-validated on save) and **Convert to Liquid**. Convert generates Liquid, renders the map and the Liquid against the recent-records set and refuses unless every body is identical, listing the differing paths. Conversion is one way: a code template has no field map. A draft\'s mode changes only through Convert.'
+      text: "A template can be in **code** mode: Liquid text that renders to JSON, with the same engine, filters and scope as an inline erp_submit `payload_template`, plus the locked-key and rule checks on the parsed result. A map template's **Code** tab shows the spec JSON (schema-validated on save) and **Convert to Liquid**. Convert generates Liquid, renders the map and the Liquid against the recent-records set and refuses unless every body is identical, listing the differing paths. Conversion is one way: a code template has no field map. A draft's mode changes only through Convert."
     },
     {
       type: 'warn',
@@ -77,16 +77,16 @@ export const payloadTemplates: DocSection = {
     {
       type: 'ul',
       items: [
-        '**Preview** — pick any record of the template\'s collection (search by id or name; newest by default). The JSON pane toggles **Draft · Live · Diff**. The preview builds the record scope exactly as the push does.',
+        "**Preview** — pick any record of the template's collection (search by id or name; newest by default). The JSON pane toggles **Draft · Live · Diff**. The preview builds the record scope exactly as the push does: `acting_user` is read from the user record for you, the way a transition push reads it for whoever moved the record, and a template whose extension builds its own scope previews without one (that push sends none).",
         '**Problems** list under the rows and the JSON: unknown path on this record, duplicate or empty key, type mismatch, rule failure, missing body secret, list source that is not a list, Liquid errors with the message.',
         '**Check recent records** — renders the newest 20 records (in chunks, with an N / M counter) and lists which fail and why. A record the sender would skip is not counted as a failure.',
-        '**Data** tab — the lookups the template can read. An erp_submit template shows the referencing action\'s context read-only plus its own editable lookups; a code-built template shows the registrar\'s description of its variables.'
+        "**Data** tab — the lookups the template can read. An erp_submit template shows the referencing action's context read-only plus its own editable lookups; a code-built template shows the registrar's description of its variables."
       ]
     },
     { type: 'h2', id: 'pt-push-checks', text: 'What happens at push time' },
     {
       type: 'p',
-      text: 'After the published template renders, locked keys and per-field checks run. A failure is a recorded failed submission (message names the key and rule) and the obligation resolves failed; nothing is sent. A template that has never been published also blocks the push. Pushes that already stored a body re-send that stored body on retry.'
+      text: 'After the published template renders, locked keys and per-field checks run. A failure is a recorded failed submission (message names the key and rule) and the obligation resolves failed; nothing is sent. A template that has never been published also blocks the push. A failed render is recorded with no body and the `validation` error class, so no retry ladder picks it up, and every resend (Retry, Bulk retry, Send now, the retry sweeps) refuses it with 409 `no_body` ("This submission has no body to resend"). Pushes that already stored a body re-send that stored body on retry.'
     },
     { type: 'h2', id: 'pt-body-secrets', text: 'Body secrets' },
     {
@@ -129,11 +129,14 @@ const { body, problems, version } = await ctx.payloadTemplates.render(key, scope
 await ctx.callExternalApi('MWF', { method: 'POST', body, bodySecrets: true })
 
 // Skip a push when the credential is not configured
-if (!(await ctx.payloadTemplates.hasBodySecret('MWF', 'token'))) return`
+if (!(await ctx.payloadTemplates.hasBodySecret('MWF', 'token'))) return
+
+// Before STORING a partner answer: body secrets back to their placeholders
+const stored = await ctx.payloadTemplates.scrubResponse('MWF', res.body)`
     },
     {
       type: 'p',
-      text: 'Validate before side effects: a throw inside a `register()` call kills the extension\'s whole register. The seed is hashed; when the shipped default later differs, the editor shows "ships a newer default" with a diff and **Use as draft**. File changes never go live by themselves. A registered template cannot be deleted from the UI. Types are mirrored in `@nivaro/extension-kit`.'
+      text: 'Validate before side effects: a throw inside a `register()` call kills the extension\'s whole register. The seed is hashed; when the shipped default later differs, the editor shows "ships a newer default" with a diff and **Use as draft**. Declared `lookups` follow the code only while the template still holds its seed; once someone has published from the editor, changed lookups also show as a newer default (**Reset to default** brings back the body and lookups together). File changes never go live by themselves. A registered template cannot be deleted from the UI. Types are mirrored in `@nivaro/extension-kit`.'
     },
     { type: 'h2', id: 'pt-routes', text: 'REST routes' },
     {
@@ -144,31 +147,49 @@ if (!(await ctx.payloadTemplates.hasBodySecret('MWF', 'token'))) return`
       type: 'table',
       head: ['Route', 'Purpose'],
       rows: [
-        ['`GET /?external_api=`', 'List with status (live / draft changes / unpublished), version, used-by count, newer-default flag'],
+        [
+          '`GET /?external_api=`',
+          'List with status (live / draft changes / unpublished), version, used-by count, newer-default flag'
+        ],
         ['`GET /:key`', 'One template with draft, published version, used-by, default info'],
         ['`POST /`', 'Create `{key, label, external_api, endpoint_path, collection, mode, body}`'],
-        ['`DELETE /:key`', 'Refused (409) when an extension registers it or transitions still use it'],
-        ['`PUT /:key/draft`', '`{mode, body, base_rev, base_published_version?}`; 409 `stale` returns the current row'],
+        [
+          '`DELETE /:key`',
+          'Refused (409) when an extension registers it or transitions still use it'
+        ],
+        [
+          '`PUT /:key/draft`',
+          '`{mode, body, base_rev, base_published_version?}`; 409 `stale` returns the current row'
+        ],
         ['`PUT /:key/lookups`', 'Template-level lookups, validated like erp_submit context'],
-        ['`POST /:key/preview`', '`{id, which: draft|published, draft?}` render one record with problems'],
+        [
+          '`POST /:key/preview`',
+          '`{id, which: draft|published, draft?}` render one record with problems'
+        ],
         ['`GET /:key/recent`', 'The newest record ids Check renders'],
-        ['`POST /:key/check`', '`{which, limit?, ids?}` render recent records (default 20) and list failures'],
+        [
+          '`POST /:key/check`',
+          '`{which, limit?, ids?}` render recent records (default 20) and list failures'
+        ],
         ['`GET /:key/record-search?q=`', 'Record picker for previews'],
         ['`POST /:key/publish`', '`{base_rev, note}` (note required)'],
         ['`GET /:key/versions`, `GET /:key/versions/:v`', 'History'],
         ['`POST /:key/versions/:v/restore`', 'Restore a version as the draft'],
         ['`POST /:key/reset-default`', 'Reset the draft to the registered default'],
-        ['`POST /:key/convert`', '`{base_rev}` map to Liquid; 422 with differing paths when not identical']
+        [
+          '`POST /:key/convert`',
+          '`{base_rev}` map to Liquid; 422 with differing paths when not identical'
+        ]
       ]
     },
     {
       type: 'p',
-      text: 'Collections whose names start with `nivaro_` or `directus_` can never be a template\'s record type or a lookup. `/payload-templates/:key` in the admin redirects to the owning API\'s editor, which is where config search links.'
+      text: "Collections whose names start with `nivaro_` or `directus_` can never be a template's record type or a lookup. `/payload-templates/:key` in the admin redirects to the owning API's editor, which is where config search links."
     },
     { type: 'h2', id: 'pt-environments', text: 'Environments and promotion' },
     {
       type: 'p',
-      text: 'Templates, versions and drafts are configuration: they ride config snapshots, Config Diff and promotion between environments. Where a nightly promotion replaces them, set `PAYLOAD_EDIT_WARNING` (for example "Payload templates here are replaced every night from development. Make lasting changes on development.") to show a banner on the list, the API\'s Payloads card and the editor. Editing drafts does not move the config epoch; publish, restore and reset do.'
+      text: 'Templates, versions and drafts are configuration: they ride config snapshots, Config Diff and promotion between environments, and every row restores by id (a restore that removes a template removes its draft and versions first). Where a nightly promotion replaces them, set `PAYLOAD_EDIT_WARNING` (for example "Payload templates here are replaced every night from development. Make lasting changes on development.") to show a banner on the list, the API\'s Payloads card and the editor. Editing drafts does not move the config epoch; publish, restore and reset do.'
     }
   ]
 }

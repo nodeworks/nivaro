@@ -106,4 +106,27 @@ describe('recordSubmission — the row must never be lost to a missing column (T
     expect(row).not.toHaveProperty('requested_by')
     expect(row).not.toHaveProperty('requested_via')
   })
+
+  it('records a failed row with no body (a template that would not render) as validation', async () => {
+    ;(db as unknown as SchemaDb).schema = { hasColumn: vi.fn().mockResolvedValue(false) }
+    const table = fakeSubmissionsTable()
+    vi.mocked(db).mockReturnValue(table as unknown as ReturnType<typeof db>)
+    const { classifyError } = await import('../../../services/integration-remediation.js')
+
+    await recordSubmission(
+      'workflows',
+      '1003',
+      9,
+      '/update_workflow.php',
+      null,
+      'failed',
+      "Payload template 'x' rendered no body"
+    )
+
+    const row = table.insert.mock.calls[0][0] as Record<string, unknown>
+    // Never on a retry ladder: there is nothing to resend.
+    expect(row.error_class).toBe('validation')
+    expect(classifyError).not.toHaveBeenCalled()
+    expect(JSON.parse(String(row.payload))).toMatchObject({ body: null, secret_paths: [] })
+  })
 })

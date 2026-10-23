@@ -274,11 +274,19 @@ export function registeredDef(key: string): RegisteredPayloadTemplate | null {
   return registries.get(currentTenantKey())?.get(key) ?? registries.get('')?.get(key) ?? null
 }
 
-/** True when the registrar ships a default that differs from the one this row was seeded with. */
-export function hasNewerDefault(row: Pick<TemplateRow, 'key' | 'default_hash'>): boolean {
+/**
+ * True when the registrar ships a default that differs from the one this row was seeded with —
+ * or, given the row's published lookups, when the lookups it declares differ from them (a
+ * declaration changed after someone published; registration leaves those alone). Reset to
+ * default + publish clears both.
+ */
+export function hasNewerDefault(
+  row: Pick<TemplateRow, 'key' | 'default_hash'> & Partial<Pick<TemplateRow, 'lookups'>>
+): boolean {
   const def = registeredDef(row.key)
   if (!def) return false
-  return hashBody(def.default.body) !== row.default_hash
+  if (hashBody(def.default.body) !== row.default_hash) return true
+  return 'lookups' in row && !sameLookups(row.lookups, def.lookups ?? null)
 }
 
 function validateDef(owner: string, def: PayloadTemplateDef): void {
@@ -342,6 +350,16 @@ export async function registerPayloadTemplate(
   }
 }
 
+/** Whether the template's live version is still its seed: version 1 and no version row a person
+ *  published (seed / registrar rows carry published_by null). */
+async function onlySeedPublished(row: TemplateRow): Promise<boolean> {
+  if (row.published_version !== 1) return false
+  const versions = (await db(V).where({ template_id: row.id }).select('published_by')) as Array<{
+    published_by: string | null
+  }>
+  return versions.every((v) => v.published_by == null)
+}
+
 async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
   const meta = {
     label: def.label,
@@ -355,9 +373,14 @@ async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
   }
   const existing = await getTemplate(def.key)
   if (existing) {
-    // Registrar-owned metadata follows the code — including the PUBLISHED lookups (the template
-    // row's column), which the registrar declares. Draft and published bodies never do, and the
-    // draft row (its body AND its lookups) is never touched here.
+    // Registrar-owned metadata follows the code. Draft and published bodies never do, and the
+    // draft row (its body AND its lookups) is never touched here. The PUBLISHED lookups follow
+    // the code only while the template still holds its seed (never published from the UI): once
+    // someone published, a changed declaration waits behind hasNewerDefault() like a changed
+    // body — pushes read published lookups, and a boot must not change what a person published.
+    const { lookups, ...rest } = meta
+    const lookupsDrift = !sameLookups(existing.lookups, def.lookups ?? null)
+    const followLookups = lookupsDrift && (await onlySeedPublished(existing))
     const drift =
       existing.label !== meta.label ||
       existing.description !== meta.description ||
@@ -366,11 +389,11 @@ async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
       existing.collection !== meta.collection ||
       existing.owner !== owner ||
       !sameJson(existing.locked_keys, def.locked_keys ?? []) ||
-      !sameJson(existing.lookups, def.lookups ?? null)
+      followLookups
     if (drift) {
       await db(T)
         .where({ id: existing.id })
-        .update({ ...meta, updated_at: new Date() })
+        .update({ ...rest, ...(followLookups ? { lookups } : {}), updated_at: new Date() })
       bustTenantCache()
     }
     return
@@ -509,22 +532,34 @@ const currentMode = (row: TemplateRow): PayloadMode | null =>
 /** What one draft write sets; a field left out keeps its current value. */
 type DraftPatch = { mode?: PayloadMode; body?: string; lookups?: Record<string, unknown> | null }
 
+/** Thrown inside writeDraft's transaction to roll it back when the published version moved. */
+const STALE_PUBLISHED = Symbol('stale-published')
+
 /**
  * Write the draft at `base` (0 = no draft row yet → insert, starting from the published body
- * and lookups). Touches the drafts table only. False = `base` is not the current revision
- * (nothing written).
+ * and lookups). Touches the drafts table only. False = `base` is not the current revision, or
+ * (`basePublishedVersion` given) a publish moved the template past the version the editor saw —
+ * nothing written either way.
+ *
+ * With `basePublishedVersion` the draft write and the published-version check share one
+ * transaction, in publishDraft's lock order (draft row, then template row): a publish that got
+ * the draft row first has committed before this reads the template row (stale), and one that
+ * comes after finds the draft rev moved (stale for it). A check outside the write would let a
+ * publish land in between.
  */
 async function writeDraft(
   row: TemplateRow,
   base: number,
   patch: DraftPatch,
-  userId: string | null
+  userId: string | null,
+  basePublishedVersion?: number | null
 ): Promise<boolean> {
   const now = new Date()
   const fields: Record<string, unknown> = {}
   if (patch.mode !== undefined) fields.mode = patch.mode
   if (patch.body !== undefined) fields.body = patch.body
   if (patch.lookups !== undefined) fields.lookups = toJsonStr(patch.lookups)
+  let insert: Record<string, unknown> | null = null
   if (base === 0) {
     const mode = patch.mode ?? row.draft_mode
     const body = patch.body ?? row.draft_body
@@ -533,28 +568,49 @@ async function writeDraft(
         problem('Save a body before changing the lookups')
       ])
     }
-    try {
-      await db(D).insert({
-        template_id: row.id,
-        mode,
-        body,
-        lookups: toJsonStr(patch.lookups !== undefined ? patch.lookups : row.lookups),
-        rev: 1,
-        updated_by: userId ?? null,
-        updated_at: now
-      })
-      return true
-    } catch (e) {
-      // A draft row appeared in between (primary key): stale. Anything else is real.
-      const exists = await db(D).where({ template_id: row.id }).first('template_id')
-      if (exists) return false
-      throw e
+    insert = {
+      template_id: row.id,
+      mode,
+      body,
+      lookups: toJsonStr(patch.lookups !== undefined ? patch.lookups : row.lookups),
+      rev: 1,
+      updated_by: userId ?? null,
+      updated_at: now
     }
   }
-  const n = await db(D)
-    .where({ template_id: row.id, rev: base })
-    .update({ ...fields, rev: base + 1, updated_by: userId ?? null, updated_at: now })
-  return affected(n) > 0
+  const write = async (q: typeof db): Promise<boolean> => {
+    if (insert) {
+      // No id: the drafts table's id is an identity column.
+      await q(D).insert(insert)
+      return true
+    }
+    const n = await q(D)
+      .where({ template_id: row.id, rev: base })
+      .update({ ...fields, rev: base + 1, updated_by: userId ?? null, updated_at: now })
+    return affected(n) > 0
+  }
+  try {
+    if (basePublishedVersion === undefined) return await write(db)
+    const seen = basePublishedVersion == null ? null : Number(basePublishedVersion)
+    return await db.transaction(async (trx) => {
+      if (!(await write(trx as unknown as typeof db))) return false
+      const live = (await trx(T).where({ id: row.id }).first('published_version')) as
+        | { published_version: number | null }
+        | undefined
+      const current = live?.published_version == null ? null : Number(live.published_version)
+      // Someone published since the editor loaded: roll the draft write back.
+      if (current !== seen) throw STALE_PUBLISHED
+      return true
+    })
+  } catch (e) {
+    if (e === STALE_PUBLISHED) return false
+    if (insert) {
+      // A draft row appeared in between (unique template_id): stale. Anything else is real.
+      const exists = await db(D).where({ template_id: row.id }).first('template_id')
+      if (exists) return false
+    }
+    throw e
+  }
 }
 
 /**
@@ -564,7 +620,14 @@ async function writeDraft(
  */
 export async function saveDraft(
   key: string,
-  input: { mode: PayloadMode; body: string; base_rev: number },
+  input: {
+    mode: PayloadMode
+    body: string
+    base_rev: number
+    /** The published version the editor last saw (null = unpublished); a publish since = stale.
+     *  Checked inside the draft write's transaction. Omitted = not checked. */
+    base_published_version?: number | null
+  },
   userId: string | null,
   opts: { convert?: boolean } = {}
 ): Promise<{ ok: true; rev: number } | { ok: false; current: TemplateRow }> {
@@ -580,7 +643,8 @@ export async function saveDraft(
   if (was && was !== input.mode && !(opts.convert && was === 'map' && input.mode === 'code')) {
     throw new PayloadTemplateError('invalid', MODE_CHANGE_MESSAGE, [problem(MODE_CHANGE_MESSAGE)])
   }
-  if (await writeDraft(row, base, { mode: input.mode, body: input.body }, userId)) {
+  const patch = { mode: input.mode, body: input.body }
+  if (await writeDraft(row, base, patch, userId, input.base_published_version)) {
     return { ok: true, rev: base + 1 }
   }
   return { ok: false, current: await requireTemplate(key) }
@@ -593,7 +657,12 @@ export async function saveDraft(
  */
 export async function saveDraftLookups(
   key: string,
-  input: { lookups: Record<string, unknown> | null; base_rev: number },
+  input: {
+    lookups: Record<string, unknown> | null
+    base_rev: number
+    /** As saveDraft: a publish since this version = stale, checked inside the write. */
+    base_published_version?: number | null
+  },
   userId: string | null
 ): Promise<{ ok: true; rev: number } | { ok: false; current: TemplateRow }> {
   const row = await requireTemplate(key)
@@ -604,7 +673,9 @@ export async function saveDraftLookups(
     ])
   }
   const lookups = parseLookups(input.lookups)
-  if (await writeDraft(row, base, { lookups }, userId)) return { ok: true, rev: base + 1 }
+  if (await writeDraft(row, base, { lookups }, userId, input.base_published_version)) {
+    return { ok: true, rev: base + 1 }
+  }
   return { ok: false, current: await requireTemplate(key) }
 }
 

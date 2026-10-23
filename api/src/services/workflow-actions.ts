@@ -466,8 +466,9 @@ export function erpActionGate(
 }
 
 /** The person performing a transition, for the `acting_user.*` values a payload can carry; null
- *  when there is none (automatic transitions) or the row cannot be read. */
-async function actingUser(
+ *  when there is none (automatic transitions) or the row cannot be read. Exported so a template
+ *  preview builds the exact value a push would (services/payload-templates/queries.ts). */
+export async function actingUser(
   userId: string | null | undefined
 ): Promise<Record<string, unknown> | null> {
   if (!userId) return null
@@ -1634,12 +1635,16 @@ export async function recordSubmission(
         ...(await chainFields('nivaro_erp_submissions')),
         // #628 — NULL when this attempt did not fail; otherwise what kind of
         // failure it was, which decides whether a later retry could help.
+        // A failed row with no body is a payload template that refused to render: repeating it
+        // cannot help (and there is nothing to resend), so it is 'validation' — never on a ladder.
         error_class:
-          status === 'failed'
-            ? (
-                await import('./integration-remediation.js')
-              ).classifyError(httpStatus ?? null, responseBody, error)
-            : null,
+          status !== 'failed'
+            ? null
+            : body == null
+              ? 'validation'
+              : (
+                  await import('./integration-remediation.js')
+                ).classifyError(httpStatus ?? null, responseBody, error),
         created_at: now,
         updated_at: now
       })

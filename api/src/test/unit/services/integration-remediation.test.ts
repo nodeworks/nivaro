@@ -535,6 +535,39 @@ describe('sendNow — actually sends (resendSubmission)', () => {
     expect(sendPayload).not.toHaveBeenCalled()
     expect(r.detail).toMatch(/not readable/)
   })
+
+  it('refuses a submission recorded without a body (a payload template that would not render)', async () => {
+    const settings = settingsChain(true)
+    const obligations = chain({
+      first: vi.fn().mockResolvedValue({
+        id: 1,
+        api: 'Partner',
+        collection: 'workflows',
+        item: '1',
+        submission_id: 50
+      })
+    })
+    const submissionRow = chain({
+      first: vi.fn().mockResolvedValue({
+        external_api: 7,
+        payload: JSON.stringify({ endpoint_path: '/orders', body: null, secret_paths: [] }),
+        external_ref: null,
+        attempts: 1
+      })
+    })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return obligations
+      if (table === 'nivaro_erp_submissions') return submissionRow
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const r = await sendNow(1, 'user-1')
+
+    expect(sendPayload).not.toHaveBeenCalled()
+    expect(applySendOutcome).not.toHaveBeenCalled()
+    expect(r).toEqual({ detail: 'This submission has no body to resend', code: 'no_body' })
+  })
 })
 
 describe('runMissingRefirePass — gate on', () => {
@@ -704,6 +737,45 @@ describe('runMissingRefirePass — gate on', () => {
       error: null,
       obligationId: 11
     })
+  })
+
+  it('never re-fires a prior request recorded without a body, and creates no shell row for it', async () => {
+    registerObligationKind(refireableKind())
+    const settings = settingsChain(true)
+    const missingRows = chain({
+      select: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 11, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '2' }
+        ])
+    })
+    const priorLookup = chain({ first: vi.fn().mockResolvedValue({ id: 77 }) })
+    const priorRow = {
+      where: vi.fn(),
+      first: vi.fn().mockResolvedValue({
+        collection: 'workflows',
+        item: '2',
+        external_api: 7,
+        payload: JSON.stringify({ endpoint_path: '/orders', body: null, secret_paths: [] }),
+        change_signature: null
+      }),
+      insert: vi.fn(),
+      update: vi.fn()
+    }
+    priorRow.where.mockReturnValue(priorRow)
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return missingRows
+      if (table === 'nivaro_erp_submissions as es') return priorLookup
+      if (table === 'nivaro_erp_submissions') return priorRow
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const r = await runMissingRefirePass()
+
+    expect(r).toEqual({ refired: 0, queued: 1 })
+    expect(priorRow.insert).not.toHaveBeenCalled()
+    expect(sendPayload).not.toHaveBeenCalled()
   })
 
   it("RULING — never mutates the prior obligation's own submission row: it stays byte-unchanged, and the new row links to the re-firing obligation, not the old one", async () => {

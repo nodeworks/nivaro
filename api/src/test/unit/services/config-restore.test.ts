@@ -388,6 +388,74 @@ describe('applyTablePlans', () => {
   })
 })
 
+describe('applyTablePlans — payload templates (migration 501)', () => {
+  const T = 'nivaro_payload_templates'
+  const V = 'nivaro_payload_template_versions'
+  const D = 'nivaro_payload_template_drafts'
+  type Tables = Record<string, Record<string, SnapshotRow>>
+  const columns = new Map<string, TableColumns>([
+    [T, cols({ id: { type: 'int', identity: true }, key: {}, published_body: {} })],
+    [V, cols({ id: { type: 'int', identity: true }, template_id: { type: 'int' }, version: {} })],
+    [
+      D,
+      cols({ id: { type: 'int', identity: true }, template_id: { type: 'int' }, body: {}, rev: {} })
+    ]
+  ])
+  // The real FKs (NO ACTION) — loadForeignKeys reads them from sys.foreign_keys on apply.
+  const fks: ForeignKey[] = [
+    { child: V, childCol: 'template_id', parent: T, parentCol: 'id', onDelete: 'NO_ACTION' },
+    { child: D, childCol: 'template_id', parent: T, parentCol: 'id', onDelete: 'NO_ACTION' }
+  ]
+
+  it('a restore that deletes a template deletes its draft row (and versions) first', async () => {
+    // The snapshot predates template 3; the live instance has it with a version and a draft.
+    const target: Tables = {
+      [T]: rows({ '1': { id: 1, key: 'kept', published_body: '{}' } }),
+      [V]: rows({ '10': { id: 10, template_id: 1, version: 1 } }),
+      [D]: rows({ '20': { id: 20, template_id: 1, body: '{}', rev: 1 } })
+    }
+    const live: Tables = {
+      [T]: rows({
+        '1': { id: 1, key: 'kept', published_body: '{}' },
+        '3': { id: 3, key: 'gone', published_body: '{}' }
+      }),
+      [V]: rows({
+        '10': { id: 10, template_id: 1, version: 1 },
+        '11': { id: 11, template_id: 3, version: 1 }
+      }),
+      [D]: rows({
+        '20': { id: 20, template_id: 1, body: '{}', rev: 1 },
+        '21': { id: 21, template_id: 3, body: '{}', rev: 4 }
+      })
+    }
+    const plans = [T, V, D].map((t) =>
+      planTable(t, target[t], live[t], columns.get(t) as TableColumns, { deletes: true })
+    )
+    // Drafts carry an identity id now: matched by it, never skipped as keyless.
+    expect(plans.find((p) => p.table === D)?.skipped_keyless).toBe(0)
+    const { trx, log } = fakeTrx()
+    await applyTablePlans(trx, plans, target, live, columns, fks)
+    expect(log.indexOf(`delete ${D} 21`)).toBeGreaterThanOrEqual(0)
+    expect(log.indexOf(`delete ${D} 21`)).toBeLessThan(log.indexOf(`delete ${T} 3`))
+    expect(log.indexOf(`delete ${V} 11`)).toBeLessThan(log.indexOf(`delete ${T} 3`))
+    expect(log).toHaveLength(3)
+  })
+
+  it('a restore that brings a template back inserts it before its draft, ids kept', async () => {
+    const target: Tables = {
+      [T]: rows({ '3': { id: 3, key: 'back', published_body: '{}' } }),
+      [D]: rows({ '21': { id: 21, template_id: 3, body: '{}', rev: 2 } })
+    }
+    const live: Tables = { [T]: rows({}), [D]: rows({}) }
+    const plans = [D, T].map((t) =>
+      planTable(t, target[t], live[t], columns.get(t) as TableColumns, { deletes: true })
+    )
+    const { trx, log } = fakeTrx()
+    await applyTablePlans(trx, plans, target, live, columns, fks)
+    expect(log).toEqual([`identity-insert ${T} 3`, `identity-insert ${D} 21`])
+  })
+})
+
 describe('applyTablePlans — external API instance_overrides (redacted by value)', () => {
   const apiCols = new Map<string, TableColumns>([
     [

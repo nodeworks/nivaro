@@ -1075,8 +1075,10 @@ export function PayloadTemplateEditorPage() {
               draft={editor.draft}
               onDraftChange={editor.change}
               values={draftPreview.data?.values ?? {}}
+              valuesPending={draftPreview.isFetching && !draftPreview.data}
               problems={draftPreview.data?.problems ?? []}
               secretNames={secretNames}
+              secretsHref={apiId != null ? `/external-apis/${apiId}#body-secrets` : null}
             />
           </section>
           <section

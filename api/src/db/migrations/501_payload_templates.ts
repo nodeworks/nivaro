@@ -6,9 +6,10 @@ import { utcNow } from '../dialect.js'
  * partner call: a field map or Liquid text, edited as a draft and published as an immutable
  * version. `published_*` is what senders use, and every publish also lands in
  * nivaro_payload_template_versions. The working copy lives in nivaro_payload_template_drafts
- * (rev = optimistic concurrency) — its own table so editor autosaves never move the config
- * epoch (it is not in config-epoch WATCHED). All three tables are configuration: they ride
- * config snapshots and promote between environments.
+ * (identity id, one row per template by a unique template_id; rev = optimistic concurrency) —
+ * its own table so editor autosaves never move the config epoch (it is not in config-epoch
+ * WATCHED). All three tables are configuration: they ride config snapshots, restore by id and
+ * promote between environments.
  */
 export async function up(knex: Knex): Promise<void> {
   if (!(await knex.schema.hasTable('nivaro_payload_templates'))) {
@@ -58,12 +59,11 @@ export async function up(knex: Knex): Promise<void> {
   }
   if (!(await knex.schema.hasTable('nivaro_payload_template_drafts'))) {
     await knex.schema.createTable('nivaro_payload_template_drafts', (t) => {
-      /** One working copy per template. */
-      t.integer('template_id')
-        .notNullable()
-        .primary()
-        .references('id')
-        .inTable('nivaro_payload_templates')
+      /** Identity key: config snapshots match and restore rows by id (a table without one is
+       *  skipped by restore). Never supplied on insert. */
+      t.increments('id')
+      /** One working copy per template (unique), FK NO ACTION. */
+      t.integer('template_id').notNullable().references('id').inTable('nivaro_payload_templates')
       /** map | code */
       t.string('mode', 10).notNullable()
       t.text('body').notNullable()
@@ -73,6 +73,7 @@ export async function up(knex: Knex): Promise<void> {
       t.integer('rev').notNullable().defaultTo(1)
       t.uuid('updated_by').nullable().references('id').inTable('nivaro_users')
       t.dateTime('updated_at').nullable()
+      t.unique(['template_id'], { indexName: 'ux_nivaro_payload_template_drafts_template_id' })
     })
   }
 }

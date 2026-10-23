@@ -25,6 +25,8 @@ const fake = vi.hoisted(() => {
   }
   const reads: string[] = []
   const failInsert: { table: string | null; err: unknown } = { table: null, err: null }
+  /** What the routes handed the service's draft writes (the published-version check rides in). */
+  const draftInputs: Row[] = []
   const chain = (table: string) => {
     reads.push(table)
     const preds: Array<(r: Row) => boolean> = []
@@ -105,12 +107,13 @@ const fake = vi.hoisted(() => {
   })
   const reset = (seed: Record<string, Row[]>) => {
     reads.length = 0
+    draftInputs.length = 0
     failInsert.table = null
     for (const k of Object.keys(tables)) delete tables[k]
     for (const [k, v] of Object.entries(seed)) tables[k] = v.map((r) => ({ ...r }))
     nextId = 900
   }
-  return { db, tables, reset, reads, failInsert }
+  return { db, tables, reset, reads, failInsert, draftInputs }
 })
 
 const auth = vi.hoisted(() => ({ admin: true }))
@@ -218,11 +221,17 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
         .map((r) => structuredClone(r)),
     saveDraft: async (
       key: string,
-      input: { mode: 'map' | 'code'; body: string; base_rev: number },
+      input: {
+        mode: 'map' | 'code'
+        body: string
+        base_rev: number
+        base_published_version?: number | null
+      },
       _user: string | null,
       opts: { convert?: boolean } = {}
     ) => {
       const r = need(key)
+      fake.draftInputs.push(structuredClone(input))
       if (input.mode === 'map') {
         const v = validateSpec(JSON.parse(input.body), { mode: 'draft' })
         if (!v.ok) throw new PayloadTemplateError('invalid', v.errors.join('; '))
@@ -232,6 +241,13 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
         throw new PayloadTemplateError('invalid', real.MODE_CHANGE_MESSAGE)
       }
       if (r.draft_rev !== input.base_rev) return { ok: false, current: structuredClone(r) }
+      // As the service: checked inside the write, stale when a publish moved past it.
+      if (
+        input.base_published_version !== undefined &&
+        input.base_published_version !== r.published_version
+      ) {
+        return { ok: false, current: structuredClone(r) }
+      }
       Object.assign(r, {
         draft_mode: input.mode,
         draft_body: input.body,
@@ -241,10 +257,21 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
     },
     saveDraftLookups: async (
       key: string,
-      input: { lookups: Record<string, unknown> | null; base_rev: number }
+      input: {
+        lookups: Record<string, unknown> | null
+        base_rev: number
+        base_published_version?: number | null
+      }
     ) => {
       const r = need(key)
+      fake.draftInputs.push(structuredClone(input))
       if (r.draft_rev !== input.base_rev) return { ok: false, current: structuredClone(r) }
+      if (
+        input.base_published_version !== undefined &&
+        input.base_published_version !== r.published_version
+      ) {
+        return { ok: false, current: structuredClone(r) }
+      }
       Object.assign(r, { draft_lookups: input.lookups, draft_rev: r.draft_rev + 1 })
       return { ok: true, rev: r.draft_rev }
     },
@@ -793,6 +820,70 @@ describe('payload template routes', () => {
     }
   })
 
+  it('previews acting_user exactly as the push builds it, for the person previewing', async () => {
+    // The user row, not the session copy (whose email is admin@x.test and has no employee id).
+    Object.assign(fake.tables.nivaro_users[2], { email: 'ada@row.test', employee_id: 'E-7' })
+    const spec = JSON.parse(SPEC) as { fields: Array<Record<string, unknown>> }
+    spec.fields.push(
+      {
+        id: 'f4',
+        key: 'who',
+        type: 'text',
+        value: { source: 'builtin', name: 'acting_user.name' },
+        include: 'always'
+      },
+      {
+        id: 'f5',
+        key: 'mail',
+        type: 'text',
+        value: { source: 'builtin', name: 'acting_user.email' },
+        include: 'always'
+      },
+      {
+        id: 'f6',
+        key: 'emp',
+        type: 'text',
+        value: { source: 'builtin', name: 'acting_user.employee_id' },
+        include: 'always'
+      }
+    )
+    const res = await call('POST', '/mwf-ir-order/preview', {
+      id: '11',
+      which: 'draft',
+      draft: { mode: 'map', body: JSON.stringify(spec) }
+    })
+    expect(res.status).toBe(200)
+    // actingUser() reads the user row, as a transition push does for whoever moved the record.
+    expect(res.body.body).toMatchObject({ who: 'Ada Admin', mail: 'ada@row.test', emp: 'E-7' })
+    expect(fake.reads).toContain('nivaro_users')
+  })
+
+  it('a registrar scope previews without acting_user, like the code-built push', async () => {
+    svc.registered.set('fusion-transfer-order', {
+      key: 'fusion-transfer-order',
+      owner: 'efp-ops',
+      default: { mode: 'map', body: SPEC },
+      scope: async (id: string) => ({ record: { workflow_id: `REG-${id}` }, state: { label: 'X' } })
+    })
+    const spec = JSON.parse(SPEC) as { fields: Array<Record<string, unknown>> }
+    spec.fields.push({
+      id: 'f4',
+      key: 'who',
+      type: 'text',
+      value: { source: 'builtin', name: 'acting_user.email' },
+      include: 'always'
+    })
+    const res = await call('POST', '/fusion-transfer-order/preview', {
+      id: '5',
+      which: 'draft',
+      draft: { mode: 'map', body: JSON.stringify(spec) }
+    })
+    expect(res.status).toBe(200)
+    // The previewing admin is not in the scope (the session has an email): the push has no
+    // acting_user either.
+    expect(res.body.body).toEqual({ workflow_id: 'REG-5', efp_state: 'X', who: null })
+  })
+
   it('builds the plain-record scope with the template lookups when nothing else applies', async () => {
     fake.tables.nivaro_workflow_transitions = []
     const row = svc.rows.get('mwf-ir-order') as FakeRow
@@ -822,6 +913,8 @@ describe('payload template routes', () => {
       draft_updated_by_name: 'Ada Admin'
     })
     expect(row.draft_rev).toBe(3)
+    // The check is the service's, inside the draft write — the route hands the version on.
+    expect(fake.draftInputs.at(-1)).toMatchObject({ base_rev: 3, base_published_version: 1 })
     const ok = await call('PUT', '/mwf-ir-order/draft', {
       mode: 'map',
       body: SPEC,
