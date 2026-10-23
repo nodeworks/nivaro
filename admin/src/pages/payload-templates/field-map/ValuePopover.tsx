@@ -630,7 +630,7 @@ function ValueChipImpl({
             <ChevronDown className='h-3 w-3 shrink-0 text-slate-400' aria-hidden />
           </button>
         </PopoverTrigger>
-        <FmPopoverContent className='w-[460px]' onOpenAutoFocus={(e) => e.preventDefault()}>
+        <FmPopoverContent className='w-[460px]'>
           <ValueEditor value={value} type={type} scope={scope} depth={depth} onChange={onChange} />
         </FmPopoverContent>
       </Popover>
