@@ -127,7 +127,9 @@ export class LiveSocket {
         features: this.o.features ?? [],
         shared_worker: this.o.sharedWorker === true,
         build: 'rtci',
-        tab: `rtci-${this.id}`
+        tab: `rtci-${this.id}`,
+        // Per-socket overrides: { app, build, api, tab, loaded } — sticky refresh / min-build tests.
+        ...(this.o.hello ?? {})
       })
       this.s.emit('auth', { token })
     } catch (e) {

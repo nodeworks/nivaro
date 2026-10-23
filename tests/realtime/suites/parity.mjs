@@ -593,6 +593,50 @@ export async function run({ only }) {
     t.check('config:update reaches a member', !!(await b.next('config:update', () => true, { from: m2, timeoutMs: 6000 })))
   })
 
+  await suite.case('sticky force refresh: an open tab now, a tab that was offline on connect, a newer page not', async (t) => {
+    t.cleanup(fx.closeAll)
+    t.cleanup(() => admin.del('/api/realtime/force-refresh/remembered/all'))
+    const now = Date.now()
+    const open = await fx.sock('alice', { hello: { app: 'rtci', build: '1.0.0', loaded: now - 120_000, tab: `open-${now}` } })
+    const m = open.mark()
+    const r = await admin.post('/api/realtime/force-refresh', { seconds: 30, message: 'sticky rtci', user_ids: [users.alice.id] })
+    t.check('POST force-refresh remembered', r.ok && r.json?.data?.remembered === true, r.json?.data)
+    t.check('open tab gets it now', !!(await open.next('client:force-refresh', () => true, { from: m })))
+    const issued = r.json?.data?.id
+    await sleep(500)
+    // A tab whose page loaded before the instruction (asleep / offline then) connects now.
+    const late = await fx.sock('alice', { hello: { app: 'rtci', build: '1.0.0', loaded: now - 60_000, tab: `late-${now}` } })
+    const got = await late.next('client:force-refresh', () => true, { timeoutMs: 8000 })
+    t.metric('late_payload', got?.p ?? null)
+    t.check('a tab loaded before it gets it when it connects (reason sticky)', got?.p?.reason === 'sticky' && got?.p?.id === issued, got?.p)
+    const fresh = await fx.sock('alice', { hello: { app: 'rtci', build: '1.0.0', loaded: Date.now(), tab: `fresh-${now}` } })
+    await sleep(2500)
+    t.check('a page loaded after it does not', fresh.all('client:force-refresh').length === 0)
+    const other = await fx.sock('bob', { hello: { app: 'rtci', build: '1.0.0', loaded: now - 60_000, tab: `bob-${now}` } })
+    await sleep(2500)
+    t.check('someone else (not targeted) does not', other.all('client:force-refresh').length === 0)
+  })
+
+  await suite.case('minimum build: open tabs below it reload now, connecting tabs below it on connect', async (t) => {
+    t.cleanup(fx.closeAll)
+    t.cleanup(() => admin.del('/api/realtime/min-build/rtci-app'))
+    const now = Date.now()
+    const old1 = await fx.sock('bob', { hello: { app: 'rtci-app', build: '1.0.0', loaded: now - 60_000, tab: `old1-${now}` } })
+    const cur = await fx.sock('carol', { hello: { app: 'rtci-app', build: '2.0.0', loaded: now - 60_000, tab: `cur-${now}` } })
+    const otherApp = await fx.sock('alice', { hello: { app: 'rtci-other', build: '1.0.0', loaded: now - 60_000, tab: `oa-${now}` } })
+    const r = await admin.req('PUT', '/api/realtime/min-build/rtci-app', { build: '2.0.0', seconds: 30, message: 'rtci min' })
+    t.check('PUT min-build 200', r.ok, r.status)
+    t.metric('told_now', r.json?.data ? { sockets: r.json.data.sockets, partial: r.json.data.partial } : null)
+    const now1 = await old1.next('client:force-refresh', (p) => p?.reason === 'min-build', { timeoutMs: 6000 })
+    t.check('open tab on 1.0.0 told now (min-build)', !!now1, old1.all('client:force-refresh').map((e) => e.p))
+    t.check('POST told count includes it (counted across processes)', (r.json?.data?.sockets ?? 0) >= 1, r.json?.data)
+    await sleep(1500)
+    t.check('tab on 2.0.0 not told', cur.all('client:force-refresh').length === 0)
+    t.check('another app not told', otherApp.all('client:force-refresh').length === 0)
+    const late = await fx.sock('bob', { hello: { app: 'rtci-app', build: '1.0.0', loaded: Date.now(), tab: `late-${now}` } })
+    t.check('a tab connecting on 1.0.0 is told on connect', !!(await late.next('client:force-refresh', (p) => p?.reason === 'min-build', { timeoutMs: 8000 })))
+  })
+
   // ── shared worker + diagnostics ──────────────────────────────────────────
   await suite.case('shared worker: worker.js + socket.io.min.js served; hello counted in stats', async (t) => {
     t.cleanup(fx.closeAll)
