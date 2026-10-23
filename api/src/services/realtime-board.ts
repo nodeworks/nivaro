@@ -110,6 +110,48 @@ let liveBoards: BoardLive[] = []
 let statsBoards: BoardStats[] = []
 let liveReadAt = 0
 let readerOn = false
+let peerChange: ((rooms: string[]) => void) | null = null
+
+/**
+ * A realtime process: called with the rooms whose OTHER-process viewers changed after a board
+ * read (record rooms and ops topic rooms), so it can tell its own sockets the new list. A join
+ * or leave on one process is only broadcast with what the others' board said at that moment;
+ * this re-tells the list once the board catches up (same-moment joins, a leave elsewhere).
+ */
+export function onPeerBoardChange(fn: ((rooms: string[]) => void) | null): void {
+  peerChange = fn
+}
+
+/** Room → the other processes' viewers there, one comparable string per room. */
+function peerRoomPrints(boards: readonly BoardLive[]): Map<string, string> {
+  const by = new Map<string, string[]>()
+  for (const b of boards) {
+    if (b.node === INSTANCE_ID) continue
+    for (const [room, list] of [
+      ...Object.entries(b.viewers ?? {}),
+      ...Object.entries(b.topics ?? {})
+    ]) {
+      const cur = by.get(room) ?? []
+      for (const v of list as Array<{ socket: string; id: string; selected?: unknown }>)
+        cur.push(`${b.node}/${v.socket}/${v.id}/${String(v.selected ?? '')}`)
+      by.set(room, cur)
+    }
+  }
+  return new Map([...by].map(([room, list]) => [room, list.sort().join('|')]))
+}
+
+/** Exported for tests: the rooms whose prints differ between two reads. */
+export function changedPeerRooms(
+  before: readonly BoardLive[],
+  after: readonly BoardLive[]
+): string[] {
+  const a = peerRoomPrints(before)
+  const b = peerRoomPrints(after)
+  const out: string[] = []
+  for (const room of new Set([...a.keys(), ...b.keys()]))
+    if (a.get(room) !== b.get(room)) out.push(room)
+  return out
+}
 
 /** Realtime processes: publish this process's share. Idempotent; returns the stop function. */
 export function startBoardPublisher(redis: BoardRedis, collect: () => LocalBoard): () => void {
@@ -194,8 +236,13 @@ export function startBoardReader(redis: BoardRedis, opts: { peers?: boolean } = 
   readerOn = !opts.peers
   const live = async () => {
     try {
+      const before = liveBoards
       liveBoards = await readAll<BoardLive>(redis, 'live')
       liveReadAt = Date.now()
+      if (opts.peers && peerChange) {
+        const rooms = changedPeerRooms(before, liveBoards)
+        if (rooms.length) peerChange(rooms)
+      }
     } catch {
       /* keep the last read; it goes stale and says so */
     }
