@@ -14,6 +14,7 @@ import { authenticate, requireAdmin, requireAuth } from '../middleware/authentic
 import { logActivity } from '../services/activity.js'
 import { registerPortalLinks } from '../services/app-links.js'
 import { registerBriefLine } from '../services/approval-brief-lines.js'
+import { hasBodySecret, scrubFailedValue, scrubSecretsFor } from '../services/body-secrets.js'
 import { currentChain } from '../services/chain.js'
 import { type ChainTable, chainFields } from '../services/chain-columns.js'
 import { beginChainRoot } from '../services/chain-roots.js'
@@ -38,6 +39,10 @@ import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.j
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { registerOpsTask } from '../services/ops-tasks.js'
+import {
+  registerPayloadTemplate,
+  renderPayloadTemplate
+} from '../services/payload-templates/index.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
@@ -117,6 +122,30 @@ function withExtensionLog(extId: string, options?: CallOptions): CallOptions {
   return {
     ...opts,
     _log: { ...opts._log, triggeredBy: opts._log?.triggeredBy ?? `extension:${extId}` }
+  }
+}
+
+/** Whether an external API has a body secret by this name; false when it cannot tell. */
+async function extensionHasBodySecret(apiName: string, name: string): Promise<boolean> {
+  try {
+    return (await hasBodySecret(String(apiName), String(name))) === true
+  } catch {
+    return false
+  }
+}
+
+/** A partner answer with every body secret of that API (instance-resolved) put back as its
+ *  placeholder — what an extension STORES from a response. Fails CLOSED: when core cannot tell
+ *  (the API's config cannot be read) it returns `{ _scrub_failed: true }` (a string value gets
+ *  that marker as JSON text), never the raw value. Never throws. */
+async function extensionScrubResponse<T>(apiName: string, value: T): Promise<T> {
+  try {
+    // scrubSecretsFor already fails closed; the cast is the kit's `Promise<T>` contract, whose
+    // docstring names the marker.
+    return (await scrubSecretsFor(String(apiName), value)) as T
+  } catch {
+    // Defensive only (scrubSecretsFor never throws): still never the raw value.
+    return scrubFailedValue(value) as T
   }
 }
 
@@ -723,6 +752,21 @@ export function registrationMembers(
         itemActionRegistry.register(def)
       }
     },
+    payloadTemplates: {
+      // Validates before any side effect (a bad definition rejects; nothing is registered,
+      // seeded, noted or owned); a database failure while seeding is logged, never thrown.
+      register: async (def) => {
+        await registerPayloadTemplate(extId, def)
+        note('payload-templates')
+        own('payload_templates', `${def.key} · ${def.label}`)
+      },
+      render: async (key, scope) => {
+        const r = await renderPayloadTemplate(key, scope)
+        return { body: r.body, problems: r.problems, version: r.version }
+      },
+      hasBodySecret: (apiName, name) => extensionHasBodySecret(apiName, name),
+      scrubResponse: (apiName, value) => extensionScrubResponse(apiName, value)
+    },
     notificationChannels: {
       register: (def) => {
         note('notification-channels')
@@ -1269,6 +1313,7 @@ async function loadExtension(
     | 'links'
     | 'bulkActions'
     | 'itemActions'
+    | 'payloadTemplates'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'
@@ -1499,6 +1544,7 @@ export async function loadExtensions(
     | 'links'
     | 'bulkActions'
     | 'itemActions'
+    | 'payloadTemplates'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'
@@ -1630,6 +1676,7 @@ export async function loadCloudExtensions(
     | 'traffic'
     | 'bulkActions'
     | 'itemActions'
+    | 'payloadTemplates'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'
@@ -1826,6 +1873,7 @@ export async function scanNewExtensions(
     | 'traffic'
     | 'bulkActions'
     | 'itemActions'
+    | 'payloadTemplates'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'

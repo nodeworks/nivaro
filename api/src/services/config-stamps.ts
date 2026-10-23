@@ -25,6 +25,7 @@ const AREAS: Array<[RegExp, string]> = [
   [/^nivaro_(rules|field_rules|at_risk_rules|sla_rules|alert_definitions)$/, 'rules'],
   [/^nivaro_(custom_queries|widgets)$/, 'queries & widgets'],
   [/^nivaro_(webhooks|integration_contracts)$/, 'integrations'],
+  [/^nivaro_payload_template(s|_versions)$/, 'Payload templates'],
   [
     /^nivaro_(mail_templates|extension_settings|settings_overrides|ai_collection_settings)$/,
     'settings'

@@ -1,6 +1,6 @@
 import type { Knex } from 'knex'
 import { describe, expect, it } from 'vitest'
-import { hashRow, type SnapshotRow } from '../../../services/config-inventory.js'
+import { hashRow, redactRow, type SnapshotRow } from '../../../services/config-inventory.js'
 import {
   applyTablePlans,
   type ColumnInfo,
@@ -385,6 +385,149 @@ describe('applyTablePlans', () => {
     await expect(applyTablePlans(trx, plans, target, live, columns, fks)).rejects.toThrow(
       /update nivaro_workflow_states #6/
     )
+  })
+})
+
+describe('applyTablePlans — payload templates (migration 501)', () => {
+  const T = 'nivaro_payload_templates'
+  const V = 'nivaro_payload_template_versions'
+  const D = 'nivaro_payload_template_drafts'
+  type Tables = Record<string, Record<string, SnapshotRow>>
+  const columns = new Map<string, TableColumns>([
+    [T, cols({ id: { type: 'int', identity: true }, key: {}, published_body: {} })],
+    [V, cols({ id: { type: 'int', identity: true }, template_id: { type: 'int' }, version: {} })],
+    [
+      D,
+      cols({ id: { type: 'int', identity: true }, template_id: { type: 'int' }, body: {}, rev: {} })
+    ]
+  ])
+  // The real FKs (NO ACTION) — loadForeignKeys reads them from sys.foreign_keys on apply.
+  const fks: ForeignKey[] = [
+    { child: V, childCol: 'template_id', parent: T, parentCol: 'id', onDelete: 'NO_ACTION' },
+    { child: D, childCol: 'template_id', parent: T, parentCol: 'id', onDelete: 'NO_ACTION' }
+  ]
+
+  it('a restore that deletes a template deletes its draft row (and versions) first', async () => {
+    // The snapshot predates template 3; the live instance has it with a version and a draft.
+    const target: Tables = {
+      [T]: rows({ '1': { id: 1, key: 'kept', published_body: '{}' } }),
+      [V]: rows({ '10': { id: 10, template_id: 1, version: 1 } }),
+      [D]: rows({ '20': { id: 20, template_id: 1, body: '{}', rev: 1 } })
+    }
+    const live: Tables = {
+      [T]: rows({
+        '1': { id: 1, key: 'kept', published_body: '{}' },
+        '3': { id: 3, key: 'gone', published_body: '{}' }
+      }),
+      [V]: rows({
+        '10': { id: 10, template_id: 1, version: 1 },
+        '11': { id: 11, template_id: 3, version: 1 }
+      }),
+      [D]: rows({
+        '20': { id: 20, template_id: 1, body: '{}', rev: 1 },
+        '21': { id: 21, template_id: 3, body: '{}', rev: 4 }
+      })
+    }
+    const plans = [T, V, D].map((t) =>
+      planTable(t, target[t], live[t], columns.get(t) as TableColumns, { deletes: true })
+    )
+    // Drafts carry an identity id now: matched by it, never skipped as keyless.
+    expect(plans.find((p) => p.table === D)?.skipped_keyless).toBe(0)
+    const { trx, log } = fakeTrx()
+    await applyTablePlans(trx, plans, target, live, columns, fks)
+    expect(log.indexOf(`delete ${D} 21`)).toBeGreaterThanOrEqual(0)
+    expect(log.indexOf(`delete ${D} 21`)).toBeLessThan(log.indexOf(`delete ${T} 3`))
+    expect(log.indexOf(`delete ${V} 11`)).toBeLessThan(log.indexOf(`delete ${T} 3`))
+    expect(log).toHaveLength(3)
+  })
+
+  it('a restore that brings a template back inserts it before its draft, ids kept', async () => {
+    const target: Tables = {
+      [T]: rows({ '3': { id: 3, key: 'back', published_body: '{}' } }),
+      [D]: rows({ '21': { id: 21, template_id: 3, body: '{}', rev: 2 } })
+    }
+    const live: Tables = { [T]: rows({}), [D]: rows({}) }
+    const plans = [D, T].map((t) =>
+      planTable(t, target[t], live[t], columns.get(t) as TableColumns, { deletes: true })
+    )
+    const { trx, log } = fakeTrx()
+    await applyTablePlans(trx, plans, target, live, columns, fks)
+    expect(log).toEqual([`identity-insert ${T} 3`, `identity-insert ${D} 21`])
+  })
+})
+
+describe('applyTablePlans — external API instance_overrides (redacted by value)', () => {
+  const apiCols = new Map<string, TableColumns>([
+    [
+      'nivaro_external_apis',
+      cols({ id: { type: 'int', identity: true }, name: {}, instance_overrides: {} })
+    ]
+  ])
+  const liveRaw = {
+    id: 4,
+    name: 'MWF',
+    instance_overrides: JSON.stringify({
+      production: {
+        base_url: 'https://prod-NEW.example',
+        auth_config: { body_secrets: { token: 'PROD-TOKEN' } }
+      }
+    })
+  }
+  const snapRaw = {
+    id: 4,
+    name: 'MWF',
+    instance_overrides: JSON.stringify({
+      production: {
+        base_url: 'https://prod-OLD.example',
+        auth_config: { body_secrets: { token: 'OLD-TOKEN' } }
+      }
+    })
+  }
+
+  function redacted(raw: Record<string, unknown>): Record<string, SnapshotRow> {
+    const data = redactRow('nivaro_external_apis', raw)
+    return { '4': { hash: hashRow(data), data } }
+  }
+
+  it('the update keeps the live credentials and takes only the plain parts from the snapshot', async () => {
+    const target = { nivaro_external_apis: redacted(snapRaw) }
+    const live = { nivaro_external_apis: redacted(liveRaw) }
+    expect(JSON.stringify(target)).not.toContain('OLD-TOKEN')
+    const plan = planTable(
+      'nivaro_external_apis',
+      target.nivaro_external_apis,
+      live.nivaro_external_apis,
+      apiCols.get('nivaro_external_apis') as TableColumns,
+      { deletes: false }
+    )
+    expect(plan.ops).toEqual([
+      expect.objectContaining({ op: 'update', fields: ['instance_overrides'] })
+    ])
+    const writes: Array<{ sql: string; b: unknown[] }> = []
+    const trx = (() => {
+      throw new Error('raw only')
+    }) as unknown as Parameters<typeof applyTablePlans>[0]
+    ;(trx as unknown as { raw: (sql: string, b?: unknown[]) => Promise<unknown> }).raw = async (
+      sql: string,
+      b: unknown[] = []
+    ) => {
+      if (/XACT_STATE/.test(sql)) return [{ s: 1 }]
+      writes.push({ sql, b })
+      if (/SELECT \[instance_overrides\] FROM \[nivaro_external_apis\] WITH \(UPDLOCK/.test(sql))
+        return [{ instance_overrides: liveRaw.instance_overrides }]
+      return /UPDATE/.test(sql) ? [{ n: 1 }] : []
+    }
+    await applyTablePlans(trx, [plan], target, live, apiCols, [])
+    const upd = writes.find((w) => /UPDATE \[nivaro_external_apis\]/.test(w.sql))
+    expect(upd).toBeDefined()
+    const written = JSON.parse(String(upd?.b[0]))
+    expect(written).toEqual({
+      production: {
+        base_url: 'https://prod-OLD.example',
+        auth_config: { body_secrets: { token: 'PROD-TOKEN' } }
+      }
+    })
+    expect(JSON.stringify(writes)).not.toContain('OLD-TOKEN')
   })
 })
 

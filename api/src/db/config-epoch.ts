@@ -61,6 +61,7 @@ const WATCHED = [
   'nivaro_custom_queries',
   'nivaro_widgets',
   'nivaro_integration_contracts',
+  'nivaro_payload_templates',
   // #1053 — flows are configuration too: an edit lands on the incident timeline.
   'nivaro_flows',
   'nivaro_flow_operations'

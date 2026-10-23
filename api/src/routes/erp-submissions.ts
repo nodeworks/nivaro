@@ -3,9 +3,18 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { clearAutoFailures } from '../services/auto-transition-memory.js'
+import {
+  neutralizeSecretMarkers,
+  restrictPlaceholders,
+  scrubbedBodyMessage,
+  scrubbedExcerpt,
+  scrubSecretsFor,
+  secretPathsOf
+} from '../services/body-secrets.js'
 import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { requesterInsertFields } from '../services/erp-requester-columns.js'
+import { hasResendableBody, NO_BODY, NoBodyToResendError } from '../services/erp-resend-guard.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
@@ -40,10 +49,13 @@ interface ErpSubmissionRow {
   updated_at: Date
 }
 
-/** payload column stores { endpoint_path, body } so retries are self-contained. */
+/** payload column stores { endpoint_path, body, secret_paths } so retries are self-contained.
+ *  secret_paths = JSON Pointers of the body's real secret placeholders (secretPathsOf at record
+ *  time); a resend neutralizes every other one, and a row without the list substitutes nothing. */
 interface StoredPayload {
   endpoint_path: string
   body: Record<string, unknown>
+  secret_paths?: string[]
 }
 
 function parseJson<T>(v: string | null | undefined): T | null {
@@ -95,11 +107,16 @@ interface SendOutcome {
  * 2xx → 'pending' (or 'accepted' when the body contains an explicit acceptance);
  * non-2xx / thrown → 'failed' with last_error.
  */
-function interpretResponse(httpStatus: number, body: unknown): SendOutcome {
+async function interpretResponse(
+  externalApi: number,
+  httpStatus: number,
+  body: unknown
+): Promise<SendOutcome> {
   if (httpStatus >= 200 && httpStatus < 300) {
     // A 2xx whose body refuses (status: ERROR, api_status: Bad Request…) did
-    // not land — recording it pending/accepted would read as success.
-    const refusal = detectDefaultBodyRejection(body)
+    // not land — recording it pending/accepted would read as success. The
+    // message quotes the body, so it is built from the scrubbed body (stored).
+    const refusal = await scrubbedBodyMessage(externalApi, body, detectDefaultBodyRejection)
     if (refusal) {
       return {
         status: 'failed',
@@ -131,11 +148,12 @@ function interpretResponse(httpStatus: number, body: unknown): SendOutcome {
     }
     return { status, external_ref: ref, error: null, response: body, http_status: httpStatus }
   }
-  const bodyStr = typeof body === 'string' ? body : JSON.stringify(body ?? null)
+  // The excerpt is stored (last_error, attempt error, obligation reason): scrubbed whole, then cut.
+  const excerpt = await scrubbedExcerpt(externalApi, body ?? null, 500)
   return {
     status: 'failed',
     external_ref: null,
-    error: `HTTP ${httpStatus}${bodyStr ? `: ${bodyStr.slice(0, 500)}` : ''}`,
+    error: `HTTP ${httpStatus}${excerpt ? `: ${excerpt}` : ''}`,
     response: body,
     http_status: httpStatus
   }
@@ -146,15 +164,21 @@ export async function sendPayload(
   stored: StoredPayload,
   userId: string | undefined
 ): Promise<SendOutcome> {
+  // Every resend path checks first (409 / skip); this is the last line, so a null body is never
+  // POSTed as `null` to a partner.
+  if (!hasResendableBody(stored)) throw new NoBodyToResendError()
   try {
     const res = await callExternalApi(externalApi, {
       method: 'POST',
       path: stored.endpoint_path,
-      body: stored.body,
+      // Only the placeholders recorded at the listed paths are honoured (fail closed without a
+      // list), so a resend substitutes exactly what the first send did and nothing data forged.
+      body: restrictPlaceholders(stored.body, stored.secret_paths),
+      bodySecrets: true,
       timeoutMs: 30_000,
       _log: { triggeredBy: 'erp-submission', userId }
     })
-    return interpretResponse(res.status, res.body)
+    return await interpretResponse(externalApi, res.status, res.body)
   } catch (err) {
     return {
       status: 'failed',
@@ -184,6 +208,7 @@ export async function retrySubmissionRow(
 ): Promise<SendOutcome> {
   const stored = parseJson<StoredPayload>(row.payload)
   if (!stored?.endpoint_path) throw new Error('Submission has no stored payload to retry')
+  if (!hasResendableBody(stored)) throw new NoBodyToResendError()
   const outcome = await withChainStep(`submission:${row.id}`, async () => {
     const sent = await sendPayload(row.external_api, stored, userId ?? undefined)
     const { applySendOutcome } = await import('../services/erp-submission-status.js')
@@ -247,7 +272,13 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       body = { ...row }
     }
 
-    const stored: StoredPayload = { endpoint_path, body }
+    // The body here is pure record data: no field may forge a body-secret placeholder.
+    const safeBody = neutralizeSecretMarkers(body) as Record<string, unknown>
+    const stored: StoredPayload = {
+      endpoint_path,
+      body: safeBody,
+      secret_paths: secretPathsOf(safeBody)
+    }
     const outcome = await sendPayload(external_api, stored, req.user?.id)
 
     const now = new Date()
@@ -265,7 +296,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         external_api,
         external_ref: outcome.external_ref,
         status: outcome.status,
-        response: serializeResponseBody(outcome.response),
+        response: await scrubSecretsFor(external_api, serializeResponseBody(outcome.response)),
         attempts: 1,
         last_error: outcome.error,
         payload: JSON.stringify(stored),
@@ -596,6 +627,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       if (!stored?.endpoint_path) {
         return reply.code(400).send({ error: 'Submission has no stored payload to retry' })
       }
+      if (!hasResendableBody(stored)) return reply.code(409).send(NO_BODY)
 
       // A retry's call log and attempt row hang under the submission it
       // retries; one helper for the row update + obligation (#628) so this
@@ -652,6 +684,10 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         const stored = parseJson<StoredPayload>(row.payload)
         if (!stored?.endpoint_path) {
           results.push({ id, status: 'skipped', error: 'no stored payload' })
+          continue
+        }
+        if (!hasResendableBody(stored)) {
+          results.push({ id, status: 'skipped', error: NO_BODY.message })
           continue
         }
         try {
@@ -797,6 +833,15 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
     if (retries >= policy.max_attempts) continue
     const stored = parseJson<StoredPayload>(row.payload)
     if (!stored?.endpoint_path) continue
+    if (!hasResendableBody(stored)) {
+      // Nothing to send, ever: classify it so this sweep (and the remediation ladder) stop
+      // selecting it — a row from before render failures were recorded as 'validation'.
+      await db('nivaro_erp_submissions')
+        .where({ id: row.id })
+        .update({ error_class: 'validation' })
+        .catch(() => {})
+      continue
+    }
     attempted++
     // Each retry's call log + attempt row nest under the submission it retries.
     const outcome = await withChainStep(`submission:${row.id}`, async () => {

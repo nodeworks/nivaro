@@ -27,6 +27,7 @@ import { db } from '../db/index.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
+import { hasResendableBody, NO_BODY } from './erp-resend-guard.js'
 import {
   allObligationKinds,
   getObligationKind,
@@ -188,7 +189,7 @@ async function resendSubmission(
   obligationId: number,
   submissionId: number,
   userId: string | null
-): Promise<{ detail: string }> {
+): Promise<SendNowResult> {
   const { sendPayload } = await import('../routes/erp-submissions.js')
   const { applySendOutcome, propagateSubmissionStatus } = await import('./erp-submission-status.js')
 
@@ -214,6 +215,8 @@ async function resendSubmission(
   } catch {
     return { detail: 'the original request is not readable' }
   }
+  // A payload template that refused to render recorded the row with no body: nothing to send.
+  if (!hasResendableBody(stored)) return { detail: NO_BODY.message, code: NO_BODY.error }
 
   // The resend's call log + attempt row nest under the submission it re-sends.
   const outcome = await withChainStep(`submission:${submissionId}`, async () => {
@@ -258,7 +261,7 @@ async function refireFromPrior(
   obligationId: number,
   priorSubmissionId: number,
   userId: string | null
-): Promise<{ detail: string }> {
+): Promise<SendNowResult> {
   const prior = (await db('nivaro_erp_submissions')
     .where({ id: priorSubmissionId })
     .first('collection', 'item', 'external_api', 'payload', 'change_signature')) as
@@ -282,6 +285,9 @@ async function refireFromPrior(
   } catch {
     return { detail: 'the original request is not readable' }
   }
+  // Checked before the shell row exists: a body-less prior (a render failure) has nothing to
+  // repeat, and a pending shell left behind would read as a send in flight.
+  if (!hasResendableBody(stored)) return { detail: NO_BODY.message, code: NO_BODY.error }
 
   // The shell: identity cloned from the prior row, everything about THIS
   // attempt (status/response/external_ref/error_class) starts blank and is
@@ -351,6 +357,10 @@ async function refireFromPrior(
   return { detail: `re-sent: ${outcome.status}${outcome.error ? ` — ${outcome.error}` : ''}` }
 }
 
+/** What Send now did. `code: 'no_body'` = the submission it would resend has no body (the route
+ *  answers 409). */
+export type SendNowResult = { detail: string; code?: 'no_body' }
+
 /**
  * A person clicked "Send now" on one obligation. When the obligation has a
  * submission of its own, that gets re-sent (the ordinary failed/overdue
@@ -367,10 +377,7 @@ async function refireFromPrior(
  * prior request is CLONED into a fresh row (`refireFromPrior`) rather than
  * rewritten, because it is someone else's history.
  */
-export async function sendNow(
-  obligationId: number,
-  userId: string | null
-): Promise<{ detail: string }> {
+export async function sendNow(obligationId: number, userId: string | null): Promise<SendNowResult> {
   if (!(await remediationEnabled())) {
     return { detail: 'remediation is off for this deployment' }
   }
@@ -534,7 +541,16 @@ export async function runRetryPass(
       continue
     }
     if (due > now) continue
-    await resendSubmission(r.id, r.submission_id, null)
+    const sent = await resendSubmission(r.id, r.submission_id, null)
+    if (sent.code === 'no_body') {
+      // Nothing to send, ever: classify it 'validation' (as runErpAutoRetries does) so this
+      // pass stops selecting it — otherwise it is revisited on every tick forever.
+      await db('nivaro_erp_submissions')
+        .where({ id: r.submission_id })
+        .update({ error_class: 'validation' })
+        .catch(() => {})
+      continue
+    }
     retried++
   }
   return { retried, gaveUp }
@@ -661,7 +677,12 @@ export async function runMissingRefirePass(
       plan.refire.push({ ...base, submission_id: Number(prior.id) })
       continue
     }
-    await refireFromPrior(r.id, prior.id, null)
+    const sent = await refireFromPrior(r.id, prior.id, null)
+    if (sent.code === 'no_body') {
+      // The newest request is a render failure: nothing to repeat — left for a person.
+      queued++
+      continue
+    }
     refired++
   }
   return plan ? { refired: 0, queued: 0, plan } : { refired, queued }
