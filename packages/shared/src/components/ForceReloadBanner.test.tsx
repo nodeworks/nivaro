@@ -2,6 +2,8 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clientVersion, markReloadFor, obeyedReloads } from '../lib/client-version'
+import { __resetUnsavedWorkForTests, registerUnsavedWork } from '../lib/unsaved-work'
 import { FORCE_RELOAD_EVENT, ForceReloadBanner } from './ForceReloadBanner'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -68,5 +70,64 @@ describe('ForceReloadBanner', () => {
     // Later ticks never reload twice.
     act(() => vi.advanceTimersByTime(3_000))
     expect(reload).toHaveBeenCalledTimes(1)
+  })
+})
+
+function pushDetail(detail: Record<string, unknown>) {
+  act(() => {
+    window.dispatchEvent(new CustomEvent(FORCE_RELOAD_EVENT, { detail }))
+  })
+}
+
+const banner = () => document.querySelector('[data-nvr-force-reload]')
+
+describe('ForceReloadBanner — unsaved work holds the reload', () => {
+  afterEach(() => __resetUnsavedWorkForTests())
+
+  it('waits while a form is dirty and reloads the moment it is saved', () => {
+    const off = registerUnsavedWork('Record form', () => true)
+    push(5)
+    act(() => vi.advanceTimersByTime(10_000))
+    expect(reload).not.toHaveBeenCalled()
+    expect(banner()?.getAttribute('data-nvr-force-reload-held')).toBe('true')
+    expect(banner()?.textContent).toContain('A reload is waiting')
+    act(() => off())
+    act(() => vi.advanceTimersByTime(0))
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('Reload now skips the hold', () => {
+    registerUnsavedWork('Record form', () => true)
+    push(5)
+    act(() => vi.advanceTimersByTime(6_000))
+    expect(reload).not.toHaveBeenCalled()
+    act(() => (banner()?.querySelector('button') as HTMLButtonElement).click())
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ForceReloadBanner — sticky instructions', () => {
+  beforeEach(() => sessionStorage.clear())
+
+  it('ignores the same instruction arriving twice and marks it before reloading', () => {
+    pushDetail({ seconds: 10, id: 'i-1', reason: 'push', issued_at: Date.now() })
+    act(() => vi.advanceTimersByTime(5_000))
+    // The remembered copy after a reconnect does not restart the clock.
+    pushDetail({ seconds: 10, id: 'i-1', reason: 'sticky', issued_at: Date.now() })
+    act(() => vi.advanceTimersByTime(5_000))
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(obeyedReloads()).toEqual(['i-1'])
+    expect(clientVersion().obeyed).toEqual(['i-1'])
+  })
+
+  it('a tab that already reloaded for an instruction never counts down for it again', () => {
+    markReloadFor('i-2')
+    pushDetail({ seconds: 5, id: 'i-2', reason: 'sticky', issued_at: Date.now() + 60_000 })
+    expect(banner()).toBeNull()
+  })
+
+  it('a remembered instruction issued before this page loaded is ignored (shared worker)', () => {
+    pushDetail({ seconds: 5, id: 'i-3', reason: 'sticky', issued_at: 1_000 })
+    expect(banner()).toBeNull()
   })
 })

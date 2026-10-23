@@ -1,5 +1,5 @@
 import type { NivaroClient } from '@nivaro/sdk'
-import { applyValidationRule } from '@nivaro/shared'
+import { applyValidationRule, useUnsavedWork } from '@nivaro/shared'
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOptionalNivaroClient } from '../context'
@@ -462,6 +462,8 @@ export function useNivaroForm(
   )
 
   const isDirty = useMemo(() => !shallowEqual(values, initialValues), [values, initialValues])
+  // A remote force reload waits while the form holds edits (ForceReloadBanner).
+  useUnsavedWork(isDirty, 'Unsaved form changes')
 
   const fieldsByGroup = useMemo(() => {
     const map = new Map<string | null, FormFieldDescriptor[]>()

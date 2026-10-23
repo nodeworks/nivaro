@@ -24,6 +24,7 @@ import {
 } from '../../lib/layout-ops'
 import { activeFreeze, dayWords, type LayoutFreeze } from '../../lib/layout-resolve'
 import { useMyUserId } from '../../lib/presence-signals'
+import { useUnsavedWork } from '../../lib/unsaved-work'
 import { cn } from '../../lib/utils'
 import {
   LAYOUT_PRETEND_SCOPE,
@@ -246,6 +247,8 @@ function useAltArrowKeys(
 /** Unsent typing, a batch in flight or unsaved changes: warn before the tab closes, send what can be sent. */
 function useLeaveGuard(draft: LayoutDraft) {
   const busy = draft.status === 'saving' || draft.dirty
+  // A remote force reload waits too (ForceReloadBanner).
+  useUnsavedWork(busy, 'Layout changes')
   useEffect(() => {
     if (!busy) return
     const onBefore = (e: BeforeUnloadEvent) => {

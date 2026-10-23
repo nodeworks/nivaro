@@ -114,6 +114,7 @@ import {
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
+import { useUnsavedWork } from '../lib/unsaved-work'
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { matchesVisibleWhen } from '../lib/visible-when'
@@ -2860,6 +2861,8 @@ function ItemEditFormView({
     // biome-ignore lint/correctness/useExhaustiveDependencies: userTouchedRef / initialDataRef mutate with draft
   }, [draft, pendingO2MRows, pendingO2MEdits, pendingO2MDeletes, m2mLinks, m2mUnlinks])
   const hasUnsaved = isDirty || unsavedSummary.total > 0
+  // A remote force reload waits while this is true (ForceReloadBanner, lib/unsaved-work.ts).
+  useUnsavedWork(hasUnsaved, 'Unsaved record changes')
   useEffect(() => {
     onDirtyChange?.(hasUnsaved, unsavedSummary)
     window.dispatchEvent(

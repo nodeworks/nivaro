@@ -1,4 +1,4 @@
-import { TipLayer } from '@nivaro/shared'
+import { registerUnsavedWork, TipLayer } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -264,7 +264,15 @@ export function useDraftEditor(key: string | null, detail: TemplateDetail | unde
       if (pending.current || inFlight.current) e.preventDefault()
     }
     window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
+    // A remote force reload waits while a change is unsent (ForceReloadBanner re-checks).
+    const offUnsaved = registerUnsavedWork(
+      'Payload template changes',
+      () => !!(pending.current || inFlight.current)
+    )
+    return () => {
+      window.removeEventListener('beforeunload', warn)
+      offUnsaved()
+    }
   }, [])
 
   const change = useCallback(

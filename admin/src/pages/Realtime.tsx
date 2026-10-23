@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 import { SocketHealthTab } from './realtime/SocketHealthTab'
+import { MinBuildControl, RememberedRefreshes } from './realtime/StickyRefresh'
 import { VerifyTab } from './realtime/VerifyTab'
 
 /**
@@ -136,7 +137,10 @@ export default function Realtime() {
               </p>
             </div>
           </div>
-          <ForceRefreshControl />
+          <div className='flex shrink-0 items-center gap-2'>
+            <MinBuildControl />
+            <ForceRefreshControl />
+          </div>
         </div>
         <div
           role='tablist'
@@ -182,6 +186,7 @@ export default function Realtime() {
 type RefreshWho = 'everyone' | 'app' | 'people' | 'older'
 
 function ForceRefreshControl() {
+  const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [seconds, setSeconds] = useState('30')
   const [message, setMessage] = useState('')
@@ -358,6 +363,7 @@ function ForceRefreshControl() {
             placeholder='Optional message shown in the banner'
             className='mt-2 h-7 w-full rounded-md border border-slate-200 bg-background px-2 text-[12px] dark:border-border'
           />
+          <RememberedRefreshes open={open} />
           <div className='mt-2 flex justify-end gap-2'>
             <button
               type='button'
@@ -385,9 +391,12 @@ function ForceRefreshControl() {
                       users: number
                       partial?: boolean
                       settling?: Record<string, string>
+                      remembered?: boolean
+                      remember_hours?: number
                     }
                   }>('/realtime/force-refresh', body)
-                  const { sockets, users, partial, settling } = r.data.data
+                  const { sockets, users, partial, settling, remembered, remember_hours } =
+                    r.data.data
                   const skipped = Object.keys(settling ?? {})
                   const tail =
                     (partial
@@ -395,10 +404,14 @@ function ForceRefreshControl() {
                       : '') +
                     (skipped.length
                       ? ` — tabs on the builds ${skipped.join(', ')} is rolling out were left alone`
+                      : '') +
+                    (remembered
+                      ? `. Tabs that connect in the next ${remember_hours ?? 24} h get it too`
                       : '')
+                  void qc.invalidateQueries({ queryKey: ['realtime-remembered-refreshes'] })
                   toast.success(
                     who === 'everyone'
-                      ? 'Refresh pushed to every connected client'
+                      ? `Refresh pushed to every connected client${tail}`
                       : sockets > 0
                         ? `Refresh pushed to ${sockets} open tab${sockets === 1 ? '' : 's'} (${users} ${users === 1 ? 'person' : 'people'})${tail}`
                         : `Refresh sent — nobody matching is connected right now${tail}`
