@@ -22,6 +22,10 @@ data: {"collection":"articles","item":"42","action":"update","changed_fields":["
       type: 'p',
       text: 'The stream carries field NAMES, never values — a consumer fetches the changed row through /items, where permissions apply. EventSource cannot set headers, so header-less consumers mint a one-shot ticket first (60-second TTL, single use); Bearer/session auth works directly. Per-collection filtering drops unauthorized collections silently.'
     },
+    {
+      type: 'note',
+      text: 'With several API processes, a stream hears every process’s writes (read from the record-event stream, `REALTIME_EVENT_STREAM`). Before 2026-10-23 it heard only the writes of the process it connected to. Behind a realtime tier, route `/api/events/stream` to the realtime processes (see Realtime tier).'
+    },
     { type: 'h3', text: 'Feature flags' },
     {
       type: 'p',

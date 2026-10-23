@@ -252,6 +252,15 @@ export async function buildServer() {
       // Post-mortem 3.3 — /events/stream hears other replicas' record changes too.
       const { startSseRemoteBridge } = await import('./services/sse-hub.js')
       startSseRemoteBridge()
+      const { wireJournalFallback } = await import('./services/event-journal.js')
+      wireJournalFallback(app.io)
+      // SOCKETS=off: what the realtime processes' sockets know (viewers, pages, socket list).
+      const { socketsServed } = await import('./services/process-role.js')
+      if (!socketsServed()) {
+        const { startBoardReader } = await import('./services/realtime-board.js')
+        const stopBoard = startBoardReader(app.redis)
+        app.addHook('onClose', async () => stopBoard())
+      }
       const { flushRawWriteQueue } = await import('./services/raw-write-announcer.js')
       app.addHook('onClose', async () => {
         flushRawWriteQueue()
@@ -665,6 +674,10 @@ export async function buildServer() {
       )
       registerCoreIntegrationSignals()
     }
+    const { connectionHandlerCount, refuseExtensionSocketHandlers } = await import(
+      './services/process-role.js'
+    )
+    const coreSocketHandlers = connectionHandlerCount(app.io as never)
     await bootPhase('Extensions', () =>
       loadExtensions({
         app,
@@ -673,6 +686,8 @@ export async function buildServer() {
         callExternalApi
       })
     )
+    // Post-mortem 3.3 — with SOCKETS=off an extension's socket handler would never run.
+    refuseExtensionSocketHandlers(coreSocketHandlers, connectionHandlerCount(app.io as never))
     await bootPhase('Scheduled flows', () => loadScheduledFlows(app))
     // #530 — fingerprint what each extension registered this boot; a changed
     // ledger becomes a new version so "when did this check appear?" has an answer.
@@ -1244,17 +1259,11 @@ export async function buildServer() {
       app.cron.schedule('concurrency-sample', '*/5 * * * *', async () => {
         const { db } = await import('./db/index.js')
         const { getLocalConcurrency } = await import('./plugins/socketio.js')
-        let { sockets, users } = getLocalConcurrency()
-        // Post-mortem 3.3 — with SOCKETS=off (a realtime tier) this process holds none: count
-        // the signed-in sockets the realtime processes hold, across the adapter.
-        const { socketsServed } = await import('./services/process-role.js')
-        if (!socketsServed()) {
-          const { listClusterClients } = await import('./services/client-versions-cluster.js')
-          const { getIo } = await import('./services/io-holder.js')
-          const { clients } = await listClusterClients(getIo(), null)
-          sockets = clients.length
-          users = new Set(clients.map((c) => c.user?.id).filter(Boolean)).size
-        }
+        // Post-mortem 3.3 — with SOCKETS=off the figures are the realtime processes' (the
+        // board); a board nobody refreshed lately would record a false zero, so skip the sample.
+        const { boardFresh, boardReaderOn } = await import('./services/realtime-board.js')
+        if (boardReaderOn() && !boardFresh()) return
+        const { sockets, users } = getLocalConcurrency()
         await db('nivaro_concurrency_samples')
           .insert({
             sampled_at: new Date(),

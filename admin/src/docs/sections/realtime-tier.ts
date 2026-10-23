@@ -32,7 +32,7 @@ export const realtimeTierDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'A realtime process needs the same `REDIS_URL`, `REDIS_CHANNEL_PREFIX`, `SESSION_SECRET`, cookie settings, `CORS_ORIGINS` and database settings as web. Sockets sign in exactly as before: the browser gets a one-time token from a web process (`GET /api/auth/ws-token`), which lives in Redis, and any process redeems it. Streams take the session cookie, a Bearer token or a one-time stream ticket. A small database pool is enough (`DB_POOL_MAX=10`, `DB_POOL_BACKGROUND_MAX=0`).'
+      text: 'A realtime process needs the same `REDIS_URL`, `REDIS_CHANNEL_PREFIX`, `SESSION_SECRET`, cookie settings, `CORS_ORIGINS` and database settings as web. Sockets sign in exactly as before: the browser gets a one-time token from a web process (`GET /api/auth/ws-token`), which lives in Redis, and any process redeems it. Streams take the session cookie, a Bearer token or a one-time stream ticket. Give it `DB_POOL_MAX=20` and `DB_POOL_BACKGROUND_MAX=0`: after a restart moves every socket to the surviving process, sign-ins, room checks, presence writes and live re-runs all land at once. GraphQL live re-runs share the heavy-read gate there.'
     },
     { type: 'h2', id: 'realtime-tier-routes', text: 'What a realtime process answers' },
     {
@@ -57,7 +57,7 @@ export const realtimeTierDocs: DocSection = {
     },
     {
       type: 'p',
-      text: '`/api/events/stream` now also hears record changes written on other processes (read from the record-event stream), on every process. A collection set to batched live updates sends no per-record entry, so a stream on another process does not see those writes.'
+      text: 'Change on every deployment with several processes: `/api/events/stream` now also hears record changes written on other processes (read from the record-event stream); before, a stream heard only the writes of the process it connected to. A collection set to batched live updates arrives as one event per record when its window closes.'
     },
     { type: 'h2', id: 'realtime-tier-routing', text: 'Proxy routing and sticky sessions' },
     {
@@ -80,8 +80,8 @@ export const realtimeTierDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Preflight check `realtime` and readiness check `realtime-tier`: a process with `SOCKETS=off` fails when its deployment has no realtime process in the instance roster, warns with one (a restart drops every connection until it is back), and passes with two or more. A deploy canary only warns.',
-        '`/api/ready` on web does not depend on the realtime tier, so a realtime restart never takes the REST tier out of the proxy.',
+        'Preflight check `realtime` and readiness check `realtime-tier`: a process with `SOCKETS=off` fails when its deployment slot has no realtime process that checked in within 45 seconds, when `REALTIME_EVENT_STREAM=off`, or when `PUBLIC_URL/api/events/stream` is not answered by a realtime process (the proxy route is missing; a realtime process marks every answer `X-Nivaro-Role: realtime`). It warns with one realtime process (a restart drops every connection until it is back) and passes with two or more. A deploy canary only warns.',
+        '`/api/ready` on web does not depend on the realtime tier, so a realtime restart never takes the REST tier out of the proxy. On a realtime process it requires Redis; the database only warns.',
         'Roster entries carry `sockets: false` on a process with `SOCKETS=off`; the Database page’s instance roster shows the role.',
         '`/api/metrics` reports `nivaro_sockets_connected` on every process.'
       ]
@@ -89,15 +89,28 @@ export const realtimeTierDocs: DocSection = {
     { type: 'h2', id: 'realtime-tier-sizing', text: 'Sizing for 200–250 people' },
     {
       type: 'p',
-      text: 'About 400 sockets with extra tabs. Run two realtime processes, about 200 sockets each, so either can carry all of them through a restart; four web and one worker. Give each realtime process one core and a 768 MB limit with `--max-old-space-size=512`: at rest it holds about 185 MB of heap, and a signed-in socket costs roughly 250 KB with its rooms, presence and send buffer (about 100 MB at 400). Keep event-loop lag p99 under 100 ms and the delivery target (95% under 2 s) green.'
+      text: 'About 400 sockets with extra tabs. Run two realtime processes, about 200 sockets each, so either can carry all of them through a restart; four web and one worker. Give each realtime process one core and, until it is measured with signed-in sockets under traffic, a 1280 MB limit with `--max-old-space-size=768`: at rest it holds about 185 MB of heap, and each socket adds its rooms, presence, send buffer and, with `SOCKET_COMPRESSION` on, compression state outside the heap. Roll realtime processes one at a time, the new one started first: recreating both at once drops every connection. Keep event-loop lag p99 under 100 ms and the delivery target (95% under 2 s) green.'
+    },
+    { type: 'h2', id: 'realtime-tier-presence', text: 'Who is viewing what' },
+    {
+      type: 'p',
+      text: 'Several answers come from the sockets themselves: who is viewing a record (the viewing chip, now-editing, skipping an in-app notification for someone looking at the record), who is on a page, the socket list and room sizes (Realtime console, Traffic Map), the concurrency sample, and whether anyone is watching before the traffic feed, AI call feed or flow firehose sends. A process that serves sockets answers from its own, as before. Each realtime process publishes its share to Redis every 2 seconds (the realtime board; the socket list every 10), and a process with `SOCKETS=off` reads it into memory, so those answers are a few seconds old and no request waits on another process.'
+    },
+    {
+      type: 'p',
+      text: 'A process with `SOCKETS=off` only publishes through the Redis adapter: it decodes no broadcasts and is never part of another process’s socket query. When a reconnecting browser rejoins its rooms and asks to catch up in the same breath, the server waits (up to 3 seconds) for the joins before it replays, so events written during the reconnect are not lost. GraphQL over the subscription transports only reads: a mutation there is refused with “Send mutations to POST /api/graphql”.'
+    },
+    { type: 'h2', id: 'realtime-tier-extensions', text: 'Extensions and sockets' },
+    {
+      type: 'p',
+      text: "A realtime process loads no extensions, so an extension that listens for socket connections (`app.io.on('connection')`, on any namespace) would never hear one on a deployment with `SOCKETS=off`. Rather than fail silently, a web or worker process with `SOCKETS=off` refuses to start when an extension registers such a handler, and the error names the setting. Move that work to an event the API emits, or keep sockets on."
     },
     { type: 'h2', id: 'realtime-tier-limits', text: 'Limits' },
     {
       type: 'ul',
       items: [
-        'What a process knows about its own sockets stays with the process that holds them. With `SOCKETS=off` the web processes hold none, so notifications are no longer skipped for someone who is looking at the record, and "who is on this page" lists read only the processes that hold sockets.',
-        "Extension code that listens for `app.io.on('connection')` runs only where sockets are served, and a realtime process loads no extensions.",
-        'The GraphQL schema is built when a process starts; a realtime process picks up a schema change at its next restart, as every web process does today.'
+        'The GraphQL schema is built when a process starts; a realtime process picks up a schema change at its next restart, as every web process does today.',
+        'The Traffic Map’s room and socket detail panels show the sockets of the process that answers the request.'
       ]
     }
   ]

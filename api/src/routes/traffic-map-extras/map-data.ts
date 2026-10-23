@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { logActivity } from '../../services/activity.js'
 import { getIo } from '../../services/io-holder.js'
+import { roomListeners } from '../../services/realtime-board.js'
 import { mapEnvironment } from '../../services/traffic-environment.js'
 import { estimateMapBytes, trafficRoomFor, trafficStoreIds } from '../../services/traffic-map.js'
 import {
@@ -241,7 +242,7 @@ export async function mapDataRoutes(app: FastifyInstance): Promise<void> {
     const io = getIo() as unknown as {
       sockets?: { adapter?: { rooms?: Map<string, Set<string>> } }
     } | null
-    const watchers = io?.sockets?.adapter?.rooms?.get(trafficRoomFor(store))?.size ?? 0
+    const watchers = roomListeners(io, trafficRoomFor(store))
     const data = withTrafficStore(store, () => overheadReport(estimateMapBytes(), watchers))
     // One process serves many tenants in cloud mode: its memory and how many stores it holds are
     // instance facts, not this tenant's, so they stay out of a tenant's answer.
