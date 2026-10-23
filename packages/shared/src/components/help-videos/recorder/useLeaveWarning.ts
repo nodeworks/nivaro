@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useUnsavedWork } from '../../../lib/unsaved-work'
 
 /** Stages in which leaving the page would drop parts not yet in the browser
  *  or on the server, or (`remote`, #1516) lose track of the recording window
@@ -13,6 +14,8 @@ export function leaveWarningActive(open: boolean, stage: string): boolean {
 
 /** Asks the browser to confirm leaving the page while `active`. */
 export function useLeaveWarning(active: boolean): void {
+  // A remote force reload waits too (ForceReloadBanner).
+  useUnsavedWork(active, 'Video recording')
   useEffect(() => {
     if (!active) return
     const warn = (e: BeforeUnloadEvent) => {
