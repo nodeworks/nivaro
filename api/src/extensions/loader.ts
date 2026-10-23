@@ -44,6 +44,7 @@ import {
   renderPayloadTemplate
 } from '../services/payload-templates/index.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { resolveExtensionBuild } from './build-identity.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
 import { type DashboardWidgetDef, dashboardWidgetRegistry } from './dashboard-widgets.js'
@@ -241,21 +242,8 @@ export interface ExtensionEntry {
   build?: string | null
 }
 
-/** #1089 — the loaded build's identity (≤64 chars, trimmed). */
-export function resolveExtensionBuild(declared: unknown, dirPath: string): string | null {
-  const clean = (v: unknown) => {
-    const t = typeof v === 'string' ? v.trim() : ''
-    return t ? t.slice(0, 64) : null
-  }
-  const fromExport = clean(declared)
-  if (fromExport) return fromExport
-  try {
-    const p = join(dirPath, '.release-sha')
-    return existsSync(p) ? clean(readFileSync(p, 'utf-8')) : null
-  } catch {
-    return null
-  }
-}
+// #1089 — lives in a leaf module; re-exported for existing importers.
+export { resolveExtensionBuild }
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
