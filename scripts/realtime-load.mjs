@@ -23,7 +23,11 @@
  *     {last_seen, is_online, is_idle} only — never creates a row;
  *   - refetches GET /api/presence/online on every `presence:changed` and every user_presence
  *     `collection:update`, joining a fetch already in flight (react-query cancelRefetch:false);
- *     `--refetch-debounce-ms` models the debounced client fix, `--refetch off` none at all;
+ *     `--refetch-debounce-ms` models the debounced client fix, `--refetch off` none at all,
+ *     `--row-refetch off` no refetch on user_presence collection updates (the fixed client);
+ *   - `--heartbeat-mode on-change` (the fixed client): PATCH only when idle flipped since the
+ *     last one, else {last_active} every 2 min and the full row every 5 min (checked every
+ *     `--heartbeat-ms`, one person-wide beat); default `always` = every tab, every beat;
  *   - reconnects now and then (`--reconnect-every-s`, mean 600 s per tab).
  * Each person flips idle now and then (`--idle-every-s`, mean 120 s) from one of their tabs.
  *
@@ -108,6 +112,13 @@ function onOff(args, key, d) {
   throw new UsageError(`--${key} takes on or off`)
 }
 
+function oneOf(args, key, values, d) {
+  const raw = args[key]
+  if (raw === undefined) return d
+  if (typeof raw === 'string' && values.includes(raw)) return raw
+  throw new UsageError(`--${key} takes ${values.join(' or ')}`)
+}
+
 /** Tokens from flags / env / file (file contents handed in, so this stays pure). */
 export function collectTokens(args, env, fileText) {
   const split = (s) =>
@@ -150,6 +161,8 @@ export function readOptions(args, env = {}, fileText = null) {
     reconnectEveryS: num(args, 'reconnect-every-s', 600, { min: 0 }),
     refetch: onOff(args, 'refetch', true),
     refetchDebounceMs: num(args, 'refetch-debounce-ms', 0, { min: 0, max: 60_000 }),
+    rowRefetch: onOff(args, 'row-refetch', true),
+    heartbeatMode: oneOf(args, 'heartbeat-mode', ['always', 'on-change'], 'always'),
     pollMs: num(args, 'poll-ms', 0, { min: 0 }),
     pageAt: onOff(args, 'page-at', false),
     ack: onOff(args, 'ack', true),
@@ -719,7 +732,7 @@ class Runner {
       if (payload?.collection !== 'user_presence') return
       const ids = keysOf('collection:update', payload)
       this.tracker.receive('row', ids, tab.id, Date.now())
-      this.refetch(tab)
+      if (this.o.rowRefetch) this.refetch(tab)
     })
     if (this.o.ack)
       s.onAny((_event, payload) => {
@@ -783,11 +796,26 @@ class Runner {
       if (p.rowId === null) p.rowId = undefined
       return
     }
+    let body = { last_seen: new Date().toISOString(), is_online: true, is_idle: p.idle }
+    if (this.o.heartbeatMode === 'on-change') {
+      // The fixed client: one beat per person, and only when something changed.
+      const now = Date.now()
+      const beat = (p.beat ??= { idle: null, activeAt: 0, fullAt: 0, busy: false })
+      if (beat.busy) return
+      if (beat.idle !== p.idle || now - beat.fullAt >= 300_000) {
+        beat.fullAt = now
+        beat.activeAt = now
+      } else if (now - beat.activeAt >= 120_000) {
+        beat.activeAt = now
+        body = { last_active: new Date().toISOString() }
+      } else return
+      beat.idle = p.idle
+    }
     this.tracker.write('row', String(p.rowId), Date.now(), this.authedTabIds())
     await this.http('PATCH', `/api/items/user_presence/${p.rowId}`, {
       token: p.token,
       route: 'PATCH /api/items/user_presence/:id',
-      body: { last_seen: new Date().toISOString(), is_online: true, is_idle: p.idle }
+      body
     })
   }
 
@@ -945,7 +973,7 @@ function printPlan(o, plan, est) {
     `Steps    ${plan.map((s) => `${s.label} ${s.people}p ${Math.round(s.durationMs / 1000)}s`).join(' · ')}`
   )
   console.log(
-    `Per tab  ping ${o.pingMs / 1000}s · heartbeat ${o.heartbeatMs ? `${o.heartbeatMs / 1000}s` : 'off'} · idle flip ~${o.idleEveryS || '–'}s/person · reconnect ~${o.reconnectEveryS || '–'}s · refetch ${o.refetch ? (o.refetchDebounceMs ? `debounced ${o.refetchDebounceMs} ms` : 'every event') : 'off'}`
+    `Per tab  ping ${o.pingMs / 1000}s · heartbeat ${o.heartbeatMs ? `${o.heartbeatMs / 1000}s` : 'off'} · idle flip ~${o.idleEveryS || '–'}s/person · reconnect ~${o.reconnectEveryS || '–'}s · refetch ${o.refetch ? (o.refetchDebounceMs ? `debounced ${o.refetchDebounceMs} ms` : 'every event') : 'off'}${o.rowRefetch ? '' : ' (not on row updates)'} · heartbeat ${o.heartbeatMode}`
   )
   console.log(
     `Expected at full load (before any server coalescing): ${est.writes_per_s} presence writes/s → ${est.deliveries_per_s} deliveries/s`

@@ -81,6 +81,9 @@ export async function run({ only }) {
     const b = await fx.sock('bob')
     const mb = b.mark()
     a.join('record:join', { collection: 'rt_items', item: id0 })
+    // Staggered like real people (the realtime board publishes every second); the same-moment
+    // case has its own test below.
+    await sleep(2500)
     b.join('record:join', { collection: 'rt_items', item: id0 })
     const viewers = await b.next('record:viewers', (p) => (p.viewers ?? []).length >= 2, { from: mb })
     t.check('record:viewers lists both people', !!viewers, viewers?.p)
@@ -105,6 +108,20 @@ export async function run({ only }) {
     const m3 = b.mark()
     a.leave('record:leave', { collection: 'rt_items', item: id0 }, 'record:join')
     t.check('record:viewers on leave drops to one', !!(await b.next('record:viewers', (p) => (p.viewers ?? []).length === 1, { from: m3 })))
+  })
+
+  await suite.case('record:viewers converge when two people open a record at the same moment', async (t) => {
+    t.cleanup(fx.closeAll)
+    const a = await fx.sock('alice')
+    const b = await fx.sock('bob')
+    const [ma, mb] = [a.mark(), b.mark()]
+    a.join('record:join', { collection: 'rt_items', item: id1 })
+    b.join('record:join', { collection: 'rt_items', item: id1 })
+    // Each side's latest record:viewers must list both within a few seconds.
+    const latest = (s, m) => s.all('record:viewers', m).filter((e) => String(e.p.item) === String(id1)).at(-1)
+    const ok = await poll(() => (latest(a, ma)?.p?.viewers ?? []).length >= 2 && (latest(b, mb)?.p?.viewers ?? []).length >= 2, { timeoutMs: 8000 })
+    t.metric('last_lists', { a: (latest(a, ma)?.p?.viewers ?? []).length, b: (latest(b, mb)?.p?.viewers ?? []).length })
+    t.check('both sides end up seeing two viewers', !!ok)
   })
 
   await suite.case('record:join is refused for an unreadable record (alice → rt_secret)', async (t) => {
@@ -375,7 +392,7 @@ export async function run({ only }) {
     const a = await fx.sock('alice')
     const b = await fx.sock('bob')
     a.join('ops:join', { topic: 'issue-view:1' })
-    await sleep(300)
+    await sleep(2500) // staggered: the realtime board publishes every second
     const m = a.mark()
     b.join('ops:join', { topic: 'issue-view:1' })
     const ch = await a.next('ops:changed', (p) => (p.viewers ?? []).length >= 2, { from: m })
