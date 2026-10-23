@@ -45,6 +45,12 @@ import { NIVARO_VERSION } from './version.js'
  * The wiring below mirrors the realtime part of buildServer() (server.ts) — a service the
  * socket handlers start to need goes in both.
  */
+/** Every `METHOD path` the realtime server registered (tests hold it to REALTIME_HTTP_ROUTES). */
+const served: string[] = []
+export function servedRealtimeRoutes(): readonly string[] {
+  return served
+}
+
 export async function buildRealtimeServer(): Promise<FastifyInstance> {
   if (process.env.CLOUD_META_DB_URL)
     throw new Error(
@@ -66,6 +72,12 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     },
     ajv: { customOptions: { strict: false } },
     pluginTimeout: 30000
+  })
+
+  served.length = 0
+  app.addHook('onRoute', (route) => {
+    for (const m of Array.isArray(route.method) ? route.method : [route.method])
+      if (m !== 'HEAD' && m !== 'OPTIONS') served.push(`${m} ${route.url}`)
   })
 
   app.addHook('onSend', async (_req, reply, payload) => {

@@ -1,0 +1,289 @@
+import type { AddressInfo } from 'node:net'
+import fastify, { type FastifyInstance } from 'fastify'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { WebSocket } from 'ws'
+
+/**
+ * Post-mortem 3.3 — the realtime tier. Two processes in one test: a realtime server
+ * (NIVARO_ROLE=realtime, listening) and a web process with SOCKETS=off. Redis is an in-memory
+ * pub/sub bus shared by every fake client, so the Socket.io Redis adapter really carries the web
+ * process's emits to the realtime process's sockets.
+ */
+
+// config.ts validates these at import; the database itself is mocked (test/setup.ts).
+vi.hoisted(() => {
+  for (const [k, v] of Object.entries({
+    DB_HOST: 'localhost',
+    DB_DATABASE: 'nivaro_test',
+    DB_USER: 'test',
+    DB_PASSWORD: 'test',
+    SESSION_SECRET: 'realtime-tier-test-secret-0123456789abcdef',
+    LOG_LEVEL: 'silent'
+  }))
+    process.env[k] ||= v
+})
+
+const bus = vi.hoisted(() => {
+  const { EventEmitter } = require('node:events') as typeof import('node:events')
+  const clients = new Set<any>()
+  /** Anything not modelled: a chainable, awaitable no-op (resolves to null). */
+  const noop: any = new Proxy(() => {}, {
+    get: (_t, k) =>
+      k === 'then'
+        ? (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+            Promise.resolve(null).then(res, rej)
+        : noop,
+    apply: () => noop
+  })
+  const V4_OR_CLUSTER = new Set([
+    'pSubscribe',
+    'pUnsubscribe',
+    'sSubscribe',
+    'sendCommand',
+    'isCluster',
+    'nodes'
+  ])
+  class BusClient extends EventEmitter {
+    options: Record<string, unknown>
+    status = 'ready'
+    patterns = new Set<string>()
+    channels = new Set<string>()
+    constructor(opts?: Record<string, unknown>) {
+      super()
+      this.options = { ...(opts ?? {}) }
+      clients.add(this)
+    }
+    duplicate() {
+      return new FakeRedis(this.options)
+    }
+    async psubscribe(...p: Array<string | string[]>) {
+      for (const x of p.flat()) this.patterns.add(x)
+      return p.flat().length
+    }
+    async subscribe(...c: Array<string | string[]>) {
+      for (const x of c.flat()) if (typeof x === 'string') this.channels.add(x)
+      return c.flat().length
+    }
+    async punsubscribe() {
+      this.patterns.clear()
+    }
+    async unsubscribe() {
+      this.channels.clear()
+    }
+    async publish(channel: string, msg: string | Buffer) {
+      const m = Buffer.isBuffer(msg) ? msg : Buffer.from(msg)
+      let n = 0
+      for (const c of clients) {
+        for (const p of c.patterns as Set<string>) {
+          if (p.endsWith('*') && channel.startsWith(p.slice(0, -1))) {
+            n++
+            setImmediate(() => c.emit('pmessageBuffer', Buffer.from(p), Buffer.from(channel), m))
+          }
+        }
+        if ((c.channels as Set<string>).has(channel)) {
+          n++
+          setImmediate(() => c.emit('messageBuffer', Buffer.from(channel), m))
+        }
+      }
+      return n
+    }
+    /** PUBSUB NUMSUB, as the adapter's serverCount() asks it (callback style). */
+    send_command(_cmd: string, args: string[], cb?: (err: unknown, res: unknown) => void) {
+      const channel = args[1]
+      let n = 0
+      for (const c of clients) if ((c.channels as Set<string>).has(channel)) n++
+      cb?.(null, [channel, n])
+      return Promise.resolve([channel, n])
+    }
+    async ping() {
+      return 'PONG'
+    }
+    async quit() {
+      clients.delete(this)
+      return 'OK'
+    }
+    disconnect() {
+      clients.delete(this)
+    }
+  }
+  /** `new FakeRedis()` — a bus client whose unmodelled commands are no-ops. */
+  const FakeRedis = function FakeRedis(opts?: Record<string, unknown>) {
+    return new Proxy(new BusClient(opts), {
+      get(t, k, r) {
+        if (k in t) return Reflect.get(t, k, r)
+        // node-redis v4 / cluster probes: absent, so the adapter takes its ioredis path.
+        if (typeof k === 'string' && V4_OR_CLUSTER.has(k)) return undefined
+        return noop
+      }
+    })
+  } as unknown as new (
+    opts?: Record<string, unknown>
+  ) => any
+  return { FakeRedis, clients }
+})
+
+vi.mock('ioredis', () => ({ Redis: bus.FakeRedis, default: bus.FakeRedis }))
+vi.mock('../../plugins/redis.js', async () => {
+  const fp = (await import('fastify-plugin')).default
+  return {
+    redisPlugin: fp(async (app: FastifyInstance) => {
+      app.decorate('redis', new bus.FakeRedis({ db: 9 }) as never)
+    })
+  }
+})
+// Background loops that would spin against the fake (stream reads, pollers, probes).
+vi.mock('../../services/event-stream.js', async (orig) => ({
+  ...(await orig<typeof import('../../services/event-stream.js')>()),
+  initEventStream: vi.fn(async () => {}),
+  closeEventStream: vi.fn(async () => {})
+}))
+vi.mock('../../services/item-events.js', async (orig) => ({
+  ...(await orig<typeof import('../../services/item-events.js')>()),
+  initItemEvents: vi.fn(async () => {}),
+  closeItemEvents: vi.fn(async () => {})
+}))
+vi.mock('../../services/event-journal.js', async (orig) => ({
+  ...(await orig<typeof import('../../services/event-journal.js')>()),
+  alignJournalSequence: vi.fn(async () => {}),
+  flushJournal: vi.fn(async () => {})
+}))
+vi.mock('../../services/traffic-map.js', async (orig) => ({
+  ...(await orig<typeof import('../../services/traffic-map.js')>()),
+  startTrafficMapEmitter: vi.fn(() => () => {})
+}))
+vi.mock('../../services/runtime-monitor.js', async (orig) => ({
+  ...(await orig<typeof import('../../services/runtime-monitor.js')>()),
+  startRuntimeMonitor: vi.fn()
+}))
+vi.mock('../../db/config-epoch.js', async (orig) => ({
+  ...(await orig<typeof import('../../db/config-epoch.js')>()),
+  startEpochWatch: vi.fn(),
+  stopEpochWatch: vi.fn()
+}))
+vi.mock('../../services/instance-roster.js', async (orig) => ({
+  ...(await orig<typeof import('../../services/instance-roster.js')>()),
+  startInstanceRoster: vi.fn()
+}))
+vi.mock('../../services/pool-attribution.js', async (orig) => ({
+  ...(await orig<typeof import('../../services/pool-attribution.js')>()),
+  startPoolAttribution: vi.fn()
+}))
+vi.mock('../../services/db-health.js', async (orig) => ({
+  ...(await orig<typeof import('../../services/db-health.js')>()),
+  startDbHealthProbe: vi.fn(),
+  isDbHealthy: () => true
+}))
+vi.mock('../../services/socket-health.js', async (orig) => ({
+  ...(await orig<typeof import('../../services/socket-health.js')>()),
+  startSocketHealth: vi.fn()
+}))
+
+/** Open an engine.io v4 websocket and connect to the main namespace; collect event frames. */
+function connect(port: number): Promise<{ ws: WebSocket; events: Array<[string, unknown]> }> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket.io/?EIO=4&transport=websocket`)
+    const events: Array<[string, unknown]> = []
+    const timer = setTimeout(() => reject(new Error('socket.io handshake timed out')), 5000)
+    ws.on('error', reject)
+    ws.on('message', (raw) => {
+      const msg = raw.toString()
+      if (msg.startsWith('0')) ws.send('40')
+      else if (msg === '2') ws.send('3')
+      else if (msg.startsWith('40')) {
+        clearTimeout(timer)
+        resolve({ ws, events })
+      } else if (msg.startsWith('42')) events.push(JSON.parse(msg.slice(2)) as [string, unknown])
+    })
+  })
+}
+
+async function waitFor(check: () => boolean, ms = 3000): Promise<void> {
+  const until = Date.now() + ms
+  while (!check()) {
+    if (Date.now() > until) throw new Error('timed out')
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
+describe('realtime tier (NIVARO_ROLE=realtime + SOCKETS=off)', () => {
+  let realtime: FastifyInstance
+  let web: FastifyInstance
+  let realtimePort = 0
+  let webPort = 0
+  const saved = { role: process.env.NIVARO_ROLE, sockets: process.env.SOCKETS }
+
+  beforeAll(async () => {
+    process.env.REDIS_CHANNEL_PREFIX = 'rt-test:'
+    process.env.NIVARO_ROLE = 'realtime'
+    delete process.env.SOCKETS
+    const { buildRealtimeServer } = await import('../../realtime-server.js')
+    realtime = await buildRealtimeServer()
+    await realtime.listen({ port: 0, host: '127.0.0.1' })
+    realtimePort = (realtime.server.address() as AddressInfo).port
+
+    process.env.NIVARO_ROLE = 'web'
+    process.env.SOCKETS = 'off'
+    const { socketioPlugin } = await import('../../plugins/socketio.js')
+    web = fastify({ logger: false })
+    web.decorate('redis', new bus.FakeRedis({ db: 9 }) as never)
+    await web.register(socketioPlugin)
+    await web.listen({ port: 0, host: '127.0.0.1' })
+    webPort = (web.server.address() as AddressInfo).port
+  }, 30_000)
+
+  afterAll(async () => {
+    await web?.close()
+    await realtime?.close()
+    if (saved.role === undefined) delete process.env.NIVARO_ROLE
+    else process.env.NIVARO_ROLE = saved.role
+    if (saved.sockets === undefined) delete process.env.SOCKETS
+    else process.env.SOCKETS = saved.sockets
+    delete process.env.REDIS_CHANNEL_PREFIX
+  })
+
+  it('registers no HTTP route beyond the realtime allowlist', async () => {
+    const { servedRealtimeRoutes } = await import('../../realtime-server.js')
+    const { REALTIME_HTTP_ROUTES } = await import('../../services/process-role.js')
+    expect([...servedRealtimeRoutes()].sort()).toEqual([...REALTIME_HTTP_ROUTES].sort())
+  })
+
+  it('answers anything else with a 404 that says where to route it', async () => {
+    for (const url of ['/api/items/projects', '/api/auth/me', '/api/stream', '/api/graphql']) {
+      const res = await realtime.inject({ method: 'GET', url })
+      expect(res.statusCode).toBe(404)
+      expect(res.json().message).toMatch(/not served by a realtime process/)
+    }
+    const post = await realtime.inject({ method: 'POST', url: '/api/graphql', payload: {} })
+    expect(post.statusCode).toBe(404)
+  })
+
+  it('says it is the realtime role on /api/version and on every response', async () => {
+    const res = await realtime.inject({ method: 'GET', url: '/api/version' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().role).toBe('realtime')
+    expect(res.headers['x-nivaro-role']).toBe('realtime')
+  })
+
+  it('serves /socket.io on the realtime process and not on a SOCKETS=off web process', async () => {
+    const rt = await fetch(`http://127.0.0.1:${realtimePort}/socket.io/?EIO=4&transport=polling`)
+    expect(rt.status).toBe(200)
+    expect(await rt.text()).toMatch(/^0\{"sid"/)
+    const w = await fetch(`http://127.0.0.1:${webPort}/socket.io/?EIO=4&transport=polling`)
+    expect(w.status).toBe(404)
+    expect(web.io.engine.clientsCount).toBe(0)
+  })
+
+  it('delivers what the SOCKETS=off web process emits to the realtime process sockets', async () => {
+    const { ws, events } = await connect(realtimePort)
+    try {
+      web.io.emit('rt:probe', { n: 1 })
+      await waitFor(() => events.some(([e]) => e === 'rt:probe'))
+      expect(events.find(([e]) => e === 'rt:probe')?.[1]).toEqual({ n: 1 })
+      // fetchSockets across the adapter: the web process sees the realtime process's socket.
+      const all = await web.io.fetchSockets()
+      expect(all.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      ws.close()
+    }
+  })
+})
