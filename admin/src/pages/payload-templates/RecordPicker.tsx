@@ -10,16 +10,7 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import { errorMessage, type RecordOption, useRecordSearch } from './api'
-
-function useDebounced<T>(value: T, ms: number): T {
-  const [v, setV] = useState(value)
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), ms)
-    return () => clearTimeout(t)
-  }, [value, ms])
-  return v
-}
+import { errorMessage, type RecordOption, useDebounced, useRecordSearch } from './api'
 
 /**
  * Which real record the preview renders. Opens on the newest record of the

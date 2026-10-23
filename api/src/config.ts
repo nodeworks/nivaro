@@ -141,7 +141,13 @@ const schema = z.object({
   // Shown on the Layouts overview and editor on instances whose layout config
   // is overwritten by promote:config (staging: "Layouts here are replaced
   // every night from development. Make lasting changes on development.").
-  LAYOUT_EDIT_WARNING: z.string().optional()
+  LAYOUT_EDIT_WARNING: z.string().optional(),
+
+  // Shown on the Payloads card, the payload template editor and its publish
+  // panel where promote:config replaces payload templates nightly (staging:
+  // "Payload templates here are replaced every night from Development. Make
+  // lasting changes on Development.").
+  PAYLOAD_EDIT_WARNING: z.string().optional()
 })
 
 const parsed = schema.safeParse(process.env)

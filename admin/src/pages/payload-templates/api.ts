@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import type { ExternalApi } from '../ExternalApis'
 
@@ -136,6 +137,9 @@ export interface TemplateDetail {
   lookups: unknown
   used_by: UsedBy[]
   newer_default: boolean
+  /** The registrar ships a file default for this key (Reset to file default). */
+  has_default?: boolean
+  default_mode?: TemplateMode | null
   default_body?: unknown
 }
 
@@ -261,12 +265,25 @@ export function formatEt(iso: string | null | undefined, timeOnly = false): stri
   return `${(timeOnly ? ET_TIME : ET).format(d)} ET`
 }
 
+/** A server error in plain words: `errors[]` (joined), then `message`, then a string `error`. */
 export function errorMessage(e: unknown, fallback = 'Something went wrong'): string {
-  const r = (e as { response?: { data?: { error?: unknown; errors?: unknown } } })?.response?.data
+  const r = (
+    e as { response?: { data?: { error?: unknown; errors?: unknown; message?: unknown } } }
+  )?.response?.data
   if (Array.isArray(r?.errors) && r.errors.length) return r.errors.map(String).join('; ')
-  if (typeof r?.error === 'string') return r.error
+  if (typeof r?.message === 'string' && r.message) return r.message
+  if (typeof r?.error === 'string' && r.error) return r.error
   if (e instanceof Error && e.message) return e.message
   return fallback
+}
+
+export function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return v
 }
 
 export function httpStatus(e: unknown): number | null {
@@ -280,9 +297,9 @@ export function staleCurrent(e: unknown): TemplateDetail | null {
   return cur ? normalizeDetail(cur) : null
 }
 
-/** Wire form of a body: map specs travel as objects, Liquid as text. */
-function wire(d: DraftBody): { mode: TemplateMode; body: MapSpec | string } {
-  return { mode: d.mode, body: d.body }
+/** Wire form of a body: both modes travel as text (map specs as JSON text; the server parses). */
+function wire(d: DraftBody): { mode: TemplateMode; body: string } {
+  return { mode: d.mode, body: d.mode === 'map' ? JSON.stringify(d.body) : d.body }
 }
 
 // ─── Hooks ───────────────────────────────────────────────────────────────────
@@ -330,38 +347,71 @@ export function useTemplate(key: string | null | undefined) {
 }
 
 /**
- * PUT the draft. Resolves `{ rev }`; a stale `base_rev` rejects with the 409 (read it with
- * `staleCurrent`), a spec the server refuses rejects with the 400 (`errorMessage`).
+ * PUT the draft. Resolves `{ rev }`; a stale `base_rev` — or a publish since the editor loaded
+ * (`base_published_version`) — rejects with the 409 (read it with `staleCurrent`), a spec the
+ * server refuses rejects with the 400 (`errorMessage`).
  */
 export function useSaveDraft(key?: string) {
   const qc = useQueryClient()
   return useMutation({
     /** `key` overrides the hook's key (a flush after the editor switched templates). */
-    mutationFn: (args: { draft: DraftBody; base_rev: number; key?: string }) =>
+    mutationFn: (args: {
+      draft: DraftBody
+      base_rev: number
+      base_published_version: number | null
+      key?: string
+    }) =>
       api
         .put<{ rev: number }>(
           `/payload-templates/${encodeURIComponent(args.key ?? key ?? '')}/draft`,
-          { ...wire(args.draft), base_rev: args.base_rev }
+          {
+            ...wire(args.draft),
+            base_rev: args.base_rev,
+            base_published_version: args.base_published_version
+          }
         )
         .then((r) => r.data),
     onSuccess: (res, args) => {
+      const k = args.key ?? key ?? ''
+      const wired = wire(args.draft)
+      let updated = null as TemplateDetail | null
       qc.setQueryData<{ data: TemplateDetail; warning: string | null }>(
-        payloadKeys.detail(args.key ?? key ?? ''),
+        payloadKeys.detail(k),
+        (old) => {
+          if (!old) return old
+          updated = {
+            ...old.data,
+            draft_rev: res.rev,
+            draft_mode: wired.mode,
+            draft_body: wired.body,
+            draft_updated_at: new Date().toISOString()
+          }
+          return { ...old, data: updated }
+        }
+      )
+      // The list's status chip follows the save; no refetch per keystroke pause.
+      qc.setQueriesData<{ data: TemplateListItem[]; warning: string | null }>(
+        { queryKey: ['payload-templates', 'admin-list'] },
         (old) =>
           old
             ? {
                 ...old,
-                data: {
-                  ...old.data,
-                  draft_rev: res.rev,
-                  draft_mode: args.draft.mode,
-                  draft_body: args.draft.body,
-                  draft_updated_at: new Date().toISOString()
-                }
+                data: old.data.map((t) =>
+                  t.key === k
+                    ? {
+                        ...t,
+                        draft_rev: res.rev,
+                        status: updated
+                          ? detailStatus(updated)
+                          : t.published_version != null
+                            ? 'draft'
+                            : 'unpublished'
+                      }
+                    : t
+                )
               }
             : old
       )
-      void qc.invalidateQueries({ queryKey: ['payload-templates', 'admin-list'] })
     }
   })
 }
@@ -440,9 +490,13 @@ export function useCreateTemplate() {
     mutationFn: (input: CreateTemplateInput) =>
       api
         .post<{ data: { key: string } }>('/payload-templates', {
-          ...input,
-          draft_mode: input.mode,
-          draft_body: input.mode === 'map' ? { v: 1, fields: [] } : '{\n}'
+          key: input.key,
+          label: input.label,
+          external_api: input.external_api,
+          ...(input.endpoint_path ? { endpoint_path: input.endpoint_path } : {}),
+          collection: input.collection,
+          mode: input.mode,
+          body: input.mode === 'map' ? JSON.stringify({ v: 1, fields: [] }) : '{\n}'
         })
         .then((r) => r.data.data ?? { key: input.key }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: payloadKeys.all })

@@ -78,7 +78,7 @@ const SURFACES: Surface[] = [
     table: 'nivaro_payload_templates',
     label: 'Payload templates',
     nameCol: 'label',
-    cols: ['key', 'label', 'description', 'draft_body', 'published_body', 'lookups'],
+    cols: ['key', 'label', 'description', 'published_body', 'lookups'],
     link: (r) => `/payload-templates/${encodeURIComponent(String(r.key))}`
   },
   {

@@ -19,6 +19,9 @@
  * - Only columns the snapshot row CARRIES and the live table still has are written. Secret
  *   columns are dropped from snapshots (by list and by name), so a restore never overwrites a
  *   live secret; redacted and credential column names are refused even when a file carries them.
+ *   Columns redacted BY VALUE (external API instance_overrides: credentials inside a JSON value)
+ *   are written as the snapshot's plain parts merged with the credential parts of the live row's
+ *   current value, read under lock in the same transaction.
  * - An update writes only the columns that differ. A row that differs only in columns the
  *   snapshot never had (a migration added them since) is "unchanged".
  * - Per-person GRANTS (GRANT_TABLES: User Scopes, owner-group and team memberships) come back
@@ -57,6 +60,8 @@ import {
   type ConfigSnapshot,
   classifyTables,
   isRedactedColumn,
+  isValueRedactedColumn,
+  restoreRedactedValue,
   type SnapshotRow
 } from './config-inventory.js'
 import { chunkArray } from './db-batch.js'
@@ -669,13 +674,31 @@ export async function applyTablePlans(
     }
     const data = target[table]?.[o.key]?.data ?? {}
     const values: Record<string, unknown> = {}
-    for (const f of o.fields) values[f] = toDbValue(data[f], cols.get(f))
+    const byValue = o.fields.filter((f) => isValueRedactedColumn(table, f))
+    for (const f of o.fields) {
+      values[f] = isValueRedactedColumn(table, f)
+        ? toDbValue(restoreRedactedValue(table, f, data[f], null), cols.get(f))
+        : toDbValue(data[f], cols.get(f))
+    }
     if (o.op === 'update') {
       return {
         table,
         key: o.key,
         op: 'update',
         run: async () => {
+          if (byValue.length > 0) {
+            // The credential parts come back from the row being overwritten, never the snapshot.
+            const cur = (await trx.raw(
+              `${lead} SELECT ${byValue.map((c) => `[${c}]`).join(', ')} FROM [${table}] WITH (UPDLOCK, HOLDLOCK) WHERE [id] = ?;`,
+              [o.key]
+            )) as Array<Record<string, unknown>>
+            for (const c of byValue) {
+              values[c] = toDbValue(
+                restoreRedactedValue(table, c, data[c], cur[0]?.[c] ?? null),
+                cols.get(c)
+              )
+            }
+          }
           const names = Object.keys(values)
           const res = (await trx.raw(
             `${lead} UPDATE [${table}] SET ${names.map((n) => `[${n}] = ?`).join(', ')} WHERE [id] = ?; SELECT @@ROWCOUNT AS n;`,

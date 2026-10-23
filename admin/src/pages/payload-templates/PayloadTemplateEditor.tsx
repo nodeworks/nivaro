@@ -32,6 +32,7 @@ import {
   sameBody,
   staleCurrent,
   type TemplateDetail,
+  useDebounced,
   useExternalApis,
   usePreview,
   useSaveDraft,
@@ -75,15 +76,6 @@ function useElementWidth<T extends HTMLElement>() {
   return [ref, width] as const
 }
 
-function useDebounced<T>(value: T, ms: number): T {
-  const [v, setV] = useState(value)
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), ms)
-    return () => clearTimeout(t)
-  }, [value, ms])
-  return v
-}
-
 type SaveState =
   | { kind: 'idle' }
   | { kind: 'pending' }
@@ -113,6 +105,8 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
   const [local, setLocal] = useState<{ key: string; draft: DraftBody } | null>(null)
   const [state, setState] = useState<SaveState>({ kind: 'idle' })
   const revs = useRef<Record<string, number>>({})
+  /** The published version each template was loaded at — a publish since then is a conflict. */
+  const loadedVersions = useRef<Record<string, number | null>>({})
   const pending = useRef<{ key: string; draft: DraftBody } | null>(null)
   const inFlight = useRef(false)
   const blocked = useRef(false)
@@ -146,7 +140,8 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
       const res = await saveRef.current.mutateAsync({
         key: job.key,
         draft: job.draft,
-        base_rev: revs.current[job.key] ?? 0
+        base_rev: revs.current[job.key] ?? 0,
+        base_published_version: loadedVersions.current[job.key] ?? null
       })
       revs.current[job.key] = res.rev
       failed.current = false
@@ -228,6 +223,9 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
     if (!detail || !key || detail.key !== key) return
     if (local?.key === key) return
     revs.current[key] = detail.draft_rev
+    loadedVersions.current[key] = detail.published_version ?? null
+    // A conflicted edit of another template is never sent behind the person's back.
+    if (blocked.current && pending.current && pending.current.key !== key) pending.current = null
     blocked.current = false
     failed.current = false
     setRev(detail.draft_rev)
@@ -269,6 +267,7 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
     blocked.current = false
     failed.current = false
     revs.current[current.key] = current.draft_rev
+    loadedVersions.current[current.key] = current.published_version ?? null
     if (keyRef.current === current.key) setRev(current.draft_rev)
     setLocal({ key: current.key, draft: draftOf(current) })
     setState({ kind: 'idle' })
@@ -278,6 +277,7 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
   const keepMine = useCallback(
     (current: TemplateDetail) => {
       revs.current[current.key] = current.draft_rev
+      loadedVersions.current[current.key] = current.published_version ?? null
       blocked.current = false
       if (local?.key === current.key) pending.current = { key: current.key, draft: local.draft }
       flush()
@@ -440,7 +440,7 @@ function MoreMenu({
           <History className='h-3.5 w-3.5 text-slate-400' />
           History
         </button>
-        {template.owner && (
+        {template.has_default && (
           <button type='button' className={item} onClick={() => pick('default')}>
             <RotateCcw className='h-3.5 w-3.5 text-slate-400' />
             Reset to file default

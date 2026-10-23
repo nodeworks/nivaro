@@ -57,7 +57,13 @@ interface StateRow {
   id: string
   key: string
   label: string
+  /** The name a partner knows the state by (migration 341); pushes render it. */
+  external_label?: string | null
 }
+
+/** The state a push renders with — the same shape runTransitionActions gets (preview == push). */
+const pushState = (s: StateRow | null | undefined) =>
+  s ? { key: s.key, label: s.label, external_label: s.external_label ?? null } : null
 
 const truthy = (v: unknown) => v === true || v === 1 || v === '1'
 
@@ -136,7 +142,7 @@ export async function outboundPreview(
   const [states, transitions] = await Promise.all([
     db('nivaro_workflow_states')
       .where({ template: instance.template })
-      .select('id', 'key', 'label') as Promise<StateRow[]>,
+      .select('id', 'key', 'label', 'external_label') as Promise<StateRow[]>,
     db('nivaro_workflow_transitions')
       .where({ template: instance.template })
       .orderBy('sort')
@@ -188,7 +194,7 @@ export async function outboundPreview(
     const previews = await previewErpActions({
       transition: { id: t.id, label: t.label, actions: t.actions },
       instance: { collection, item: String(item) },
-      newStateObj: to ? { key: to.key, label: to.label } : null,
+      newStateObj: pushState(to),
       userId,
       cache
     })
@@ -451,14 +457,14 @@ export async function transitionPreflight(
   }
 
   const to = t.to_state
-    ? ((await db('nivaro_workflow_states').where({ id: t.to_state }).first('key', 'label')) as
-        | { key: string; label: string }
-        | undefined)
+    ? ((await db('nivaro_workflow_states')
+        .where({ id: t.to_state })
+        .first('id', 'key', 'label', 'external_label')) as StateRow | undefined)
     : undefined
   const previews = await previewErpActions({
     transition: { id: t.id, label: t.label, actions: t.actions },
     instance: { collection, item: String(item) },
-    newStateObj: to ?? null,
+    newStateObj: pushState(to),
     userId
   })
   const names = await apiNames(previews.map((p) => p.api_id ?? Number.NaN))
