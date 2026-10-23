@@ -13,7 +13,7 @@ export const OUTLINE_BTN =
   'inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
 
 export const PRIMARY_BTN =
-  'inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 dark:focus-visible:ring-offset-background'
+  'inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:hover:bg-slate-200 dark:disabled:bg-muted dark:disabled:text-muted-foreground dark:focus-visible:ring-offset-background'
 
 /** A solid neutral button for confirming a draft-changing step (cyan stays Publish-only). */
 export const STRONG_BTN = cn(
@@ -89,7 +89,7 @@ export function PanelFrame({
         <button
           type='button'
           onClick={onClose}
-          className='inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[12px] text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-muted dark:hover:text-foreground'
+          className='inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 py-1 text-[12px] text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:bg-muted dark:hover:text-foreground'
           data-payload-panel-close
         >
           <X className='h-3.5 w-3.5' />

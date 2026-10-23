@@ -3,7 +3,7 @@ import type { TemplateDetail } from './api'
 import { orderResults, summarize } from './CheckRecentPanel'
 import { conflictText } from './ConflictPanel'
 import { defaultCopy } from './DefaultPanel'
-import { restoreCopy } from './HistoryPanel'
+import { restoreCopy, seedAuthor } from './HistoryPanel'
 import { type CheckResult, draftLookupsOf, liveLookupsOf, sameLookups } from './panel-api'
 
 const row = (over: Partial<TemplateDetail>): TemplateDetail =>
@@ -83,5 +83,27 @@ describe('lookups on a template', () => {
     } as unknown as TemplateDetail
     expect(draftLookupsOf(t)).toBeNull()
     expect(sameLookups(draftLookupsOf(t), liveLookupsOf(t))).toBe(false)
+  })
+})
+
+describe('seedAuthor', () => {
+  const v = (over: Record<string, unknown>) =>
+    ({
+      id: 1,
+      version: 1,
+      mode: 'map',
+      note: '',
+      published_by: null,
+      published_at: null,
+      ...over
+    }) as never
+
+  it('names the file default for a seeded version, nobody else', () => {
+    expect(seedAuthor(v({ note: 'Seeded from efp-ops' }), 'efp-ops')).toBe('efp-ops file default')
+    expect(seedAuthor(v({ note: 'Seeded from the efp-ops file default' }), null)).toBe(
+      'efp-ops file default'
+    )
+    expect(seedAuthor(v({ note: 'Seeded from efp-ops', published_by: 'u1' }), 'efp-ops')).toBeNull()
+    expect(seedAuthor(v({ note: 'Fix the PO number' }), 'efp-ops')).toBeNull()
   })
 })

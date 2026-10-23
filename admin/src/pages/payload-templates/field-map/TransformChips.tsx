@@ -138,7 +138,7 @@ export function TransformChips({
           // biome-ignore lint/suspicious/noArrayIndexKey: transforms carry no id; order is the identity
           <span key={i} className='inline-flex items-center gap-1'>
             {i > 0 && (
-              <span className='text-[11px] text-slate-400' aria-hidden>
+              <span className='text-[11px] text-slate-500 dark:text-muted-foreground' aria-hidden>
                 →
               </span>
             )}

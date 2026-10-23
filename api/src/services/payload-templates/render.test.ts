@@ -213,6 +213,43 @@ describe('renderBody map mode', () => {
       {}
     )
     expect(r.problems.map((p) => p.path)).toEqual(['lines[1].sku'])
+    expect(r.problems[0]).toMatchObject({
+      code: 'rule_max_length',
+      params: { length: 3, max: 2 }
+    })
+  })
+
+  it('rule failures and locked keys carry codes the admin composes copy from', async () => {
+    const r = await renderBody(
+      'map',
+      JSON.stringify({
+        v: 1,
+        fields: [
+          {
+            id: 'a',
+            key: 'kind',
+            type: 'text',
+            include: 'always',
+            value: { source: 'fixed', value: 'X' },
+            rules: { allowed: ['A', 'B'] }
+          },
+          {
+            id: 'b',
+            key: 'qty',
+            type: 'number',
+            include: 'always',
+            value: { source: 'fixed', value: 0 },
+            rules: { min: 1 }
+          }
+        ]
+      }),
+      {},
+      { lockedKeys: ['status'] }
+    )
+    const codes = Object.fromEntries(r.problems.map((p) => [p.code, p.params]))
+    expect(codes.rule_allowed).toEqual({ got: 'X', allowed: ['A', 'B'] })
+    expect(codes.rule_min).toEqual({ got: 0, min: 1 })
+    expect(codes.locked_missing).toEqual({ key: 'status' })
   })
 
   it('invalid spec JSON is one error', async () => {

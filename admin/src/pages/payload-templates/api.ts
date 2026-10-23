@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import type { ExternalApi } from '../ExternalApis'
+import { collectionWord, type PathNames } from './field-map/labels'
 
 // ─── Partner payload templates: admin types + hooks ─────────────────────────
 // The admin never imports api/src, so the field-map shapes are mirrored here
@@ -85,6 +86,10 @@ export type Problem = {
   path: string
   message: string
   severity: 'error' | 'warning'
+  /** Machine code (`no_value`, `type_number`, `rule_max_length`…); copy is composed from it. */
+  code?: string
+  /** Small facts for the copy: `{ source }`, `{ got }`, `{ max, length }`, `{ key }`… */
+  params?: Record<string, unknown>
 }
 
 export type TemplateMode = 'map' | 'code'
@@ -476,6 +481,74 @@ export function useRecordSearch(key: string | null | undefined, q: string) {
       prevQuery?.queryKey[2] === (key ?? '') ? prev : undefined,
     staleTime: 30_000
   })
+}
+
+/**
+ * The label of a record the preview has listed (newest records or any search so far),
+ * for problem copy ("IR-004818 has no …"). Shares RecordPicker's newest-records query.
+ */
+export function useRecordLabel(
+  key: string | null | undefined,
+  recordId: string | null | undefined
+): string | null {
+  const qc = useQueryClient()
+  const newest = useRecordSearch(key, '')
+  if (!key || !recordId) return null
+  const hit = newest.data?.find((r) => r.id === recordId)
+  if (hit?.label) return hit.label
+  for (const [, rows] of qc.getQueriesData<RecordOption[]>({
+    queryKey: ['payload-templates', 'records', key]
+  })) {
+    const r = rows?.find((x) => x.id === recordId)
+    if (r?.label) return r.label
+  }
+  return null
+}
+
+type CollectionRow = { collection: string; display_name?: string | null; singular?: string | null }
+type CollectionMetaRow = {
+  relations?: Array<{
+    many_collection: string
+    many_field: string
+    one_collection: string | null
+    junction_field: string | null
+  }>
+}
+
+/**
+ * Display names for path labels on `collection`'s templates: its many-to-one fields → the
+ * related collection's singular display name, plus the upper-case words those names use.
+ * Shares the admin-wide `['collections']` and the field picker's `['collection-meta', c]`.
+ */
+export function usePathNames(collection: string | null | undefined): PathNames | null {
+  const list = useQuery<CollectionRow[]>({
+    queryKey: ['collections'],
+    queryFn: () => api.get('/collections').then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const meta = useQuery<CollectionMetaRow>({
+    queryKey: ['collection-meta', collection ?? ''],
+    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    enabled: !!collection,
+    staleTime: 60_000
+  })
+  return useMemo(() => {
+    if (!list.data) return null
+    const collectionLabel: Record<string, string> = {}
+    const acronyms = new Set<string>()
+    for (const c of list.data) {
+      const shown = c.singular?.trim() || c.display_name?.trim()
+      if (!shown) continue
+      collectionLabel[c.collection] = c.singular?.trim() ? shown : collectionWord(shown)
+      for (const w of shown.split(/\s+/)) if (/^[A-Z][A-Z0-9]{1,5}$/.test(w)) acronyms.add(w)
+    }
+    const relCollection: Record<string, string> = {}
+    for (const r of meta.data?.relations ?? []) {
+      if (r.many_collection === collection && r.one_collection && r.junction_field == null)
+        relCollection[r.many_field] = r.one_collection
+    }
+    return { collectionLabel, relCollection, acronyms }
+  }, [list.data, meta.data, collection])
 }
 
 export interface CreateTemplateInput {

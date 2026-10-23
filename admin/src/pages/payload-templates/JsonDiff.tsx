@@ -4,7 +4,8 @@ import { cn } from '@/lib/utils'
 import {
   countChanges,
   diffLines,
-  type PathChange,
+  type GroupedChange,
+  groupPathChanges,
   pathChanges,
   prettyBody,
   segmentDiff,
@@ -27,9 +28,12 @@ const PATHS_SHOWN = 8
 
 const isContainer = (v: unknown) => v !== null && typeof v === 'object'
 
-function ChangeRow({ c }: { c: PathChange }) {
+function ChangeRow({ c }: { c: GroupedChange }) {
   return (
-    <li className='flex min-w-0 gap-2 text-[12px] leading-snug'>
+    <li
+      className='flex min-w-0 gap-2 text-[12px] leading-snug'
+      data-tip={c.count > 1 ? c.paths.join('\n') : undefined}
+    >
       <span
         className={cn(
           'w-[60px] shrink-0 text-[11px] font-medium',
@@ -41,7 +45,17 @@ function ChangeRow({ c }: { c: PathChange }) {
         {c.kind === 'added' ? 'Added' : c.kind === 'removed' ? 'Removed' : 'Changed'}
       </span>
       <span className='min-w-0 break-words text-slate-700 dark:text-slate-200'>
-        <span className='font-mono text-[11.5px]'>{c.path}</span>
+        {c.count > 1 ? (
+          <>
+            <span className='font-mono text-[11.5px]'>{c.leaf}</span>
+            <span className='text-slate-500 dark:text-muted-foreground'> on {c.count} lines</span>
+            {c.kind === 'changed' && (
+              <span className='text-slate-500 dark:text-muted-foreground'>:</span>
+            )}
+          </>
+        ) : (
+          <span className='font-mono text-[11.5px]'>{c.path}</span>
+        )}
         <span className='text-slate-500 dark:text-muted-foreground'>
           {c.kind === 'changed'
             ? ` ${shortValue(c.before)} → ${shortValue(c.after)}`
@@ -93,7 +107,9 @@ export function JsonDiff({
     )
 
   const counts = lines ? countChanges(lines) : null
-  const shownPaths = paths ? (allPaths ? paths.changes : paths.changes.slice(0, PATHS_SHOWN)) : []
+  const grouped = paths ? groupPathChanges(paths.changes) : []
+  const shownPaths = allPaths ? grouped : grouped.slice(0, PATHS_SHOWN)
+  const shownCount = shownPaths.reduce((n, c) => n + c.count, 0)
 
   return (
     <div className='min-w-0' data-json-diff>
@@ -119,7 +135,7 @@ export function JsonDiff({
               <ChangeRow key={`${c.kind}:${c.path}`} c={c} />
             ))}
           </ul>
-          {paths.total > shownPaths.length && (
+          {paths.total > shownCount && (
             <button
               type='button'
               onClick={() => setAllPaths(true)}
@@ -127,8 +143,8 @@ export function JsonDiff({
               className='mt-1.5 text-[11.5px] font-medium text-slate-600 underline underline-offset-2 hover:text-slate-900 disabled:no-underline dark:text-slate-300 dark:hover:text-foreground'
             >
               {allPaths
-                ? `${paths.total - shownPaths.length} more not listed`
-                : `${paths.total - shownPaths.length} more changes`}
+                ? `${paths.total - shownCount} more not listed`
+                : `${paths.total - shownCount} more changes`}
             </button>
           )}
         </div>
@@ -139,7 +155,7 @@ export function JsonDiff({
           These bodies are too long to compare line by line here.
         </p>
       ) : (
-        <pre className='whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.6]'>
+        <pre className='overflow-x-auto whitespace-pre font-mono text-[12px] leading-[1.6]'>
           {segments.map((s, si) =>
             s.kind === 'fold' && !open.has(si) ? (
               <button
@@ -159,7 +175,7 @@ export function JsonDiff({
                   // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are positional
                   key={`${si}:${li}`}
                   className={cn(
-                    'flex gap-2 rounded-sm px-1',
+                    'flex w-max min-w-full gap-2 rounded-sm px-1',
                     l.kind === 'add' &&
                       'bg-emerald-50 text-emerald-900 dark:bg-emerald-500/10 dark:text-emerald-200',
                     l.kind === 'del' &&

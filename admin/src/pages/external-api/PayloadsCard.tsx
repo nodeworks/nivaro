@@ -215,7 +215,9 @@ function CreateForm({
             id='payload-key-hint'
             className={cn(
               'text-[12px]',
-              keyError ? 'text-red-600 dark:text-red-400' : 'text-slate-400'
+              keyError
+                ? 'text-red-600 dark:text-red-400'
+                : 'text-slate-500 dark:text-muted-foreground'
             )}
           >
             {keyError ??
@@ -282,7 +284,7 @@ function CreateForm({
         <button
           type='submit'
           disabled={!canCreate}
-          className='h-8 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40'
+          className='h-8 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:hover:bg-slate-200 dark:disabled:bg-muted dark:disabled:text-muted-foreground'
         >
           {create.isPending ? 'Creating…' : 'Create payload'}
         </button>
@@ -324,7 +326,7 @@ export function PayloadsCard({ apiId, apiName }: { apiId: number; apiName: strin
       <div className='flex items-start justify-between gap-4'>
         <div>
           <Label>Payloads</Label>
-          <p className='text-[12px] text-slate-400'>
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
             The request bodies Nivaro sends to {apiName}. Pushes send the published version only;
             edits stay a draft until you publish.
           </p>
@@ -372,7 +374,7 @@ export function PayloadsCard({ apiId, apiName }: { apiId: number; apiName: strin
           </p>
         ) : templates.length === 0 ? (
           !creating && (
-            <p className='text-[13px] text-slate-400'>
+            <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>
               No payloads yet. A payload is the JSON body a pipeline action or code push sends to
               this API.
             </p>
@@ -393,7 +395,7 @@ export function PayloadsCard({ apiId, apiName }: { apiId: number; apiName: strin
                     <span className='block truncate text-[13px] text-slate-800 dark:text-foreground'>
                       {t.label}
                     </span>
-                    <span className='block truncate font-mono text-[11px] text-slate-400'>
+                    <span className='block truncate font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
                       {t.key}
                     </span>
                   </span>

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 import { type DraftBody, errorMessage, publishedOf, staleCurrent, type TemplateDetail } from './api'
 import {
   CheckProgress,
@@ -58,6 +59,7 @@ export function PublishPanel({
   const ctxRef = useRef(ctx)
   ctxRef.current = ctx
   const noteId = useId()
+  const blockedId = useId()
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -149,7 +151,8 @@ export function PublishPanel({
       {warning && <EditWarningNote text={warning} />}
       <div>
         <label htmlFor={noteId} className={SECTION_LABEL}>
-          Note for History <span className='font-normal text-slate-400'>(required)</span>
+          Note for History{' '}
+          <span className='font-normal text-slate-500 dark:text-muted-foreground'>(required)</span>
         </label>
         <Textarea
           id={noteId}
@@ -186,17 +189,16 @@ export function PublishPanel({
             failed submission.
           </p>
           <div className='flex flex-wrap items-center gap-2'>
-            <span data-tip={blockedTip}>
-              <button
-                type='button'
-                disabled={!!blockedTip || busy}
-                onClick={() => void doPublish(true)}
-                className={PRIMARY_BTN}
-                data-payload-publish-anyway-go
-              >
-                {busy ? 'Publishing…' : `Publish anyway — ${plural(failing, 'record')} would fail`}
-              </button>
-            </span>
+            <button
+              type='button'
+              disabled={!!blockedTip || busy}
+              onClick={() => void doPublish(true)}
+              className={PRIMARY_BTN}
+              aria-describedby={blockedTip ? blockedId : undefined}
+              data-payload-publish-anyway-go
+            >
+              {busy ? 'Publishing…' : `Publish anyway — ${plural(failing, 'record')} would fail`}
+            </button>
             <button
               type='button'
               onClick={() => setAnyway(false)}
@@ -205,25 +207,43 @@ export function PublishPanel({
             >
               Keep editing
             </button>
+            {blockedTip && !busy && (
+              <span
+                id={blockedId}
+                className='text-[12px] text-slate-600 dark:text-muted-foreground'
+              >
+                {blockedTip}
+              </span>
+            )}
           </div>
         </div>
       ) : (
-        <div className='flex flex-wrap items-center gap-2'>
-          <span data-tip={blockedTip}>
+        <div className='space-y-1.5'>
+          <div className='flex flex-wrap items-center gap-x-3 gap-y-1.5'>
             <button
               type='button'
               disabled={!!blockedTip || busy}
               onClick={() => void doPublish()}
-              className={PRIMARY_BTN}
+              className={cn(PRIMARY_BTN, 'shrink-0')}
+              aria-describedby={blockedTip ? blockedId : undefined}
               data-payload-publish-confirm
             >
               {busy ? 'Publishing…' : `Publish v${next}`}
             </button>
-          </span>
+            {blockedTip && !busy && (
+              <span
+                id={blockedId}
+                className='text-[12px] text-slate-600 dark:text-muted-foreground'
+                data-payload-publish-blocked
+              >
+                {blockedTip}
+              </span>
+            )}
+          </div>
           {!nothingToPublish && failing > 0 && (
-            <span className='text-[12px] text-red-700 dark:text-red-300'>
+            <p className='text-[12px] text-red-700 dark:text-red-300' data-payload-publish-failing>
               {failing} of {s.total} recent records would fail with this version
-            </span>
+            </p>
           )}
         </div>
       )}
@@ -290,6 +310,8 @@ export function PublishPanel({
                   collection={template.collection}
                   onPreview={onPreview}
                   failuresOnly
+                  spec={draft.mode === 'map' ? draft.body : null}
+                  partner={template.external_api}
                 />
               </>
             )}

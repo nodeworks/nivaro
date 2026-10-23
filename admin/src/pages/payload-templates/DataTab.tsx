@@ -87,6 +87,8 @@ function ActionLookups({ template }: { template: TemplateDetail }) {
   const transitions = template.used_by.filter((u) => u.kind === 'transition')
   const tr = q.data?.transitions?.find((t) => String(t.id) === String(ref.transition_id))
   const action = tr ? findErpAction(tr.actions, template.key) : null
+  // The pipeline no longer sends it from this transition: "previews read this one" would be wrong.
+  const gone = !q.isLoading && !q.isError && !action
   return (
     <section className='space-y-2' aria-label='From the pipeline action'>
       <div className='flex flex-wrap items-baseline gap-x-2'>
@@ -101,7 +103,7 @@ function ActionLookups({ template }: { template: TemplateDetail }) {
       </div>
       <p className={P}>
         {ref.label}
-        {transitions.length > 1
+        {transitions.length > 1 && !gone
           ? ` — previews read this one; ${transitions.length - 1} more ${transitions.length === 2 ? 'transition sends' : 'transitions send'} this payload with their own lookups.`
           : ''}
       </p>
@@ -128,9 +130,9 @@ function ActionLookups({ template }: { template: TemplateDetail }) {
 }
 
 const INPUT =
-  'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-800 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100'
+  'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-800 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100'
 const JSON_INPUT =
-  'block min-h-[56px] w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-[11.5px] leading-[1.55] text-slate-800 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+  'block min-h-[56px] w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-[11.5px] leading-[1.55] text-slate-800 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
 const FIELD_LABEL = 'mb-1 block text-[11.5px] font-medium text-slate-600 dark:text-slate-300'
 
 function CollectionPicker({
@@ -157,7 +159,7 @@ function CollectionPicker({
           <span
             className={cn(
               'min-w-0 flex-1 truncate font-mono text-[12px]',
-              !value && 'font-sans text-slate-400'
+              !value && 'font-sans text-slate-500 dark:text-muted-foreground'
             )}
           >
             {value || 'Pick a collection'}
@@ -236,7 +238,10 @@ function LookupRowEditor({
       <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-2'>
         <div>
           <label htmlFor={`${id}-name`} className={FIELD_LABEL}>
-            Name <span className='font-normal text-slate-400'>(read as context.name)</span>
+            Name{' '}
+            <span className='font-normal text-slate-500 dark:text-muted-foreground'>
+              (read as context.name)
+            </span>
           </label>
           <input
             id={`${id}-name`}
@@ -260,7 +265,10 @@ function LookupRowEditor({
       </div>
       <div>
         <label htmlFor={`${id}-filter`} className={FIELD_LABEL}>
-          Filter <span className='font-normal text-slate-400'>(JSON, optional)</span>
+          Filter{' '}
+          <span className='font-normal text-slate-500 dark:text-muted-foreground'>
+            (JSON, optional)
+          </span>
         </label>
         <textarea
           id={`${id}-filter`}
@@ -306,7 +314,10 @@ function LookupRowEditor({
       </div>
       <div>
         <label htmlFor={`${id}-expand`} className={FIELD_LABEL}>
-          Expand <span className='font-normal text-slate-400'>(JSON, optional — adds fk_data)</span>
+          Expand{' '}
+          <span className='font-normal text-slate-500 dark:text-muted-foreground'>
+            (JSON, optional — adds fk_data)
+          </span>
         </label>
         <textarea
           id={`${id}-expand`}

@@ -51,21 +51,62 @@ export function builtinLabel(name: string): string {
   return BUILTINS.find((b) => b.name === name)?.label ?? name
 }
 
-function humanizeSegment(seg: string): string {
+/**
+ * What the admin knows about the record's collection, so a path reads the way the
+ * collections are named: a relation hop is the related collection's display name
+ * ("MWF queue → MWF id", "Purchase order → Number"), not the title-cased column.
+ */
+export interface PathNames {
+  /** Field of the record's collection → the collection it points at (many-to-one). */
+  relCollection: Record<string, string>
+  /** Collection → its singular display name ("Purchase order"). */
+  collectionLabel: Record<string, string>
+  /** Upper-case words used in display names ("MWF", "PO") — kept upper-case in labels. */
+  acronyms: ReadonlySet<string>
+}
+
+export function humanizeSegment(seg: string, acronyms?: ReadonlySet<string> | null): string {
   const clean = seg.replace(/\[\d*\]/g, '').replace(/_data$/, '')
   const words = clean
     .replace(/[_-]+/g, ' ')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .trim()
   if (!words) return seg
-  return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase()
+  const sentence = words.charAt(0).toUpperCase() + words.slice(1).toLowerCase()
+  if (!acronyms?.size) return sentence
+  return sentence
+    .split(' ')
+    .map((w) => (acronyms.has(w.toUpperCase()) ? w.toUpperCase() : w))
+    .join(' ')
+}
+
+/** "Purchase Orders" → "Purchase order" (sentence case, one of them). */
+export function collectionWord(display: string): string {
+  const words = display.trim().split(/\s+/)
+  if (!words.length || !words[0]) return display
+  const last = singular(words[words.length - 1])
+  const all = [...words.slice(0, -1), last]
+  return all
+    .map((w, i) =>
+      /^[A-Z0-9]{2,}$/.test(w)
+        ? w
+        : i === 0
+          ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+          : w.toLowerCase()
+    )
+    .join(' ')
 }
 
 /** `record.shipping_location.inventory_org` → "Shipping location → Inventory org". */
-export function humanizePath(path: string, itemAlias?: string | null): string {
+export function humanizePath(
+  path: string,
+  itemAlias?: string | null,
+  names?: PathNames | null
+): string {
   const parts = path.split('.').filter(Boolean)
   if (!parts.length) return ''
   const head = parts[0].replace(/\[\d*\]/g, '')
+  const acr = names?.acronyms
   let rest = parts
   let prefix = ''
   if (head === 'record') rest = parts.slice(1)
@@ -77,9 +118,17 @@ export function humanizePath(path: string, itemAlias?: string | null): string {
     prefix = `Each ${humanizeSegment(itemAlias).toLowerCase()}`
     if (!rest.length) return `The ${humanizeSegment(itemAlias).toLowerCase()} itself`
   }
-  const words = rest.map(humanizeSegment)
+  const words = rest.map((seg, i) => {
+    // A record relation hop (not the last segment): the related collection's name.
+    if (head === 'record' && i === 0 && rest.length > 1 && names) {
+      const target = names.relCollection[seg.replace(/\[\d*\]/g, '')]
+      const label = target ? names.collectionLabel[target] : undefined
+      if (label) return label
+    }
+    return humanizeSegment(seg, acr)
+  })
   if (prefix) words.unshift(prefix)
-  return words.join(' → ') || humanizeSegment(head)
+  return words.join(' → ') || humanizeSegment(head, acr)
 }
 
 /** "materials" → "material" — good enough for a sentence header. */
@@ -209,13 +258,17 @@ function quote(v: unknown): string {
 }
 
 /** What the value chip says (no transforms/fallbacks — those render as their own bits). */
-export function valueSourceText(v: ValueSpec | undefined, itemAlias?: string | null): string {
+export function valueSourceText(
+  v: ValueSpec | undefined,
+  itemAlias?: string | null,
+  names?: PathNames | null
+): string {
   if (!v) return ''
   switch (v.source) {
     case 'fixed':
       return quote(v.value)
     case 'path':
-      return v.path ? humanizePath(v.path, itemAlias) : 'Choose a field'
+      return v.path ? humanizePath(v.path, itemAlias, names) : 'Choose a field'
     case 'builtin':
       return builtinLabel(v.name)
     case 'secret':

@@ -79,4 +79,56 @@ export type Problem = {
   path: string
   message: string
   severity: 'error' | 'warning'
+  /**
+   * Machine code the admin composes plain copy from (`no_value`, `type_number`,
+   * `rule_max_length`…); `message` stays the English fallback for older clients and logs.
+   */
+  code?: ProblemCode
+  /** Small facts for the copy: `{ source }`, `{ got }`, `{ max, length }`, `{ key }`… */
+  params?: Record<string, string | number | string[]>
 }
+
+export type ProblemCode =
+  | 'no_value'
+  | 'no_field'
+  | 'no_fields'
+  | 'type_text'
+  | 'type_number'
+  | 'type_boolean'
+  | 'type_date'
+  | 'type_unknown'
+  | 'json_invalid'
+  | 'rule_required'
+  | 'rule_max_length'
+  | 'rule_allowed'
+  | 'rule_pattern'
+  | 'rule_pattern_invalid'
+  | 'rule_not_number'
+  | 'rule_min'
+  | 'rule_max'
+  | 'rules_ignored'
+  | 'secret_none'
+  | 'secret_unknown'
+  | 'secret_not_text'
+  | 'secret_bad_name'
+  | 'list_no_source'
+  | 'list_not_list'
+  | 'list_scalar_children'
+  | 'formula_error'
+  | 'condition_error'
+  | 'unknown_builtin'
+  | 'unknown_source'
+  | 'unknown_transform'
+  | 'eval_error'
+  | 'not_a_field'
+  | 'empty_key'
+  | 'duplicate_key'
+  | 'number_key'
+  | 'locked_missing'
+  | 'locked_missing_output'
+  | 'liquid_error'
+  | 'invalid_json'
+  | 'not_object'
+  | 'duplicate_output_key'
+  | 'unjsonified'
+  | 'invalid_spec'

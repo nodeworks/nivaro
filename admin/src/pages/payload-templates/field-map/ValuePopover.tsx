@@ -492,7 +492,7 @@ export function ValueEditor({
     <div className='flex max-h-[min(560px,calc(100vh-80px))] flex-col'>
       <div className='flex min-h-0 flex-1'>
         <div
-          className='w-[124px] shrink-0 space-y-px border-r border-slate-100 p-1.5 dark:border-border'
+          className='w-[136px] shrink-0 space-y-px border-r border-slate-100 p-1.5 dark:border-border'
           role='tablist'
           aria-orientation='vertical'
           aria-label='Where the value comes from'
@@ -638,10 +638,11 @@ function ValueChipImpl({
   className,
   id
 }: ValueChipProps) {
+  const env = useFieldMapEnv()
   const [open, setOpen] = useState(!!defaultOpen)
   const Icon = sourceIcon(value)
   const blank = valueIsBlank(value)
-  const text = value ? valueSourceText(value, scope?.alias) : (emptyText ?? placeholder)
+  const text = value ? valueSourceText(value, scope?.alias, env.names) : (emptyText ?? placeholder)
   const machine =
     value?.source === 'fixed' || value?.source === 'formula' || value?.source === 'secret'
   const steps = value?.transforms ?? []
@@ -676,7 +677,7 @@ function ValueChipImpl({
             )}
             {fb.length > 0 && (
               <span className='min-w-0 shrink truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-                · else {valueSourceText(fb[0], scope?.alias)}
+                · else {valueSourceText(fb[0], scope?.alias, env.names)}
                 {fb.length > 1 ? ` +${fb.length - 1}` : ''}
               </span>
             )}

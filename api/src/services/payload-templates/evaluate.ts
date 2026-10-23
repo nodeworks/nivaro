@@ -12,7 +12,7 @@ import {
 } from '../payload-filters.js'
 import { makeSecretTokens, neutralizeSecretMarkers, SECRET_PLACEHOLDER } from '../secret-markers.js'
 import { type ConditionRule, evalConditionRule } from '../workflow-conditions.js'
-import type { Field, MapSpec, Problem, Transform, ValueSpec } from './types.js'
+import type { Field, MapSpec, Problem, ProblemCode, Transform, ValueSpec } from './types.js'
 
 export { validateSpec } from './validate.js'
 
@@ -83,13 +83,22 @@ const isEmpty = (v: unknown): boolean =>
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-function addProblem(ctx: Ctx, at: At, message: string, severity: Problem['severity']): void {
+function addProblem(
+  ctx: Ctx,
+  at: At,
+  message: string,
+  severity: Problem['severity'],
+  code: ProblemCode,
+  params?: Problem['params']
+): void {
   // One problem per row + message: a 2,000-line list reports a bad row once,
   // anchored at its first occurrence.
   const key = `${at.fieldId}\u0001${severity}\u0001${message}`
   if (ctx.seen.has(key)) return
   ctx.seen.add(key)
-  ctx.problems.push({ field_id: at.fieldId, path: at.path, message, severity })
+  const p: Problem = { field_id: at.fieldId, path: at.path, message, severity, code }
+  if (params) p.params = params
+  ctx.problems.push(p)
 }
 
 function setKey(out: Record<string, unknown>, key: string, value: unknown): void {
@@ -102,6 +111,11 @@ const joinPath = (prefix: string, key: string): string => (prefix ? `${prefix}.$
 
 /** A short, quoted rendering of a value for problem messages. */
 function show(v: unknown): string {
+  return `'${shown(v)}'`
+}
+
+/** The same, unquoted (problem params). */
+function shown(v: unknown): string {
   let s: string
   if (typeof v === 'string') s = v
   else {
@@ -111,7 +125,7 @@ function show(v: unknown): string {
       s = String(v)
     }
   }
-  return `'${s.length > 60 ? `${s.slice(0, 57)}...` : s}'`
+  return s.length > 60 ? `${s.slice(0, 57)}...` : s
 }
 
 // ─── Paths ───────────────────────────────────────────────────────────────────
@@ -200,7 +214,17 @@ function rulesPass(ctx: Ctx, rules: unknown, at: At): boolean {
         pass = evalConditionRule(r, { [r.field]: resolvePath(ctx, r.field).value })
       }
     } catch (err) {
-      addProblem(ctx, at, `Condition on ${r.field} failed: ${errMsg(err)}`, 'error')
+      addProblem(
+        ctx,
+        at,
+        `Condition on ${r.field} failed: ${errMsg(err)}`,
+        'error',
+        'condition_error',
+        {
+          field: r.field,
+          detail: errMsg(err)
+        }
+      )
       pass = false
     }
     if (!pass) return false
@@ -237,13 +261,17 @@ function liquidScope(ctx: Ctx): Record<string, unknown> {
 async function renderFormula(ctx: Ctx, liquid: string, at: At): Promise<unknown> {
   const tpl = parsed(String(liquid ?? ''))
   if (tpl instanceof Error) {
-    addProblem(ctx, at, `Formula error: ${tpl.message}`, 'error')
+    addProblem(ctx, at, `Formula error: ${tpl.message}`, 'error', 'formula_error', {
+      detail: tpl.message
+    })
     return null
   }
   try {
     return String(await payloadLiquid().render(tpl, liquidScope(ctx)))
   } catch (err) {
-    addProblem(ctx, at, `Formula error: ${errMsg(err)}`, 'error')
+    addProblem(ctx, at, `Formula error: ${errMsg(err)}`, 'error', 'formula_error', {
+      detail: errMsg(err)
+    })
     return null
   }
 }
@@ -281,7 +309,7 @@ function builtin(ctx: Ctx, name: string, at: At): unknown {
     case 'state.external_label':
       return state?.external_label ?? null
     default:
-      addProblem(ctx, at, `Unknown built-in value '${name}'`, 'error')
+      addProblem(ctx, at, `Unknown built-in value '${name}'`, 'error', 'unknown_builtin', { name })
       return null
   }
 }
@@ -296,7 +324,7 @@ async function rawValue(ctx: Ctx, spec: ValueSpec, at: At): Promise<Got> {
       const path = String(spec.path ?? '')
       // A draft may hold a row whose field is not picked yet (drafts always save).
       if (!path.trim()) {
-        addProblem(ctx, at, 'No field chosen for this value yet', 'error')
+        addProblem(ctx, at, 'No field chosen for this value yet', 'error', 'no_field')
         return got
       }
       const r = resolvePath(ctx, path)
@@ -311,11 +339,13 @@ async function rawValue(ctx: Ctx, spec: ValueSpec, at: At): Promise<Got> {
     case 'secret': {
       const name = String(spec.name ?? '').trim()
       if (!name) {
-        addProblem(ctx, at, 'No secret chosen', 'error')
+        addProblem(ctx, at, 'No secret chosen', 'error', 'secret_none')
         return got
       }
       if (ctx.secretNames && !ctx.secretNames.has(name)) {
-        addProblem(ctx, at, `${name} is not a body secret on this API`, 'error')
+        addProblem(ctx, at, `${name} is not a body secret on this API`, 'error', 'secret_unknown', {
+          name
+        })
       }
       // A private token; finalize() swaps it for SECRET_PLACEHOLDER(name).
       got.value = ctx.tokens.token(name)
@@ -337,7 +367,8 @@ async function rawValue(ctx: Ctx, spec: ValueSpec, at: At): Promise<Got> {
         ctx,
         at,
         `Unknown value source '${String((spec as { source?: unknown }).source)}'`,
-        'error'
+        'error',
+        'unknown_source'
       )
       return got
   }
@@ -450,7 +481,13 @@ async function applyTransforms(
           : text(v)
         break
       default:
-        addProblem(ctx, at, `Unknown transform '${String((t as { op?: unknown }).op)}'`, 'error')
+        addProblem(
+          ctx,
+          at,
+          `Unknown transform '${String((t as { op?: unknown }).op)}'`,
+          'error',
+          'unknown_transform'
+        )
     }
   }
   return v
@@ -459,26 +496,28 @@ async function applyTransforms(
 /** Coerce to the row's type. `failed` = a type problem was reported. */
 function coerce(ctx: Ctx, type: string, got: Got, at: At): { value: unknown; failed: boolean } {
   const v = got.value === undefined ? null : got.value
-  const fail = (message: string) => {
-    addProblem(ctx, at, message, 'error')
+  const fail = (message: string, code: ProblemCode, params: Problem['params'] = {}) => {
+    if (got.source) params = { ...params, source: got.source }
+    addProblem(ctx, at, message, 'error', code, params)
     return { value: null, failed: true }
   }
   switch (type) {
     case 'text':
       if (v == null) return { value: null, failed: false }
-      if (Array.isArray(v)) return fail('Text expected, got a list')
-      if (typeof v === 'object' && !(v instanceof Date)) return fail('Text expected, got an object')
+      if (Array.isArray(v)) return fail('Text expected, got a list', 'type_text', { kind: 'list' })
+      if (typeof v === 'object' && !(v instanceof Date))
+        return fail('Text expected, got an object', 'type_text', { kind: 'object' })
       return { value: text(v), failed: false }
     case 'number': {
       if (v == null) return { value: null, failed: false }
       if (typeof v === 'string' && v.trim() === '') return { value: null, failed: false }
       if (typeof v === 'object' || typeof v === 'symbol' || typeof v === 'function') {
-        return fail(`Number expected, got ${show(v)}`)
+        return fail(`Number expected, got ${show(v)}`, 'type_number', { got: shown(v) })
       }
       const n = typeof v === 'string' ? Number(v.trim()) : Number(v)
       return Number.isFinite(n)
         ? { value: n, failed: false }
-        : fail(`Number expected, got ${show(v)}`)
+        : fail(`Number expected, got ${show(v)}`, 'type_number', { got: shown(v) })
     }
     case 'boolean': {
       if (v == null || v === '') return { value: null, failed: false }
@@ -489,14 +528,16 @@ function coerce(ctx: Ctx, type: string, got: Got, at: At): { value: unknown; fai
         if (s === 'true' || s === '1') return { value: true, failed: false }
         if (s === 'false' || s === '0') return { value: false, failed: false }
       }
-      return fail(`Boolean expected, got ${show(v)}`)
+      return fail(`Boolean expected, got ${show(v)}`, 'type_boolean', { got: shown(v) })
     }
     case 'date': {
       if (v == null || v === '') return { value: null, failed: false }
       if (typeof v !== 'string' && !(v instanceof Date))
-        return fail(`Date expected, got ${show(v)}`)
+        return fail(`Date expected, got ${show(v)}`, 'type_date', { got: shown(v) })
       const day = isoDate(v)
-      return day ? { value: day, failed: false } : fail(`Date expected, got ${show(v)}`)
+      return day
+        ? { value: day, failed: false }
+        : fail(`Date expected, got ${show(v)}`, 'type_date', { got: shown(v) })
     }
     case 'json': {
       if (!got.formula || typeof v !== 'string') return { value: v, failed: false }
@@ -504,11 +545,13 @@ function coerce(ctx: Ctx, type: string, got: Got, at: At): { value: unknown; fai
       try {
         return { value: JSON.parse(v), failed: false }
       } catch (err) {
-        return fail(`Formula output is not valid JSON: ${errMsg(err)}`)
+        return fail(`Formula output is not valid JSON: ${errMsg(err)}`, 'json_invalid', {
+          detail: errMsg(err)
+        })
       }
     }
     default:
-      return fail(`Unknown type '${type}'`)
+      return fail(`Unknown type '${type}'`, 'type_unknown', { type: String(type) })
   }
 }
 
@@ -527,7 +570,13 @@ function readsSecret(v: unknown): boolean {
 async function scalarValue(ctx: Ctx, field: Field, at: At, itemDefault: unknown): Promise<unknown> {
   // Publish refuses this (validateSpec); a draft may hold it while someone retypes the row.
   if (field.type !== 'text' && readsSecret(field.value)) {
-    addProblem(ctx, at, 'A secret can only be sent as text — set this field to Text', 'error')
+    addProblem(
+      ctx,
+      at,
+      'A secret can only be sent as text — set this field to Text',
+      'error',
+      'secret_not_text'
+    )
     return null
   }
   const got: Got = isObj(field.value)
@@ -535,15 +584,20 @@ async function scalarValue(ctx: Ctx, field: Field, at: At, itemDefault: unknown)
     : { value: itemDefault ?? null, missing: null, source: null, formula: false }
   const { value, failed } = coerce(ctx, field.type, got, at)
   if (!failed && isEmpty(value)) {
+    const source = got.missing ?? got.source
     if (field.rules?.required) {
       addProblem(
         ctx,
         at,
-        `${got.missing ?? got.source ?? field.key} has no value on this record`,
-        'error'
+        `${source ?? field.key} has no value on this record`,
+        'error',
+        'rule_required',
+        source ? { source } : {}
       )
     } else if (got.missing) {
-      addProblem(ctx, at, `${got.missing} has no value on this record`, 'warning')
+      addProblem(ctx, at, `${got.missing} has no value on this record`, 'warning', 'no_value', {
+        source: got.missing
+      })
     }
   }
   return value
@@ -578,7 +632,7 @@ function sortItems(ctx: Ctx, items: unknown[], sort: string, alias: string): unk
 async function listValue(ctx: Ctx, field: Field, at: At): Promise<unknown[]> {
   const ls = field.list
   if (!isObj(ls) || typeof ls.source !== 'string' || !ls.source.trim()) {
-    addProblem(ctx, at, 'This list has no source', 'error')
+    addProblem(ctx, at, 'This list has no source', 'error', 'list_no_source')
     return []
   }
   const alias = (typeof ls.item === 'string' && ls.item.trim()) || 'line'
@@ -586,15 +640,22 @@ async function listValue(ctx: Ctx, field: Field, at: At): Promise<unknown[]> {
   const r = resolvePath(ctx, ls.source)
   let src = typeof r.value === 'string' ? parseJsonText(ctx, r.value) : r.value
   if (src != null && !Array.isArray(src)) {
-    addProblem(ctx, at, `${ls.source} is not a list`, 'error')
+    addProblem(ctx, at, `${ls.source} is not a list`, 'error', 'list_not_list', {
+      source: ls.source,
+      got: shown(src)
+    })
     src = null
   }
   let items = (src as unknown[] | null) ?? []
   if (items.length === 0) {
     if (field.rules?.required) {
-      addProblem(ctx, at, `${ls.source} has no value on this record`, 'error')
+      addProblem(ctx, at, `${ls.source} has no value on this record`, 'error', 'rule_required', {
+        source: ls.source
+      })
     } else if (r.parentMissing) {
-      addProblem(ctx, at, `${ls.source} has no value on this record`, 'warning')
+      addProblem(ctx, at, `${ls.source} has no value on this record`, 'warning', 'no_value', {
+        source: ls.source
+      })
     }
     return []
   }
@@ -612,7 +673,13 @@ async function listValue(ctx: Ctx, field: Field, at: At): Promise<unknown[]> {
 
     const children = Array.isArray(field.children) ? field.children : []
     if (ls.scalar && children.length !== 1) {
-      addProblem(ctx, at, 'A plain-values list needs exactly one field', 'error')
+      addProblem(
+        ctx,
+        at,
+        'A plain-values list needs exactly one field',
+        'error',
+        'list_scalar_children'
+      )
     }
     const out: unknown[] = []
     for (let i = 0; i < items.length; i++) {
@@ -637,7 +704,9 @@ async function listValue(ctx: Ctx, field: Field, at: At): Promise<unknown[]> {
       }
     }
     if (out.length === 0 && field.rules?.required) {
-      addProblem(ctx, at, `${ls.source} has no value on this record`, 'error')
+      addProblem(ctx, at, `${ls.source} has no value on this record`, 'error', 'rule_required', {
+        source: ls.source
+      })
     }
     return out
   } finally {
@@ -679,7 +748,9 @@ async function objectValue(
       const res = await fieldValue(ctx, field, at)
       if (!res.drop) setKey(out, field.key, res.value)
     } catch (err) {
-      addProblem(ctx, at, `Could not evaluate: ${errMsg(err)}`, 'error')
+      addProblem(ctx, at, `Could not evaluate: ${errMsg(err)}`, 'error', 'eval_error', {
+        detail: errMsg(err)
+      })
       setKey(out, field.key, null)
     }
   }
@@ -692,19 +763,19 @@ function checkKeys(ctx: Ctx, fields: unknown, prefix: string): void {
   const keys = new Set<string>()
   for (const field of fields) {
     if (!isObj(field)) {
-      addProblem(ctx, { fieldId: '', path: prefix }, 'A row is not a field', 'error')
+      addProblem(ctx, { fieldId: '', path: prefix }, 'A row is not a field', 'error', 'not_a_field')
       continue
     }
     const at: At = { fieldId: String(field.id ?? ''), path: prefix }
     const key = typeof field.key === 'string' ? field.key : ''
     if (!key.trim()) {
-      addProblem(ctx, at, 'Empty key', 'error')
+      addProblem(ctx, at, 'Empty key', 'error', 'empty_key')
       ctx.skip.add(field)
       continue
     }
     at.path = joinPath(prefix, key)
     if (keys.has(key)) {
-      addProblem(ctx, at, `Duplicate key '${key}'`, 'error')
+      addProblem(ctx, at, `Duplicate key '${key}'`, 'error', 'duplicate_key', { key })
       ctx.skip.add(field)
       continue
     }
@@ -714,7 +785,9 @@ function checkKeys(ctx: Ctx, fields: unknown, prefix: string): void {
         ctx,
         at,
         `Key '${key}' is a number: JSON objects put number keys first, so it will not keep its place`,
-        'warning'
+        'warning',
+        'number_key',
+        { key }
       )
     }
     if (field.type === 'object') checkKeys(ctx, field.children, at.path)
@@ -757,7 +830,13 @@ export async function evaluateMap(
   }
   const fields = isObj(spec) && Array.isArray(spec.fields) ? spec.fields : null
   if (!fields) {
-    addProblem(ctx, { fieldId: '', path: '' }, 'The field map has no fields list', 'error')
+    addProblem(
+      ctx,
+      { fieldId: '', path: '' },
+      'The field map has no fields list',
+      'error',
+      'no_fields'
+    )
     return { body: {}, problems: ctx.problems, values: ctx.values }
   }
   checkKeys(ctx, fields, '')
@@ -765,10 +844,22 @@ export async function evaluateMap(
   try {
     body = await objectValue(ctx, fields, '')
   } catch (err) {
-    addProblem(ctx, { fieldId: '', path: '' }, `Could not evaluate: ${errMsg(err)}`, 'error')
+    addProblem(
+      ctx,
+      { fieldId: '', path: '' },
+      `Could not evaluate: ${errMsg(err)}`,
+      'error',
+      'eval_error',
+      {
+        detail: errMsg(err)
+      }
+    )
   }
   const fin = ctx.tokens.finish
-  for (const p of ctx.problems) p.message = fin(p.message) as string
+  for (const p of ctx.problems) {
+    p.message = fin(p.message) as string
+    if (p.params) p.params = fin(p.params) as Problem['params']
+  }
   return {
     body: fin(body) as Record<string, unknown>,
     problems: ctx.problems,

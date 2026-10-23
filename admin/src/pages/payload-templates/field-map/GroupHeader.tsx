@@ -207,15 +207,15 @@ function GroupHeaderImpl({
           type='button'
           data-value-chip=''
           className={cn(
-            'inline-flex h-7 min-w-0 max-w-full items-center gap-1.5 rounded-md border px-2 text-left text-[12.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+            'inline-flex h-auto min-h-7 min-w-0 max-w-full items-start gap-1.5 whitespace-normal rounded-md border px-2 py-1 text-left text-[12.5px] leading-[18px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
             missing
               ? 'border-dashed border-slate-300 text-slate-500 dark:border-slate-600 dark:text-muted-foreground'
               : 'border-transparent text-slate-600 hover:border-slate-200 dark:text-slate-300 dark:hover:border-border',
             open && 'border-nvr-cyan'
           )}
         >
-          <Settings2 className='h-3.5 w-3.5 shrink-0 text-slate-400' aria-hidden />
-          <span className='min-w-0 truncate'>
+          <Settings2 className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400' aria-hidden />
+          <span className='min-w-0'>
             {parts.map((p, i) =>
               p.bold ? (
                 // biome-ignore lint/suspicious/noArrayIndexKey: static sentence parts
