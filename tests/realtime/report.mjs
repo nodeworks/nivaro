@@ -173,6 +173,7 @@ export function buildLoadTable(dirs) {
       run: `${r.mode ?? '?'} / ${basename(dir)}`,
       sockets: `${hold.sockets ?? '?'} (peak ${Object.values(m.sockets_peak ?? {}).reduce((a, b) => a + (b ?? 0), 0)})`,
       presence: m.load_delivery ? `p50 ${m.load_delivery.p50_ms} / p95 ${m.load_delivery.p95_ms} / p99 ${m.load_delivery.p99_ms} ms, ${m.load_delivery.within_target_pct}% ≤2 s, missed ${m.load_delivery.missed}` : '—',
+      stale: m.staleness?.n ? `p50 ${m.staleness.p50_ms} / p95 ${m.staleness.p95_ms} / max ${m.staleness.max_ms} ms, never ${m.staleness.never}` : '—',
       record: m.probe_delivery_ms ? `p50 ${m.probe_delivery_ms.p50} / p95 ${m.probe_delivery_ms.p95} / p99 ${m.probe_delivery_ms.p99} ms, lost ${m.probe_delivery_ms.lost}` : '—',
       online: (() => {
         const o = (m.load_routes ?? []).find((x) => /presence\/online/.test(x.route))
@@ -184,8 +185,8 @@ export function buildLoadTable(dirs) {
       machine: `${(m.machine_load_start ?? []).join(' ')} → ${(m.machine_load_end ?? []).join(' ')}`
     })
   }
-  const cols = ['run', 'sockets', 'presence', 'record', 'online', 'webPool', 'webHeap', 'realtime', 'machine']
-  const head = ['Run', 'Sockets (hold)', 'Presence delivery', 'Record delivery (probe, from write response)', '/presence/online (whole run)', 'Web pool / lag', 'Web memory', 'Realtime tasks at peak', 'Host load (1/5/15 min)']
+  const cols = ['run', 'sockets', 'presence', 'stale', 'record', 'online', 'webPool', 'webHeap', 'realtime', 'machine']
+  const head = ['Run', 'Sockets (hold)', 'Presence delivery', 'List staleness', 'Record delivery (probe, from write response)', '/presence/online (whole run)', 'Web pool / lag', 'Web memory', 'Realtime tasks at peak', 'Host load (1/5/15 min)']
   return [`| ${head.join(' | ')} |`, `|${head.map(() => '---').join('|')}|`, ...rows.map((r) => `| ${cols.map((k) => esc(r[k])).join(' | ')} |`)].join('\n')
 }
 

@@ -150,8 +150,9 @@ export async function run({ only, args }) {
     const report = existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : null
     const d = report?.totals?.delivery ?? null
     t.metric('load_delivery', d)
+    t.metric('staleness', report?.totals?.staleness ?? null)
     t.metric('machine_load_end', (await import('node:os')).loadavg().map((x) => Math.round(x * 100) / 100))
-    t.metric('load_steps', (report?.steps ?? []).map((s) => ({ label: s.label, people: s.people, sockets: s.sockets, rps: s.requests_per_s, p95: s.delivery?.p95_ms, within: s.delivery?.within_target_pct, missed: s.delivery?.missed, server: s.server })))
+    t.metric('load_steps', (report?.steps ?? []).map((s) => ({ label: s.label, people: s.people, sockets: s.sockets, rps: s.requests_per_s, p95: s.delivery?.p95_ms, within: s.delivery?.within_target_pct, missed: s.delivery?.missed, staleness: s.staleness, server: s.server })))
     t.metric('load_reconnects', report?.totals?.reconnects)
     t.metric('load_routes', (report?.totals?.routes ?? []).slice(0, 8))
     const pl = pct(probeLat.filter((x) => x != null))
@@ -199,6 +200,8 @@ export async function run({ only, args }) {
     }, {}))
     t.metric('sockets_after', after.sockets)
 
+    const st = report?.totals?.staleness
+    if (st?.n) t.check('list staleness p95 ≤ 12 s (idle flip → every tab shows it)', st.p95_ms != null && st.p95_ms <= 12_000, st)
     t.check('presence delivery p95 under 2 s (load script)', d?.p95_ms != null && d.p95_ms < 2000, d)
     t.check('presence events missed = 0', (d?.missed ?? 1) === 0, d?.missed)
     t.check('record-event delivery p95 under 2 s (probe)', pl.p95 != null && pl.p95 < 2000, pl)
