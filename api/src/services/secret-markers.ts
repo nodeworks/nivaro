@@ -1,7 +1,8 @@
 /**
  * The ONE implementation of the secret-placeholder defence. Record, trigger and response data
  * must never be able to forge a body-secret placeholder `⟦nvr-secret:<name>⟧`; only
- * ADMIN-AUTHORED template text (a `secret` source, `secrets.<name>` / `| secret`, a literal placeholder in a
+ * ADMIN-AUTHORED template text (a `secret` source, `secrets.<name>` / `| secret`, a literal
+ * placeholder in a
  * JSON body template) may produce a real one. Pure module (no db / config imports) so the payload
  * evaluator, the code-mode render and body-secrets.ts all share it and cannot drift.
  */
@@ -92,7 +93,8 @@ export function neutralizeSecretMarkers(value: unknown): unknown {
 /**
  * A per-call, unforgeable token factory for the places that must emit a real placeholder while
  * data is still flowing through. `token(name)` returns a private token (underscore-wrapped random
- * digits: not a number, case filters leave it alone, JSON text carries it unescaped, data cannot guess it). `finish(value)`
+ * digits: not a number, case filters leave it alone, JSON text carries it unescaped, data cannot
+ * guess it). `finish(value)`
  * is the ONE final pass: neutralize every string value and key (so record text, JSON text decoded
  * along the way, fixed text and formula output can never forge a marker), and only then swap the
  * tokens for the real placeholders — in string VALUES; a token in an object key comes back
