@@ -675,6 +675,127 @@ export async function resetToDefault(key: string, userId: string | null): Promis
   return { rev }
 }
 
+// ─── install as draft (blueprints) ───────────────────────────────────────────
+
+/** A template carried to another instance: its published body plus its row metadata. */
+export type PayloadTemplateBundle = {
+  key: string
+  label: string
+  description: string | null
+  external_api: string | null
+  endpoint_path: string | null
+  collection: string
+  mode: PayloadMode
+  body: string
+  locked_keys: string[]
+  lookups: Record<string, unknown> | null
+}
+
+/**
+ * Bring a template in from elsewhere (a blueprint) AS A DRAFT — never as a published version, so
+ * nothing a sender uses changes until someone publishes it here.
+ *   - Missing: the row is created unpublished (senders refuse it until it is published) with the
+ *     bundle's metadata, and the body becomes its draft.
+ *   - Existing: only the draft changes (the row's metadata stays the registrar's / the row's); a
+ *     draft already equal to the body is left alone. The mode lock holds: map → code is allowed
+ *     (the direction Convert to Liquid allows), code → map is refused.
+ * Validates before any write (throws PayloadTemplateError).
+ */
+export async function installTemplateDraft(
+  bundle: PayloadTemplateBundle,
+  userId: string | null,
+  note = 'Draft installed'
+): Promise<'created' | 'drafted' | 'unchanged'> {
+  const key = bundle?.key
+  const bad = (m: string) => {
+    throw new PayloadTemplateError('invalid', `Payload template '${key}': ${m}`, [problem(m)])
+  }
+  if (typeof key !== 'string' || key.length > 120 || !KEY_RE.test(key)) {
+    bad('key must be lowercase letters, digits and dashes (at most 120)')
+  }
+  if (typeof bundle.label !== 'string' || !bundle.label.trim()) bad('label is required')
+  if (typeof bundle.collection !== 'string' || !bundle.collection.trim()) {
+    bad('collection is required')
+  }
+  checkBody(bundle.mode, bundle.body, `Payload template '${key}' draft`)
+  const locked = Array.isArray(bundle.locked_keys)
+    ? bundle.locked_keys.filter((k): k is string => typeof k === 'string')
+    : []
+  const lookups =
+    bundle.lookups && typeof bundle.lookups === 'object' && !Array.isArray(bundle.lookups)
+      ? bundle.lookups
+      : null
+
+  let row = await getTemplate(key)
+  if (!row) {
+    const now = new Date()
+    try {
+      await db.transaction(async (trx) => {
+        await trx(T).insert({
+          key,
+          label: bundle.label,
+          description: bundle.description ?? null,
+          external_api: bundle.external_api ?? null,
+          endpoint_path: bundle.endpoint_path ?? null,
+          collection: bundle.collection,
+          owner: null,
+          published_mode: null,
+          published_body: null,
+          published_version: null,
+          published_at: null,
+          published_by: null,
+          locked_keys: toJsonStr(locked),
+          lookups: toJsonStr(lookups),
+          default_hash: null,
+          created_at: now,
+          updated_at: now
+        })
+        // Insert-then-select: `.returning('id')` shapes differ on this stack.
+        const r = (await trx(T).where({ key }).first('id')) as { id: number } | undefined
+        if (!r) throw new Error('installed row not found')
+        await trx(D).insert({
+          template_id: Number(r.id),
+          mode: bundle.mode,
+          body: bundle.body,
+          rev: 1,
+          updated_by: userId ?? null,
+          updated_at: now
+        })
+      })
+      bustTenantCache()
+      await logActivity({
+        action: 'payload-template-install',
+        user: userId,
+        collection: T,
+        item: key,
+        comment: `${note} (new, unpublished)`
+      })
+      return 'created'
+    } catch (e) {
+      // Another writer created it first (unique key): install over that row as a draft.
+      row = await getTemplate(key)
+      if (!row) throw e
+    }
+  }
+
+  if (row.draft_mode === bundle.mode && row.draft_body === bundle.body) return 'unchanged'
+  const was = currentMode(row)
+  if (was && was !== bundle.mode && !(was === 'map' && bundle.mode === 'code')) {
+    throw new PayloadTemplateError('invalid', `Payload template '${key}': ${MODE_CHANGE_MESSAGE}`, [
+      problem(MODE_CHANGE_MESSAGE)
+    ])
+  }
+  await replaceDraft(row, bundle.mode, bundle.body, userId)
+  await logActivity({
+    action: 'payload-template-install',
+    user: userId,
+    collection: T,
+    item: key,
+    comment: note
+  })
+  return 'drafted'
+}
+
 // ─── published cache (per tenant) ────────────────────────────────────────────
 
 /** What a published render needs — the cache never holds a draft. */
