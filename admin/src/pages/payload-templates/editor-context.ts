@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { TemplateDetail } from './api'
+import type { PathNames } from './field-map/labels'
 
 /**
  * What the editor shell shares with the Code tab and the panels without
@@ -31,6 +32,10 @@ export interface PayloadEditorCtx {
   /** True while an edit is waiting or being saved. */
   saving: boolean
   recordId: string | null
+  /** The preview record's label when known ("IR-004818 · …") — problem copy names it. */
+  recordLabel: string | null
+  /** Collection display names for path labels ("MWF queue → MWF id"); null until loaded. */
+  pathNames: PathNames | null
 }
 
 const noop = async () => {}
@@ -48,7 +53,9 @@ export const PayloadEditorContext = createContext<PayloadEditorCtx>({
   rev: null,
   getRev: () => null,
   saving: false,
-  recordId: null
+  recordId: null,
+  recordLabel: null,
+  pathNames: null
 })
 
 export const usePayloadEditor = () => useContext(PayloadEditorContext)

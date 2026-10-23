@@ -177,7 +177,7 @@ export function BodySecretsCard({
       <div className='flex items-start justify-between gap-4'>
         <div>
           <Label>Body secrets</Label>
-          <p className='text-[12px] text-slate-400'>
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
             Values the partner wants inside the request body, like an API token. Payloads use them
             by name; the value is filled in only when a request is sent, so it never appears in
             previews, stored pushes or logs.
@@ -227,7 +227,7 @@ export function BodySecretsCard({
 
       <div className='mt-3'>
         {names.length === 0 && !adding ? (
-          <p className='text-[13px] text-slate-400'>No body secrets.</p>
+          <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>No body secrets.</p>
         ) : names.length > 0 ? (
           <ul className='divide-y divide-slate-100 rounded-md border border-slate-200 dark:divide-border dark:border-border'>
             {names.map((n) => (
@@ -237,7 +237,7 @@ export function BodySecretsCard({
                   <span className='font-mono text-[12.5px] text-slate-900 dark:text-foreground'>
                     {n}
                   </span>
-                  <span className='font-mono text-[12px] text-slate-400'>
+                  <span className='font-mono text-[12px] text-slate-500 dark:text-muted-foreground'>
                     {secrets[n] ? MASK : 'empty'}
                   </span>
                   <span className='min-w-0 flex-1 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>

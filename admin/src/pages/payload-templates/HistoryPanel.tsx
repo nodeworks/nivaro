@@ -86,7 +86,7 @@ function VersionRow({
             <span>{formatEt(v.published_at)}</span>
           </span>
           <span className='mt-0.5 line-clamp-2 block break-words text-[12.5px] text-slate-700 dark:text-slate-200'>
-            {v.note || <span className='text-slate-400'>No note</span>}
+            {v.note || <span className='text-slate-500 dark:text-muted-foreground'>No note</span>}
           </span>
         </span>
         <ChevronRight className='mt-1 h-3.5 w-3.5 shrink-0 text-slate-300 dark:text-slate-600' />
@@ -299,6 +299,14 @@ function VersionDetailView({
   )
 }
 
+/** A version seeded from an extension's file default has no person: "efp-ops file default". */
+export function seedAuthor(v: VersionSummary, owner: string | null): string | null {
+  if (v.published_by) return null
+  const m = /^Seeded from (?:the )?(.*?)(?: file default)?\.?$/i.exec(v.note.trim())
+  if (!m) return null
+  return `${owner || m[1].trim() || 'Extension'} file default`
+}
+
 /**
  * History: every published version (vN · who · 9:45 PM ET · note), newest
  * first → one version's payload diff → Restore as draft.
@@ -323,7 +331,8 @@ export function HistoryPanel({
   const people = usePeople(versions.filter((v) => !v.published_by_name).map((v) => v.published_by))
   const [selected, setSelected] = useState<number | null>(null)
   const summary = versions.find((v) => v.version === selected) ?? null
-  const whoOf = (v: VersionSummary) => personName(people.data, v.published_by, v.published_by_name)
+  const whoOf = (v: VersionSummary) =>
+    seedAuthor(v, template.owner) ?? personName(people.data, v.published_by, v.published_by_name)
 
   return (
     <PanelFrame title='History' panel='history' onClose={onClose}>

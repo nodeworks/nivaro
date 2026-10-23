@@ -173,6 +173,45 @@ export function pathChanges(
   return { changes, total }
 }
 
+/** One row of the change list: identical changes across list items fold into one. */
+export type GroupedChange = PathChange & {
+  /** How many paths this row stands for (1 = a plain change). */
+  count: number
+  /** Every path it stands for (tooltip). */
+  paths: string[]
+  /** The key that changed, for a folded row ("taskNumber"). */
+  leaf: string
+}
+
+/**
+ * Fold changes that differ only by list position and carry the same values —
+ * `orderDetails[0].taskNumber`, `[1]`, `[2]` all '1000' → '1100' become one row,
+ * "taskNumber on 3 lines". Document order is kept (a group sits where it starts).
+ */
+export function groupPathChanges(changes: PathChange[]): GroupedChange[] {
+  const out: GroupedChange[] = []
+  const at = new Map<string, GroupedChange>()
+  for (const c of changes) {
+    const shape = c.path.replace(/\[\d+\]/g, '[]')
+    const sig = `${c.kind}\u0001${shape}\u0001${JSON.stringify(c.before)}\u0001${JSON.stringify(c.after)}`
+    const hit = shape !== c.path ? at.get(sig) : undefined
+    if (hit) {
+      hit.count++
+      hit.paths.push(c.path)
+      continue
+    }
+    const leaf =
+      c.path
+        .split('.')
+        .pop()
+        ?.replace(/\[\d+\]$/, '') ?? c.path
+    const row: GroupedChange = { ...c, count: 1, paths: [c.path], leaf }
+    out.push(row)
+    if (shape !== c.path) at.set(sig, row)
+  }
+  return out
+}
+
 /** A short one-line rendering of a JSON value for change lists. */
 export function shortValue(v: unknown, max = 60): string {
   if (v === undefined) return '—'

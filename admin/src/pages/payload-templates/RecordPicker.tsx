@@ -90,11 +90,13 @@ export function RecordPicker({
                 {label || `Record ${value}`}
               </span>
               {label && (
-                <span className='shrink-0 font-mono text-[11px] text-slate-400'>#{value}</span>
+                <span className='shrink-0 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  #{value}
+                </span>
               )}
             </>
           ) : (
-            <span className='truncate text-slate-400'>
+            <span className='truncate text-slate-500 dark:text-muted-foreground'>
               {newest.isLoading
                 ? 'Finding the newest record…'
                 : noRecords
@@ -152,7 +154,9 @@ export function RecordPicker({
                         )}
                       />
                       <span className='min-w-0 flex-1 truncate'>{o.label || `Record ${o.id}`}</span>
-                      <span className='shrink-0 font-mono text-[11px] text-slate-400'>#{o.id}</span>
+                      <span className='shrink-0 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
+                        #{o.id}
+                      </span>
                     </CommandItem>
                   ))}
                 </CommandGroup>

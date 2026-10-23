@@ -34,7 +34,9 @@ import {
   type TemplateDetail,
   useDebounced,
   useExternalApis,
+  usePathNames,
   usePreview,
+  useRecordLabel,
   useSaveDraft,
   useTemplate,
   useTemplates
@@ -55,7 +57,7 @@ import {
   sameLookups,
   serverErrors
 } from './panel-api'
-import { OUTLINE_BTN } from './panel-parts'
+import { OUTLINE_BTN, PRIMARY_BTN } from './panel-parts'
 import { TemplateList } from './TemplateList'
 
 /** What the preview column shows instead of the preview. */
@@ -67,6 +69,8 @@ const PREVIEW_DEBOUNCE_MS = 300
 const LIST_BESIDE_MIN = 760
 /** Page width at which the preview sits beside the editor instead of under it. */
 const PREVIEW_BESIDE_MIN = 1100
+/** Below this page width, with the preview beside the editor, the list folds into a combobox. */
+const LIST_COLUMN_MIN_WITH_PREVIEW = 1400
 
 // ─── Small hooks ─────────────────────────────────────────────────────────────
 
@@ -346,7 +350,7 @@ function SaveStatus({ state, onRetry }: { state: SaveState; onRetry: () => void 
     )
   return (
     <span
-      className='text-[11.5px] text-slate-400'
+      className='text-[11.5px] text-slate-500 dark:text-muted-foreground'
       aria-live='polite'
       data-payload-save={state.kind}
     >
@@ -477,7 +481,7 @@ function MoreMenu({
 
 const PANEL_TITLES: Record<EditorPanel, string> = {
   publish: 'Publish',
-  check: 'Check recent records',
+  check: 'Recent records',
   history: 'History',
   default: 'File default',
   conflict: 'Review the diff'
@@ -581,17 +585,58 @@ function Bar({ w, h = 'h-3' }: { w: string; h?: string }) {
   )
 }
 
-function MainSkeleton() {
+/** The editor's shape while it loads: header, tabs, field rows — and the preview beside them. */
+function MainSkeleton({ split = false }: { split?: boolean }) {
+  const rows = [
+    ['112px', '160px', '64px'],
+    ['96px', '200px', '48px'],
+    ['128px', '140px', '72px'],
+    ['84px', '180px', '40px'],
+    ['120px', '150px', '56px'],
+    ['104px', '170px', '60px']
+  ]
   return (
     <div className='flex min-h-0 flex-1 flex-col' aria-hidden data-payload-loading>
-      <div className='space-y-2.5 border-b border-slate-200 bg-white px-5 py-4 dark:border-border dark:bg-card'>
-        <Bar w='220px' h='h-4' />
-        <Bar w='340px' />
+      <div className='flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-5 py-3.5 dark:border-border dark:bg-card'>
+        <div className='space-y-2.5'>
+          <Bar w='220px' h='h-4' />
+          <Bar w='300px' />
+        </div>
+        <div className='flex gap-2'>
+          <Bar w='84px' h='h-8' />
+          <Bar w='140px' h='h-8' />
+          <Bar w='72px' h='h-8' />
+        </div>
       </div>
-      <div className='space-y-3 px-5 py-5'>
-        {['70%', '55%', '62%', '48%', '66%'].map((w) => (
-          <Bar key={w} w={w} />
-        ))}
+      <div className={cn('flex min-h-0 flex-1', split ? 'flex-row' : 'flex-col')}>
+        <div className='min-w-0 flex-1 bg-white dark:bg-card'>
+          <div className='flex gap-5 border-b border-slate-200 px-5 py-3 dark:border-border'>
+            <Bar w='64px' />
+            <Bar w='36px' />
+            <Bar w='36px' />
+          </div>
+          <div className='divide-y divide-slate-100 px-5 dark:divide-border/60'>
+            {rows.map(([k, v, x]) => (
+              <div key={k + v} className='flex items-center gap-4 py-3.5'>
+                <Bar w={k} />
+                <Bar w='40px' />
+                <Bar w={v} h='h-6' />
+                <span className='flex-1' />
+                <Bar w={x} />
+              </div>
+            ))}
+          </div>
+        </div>
+        {split && (
+          <div className='w-[42%] min-w-[360px] max-w-[580px] shrink-0 space-y-2.5 border-l border-slate-200 bg-slate-50 px-4 py-3 dark:border-border dark:bg-background'>
+            <Bar w='100%' h='h-8' />
+            {['30%', '62%', '54%', '70%', '48%', '66%', '40%', '58%'].map((w, i) => (
+              <div key={w} style={{ marginLeft: i === 0 ? 0 : 16 }}>
+                <Bar w={w} />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -739,6 +784,8 @@ export function PayloadTemplateEditorPage() {
   const [pageRef, width] = useElementWidth<HTMLDivElement>()
   const listBeside = width >= LIST_BESIDE_MIN
   const previewBeside = width >= PREVIEW_BESIDE_MIN
+  // The list column only when the editor keeps its room; otherwise a combobox bar on top.
+  const listColumn = listBeside && !(previewBeside && width < LIST_COLUMN_MIN_WITH_PREVIEW)
 
   const apisQ = useExternalApis()
   const apis = apisQ.data ?? []
@@ -869,6 +916,8 @@ export function PayloadTemplateEditorPage() {
   }, [key, qc, reload])
 
   const saveState = editor.state
+  const recordLabel = useRecordLabel(key, recordId)
+  const pathNames = usePathNames(template?.collection)
   const editorCtx = useMemo<PayloadEditorCtx>(
     () => ({
       saveNow: editor.saveNow,
@@ -886,7 +935,9 @@ export function PayloadTemplateEditorPage() {
       rev: editor.rev,
       getRev: editor.getRev,
       saving: saveState.kind === 'pending' || saveState.kind === 'saving',
-      recordId
+      recordId,
+      recordLabel,
+      pathNames
     }),
     [
       editor.saveNow,
@@ -899,7 +950,9 @@ export function PayloadTemplateEditorPage() {
       editor.getRev,
       adoptServerDraft,
       saveState,
-      recordId
+      recordId,
+      recordLabel,
+      pathNames
     ]
   )
   const closePanel = useCallback(() => setPanel(null), [])
@@ -914,7 +967,7 @@ export function PayloadTemplateEditorPage() {
 
   let main: React.ReactNode
   if (apisQ.isLoading) {
-    main = <MainSkeleton />
+    main = <MainSkeleton split={previewBeside} />
   } else if (apisQ.isError) {
     main = <Notice title='External APIs could not load'>{errorMessage(apisQ.error)}</Notice>
   } else if (!currentApi) {
@@ -931,7 +984,7 @@ export function PayloadTemplateEditorPage() {
     )
   } else if (!key) {
     main = listQ.isLoading ? (
-      <MainSkeleton />
+      <MainSkeleton split={previewBeside} />
     ) : (
       <Notice title={`No payloads on ${currentApi.name} yet`}>
         Create one from the Payloads card on the API page.
@@ -956,7 +1009,7 @@ export function PayloadTemplateEditorPage() {
         </Notice>
       )
   } else if (!template || !editor.draft) {
-    main = <MainSkeleton />
+    main = <MainSkeleton split={previewBeside} />
   } else {
     main = (
       <div className={cn('flex flex-1 flex-col', previewBeside && 'min-h-0 overflow-hidden')}>
@@ -1024,7 +1077,12 @@ export function PayloadTemplateEditorPage() {
                   disabled={nothingToPublish}
                   onClick={() => setPanel('publish')}
                   aria-pressed={panel === 'publish'}
-                  className='inline-flex h-8 items-center rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 dark:focus-visible:ring-offset-background'
+                  className={
+                    // While the Publish panel is open its own button is the one cyan action.
+                    panel === 'publish'
+                      ? cn(OUTLINE_BTN, 'bg-slate-100 dark:bg-muted')
+                      : PRIMARY_BTN
+                  }
                   data-payload-publish
                 >
                   Publish
@@ -1133,7 +1191,11 @@ export function PayloadTemplateEditorPage() {
       <div
         className={cn(
           'flex min-h-0 flex-1',
-          listBeside ? 'overflow-hidden' : 'flex-col overflow-y-auto'
+          listColumn
+            ? 'overflow-hidden'
+            : previewBeside
+              ? 'flex-col overflow-hidden'
+              : 'flex-col overflow-y-auto'
         )}
       >
         <TemplateList
@@ -1147,13 +1209,13 @@ export function PayloadTemplateEditorPage() {
           selectedKey={key}
           onSelect={selectTemplate}
           onNew={newPayload}
-          stacked={!listBeside}
+          compact={!listColumn}
         />
         <main
           className={cn(
             'flex min-w-0 flex-1 flex-col bg-slate-50 dark:bg-background',
-            listBeside && 'min-h-0',
-            listBeside && !previewBeside && 'overflow-y-auto',
+            (listColumn || previewBeside) && 'min-h-0',
+            listColumn && !previewBeside && 'overflow-y-auto',
             previewBeside && 'overflow-hidden'
           )}
         >

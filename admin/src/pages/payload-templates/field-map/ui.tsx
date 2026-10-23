@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
+import type { PathNames } from './labels'
 
 // ─── Field-map context: what every row may need, without prop drilling ──────
 
@@ -33,6 +34,8 @@ export interface FieldMapEnv {
   partner: string
   /** Where the API's Body secrets card lives (null when unknown). */
   secretsHref: string | null
+  /** Collection display names for path labels (null until loaded / outside the editor). */
+  names?: PathNames | null
 }
 
 export const FieldMapEnvContext = createContext<FieldMapEnv>({
@@ -82,7 +85,7 @@ FmPopoverContent.displayName = 'FmPopoverContent'
 // ─── Inputs ──────────────────────────────────────────────────────────────────
 
 export const fmInput =
-  'h-7 w-full min-w-0 rounded-md border border-slate-200 bg-white px-2 text-[12.5px] text-slate-900 placeholder:text-slate-400 focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-slate-500'
+  'h-7 w-full min-w-0 rounded-md border border-slate-200 bg-white px-2 text-[12.5px] text-slate-900 placeholder:text-slate-500 focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-slate-400'
 
 /** Commits on every keystroke (popover inputs never wait for blur). */
 export function TextField({
@@ -292,7 +295,7 @@ export function OptionMenu<T extends string>({
 
 /** Quiet inline control (type, include, rules): text-sized, border only on hover/focus. */
 export const quietButton =
-  'inline-flex h-6 max-w-full items-center gap-1 rounded px-1.5 text-[12px] text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
+  'inline-flex h-6 max-w-full items-center gap-1 rounded px-1.5 text-[12px] text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:text-slate-500 disabled:hover:bg-transparent disabled:hover:text-slate-500 dark:text-muted-foreground dark:disabled:hover:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
 
 export const smallAction =
   'inline-flex h-7 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-300 dark:hover:bg-muted dark:hover:text-foreground'

@@ -1,12 +1,22 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Ban, CheckCircle2, Eye, RefreshCw, XCircle } from 'lucide-react'
+import {
+  AlertCircle,
+  AlertTriangle,
+  Ban,
+  CheckCircle2,
+  CircleX,
+  Eye,
+  RefreshCw,
+  XCircle
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
-import type { TemplateDetail } from './api'
+import { draftOf, type MapSpec, publishedOf, type TemplateDetail } from './api'
 import { usePayloadEditor } from './editor-context'
 import { CHECK_LIMIT, type CheckResult, useChunkedCheck } from './panel-api'
 import { InlineError, OUTLINE_BTN, PanelFrame, SECTION_LABEL, Segmented } from './panel-parts'
+import { problemCopy } from './problem-copy'
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
@@ -72,12 +82,18 @@ export function CheckResultsList({
   results,
   collection,
   onPreview,
-  failuresOnly = false
+  failuresOnly = false,
+  spec = null,
+  partner = null
 }: {
   results: CheckResult[]
   collection: string
   onPreview?: (id: string) => void
   failuresOnly?: boolean
+  /** The field map checked — names list items in the problem copy ("Material 1"). */
+  spec?: MapSpec | null
+  /** Partner name for locked-key copy. */
+  partner?: string | null
 }) {
   const rows = useMemo(
     () => orderResults(results).filter((r) => !failuresOnly || !r.ok),
@@ -120,7 +136,9 @@ export function CheckResultsList({
                 {r.label}
               </Link>
               {r.label !== r.id && (
-                <span className='shrink-0 font-mono text-[11px] text-slate-400'>#{r.id}</span>
+                <span className='shrink-0 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  #{r.id}
+                </span>
               )}
               <span className='flex-1' />
               {onPreview && (
@@ -142,21 +160,32 @@ export function CheckResultsList({
             )}
             {errs.length > 0 && (
               <ul className='mt-1 space-y-0.5 pl-[22px]'>
-                {errs.map((p) => (
-                  <li
-                    key={`${p.field_id}:${p.path}:${p.message}`}
-                    className='text-[12px] leading-snug text-red-700 dark:text-red-300'
-                  >
-                    {p.path && <span className='mr-1.5 font-mono text-[11.5px]'>{p.path}</span>}
-                    {p.message}
-                  </li>
-                ))}
+                {errs.map((p) => {
+                  const c = problemCopy(p, { recordLabel: r.label, spec, partner })
+                  return (
+                    <li
+                      key={`${p.field_id}:${p.path}:${p.message}`}
+                      className='flex items-start gap-1.5 text-[12px] leading-snug text-red-700 dark:text-red-300'
+                    >
+                      <CircleX className='mt-[2px] h-3 w-3 shrink-0' aria-hidden />
+                      <span data-tip={c.tip}>{c.text}</span>
+                    </li>
+                  )
+                })}
               </ul>
             )}
             {!failuresOnly && warns.length > 0 && (
-              <p className='mt-0.5 pl-[22px] text-[12px] text-amber-700 dark:text-amber-300'>
-                {plural(warns.length, 'warning')}: {warns[0].message}
-                {warns.length > 1 ? ' …' : ''}
+              <p className='mt-0.5 flex items-start gap-1.5 pl-[22px] text-[12px] leading-snug text-amber-800 dark:text-amber-300'>
+                <AlertTriangle className='mt-[2px] h-3 w-3 shrink-0' aria-hidden />
+                <span
+                  data-tip={warns
+                    .map((w) => problemCopy(w, { recordLabel: r.label, spec, partner }).text)
+                    .join('\n')}
+                >
+                  {plural(warns.length, 'warning')}:{' '}
+                  {problemCopy(warns[0], { recordLabel: r.label, spec, partner }).text}
+                  {warns.length > 1 ? ' …' : ''}
+                </span>
               </p>
             )}
           </li>
@@ -228,6 +257,10 @@ export function CheckRecentPanel({
   const [run, setRun] = useState<{ rev: number; n: number; saved: boolean } | null>(null)
   const [preparing, setPreparing] = useState(false)
   const [liveN, setLiveN] = useState(0)
+  const checkedSpec = useMemo(() => {
+    const b = which === 'published' ? publishedOf(template) : draftOf(template)
+    return b?.mode === 'map' ? b.body : null
+  }, [which, template])
 
   const start = useCallback(async (n: number) => {
     setPreparing(true)
@@ -260,7 +293,7 @@ export function CheckRecentPanel({
 
   return (
     <PanelFrame
-      title='Check recent records'
+      title='Recent records'
       panel='check'
       onClose={onClose}
       actions={
@@ -268,7 +301,7 @@ export function CheckRecentPanel({
           type='button'
           onClick={runAgain}
           disabled={running}
-          className={cn(OUTLINE_BTN, 'h-7 px-2.5 text-[12px]')}
+          className={cn(OUTLINE_BTN, 'h-7 shrink-0 whitespace-nowrap px-2.5 text-[12px]')}
         >
           <RefreshCw className='h-3 w-3' />
           Run again
@@ -330,6 +363,8 @@ export function CheckRecentPanel({
           results={check.results}
           collection={template.collection}
           onPreview={onPreview}
+          spec={checkedSpec}
+          partner={template.external_api}
         />
       </div>
     </PanelFrame>

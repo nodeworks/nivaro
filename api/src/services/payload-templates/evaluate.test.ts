@@ -54,7 +54,14 @@ describe('evaluateMap', () => {
     expect(values.q).toBe(12)
     expect(body.bad).toBeNull()
     expect(problems).toEqual([
-      { field_id: 'b', path: 'bad', message: "Number expected, got 'abc'", severity: 'error' }
+      {
+        field_id: 'b',
+        path: 'bad',
+        message: "Number expected, got 'abc'",
+        severity: 'error',
+        code: 'type_number',
+        params: { got: 'abc', source: 'record.bad' }
+      }
     ])
   })
 
@@ -275,7 +282,9 @@ describe('evaluateMap', () => {
         field_id: 'b',
         path: 'key',
         message: 'apiKey is not a body secret on this API',
-        severity: 'error'
+        severity: 'error',
+        code: 'secret_unknown',
+        params: { name: 'apiKey' }
       }
     ])
     // without a secret list nothing is flagged
@@ -504,7 +513,14 @@ describe('evaluateMap', () => {
     })
     expect(body).toEqual({ pos: ['PO1', 'PO2'], bad: [] })
     expect(problems).toEqual([
-      { field_id: 'm', path: 'bad', message: 'record.word is not a list', severity: 'error' }
+      {
+        field_id: 'm',
+        path: 'bad',
+        message: 'record.word is not a list',
+        severity: 'error',
+        code: 'list_not_list',
+        params: { source: 'record.word', got: 'PO1' }
+      }
     ])
   })
 
@@ -538,13 +554,17 @@ describe('evaluateMap', () => {
         field_id: 'org',
         path: 'inventoryOrg',
         message: 'context.shipping_location.inventory_org has no value on this record',
-        severity: 'warning'
+        severity: 'warning',
+        code: 'no_value',
+        params: { source: 'context.shipping_location.inventory_org' }
       },
       {
         field_id: 'link',
         path: 'mwfId',
         message: 'context.mwf_link[0].id has no value on this record',
-        severity: 'error'
+        severity: 'error',
+        code: 'rule_required',
+        params: { source: 'context.mwf_link[0].id' }
       }
     ])
     // nothing at all in scope still renders
@@ -581,8 +601,15 @@ describe('evaluateMap', () => {
     const { body, problems } = await evaluateMap(s, {})
     expect(body).toEqual({ po: 'first' })
     expect(problems).toEqual([
-      { field_id: 'b', path: 'po', message: "Duplicate key 'po'", severity: 'error' },
-      { field_id: 'c', path: '', message: 'Empty key', severity: 'error' }
+      {
+        field_id: 'b',
+        path: 'po',
+        message: "Duplicate key 'po'",
+        severity: 'error',
+        code: 'duplicate_key',
+        params: { key: 'po' }
+      },
+      { field_id: 'c', path: '', message: 'Empty key', severity: 'error', code: 'empty_key' }
     ])
   })
 
@@ -623,6 +650,7 @@ describe('evaluateMap', () => {
     expect(problems).toHaveLength(1)
     expect(problems[0]).toMatchObject({ field_id: 'bad', path: 'lines[0].bad', severity: 'error' })
     expect(problems[0].message).toMatch(/^Formula error: /)
+    expect(problems[0].code).toBe('formula_error')
   })
 
   it('2000-line list renders under 200 ms', async () => {
@@ -749,6 +777,10 @@ describe('evaluateMap', () => {
     expect(problems.map((p) => p.message)).toEqual([
       "Boolean expected, got 'maybe'",
       "Date expected, got 'soon'"
+    ])
+    expect(problems.map((p) => [p.code, p.params?.got])).toEqual([
+      ['type_boolean', 'maybe'],
+      ['type_date', 'soon']
     ])
   })
 

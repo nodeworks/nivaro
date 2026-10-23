@@ -1,8 +1,10 @@
-import { AlertCircle, AlertTriangle, Ban, KeyRound, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Ban, CircleX, KeyRound, RefreshCw } from 'lucide-react'
 import { type ReactNode, useMemo } from 'react'
 import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
-import { type DraftBody, errorMessage, type Problem, usePreview } from './api'
+import { type DraftBody, errorMessage, type MapSpec, type Problem, usePreview } from './api'
+import { usePayloadEditor } from './editor-context'
+import { problemCopy } from './problem-copy'
 import { RecordPicker } from './RecordPicker'
 
 export type PreviewView = 'draft' | 'live' | 'diff'
@@ -94,7 +96,7 @@ function JsonView({ body }: { body: unknown }) {
   const lines = useMemo(() => pretty(body).split('\n'), [body])
   return (
     <pre
-      className='whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.6] text-slate-500 dark:text-slate-400'
+      className='overflow-x-auto whitespace-pre font-mono text-[12px] leading-[1.6] text-slate-500 dark:text-slate-400'
       data-payload-json
     >
       {lines.map((l, i) => (
@@ -171,13 +173,13 @@ function DiffView({ live, draft, version }: { live: unknown; draft: unknown; ver
           <span className='font-mono text-emerald-700 dark:text-emerald-400'>+</span> draft
         </span>
       </p>
-      <pre className='whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.6]'>
+      <pre className='overflow-x-auto whitespace-pre font-mono text-[12px] leading-[1.6]'>
         {lines.map((l, i) => (
           <div
             // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are positional
             key={i}
             className={cn(
-              'flex gap-2 rounded-sm px-1',
+              'flex w-max min-w-full gap-2 rounded-sm px-1',
               l.kind === 'add' &&
                 'bg-emerald-50 text-emerald-900 dark:bg-emerald-500/10 dark:text-emerald-200',
               l.kind === 'del' && 'bg-red-50 text-red-900 dark:bg-red-500/10 dark:text-red-200',
@@ -232,11 +234,14 @@ function ErrorState({ error, onRetry }: { error: unknown; onRetry: () => void })
 
 function ProblemsList({
   problems,
-  externalApiId
+  externalApiId,
+  spec
 }: {
   problems: Problem[]
   externalApiId?: number | null
+  spec: MapSpec | null
 }) {
+  const { recordLabel, pathNames } = usePayloadEditor()
   if (!problems.length) return null
   const errors = problems.filter((p) => p.severity === 'error').length
   return (
@@ -252,24 +257,27 @@ function ProblemsList({
       </p>
       <ul className='max-h-40 space-y-1 overflow-y-auto'>
         {problems.map((p) => {
-          const missingSecret = /not a body secret/i.test(p.message)
+          const missingSecret =
+            p.code === 'secret_unknown' || /not a body secret|has no `.*` secret/i.test(p.message)
+          const c = problemCopy(p, { recordLabel, spec, names: pathNames })
           return (
             <li
               key={`${p.field_id}:${p.path}:${p.message}`}
               className='flex gap-2 text-[12px] leading-snug'
             >
               {p.severity === 'error' ? (
-                <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400' />
+                <CircleX
+                  className='mt-[2px] h-3 w-3 shrink-0 text-red-600 dark:text-red-400'
+                  aria-label='Error'
+                />
               ) : (
-                <AlertTriangle className='mt-px h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400' />
+                <AlertTriangle
+                  className='mt-[2px] h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400'
+                  aria-label='Warning'
+                />
               )}
               <span className='min-w-0 text-slate-700 dark:text-slate-200'>
-                {p.path && (
-                  <span className='mr-1.5 font-mono text-[11.5px] text-slate-500 dark:text-slate-400'>
-                    {p.path}
-                  </span>
-                )}
-                {p.message}
+                <span data-tip={c.tip}>{c.text}</span>
                 {missingSecret && externalApiId != null && (
                   <>
                     {' '}
@@ -277,7 +285,7 @@ function ProblemsList({
                       to={`/external-apis/${externalApiId}#body-secrets`}
                       className='font-medium text-slate-900 underline underline-offset-2 dark:text-foreground'
                     >
-                      Add it under Body secrets
+                      Open Body secrets
                     </Link>
                   </>
                 )}
@@ -415,17 +423,26 @@ export function PreviewPane({
         </div>
       )}
 
-      <ProblemsList problems={problems} externalApiId={externalApiId} />
+      <ProblemsList
+        problems={problems}
+        externalApiId={externalApiId}
+        spec={draft?.mode === 'map' ? (draft.body as MapSpec) : null}
+      />
 
       <div className='relative min-h-[240px] flex-1 overflow-y-auto px-4 py-3'>
         {refreshing && (
-          <span className='absolute right-3 top-2 text-[11px] text-slate-400' aria-live='polite'>
+          <span
+            className='absolute right-3 top-2 text-[11px] text-slate-500 dark:text-muted-foreground'
+            aria-live='polite'
+          >
             Updating…
           </span>
         )}
         {body}
         {view === 'live' && result?.version != null && (
-          <p className='mt-3 text-[11.5px] text-slate-400'>Live v{result.version}</p>
+          <p className='mt-3 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            Live v{result.version}
+          </p>
         )}
       </div>
     </div>

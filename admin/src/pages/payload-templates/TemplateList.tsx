@@ -44,11 +44,13 @@ export function StatusChip({
 function ApiSwitcher({
   apis,
   current,
-  onSwitch
+  onSwitch,
+  className
 }: {
   apis: ExternalApi[]
   current: ExternalApi | null
   onSwitch: (a: ExternalApi) => void
+  className?: string
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -59,7 +61,10 @@ function ApiSwitcher({
           role='combobox'
           aria-expanded={open}
           aria-label='Switch external API'
-          className='flex h-8 w-full items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[12.5px] font-medium text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-foreground dark:hover:bg-muted'
+          className={cn(
+            'flex h-8 w-full items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[12.5px] font-medium text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-foreground dark:hover:bg-muted',
+            className
+          )}
           data-payload-api-switcher
         >
           <span className='min-w-0 flex-1 truncate'>{current?.name ?? 'Pick an API'}</span>
@@ -101,6 +106,93 @@ function ApiSwitcher({
   )
 }
 
+/** The payload list as one combobox (compact layout): label, status and use per row. */
+function PayloadSwitcher({
+  templates,
+  loading,
+  error,
+  selectedKey,
+  onSelect,
+  apiName
+}: {
+  templates: TemplateListItem[]
+  loading: boolean
+  error: string | null
+  selectedKey: string | null
+  onSelect: (key: string) => void
+  apiName: string
+}) {
+  const [open, setOpen] = useState(false)
+  const current = templates.find((t) => t.key === selectedKey) ?? null
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          role='combobox'
+          aria-expanded={open}
+          aria-label='Switch payload'
+          disabled={loading && !templates.length}
+          className='flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[12.5px] text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-wait dark:border-border dark:bg-background dark:text-foreground dark:hover:bg-muted sm:max-w-[420px]'
+          data-payload-switcher
+        >
+          <span className='shrink-0 text-slate-500 dark:text-muted-foreground'>Payload</span>
+          <span className='min-w-0 flex-1 truncate font-medium'>
+            {current?.label ??
+              (loading ? 'Loading…' : templates.length ? 'Pick a payload' : 'None yet')}
+          </span>
+          {templates.length > 1 && (
+            <span className='shrink-0 tabular-nums text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              {templates.length}
+            </span>
+          )}
+          <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[340px] p-0' align='start'>
+        <Command>
+          <CommandInput placeholder='Find a payload…' className='h-8 text-[12px]' />
+          <CommandList>
+            <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+              {error ?? `No payload by that name on ${apiName}`}
+            </CommandEmpty>
+            <CommandGroup>
+              {templates.map((t) => (
+                <CommandItem
+                  key={t.key}
+                  value={`${t.label} ${t.key}`}
+                  onSelect={() => {
+                    setOpen(false)
+                    if (t.key !== selectedKey) onSelect(t.key)
+                  }}
+                  className='items-start gap-2 py-1.5 text-[12.5px]'
+                  data-payload-row={t.key}
+                >
+                  <Check
+                    className={cn(
+                      'mt-0.5 h-3 w-3 shrink-0',
+                      t.key === selectedKey ? 'opacity-100' : 'opacity-0'
+                    )}
+                  />
+                  <span className='min-w-0 flex-1'>
+                    <span className='block truncate'>{t.label}</span>
+                    <span className='mt-0.5 flex items-center gap-2'>
+                      <StatusChip status={t.status} version={t.published_version} />
+                      <span className='truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                        {t.used_by_count > 0 ? `Used by ${t.used_by_count}` : 'Not used yet'}
+                      </span>
+                    </span>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function ListSkeleton() {
   return (
     <div className='space-y-1 px-2 py-1' aria-hidden>
@@ -130,7 +222,7 @@ export function TemplateList({
   selectedKey,
   onSelect,
   onNew,
-  stacked
+  compact
 }: {
   apis: ExternalApi[]
   currentApi: ExternalApi | null
@@ -142,16 +234,56 @@ export function TemplateList({
   selectedKey: string | null
   onSelect: (key: string) => void
   onNew: () => void
-  /** Narrow page: the list sits above the editor instead of beside it. */
-  stacked: boolean
+  /**
+   * Not enough room for a list column (a narrow page, or the preview beside a cramped
+   * editor): the list folds into a combobox in a bar above the editor.
+   */
+  compact: boolean
 }) {
+  if (compact)
+    return (
+      <div
+        className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
+        data-payload-list-compact
+      >
+        <button
+          type='button'
+          onClick={onBack}
+          aria-label={`Back to ${currentApi?.name ?? 'External APIs'}`}
+          data-tip={`Back to ${currentApi?.name ?? 'External APIs'}`}
+          className='inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
+          data-payload-back
+        >
+          <ArrowLeft className='h-4 w-4' />
+        </button>
+        <ApiSwitcher
+          apis={apis}
+          current={currentApi}
+          onSwitch={onSwitchApi}
+          className='w-[180px] shrink-0'
+        />
+        <PayloadSwitcher
+          templates={templates}
+          loading={loading}
+          error={error}
+          selectedKey={selectedKey}
+          onSelect={onSelect}
+          apiName={currentApi?.name ?? 'this API'}
+        />
+        <button
+          type='button'
+          onClick={onNew}
+          data-tip='New payload — created from the API page'
+          aria-label='New payload'
+          className='inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
+        >
+          <Plus className='h-4 w-4' />
+        </button>
+        {error && <p className='w-full text-[12px] text-red-600 dark:text-red-400'>{error}</p>}
+      </div>
+    )
   return (
-    <aside
-      className={cn(
-        'flex shrink-0 flex-col border-slate-200 bg-white dark:border-border dark:bg-card',
-        stacked ? 'max-h-[40vh] w-full border-b' : 'w-[272px] border-r'
-      )}
-    >
+    <aside className='flex w-[272px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
       <div className='shrink-0 space-y-2.5 border-b border-slate-100 px-3 pb-3 pt-3 dark:border-border'>
         <button
           type='button'

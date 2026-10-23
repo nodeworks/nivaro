@@ -34,7 +34,7 @@ export function ConditionRules({
           // biome-ignore lint/suspicious/noArrayIndexKey: rules carry no id
           <div key={i} className='flex items-center gap-1.5'>
             <span
-              className={`w-6 shrink-0 text-[11.5px] text-slate-400 ${i === 0 ? 'invisible' : ''}`}
+              className={`w-6 shrink-0 text-[11.5px] text-slate-500 dark:text-muted-foreground ${i === 0 ? 'invisible' : ''}`}
               aria-hidden
             >
               and

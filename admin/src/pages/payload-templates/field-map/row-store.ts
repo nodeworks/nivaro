@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { Problem } from '../api'
+import type { ShownProblem } from '../problem-copy'
 import type { Issue } from './spec-ops'
 
 // Per-row facts that change often (problems, structural issues, preview
@@ -12,7 +12,7 @@ export interface RowMeta {
   /** Client-side shape checks (empty / duplicate key …). */
   issues: Issue[]
   /** Server problems for this row (from the preview). */
-  problems: Problem[]
+  problems: ShownProblem[]
   value: unknown
   hasValue: boolean
   /** Group folded shut. */

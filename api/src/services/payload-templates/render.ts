@@ -1,7 +1,7 @@
 import { payloadLiquid } from '../payload-filters.js'
 import { makeSecretTokens, neutralizeSecretMarkers, SECRET_NAME_RE } from '../secret-markers.js'
 import { evaluateMap } from './evaluate.js'
-import type { Field, MapSpec, Problem } from './types.js'
+import type { Field, MapSpec, Problem, ProblemCode } from './types.js'
 
 // ─── Render entry ────────────────────────────────────────────────────────────
 // One call turns a stored template body (map spec JSON or Liquid) plus a scope
@@ -29,11 +29,19 @@ export type RenderResult = {
 const isObj = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v)
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
-const err = (fieldId: string, path: string, message: string): Problem => ({
+const err = (
+  fieldId: string,
+  path: string,
+  message: string,
+  code: ProblemCode,
+  params?: Problem['params']
+): Problem => ({
   field_id: fieldId,
   path,
   message,
-  severity: 'error'
+  severity: 'error',
+  code,
+  ...(params ? { params } : {})
 })
 
 /** The problems that stop a send. */
@@ -145,25 +153,27 @@ async function renderCode(
       field_id: '',
       path: '',
       message: `Output '${expr}' is not passed through | jsonify — record text with quotes can break the payload`,
-      severity: 'warning'
+      severity: 'warning',
+      code: 'unjsonified',
+      params: { expr }
     })
   }
   let text: string
   try {
     text = String(await payloadLiquid().parseAndRender(body, renderScope))
   } catch (e) {
-    problems.push(err('', '', `Liquid error: ${errMsg(e)}`))
+    problems.push(err('', '', `Liquid error: ${errMsg(e)}`, 'liquid_error', { detail: errMsg(e) }))
     return { body: null, problems, values: {} }
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch (e) {
-    problems.push(err('', '', `Invalid JSON: ${errMsg(e)}`))
+    problems.push(err('', '', `Invalid JSON: ${errMsg(e)}`, 'invalid_json', { detail: errMsg(e) }))
     return { body: null, problems, values: {} }
   }
   if (!isObj(parsed)) {
-    problems.push(err('', '', 'The template must render a JSON object'))
+    problems.push(err('', '', 'The template must render a JSON object', 'not_object'))
     return { body: null, problems, values: {} }
   }
   for (const k of new Set(duplicateKeys(text))) {
@@ -171,7 +181,9 @@ async function renderCode(
       err(
         '',
         k,
-        `Duplicate key '${k}' in rendered JSON (a record value may contain unescaped quotes — use | jsonify)`
+        `Duplicate key '${k}' in rendered JSON (a record value may contain unescaped quotes — use | jsonify)`,
+        'duplicate_output_key',
+        { key: k }
       )
     )
   }
@@ -180,14 +192,26 @@ async function renderCode(
   const asked = new Set([...used, ...landed, ...scanSecretNames(body)])
   for (const n of asked) {
     if (!SECRET_NAME_RE.test(n)) {
-      problems.push(err('', '', `Secret name '${n}': Secret names use letters, digits, - and _`))
+      problems.push(
+        err(
+          '',
+          '',
+          `Secret name '${n}': Secret names use letters, digits, - and _`,
+          'secret_bad_name',
+          {
+            name: n
+          }
+        )
+      )
     }
   }
   if (opts.secretNames) {
     const have = new Set(opts.secretNames)
     for (const n of asked) {
       if (SECRET_NAME_RE.test(n) && !have.has(n))
-        problems.push(err('', '', `This API has no \`${n}\` secret yet`))
+        problems.push(
+          err('', '', `This API has no \`${n}\` secret yet`, 'secret_unknown', { name: n })
+        )
     }
   }
   return { body: value as Record<string, unknown>, problems, values: {} }
@@ -206,36 +230,71 @@ function getPath(body: Record<string, unknown>, path: string): unknown {
 
 const empty = (v: unknown): boolean => v === undefined || v === null || v === ''
 
+type RuleFailure = { message: string; code: ProblemCode; params: NonNullable<Problem['params']> }
+
+/** A value cut short for problem params. */
+const brief = (s: string): string => (s.length > 60 ? `${s.slice(0, 57)}...` : s)
+
 /** Rule failures for one present value. `required` is checked by the caller. */
-function ruleMessages(path: string, value: unknown, r: Rules): string[] {
-  const out: string[] = []
+function ruleFailures(path: string, value: unknown, r: Rules): RuleFailure[] {
+  const out: RuleFailure[] = []
   if (empty(value)) return out
   const s = typeof value === 'string' ? value : String(value)
   if (r.max_length !== undefined && s.length > r.max_length) {
-    out.push(`${path} is ${s.length} characters; the most allowed is ${r.max_length}`)
+    out.push({
+      message: `${path} is ${s.length} characters; the most allowed is ${r.max_length}`,
+      code: 'rule_max_length',
+      params: { length: s.length, max: r.max_length }
+    })
   }
   if (r.allowed && !r.allowed.includes(s)) {
-    out.push(`${path} is "${s}"; allowed values are ${r.allowed.join(', ')}`)
+    out.push({
+      message: `${path} is "${s}"; allowed values are ${r.allowed.join(', ')}`,
+      code: 'rule_allowed',
+      params: { got: brief(s), allowed: r.allowed.slice(0, 20) }
+    })
   }
   if (r.pattern !== undefined) {
     try {
       if (r.pattern.length > 200) throw new Error('Pattern is too long')
       if (!new RegExp(r.pattern).test(s.slice(0, 10_000)))
-        out.push(`${path} "${s}" does not match ${r.pattern}`)
-    } catch (e) {
-      out.push(
-        r.pattern.length > 200
-          ? `${path}: Pattern is too long (200 characters at most)`
-          : `${path} has a rule pattern that is not a valid expression: ${r.pattern}`
-      )
+        out.push({
+          message: `${path} "${s}" does not match ${r.pattern}`,
+          code: 'rule_pattern',
+          params: { got: brief(s), pattern: r.pattern }
+        })
+    } catch {
+      out.push({
+        message:
+          r.pattern.length > 200
+            ? `${path}: Pattern is too long (200 characters at most)`
+            : `${path} has a rule pattern that is not a valid expression: ${r.pattern}`,
+        code: 'rule_pattern_invalid',
+        params: { pattern: brief(r.pattern) }
+      })
     }
   }
   if (r.min !== undefined || r.max !== undefined) {
     const n = typeof value === 'number' ? value : Number(value)
-    if (Number.isNaN(n)) out.push(`${path} is not a number`)
+    if (Number.isNaN(n))
+      out.push({
+        message: `${path} is not a number`,
+        code: 'rule_not_number',
+        params: { got: brief(s) }
+      })
     else {
-      if (r.min !== undefined && n < r.min) out.push(`${path} is ${n}; the minimum is ${r.min}`)
-      if (r.max !== undefined && n > r.max) out.push(`${path} is ${n}; the maximum is ${r.max}`)
+      if (r.min !== undefined && n < r.min)
+        out.push({
+          message: `${path} is ${n}; the minimum is ${r.min}`,
+          code: 'rule_min',
+          params: { got: n, min: r.min }
+        })
+      if (r.max !== undefined && n > r.max)
+        out.push({
+          message: `${path} is ${n}; the maximum is ${r.max}`,
+          code: 'rule_max',
+          params: { got: n, max: r.max }
+        })
     }
   }
   return out
@@ -253,7 +312,8 @@ function checkMapRules(fields: Field[], node: unknown, prefix: string, out: Prob
         field_id: field.id,
         path,
         message: 'Rules on a group or list are ignored',
-        severity: 'warning'
+        severity: 'warning',
+        code: 'rules_ignored'
       })
     }
     if (field.type === 'object' && field.children) {
@@ -263,14 +323,15 @@ function checkMapRules(fields: Field[], node: unknown, prefix: string, out: Prob
         if (field.list?.scalar) {
           const child = field.children?.[0]
           if (child?.rules) {
-            for (const m of ruleMessages(`${path}[${i}]`, item, child.rules)) {
-              out.push(err(child.id, `${path}[${i}]`, m))
+            for (const m of ruleFailures(`${path}[${i}]`, item, child.rules)) {
+              out.push(err(child.id, `${path}[${i}]`, m.message, m.code, m.params))
             }
           }
         } else checkMapRules(field.children ?? [], item, `${path}[${i}]`, out)
       })
     } else if (field.rules) {
-      for (const m of ruleMessages(path, value, field.rules)) out.push(err(field.id, path, m))
+      for (const m of ruleFailures(path, value, field.rules))
+        out.push(err(field.id, path, m.message, m.code, m.params))
     }
   }
 }
@@ -291,7 +352,11 @@ function findFieldId(fields: Field[], path: string): string {
 function checkLockedSpec(fields: Field[], locked: string[] | undefined, out: Problem[]): void {
   for (const key of locked ?? []) {
     if (!findFieldId(fields, key)) {
-      out.push(err('', key, `Locked key \`${key}\` is missing from the field map`))
+      out.push(
+        err('', key, `Locked key \`${key}\` is missing from the field map`, 'locked_missing', {
+          key
+        })
+      )
     }
   }
 }
@@ -308,7 +373,9 @@ function checkLockedOutput(
         field_id: '',
         path: key,
         message: `Locked key \`${key}\` is missing from the output`,
-        severity: 'warning'
+        severity: 'warning',
+        code: 'locked_missing_output',
+        params: { key }
       })
     }
   }
@@ -321,8 +388,10 @@ function checkCodeRules(
 ): void {
   for (const [path, r] of Object.entries(rules ?? {})) {
     const value = getPath(body, path)
-    if (r.required && empty(value)) out.push(err('', path, `${path} is required`))
-    else for (const m of ruleMessages(path, value, r)) out.push(err('', path, m))
+    if (r.required && empty(value)) out.push(err('', path, `${path} is required`, 'rule_required'))
+    else
+      for (const m of ruleFailures(path, value, r))
+        out.push(err('', path, m.message, m.code, m.params))
   }
 }
 
@@ -348,7 +417,9 @@ export async function renderBody(
   } catch (e) {
     return {
       body: null,
-      problems: [err('', '', `Invalid field map JSON: ${errMsg(e)}`)],
+      problems: [
+        err('', '', `Invalid field map JSON: ${errMsg(e)}`, 'invalid_spec', { detail: errMsg(e) })
+      ],
       values: {}
     }
   }

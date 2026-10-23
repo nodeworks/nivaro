@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { AlertCircle, AlertTriangle, Plus, Redo2, Undo2 } from 'lucide-react'
+import { AlertTriangle, CircleX, Plus, Redo2, Undo2 } from 'lucide-react'
 import {
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -30,6 +30,8 @@ import {
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { Field, MapSpec, Problem } from '../api'
+import { usePayloadEditor } from '../editor-context'
+import { makeProblemShower, type ShownProblem } from '../problem-copy'
 import { FieldMapLayoutContext, FieldRow, INDENT, type RowActions } from './FieldRow'
 import { parseContextPath } from './PathPicker'
 import { EMPTY_META, type RowMeta, RowStore, useRowMeta } from './row-store'
@@ -271,7 +273,7 @@ function AddRow({
             ? 'Add a field here — type a key, press Enter'
             : 'Add a field — type a key, press Enter'
         }
-        className='h-7 w-full min-w-0 max-w-[420px] rounded border border-transparent bg-transparent px-1.5 font-mono text-[12.5px] text-slate-900 placeholder:font-sans placeholder:text-slate-400 hover:border-slate-200 focus:border-nvr-cyan focus:bg-white focus:outline-none dark:text-foreground dark:placeholder:text-slate-500 dark:hover:border-border dark:focus:bg-background'
+        className='h-7 w-full min-w-0 max-w-[420px] rounded border border-transparent bg-transparent px-1.5 font-mono text-[12.5px] text-slate-900 placeholder:font-sans placeholder:text-slate-500 hover:border-slate-200 focus:border-nvr-cyan focus:bg-white focus:outline-none dark:text-foreground dark:placeholder:text-slate-400 dark:hover:border-border dark:focus:bg-background'
       />
     </div>
   )
@@ -364,15 +366,17 @@ export function FieldMap(props: FieldMapProps) {
   // Same names → same array, whatever the caller passes (an inline [] re-renders every row).
   const secretSig = props.secretNames.join('\u0001')
   const secretNames = useMemo(() => (secretSig ? secretSig.split('\u0001') : []), [secretSig])
+  const { recordLabel, pathNames } = usePayloadEditor()
   const env = useMemo<FieldMapEnv>(
     () => ({
       collection: props.collection,
       lookups,
       secretNames,
       partner: props.partner?.trim() || 'the partner',
-      secretsHref: props.secretsHref ?? null
+      secretsHref: props.secretsHref ?? null,
+      names: pathNames
     }),
-    [props.collection, lookups, secretNames, props.partner, props.secretsHref]
+    [props.collection, lookups, secretNames, props.partner, props.secretsHref, pathNames]
   )
 
   // ── Per-row facts → row store (one row re-renders, not all of them) ──
@@ -398,6 +402,22 @@ export function FieldMap(props: FieldMapProps) {
   lockedRef.current = lockedIds
   const locks = useMemo(() => lockState(spec, lockedIds), [spec, lockedIds])
   const issues = useMemo(() => structuralIssues(spec), [spec])
+  // Plain copy per problem (problem-copy.ts): same problem object → same shown object, so a
+  // keystroke elsewhere never re-renders a row whose problems did not change.
+  const specRef = useRef(spec)
+  specRef.current = spec
+  const show = useMemo(
+    () =>
+      makeProblemShower({
+        recordLabel,
+        names: pathNames,
+        partner: props.partner,
+        get spec() {
+          return specRef.current
+        }
+      }),
+    [recordLabel, pathNames, props.partner]
+  )
   const { byRow, pageProblems } = useMemo(() => {
     const ids = new Set<string>()
     const walk = (fs: Field[]) => {
@@ -407,10 +427,11 @@ export function FieldMap(props: FieldMapProps) {
       }
     }
     walk(spec.fields ?? [])
-    const byRow = new Map<string, Problem[]>()
-    const page: Problem[] = []
+    const byRow = new Map<string, ShownProblem[]>()
+    const page: ShownProblem[] = []
     const seen = new Set<string>()
-    for (const p of problems) {
+    for (const raw of problems) {
+      const p = show(raw)
       if (!p.field_id) {
         page.push(p)
         continue
@@ -429,7 +450,7 @@ export function FieldMap(props: FieldMapProps) {
       else byRow.set(p.field_id, [p])
     }
     return { byRow, pageProblems: page }
-  }, [problems, spec])
+  }, [problems, spec, show])
 
   const metaMap = useMemo(() => {
     const m = new Map<string, RowMeta>()
@@ -730,6 +751,19 @@ export function FieldMap(props: FieldMapProps) {
     () => problems.filter((p) => p.severity === 'error').length,
     [problems]
   )
+  // Key column: sized to the longest key (depth counted in), 9rem–14rem; rows read the CSS
+  // variables, so a longer key never re-renders every row.
+  const keyCh = useMemo(() => {
+    let n = 0
+    const walk = (fs: Field[] | undefined, depth: number) => {
+      for (const f of fs ?? []) {
+        n = Math.max(n, (typeof f.key === 'string' ? f.key.length : 0) + (depth * INDENT) / 7.5)
+        walk(f.children, depth + 1)
+      }
+    }
+    walk(spec.fields, 0)
+    return Math.ceil(n)
+  }, [spec.fields])
 
   return (
     <FieldMapEnvContext.Provider value={env}>
@@ -738,6 +772,12 @@ export function FieldMap(props: FieldMapProps) {
         <div
           ref={rootRef}
           className='flex min-h-full flex-col outline-none'
+          style={
+            {
+              '--fm-key-ch': keyCh,
+              '--fm-key-cap': narrow ? '11.5rem' : '14rem'
+            } as React.CSSProperties
+          }
           tabIndex={-1}
           onKeyDown={onKeyDown}
           data-payload-field-map=''
@@ -791,7 +831,13 @@ export function FieldMap(props: FieldMapProps) {
 
           {pageProblems.length > 0 && (
             <ul
-              className='mx-4 mt-3 space-y-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'
+              className={cn(
+                'mx-4 mt-3 space-y-1 rounded-md border px-3 py-2',
+                pageProblems.some((p) => p.severity === 'error')
+                  ? 'border-red-200 bg-red-50 dark:border-red-500/30 dark:bg-red-500/10'
+                  : 'border-amber-200 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10'
+              )}
+              data-payload-page-problems
               aria-live='polite'
             >
               {pageProblems.map((p, i) => (
@@ -806,11 +852,11 @@ export function FieldMap(props: FieldMapProps) {
                   )}
                 >
                   {p.severity === 'warning' ? (
-                    <AlertTriangle className='mt-px h-3.5 w-3.5 shrink-0' />
+                    <AlertTriangle className='mt-0.5 h-3 w-3 shrink-0' aria-label='Warning' />
                   ) : (
-                    <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0' />
+                    <CircleX className='mt-0.5 h-3 w-3 shrink-0' aria-label='Error' />
                   )}
-                  <span>{p.message}</span>
+                  <span data-tip={p.tip}>{p.text}</span>
                 </li>
               ))}
             </ul>
@@ -850,7 +896,7 @@ export function FieldMap(props: FieldMapProps) {
               />
             </DndContext>
           </div>
-          <p className='mt-auto px-4 pb-3 pt-1 text-[11.5px] text-slate-400 dark:text-slate-500'>
+          <p className='mt-auto px-4 pb-3 pt-1 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
             ↑ ↓ move between rows · ⌥↑ ⌥↓ reorder · ⌘D duplicate · ⌫ on a row removes it · ⌘Z undo
           </p>
         </div>

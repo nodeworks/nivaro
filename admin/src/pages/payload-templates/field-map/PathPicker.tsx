@@ -86,21 +86,34 @@ export function RecordFieldSection({
             <CollectionFieldPicker
               collection={scope.collection}
               value={itemRel}
-              valueLabel={itemRel ? humanizePath(value, scope.alias) : undefined}
+              valueLabel={itemRel ? humanizePath(value, scope.alias, env.names) : undefined}
               onChange={(p) => onChange(`${scope.alias}.${p.path.join('.')}`)}
               placeholder={`Pick a field of the ${scope.alias}…`}
             />
           ) : (
-            <PathTextInput
-              rel={itemRel}
-              toPath={(r) => `${scope.alias}.${r}`}
-              onChange={onChange}
-              label={`Field of each ${scope.alias}`}
-            />
+            <>
+              <PathTextInput
+                rel={itemRel}
+                toPath={(r) => `${scope.alias}.${r}`}
+                onChange={onChange}
+                label={`Field of each ${scope.alias}`}
+              />
+              <Hint className='mt-1'>
+                {itemRel
+                  ? `Reads ${humanizePath(value, scope.alias, env.names)}`
+                  : `Type the name of a field each ${scope.alias} has.`}
+              </Hint>
+            </>
           )}
           <button
             type='button'
-            className={cn(smallAction, 'mt-1 -ml-2', value === scope.alias && 'text-nvr-cyan')}
+            aria-pressed={value === scope.alias}
+            className={cn(
+              smallAction,
+              'mt-1.5 border border-slate-200 font-normal dark:border-border',
+              value === scope.alias &&
+                'border-nvr-cyan/50 bg-nvr-cyan/10 text-slate-900 hover:bg-nvr-cyan/15 dark:text-foreground'
+            )}
             onClick={() => onChange(scope.alias)}
           >
             Use the {scope.alias} itself
@@ -112,7 +125,7 @@ export function RecordFieldSection({
         <CollectionFieldPicker
           collection={env.collection}
           value={recordRel}
-          valueLabel={recordRel ? humanizePath(value) : undefined}
+          valueLabel={recordRel ? humanizePath(value, null, env.names) : undefined}
           onChange={(p) => onChange(`record.${p.path.join('.')}`)}
           placeholder='Pick a field…'
         />
@@ -232,7 +245,7 @@ export function PathPicker({
   const [tab, setTab] = useState<'record' | 'related'>(
     isContext || (listSource && env.lookups.length) ? 'related' : 'record'
   )
-  const label = value ? humanizePath(value, scope?.alias) : ''
+  const label = value ? humanizePath(value, scope?.alias, env.names) : ''
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -247,7 +260,9 @@ export function PathPicker({
           <span
             className={cn(
               'min-w-0 flex-1 truncate',
-              value ? 'text-slate-800 dark:text-foreground' : 'text-slate-400'
+              value
+                ? 'text-slate-800 dark:text-foreground'
+                : 'text-slate-500 dark:text-muted-foreground'
             )}
           >
             {label || placeholder}

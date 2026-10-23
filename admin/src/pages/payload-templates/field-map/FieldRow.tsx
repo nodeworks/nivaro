@@ -1,8 +1,11 @@
+import { useOverflowTip } from '@nivaro/shared'
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   ChevronDown,
   ChevronRight,
+  CircleX,
   Copy,
   GripVertical,
   Lock,
@@ -14,7 +17,7 @@ import {
 import { createContext, type HTMLAttributes, type Ref, useContext, useState } from 'react'
 import { Popover, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import type { Field, ListSpec, Problem, ValueSpec } from '../api'
+import type { Field, ListSpec, ValueSpec } from '../api'
 import { GroupHeader } from './GroupHeader'
 import { IncludeControl } from './IncludeControl'
 import { showValue, TYPE_HINTS, TYPE_LABELS } from './labels'
@@ -101,7 +104,7 @@ function InlineValue({ meta, field, pending }: { meta: RowMeta; field: Field; pe
       className={cn(
         'block truncate text-right font-mono text-[12px]',
         v === null || v === ''
-          ? 'italic text-slate-400 dark:text-slate-500'
+          ? 'italic text-slate-500 dark:text-muted-foreground'
           : 'text-slate-600 dark:text-slate-300'
       )}
       data-tip={text.length > 24 ? full : undefined}
@@ -135,7 +138,7 @@ function RowMenu({
   }
   const item =
     'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40 dark:text-slate-200'
-  const kbd = 'ml-auto font-mono text-[11px] text-slate-400'
+  const kbd = 'ml-auto font-mono text-[11px] text-slate-500 dark:text-muted-foreground'
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -287,8 +290,13 @@ export function FieldRow({
   // A just-added row's empty key is not an error until the person leaves it.
   const issues = meta.fresh ? meta.issues.filter((m) => m.code !== 'empty_key') : meta.issues
   const keyBad = issues.some((m) => KEY_ISSUES.has(m.code))
-  const keyWidth = Math.max(96, (narrow ? 152 : 184) - depth * INDENT)
+  // Sized by FieldMap's --fm-key-ch / --fm-key-cap (longest key, 9rem–14rem); deeper rows
+  // give back their indent so every value column lines up.
+  const keyWidth = `max(96px, calc(clamp(9rem, calc(var(--fm-key-ch, 20) * 1ch + 2.25rem), var(--fm-key-cap, 14rem)) - ${depth * INDENT}px))`
   const pad = 4 + depth * INDENT
+  const keyTipRef = useOverflowTip<HTMLInputElement>(locked ? null : field.key)
+  const errorShown = issues.length > 0 || meta.problems.some((p) => p.severity === 'error')
+  const warningShown = !errorShown && meta.problems.length > 0
 
   const controls = (
     <>
@@ -339,27 +347,35 @@ export function FieldRow({
   )
 
   return (
-    <div className={cn(dragging && 'opacity-60')}>
+    <div
+      className={cn(
+        'relative border-b border-slate-100 py-2 dark:border-border/60',
+        warningShown && 'bg-amber-50/60 dark:bg-amber-500/5',
+        errorShown && 'bg-red-50/40 dark:bg-red-500/5',
+        dragging && 'opacity-60'
+      )}
+      data-field-block={field.id}
+    >
+      {/* depth guides span the whole block (row, note, problems) */}
+      {depth > 0 &&
+        Array.from({ length: depth }, (_, i) => (
+          <span
+            // biome-ignore lint/suspicious/noArrayIndexKey: static guides
+            key={i}
+            aria-hidden
+            className='absolute bottom-0 top-0 w-px bg-slate-200 dark:bg-border'
+            style={{ left: 12 + i * INDENT }}
+          />
+        ))}
       <div
         data-row-id={field.id}
         tabIndex={-1}
         className={cn(
-          'group/row relative flex min-h-9 items-center gap-1.5 rounded-md pr-1.5 outline-none hover:bg-slate-50 focus-visible:ring-1 focus-visible:ring-nvr-cyan/70 focus-within:bg-slate-50 dark:hover:bg-muted/40 dark:focus-within:bg-muted/40',
-          narrow && 'flex-wrap py-1'
+          'group/row relative flex min-h-8 items-center gap-1.5 rounded-md pr-1.5 outline-none hover:bg-slate-50 focus-visible:ring-1 focus-visible:ring-nvr-cyan/70 focus-within:bg-slate-50 dark:hover:bg-muted/40 dark:focus-within:bg-muted/40',
+          narrow && 'flex-wrap gap-y-1'
         )}
         style={{ paddingLeft: pad }}
       >
-        {/* depth guides */}
-        {depth > 0 &&
-          Array.from({ length: depth }, (_, i) => (
-            <span
-              // biome-ignore lint/suspicious/noArrayIndexKey: static guides
-              key={i}
-              aria-hidden
-              className='absolute bottom-0 top-0 w-px bg-slate-200 dark:bg-border'
-              style={{ left: 12 + i * INDENT }}
-            />
-          ))}
         <button
           type='button'
           ref={handle?.ref}
@@ -387,13 +403,17 @@ export function FieldRow({
         ) : (
           <span className='w-4 shrink-0' aria-hidden />
         )}
-        <span className='relative flex shrink-0 items-center' style={{ width: keyWidth }}>
+        <span
+          className='relative flex shrink-0 items-center font-mono text-[12.5px]'
+          style={{ width: keyWidth }}
+        >
           {isScalarChild ? (
-            <span className='px-1.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+            <span className='px-1.5 font-sans text-[12.5px] text-slate-500 dark:text-muted-foreground'>
               Each value
             </span>
           ) : (
             <input
+              ref={keyTipRef}
               data-key-input=''
               value={field.key}
               readOnly={locked}
@@ -405,9 +425,15 @@ export function FieldRow({
               placeholder='key'
               onChange={(e) => actions.rename(field.id, e.target.value)}
               onBlur={() => meta.fresh && actions.settle(field.id)}
-              data-tip={lockedSelf ? lockTip : meta.lock === 'inside' ? insideTip : undefined}
+              data-tip={
+                lockedSelf
+                  ? `${field.key} — ${lockTip}`
+                  : meta.lock === 'inside'
+                    ? `${field.key} — ${insideTip}`
+                    : undefined
+              }
               className={cn(
-                'h-7 w-full min-w-0 rounded border bg-transparent px-1.5 font-mono text-[12.5px] text-slate-900 placeholder:text-slate-300 focus:bg-white focus:outline-none dark:text-foreground dark:placeholder:text-slate-600 dark:focus:bg-background',
+                'h-7 w-full min-w-0 text-ellipsis rounded border bg-transparent px-1.5 font-mono text-[12.5px] text-slate-900 placeholder:text-slate-500 focus:bg-white focus:outline-none dark:text-foreground dark:placeholder:text-slate-400 dark:focus:bg-background',
                 locked ? 'cursor-default pr-6' : 'hover:border-slate-200 dark:hover:border-border',
                 keyBad
                   ? 'border-red-300 focus:border-red-500 dark:border-red-500/50'
@@ -475,7 +501,7 @@ export function FieldRow({
         )}
       </div>
       {(field.note || editingNote) && (
-        <div className='pb-1' style={{ paddingLeft: pad + 42 }}>
+        <div className='pt-0.5' style={{ paddingLeft: pad + 42 }}>
           {editingNote ? (
             <input
               // biome-ignore lint/a11y/noAutofocus: opened from the menu to type the note
@@ -505,28 +531,39 @@ export function FieldRow({
         </div>
       )}
       {(issues.length > 0 || meta.problems.length > 0) && (
-        <ul className='space-y-0.5 pb-1.5' style={{ paddingLeft: pad + 42 }} aria-live='polite'>
+        <ul
+          className='space-y-0.5 pr-2 pt-1'
+          style={{ paddingLeft: pad + 42 }}
+          aria-live='polite'
+          data-row-problems
+        >
           {issues.map((m) => (
             <li
               key={`i:${m.code}:${m.message}`}
               data-issue={m.code}
-              className='text-[11.5px] leading-snug text-red-600 dark:text-red-400'
+              className='flex items-start gap-1.5 text-[11.5px] leading-snug text-red-600 dark:text-red-400'
             >
-              {m.message}
+              <CircleX className='mt-[2px] h-3 w-3 shrink-0' aria-label='Error' />
+              <span>{m.message}</span>
             </li>
           ))}
-          {meta.problems.map((p: Problem, i) => (
+          {meta.problems.map((p, i) => (
             <li
               // biome-ignore lint/suspicious/noArrayIndexKey: problems may repeat a message
               key={`p:${i}`}
               className={cn(
-                'text-[11.5px] leading-snug',
+                'flex items-start gap-1.5 text-[11.5px] leading-snug',
                 p.severity === 'warning'
-                  ? 'text-amber-700 dark:text-amber-300'
+                  ? 'text-amber-800 dark:text-amber-300'
                   : 'text-red-600 dark:text-red-400'
               )}
             >
-              {p.message}
+              {p.severity === 'warning' ? (
+                <AlertTriangle className='mt-[2px] h-3 w-3 shrink-0' aria-label='Warning' />
+              ) : (
+                <CircleX className='mt-[2px] h-3 w-3 shrink-0' aria-label='Error' />
+              )}
+              <span data-tip={p.tip}>{p.text}</span>
             </li>
           ))}
         </ul>

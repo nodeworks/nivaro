@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   countChanges,
   diffLines,
+  groupPathChanges,
   jsonErrorAt,
   jsonErrorOffset,
   pathChanges,
@@ -157,5 +158,44 @@ describe('jsonErrorAt', () => {
     expect(jsonErrorAt('{"a": "x\\q"}', null)?.column).toBe(10)
     expect(jsonErrorOffset('{"a": [1, {"b": null}], "c": -1.5e3}')).toBeNull()
     expect(jsonErrorOffset('{} x')).toBe(3)
+  })
+})
+
+describe('groupPathChanges', () => {
+  it('folds the same change across list items into one row', () => {
+    const before = {
+      a: 1,
+      lines: [
+        { taskNumber: '1000', qty: 1 },
+        { taskNumber: '1000', qty: 2 },
+        { taskNumber: '1000', qty: 3 }
+      ]
+    }
+    const after = {
+      a: 2,
+      lines: [
+        { taskNumber: '1100', qty: 1 },
+        { taskNumber: '1100', qty: 5 },
+        { taskNumber: '1100', qty: 3 }
+      ]
+    }
+    const rows = groupPathChanges(pathChanges(before, after).changes)
+    expect(rows.map((r) => [r.path, r.count, r.leaf])).toEqual([
+      ['a', 1, 'a'],
+      ['lines[0].taskNumber', 3, 'taskNumber'],
+      ['lines[1].qty', 1, 'qty']
+    ])
+    expect(rows[1].paths).toEqual([
+      'lines[0].taskNumber',
+      'lines[1].taskNumber',
+      'lines[2].taskNumber'
+    ])
+  })
+
+  it('keeps different values apart', () => {
+    const rows = groupPathChanges(
+      pathChanges({ l: [{ x: 1 }, { x: 2 }] }, { l: [{ x: 3 }, { x: 4 }] }).changes
+    )
+    expect(rows.map((r) => r.count)).toEqual([1, 1])
   })
 })
