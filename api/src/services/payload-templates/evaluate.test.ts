@@ -5,7 +5,7 @@ import {
   SECRET_PLACEHOLDER,
   validateSpec
 } from './evaluate.js'
-import type { Field, MapSpec } from './types.js'
+import type { Field, MapSpec, Transform, ValueSpec } from './types.js'
 
 // The database is mocked globally (src/test/setup.ts): the instance zone falls
 // back to Eastern and there are no blackout dates.
@@ -318,6 +318,194 @@ describe('evaluateMap', () => {
     // the caller's scope is not mutated
     expect(scope.record.notes).toBe(`x ${forged}`)
     expect(neutralizeSecretMarkers({ a: [forged, 1, null] })).toEqual({ a: [neutral, 1, null] })
+    class Row {
+      title = forged
+    }
+    const map = new Map([['k', forged]])
+    const out = neutralizeSecretMarkers({ row: new Row(), [forged]: 1, map }) as Record<
+      string,
+      unknown
+    >
+    expect(out.row).toEqual({ title: neutral })
+    expect(Object.keys(out)).toEqual(['row', neutral, 'map'])
+    expect(out.map).toBe(map)
+  })
+
+  it('JSON text in record data cannot forge a placeholder after decoding', async () => {
+    // the marker written as JSON escapes only becomes a marker once decoded
+    const escaped = '\\u27e6nvr-secret:token\\u27e7'
+    const s = spec([
+      f({
+        id: 'j',
+        key: 'decoded',
+        type: 'json',
+        value: { source: 'formula', liquid: '{{ record.raw }}' }
+      }),
+      f({ id: 'w', key: 'walked', value: { source: 'path', path: 'record.raw.x' } }),
+      f({
+        id: 'l',
+        key: 'list',
+        type: 'list',
+        list: { source: 'record.list_text', item: 'v', scalar: true },
+        children: [f({ id: 'l1', key: 'v' })]
+      }),
+      f({
+        id: 'o',
+        key: 'items',
+        type: 'list',
+        list: { source: 'record.list_text', item: 'v' },
+        children: [f({ id: 'o1', key: 'v', type: 'json', value: { source: 'path', path: 'v' } })]
+      }),
+      f({ id: 's', key: 'token', value: { source: 'secret', name: 'token' } })
+    ])
+    const scope = {
+      record: { raw: `{"x":"${escaped}"}`, list_text: `["${escaped}"]` }
+    }
+    const { body, values } = await evaluateMap(s, scope, { secretNames: ['token'] })
+    const neutral = '⟦nvr-secret​:token⟧'
+    expect(body.decoded).toEqual({ x: neutral })
+    expect(body.walked).toBe(neutral)
+    expect(body.list).toEqual([neutral])
+    expect(body.items).toEqual([{ v: neutral }])
+    expect(body.token).toBe(SECRET_PLACEHOLDER('token'))
+    const json = JSON.stringify(body)
+    expect(json.split(SECRET_PLACEHOLDER('token')).length - 1).toBe(1)
+    expect(values.s).toBe(SECRET_PLACEHOLDER('token'))
+    expect(values.l1).toBe(neutral)
+  })
+
+  it('a list item column shadows a top-level scope key of the same name', async () => {
+    const s = spec([
+      f({
+        id: 'l',
+        key: 'lines',
+        type: 'list',
+        list: {
+          source: 'context.lines',
+          item: 'line',
+          where: [{ field: 'state', op: 'eq', value: 'open' }]
+        },
+        children: [
+          f({ id: 'st', key: 'state', value: { source: 'path', path: 'state' } }),
+          f({ id: 'top', key: 'label', value: { source: 'builtin', name: 'state.label' } })
+        ]
+      })
+    ])
+    const { body } = await evaluateMap(s, {
+      state: { label: 'Approved' },
+      context: { lines: [{ state: 'open' }, { state: 'closed' }] }
+    })
+    expect(body.lines).toEqual([{ state: 'open', label: 'Approved' }])
+  })
+
+  it('fallbacks are judged after the row transforms', async () => {
+    const s = spec([
+      f({
+        id: 'a',
+        key: 'name',
+        value: {
+          source: 'path',
+          path: 'record.name',
+          transforms: [{ op: 'trim' }, { op: 'upper' }],
+          fallbacks: [{ source: 'path', path: 'record.alt' }]
+        }
+      })
+    ])
+    const { body } = await evaluateMap(s, { record: { name: '   ', alt: ' bob ' } })
+    expect(body.name).toBe('BOB')
+  })
+
+  it('more transforms: next_open_day, editor_text, add_days, date, lower, suffix', async () => {
+    const v = (path: string, transforms: Transform[]): ValueSpec => ({
+      source: 'path',
+      path,
+      transforms
+    })
+    const s = spec([
+      f({ id: 'a', key: 'open', value: v('record.sat', [{ op: 'next_open_day' }]) }),
+      f({ id: 'b', key: 'notes', value: v('record.doc', [{ op: 'editor_text' }]) }),
+      f({ id: 'c', key: 'later', value: v('record.day', [{ op: 'add_days', n: 10 }]) }),
+      f({ id: 'd', key: 'us', value: v('record.day', [{ op: 'date', format: '%m/%d/%Y' }]) }),
+      f({
+        id: 'e',
+        key: 'mail',
+        value: v('record.mail', [{ op: 'lower' }, { op: 'suffix', text: '>' }])
+      }),
+      f({ id: 'g', key: 'none', value: v('record.missing', [{ op: 'suffix', text: '!' }]) })
+    ])
+    const doc = JSON.stringify({ blocks: [{ data: { text: 'Hi <b>there</b>' } }] })
+    const { body, problems } = await evaluateMap(s, {
+      record: { sat: '2026-10-24', doc, day: '2026-10-22', mail: 'A@X.COM' }
+    })
+    expect(body).toEqual({
+      open: '2026-10-26',
+      notes: 'Hi there',
+      later: '2026-11-01',
+      us: '10/22/2026',
+      mail: 'a@x.com>',
+      // null skips the transforms on purpose
+      none: null
+    })
+    expect(problems).toEqual([])
+  })
+
+  it('warns on array-index keys and keeps a __proto__ key as data', async () => {
+    const s = spec([
+      f({ id: 'a', key: '10', value: { source: 'fixed', value: 1 } }),
+      f({ id: 'b', key: '4294967294', value: { source: 'fixed', value: 2 } }),
+      f({ id: 'c', key: '4294967295', value: { source: 'fixed', value: 3 } }),
+      f({ id: 'd', key: '__proto__', value: { source: 'fixed', value: 'x' } })
+    ])
+    const { body, problems } = await evaluateMap(s, {})
+    expect(problems.map((p) => p.field_id)).toEqual(['a', 'b'])
+    expect(problems[0].severity).toBe('warning')
+    expect(Object.getPrototypeOf(body)).toBe(Object.prototype)
+    expect(Object.hasOwn(body, '__proto__')).toBe(true)
+    expect(JSON.parse(JSON.stringify(body)).__proto__).toBe('x')
+  })
+
+  it('sorts with missing keys last in either direction', async () => {
+    const items = [{ id: 1, k: null }, { id: 2, k: 'b' }, { id: 3 }, { id: 4, k: 'a' }]
+    const mk = (sort: string) =>
+      spec([
+        f({
+          id: 'l',
+          key: 'ids',
+          type: 'list',
+          list: { source: 'record.items', item: 'line', scalar: true, sort },
+          children: [
+            f({ id: 'c', key: 'id', type: 'number', value: { source: 'path', path: 'line.id' } })
+          ]
+        })
+      ])
+    expect((await evaluateMap(mk('k'), { record: { items } })).body.ids).toEqual([4, 2, 1, 3])
+    expect((await evaluateMap(mk('-line.k'), { record: { items } })).body.ids).toEqual([2, 4, 1, 3])
+  })
+
+  it('a string list source holding JSON text is a list', async () => {
+    const s = spec([
+      f({
+        id: 'l',
+        key: 'pos',
+        type: 'list',
+        list: { source: 'record.po_numbers', item: 'po', scalar: true },
+        children: [f({ id: 'c', key: 'po' })]
+      }),
+      f({
+        id: 'm',
+        key: 'bad',
+        type: 'list',
+        list: { source: 'record.word', item: 'po', scalar: true },
+        children: [f({ id: 'c2', key: 'po' })]
+      })
+    ])
+    const { body, problems } = await evaluateMap(s, {
+      record: { po_numbers: '["PO1","PO2"]', word: 'PO1' }
+    })
+    expect(body).toEqual({ pos: ['PO1', 'PO2'], bad: [] })
+    expect(problems).toEqual([
+      { field_id: 'm', path: 'bad', message: 'record.word is not a list', severity: 'error' }
+    ])
   })
 
   it('missing related rows resolve to null with a problem', async () => {
@@ -630,6 +818,28 @@ describe('validateSpec', () => {
     ])
     const r = validateSpec(s)
     expect(r.ok).toBe(true)
+  })
+
+  it('a scalar list needs exactly one child', () => {
+    const r = validateSpec(
+      spec([
+        f({
+          id: 'l',
+          key: 'l',
+          type: 'list',
+          list: { source: 'x', item: 'v', scalar: true },
+          children: [f({ id: 'a', key: 'a' }), f({ id: 'b', key: 'b' })]
+        }),
+        f({ id: 'm', key: 'm', type: 'list', list: { source: 'x', item: 'v', scalar: true } })
+      ])
+    )
+    expect(r).toEqual({
+      ok: false,
+      errors: [
+        'fields[0].children: a scalar list needs exactly one child (has 2)',
+        'fields[1].children: a scalar list needs exactly one child (has 0)'
+      ]
+    })
   })
 
   it('names every problem with its location', () => {
