@@ -104,6 +104,29 @@ async function getActiveSessions(
   return sessions.sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
 }
 
+/** How long pings and disconnects are gathered into one admin-room broadcast. */
+export const PRESENCE_BROADCAST_COALESCE_MS = 2000
+/** Tenants with a broadcast already scheduled (tenant-keyed: one process serves every tenant). */
+const broadcastPending = new Set<string>()
+
+/**
+ * Tell the admin room the session list changed — at most once per window per tenant, after the
+ * request has answered. Each ping used to SCAN the whole Redis keyspace and broadcast inline, so
+ * every client's 10 s ping cost a full scan on the request (staging demo 2026-10-23, under
+ * event-loop stalls). The periodic sweep still sends the full list on its own interval.
+ */
+export function schedulePresenceBroadcast(app: FastifyInstance, tenant = currentTenantKey()): void {
+  if (!app.io || !app.redis || broadcastPending.has(tenant)) return
+  broadcastPending.add(tenant)
+  const timer = setTimeout(() => {
+    broadcastPending.delete(tenant)
+    getActiveSessions(app, tenant)
+      .then((sessions) => app.io?.to(adminRoom(tenant)).emit('presence:update', { sessions }))
+      .catch(() => {})
+  }, PRESENCE_BROADCAST_COALESCE_MS)
+  timer.unref?.()
+}
+
 /** Tenants with live presence sessions ('' self-hosted). */
 export async function sessionTenants(app: FastifyInstance): Promise<string[]> {
   if (!process.env.CLOUD_META_DB_URL) return ['']
@@ -313,11 +336,7 @@ export async function presencePublicRoutes(app: FastifyInstance) {
 
       const { ttl } = await getPresenceCfg()
       await app.redis.setex(key, ttl, JSON.stringify(session))
-
-      if (app.io) {
-        const sessions = await getActiveSessions(app)
-        app.io.to(adminRoom()).emit('presence:update', { sessions })
-      }
+      schedulePresenceBroadcast(app)
 
       return reply.code(204).send()
     }
@@ -329,10 +348,7 @@ export async function presencePublicRoutes(app: FastifyInstance) {
       const sessionId = sanitizeId(req.body.sessionId)
       if (sessionId) {
         await app.redis.del(sessionKeyPrefix() + sessionId)
-        if (app.io) {
-          const sessions = await getActiveSessions(app)
-          app.io.to(adminRoom()).emit('presence:update', { sessions })
-        }
+        schedulePresenceBroadcast(app)
       }
     }
     return reply.code(204).send()
