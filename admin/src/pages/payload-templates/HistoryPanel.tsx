@@ -11,13 +11,17 @@ import {
 } from './api'
 import { usePayloadEditor } from './editor-context'
 import {
+  draftLookupsOf,
+  liveLookupsOf,
   personName,
+  sameLookups,
   usePeople,
   useRestoreVersion,
   useVersion,
   useVersions,
   type VersionSummary,
-  versionBody
+  versionBody,
+  versionLookupsOf
 } from './panel-api'
 import {
   Bars,
@@ -36,7 +40,7 @@ export function restoreCopy(
   versionMode: DraftBody['mode'],
   draftMode: DraftBody['mode']
 ) {
-  const base = `Your current draft is replaced by v${v}. Nothing goes live until you publish.`
+  const base = `Your current draft — body and lookups — is replaced by v${v}. Nothing goes live until you publish.`
   if (versionMode === draftMode) return base
   return versionMode === 'map'
     ? `${base} v${v} is a field map, so this payload switches back from Liquid to the field map.`
@@ -121,7 +125,11 @@ function VersionDetailView({
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const body = vq.data ? versionBody(vq.data) : null
-  const matchesDraft = body ? sameBody(body, draft) : false
+  const matchesDraft =
+    !!body &&
+    !!vq.data &&
+    sameBody(body, draft) &&
+    sameLookups(versionLookupsOf(vq.data), draftLookupsOf(template))
   const compareTo = against === 'live' && live ? live : draft
 
   const doRestore = async () => {
@@ -199,12 +207,27 @@ function VersionDetailView({
             collection={template.collection}
             recordId={recordId}
             onRecordChange={onRecordChange}
-            before={{
-              label:
-                against === 'live' && live ? `live v${template.published_version}` : 'your draft',
-              body: compareTo
+            before={
+              against === 'live' && live
+                ? {
+                    label: `live v${template.published_version}`,
+                    body: live,
+                    lookups: liveLookupsOf(template),
+                    source: 'published'
+                  }
+                : {
+                    label: 'your draft',
+                    body: compareTo,
+                    lookups: draftLookupsOf(template),
+                    source: 'draft'
+                  }
+            }
+            after={{
+              label: `v${summary.version}`,
+              body,
+              lookups: vq.data ? versionLookupsOf(vq.data) : null,
+              source: 'given'
             }}
-            after={{ label: `v${summary.version}`, body }}
             sameText={{
               payload: `v${summary.version} sends the same body as ${against === 'live' ? 'live' : 'your draft'} for this record.`,
               template: `v${summary.version} is the same template as ${against === 'live' ? 'live' : 'your draft'}.`
@@ -221,7 +244,10 @@ function VersionDetailView({
               </p>
               <p className='text-[12.5px] text-slate-600 dark:text-slate-300'>
                 {restoreCopy(summary.version, body.mode, draft.mode)}
-                {template.published_version != null && live && !sameBody(draft, live)
+                {template.published_version != null &&
+                live &&
+                (!sameBody(draft, live) ||
+                  !sameLookups(draftLookupsOf(template), liveLookupsOf(template)))
                   ? ' Your unpublished changes are not kept as a version.'
                   : ''}
               </p>

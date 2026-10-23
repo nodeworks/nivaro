@@ -83,7 +83,10 @@ export type TemplateRow = {
   published_at: Date | string | null
   published_by: string | null
   locked_keys: string[]
+  /** The PUBLISHED lookups — what senders (erp_submit pushes, published renders) read. */
   lookups: Record<string, unknown> | null
+  /** The draft's lookups (mirrors `lookups` until a draft row exists); previews of the draft. */
+  draft_lookups: Record<string, unknown> | null
   default_hash: string | null
   created_at: Date | string | null
   updated_at: Date | string | null
@@ -98,7 +101,11 @@ export type TemplateVersionSummary = {
   published_at: Date | string | null
 }
 
-export type TemplateVersion = TemplateVersionSummary & { body: string }
+export type TemplateVersion = TemplateVersionSummary & {
+  body: string
+  /** The lookups this version published. */
+  lookups: Record<string, unknown> | null
+}
 
 export type PayloadTemplateErrorCode = 'unknown_key' | 'unpublished' | 'invalid' | 'conflict'
 
@@ -157,9 +164,24 @@ const parseLocked = (raw: unknown): string[] => {
   return Array.isArray(v) ? v.filter((k): k is string => typeof k === 'string') : []
 }
 
+/** A lookups column (JSON text) as an object, or null. */
+export function parseLookups(raw: unknown): Record<string, unknown> | null {
+  const v = typeof raw === 'string' ? parseJson(raw) : raw
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+}
+
+/** Same lookups (JSON-equal; null and {} both mean none). */
+export function sameLookups(a: unknown, b: unknown): boolean {
+  const norm = (x: unknown) => {
+    const o = parseLookups(x)
+    return o && Object.keys(o).length ? JSON.stringify(o) : 'null'
+  }
+  return norm(a) === norm(b)
+}
+
 /** `r` = a templates row with the draft columns aliased `draft_*` (null when no draft row). */
 function toRow(r: Record<string, unknown>): TemplateRow {
-  const lookups = parseJson((r.lookups as string | null) ?? null)
+  const lookups = parseLookups(r.lookups)
   const num = (v: unknown): number | null => (v == null ? null : Number(v))
   const publishedMode = isMode(r.published_mode) ? r.published_mode : null
   const hasDraft = r.draft_rev != null
@@ -185,10 +207,8 @@ function toRow(r: Record<string, unknown>): TemplateRow {
     published_at: (r.published_at as Date | null) ?? null,
     published_by: (r.published_by as string | null) ?? null,
     locked_keys: parseLocked(r.locked_keys),
-    lookups:
-      lookups && typeof lookups === 'object' && !Array.isArray(lookups)
-        ? (lookups as Record<string, unknown>)
-        : null,
+    lookups,
+    draft_lookups: hasDraft ? parseLookups(r.draft_lookups) : lookups,
     default_hash: (r.default_hash as string | null) ?? null,
     created_at: (r.created_at as Date | null) ?? null,
     updated_at: (r.updated_at as Date | null) ?? null
@@ -325,7 +345,9 @@ async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
   }
   const existing = await getTemplate(def.key)
   if (existing) {
-    // Registrar-owned metadata follows the code; draft and published bodies never do.
+    // Registrar-owned metadata follows the code — including the PUBLISHED lookups (the template
+    // row's column), which the registrar declares. Draft and published bodies never do, and the
+    // draft row (its body AND its lookups) is never touched here.
     const drift =
       existing.label !== meta.label ||
       existing.description !== meta.description ||
@@ -366,6 +388,7 @@ async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
         template_id: id,
         mode: def.default.mode,
         body: def.default.body,
+        lookups: meta.lookups,
         rev: 1,
         updated_by: null,
         updated_at: now
@@ -375,6 +398,7 @@ async function seed(owner: string, def: PayloadTemplateDef): Promise<void> {
         version: 1,
         mode: def.default.mode,
         body: def.default.body,
+        lookups: meta.lookups,
         note: `Seeded from ${owner}`.slice(0, 1000),
         published_by: null,
         published_at: now
@@ -394,6 +418,7 @@ const ROW_COLUMNS = [
   't.*',
   'd.mode as draft_mode',
   'd.body as draft_body',
+  'd.lookups as draft_lookups',
   'd.rev as draft_rev',
   'd.updated_by as draft_updated_by',
   'd.updated_at as draft_updated_at'
@@ -455,7 +480,9 @@ async function versionOf(templateId: number, version: number): Promise<TemplateV
   const r = (await db(V).where({ template_id: templateId, version }).first()) as
     | Record<string, unknown>
     | undefined
-  return r ? { ...summaryOf(r), body: String(r.body ?? '') } : null
+  return r
+    ? { ...summaryOf(r), body: String(r.body ?? ''), lookups: parseLookups(r.lookups) }
+    : null
 }
 
 export async function getVersion(key: string, version: number): Promise<TemplateVersion | null> {
@@ -469,24 +496,39 @@ export async function getVersion(key: string, version: number): Promise<Template
 const currentMode = (row: TemplateRow): PayloadMode | null =>
   row.draft_rev > 0 ? row.draft_mode : row.published_mode
 
+/** What one draft write sets; a field left out keeps its current value. */
+type DraftPatch = { mode?: PayloadMode; body?: string; lookups?: Record<string, unknown> | null }
+
 /**
- * Write the draft at `base` (0 = no draft row yet → insert). Touches the drafts table only.
- * False = `base` is not the current revision (nothing written).
+ * Write the draft at `base` (0 = no draft row yet → insert, starting from the published body
+ * and lookups). Touches the drafts table only. False = `base` is not the current revision
+ * (nothing written).
  */
 async function writeDraft(
-  templateId: number,
+  row: TemplateRow,
   base: number,
-  mode: PayloadMode,
-  body: string,
+  patch: DraftPatch,
   userId: string | null
 ): Promise<boolean> {
   const now = new Date()
+  const fields: Record<string, unknown> = {}
+  if (patch.mode !== undefined) fields.mode = patch.mode
+  if (patch.body !== undefined) fields.body = patch.body
+  if (patch.lookups !== undefined) fields.lookups = toJsonStr(patch.lookups)
   if (base === 0) {
+    const mode = patch.mode ?? row.draft_mode
+    const body = patch.body ?? row.draft_body
+    if (body == null) {
+      throw new PayloadTemplateError('invalid', `Payload template '${row.key}' has no body yet`, [
+        problem('Save a body before changing the lookups')
+      ])
+    }
     try {
       await db(D).insert({
-        template_id: templateId,
+        template_id: row.id,
         mode,
         body,
+        lookups: toJsonStr(patch.lookups !== undefined ? patch.lookups : row.lookups),
         rev: 1,
         updated_by: userId ?? null,
         updated_at: now
@@ -494,14 +536,14 @@ async function writeDraft(
       return true
     } catch (e) {
       // A draft row appeared in between (primary key): stale. Anything else is real.
-      const exists = await db(D).where({ template_id: templateId }).first('template_id')
+      const exists = await db(D).where({ template_id: row.id }).first('template_id')
       if (exists) return false
       throw e
     }
   }
   const n = await db(D)
-    .where({ template_id: templateId, rev: base })
-    .update({ mode, body, rev: base + 1, updated_by: userId ?? null, updated_at: now })
+    .where({ template_id: row.id, rev: base })
+    .update({ ...fields, rev: base + 1, updated_by: userId ?? null, updated_at: now })
   return affected(n) > 0
 }
 
@@ -528,9 +570,31 @@ export async function saveDraft(
   if (was && was !== input.mode && !(opts.convert && was === 'map' && input.mode === 'code')) {
     throw new PayloadTemplateError('invalid', MODE_CHANGE_MESSAGE, [problem(MODE_CHANGE_MESSAGE)])
   }
-  if (await writeDraft(row.id, base, input.mode, input.body, userId)) {
+  if (await writeDraft(row, base, { mode: input.mode, body: input.body }, userId)) {
     return { ok: true, rev: base + 1 }
   }
+  return { ok: false, current: await requireTemplate(key) }
+}
+
+/**
+ * Save the draft's lookups (validated by the caller) under the same revision guard as the body:
+ * stale `base_rev` → `{ ok: false, current }`, otherwise rev + 1. Published lookups — what pushes
+ * read — change only on publish.
+ */
+export async function saveDraftLookups(
+  key: string,
+  input: { lookups: Record<string, unknown> | null; base_rev: number },
+  userId: string | null
+): Promise<{ ok: true; rev: number } | { ok: false; current: TemplateRow }> {
+  const row = await requireTemplate(key)
+  const base = Number(input?.base_rev)
+  if (!Number.isInteger(base) || base < 0) {
+    throw new PayloadTemplateError('invalid', 'base_rev must be a whole number', [
+      problem('base_rev must be a whole number')
+    ])
+  }
+  const lookups = parseLookups(input.lookups)
+  if (await writeDraft(row, base, { lookups }, userId)) return { ok: true, rev: base + 1 }
   return { ok: false, current: await requireTemplate(key) }
 }
 
@@ -561,8 +625,8 @@ export async function publishDraft(
     // between either landed first (rev moved → stale) or waits for this publish.
     const locked = await trx(D).where({ template_id: row.id, rev: base }).update({ rev: base })
     if (affected(locked) === 0) return STALE
-    const draft = (await trx(D).where({ template_id: row.id }).first('mode', 'body')) as
-      | { mode: string; body: string | null }
+    const draft = (await trx(D).where({ template_id: row.id }).first('mode', 'body', 'lookups')) as
+      | { mode: string; body: string | null; lookups: string | null }
       | undefined
     if (!draft?.body?.trim()) {
       throw new PayloadTemplateError('invalid', `Payload template '${key}' has an empty draft`, [
@@ -571,6 +635,8 @@ export async function publishDraft(
     }
     checkBody(draft.mode, draft.body, `Payload template '${key}' draft`)
     const mode = draft.mode as PayloadMode
+    // The draft's lookups go live with its body (null and {} both mean none).
+    const lookups = toJsonStr(parseLookups(draft.lookups))
     const newest = (await trx(V)
       .where({ template_id: row.id })
       .orderBy('version', 'desc')
@@ -588,6 +654,7 @@ export async function publishDraft(
         published_version: version,
         published_at: now,
         published_by: userId ?? null,
+        lookups,
         updated_at: now,
         ...(adopt ? { default_hash: adopt } : {})
       })
@@ -597,6 +664,7 @@ export async function publishDraft(
       version,
       mode,
       body: draft.body,
+      lookups,
       note,
       published_by: userId ?? null,
       published_at: now
@@ -615,16 +683,18 @@ export async function publishDraft(
   return { ok: true, version: result }
 }
 
-/** Write a draft body on top of whatever revision is current (rev + 1). */
+/** Write a draft (body, and lookups when given) on top of whatever revision is current (rev + 1). */
 async function replaceDraft(
   row: TemplateRow,
   mode: PayloadMode,
   body: string,
-  userId: string | null
+  userId: string | null,
+  lookups?: Record<string, unknown> | null
 ): Promise<number> {
   let current = row
+  const patch: DraftPatch = { mode, body, ...(lookups !== undefined ? { lookups } : {}) }
   for (let attempt = 0; attempt < DRAFT_RETRIES; attempt++) {
-    if (await writeDraft(current.id, current.draft_rev, mode, body, userId)) {
+    if (await writeDraft(current, current.draft_rev, patch, userId)) {
       return current.draft_rev + 1
     }
     current = await requireTemplate(row.key)
@@ -644,7 +714,8 @@ export async function restoreVersion(
   const row = await requireTemplate(key)
   const v = await versionOf(row.id, version)
   if (!v) return null
-  const rev = await replaceDraft(row, v.mode, v.body, userId)
+  // The version's lookups come back with its body.
+  const rev = await replaceDraft(row, v.mode, v.body, userId, v.lookups)
   await logActivity({
     action: 'payload-template-restore',
     user: userId,
@@ -667,7 +738,14 @@ export async function resetToDefault(key: string, userId: string | null): Promis
       problem('No extension registers a default for this template')
     ])
   }
-  const rev = await replaceDraft(row, def.default.mode, def.default.body, userId)
+  // The registrar's declared lookups are the default's.
+  const rev = await replaceDraft(
+    row,
+    def.default.mode,
+    def.default.body,
+    userId,
+    def.lookups ?? null
+  )
   await logActivity({
     action: 'payload-template-reset',
     user: userId,
@@ -749,7 +827,8 @@ export async function installTemplateDraft(
           published_at: null,
           published_by: null,
           locked_keys: toJsonStr(locked),
-          lookups: toJsonStr(lookups),
+          // Unpublished: nothing is live, lookups included; the bundle's go to the draft.
+          lookups: null,
           default_hash: null,
           created_at: now,
           updated_at: now
@@ -761,6 +840,7 @@ export async function installTemplateDraft(
           template_id: Number(r.id),
           mode: bundle.mode,
           body: bundle.body,
+          lookups: toJsonStr(lookups),
           rev: 1,
           updated_by: userId ?? null,
           updated_at: now
@@ -782,14 +862,19 @@ export async function installTemplateDraft(
   if (!row)
     throw new PayloadTemplateError('conflict', `Payload template '${key}' could not be installed`)
 
-  if (row.draft_mode === bundle.mode && row.draft_body === bundle.body) return 'unchanged'
+  if (
+    row.draft_mode === bundle.mode &&
+    row.draft_body === bundle.body &&
+    sameLookups(row.draft_lookups, lookups)
+  )
+    return 'unchanged'
   const was = currentMode(row)
   if (was && was !== bundle.mode && !(was === 'map' && bundle.mode === 'code')) {
     throw new PayloadTemplateError('invalid', `Payload template '${key}': ${MODE_CHANGE_MESSAGE}`, [
       problem(MODE_CHANGE_MESSAGE)
     ])
   }
-  await replaceDraft(row, bundle.mode, bundle.body, userId)
+  await replaceDraft(row, bundle.mode, bundle.body, userId, lookups)
   await logInstall(key, userId, note)
   return 'drafted'
 }
@@ -820,6 +905,8 @@ type PublishedTemplate = {
   published_mode: PayloadMode | null
   published_body: string | null
   published_version: number | null
+  /** The published lookups (never the draft's). */
+  lookups: Record<string, unknown> | null
 }
 type CacheEntry = { at: number; row: PublishedTemplate | null }
 const publishedCache = new Map<string, Map<string, CacheEntry>>()
@@ -843,7 +930,8 @@ async function publishedTemplate(key: string): Promise<PublishedTemplate | null>
       'locked_keys',
       'published_mode',
       'published_body',
-      'published_version'
+      'published_version',
+      'lookups'
     )) as Record<string, unknown> | undefined
   if (!r) return null
   return {
@@ -852,8 +940,20 @@ async function publishedTemplate(key: string): Promise<PublishedTemplate | null>
     locked_keys: parseLocked(r.locked_keys),
     published_mode: isMode(r.published_mode) ? r.published_mode : null,
     published_body: (r.published_body as string | null) ?? null,
-    published_version: r.published_version == null ? null : Number(r.published_version)
+    published_version: r.published_version == null ? null : Number(r.published_version),
+    lookups: parseLookups(r.lookups)
   }
+}
+
+/**
+ * What a sender (an erp_submit push) reads of a template besides its body: the PUBLISHED
+ * lookups and the external API name, from the published cache. Null = unknown key.
+ */
+export async function publishedTemplateInfo(
+  key: string
+): Promise<{ lookups: Record<string, unknown> | null; external_api: string | null } | null> {
+  const row = await cachedPublished(key)
+  return row ? { lookups: row.lookups, external_api: row.external_api } : null
 }
 
 async function cachedPublished(key: string): Promise<PublishedTemplate | null> {

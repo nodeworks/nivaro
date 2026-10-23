@@ -221,12 +221,12 @@ type BuildContextDefs = Parameters<typeof buildContext>[0]
 
 /** The template-level lookups (same shape as an action's `context`), resolved for one record. */
 async function lookupContext(
-  row: TemplateRow,
+  lookups: Record<string, unknown> | null,
   id: string,
   record: Record<string, unknown>,
   userId: string | null
 ): Promise<Record<string, unknown>> {
-  return row.lookups ? buildContext(row.lookups as BuildContextDefs, id, record, userId) : {}
+  return lookups ? buildContext(lookups as BuildContextDefs, id, record, userId) : {}
 }
 
 /**
@@ -245,8 +245,18 @@ export async function scopeForRecord(
   reader: User,
   /** Share across records of one template (Check recent records): the referencing action and
    *  its target state are read once. */
-  memo?: Map<string, Promise<unknown>>
+  memo?: Map<string, Promise<unknown>>,
+  /** Which lookups the scope reads: the published ones (a published render, like a push) or the
+   *  draft's (default; a draft preview). An object = these exact lookups (an unsaved or older
+   *  version's, already validated). */
+  lookupsFrom: 'draft' | 'published' | { lookups: Record<string, unknown> | null } = 'draft'
 ): Promise<RecordScope> {
+  const templateLookups =
+    lookupsFrom === 'published'
+      ? row.lookups
+      : lookupsFrom === 'draft'
+        ? row.draft_lookups
+        : lookupsFrom.lookups
   const once = <V>(k: string, load: () => Promise<V>): Promise<V> => {
     if (!memo) return load()
     let p = memo.get(k) as Promise<V> | undefined
@@ -269,7 +279,7 @@ export async function scopeForRecord(
   const [ref] = await once(`refs:${row.key}`, () => referencingTransitions(row.key))
   if (ref) {
     const record = await readRecord(row.collection, id)
-    const lookups = await lookupContext(row, id, record, userId)
+    const lookups = await lookupContext(templateLookups, id, record, userId)
     const own = await buildContext(ref.action.context as BuildContextDefs, id, record, userId)
     const context = { ...lookups, ...own }
     return {
@@ -297,7 +307,7 @@ export async function scopeForRecord(
   return {
     scope: {
       record,
-      context: await lookupContext(row, id, record, userId),
+      context: await lookupContext(templateLookups, id, record, userId),
       state: null,
       responses: [],
       response: null,
@@ -547,15 +557,4 @@ export function validateLookups(
     }
   }
   return errors.length ? { ok: false, errors } : { ok: true, value: raw }
-}
-
-/** Store a template's own lookups (already validated). */
-export async function saveTemplateLookups(
-  id: number,
-  lookups: Record<string, unknown> | null
-): Promise<void> {
-  await db(T)
-    .where({ id })
-    .update({ lookups: toJsonStr(lookups), updated_at: new Date() })
-  bustPayloadTemplateCache()
 }

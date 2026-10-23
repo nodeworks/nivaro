@@ -1,8 +1,10 @@
 import { AlertTriangle, RefreshCw, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { type DraftBody, errorMessage, usePreview } from './api'
+import { type DraftBody, errorMessage } from './api'
 import { JsonDiff } from './JsonDiff'
+import { prettyBody } from './json-diff'
+import { type CompareSide, sameLookups, useSidePreview } from './panel-api'
 import { RecordPicker } from './RecordPicker'
 
 // ─── Pieces every preview-column panel shares ───────────────────────────────
@@ -166,11 +168,9 @@ export function EditWarningNote({ text }: { text: string }) {
 export const modeWord = (b: DraftBody | null | undefined) =>
   b?.mode === 'code' ? 'Liquid' : 'a field map'
 
-type Side = { label: string; body: DraftBody | null }
-
 /**
- * Two template bodies compared either as the payload they send for one real
- * record (the server renders both) or as their template source.
+ * Two template versions compared either as the payload they send for one real record (the
+ * server renders both, each with its own lookups) or as their template source plus lookups.
  */
 export function BodyCompare({
   templateKey,
@@ -185,44 +185,57 @@ export function BodyCompare({
   collection: string
   recordId: string | null
   onRecordChange: (id: string) => void
-  before: Side
-  after: Side
+  before: CompareSide
+  after: CompareSide
   sameText?: { payload: string; template: string }
 }) {
   const [view, setView] = useState<'payload' | 'template'>('payload')
-  const beforeQ = usePreview(templateKey, {
-    which: 'draft',
-    recordId,
-    draft: before.body,
-    enabled: view === 'payload' && !!before.body
-  })
-  const afterQ = usePreview(templateKey, {
-    which: 'draft',
-    recordId,
-    draft: after.body,
-    enabled: view === 'payload' && !!after.body
-  })
+  const beforeQ = useSidePreview(templateKey, recordId, before, view === 'payload')
+  const afterQ = useSidePreview(templateKey, recordId, after, view === 'payload')
+  const lookupsDiffer = !sameLookups(before.lookups, after.lookups)
 
   let body: ReactNode
   if (view === 'template') {
     const bs = before.body
     const as = after.body
+    const bodiesSame =
+      !!bs && !!as && bs.mode === as.mode && prettyBody(bs.body) === prettyBody(as.body)
     body = (
-      <>
+      <div className='space-y-3'>
         {bs && as && bs.mode !== as.mode && (
-          <p className='mb-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
             {before.label} is {modeWord(bs)}; {after.label} is {modeWord(as)}.
           </p>
         )}
-        <JsonDiff
-          before={bs ? bs.body : undefined}
-          after={as ? as.body : undefined}
-          beforeLabel={before.label}
-          afterLabel={after.label}
-          showPaths={!!bs && !!as && bs.mode === 'map' && as.mode === 'map'}
-          sameText={sameText?.template ?? 'The two templates are the same.'}
-        />
-      </>
+        {bodiesSame && !lookupsDiffer ? (
+          <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+            {sameText?.template ?? 'The two templates are the same.'}
+          </p>
+        ) : (
+          <>
+            <JsonDiff
+              before={bs ? bs.body : undefined}
+              after={as ? as.body : undefined}
+              beforeLabel={before.label}
+              afterLabel={after.label}
+              showPaths={!!bs && !!as && bs.mode === 'map' && as.mode === 'map'}
+              sameText='The bodies are the same.'
+            />
+            <div className='space-y-1.5' data-payload-compare-lookups>
+              <h4 className={SECTION_LABEL}>Lookups</h4>
+              <JsonDiff
+                before={before.lookups ?? {}}
+                after={after.lookups ?? {}}
+                beforeLabel={before.label}
+                afterLabel={after.label}
+                sameText={
+                  before.lookups ? 'The same lookups on both sides.' : 'No lookups on either side.'
+                }
+              />
+            </div>
+          </>
+        )}
+      </div>
     )
   } else if (!recordId) {
     body = (
@@ -256,6 +269,12 @@ export function BodyCompare({
             This record wouldn't send this: {skipped}
           </p>
         )}
+        {lookupsDiffer && (
+          <p className='mb-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            The two sides read different lookups; each body below is rendered with its own. The
+            Template view lists the lookup changes.
+          </p>
+        )}
         <JsonDiff
           before={before.body ? beforeQ.data?.body : undefined}
           after={after.body ? afterQ.data?.body : undefined}
@@ -276,7 +295,10 @@ export function BodyCompare({
           onChange={setView}
           options={[
             { value: 'payload', label: 'Payload' },
-            { value: 'template', label: 'Template' }
+            {
+              value: 'template',
+              label: lookupsDiffer ? 'Template + lookups' : 'Template'
+            }
           ]}
         />
         {view === 'payload' && (

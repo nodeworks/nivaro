@@ -221,6 +221,27 @@ describe('erp_submit payload_template_key', () => {
     expect(vi.mocked(resolveObligation).mock.calls.at(-1)?.[1]).toMatchObject({ outcome: 'sent' })
   })
 
+  it('a push reads the PUBLISHED lookups, never the draft row', async () => {
+    // The draft's lookups point `wh` at another collection; the push must not see them.
+    wire(published(MAP, { draft_lookups: JSON.stringify({ wh: { collection: 'draft_only' } }) }), {
+      nivaro_payload_template_drafts: [
+        {
+          template_id: 9,
+          mode: 'map',
+          body: JSON.stringify(MAP),
+          lookups: JSON.stringify({ wh: { collection: 'draft_only' } }),
+          rev: 4
+        }
+      ],
+      draft_only: [{ id: 3, code: 'DRAFT' }]
+    })
+    await run([keyAction()])
+    const opts = vi.mocked(callExternalApi).mock.calls[0][1] as { body: Record<string, unknown> }
+    expect(opts.body.warehouse).toBe('W1')
+    expect(reads).not.toContain('draft_only')
+    expect(reads).not.toContain('nivaro_payload_template_drafts')
+  })
+
   it('preview renders the published template', async () => {
     wire(published(MAP))
     const out = await preview([keyAction()])

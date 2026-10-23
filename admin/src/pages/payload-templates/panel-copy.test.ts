@@ -4,7 +4,7 @@ import { orderResults, summarize } from './CheckRecentPanel'
 import { conflictText } from './ConflictPanel'
 import { defaultCopy } from './DefaultPanel'
 import { restoreCopy } from './HistoryPanel'
-import type { CheckResult } from './panel-api'
+import { type CheckResult, draftLookupsOf, liveLookupsOf, sameLookups } from './panel-api'
 
 const row = (over: Partial<TemplateDetail>): TemplateDetail =>
   ({ key: 'k', published_version: 7, ...over }) as TemplateDetail
@@ -29,7 +29,7 @@ describe('conflictText', () => {
 describe('restore / default copy', () => {
   it('says out loud when restoring switches the mode', () => {
     expect(restoreCopy(5, 'map', 'map')).toBe(
-      'Your current draft is replaced by v5. Nothing goes live until you publish.'
+      'Your current draft — body and lookups — is replaced by v5. Nothing goes live until you publish.'
     )
     expect(restoreCopy(5, 'map', 'code')).toMatch(/switches back from Liquid to the field map/)
     expect(restoreCopy(5, 'code', 'map')).toMatch(/field map goes away/)
@@ -56,5 +56,20 @@ describe('check results', () => {
     const out = orderResults([r('a', true), r('b', true, 'gate'), r('c', false), r('d', true)])
     expect(out.map((x) => x.id)).toEqual(['c', 'b', 'a', 'd'])
     expect(summarize(out)).toEqual({ failed: 1, skipped: 1, passed: 2, total: 4 })
+  })
+})
+
+describe('lookups on a template', () => {
+  it('reads the draft lookups apart from the published ones; null and {} are the same', () => {
+    const t = {
+      lookups: '{"wh":{"collection":"warehouses"}}',
+      draft_lookups: { region: { collection: 'regions' } }
+    } as unknown as TemplateDetail
+    expect(liveLookupsOf(t)).toEqual({ wh: { collection: 'warehouses' } })
+    expect(draftLookupsOf(t)).toEqual({ region: { collection: 'regions' } })
+    expect(sameLookups(liveLookupsOf(t), draftLookupsOf(t))).toBe(false)
+    expect(sameLookups(null, {})).toBe(true)
+    // An older server without draft_lookups: the draft mirrors the published ones.
+    expect(draftLookupsOf({ lookups: null } as unknown as TemplateDetail)).toBeNull()
   })
 })

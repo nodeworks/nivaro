@@ -47,7 +47,14 @@ import { PayloadEditorContext, type PayloadEditorCtx } from './editor-context'
 import { HistoryPanel } from './HistoryPanel'
 import { PreviewPane, type PreviewView } from './PreviewPane'
 import { PublishPanel } from './PublishPanel'
-import { defaultOf, serverErrors } from './panel-api'
+import {
+  defaultLookupsOf,
+  defaultOf,
+  draftLookupsOf,
+  liveLookupsOf,
+  sameLookups,
+  serverErrors
+} from './panel-api'
 import { OUTLINE_BTN } from './panel-parts'
 import { TemplateList } from './TemplateList'
 
@@ -171,6 +178,14 @@ export function useDraftEditor(key: string | null, detail: TemplateDetail | unde
       if (pending.current && !blocked.current && !waitForRetry) void run()
     }
   }
+
+  /** A draft write made outside autosave (the lookups) moved the rev to `r`. */
+  const bumpRev = useCallback((r: number) => {
+    const k = keyRef.current
+    if (!k) return
+    revs.current[k] = r
+    setRev(r)
+  }, [])
 
   /** Our own publish moved the live version: later saves are not conflicts with it. */
   const markPublished = useCallback((k: string, version: number) => {
@@ -304,6 +319,7 @@ export function useDraftEditor(key: string | null, detail: TemplateDetail | unde
     discardPending,
     raiseConflict,
     markPublished,
+    bumpRev,
     rev,
     getRev
   }
@@ -658,9 +674,16 @@ function NewerDefaultBanner({
   const { take, pending } = useTakeDefault(template)
   const def = defaultOf(template)
   const live = publishedOf(template)
-  const holdsDefault = !!def && sameBody(def, draft)
+  const draftLk = draftLookupsOf(template)
+  const holdsDefault =
+    !!def && sameBody(def, draft) && sameLookups(defaultLookupsOf(template), draftLk)
   // Nothing unpublished and no mode switch → nothing to lose, so no extra step.
-  const direct = !!def && !!live && sameBody(draft, live) && def.mode === draft.mode
+  const direct =
+    !!def &&
+    !!live &&
+    sameBody(draft, live) &&
+    sameLookups(draftLk, liveLookupsOf(template)) &&
+    def.mode === draft.mode
   const use = async () => {
     if (!direct) return onReview()
     const err = await take()
@@ -815,7 +838,14 @@ export function PayloadTemplateEditorPage() {
     navigate(`/external-apis/${a.id}/payloads`, { replace: true })
   const newPayload = () => apiId != null && navigate(`/external-apis/${apiId}#new-payload`)
 
-  const status = template ? detailStatus(template, editor.draft) : null
+  // Lookups publish with the body: the same body with different lookups is still a draft.
+  const bodyStatus = template ? detailStatus(template, editor.draft) : null
+  const status =
+    template &&
+    bodyStatus === 'live' &&
+    !sameLookups(draftLookupsOf(template), liveLookupsOf(template))
+      ? 'draft'
+      : bodyStatus
   const nothingToPublish = status === 'live'
   const conflict = editor.state.kind === 'conflict' ? editor.state.current : null
   // The diff review only makes sense while the conflict stands.
@@ -844,6 +874,7 @@ export function PayloadTemplateEditorPage() {
       adoptServerDraft,
       raiseConflict: editor.raiseConflict,
       markPublished: editor.markPublished,
+      bumpRev: editor.bumpRev,
       conflicted: saveState.kind === 'conflict',
       saveError:
         saveState.kind === 'error'
@@ -859,6 +890,7 @@ export function PayloadTemplateEditorPage() {
       editor.discardPending,
       editor.raiseConflict,
       editor.markPublished,
+      editor.bumpRev,
       editor.rev,
       editor.getRev,
       adoptServerDraft,

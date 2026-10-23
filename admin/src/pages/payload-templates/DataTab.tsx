@@ -1,5 +1,5 @@
 import { ArrowRight, Check, ChevronsUpDown, Code2, Plus, Trash2 } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import {
@@ -12,7 +12,9 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import { errorMessage, type TemplateDetail } from './api'
+import { errorMessage, staleCurrent, type TemplateDetail } from './api'
+import { usePayloadEditor } from './editor-context'
+import { JsonDiff } from './JsonDiff'
 import {
   buildLookups,
   describeLookups,
@@ -22,7 +24,15 @@ import {
   type LookupRow,
   rowsFromLookups
 } from './lookups'
-import { serverErrors, useLookupCollections, usePipeline, useSaveLookups } from './panel-api'
+import {
+  draftLookupsOf,
+  liveLookupsOf,
+  sameLookups,
+  serverErrors,
+  useLookupCollections,
+  usePipeline,
+  useSaveLookups
+} from './panel-api'
 import { Bars, InlineError, OUTLINE_BTN, STRONG_BTN } from './panel-parts'
 
 export interface DataTabProps {
@@ -336,9 +346,16 @@ const isBlank = (r: LookupRow) =>
 
 /** A UI-created template's own lookups: edit, check, save (PUT /:key/lookups). */
 function LookupsEditor({ template }: { template: TemplateDetail }) {
-  const initial = useMemo(() => rowsFromLookups(template.lookups), [template.lookups])
+  const ctx = usePayloadEditor()
+  const ctxRef = useRef(ctx)
+  ctxRef.current = ctx
+  const draftLookups = draftLookupsOf(template)
+  const live = liveLookupsOf(template)
+  const initial = useMemo(() => rowsFromLookups(draftLookups), [draftLookups])
   const [rows, setRows] = useState<LookupRow[]>(initial)
+  const [blocked, setBlocked] = useState<string | null>(null)
   const save = useSaveLookups(template.key)
+  const unpublished = !sameLookups(draftLookups, live)
   const built = useMemo(() => buildLookups(rows), [rows])
   const baseline = useMemo(() => JSON.stringify(buildLookups(initial).value), [initial])
   const dirty = JSON.stringify(built.value) !== baseline
@@ -349,14 +366,33 @@ function LookupsEditor({ template }: { template: TemplateDetail }) {
     setRows((rs) => rs.map((r) => (r.uid === uid ? next : r)))
 
   const doSave = async () => {
+    setBlocked(null)
+    // Lookups ride the draft's revision: send any waiting body edit first, then save at its rev.
+    const ok = await ctxRef.current.saveNow()
+    if (!ok) {
+      setBlocked(
+        ctxRef.current.conflicted
+          ? 'Saving is paused by the conflict above. Reload, or keep your draft, first.'
+          : 'Your latest body edit didn’t save, so the lookups weren’t saved either. Fix it first.'
+      )
+      return
+    }
     try {
-      const saved = await save.mutateAsync(built.value)
-      setRows(rowsFromLookups(saved.lookups))
-      toast.success('Lookups saved', {
-        description: 'Previews and pushes read them from now on.'
+      const saved = await save.mutateAsync({
+        lookups: built.value,
+        base_rev: ctxRef.current.getRev() ?? 0
       })
-    } catch {
-      /* shown inline */
+      ctxRef.current.bumpRev(saved.rev)
+      setRows(rowsFromLookups(saved.lookups))
+      toast.success('Lookups saved to the draft', {
+        description: 'Previews of the draft read them now. Publish to use them in pushes.'
+      })
+    } catch (e) {
+      const current = staleCurrent(e)
+      if (current) {
+        ctxRef.current.raiseConflict(current)
+        setBlocked('The draft changed on the server. See the banner above.')
+      }
     }
   }
 
@@ -384,13 +420,18 @@ function LookupsEditor({ template }: { template: TemplateDetail }) {
           ))}
         </ul>
       )}
+      {blocked && (
+        <p className='text-[12px] text-red-700 dark:text-red-300' role='alert'>
+          {blocked}
+        </p>
+      )}
       {srvErrors.length > 0 ? (
         <ul className='space-y-0.5 text-[12px] text-red-700 dark:text-red-300' role='alert'>
           {srvErrors.map((m) => (
             <li key={m}>{m}</li>
           ))}
         </ul>
-      ) : save.isError ? (
+      ) : save.isError && !staleCurrent(save.error) ? (
         <p className='text-[12px] text-red-700 dark:text-red-300' role='alert'>
           {errorMessage(save.error, 'The lookups were not saved')}
         </p>
@@ -427,8 +468,9 @@ function LookupsEditor({ template }: { template: TemplateDetail }) {
           <button
             type='button'
             onClick={() => {
-              setRows(rowsFromLookups(template.lookups))
+              setRows(rowsFromLookups(draftLookups))
               save.reset()
+              setBlocked(null)
             }}
             className='text-[12px] font-medium text-slate-500 underline underline-offset-2 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
           >
@@ -437,9 +479,23 @@ function LookupsEditor({ template }: { template: TemplateDetail }) {
         )}
       </div>
       <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-        Lookups aren’t part of the draft: saving changes what every push of this payload reads right
-        away, live version included.
+        Saved to the draft — publish to use. Pushes keep reading the live version’s lookups until
+        then.
       </p>
+      {unpublished && !dirty && (
+        <div className='space-y-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-500/10'>
+          <p className='text-[12px] font-medium text-amber-900 dark:text-amber-200'>
+            The draft’s lookups differ from the live ones
+          </p>
+          <JsonDiff
+            before={live ?? {}}
+            after={draftLookups ?? {}}
+            beforeLabel={`live v${template.published_version ?? '—'}`}
+            afterLabel='draft'
+            sameText=''
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -451,7 +507,7 @@ function LookupsEditor({ template }: { template: TemplateDetail }) {
  * data.
  */
 export function DataTab({ template }: DataTabProps) {
-  const own = describeLookups(template.lookups)
+  const own = describeLookups(draftLookupsOf(template))
   const codeSenders = template.used_by.filter((u) => u.kind === 'code')
   const hasTransitions = template.used_by.some((u) => u.kind === 'transition')
   // Built by an extension's code (its scope() documents the variables in the description).
@@ -473,7 +529,7 @@ export function DataTab({ template }: DataTabProps) {
         <h3 className={H}>This payload’s own lookups</h3>
         <p className={P}>
           {template.owner
-            ? `Set by ${template.owner} in code when it registers this payload, so they're read-only here. A pipeline action’s lookup with the same name wins.`
+            ? `Declared by ${template.owner} in code, so they're read-only here (restoring a version or the file default puts that version's into the draft — publish to use). A pipeline action’s lookup with the same name wins.`
             : 'Extra rows every sender of this payload reads. A pipeline action’s lookup with the same name wins.'}
         </p>
         {template.owner ? (

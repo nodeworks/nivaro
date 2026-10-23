@@ -1,4 +1,5 @@
 import { type DraftBody, draftOf, publishedOf, type TemplateDetail } from './api'
+import { draftLookupsOf, liveLookupsOf } from './panel-api'
 import { BodyCompare, OUTLINE_BTN, PanelFrame } from './panel-parts'
 
 /** Did the 409's row publish a new version since the editor loaded (vs. only save a draft)? */
@@ -73,8 +74,20 @@ export function ConflictPanel({
           collection={loaded.collection}
           recordId={recordId}
           onRecordChange={onRecordChange}
-          before={{ label: theirLabel, body: theirs }}
-          after={{ label: 'your draft', body: draft }}
+          before={{
+            label: theirLabel,
+            body: theirs,
+            ...(published
+              ? { lookups: liveLookupsOf(current), source: 'published' as const }
+              : { lookups: draftLookupsOf(current), source: 'given' as const })
+          }}
+          after={{
+            label: 'your draft',
+            body: draft,
+            // The server's saved draft lookups may now be theirs: render with the ones loaded here.
+            lookups: draftLookupsOf(loaded),
+            source: 'given'
+          }}
           sameText={{
             payload: `Your draft sends the same body as ${theirLabel} for this record.`,
             template: `Your draft is the same template as ${theirLabel}.`

@@ -142,7 +142,8 @@ const {
   renderPayloadTemplate,
   resetToDefault,
   restoreVersion,
-  saveDraft
+  saveDraft,
+  saveDraftLookups
 } = svc
 
 const USER = '11111111-1111-1111-1111-111111111111'
@@ -393,6 +394,84 @@ describe('draft and publish', () => {
   })
 })
 
+describe('draft lookups', () => {
+  const LK = { wh: { collection: 'warehouses', filter: { site: '$record.site' } } }
+  const LK2 = { region: { collection: 'regions' } }
+
+  it('seeds the declared lookups as published, draft and v1', async () => {
+    await registerPayloadTemplate('efp-ops', { ...def(), lookups: LK })
+    const row = await getTemplate(KEY)
+    expect(row?.lookups).toEqual(LK)
+    expect(row?.draft_lookups).toEqual(LK)
+    expect((await getVersion(KEY, 1))?.lookups).toEqual(LK)
+  })
+
+  it('lookups save to the draft under the rev guard; publish copies them live and into the version', async () => {
+    await registerPayloadTemplate('efp-ops', def())
+    const stale = await saveDraftLookups(KEY, { lookups: LK, base_rev: 0 }, USER)
+    expect(stale.ok).toBe(false)
+    expect(await saveDraftLookups(KEY, { lookups: LK, base_rev: 1 }, USER)).toEqual({
+      ok: true,
+      rev: 2
+    })
+    let row = await getTemplate(KEY)
+    expect(row?.draft_lookups).toEqual(LK)
+    expect(row?.lookups).toBeNull()
+    expect(row?.draft_body).toBe(spec('record.status'))
+    // A body save keeps the draft lookups.
+    await saveDraft(KEY, { mode: 'map', body: spec('record.label'), base_rev: 2 }, USER)
+    expect((await getTemplate(KEY))?.draft_lookups).toEqual(LK)
+
+    expect(await publishDraft(KEY, { base_rev: 3, note: 'lookups' }, USER)).toEqual({
+      ok: true,
+      version: 2
+    })
+    row = await getTemplate(KEY)
+    expect(row?.lookups).toEqual(LK)
+    expect((await getVersion(KEY, 2))?.lookups).toEqual(LK)
+    expect((await getVersion(KEY, 1))?.lookups).toBeNull()
+  })
+
+  it('the first draft row starts from the published lookups', async () => {
+    await registerPayloadTemplate('efp-ops', { ...def(), lookups: LK })
+    store.tables[D] = []
+    expect((await getTemplate(KEY))?.draft_rev).toBe(0)
+    await saveDraft(KEY, { mode: 'map', body: spec('record.label'), base_rev: 0 }, USER)
+    expect((await getTemplate(KEY))?.draft_lookups).toEqual(LK)
+  })
+
+  it('restore brings back the version lookups; reset brings back the declared ones', async () => {
+    await registerPayloadTemplate('efp-ops', { ...def(), lookups: LK })
+    await saveDraftLookups(KEY, { lookups: LK2, base_rev: 1 }, USER)
+    await publishDraft(KEY, { base_rev: 2, note: 'v2' }, USER)
+    expect((await getTemplate(KEY))?.lookups).toEqual(LK2)
+
+    await restoreVersion(KEY, 1, USER)
+    let row = await getTemplate(KEY)
+    expect(row?.draft_lookups).toEqual(LK)
+    expect(row?.lookups).toEqual(LK2)
+
+    await saveDraftLookups(KEY, { lookups: null, base_rev: row?.draft_rev ?? 0 }, USER)
+    await resetToDefault(KEY, USER)
+    row = await getTemplate(KEY)
+    expect(row?.draft_lookups).toEqual(LK)
+  })
+
+  it('registration resets the published lookups to the declared ones and never the draft row', async () => {
+    await registerPayloadTemplate('efp-ops', { ...def(), lookups: LK })
+    await saveDraftLookups(KEY, { lookups: LK2, base_rev: 1 }, USER)
+    await publishDraft(KEY, { base_rev: 2, note: 'v2' }, USER)
+    await saveDraftLookups(KEY, { lookups: null, base_rev: 2 }, USER)
+    const draftBefore = JSON.stringify(store.tables[D])
+    // Next boot: the registrar still declares LK.
+    await registerPayloadTemplate('efp-ops', { ...def(), lookups: LK })
+    const row = await getTemplate(KEY)
+    expect(row?.lookups).toEqual(LK)
+    expect(row?.draft_lookups).toBeNull()
+    expect(JSON.stringify(store.tables[D])).toBe(draftBefore)
+  })
+})
+
 describe('versions', () => {
   it('restore puts the version body into the draft', async () => {
     await registerPayloadTemplate('efp-ops', def())
@@ -589,7 +668,9 @@ describe('installTemplateDraft (blueprint install)', () => {
     expect(row?.draft_rev).toBe(1)
     expect(row?.owner).toBeNull()
     expect(row?.locked_keys).toEqual(['status'])
-    expect(row?.lookups).toEqual({ wh: { collection: 'warehouses' } })
+    // Nothing is published, lookups included: the bundle's lookups are the draft's.
+    expect(row?.lookups).toBeNull()
+    expect(row?.draft_lookups).toEqual({ wh: { collection: 'warehouses' } })
     expect(store.tables[V] ?? []).toHaveLength(0)
     // Senders refuse it until someone publishes it here.
     await expect(renderPayloadTemplate(KEY, { record: {} }, noSecrets)).rejects.toThrow(

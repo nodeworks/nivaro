@@ -10,7 +10,13 @@ import {
   summarize
 } from './CheckRecentPanel'
 import { usePayloadEditor } from './editor-context'
-import { useChunkedCheck, usePublish } from './panel-api'
+import {
+  draftLookupsOf,
+  liveLookupsOf,
+  sameLookups,
+  useChunkedCheck,
+  usePublish
+} from './panel-api'
 import {
   BodyCompare,
   EditWarningNote,
@@ -58,6 +64,7 @@ export function PublishPanel({
   const publish = usePublish(template.key)
   const next = (template.published_version ?? 0) + 1
   const live = publishedOf(template)
+  const lookupsChange = !sameLookups(draftLookupsOf(template), liveLookupsOf(template))
 
   // Send any waiting edit now, so the check below covers what will be published.
   const [mountSave, setMountSave] = useState<'pending' | 'ok' | 'failed'>('pending')
@@ -240,6 +247,8 @@ export function PublishPanel({
               ? ` for ${uses.join(' and ')} the moment you publish.`
               : '. Nothing sends this payload yet.'}{' '}
             You can restore an older version from History afterwards.
+            {lookupsChange &&
+              ' It also changes the lookups — the Template + lookups view below lists them.'}
           </p>
         )}
 
@@ -303,9 +312,16 @@ export function PublishPanel({
             onRecordChange={onRecordChange}
             before={{
               label: live ? `live v${template.published_version}` : 'nothing live yet',
-              body: live
+              body: live,
+              lookups: liveLookupsOf(template),
+              source: 'published'
             }}
-            after={{ label: 'draft', body: draft }}
+            after={{
+              label: 'draft',
+              body: draft,
+              lookups: draftLookupsOf(template),
+              source: 'draft'
+            }}
             sameText={{
               payload: `The draft sends the same body as live v${template.published_version} for this record.`,
               template: 'The draft template is the same as live.'

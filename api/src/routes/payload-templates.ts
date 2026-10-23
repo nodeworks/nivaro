@@ -19,7 +19,9 @@ import {
   renderPayloadTemplate,
   resetToDefault,
   restoreVersion,
+  sameLookups,
   saveDraft,
+  saveDraftLookups,
   type TemplateRow
 } from '../services/payload-templates/index.js'
 import {
@@ -29,7 +31,6 @@ import {
   deleteTemplate,
   RecordNotFoundError,
   recentIds,
-  saveTemplateLookups,
   scopeForRecord,
   TemplateExistsError,
   transitionUseCount,
@@ -62,13 +63,18 @@ const EMPTY_MAP = JSON.stringify({ v: 1, fields: [] })
 
 type Which = 'draft' | 'published'
 type Body = { mode: PayloadMode; body: string }
+/** A preview's unsaved draft; `lookups` (when present) replaces the saved draft's for this render. */
+type PreviewDraft = Body & { lookups?: unknown }
 
 const warning = () => config.PAYLOAD_EDIT_WARNING ?? null
 const isMode = (m: unknown): m is PayloadMode => m === 'map' || m === 'code'
 
 function statusOf(row: TemplateRow): 'live' | 'draft' | 'unpublished' {
   if (row.published_version == null || row.published_body == null) return 'unpublished'
-  return row.draft_mode !== row.published_mode || row.draft_body !== row.published_body
+  // Lookups are published with the body: different lookups = something to publish.
+  return row.draft_mode !== row.published_mode ||
+    row.draft_body !== row.published_body ||
+    !sameLookups(row.draft_lookups, row.lookups)
     ? 'draft'
     : 'live'
 }
@@ -134,11 +140,19 @@ async function renderFor(
   row: TemplateRow,
   id: string,
   which: Which,
-  draft: Body | undefined,
+  draft: PreviewDraft | undefined,
   user: User,
   memo?: Map<string, Promise<unknown>>
 ) {
-  const { scope, skipped } = await scopeForRecord(row, id, user, memo)
+  // Published = what a push reads (published lookups); a draft render reads the draft's, or the
+  // lookups the preview sent (already validated).
+  const lookupsFrom =
+    which === 'published'
+      ? ('published' as const)
+      : draft && draft.lookups !== undefined
+        ? { lookups: (draft.lookups ?? null) as Record<string, unknown> | null }
+        : ('draft' as const)
+  const { scope, skipped } = await scopeForRecord(row, id, user, memo, lookupsFrom)
   let draftBody: Body | undefined
   if (which === 'published') {
     if (row.published_version == null || row.published_body == null || !row.published_mode) {
@@ -226,7 +240,13 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
         used_by: await usedBy(row.key),
         newer_default: hasNewerDefault(row),
         has_default: !!def,
-        ...(def ? { default_mode: def.default.mode, default_body: def.default.body } : {})
+        ...(def
+          ? {
+              default_mode: def.default.mode,
+              default_body: def.default.body,
+              default_lookups: def.lookups ?? null
+            }
+          : {})
       },
       warning: warning()
     }
@@ -273,7 +293,7 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
   // ── preview one record ──
   app.post<{
     Params: { key: string }
-    Body: { id?: string | number; which?: Which; draft?: Body }
+    Body: { id?: string | number; which?: Which; draft?: PreviewDraft }
   }>('/:key/preview', async (req, reply) => {
     markConfigRead(req)
     const b = req.body ?? {}
@@ -282,6 +302,12 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     if (b.draft !== undefined) {
       const errors = bodyErrors(b.draft)
       if (errors) return reply.code(400).send({ error: 'invalid', errors })
+      // Lookups sent with a preview (an older version's, the default's) pass the same checks a
+      // saved draft's do — the system-collection guard included.
+      if (b.draft && b.draft.lookups !== undefined) {
+        const v = validateLookups(b.draft.lookups)
+        if (!v.ok) return reply.code(400).send({ error: 'invalid', errors: v.errors })
+      }
     }
     const row = await loadReadable(req.params.key, reply)
     if (!row) return reply
@@ -372,7 +398,7 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
   })
 
   // ── the template's own lookups (UI-created templates; a registrar's follow its code) ──
-  app.put<{ Params: { key: string }; Body: { lookups?: unknown } }>(
+  app.put<{ Params: { key: string }; Body: { lookups?: unknown; base_rev?: number } }>(
     '/:key/lookups',
     async (req, reply) => {
       const row = await loadOr404(req.params.key, reply)
@@ -386,17 +412,32 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
       const b = req.body ?? {}
       if (!('lookups' in b))
         return reply.code(400).send({ error: 'invalid', errors: ['lookups is required'] })
+      const baseRev = Number(b.base_rev)
+      if (b.base_rev == null || !Number.isInteger(baseRev) || baseRev < 0) {
+        return reply.code(400).send({ error: 'invalid', errors: ['base_rev is required'] })
+      }
       const v = validateLookups(b.lookups)
       if (!v.ok) return reply.code(400).send({ error: 'invalid', errors: v.errors })
-      await saveTemplateLookups(row.id, v.value)
-      await logActivity({
-        action: 'payload-template-lookups',
-        user: req.user?.id ?? null,
-        collection: TABLE,
-        item: row.key,
-        comment: `Changed the lookups of payload template ${row.label}`
-      })
-      return { data: { lookups: v.value } }
+      try {
+        // Saved to the DRAFT under the draft's revision guard; pushes keep the published ones
+        // until this draft is published.
+        const r = await saveDraftLookups(
+          row.key,
+          { lookups: v.value, base_rev: baseRev },
+          req.user?.id ?? null
+        )
+        if (!r.ok) return sendStale(reply, r.current)
+        await logActivity({
+          action: 'payload-template-lookups',
+          user: req.user?.id ?? null,
+          collection: TABLE,
+          item: row.key,
+          comment: `Changed the draft lookups of payload template ${row.label}`
+        })
+        return { rev: r.rev, data: { lookups: v.value } }
+      } catch (e) {
+        return sendError(reply, e)
+      }
     }
   )
 

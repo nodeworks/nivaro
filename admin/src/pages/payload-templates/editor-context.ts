@@ -16,6 +16,8 @@ export interface PayloadEditorCtx {
   raiseConflict: (current: TemplateDetail) => void
   /** This editor published `version` of template `key`: later saves are based on it. */
   markPublished: (key: string, version: number) => void
+  /** A draft write outside autosave (Save lookups) moved the draft to rev `r`. */
+  bumpRev: (r: number) => void
   /** A 409 stands (the banner is up); saving is blocked until Reload or Keep my draft. */
   conflicted: boolean
   /** The last draft save the server refused, with validateSpec's errors when it sent them. */
@@ -37,6 +39,7 @@ export const PayloadEditorContext = createContext<PayloadEditorCtx>({
   adoptServerDraft: noop,
   raiseConflict: () => {},
   markPublished: () => {},
+  bumpRev: () => {},
   conflicted: false,
   saveError: null,
   rev: null,

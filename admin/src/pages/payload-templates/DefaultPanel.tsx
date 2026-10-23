@@ -3,12 +3,19 @@ import { useCallback, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { type DraftBody, errorMessage, publishedOf, sameBody, type TemplateDetail } from './api'
 import { usePayloadEditor } from './editor-context'
-import { defaultOf, useResetDefault } from './panel-api'
+import {
+  defaultLookupsOf,
+  defaultOf,
+  draftLookupsOf,
+  liveLookupsOf,
+  sameLookups,
+  useResetDefault
+} from './panel-api'
 import { BodyCompare, OUTLINE_BTN, PanelFrame, STRONG_BTN } from './panel-parts'
 
 /** What taking the default does to a draft, in words (a mode switch said out loud). */
 export function defaultCopy(owner: string, def: DraftBody, draft: DraftBody): string {
-  const base = `The draft becomes the default ${owner} ships. Nothing goes live until you publish.`
+  const base = `The draft — body and lookups — becomes the default ${owner} ships. Nothing goes live until you publish.`
   if (def.mode === draft.mode) return base
   return def.mode === 'map'
     ? `${base} The default is a field map, so this payload switches back from Liquid to the field map.`
@@ -62,8 +69,13 @@ export function DefaultPanel({
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const live = publishedOf(template)
-  const unpublished = !live || !sameBody(draft, live)
-  const matches = def ? sameBody(def, draft) : false
+  const unpublished =
+    !live ||
+    !sameBody(draft, live) ||
+    !sameLookups(draftLookupsOf(template), liveLookupsOf(template))
+  const matches = def
+    ? sameBody(def, draft) && sameLookups(defaultLookupsOf(template), draftLookupsOf(template))
+    : false
   const action = newer ? 'Use as draft' : 'Reset to file default'
   // Ask first when something would be lost or the mode would switch.
   const needsConfirm = unpublished || def?.mode !== draft.mode
@@ -149,8 +161,18 @@ export function DefaultPanel({
           collection={template.collection}
           recordId={recordId}
           onRecordChange={onRecordChange}
-          before={{ label: 'your draft', body: draft }}
-          after={{ label: `${owner} default`, body: def }}
+          before={{
+            label: 'your draft',
+            body: draft,
+            lookups: draftLookupsOf(template),
+            source: 'draft'
+          }}
+          after={{
+            label: `${owner} default`,
+            body: def,
+            lookups: defaultLookupsOf(template),
+            source: 'given'
+          }}
           sameText={{
             payload: 'The default sends the same body as your draft for this record.',
             template: 'The default is the same template as your draft.'

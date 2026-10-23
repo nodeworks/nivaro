@@ -33,7 +33,7 @@ export async function up(knex: Knex): Promise<void> {
       t.uuid('published_by').nullable().references('id').inTable('nivaro_users')
       /** JSON array of output paths the registrar locks. */
       t.text('locked_keys').nullable()
-      /** JSON, template-level extra data lookups. */
+      /** JSON, the PUBLISHED template-level extra data lookups (senders read these). */
       t.text('lookups').nullable()
       /** sha256 of the registered file default at seed time. */
       t.string('default_hash', 64).nullable()
@@ -48,6 +48,8 @@ export async function up(knex: Knex): Promise<void> {
       t.integer('version').notNullable()
       t.string('mode', 10).notNullable()
       t.text('body').notNullable()
+      /** JSON, the template lookups this version published (null = none). */
+      t.text('lookups').nullable()
       t.string('note', 1000).notNullable()
       t.uuid('published_by').nullable().references('id').inTable('nivaro_users')
       t.dateTime('published_at').notNullable().defaultTo(utcNow(knex))
@@ -65,6 +67,8 @@ export async function up(knex: Knex): Promise<void> {
       /** map | code */
       t.string('mode', 10).notNullable()
       t.text('body').notNullable()
+      /** JSON, the draft's template lookups (published ones live on the template row). */
+      t.text('lookups').nullable()
       /** Bumped on every draft write (optimistic concurrency). */
       t.integer('rev').notNullable().defaultTo(1)
       t.uuid('updated_by').nullable().references('id').inTable('nivaro_users')
