@@ -79,7 +79,7 @@ const SURFACES: Surface[] = [
     label: 'Payload templates',
     nameCol: 'label',
     cols: ['key', 'label', 'description', 'published_body', 'lookups'],
-    link: (r) => `/external-apis?payload=${r.key}`
+    link: (r) => `/payload-templates/${encodeURIComponent(String(r.key))}`
   },
   {
     table: 'nivaro_external_api_endpoints',

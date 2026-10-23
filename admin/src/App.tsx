@@ -95,6 +95,16 @@ const ExternalApisPage = lazy(() =>
 const ExternalApiEditPage = lazy(() =>
   import('@/pages/ExternalApiEdit').then((m) => ({ default: m.ExternalApiEditPage }))
 )
+const PayloadTemplateEditorPage = lazy(() =>
+  import('@/pages/payload-templates/PayloadTemplateEditor').then((m) => ({
+    default: m.PayloadTemplateEditorPage
+  }))
+)
+const PayloadTemplateRedirectPage = lazy(() =>
+  import('@/pages/payload-templates/PayloadTemplateEditor').then((m) => ({
+    default: m.PayloadTemplateRedirectPage
+  }))
+)
 const GraphQLExplorerPage = lazy(() =>
   import('@/pages/GraphQLExplorer').then((m) => ({ default: m.GraphQLExplorerPage }))
 )
@@ -592,6 +602,11 @@ export default function App() {
                   <Route path='pipelines/:id' element={<PipelineEditPage />} />
                   <Route path='external-apis' element={<ExternalApisPage />} />
                   <Route path='external-apis/:id' element={<ExternalApiEditPage />} />
+                  <Route
+                    path='external-apis/:id/payloads/:key?'
+                    element={<PayloadTemplateEditorPage />}
+                  />
+                  <Route path='payload-templates/:key' element={<PayloadTemplateRedirectPage />} />
                   <Route path='extensions' element={<ExtensionsPage />} />
                   <Route path='settings' element={<SettingsPage />} />
                   <Route path='docs' element={<DocsPage />} />
