@@ -75,6 +75,7 @@ interface RealtimeStats {
   rooms: Array<{ room: string; size: number }>
   api_version?: string
   versions?: VersionGroup[]
+  versions_scope?: VersionsScope
   transports?: Record<string, number>
   /** #2475 — connections that are shared workers, and distinct signed-in people (this node). */
   shared_worker_count?: number
@@ -85,7 +86,19 @@ interface RealtimeStats {
   traffic?: TransportTraffic
 }
 
-/** #1048 — open tabs grouped by the build they run (this node). */
+/** #1048 — how much of the cluster the versions list covers. */
+interface VersionsScope {
+  /** API processes with signed-in sockets. */
+  nodes: number
+  /** Another replica did not answer: only this node's tabs are counted. */
+  partial: boolean
+  /** API versions the replicas serve right now (two = a deploy is rolling). */
+  roster?: string[]
+  /** app → why it is not judged yet (its deploy is still rolling). */
+  settling?: Record<string, string>
+}
+
+/** #1048 — open tabs grouped by the build they run (every API replica). */
 interface VersionGroup {
   app: string | null
   build: string | null
@@ -95,6 +108,10 @@ interface VersionGroup {
   current: boolean
   older: 'build' | 'api' | null
   newest_load: string | null
+  /** Who is on it (first 25 by name). */
+  people?: Array<{ id: string; name: string }>
+  /** Set while this app's deploy is still rolling: not judged, never reloaded as old. */
+  settling?: string | null
 }
 
 export default function Realtime() {
@@ -173,7 +190,11 @@ function ForceRefreshControl() {
   const [people, setPeople] = useState<Array<{ id: string; name: string }>>([])
   const [search, setSearch] = useState('')
   const [sending, setSending] = useState(false)
-  const { data: stats } = useQuery<{ sockets: SocketRow[]; versions?: VersionGroup[] }>({
+  const { data: stats } = useQuery<{
+    sockets: SocketRow[]
+    versions?: VersionGroup[]
+    versions_scope?: VersionsScope
+  }>({
     queryKey: ['realtime-stats'],
     queryFn: () => api.get('/realtime/stats').then((r) => r.data.data),
     enabled: open,
@@ -182,6 +203,8 @@ function ForceRefreshControl() {
   const apps = useMemo(() => {
     const seen = new Set<string>(['admin'])
     for (const s of stats?.sockets ?? []) if (s.app) seen.add(s.app)
+    // Apps open on other replicas too (the versions list reads the whole cluster).
+    for (const g of stats?.versions ?? []) if (g.app) seen.add(g.app)
     return [...seen]
   }, [stats])
   const { data: found = [] } = useQuery<Array<{ id: string; name: string }>>({
@@ -258,12 +281,14 @@ function ForceRefreshControl() {
                 </button>
               ))}
               <span className='w-full text-[11px] text-slate-400'>
-                Only sockets connected to this API node — apps appear once one of their tabs is
+                Reaches that app's tabs on every API replica — apps appear once one of their tabs is
                 open.
               </span>
             </div>
           )}
-          {who === 'older' && <OlderTabsNote groups={stats?.versions ?? []} />}
+          {who === 'older' && (
+            <OlderTabsNote groups={stats?.versions ?? []} scope={stats?.versions_scope} />
+          )}
           {who === 'people' && (
             <div className='mt-2'>
               {people.length > 0 && (
@@ -354,17 +379,27 @@ function ForceRefreshControl() {
                   if (who === 'app') body.app = app
                   if (who === 'people') body.user_ids = people.map((p) => p.id)
                   if (who === 'older') body.older = true
-                  const r = await api.post<{ data: { sockets: number; users: number } }>(
-                    '/realtime/force-refresh',
-                    body
-                  )
-                  const { sockets, users } = r.data.data
+                  const r = await api.post<{
+                    data: {
+                      sockets: number
+                      users: number
+                      partial?: boolean
+                      settling?: Record<string, string>
+                    }
+                  }>('/realtime/force-refresh', body)
+                  const { sockets, users, partial, settling } = r.data.data
+                  const skipped = Object.keys(settling ?? {})
+                  const tail =
+                    (partial
+                      ? ' — another API replica did not answer, so only this one was reached'
+                      : '') +
+                    (skipped.length ? ` — ${skipped.join(', ')} still deploying, left alone` : '')
                   toast.success(
                     who === 'everyone'
                       ? 'Refresh pushed to every connected client'
                       : sockets > 0
-                        ? `Refresh pushed to ${sockets} open tab${sockets === 1 ? '' : 's'} (${users} ${users === 1 ? 'person' : 'people'})`
-                        : 'Refresh sent — nobody matching is connected to this node right now'
+                        ? `Refresh pushed to ${sockets} open tab${sockets === 1 ? '' : 's'} (${users} ${users === 1 ? 'person' : 'people'})${tail}`
+                        : `Refresh sent — nobody matching is connected right now${tail}`
                   )
                   setOpen(false)
                 } catch {
@@ -397,7 +432,21 @@ function olderCount(groups: VersionGroup[]): { tabs: number; people: number } {
   return { tabs, people }
 }
 
-function OlderTabsNote({ groups }: { groups: VersionGroup[] }) {
+function scopeText(scope: VersionsScope | undefined): string {
+  if (!scope) return ''
+  const parts: string[] = []
+  if (scope.partial)
+    parts.push('Another API replica did not answer — only tabs connected to this one are counted.')
+  else if (scope.nodes > 1) parts.push(`Counts tabs on all ${scope.nodes} API replicas.`)
+  const settling = Object.entries(scope.settling ?? {})
+  if (settling.length)
+    parts.push(
+      `Still deploying, so not judged and not reloaded: ${settling.map(([app, why]) => `${app} (${why})`).join('; ')}.`
+    )
+  return parts.join(' ')
+}
+
+function OlderTabsNote({ groups, scope }: { groups: VersionGroup[]; scope?: VersionsScope }) {
   const { tabs, people } = olderCount(groups)
   return (
     <p
@@ -406,13 +455,18 @@ function OlderTabsNote({ groups }: { groups: VersionGroup[] }) {
     >
       {tabs > 0
         ? `Reaches ${tabs} tab${tabs === 1 ? '' : 's'} (${people} ${people === 1 ? 'person' : 'people'}) still running an older build or loaded against an older API. Tabs on the current version are left alone.`
-        : 'No tab on this node runs an older version right now — nothing would reload.'}{' '}
-      Only sockets connected to this API node.
+        : 'No open tab runs an older version right now — nothing would reload.'}{' '}
+      {scopeText(scope)}
     </p>
   )
 }
 
 function versionStatus(g: VersionGroup): { label: string; tone: string } {
+  if (g.settling)
+    return {
+      label: 'Deploy in progress',
+      tone: 'bg-sky-50 text-sky-800 dark:bg-sky-500/15 dark:text-sky-200'
+    }
   if (g.older === 'build')
     return {
       label: 'Older build',
@@ -434,15 +488,24 @@ function versionStatus(g: VersionGroup): { label: string; tone: string } {
   }
 }
 
-function VersionsTable({ groups, apiVersion }: { groups: VersionGroup[]; apiVersion: string }) {
+function VersionsTable({
+  groups,
+  apiVersion,
+  scope
+}: {
+  groups: VersionGroup[]
+  apiVersion: string
+  scope?: VersionsScope
+}) {
   if (groups.length === 0) return null
   return (
     <div data-realtime-versions>
       <h2 className='mb-1 text-[13px] font-medium'>Open tabs by version</h2>
       <p className='mb-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
-        This API runs {apiVersion}. The current build of each app is the one its newest page load
-        reported; a tab is older when it runs another build, or first talked to an older API. Use
-        Force client refresh → Old versions to reload just those.
+        This API runs {apiVersion}. Admin's current build is the version every API replica serves;
+        another app's is the one its newest page load reported, once only one build of it has loaded
+        for 10 minutes. A tab is older when it runs another build, or first talked to an older API.
+        Use Force client refresh → Old versions to reload just those. {scopeText(scope)}
       </p>
       <div className='overflow-x-auto rounded-lg border border-slate-200 dark:border-border'>
         <table className='w-full text-[12px] tabular-nums'>
@@ -453,6 +516,7 @@ function VersionsTable({ groups, apiVersion }: { groups: VersionGroup[]; apiVers
               <th className='px-3 py-2 font-medium'>API it loaded against</th>
               <th className='px-3 py-2 text-right font-medium'>Tabs</th>
               <th className='px-3 py-2 text-right font-medium'>People</th>
+              <th className='px-3 py-2 font-medium'>Who</th>
               <th className='px-3 py-2 font-medium'>Status</th>
             </tr>
           </thead>
@@ -464,12 +528,16 @@ function VersionsTable({ groups, apiVersion }: { groups: VersionGroup[]; apiVers
                   key={`${g.app}|${g.build}|${g.api}`}
                   data-version-group={`${g.app ?? ''}:${g.build ?? ''}`}
                   data-version-older={g.older ?? ''}
+                  data-version-settling={g.settling ? '1' : undefined}
                 >
                   <td className='px-3 py-1.5'>{g.app ?? '—'}</td>
                   <td className='px-3 py-1.5 font-mono text-[11px]'>{g.build ?? '—'}</td>
                   <td className='px-3 py-1.5 font-mono text-[11px]'>{g.api ?? '—'}</td>
                   <td className='px-3 py-1.5 text-right'>{g.sockets}</td>
                   <td className='px-3 py-1.5 text-right'>{g.users}</td>
+                  <td className='max-w-[280px] px-3 py-1.5'>
+                    <PeopleCell group={g} />
+                  </td>
                   <td className='px-3 py-1.5'>
                     <span className={cn('rounded-full px-2 py-0.5 text-[11px]', st.tone)}>
                       {st.label}
@@ -482,6 +550,23 @@ function VersionsTable({ groups, apiVersion }: { groups: VersionGroup[]; apiVers
         </table>
       </div>
     </div>
+  )
+}
+
+/** Names on a build; the full list (first 25 the API sends) in the tip. */
+function PeopleCell({ group }: { group: VersionGroup }) {
+  const names = (group.people ?? []).map((p) => p.name)
+  if (names.length === 0) return <span className='text-slate-400'>—</span>
+  const more = group.users - names.length
+  const text = names.join(', ') + (more > 0 ? ` +${more} more` : '')
+  return (
+    <span
+      className='block truncate text-slate-600 dark:text-slate-300'
+      data-tip={text}
+      data-version-people={names.length}
+    >
+      {text}
+    </span>
   )
 }
 
@@ -503,7 +588,11 @@ function SocketsTab() {
         {data.node_scope}
       </p>
       <TransportStrip data={data} />
-      <VersionsTable groups={data.versions ?? []} apiVersion={data.api_version ?? '—'} />
+      <VersionsTable
+        groups={data.versions ?? []}
+        apiVersion={data.api_version ?? '—'}
+        scope={data.versions_scope}
+      />
       <div className='overflow-x-auto rounded-lg border border-slate-200 dark:border-border'>
         <table className='w-full text-[12px] tabular-nums'>
           <thead>

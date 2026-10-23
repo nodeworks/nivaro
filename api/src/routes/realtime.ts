@@ -4,7 +4,7 @@ import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import {
   emitForceRefresh,
-  getClientVersionGroups,
+  getClusterClientVersionGroups,
   getRealtimeStats,
   getRecordViewerSnapshot,
   socketCompressionOn,
@@ -64,6 +64,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/stats', async () => {
     const stats = scopeRealtimeStats(getRealtimeStats(), tenantScope())
+    const versions = await getClusterClientVersionGroups(tenantScope())
     // #1672 — which transport each client is on; the SSE fallback streams are counted apart.
     const transports: Record<string, number> = {}
     for (const s of stats.sockets) {
@@ -93,9 +94,17 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
         compression: socketCompressionOn(),
         // #1730 — bytes per event type and per room kind; #1681 — bursts merged.
         traffic: transportStats(15, tenantScope()),
-        // #1048 — open tabs by the build they run; `older` groups are what "Reload old tabs" reaches.
+        // #1048 — open tabs by the build they run, on every replica; `older` groups are what
+        // "Reload old tabs" reaches. `versions_scope` says whether every replica answered.
         api_version: NIVARO_VERSION,
-        versions: getClientVersionGroups(tenantScope()),
+        versions: versions.groups,
+        versions_scope: {
+          nodes: versions.nodes,
+          partial: versions.partial,
+          // API versions the replicas serve, and apps whose deploy is still rolling (not judged).
+          roster: versions.roster,
+          settling: versions.settling
+        },
         sockets: stats.sockets.map((s) => ({
           id: s.id,
           user:
@@ -273,7 +282,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
       message?: string
       user_ids?: string[]
       app?: string
-      /** #1048 — only tabs on an older build or loaded against an older API (this node). */
+      /** #1048 — only tabs on an older build or loaded against an older API (every replica). */
       older?: boolean
     }
   }>('/force-refresh', async (req) => {
@@ -286,7 +295,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
       throw Object.assign(new Error('user_ids must name at least one user'), { statusCode: 400 })
     const appFilter = req.body?.app ? String(req.body.app).slice(0, 50) : null
     const older = req.body?.older === true
-    const hit = emitForceRefresh({ userIds, app: appFilter, older }, { seconds, message })
+    const hit = await emitForceRefresh({ userIds, app: appFilter, older }, { seconds, message })
     const names = userIds.length
       ? await db('nivaro_users')
           .whereIn('id', userIds)
@@ -304,7 +313,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
     await logActivity({
       action: 'client-force-refresh',
       user: req.user?.id,
-      comment: `${scope} — ${seconds}s${message ? ` — ${message}` : ''} (${hit.sockets} tabs on this node)`,
+      comment: `${scope} — ${seconds}s${message ? ` — ${message}` : ''} (${hit.sockets} tabs${hit.partial ? ' on this node only — another replica did not answer' : ''})`,
       req
     })
     return { data: { sent: true, seconds, targets: userIds.length, older, ...hit } }

@@ -363,6 +363,8 @@ export function getSocket(): Socket {
     if (socket) syncClock(socket)
     // Rejoin what this tab holds, then replay whatever happened while away.
     for (const room of joinedCollections) socket?.emit('collection:join', { collection: room })
+    for (const r of localRecordJoins.values())
+      socket?.emit('record:join', { collection: r.collection, item: r.item })
     // Watch rooms ride the LEADER's socket only (a follower's own socket joining one would keep
     // the server emitting to a tab that never relays it). The leader holds every tab's joins.
     if (!leaderHandle || leaderHandle.isLeader()) {
@@ -467,6 +469,10 @@ export function getSocket(): Socket {
   for (const ev of ['job:progress', 'bulk:rows', 'announcements:changed', 'flags:changed']) {
     socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
   }
+  // A record opened in a drill-down sheet joins its room on THIS socket (adminRealtime.emit
+  // below); hand the room's viewer list to the shared presence hook.
+  if (!usesWorkerSocket())
+    socket.on('record:viewers', (payload: unknown) => relayLiveEvent('record:viewers', payload))
   // #2475 — on the shared socket the record rooms ride this connection too (the per-record
   // socket in use-record-presence relays these itself otherwise).
   if (usesWorkerSocket())
@@ -492,6 +498,27 @@ const leaderOpsRefs = new Map<string, number>()
  * otherwise a second tab on the same page would stop receiving events.
  */
 const leaderWatchRefs = new Map<string, number>()
+
+/**
+ * Record rooms the shared presence hook (`usePresence`, e.g. a record opened in a drill-down
+ * sheet) holds in THIS tab. They ride this tab's own socket, never the leader's: the room says
+ * this tab has the record open, and the leader may be another tab that closes first. Re-sent
+ * on every auth:ok. A set, not a count: the hook re-sends its join after every reconnect, so a
+ * count would never reach zero and leave the person "viewing" after the sheet closed.
+ */
+const localRecordJoins = new Map<string, { collection: string; item: string }>()
+
+function emitRecordRoom(event: 'record:join' | 'record:leave', payload: unknown): void {
+  const p = (payload ?? {}) as { collection?: unknown; item?: unknown }
+  if (typeof p.collection !== 'string' || p.item == null) return
+  const collection = p.collection
+  const item = String(p.item)
+  const key = `${collection}\u0000${item}`
+  if (event === 'record:join') localRecordJoins.set(key, { collection, item })
+  else localRecordJoins.delete(key)
+  const s = getSocket()
+  if (s.connected) s.emit(event, { collection, item })
+}
 
 const RELAYED_EVENTS = new Set([
   'collection:update',
@@ -650,6 +677,7 @@ export const adminRealtime: RealtimeAdapter = {
   emit(event, payload) {
     const w = viaWorker()
     if (w) return w.emit(event, payload)
+    if (event === 'record:join' || event === 'record:leave') return emitRecordRoom(event, payload)
     const handle = ensureLeaderSocket()
     // Topic joins are reference counted and re-sent after a reconnect (auth:ok above).
     if (event === 'ops:join' || event === 'ops:leave') {

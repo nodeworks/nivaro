@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ExternalLink } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Eye } from 'lucide-react'
 import { lazy, type ReactNode, Suspense, useCallback, useMemo, useState } from 'react'
 import {
   DrilldownContext,
@@ -9,6 +9,7 @@ import {
   useNivaroClient
 } from '../context'
 import { get } from '../lib/commands'
+import { usePresence } from '../lib/presence-hooks'
 import { titleCase } from '../lib/utils'
 import { DesignCanvas } from './layout-editor/design-canvas'
 import type { LayoutDesignProp } from './layout-editor/design-context'
@@ -119,6 +120,13 @@ export function RecordDrilldownSheet({
     else setOwnStack((prev) => prev.slice(0, -1))
   }, [controlled, onPop])
 
+  // A record open in this sheet is open: join its record room like the record page does, so
+  // the people on that record see this person too, and show who else has it open.
+  const { viewers } = usePresence(
+    design ? null : current.collection,
+    design ? null : current.itemId
+  )
+
   // No drilling on the design canvas: relation values render as plain labels.
   const drillCtx = useMemo(() => (design ? null : { open: pushDrill }), [design, pushDrill])
 
@@ -177,6 +185,18 @@ export function RecordDrilldownSheet({
           {!useRootSlug && detailLayout ? ` · ${detailLayout.layout.name}` : ''}
         </span>
       </span>
+      {!design && viewers.length > 0 && (
+        <span
+          className='ml-auto flex min-w-0 items-center gap-1 text-[11px] font-normal text-slate-500 dark:text-slate-400'
+          data-drill-viewers={viewers.length}
+          data-tip={`Also viewing: ${viewers.map((v) => v.name).join(', ')}`}
+        >
+          <Eye className='h-3 w-3 shrink-0' />
+          <span className='truncate'>
+            {viewers.length === 1 ? viewers[0].name : `${viewers.length} others`}
+          </span>
+        </span>
+      )}
       {!design && (
         <button
           type='button'

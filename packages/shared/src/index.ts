@@ -506,6 +506,7 @@ export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { RowPresence } from './components/RowPresence'
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
+export { type StaleBuild, StaleBuildChip } from './components/StaleBuildChip'
 export {
   buildReportPayload,
   ReportProblemButton,

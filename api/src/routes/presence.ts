@@ -686,6 +686,21 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       }
     }
 
+    // #1048 — administrators only: which apps each person still has open on an old build
+    // (every replica's sockets, judged against each app's newest page load). Absent for
+    // everyone else, and for people whose every tab is current.
+    let staleBuilds = new Map<string, unknown[]>()
+    if (req.isAdmin && userIds.length > 0) {
+      try {
+        const { getClusterStaleBuilds } = await import('../plugins/socketio.js')
+        staleBuilds = await getClusterStaleBuilds(
+          process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
+        )
+      } catch {
+        /* decoration only */
+      }
+    }
+
     const recordLabels = await resolveRecordLabels(
       visibleRows.map((r) => (r.current_path as string | null) ?? null),
       req.user!
@@ -781,6 +796,7 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
           scopes_by_dimension: Object.fromEntries(scopesByUser.get(uid) ?? []),
           recording_id: recordingByUser.get(uid) ?? null,
+          ...(staleBuilds.has(uid) ? { stale_build: staleBuilds.get(uid) } : {}),
           // Set while an admin is masquerading as this user — the row is
           // theirs, the person behind it is someone else.
           masquerade: masqByUser.has(uid)

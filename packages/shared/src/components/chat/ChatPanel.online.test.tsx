@@ -9,6 +9,7 @@ import { type ChatConfig, ChatConfigContext } from './chat-core'
 const presence = vi.hoisted(() => ({
   data: undefined as unknown
 }))
+const auth = vi.hoisted(() => ({ isAdmin: false }))
 
 vi.mock('@tanstack/react-query', () => ({
   useQuery: ({ queryKey }: { queryKey: unknown[] }) =>
@@ -27,7 +28,7 @@ vi.mock('@tanstack/react-query', () => ({
 vi.mock('../../context', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../context')>()),
   useNivaroClient: () => ({}),
-  useItemEditAuth: () => ({ isAdmin: false }),
+  useItemEditAuth: () => ({ isAdmin: auth.isAdmin }),
   useNavigation: () => ({ navigate: () => {} })
 }))
 
@@ -120,5 +121,41 @@ describe('ChatPanel Online tab person row', () => {
     expect(html).toContain('data-chat-online-page')
     expect(html).not.toContain('data-chat-online-meta')
     expect(html).not.toContain('Zone 3')
+  })
+})
+
+describe('ChatPanel Online tab — old build badge (#1048)', () => {
+  const STALE = {
+    ...ZONED,
+    stale_build: [
+      { app: 'efp-new', build: 'abc123', current_build: 'def456', reason: 'build', tabs: 2 }
+    ]
+  }
+
+  it('shows administrators who still runs an old build', () => {
+    auth.isAdmin = true
+    try {
+      const html = render({ rows: [STALE], users: [ZONED_USER] })
+      expect(html).toContain('data-stale-build="efp-new"')
+      expect(html).toContain('>Old build<')
+      expect(html).toContain('current is def456 (2 tabs)')
+    } finally {
+      auth.isAdmin = false
+    }
+  })
+
+  it('never shows it to anyone else, even if the field arrived', () => {
+    const html = render({ rows: [STALE], users: [ZONED_USER] })
+    expect(html).not.toContain('data-stale-build')
+  })
+
+  it('shows nothing for a person whose tabs are all current', () => {
+    auth.isAdmin = true
+    try {
+      const html = render({ rows: [ZONED], users: [ZONED_USER] })
+      expect(html).not.toContain('data-stale-build')
+    } finally {
+      auth.isAdmin = false
+    }
   })
 })

@@ -8,14 +8,22 @@ import { hasColumn } from '../lib/column-probe.js'
 import { userHasSocket } from '../services/ai-stream-delivery.js'
 import { chaosRedisClient, chaosRedisSubscriber } from '../services/chaos/redis-hook.js'
 import { canSeeRoom } from '../services/chat.js'
+import { type ClientVersion, clientVersionFromHello } from '../services/client-version.js'
 import {
-  type ClientVersion,
-  clientVersionFromHello,
-  currentBuilds,
-  olderReason
-} from '../services/client-version.js'
+  CLIENT_DATA_KEY,
+  type ClientData,
+  groupClientVersions,
+  listClusterClients,
+  listClusterClientsCached,
+  makeBuildJudge,
+  olderClientIds,
+  type StaleBuild,
+  staleBuildsByUser,
+  type VersionGroup
+} from '../services/client-versions-cluster.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
+import { INSTANCE_ID } from '../services/instance-roster.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
@@ -177,50 +185,65 @@ export function socketUserOf(socketId: string): { id: string; name: string } | n
 
 /**
  * Remote client reload (#285, targeted 2026-09-25): tell every connected
- * client — or only the named people, or only one app's clients — to show a
- * countdown and reload. User targeting rides the `user:<id>` rooms, which the
- * Redis adapter fans out across nodes; an `app` filter has to read this
- * node's socketMeta (client:hello is per-socket state), so it only reaches
- * sockets connected HERE — the returned counts say what this node saw.
+ * client — or only the named people, or only one app's clients, or only tabs
+ * on an older build — to show a countdown and reload. Unfiltered and
+ * people-only sends ride rooms (`user:<id>`, the tenant's all-room), which the
+ * Redis adapter fans out across nodes. App and version filters read each
+ * socket's client:hello report, which every replica publishes on socket.data,
+ * so those reach matching sockets on every replica too (#1048 follow-up);
+ * `partial` says another replica did not answer and only this one's were
+ * reached.
  */
-export function emitForceRefresh(
+export async function emitForceRefresh(
   target: { userIds?: string[]; app?: string | null; older?: boolean },
   payload: { seconds: number; message: string }
-): { sockets: number; users: number } {
+): Promise<{
+  sockets: number
+  users: number
+  nodes: number
+  partial: boolean
+  settling: Record<string, string>
+}> {
   const io = _ioRef
-  if (!io) return { sockets: 0, users: 0 }
+  if (!io) return { sockets: 0, users: 0, nodes: 0, partial: false, settling: {} }
   const userIds = (target.userIds ?? []).map((u) => String(u).toUpperCase())
   const app = target.app ? String(target.app).slice(0, 50) : null
-  // #1048 — only tabs on an older build (or loaded against an older API). Judged from this
-  // node's client:hello reports, so like the app filter it reaches sockets connected HERE.
   const older = target.older === true
-  const current = older ? currentBuilds(socketMeta.values()) : new Map<string, string>()
-  const local = !!app || older
   const wanted = new Set(userIds)
   // Cloud: an administrator refreshes their own tenant's tabs only (the caller's context).
   const tenant = process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
+  const cluster = await listClusterClients(io, tenant)
+  // #1048 — "older" is judged across the whole cluster, deploy-aware (makeBuildJudge): an app
+  // whose deploy is still rolling is settling and none of its tabs are reloaded.
+  const judge = makeBuildJudge(cluster.clients, { roster: cluster.roster })
+  const olderIds = older ? olderClientIds(cluster.clients, judge) : null
+  const filtered = !!app || older
   let sockets = 0
   const users = new Set<string>()
-  for (const [id, sock] of io.sockets.sockets) {
-    const meta = socketMeta.get(id)
-    if (!meta?.user) continue
-    if (tenant != null && sock.data?.nvrTenantKey !== tenant) continue
-    if (wanted.size && !wanted.has(meta.user.id.toUpperCase())) continue
-    if (app && meta.app !== app) continue
-    if (older && !olderReason(meta.app, meta.version, current)) continue
+  for (const c of cluster.clients) {
+    const uid = String(c.user!.id).toUpperCase()
+    if (wanted.size && !wanted.has(uid)) continue
+    if (app && c.app !== app) continue
+    if (olderIds && !olderIds.has(c.id)) continue
     sockets++
-    users.add(meta.user.id)
-    // App- and version-filtered sends are local by construction; the others use rooms
-    // below (cross-node), so skip the direct emit to avoid double delivery.
-    if (local) sock.emit('client:force-refresh', payload)
+    users.add(uid)
+    // Filtered sends go to each matching socket (local or remote); the others use rooms
+    // below, so skip the direct emit to avoid double delivery.
+    if (filtered) c.emit('client:force-refresh', payload)
   }
-  if (!local) {
+  if (!filtered) {
     if (wanted.size)
       for (const u of userIds) io.to(`user:${u}`).emit('client:force-refresh', payload)
     else if (tenant != null) io.to(tenantSocketsRoom(tenant)).emit('client:force-refresh', payload)
     else io.emit('client:force-refresh', payload)
   }
-  return { sockets, users: users.size }
+  return {
+    sockets,
+    users: users.size,
+    nodes: cluster.nodes,
+    partial: cluster.partial,
+    settling: older ? Object.fromEntries(judge.settling) : {}
+  }
 }
 
 /** Cloud: every signed-in socket of a tenant sits in this room (record-events.ts
@@ -268,9 +291,9 @@ export function getRealtimeStats(): {
 }
 
 /**
- * #1048 — this node's open tabs grouped by the build they run: per app and build, how many
- * sockets and people, whether it is the current build, and whether a "reload old tabs" would
- * reach it. Sockets that never said which build (an older client) group under build null.
+ * #1048 — this node's open tabs grouped by the build they run (services/client-versions-cluster
+ * groupClientVersions). /realtime reads getClusterClientVersionGroups instead; this stays for a
+ * caller that wants one process only.
  */
 export function getClientVersionGroups(
   tenant: string | null = null,
@@ -279,68 +302,49 @@ export function getClientVersionGroups(
     metas: Map<string, SocketMeta>
     tenantOf: (socketId: string) => string | null
   } = { metas: socketMeta, tenantOf: socketTenantKey }
-): Array<{
-  app: string | null
-  build: string | null
-  api: string | null
-  sockets: number
-  users: number
-  current: boolean
-  older: 'build' | 'api' | null
-  newest_load: string | null
-}> {
-  // Cloud: only the caller's tenant's tabs (the versions list on /realtime/stats). The
-  // "current build" is judged from those tabs too.
+): VersionGroup[] {
+  // Cloud: only the caller's tenant's tabs. The "current build" is judged from those tabs too.
   const metas = [...deps.metas.entries()]
     .filter(([id]) => tenant == null || deps.tenantOf(id) === tenant)
     .map(([, m]) => m)
-  const current = currentBuilds(metas)
-  const groups = new Map<
-    string,
-    {
-      app: string | null
-      build: string | null
-      api: string | null
-      sockets: number
-      users: Set<string>
-      older: 'build' | 'api' | null
-      loaded: number | null
-    }
-  >()
-  for (const meta of metas) {
-    if (!meta.user) continue
-    const v = meta.version
-    const older = olderReason(meta.app, v, current)
-    const key = `${meta.app ?? ''}|${v?.build ?? ''}|${v?.api ?? ''}`
-    let g = groups.get(key)
-    if (!g) {
-      g = {
-        app: meta.app,
-        build: v?.build ?? null,
-        api: v?.api ?? null,
-        sockets: 0,
-        users: new Set(),
-        older,
-        loaded: null
-      }
-      groups.set(key, g)
-    }
-    g.sockets++
-    g.users.add(meta.user.id)
-    if (v?.loaded != null && (g.loaded == null || v.loaded > g.loaded)) g.loaded = v.loaded
+  return groupClientVersions(metas)
+}
+
+/**
+ * #1048 — open tabs by build on EVERY replica (socket.data via the Redis adapter). `nodes` =
+ * API processes with signed-in sockets; `partial` = another replica did not answer, so only
+ * this process's tabs are counted.
+ */
+export async function getClusterClientVersionGroups(tenant: string | null): Promise<{
+  groups: VersionGroup[]
+  nodes: number
+  partial: boolean
+  roster: string[]
+  settling: Record<string, string>
+}> {
+  const cluster = await listClusterClients(_ioRef, tenant)
+  const judge = makeBuildJudge(cluster.clients, { roster: cluster.roster })
+  return {
+    groups: groupClientVersions(cluster.clients, judge),
+    nodes: cluster.nodes,
+    partial: cluster.partial,
+    roster: cluster.roster,
+    settling: Object.fromEntries(judge.settling)
   }
-  return [...groups.values()]
-    .map((g) => ({
-      app: g.app,
-      build: g.build,
-      api: g.api,
-      sockets: g.sockets,
-      users: g.users.size,
-      current: !!g.build && current.get(g.app ?? 'app') === g.build && !g.older,
-      older: g.older,
-      newest_load: g.loaded != null ? new Date(g.loaded).toISOString() : null
-    }))
-    .sort((a, b) => (a.app ?? '').localeCompare(b.app ?? '') || b.sockets - a.sockets)
+}
+
+/**
+ * Per person (upper-cased id), the apps they have open on an old build, across the cluster.
+ * For the admin-only presence badge; cached a few seconds per tenant.
+ */
+export async function getClusterStaleBuilds(
+  tenant: string | null
+): Promise<Map<string, StaleBuild[]>> {
+  const cluster = await listClusterClientsCached(_ioRef, tenant)
+  return staleBuildsByUser(
+    cluster.clients,
+    makeBuildJudge(cluster.clients, { roster: cluster.roster })
+  )
 }
 
 /** The tenant key a socket on this node resolved to (cloud), or null. */
@@ -628,6 +632,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       coalesce: false,
       shared_worker: false
     })
+    // #1048 — the build report on socket.data too, which fetchSockets() returns from every
+    // replica (services/client-versions-cluster.ts): the versions list and "Old versions"
+    // refresh read the whole cluster, not this process's tabs only.
+    const publishClient = () => {
+      const m = socketMeta.get(socket.id)
+      if (!m) return
+      const data: ClientData = { app: m.app, version: m.version, user: m.user, node: INSTANCE_ID }
+      socket.data[CLIENT_DATA_KEY] = data
+    }
     socket.conn?.on?.('upgrade', (t: { name?: string }) => {
       const meta = socketMeta.get(socket.id)
       if (meta) meta.transport = t?.name ?? meta.transport
@@ -850,6 +863,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         }
         const version = clientVersionFromHello(payload)
         if (version.build || version.api || version.tab) meta.version = version
+        publishClient()
         // #2460 — this tab was closed for falling too far behind: reload, never replay.
         if (meta.user && version.tab) {
           void takeResync(meta.user.id, version.tab).then((owed) => {
@@ -1001,6 +1015,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           id: user.id,
           name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
         }
+      publishClient()
       socket.join(`user:${user.id}`)
       // A revoke publishes to these rooms, which reach the socket on every replica.
       if (bind.kind === 'session') socket.join(sessionRoom(bind.sid))

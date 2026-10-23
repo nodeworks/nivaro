@@ -55,6 +55,7 @@ import { CustomStatusEditor } from '../CustomStatusEditor'
 import { DoNotDisturbRow } from '../DoNotDisturb'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { UserChip } from '../item-edit/UserChip'
+import { type StaleBuild, StaleBuildChip } from '../StaleBuildChip'
 import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -3871,6 +3872,8 @@ interface PresenceExtra {
   masquerade?: { admin_id: string | null; admin_name: string } | null
   /** The person chose "appear away" — reads as away whatever they are doing. */
   away?: boolean
+  /** #1048 — administrators only: apps this person has open on an old build. */
+  stale_build?: StaleBuild[]
 }
 
 /** End of today in the viewer's clock, for "until tomorrow". */
@@ -4616,6 +4619,8 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                                 </span>
                               )
                             })()}
+                            {/* #1048 — administrators only (the API sends it to them only). */}
+                            {isAdmin && <StaleBuildChip builds={px?.stale_build} />}
                           </span>
                           {(() => {
                             const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())

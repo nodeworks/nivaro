@@ -1,16 +1,18 @@
 import {
   type ChannelMeta,
+  type ChatAnchor,
   ChatAppearAwayRow,
   ChatChannelBrowser,
   ChatChannelSettings,
   type ChatOnlineUser,
-  type ChatAnchor,
   ChatRoomList,
   ChatRoomView,
   ChatSideView,
   chatAvatarColor,
   chatInitials,
   dmRoom,
+  type StaleBuild,
+  StaleBuildChip,
   useChatConfig,
   useChatRooms
 } from '@nivaro/shared'
@@ -61,9 +63,32 @@ type ActiveRoom = {
   thread?: number
 }
 
+/** #1048 — administrators only: who still has an app open on an old build (from /presence/online,
+ *  which sends `stale_build` to administrators only). */
+function useStaleBuilds(enabled: boolean): Map<string, StaleBuild[]> {
+  const { data } = useQuery({
+    queryKey: ['admin-stale-builds'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ user_id: string; stale_build?: StaleBuild[] }> }>('/presence/online')
+        .then((r) => r.data.data ?? []),
+    enabled,
+    refetchInterval: 30_000,
+    staleTime: 15_000
+  })
+  return useMemo(() => {
+    const m = new Map<string, StaleBuild[]>()
+    for (const r of data ?? [])
+      if (r.stale_build?.length) m.set(String(r.user_id).toUpperCase(), r.stale_build)
+    return m
+  }, [data])
+}
+
 function OnlineList({ onOpenDm }: { onOpenDm: (u: ChatOnlineUser) => void }) {
   const cfg = useChatConfig()
   const users = cfg.onlineUsers
+  const { user: me } = useAuth()
+  const stale = useStaleBuilds(!!me?.is_admin)
   if (users.length === 0) {
     return (
       <div className='p-2'>
@@ -103,6 +128,9 @@ function OnlineList({ onOpenDm }: { onOpenDm: (u: ChatOnlineUser) => void }) {
             <span className='min-w-0 flex-1'>
               <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
                 {u.display_name ?? 'Unknown user'}
+                {me?.is_admin && (
+                  <StaleBuildChip builds={stale.get(String(u.user_id).toUpperCase())} />
+                )}
               </span>
               <span className='block truncate text-[11px] text-slate-400'>{subtitle}</span>
             </span>
