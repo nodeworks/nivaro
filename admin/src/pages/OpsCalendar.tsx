@@ -95,7 +95,7 @@ export default function OpsCalendar() {
               type='button'
               onClick={() => setOffsetDays(0)}
               className={cn(
-                'h-8 rounded-md border px-3 text-[12.5px] font-medium',
+                'h-8 whitespace-nowrap rounded-md border px-3 text-[12.5px] font-medium',
                 offsetDays === 0
                   ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
                   : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
@@ -140,7 +140,7 @@ export default function OpsCalendar() {
         </div>
       </HubToolbar>
 
-      <div className='flex-1 overflow-y-auto p-4'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
         {isLoading ? (
           <p className='px-2 py-8 text-[13px] text-slate-400'>Loading schedule…</p>
         ) : (

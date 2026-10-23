@@ -108,6 +108,7 @@ import { useCloudPlugins, useExtensionPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
+import { hubForPath } from '@/lib/hubs'
 import { useT } from '@/lib/i18n'
 import { openViewAsTab, readMasquerade, stopMasquerade } from '@/lib/masquerade'
 import { usePagePresence } from '@/lib/use-page-presence'
@@ -453,6 +454,9 @@ export function AppLayout() {
   }
 
   const disabledPaths = useUiPermissions()
+  // A hub's tabs are one page: switching tabs keeps the hub mounted (no
+  // page-enter replay, focus stays on the tab strip) and swaps only its body.
+  const pageKey = hubForPath(location.pathname)?.hub.base ?? location.pathname
 
   // The reader's own shortcuts get their own place in the rail rather than
   // sitting on top of one category's nav — they cut across categories, so
@@ -868,14 +872,14 @@ export function AppLayout() {
             {/* ─── Main area ───────────────────────────────────────────── */}
             <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
               <HelpVideoHost>
-                <PageErrorBoundary key={location.pathname}>
+                <PageErrorBoundary key={pageKey}>
                   <Suspense fallback={null}>
                     {disabledPaths.size > 0 &&
                     [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
                       <Navigate to='/' replace />
                     ) : (
                       <div
-                        key={location.pathname}
+                        key={pageKey}
                         className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
                       >
                         <Outlet />

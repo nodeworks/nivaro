@@ -126,7 +126,7 @@ export function OpsRedisPage() {
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         {/* Left: pattern + key list */}
         <aside className='flex w-[420px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-background'>
-          <div className='flex shrink-0 items-center gap-2 border-b border-slate-200 p-3 dark:border-border'>
+          <div className='flex shrink-0 items-center gap-2 border-b border-slate-200 px-4 py-3 sm:px-6 dark:border-border'>
             <Input
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}

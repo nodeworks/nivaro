@@ -11,7 +11,7 @@ const sharedClient = createNivaro(typeof window !== 'undefined' ? window.locatio
 export default function DbTuning() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <HubToolbar description='The platform watches its own query workload, proposes indexes, procedure rewrites, stored rollups and query caches, and proves each one before it is listed. Nothing changes until you click Apply; an applied change is watched for a week and rolled back if it regresses.' />
+      <HubToolbar description='Indexes, rewrites, rollups and caches proposed from this instance’s workload and proven first. Nothing changes until you Apply; applied changes are watched for a week and rolled back on regression.' />
       <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <NivaroProvider client={sharedClient}>
           <DbTuningView

@@ -404,6 +404,7 @@ export function DbHealthPage() {
           <Button
             size='sm'
             variant='outline'
+            className='h-8 text-[12px]'
             onClick={() => void qc.invalidateQueries({ queryKey: ['ops'] })}
           >
             <RefreshCw className='mr-1.5 h-3.5 w-3.5' /> Refresh
@@ -411,7 +412,7 @@ export function DbHealthPage() {
         }
       />
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-8 dark:bg-background'>
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {proposedCount > 0 && (
           <Link
             to='/database/tuning'

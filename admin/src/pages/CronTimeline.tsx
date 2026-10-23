@@ -156,7 +156,7 @@ export function CronTimelinePage() {
                   type='button'
                   onClick={() => setHours(h)}
                   className={cn(
-                    'px-2.5 py-1 text-[12px] tabular-nums',
+                    'h-8 px-2.5 text-[12px] tabular-nums',
                     hours === h
                       ? 'bg-[#00ceff]/10 font-semibold text-slate-900 dark:text-slate-100'
                       : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-900'
@@ -169,7 +169,7 @@ export function CronTimelinePage() {
             <Button
               variant='outline'
               size='sm'
-              className='h-7 gap-1.5 text-[12px]'
+              className='h-8 gap-1.5 text-[12px]'
               onClick={() => refetch()}
             >
               <RotateCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />

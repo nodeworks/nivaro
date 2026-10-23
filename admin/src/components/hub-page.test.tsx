@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
+import { DATABASE_HUB } from '@/lib/hubs'
 import { HubPage, HubRedirect } from './hub-page'
 
 // The shared setup stubs react-router's hooks; this file tests real routing.
@@ -11,13 +12,11 @@ function Where() {
   return <output data-testid='where'>{`${pathname}${search}${hash}`}</output>
 }
 
-const tabs = [
-  { path: '', label: 'Overview', component: () => <p>overview body</p> },
-  { path: 'tuning', label: 'Tuning', component: () => <p>tuning body</p> }
-]
-
-function Icon() {
-  return null
+const screens = {
+  '': () => <p>overview body</p>,
+  tuning: () => <p>tuning body</p>,
+  'sql-checks': () => <p>checks body</p>,
+  redis: () => <p>redis body</p>
 }
 
 function renderAt(url: string) {
@@ -28,7 +27,7 @@ function renderAt(url: string) {
           path='database/*'
           element={
             <>
-              <HubPage icon={Icon} title='Database' hint='hint' base='/database' tabs={tabs} />
+              <HubPage hub={DATABASE_HUB} components={screens} />
               <Where />
             </>
           }
@@ -54,6 +53,10 @@ describe('HubPage', () => {
     renderAt('/database')
     fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' })
     expect(screen.getByTestId('where').textContent).toBe('/database/tuning')
+    // Focus follows the selection, so the next arrow press keeps working.
+    expect(screen.getByRole('tab', { name: 'Tuning' })).toHaveFocus()
+    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'End' })
+    expect(screen.getByTestId('where').textContent).toBe('/database/redis')
     fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' })
     expect(screen.getByTestId('where').textContent).toBe('/database')
   })

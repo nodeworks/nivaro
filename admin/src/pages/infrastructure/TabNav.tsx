@@ -1,5 +1,6 @@
 import { Check, ChevronsUpDown } from 'lucide-react'
-import { Fragment, type KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
+import { ScrollTabStrip } from '@/components/tab-strip'
 import {
   Command,
   CommandEmpty,
@@ -9,7 +10,6 @@ import {
   CommandList
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { cn } from '@/lib/utils'
 import { INFRA_TABS, type InfraGroup, type InfraTab } from './tabs'
 
 export const tabDomId = (id: string) => `infra-tab-${id}`
@@ -37,124 +37,18 @@ export function InfraTabNav({
   return (
     <div className='shrink-0 border-b border-slate-200 bg-white dark:border-border dark:bg-card'>
       <div className='hidden md:block'>
-        <TabStrip active={active.id} onSelect={onSelect} />
+        <ScrollTabStrip
+          tabs={INFRA_TABS.map((t) => ({ id: t.id, label: t.label, group: t.group }))}
+          active={active.id}
+          onSelect={onSelect}
+          ariaLabel='Infrastructure views'
+          tabDomId={tabDomId}
+          panelId={PANEL_ID}
+        />
       </div>
       <div className='px-4 py-2 md:hidden'>
         <TabMenu active={active} onSelect={onSelect} />
       </div>
-    </div>
-  )
-}
-
-function TabStrip({ active, onSelect }: { active: string; onSelect: (id: string) => void }) {
-  const scroller = useRef<HTMLDivElement>(null)
-  const [edges, setEdges] = useState({ left: false, right: false })
-
-  useEffect(() => {
-    const el = scroller.current
-    if (!el) return
-    const measure = () =>
-      setEdges((prev) => {
-        const left = el.scrollLeft > 1
-        const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1
-        return prev.left === left && prev.right === right ? prev : { left, right }
-      })
-    measure()
-    el.addEventListener('scroll', measure, { passive: true })
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => {
-      el.removeEventListener('scroll', measure)
-      ro.disconnect()
-    }
-  }, [])
-
-  // Keep the active tab visible when it changes (deep links, keyboard, the narrow menu).
-  useEffect(() => {
-    const el = scroller.current
-    const tab = el?.querySelector<HTMLElement>(`#${tabDomId(active)}`)
-    if (!el || !tab) return
-    const pad = 32
-    if (tab.offsetLeft - pad < el.scrollLeft) el.scrollLeft = tab.offsetLeft - pad
-    else if (tab.offsetLeft + tab.offsetWidth + pad > el.scrollLeft + el.clientWidth)
-      el.scrollLeft = tab.offsetLeft + tab.offsetWidth + pad - el.clientWidth
-  }, [active])
-
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const i = INFRA_TABS.findIndex((t) => t.id === active)
-    const next =
-      e.key === 'ArrowRight'
-        ? INFRA_TABS[(i + 1) % INFRA_TABS.length]
-        : e.key === 'ArrowLeft'
-          ? INFRA_TABS[(i - 1 + INFRA_TABS.length) % INFRA_TABS.length]
-          : e.key === 'Home'
-            ? INFRA_TABS[0]
-            : e.key === 'End'
-              ? INFRA_TABS[INFRA_TABS.length - 1]
-              : null
-    if (!next) return
-    e.preventDefault()
-    onSelect(next.id)
-    requestAnimationFrame(() => document.getElementById(tabDomId(next.id))?.focus())
-  }
-
-  return (
-    <div className='relative'>
-      <div
-        ref={scroller}
-        role='tablist'
-        aria-label='Infrastructure views'
-        onKeyDown={onKeyDown}
-        className='flex items-stretch gap-0.5 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
-      >
-        {GROUPS.map((g, gi) => (
-          <Fragment key={g.group}>
-            {gi > 0 && (
-              <span
-                aria-hidden
-                className='mx-1.5 my-2.5 w-px shrink-0 bg-slate-200 dark:bg-border'
-              />
-            )}
-            {g.tabs.map((t) => {
-              const on = t.id === active
-              return (
-                <button
-                  key={t.id}
-                  id={tabDomId(t.id)}
-                  type='button'
-                  role='tab'
-                  aria-selected={on}
-                  aria-controls={PANEL_ID}
-                  tabIndex={on ? 0 : -1}
-                  onClick={() => onSelect(t.id)}
-                  className={cn(
-                    'shrink-0 whitespace-nowrap border-b-2 px-2.5 py-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
-                    on
-                      ? 'border-nvr-cyan text-slate-900 dark:text-foreground'
-                      : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
-                  )}
-                >
-                  {t.label}
-                </button>
-              )
-            })}
-          </Fragment>
-        ))}
-      </div>
-      <span
-        aria-hidden
-        className={cn(
-          'pointer-events-none absolute inset-y-0 left-0 w-10 bg-gradient-to-r from-white to-transparent transition-opacity duration-150 dark:from-card',
-          edges.left ? 'opacity-100' : 'opacity-0'
-        )}
-      />
-      <span
-        aria-hidden
-        className={cn(
-          'pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-white to-transparent transition-opacity duration-150 dark:from-card',
-          edges.right ? 'opacity-100' : 'opacity-0'
-        )}
-      />
     </div>
   )
 }

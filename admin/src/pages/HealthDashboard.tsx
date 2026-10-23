@@ -374,7 +374,7 @@ export function HealthDashboardPage() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar
-        description='Is this instance up: database, Redis, sockets, migrations, memory and uptime, plus the deploy preflight and service levels.'
+        description='Database, Redis, sockets, migrations, memory and uptime for this process, plus the deploy preflight and service levels.'
         actions={
           dataUpdatedAt > 0 && (
             <span className='text-[11px] text-muted-foreground'>

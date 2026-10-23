@@ -7,6 +7,7 @@ import { HubRedirect } from '@/components/hub-page'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
+import { HUBS, hubTabPath } from '@/lib/hubs'
 import { I18nProvider } from '@/lib/i18n'
 // #2448 — lazy that remembers its loader, so nav hover can preload a screen's chunk
 import { lazy, PreloadRoutes } from '@/lib/route-preload'
@@ -710,16 +711,19 @@ export default function App() {
                   <Route path='jobs/*' element={<JobsHub />} />
                   <Route path='database/*' element={<DatabaseHub />} />
                   <Route path='health/*' element={<HealthHub />} />
-                  <Route path='background-jobs' element={<HubRedirect to='/jobs' />} />
-                  <Route path='cron-timeline' element={<HubRedirect to='/jobs/timeline' />} />
-                  <Route path='ops-calendar' element={<HubRedirect to='/jobs/calendar' />} />
-                  <Route path='ops-tasks' element={<HubRedirect to='/jobs/tasks' />} />
-                  <Route path='db-health' element={<HubRedirect to='/database' />} />
-                  <Route path='db-tuning' element={<HubRedirect to='/database/tuning' />} />
-                  <Route path='sql-checks' element={<HubRedirect to='/database/sql-checks' />} />
-                  <Route path='ops-redis' element={<HubRedirect to='/database/redis' />} />
-                  <Route path='monitors' element={<HubRedirect to='/health/monitors' />} />
-                  <Route path='telemetry' element={<HubRedirect to='/health/telemetry' />} />
+                  {HUBS.flatMap((hub) =>
+                    hub.tabs.flatMap((tab) =>
+                      tab.legacy
+                        ? [
+                            <Route
+                              key={tab.legacy}
+                              path={tab.legacy.slice(1)}
+                              element={<HubRedirect to={hubTabPath(hub, tab)} />}
+                            />
+                          ]
+                        : []
+                    )
+                  )}
                   <Route path='infrastructure' element={<InfrastructurePage />} />
                   <Route path='chaos' element={<ChaosPage />} />
                   <Route path='chaos/runs/:id' element={<ChaosRunReport />} />

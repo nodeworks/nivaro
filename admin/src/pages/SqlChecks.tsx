@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { HubToolbar } from '@/components/hub-page'
+import { ScrollTabStrip } from '@/components/tab-strip'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -27,6 +28,8 @@ const TABS = [
   { key: 'runs', label: 'Runs' }
 ] as const
 type TabKey = (typeof TABS)[number]['key']
+
+const sqlChecksTabId = (key: string) => `sql-checks-tab-${key}`
 
 export default function SqlChecks() {
   const qc = useQueryClient()
@@ -95,7 +98,7 @@ export default function SqlChecks() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar
-        description='Every procedure, function, view and trigger in the database, plus import definitions’ stored procedures and custom queries, checked for mistakes that corrupt or slow data: MERGE keys that skip empty values, writes without WHERE, transactions left open and more. Checks only read. Two kinds of procedure fix can be applied from a finding, with a preview, a re-check and automatic undo.'
+        description='Procedures, functions, views, triggers, stored import procedures and custom queries, checked for SQL that corrupts or slows data. Checks only read; two kinds of fix can be applied from a finding, with a preview and automatic undo.'
         actions={
           <>
             <Button
@@ -197,52 +200,27 @@ export default function SqlChecks() {
         />
       )}
 
-      <div
-        role='tablist'
-        aria-label='SQL checks sections'
-        onKeyDown={(e) => {
-          const i = TABS.findIndex((t) => t.key === tab)
-          const to =
-            e.key === 'ArrowRight'
-              ? (i + 1) % TABS.length
-              : e.key === 'ArrowLeft'
-                ? (i - 1 + TABS.length) % TABS.length
-                : e.key === 'Home'
-                  ? 0
-                  : e.key === 'End'
-                    ? TABS.length - 1
-                    : -1
-          if (to < 0) return
-          e.preventDefault()
-          setTab(TABS[to].key, { object: null, severity: null })
-          document.getElementById(`sql-checks-tab-${TABS[to].key}`)?.focus()
-        }}
-        className='flex shrink-0 gap-1 overflow-x-auto border-b border-slate-200 bg-white px-4 dark:border-border dark:bg-card sm:px-6'
-      >
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type='button'
-            role='tab'
-            id={`sql-checks-tab-${t.key}`}
-            aria-selected={tab === t.key}
-            aria-controls='sql-checks-panel'
-            tabIndex={tab === t.key ? 0 : -1}
-            onClick={() => setTab(t.key, { object: null, severity: null })}
-            className={cn(
-              '-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[12.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
-              tab === t.key
-                ? 'border-nvr-cyan text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            )}
-          >
-            {t.label}
-            {t.key === 'fixes' && (s?.fixes_30d ?? 0) > 0 && (
-              <span className='ml-1.5 text-[11px] text-muted-foreground'>{s?.fixes_30d}</span>
-            )}
-          </button>
-        ))}
-      </div>
+      <ScrollTabStrip
+        variant='sub'
+        className='shrink-0 border-b border-slate-200 bg-slate-50 dark:border-border dark:bg-background'
+        tabs={TABS.map((t) => ({
+          id: t.key,
+          label:
+            t.key === 'fixes' && (s?.fixes_30d ?? 0) > 0 ? (
+              <>
+                {t.label}
+                <span className='ml-1.5 text-[11px] text-muted-foreground'>{s?.fixes_30d}</span>
+              </>
+            ) : (
+              t.label
+            )
+        }))}
+        active={tab}
+        onSelect={(key) => setTab(key as TabKey, { object: null, severity: null })}
+        ariaLabel='SQL checks sections'
+        tabDomId={sqlChecksTabId}
+        panelId='sql-checks-panel'
+      />
 
       <div
         id='sql-checks-panel'
