@@ -1,6 +1,8 @@
 import type { Knex } from 'knex'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
+import { alertUnmetObligations } from '../../../services/integration-alerts.js'
+import { currentApiHealth, recordIncidentFlips } from '../../../services/integration-incidents.js'
 import {
   allObligationKinds,
   bustObligationsEpochCache,
@@ -14,6 +16,26 @@ import {
   runIntegrationReconcile,
   runIntegrationReconcileForCron
 } from '../../../services/integration-reconcile.js'
+import { runMissingRefirePass, runRetryPass } from '../../../services/integration-remediation.js'
+
+// The passes runIntegrationReconcile runs after the sweep (alerting, incident
+// flips, remediation) are dynamic imports. Left real, the first test to reach
+// one paid the cold load of their module graph (notification channels, chain,
+// ERP send …) INSIDE its 5 s timeout: ~1.5 s alone, past 5 s in a loaded full
+// run. They are covered by their own test files; here they are stubs, which
+// also lets the dormant-safe contract (nothing registered = none of them run)
+// be asserted directly.
+vi.mock('../../../services/integration-alerts.js', () => ({
+  alertUnmetObligations: vi.fn(async () => ({ notified: 0 }))
+}))
+vi.mock('../../../services/integration-incidents.js', () => ({
+  currentApiHealth: vi.fn(async () => []),
+  recordIncidentFlips: vi.fn(async () => undefined)
+}))
+vi.mock('../../../services/integration-remediation.js', () => ({
+  runRetryPass: vi.fn(async () => ({ retried: 0, gaveUp: 0 })),
+  runMissingRefirePass: vi.fn(async () => ({ refired: 0, queued: 0 }))
+}))
 
 const now = new Date('2026-09-22T12:00:00Z')
 const minsAgo = (m: number) => new Date(now.getTime() - m * 60_000)
@@ -210,6 +232,13 @@ describe('runIntegrationReconcile / dryRunIntegrationReconcile / runIntegrationR
       failed: 0
     })
     expect(db).not.toHaveBeenCalled()
+    // Dormant-safe: with nothing registered, incident tracking and
+    // remediation never run; alerting is asked (it gates itself).
+    expect(currentApiHealth).not.toHaveBeenCalled()
+    expect(recordIncidentFlips).not.toHaveBeenCalled()
+    expect(runRetryPass).not.toHaveBeenCalled()
+    expect(runMissingRefirePass).not.toHaveBeenCalled()
+    expect(alertUnmetObligations).toHaveBeenCalledTimes(1)
   })
 
   it('dryRunIntegrationReconcile reports "0 kinds" without touching the db', async () => {
@@ -266,6 +295,12 @@ describe('runIntegrationReconcileForCron — total-failure visibility', () => {
       { err: 'wf.broken: connection refused' },
       'integration reconcile: a kind reported an error'
     )
+    // With kinds registered, every after-sweep pass runs once.
+    expect(currentApiHealth).toHaveBeenCalledTimes(1)
+    expect(alertUnmetObligations).toHaveBeenCalledTimes(1)
+    expect(recordIncidentFlips).toHaveBeenCalledWith([])
+    expect(runRetryPass).toHaveBeenCalledTimes(1)
+    expect(runMissingRefirePass).toHaveBeenCalledTimes(1)
   })
 
   it('throws when every registered kind failed, so the job run records as failed', async () => {
