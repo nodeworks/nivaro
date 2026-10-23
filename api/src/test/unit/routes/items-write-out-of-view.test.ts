@@ -110,6 +110,25 @@ describe('POST /items/:collection', () => {
   })
 })
 
+describe('create scope guard refusal (CREATE_SCOPE_GUARD=on)', () => {
+  it('answers 422 OUT_OF_SCOPE with the message — nothing to read back', async () => {
+    const { OutOfScopeCreateError } = await import('../../../services/create-scope-guard.js')
+    svc.createOneReported.mockRejectedValue(
+      new OutOfScopeCreateError('Choose a Zone you have access to', 'division')
+    )
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/items/workflows',
+      payload: { project: 8170 }
+    })
+    expect(res.statusCode).toBe(422)
+    expect(res.json()).toMatchObject({
+      code: 'OUT_OF_SCOPE',
+      message: 'Choose a Zone you have access to'
+    })
+  })
+})
+
 describe('PATCH /items/:collection/:id', () => {
   it('an edit that moves the record out of view → the id and the reason, never data null', async () => {
     svc.updateOne.mockImplementation(async (...args: unknown[]) => {

@@ -5165,10 +5165,10 @@ export async function createOneReported(
   upserted: boolean
 }> {
   const outcome: CreateOutcome = {}
-  const item = (await createOne(user, collection, data, req, workspaceId, { outcome })) as Record<
-    string,
-    unknown
-  > | null
+  const item = (await createOne(user, collection, data, req, workspaceId, {
+    outcome,
+    scopeGuard: true
+  })) as Record<string, unknown> | null
   const hidden = item == null || isOutOfView(item)
   const id = (item?.id as string | number | undefined) ?? outcome.id ?? null
   return {
@@ -5190,6 +5190,8 @@ export async function createOne(
     skipRollupRecalc?: boolean
     dryRun?: { insert: boolean }
     outcome?: CreateOutcome
+    /** Judge this create with the create scope guard (create-scope-guard.ts). */
+    scopeGuard?: boolean
   }
 ) {
   await assertServable(user, collection, 'create')
@@ -5510,6 +5512,29 @@ export async function createOne(
     // rendered name/prefix the caller asked for.
     const linkFailures: string[] = []
     await applyAliasM2MWrites(user, returnedId as string | number, aliasWrites, req, linkFailures)
+
+    // Create scope guard (CREATE_SCOPE_GUARD=on, default off): a User-Scoped
+    // creator whose new record would be outside their own scope is refused
+    // and the row taken back out — checked once the links that usually place
+    // it in a scope exist, before child sets, hooks and outbound effects.
+    // Only the caller's own record (opts.scopeGuard, set by the write routes):
+    // the junction and child rows a create makes on the way are never judged
+    // alone — a link written before the Zone link would read as out of scope.
+    {
+      const guard = await import('./create-scope-guard.js')
+      if (opts?.scopeGuard && guard.createScopeGuardOn()) {
+        const refusal = await guard.outOfScopeRefusal(
+          user,
+          !!req?.isAdmin,
+          collection,
+          returnedId as string | number
+        )
+        if (refusal) {
+          await undoNewParent(collection, returnedId as string | number, aliasWrites)
+          throw refusal
+        }
+      }
+    }
 
     // Nested child sets (lines, forecasts…) — before the read-back so stored
     // rollups over them are already in the response, and before the after-hooks

@@ -18,6 +18,12 @@ describe('userErrorMessage — never raw JavaScript error text', () => {
     expect(userErrorMessage({ response: { data: { error: 'Choose a Zone' } } })).toBe(
       'Choose a Zone'
     )
+    // A coded refusal: the status word is not an explanation, the message is.
+    expect(
+      userErrorMessage({
+        response: { error: 'Unprocessable Entity', message: 'Choose a Zone you have access to' }
+      })
+    ).toBe('Choose a Zone you have access to')
   })
 
   it('a network failure and a plain Error keep their message', () => {

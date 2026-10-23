@@ -30,13 +30,28 @@ export function isCodeError(err: unknown): boolean {
   return err instanceof TypeError || err instanceof ReferenceError || err instanceof RangeError
 }
 
-/** The server's own `{error}` text, through the SDK (`response.error`) or axios (`response.data.error`). */
+const BARE_STATUS =
+  /^(bad request|unauthorized|forbidden|not found|conflict|unprocessable entity|too many requests|internal server error|bad gateway|service unavailable|gateway timeout)$/i
+
+/**
+ * The server's own explanation, through the SDK (`response`) or axios
+ * (`response.data`): `error` when it says something, else `message` (a coded
+ * refusal answers `{error: 'Unprocessable Entity', message: '<why>'}`).
+ */
 function serverText(err: unknown): string | null {
   const e = err as {
-    response?: { data?: { error?: unknown; message?: unknown }; error?: unknown }
+    response?: { data?: { error?: unknown; message?: unknown }; error?: unknown; message?: unknown }
   } | null
-  const raw = e?.response?.data?.error ?? e?.response?.error ?? e?.response?.data?.message
-  return typeof raw === 'string' && raw.trim() ? raw.trim() : null
+  const bodies = [e?.response?.data, e?.response]
+  for (const b of bodies) {
+    const raw = b?.error
+    if (typeof raw === 'string' && raw.trim() && !BARE_STATUS.test(raw.trim())) return raw.trim()
+  }
+  for (const b of bodies) {
+    const raw = b?.message
+    if (typeof raw === 'string' && raw.trim()) return raw.trim()
+  }
+  return null
 }
 
 /**
