@@ -29,8 +29,8 @@
  *     change refreshes at once; otherwise one pending refresh per tab, 1 s after the first
  *     change when the last event-driven refresh was ≥ 10 s ago, else at 10 s since it + 0–2 s
  *     jitter (pair it with `--poll-ms 60000`, the backstop poll);
- *   - staleness: from an idle flip to each open tab's /presence/online showing it (p50/p95/max,
- *     and how many tabs never showed it within 60 s);
+ *   - staleness: from a person coming back from idle (presence:idle false → last_active) to
+ *     each open tab's /presence/online showing it (p50/p95/max, and how many never did in 60 s);
  *   - `--heartbeat-mode on-change` (the fixed client): PATCH only when idle flipped since the
  *     last one, else {last_active} every 2 min and the full row every 5 min (checked every
  *     `--heartbeat-ms`, one person-wide beat); default `always` = every tab, every beat;
@@ -896,8 +896,13 @@ class Runner {
     tab.gapTimer = this.timer(fire, delay)
   }
 
-  /** An idle flip of person `p`: every open tab's list should show it (staleness). */
+  /**
+   * Back from idle (person `p`): every open tab's list should show it (staleness). Only this
+   * direction is visible at once — the server stamps last_active, which /presence/online
+   * returns; going idle shows only after IDLE_AFTER_MS of no input, by design.
+   */
   noteStale(p) {
+    if (p.idle) return
     const key = String(p.userId).toUpperCase()
     const prev = this.stale.pending.get(key)
     if (prev) this.stale.superseded += prev.waiting.size
@@ -911,7 +916,10 @@ class Runner {
     for (const [key, w] of this.stale.pending) {
       if (!w.waiting.has(tab.id)) continue
       const row = rows.find((r) => String(r.user_id).toUpperCase() === key)
-      if (row && Boolean(row.is_idle) === w.idle) {
+      const active = row?.last_active ? Date.parse(row.last_active) : 0
+      // 1 s allowance for the container clock; flips are minutes apart, so an older stamp
+      // cannot pass for this one.
+      if (row && active >= w.at - 1000) {
         w.waiting.delete(tab.id)
         this.stale.step.push(now - w.at)
         this.stale.all.push(now - w.at)
@@ -1160,7 +1168,7 @@ async function main() {
   )
   const st = report.totals.staleness
   console.log(
-    `Staleness (idle flip → every tab's list shows it): ${st.n} tab views, p50 ${st.p50_ms} ms, p95 ${st.p95_ms} ms, max ${st.max_ms} ms, ${st.never} never within 60 s`
+    `Staleness (back from idle → every tab's list shows it): ${st.n} tab views, p50 ${st.p50_ms} ms, p95 ${st.p95_ms} ms, max ${st.max_ms} ms, ${st.never} never within 60 s`
   )
   if (!runner.adminOk) console.log('Server lag/pool: unavailable — pass an admin --admin-token')
   if (o.out) {

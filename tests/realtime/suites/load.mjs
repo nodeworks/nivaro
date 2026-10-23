@@ -201,7 +201,7 @@ export async function run({ only, args }) {
     t.metric('sockets_after', after.sockets)
 
     const st = report?.totals?.staleness
-    if (st?.n) t.check('list staleness p95 ≤ 12 s (idle flip → every tab shows it)', st.p95_ms != null && st.p95_ms <= 12_000, st)
+    if (st?.n) t.check('list staleness p95 ≤ 12 s (back from idle → every tab shows it)', st.p95_ms != null && st.p95_ms <= 12_000, st)
     t.check('presence delivery p95 under 2 s (load script)', d?.p95_ms != null && d.p95_ms < 2000, d)
     t.check('presence events missed = 0', (d?.missed ?? 1) === 0, d?.missed)
     t.check('record-event delivery p95 under 2 s (probe)', pl.p95 != null && pl.p95 < 2000, pl)

@@ -167,7 +167,7 @@ export function buildLoadTable(dirs) {
     const hold = steps.find((s) => s.label === 'hold') ?? steps.at(-1) ?? {}
     const webNodes = Object.values(hold.server?.nodes ?? {})
     const pm = m.process_memory ?? {}
-    const web = ['web-1', 'web-2'].map((n) => pm[n]).filter(Boolean)
+    const web = ['web-1', 'web-2', 'web-3'].map((n) => pm[n]).filter(Boolean)
     const rts = Object.entries(pm).filter(([n]) => n.startsWith('rt-') && pm[n]?.at_peak_sockets?.sockets)
     rows.push({
       run: `${r.mode ?? '?'} / ${basename(dir)}`,

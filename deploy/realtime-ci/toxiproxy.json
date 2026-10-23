@@ -2,11 +2,13 @@
   { "name": "mssql", "listen": "0.0.0.0:7433", "upstream": "mssql:1433", "enabled": true },
   { "name": "redis_web1", "listen": "0.0.0.0:7001", "upstream": "redis:6379", "enabled": true },
   { "name": "redis_web2", "listen": "0.0.0.0:7002", "upstream": "redis:6379", "enabled": true },
+  { "name": "redis_web3", "listen": "0.0.0.0:7003", "upstream": "redis:6379", "enabled": true },
   { "name": "redis_rt1", "listen": "0.0.0.0:7011", "upstream": "redis:6379", "enabled": true },
   { "name": "redis_rt2", "listen": "0.0.0.0:7012", "upstream": "redis:6379", "enabled": true },
   { "name": "redis_worker", "listen": "0.0.0.0:7021", "upstream": "redis:6379", "enabled": true },
   { "name": "web1_http", "listen": "0.0.0.0:8201", "upstream": "web-1:3055", "enabled": true },
   { "name": "web2_http", "listen": "0.0.0.0:8202", "upstream": "web-2:3055", "enabled": true },
+  { "name": "web3_http", "listen": "0.0.0.0:8203", "upstream": "web-3:3055", "enabled": true },
   { "name": "rt1_http", "listen": "0.0.0.0:8101", "upstream": "rt-1:3055", "enabled": true },
   { "name": "rt2_http", "listen": "0.0.0.0:8102", "upstream": "rt-2:3055", "enabled": true }
 ]

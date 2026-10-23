@@ -7,6 +7,7 @@
 #        single today's shape: web ×2 serving sockets themselves, worker ×1
 #        --image  run an existing image tag instead of building the worktree
 #        --v2     also start Traefik v2.4 on RTCI_HTTP_V2_PORT
+#        --web3   a third web process (web-3) behind Traefik
 #   rtci.sh build <tag> [<git-ref>]   build the slim release image of the worktree (or of a ref,
 #                                     via git archive) — e.g. an "old" image for mixed versions
 #   rtci.sh seed [--load-users N]     bootstrap admin (SQL) + seed through the API (idempotent)
@@ -34,6 +35,7 @@ dc() {
   local p=()
   [ "${RTCI_MODE:-tier}" = tier ] && p+=(--profile tier)
   [ "${RTCI_V2:-0}" = 1 ] && p+=(--profile v2)
+  [ "${RTCI_WEB3:-0}" = 1 ] && p+=(--profile web3)
   docker compose --env-file "$ENVF" -f "$HERE/docker-compose.yml" ${p[@]+"${p[@]}"} "$@"
 }
 
@@ -74,13 +76,14 @@ cmd="${1:-}"
 shift || true
 case "$cmd" in
   up)
-    mode=tier image="" build=1 v2=0 seed=1
+    mode=tier image="" build=1 v2=0 seed=1 web3=0
     while [ $# -gt 0 ]; do
       case "$1" in
         tier | single) mode="$1" ;;
         --image) image="$2"; shift ;;
         --no-build) build=0 ;;
         --v2) v2=1 ;;
+        --web3) web3=1 ;;
         --no-seed) seed=0 ;;
         *) echo "rtci: unknown option $1" >&2; exit 2 ;;
       esac
@@ -92,12 +95,14 @@ case "$cmd" in
     fi
     export RTCI_MODE="$mode" RTCI_IMAGE="$image"
     if [ "$mode" = tier ]; then export RTCI_WEB_SOCKETS=off; else export RTCI_WEB_SOCKETS=on; fi
-    export RTCI_V2="$v2"
+    export RTCI_V2="$v2" RTCI_WEB3="$web3"
+    if [ "$web3" = 1 ]; then export RTCI_TRAEFIK_CFG="${mode}3"; else export RTCI_TRAEFIK_CFG="$mode"; fi
     mkdir -p "$STATE"
-    printf '{"mode":"%s","image":"%s","v2":%s,"started_at":"%s"}\n' "$mode" "$image" \
-      "$([ "$v2" = 1 ] && echo true || echo false)" "$(date -u +%FT%TZ)" >"$STATE/stack.json"
-    printf 'RTCI_MODE=%s\nRTCI_IMAGE=%s\nRTCI_WEB_SOCKETS=%s\nRTCI_V2=%s\n' "$mode" "$image" \
-      "$RTCI_WEB_SOCKETS" "$v2" >"$STATE/stack.env"
+    printf '{"mode":"%s","image":"%s","v2":%s,"web3":%s,"started_at":"%s"}\n' "$mode" "$image" \
+      "$([ "$v2" = 1 ] && echo true || echo false)" "$([ "$web3" = 1 ] && echo true || echo false)" \
+      "$(date -u +%FT%TZ)" >"$STATE/stack.json"
+    printf 'RTCI_MODE=%s\nRTCI_IMAGE=%s\nRTCI_WEB_SOCKETS=%s\nRTCI_V2=%s\nRTCI_WEB3=%s\nRTCI_TRAEFIK_CFG=%s\n' \
+      "$mode" "$image" "$RTCI_WEB_SOCKETS" "$v2" "$web3" "$RTCI_TRAEFIK_CFG" >"$STATE/stack.env"
     t0=$(date +%s)
     echo "rtci: starting $mode stack with $image (first boot runs every migration — minutes)"
     dc up -d --wait --wait-timeout 2400
@@ -114,7 +119,7 @@ case "$cmd" in
     node "$ROOT/tests/realtime/seed.mjs" "$@"
     ;;
   down)
-    RTCI_MODE=tier RTCI_V2=1 dc --profile cloud --profile tools down -v --remove-orphans
+    RTCI_MODE=tier RTCI_V2=1 RTCI_WEB3=1 dc --profile cloud --profile tools down -v --remove-orphans
     rm -rf "$STATE"
     ;;
   ps)

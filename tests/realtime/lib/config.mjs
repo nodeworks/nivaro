@@ -40,6 +40,7 @@ export const cfg = {
   nodes: {
     'web-1': { port: port('RTCI_WEB1_PORT'), http: 'web1_http', redis: 'redis_web1', role: 'web' },
     'web-2': { port: port('RTCI_WEB2_PORT'), http: 'web2_http', redis: 'redis_web2', role: 'web' },
+    'web-3': { port: port('RTCI_WEB3_PORT'), http: 'web3_http', redis: 'redis_web3', role: 'web' },
     'rt-1': { port: port('RTCI_RT1_PORT'), http: 'rt1_http', redis: 'redis_rt1', role: 'realtime' },
     'rt-2': { port: port('RTCI_RT2_PORT'), http: 'rt2_http', redis: 'redis_rt2', role: 'realtime' },
     worker: { port: port('RTCI_WORKER_PORT'), http: null, redis: 'redis_worker', role: 'worker' }
@@ -48,7 +49,13 @@ export const cfg = {
 
 /** The processes that hold sockets in this mode (tier: rt-*, single: web-*). */
 export function socketNodes() {
-  return cfg.mode === 'tier' ? ['rt-1', 'rt-2'] : ['web-1', 'web-2']
+  if (cfg.mode === 'tier') return ['rt-1', 'rt-2']
+  return stack.web3 ? ['web-1', 'web-2', 'web-3'] : ['web-1', 'web-2']
+}
+
+/** The web processes of the running stack. */
+export function webNodes() {
+  return stack.web3 ? ['web-1', 'web-2', 'web-3'] : ['web-1', 'web-2']
 }
 
 export function directUrl(node) {

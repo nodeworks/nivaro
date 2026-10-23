@@ -200,6 +200,23 @@ services:
     ports:
       - '127.0.0.1:${RTCI_WEB2_PORT:-24102}:3055'
 
+  # A third web process (`rtci.sh up … --web3`): production plans more web replicas, and the
+  # cross-process board/journal paths are only fully exercised with more than two.
+  web-3:
+    <<: *api
+    profiles: ['web3']
+    depends_on:
+      worker:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+      NIVARO_ROLE: web
+      REDIS_URL: redis://toxiproxy:7003
+      CRON_TICKS: 'off'
+      SOCKETS: ${RTCI_WEB_SOCKETS:-off}
+    ports:
+      - '127.0.0.1:${RTCI_WEB3_PORT:-24103}:3055'
+
   rt-1:
     <<: *api
     image: ${RTCI_IMAGE_RT1:-${RTCI_IMAGE:-nivaro-rtci:local}}
@@ -243,7 +260,7 @@ services:
       - --providers.file.watch=true
       - --log.level=${RTCI_TRAEFIK_LOG:-WARN}
     volumes:
-      - ./traefik/${RTCI_MODE:-tier}.v3.yml:/etc/traefik/dynamic.yml:ro
+      - ./traefik/${RTCI_TRAEFIK_CFG:-${RTCI_MODE:-tier}}.v3.yml:/etc/traefik/dynamic.yml:ro
     ports:
       - '127.0.0.1:${RTCI_HTTP_PORT:-24080}:80'
       - '127.0.0.1:${RTCI_DASH_PORT:-24088}:8080'
@@ -260,7 +277,7 @@ services:
       - --providers.file.watch=true
       - --log.level=${RTCI_TRAEFIK_LOG:-WARN}
     volumes:
-      - ./traefik/${RTCI_MODE:-tier}.v2.yml:/etc/traefik/dynamic.yml:ro
+      - ./traefik/${RTCI_TRAEFIK_CFG:-${RTCI_MODE:-tier}}.v2.yml:/etc/traefik/dynamic.yml:ro
     ports:
       - '127.0.0.1:${RTCI_HTTP_V2_PORT:-24082}:80'
     depends_on:

@@ -3,7 +3,7 @@
 // puts the stack back (toxics cleared, stopped services started, ready) in its cleanup.
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
-import { cfg, directUrl, repoRoot, socketNodes } from '../lib/config.mjs'
+import { cfg, directUrl, repoRoot, socketNodes, webNodes } from '../lib/config.mjs'
 import { fixture } from '../lib/fixture.mjs'
 import { pct, poll, Suite, sleep } from '../lib/harness.mjs'
 import { adminClient, Client } from '../lib/http.mjs'
@@ -28,7 +28,7 @@ export async function run({ only, args }) {
 
   async function ensureAllUp() {
     await toxics.resetAll()
-    for (const n of [...nodes, 'web-1', 'web-2']) {
+    for (const n of [...new Set([...nodes, ...webNodes()])]) {
       try {
         await waitReady(n, 2000)
       } catch {
@@ -58,7 +58,7 @@ export async function run({ only, args }) {
       const body = { title: `${label} ${i++}`, status: 'loop', n: i }
       let r = await admin.post('/api/items/rt_items', body, { timeoutMs: 5000 }).catch((e) => ({ ok: false, status: e.message }))
       if (!r.ok) {
-        for (const w of ['web-1', 'web-2']) {
+        for (const w of webNodes()) {
           r = await adminClient(directUrl(w)).post('/api/items/rt_items', body, { timeoutMs: 5000 }).catch((e) => ({ ok: false, status: e.message }))
           if (r.ok) break
         }
@@ -288,7 +288,7 @@ export async function run({ only, args }) {
     })
     const socks = await fleet(10)
     const since = Date.now()
-    for (const w of ['web-1', 'web-2']) {
+    for (const w of webNodes()) {
       await stop(w, 15)
       await start(w)
       await waitReady(w, 240_000)
@@ -319,13 +319,13 @@ export async function run({ only, args }) {
       const v2 = (await (await fetch(`${directUrl('web-2')}/api/version`)).json()).version
       t.metric('versions', { 'web-1': v1, 'web-2': v2, alt: altImage })
       const socks = await fleet(8)
-      for (const w of ['web-1', 'web-2']) {
+      for (const w of webNodes()) {
         const marks = socks.map((s) => s.mark())
         const r = await adminClient(directUrl(w)).must('POST', '/api/items/rt_items', { title: `mixed via ${w}`, status: 'loop' })
         const got = await Promise.all(socks.map((s, i) => s.next('collection:update', (p) => String(p.item) === String(r.id), { from: marks[i] })))
         t.check(`write on ${w} reaches all ${socks.length} sockets`, got.every(Boolean), got.filter((x) => !x).length)
       }
-      for (const w of ['web-1', 'web-2']) {
+      for (const w of webNodes()) {
         const s = socks[0]
         const m = s.mark()
         const r = await adminClient(directUrl(w)).post('/api/notifications', { recipient: fx.users.alice.id, subject: `mixed ${w}` })
