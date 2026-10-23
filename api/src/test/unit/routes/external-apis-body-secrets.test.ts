@@ -96,6 +96,20 @@ describe('external API body secrets — read masking', () => {
     await app.close()
   })
 
+  it('an Authorization header in an instance override is masked on GET', async () => {
+    row.instance_overrides = JSON.stringify({
+      production: { headers: { Authorization: 'Bearer RAW-PROD', Accept: 'application/json' } }
+    })
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/3' })
+    expect(res.json().data.instance_overrides.production.headers).toEqual({
+      Authorization: MASK,
+      Accept: 'application/json'
+    })
+    expect(res.body).not.toContain('RAW-PROD')
+    await app.close()
+  })
+
   it('the list masks them too', async () => {
     vi.mocked(db).mockImplementation((() => ({
       orderBy: vi.fn(async () => [row])

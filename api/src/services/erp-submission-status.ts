@@ -217,11 +217,6 @@ async function recordAttempt(row: AttemptRow): Promise<void> {
   }
 }
 
-/**
- * Snapshot the submission row as attempt `priorAttempts` when that attempt
- * has no history row yet. Returns the row's stored payload either way, so the
- * next attempt records what it re-sent.
- */
 /** The serialized response with the submission's API body secrets scrubbed (never throws). */
 async function scrubbedResponse(
   submissionId: number,
@@ -240,6 +235,11 @@ async function scrubbedResponse(
   }
 }
 
+/**
+ * Snapshot the submission row as attempt `priorAttempts` when that attempt
+ * has no history row yet. Returns the row's stored payload either way, so the
+ * next attempt records what it re-sent.
+ */
 async function captureSubmissionRow(
   submissionId: number,
   priorAttempts: number

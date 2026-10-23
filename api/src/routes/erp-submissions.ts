@@ -3,7 +3,12 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { clearAutoFailures } from '../services/auto-transition-memory.js'
-import { neutralizeSecretMarkers, scrubSecretsFor } from '../services/body-secrets.js'
+import {
+  neutralizeSecretMarkers,
+  restrictPlaceholders,
+  scrubSecretsFor,
+  secretPathsOf
+} from '../services/body-secrets.js'
 import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { requesterInsertFields } from '../services/erp-requester-columns.js'
@@ -41,10 +46,13 @@ interface ErpSubmissionRow {
   updated_at: Date
 }
 
-/** payload column stores { endpoint_path, body } so retries are self-contained. */
+/** payload column stores { endpoint_path, body, secret_paths } so retries are self-contained.
+ *  secret_paths = JSON Pointers of the body's real secret placeholders (secretPathsOf at record
+ *  time); a resend neutralizes every other one, and a row without the list substitutes nothing. */
 interface StoredPayload {
   endpoint_path: string
   body: Record<string, unknown>
+  secret_paths?: string[]
 }
 
 function parseJson<T>(v: string | null | undefined): T | null {
@@ -151,9 +159,9 @@ export async function sendPayload(
     const res = await callExternalApi(externalApi, {
       method: 'POST',
       path: stored.endpoint_path,
-      body: stored.body,
-      // Stored bodies carry only template-authored placeholders (record data is neutralized
-      // before it becomes a payload), so a retry substitutes the API's body secrets again.
+      // Only the placeholders recorded at the listed paths are honoured (fail closed without a
+      // list), so a resend substitutes exactly what the first send did and nothing data forged.
+      body: restrictPlaceholders(stored.body, stored.secret_paths),
       bodySecrets: true,
       timeoutMs: 30_000,
       _log: { triggeredBy: 'erp-submission', userId }
@@ -252,9 +260,11 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     }
 
     // The body here is pure record data: no field may forge a body-secret placeholder.
+    const safeBody = neutralizeSecretMarkers(body) as Record<string, unknown>
     const stored: StoredPayload = {
       endpoint_path,
-      body: neutralizeSecretMarkers(body) as Record<string, unknown>
+      body: safeBody,
+      secret_paths: secretPathsOf(safeBody)
     }
     const outcome = await sendPayload(external_api, stored, req.user?.id)
 

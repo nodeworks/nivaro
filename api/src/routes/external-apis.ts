@@ -33,7 +33,7 @@ import {
   redactUrl
 } from '../services/outbound-redaction.js'
 import { registerReadinessCheck } from '../services/readiness.js'
-import { maskBodySecrets } from '../services/secret-mask.js'
+import { isSensitiveHeaderName, maskBodySecrets } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { readAgreed, validateAgreed, withAgreed } from '../services/traffic-partner-contract.js'
 
@@ -184,7 +184,9 @@ function validateGraceMinutes(
 const SECRET_FIELDS = new Set(['token', 'password', 'client_secret', 'value'])
 const MASK = '••••••'
 
-const SECRET_HEADER_RE = /secret|token|password|key/i
+// Header credentials in auth_config.token_headers and instance overrides: the maskHeaders rule
+// (Authorization, Cookie, Proxy-Authorization, anything *token* / *key* / *auth* …).
+const SECRET_HEADER_RE = { test: (name: string) => isSensitiveHeaderName(name) }
 
 function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!cfg) return null

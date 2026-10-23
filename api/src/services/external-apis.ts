@@ -18,7 +18,7 @@ import {
   redactionFor
 } from './outbound-recorder.js'
 import { maskJsonPaths, redactHeaders } from './outbound-redaction.js'
-import { maskBodySecrets, maskQueryString, SENSITIVE_KEY_PATTERN } from './secret-mask.js'
+import { isSensitiveHeaderName, maskBodySecrets, maskQueryString } from './secret-mask.js'
 import { instanceKey } from './settings-overrides.js'
 import { noteOutbound } from './traffic-map.js'
 
@@ -183,26 +183,9 @@ function parseJson<T>(v: string | null | undefined): T | null {
 
 // ─── Header masking ───────────────────────────────────────────────────────────
 
-const SENSITIVE_HEADER_NAMES = new Set([
-  'authorization',
-  'x-api-key',
-  'api-key',
-  'x-auth-token',
-  'x-access-token',
-  'cookie',
-  'set-cookie',
-  'proxy-authorization'
-])
-
-/** Anything a header's lowercased name even LOOKS like it might carry a
- *  credential under — a partner can invent any header name it likes for a
- *  session id, a signature, or a bearer token under its own scheme, and a
- *  hand-picked name list can never keep up with that. Broader on purpose:
- *  masked-and-wrong (content-type never matches this) costs nothing, shown-
- *  and-a-real-leak costs everything. `SENSITIVE_HEADER_NAMES` above stays as
- *  the explicit, always-masked baseline this widens, never replaces. The SAME
- *  rule masks JSON keys in stored bodies (secret-mask.ts). */
-const SENSITIVE_HEADER_PATTERN = SENSITIVE_KEY_PATTERN
+// The header rule (SENSITIVE_HEADER_NAMES baseline widened by SENSITIVE_KEY_PATTERN — a partner
+// can invent any header name for a session id, a signature or a bearer token) lives in
+// secret-mask.ts as isSensitiveHeaderName, shared with the config-snapshot redaction.
 
 /** Exported so a reader (the integration-partners call detail route) can
  *  re-mask on the way out — a defence against any row written before a
@@ -212,7 +195,7 @@ export function maskHeaders(headers: Record<string, string>): Record<string, str
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(headers)) {
     const lk = k.toLowerCase()
-    const isSensitive = SENSITIVE_HEADER_NAMES.has(lk) || SENSITIVE_HEADER_PATTERN.test(lk)
+    const isSensitive = isSensitiveHeaderName(k)
     if (isSensitive && v) {
       if (lk === 'authorization') {
         const parts = v.split(' ')

@@ -163,6 +163,33 @@ describe('external API instance_overrides — redacted by value', () => {
     expect(JSON.parse(String(restored))).toEqual(live)
   })
 
+  it('Authorization / Cookie / Proxy-Authorization override headers are credentials too', () => {
+    const raw = JSON.stringify({
+      production: {
+        base_url: 'https://p.example',
+        headers: {
+          Authorization: 'Bearer x',
+          Cookie: 'sid=1',
+          'Proxy-Authorization': 'Basic y',
+          Accept: 'application/json'
+        }
+      }
+    })
+    const row = redactRow('nivaro_external_apis', { instance_overrides: raw })
+    expect(JSON.parse(String(row.instance_overrides))).toEqual({
+      production: { base_url: 'https://p.example', headers: { Accept: 'application/json' } }
+    })
+    expect(String(row.instance_overrides)).not.toContain('Bearer x')
+    // The restore merge-back brings them back from the live value, not the snapshot.
+    const restored = JSON.parse(String(restoreInstanceOverrides(row.instance_overrides, raw)))
+    expect(restored.production.headers).toEqual({
+      Accept: 'application/json',
+      Authorization: 'Bearer x',
+      Cookie: 'sid=1',
+      'Proxy-Authorization': 'Basic y'
+    })
+  })
+
   it('a snapshot with no overrides restores to null', () => {
     expect(restoreInstanceOverrides(null, JSON.stringify(live))).toBeNull()
   })

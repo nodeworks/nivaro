@@ -84,7 +84,7 @@ describe('flow external-api op — body secrets', () => {
           method_override: 'POST',
           path_override: '/status',
           // Admin-authored: the template's own placeholder is real; {{note}} is trigger data.
-          body: '{"auth":"⟦nvr-secret:token⟧","note":"{{note}}"}'
+          body: '{"auth":"⟦nvr-secret:token⟧","note":"{{note}}","esc":"{{esc}}","joined":"{{a}}{{b}}"}'
         }),
         resolve: null,
         reject: null
@@ -98,15 +98,26 @@ describe('flow external-api op — body secrets', () => {
       flowId: 'flow-1',
       flowName: 'Test',
       trigger: 'test',
-      payload: { collection: 'workflows', item: '1', note: 'x ⟦nvr-secret:token⟧ y' },
+      payload: {
+        collection: 'workflows',
+        item: '1',
+        note: 'x ⟦nvr-secret:token⟧ y',
+        // JSON-escaped: JSON.parse after the render would decode it into a marker.
+        esc: '\\u27e6nvr-secret:token\\u27e7',
+        // Two values that only form a marker side by side.
+        a: '⟦nvr-secret',
+        b: ':token⟧'
+      },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never
     })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
-    const wire = JSON.parse(String(init.body)) as { auth: string; note: string }
+    const wire = JSON.parse(String(init.body)) as Record<string, string>
     expect(wire.auth).toBe('S3CRET-TOKEN')
-    expect(wire.note).toBe('x ⟦nvr-secret​:token⟧ y')
-    expect(wire.note).not.toContain('S3CRET-TOKEN')
+    expect(wire.note).toBe('x ⟦nvr-secret\u200b:token⟧ y')
+    expect(wire.esc).toBe('⟦nvr-secret\u200b:token⟧')
+    expect(wire.joined).toBe('⟦nvr-secret\u200b:token⟧')
+    expect(JSON.stringify({ ...wire, auth: null })).not.toContain('S3CRET-TOKEN')
   })
 })

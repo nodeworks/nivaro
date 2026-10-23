@@ -24,6 +24,7 @@ import {
   hasBodySecret,
   isRecord,
   neutralizeSecretMarkers,
+  protectTemplatePlaceholders,
   scrubSecretsFor,
   scrubSecretValues,
   secretPlaceholder,
@@ -98,17 +99,92 @@ describe('neutralizeSecretMarkers', () => {
       { deep: '⟦nvr-secret\u200b:token⟧' }
     ])
     expect(out['⟦nvr-secret\u200b:k⟧']).toBe(true)
-    expect(out.when).toBe(when)
+    // Dates are copied, not walked.
+    expect(out.when).toEqual(when)
+    expect(out.when).not.toBe(when)
     expect(input.note).toBe(`a ${P('token')} b ${P('x')}`)
     expect(out).not.toBe(input)
     // A neutralized marker is never substituted and never refused.
     expect(substituteBodySecrets(out, {}, 'MWF')).toBe(out)
   })
 
+  it('walks class instances by own keys; Map / Set / Buffer / typed arrays stay opaque', () => {
+    class Row {
+      note = P('token')
+      method() {
+        return 1
+      }
+    }
+    const map = new Map([['k', P('token')]])
+    const set = new Set([P('token')])
+    const buf = Buffer.from(P('token'))
+    const u8 = new Uint8Array([1, 2])
+    const out = neutralizeSecretMarkers({ row: new Row(), map, set, buf, u8 }) as Record<
+      string,
+      unknown
+    >
+    expect(out.row).toEqual({ note: '⟦nvr-secret\u200b:token⟧' })
+    expect(out.map).toBe(map)
+    expect(out.set).toBe(set)
+    expect(out.buf).toBe(buf)
+    expect(out.u8).toBe(u8)
+  })
+
+  it('keeps cycles and a __proto__ own key', () => {
+    const a: Record<string, unknown> = { s: P('token') }
+    a.self = a
+    const out = neutralizeSecretMarkers(a) as Record<string, unknown>
+    expect(out.self).toBe(out)
+    const evil = JSON.parse(`{"__proto__":{"x":"${P('token')}"}}`)
+    const n = neutralizeSecretMarkers(evil) as Record<string, unknown>
+    expect(Object.hasOwn(n, '__proto__')).toBe(true)
+    expect(({} as Record<string, unknown>).x).toBeUndefined()
+  })
+
   it('leaves non-string scalars alone', () => {
     expect(neutralizeSecretMarkers(5)).toBe(5)
     expect(neutralizeSecretMarkers(null)).toBe(null)
     expect(neutralizeSecretMarkers(undefined)).toBe(undefined)
+  })
+})
+
+describe('protectTemplatePlaceholders', () => {
+  const render = (text: string, data: Record<string, string>) =>
+    text.replace(/\{\{(\w+)\}\}/g, (_m, k: string) => data[k] ?? '')
+
+  it('keeps the template placeholder real and neutralizes everything data produced', () => {
+    const p = protectTemplatePlaceholders(
+      `{"auth":"Bearer ${P('token')}","plain":"{{a}}","esc":"{{b}}","joined":"{{c}}{{d}}"}`
+    )
+    expect(p.text).not.toContain('⟦nvr-secret:')
+    const data = {
+      a: P('token'),
+      b: '\\u27e6nvr-secret:token\\u27e7',
+      c: '⟦nvr-secret',
+      d: ':token⟧'
+    }
+    const body = p.finish(JSON.parse(render(p.text, data))) as Record<string, string>
+    const N = '⟦nvr-secret\u200b:token⟧'
+    expect(body).toEqual({ auth: `Bearer ${P('token')}`, plain: N, esc: N, joined: N })
+  })
+
+  it('a token in an object key comes back neutral; values only carry real placeholders', () => {
+    const p = protectTemplatePlaceholders(`{"${P('k')}":"${P('v')}"}`)
+    const body = p.finish(JSON.parse(p.text)) as Record<string, string>
+    expect(body).toEqual({ '⟦nvr-secret\u200b:k⟧': P('v') })
+  })
+
+  it('the token survives case filters and differs per call', () => {
+    const a = protectTemplatePlaceholders(`"${P('t')}"`)
+    const b = protectTemplatePlaceholders(`"${P('t')}"`)
+    expect(a.text).not.toBe(b.text)
+    expect(a.finish(JSON.parse(a.text.toUpperCase()))).toBe(P('t'))
+  })
+
+  it('data that guesses no nonce cannot produce a token', () => {
+    const p = protectTemplatePlaceholders('{"x":"{{a}}"}')
+    const body = p.finish(JSON.parse(render(p.text, { a: '1234567890' }))) as Record<string, string>
+    expect(body.x).toBe('1234567890')
   })
 })
 

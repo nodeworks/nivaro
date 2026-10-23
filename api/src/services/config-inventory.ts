@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db as defaultDb } from '../db/index.js'
+import { isSensitiveHeaderName } from './secret-mask.js'
 
 /**
  * The configuration layer of a Nivaro instance, and how to compare two of them.
@@ -433,8 +434,6 @@ export function isRedactedColumn(table: string, column: string): boolean {
 // restore wipe them, so these columns are redacted by value: the snapshot keeps the plain parts,
 // and a restore merges the credential parts back from the live row it writes to.
 
-const SECRET_HEADER_RE = /secret|token|password|key/i
-
 function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
 }
@@ -452,12 +451,13 @@ function jsonObject(v: unknown): Record<string, unknown> | undefined {
 }
 
 function plainHeaders(h: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(h).filter(([k]) => !SECRET_HEADER_RE.test(k)))
+  return Object.fromEntries(Object.entries(h).filter(([k]) => !isSensitiveHeaderName(k)))
 }
 
 /**
  * `nivaro_external_apis.instance_overrides` without credentials: every `<instance>.auth_config`
- * dropped, every secret-looking `<instance>.headers` entry dropped (an emptied headers object
+ * dropped, every credential-looking `<instance>.headers` entry dropped (isSensitiveHeaderName —
+ * the maskHeaders rule: Authorization, Cookie, *token*, *key*…; an emptied headers object
  * goes too). A value that is not a JSON object is dropped whole (it cannot be vouched for).
  */
 export function redactInstanceOverrides(v: unknown): unknown {
@@ -504,7 +504,7 @@ export function restoreInstanceOverrides(snapshotValue: unknown, currentValue: u
     const cur = isObj(current[inst]) ? (current[inst] as Record<string, unknown>) : {}
     const curHeaders = isObj(cur.headers) ? cur.headers : {}
     const secretHeaders = Object.fromEntries(
-      Object.entries(curHeaders).filter(([k]) => SECRET_HEADER_RE.test(k))
+      Object.entries(curHeaders).filter(([k]) => isSensitiveHeaderName(k))
     )
     const headers = { ...(isObj(e.headers) ? plainHeaders(e.headers) : {}), ...secretHeaders }
     if (Object.keys(headers).length) e.headers = headers
