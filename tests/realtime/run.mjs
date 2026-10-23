@@ -19,6 +19,12 @@ const argv = process.argv.slice(2)
 const args = {}
 for (let i = 0; i < argv.length; i++) {
   if (!argv[i].startsWith('--')) continue
+  const eq = argv[i].indexOf('=')
+  if (eq > 0) {
+    // --key=value (needed when the value itself starts with --, e.g. --load-args=--x 1)
+    args[argv[i].slice(2, eq)] = argv[i].slice(eq + 1)
+    continue
+  }
   const k = argv[i].slice(2)
   const v = argv[i + 1]
   if (v === undefined || v.startsWith('--')) args[k] = true

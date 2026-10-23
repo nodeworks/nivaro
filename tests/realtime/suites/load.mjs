@@ -47,6 +47,7 @@ export async function run({ only, args }) {
     const probeLat = []
     const writeLat = []
     const rtt = Object.fromEntries(socketNodes().map((n) => [n, []]))
+    t.metric('machine_load_start', (await import('node:os')).loadavg().map((x) => Math.round(x * 100) / 100))
     let stopped = false
 
     // Probe sockets: one straight to each socket process (event-loop RTT) and four through
@@ -56,8 +57,10 @@ export async function run({ only, args }) {
       // Signed in through Traefik (a realtime process has no sign-in route); the socket itself
       // goes straight to the process.
       const c = await fx.browser('carol')
-      direct[n] = new LiveSocket(c, { base: directUrl(n) })
-      await direct[n].open()
+      const probe = new LiveSocket(c, { base: directUrl(n), reconnection: false })
+      // A stopped process (the one-realtime-task memory run) gets no probe.
+      if (await probe.open({ timeoutMs: 5000 }).then(() => true, () => false)) direct[n] = probe
+      else probe.close()
     }
     const probes = []
     for (let i = 0; i < 4; i++) probes.push(await fx.sock('carol'))
@@ -119,7 +122,7 @@ export async function run({ only, args }) {
       '--steps', String(steps),
       '--hold-minutes', String(holdMin),
       '--out', out,
-      // Extra realtime-load.mjs flags, e.g. --load-args "--refetch-debounce-ms 1000"
+      // Extra realtime-load.mjs flags, e.g. --load-args="--refetch-debounce-ms 1000"
       ...(typeof args['load-args'] === 'string' ? args['load-args'].split(/\s+/).filter(Boolean) : [])
     ]
     const tLoad = Date.now()
@@ -147,6 +150,7 @@ export async function run({ only, args }) {
     const report = existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : null
     const d = report?.totals?.delivery ?? null
     t.metric('load_delivery', d)
+    t.metric('machine_load_end', (await import('node:os')).loadavg().map((x) => Math.round(x * 100) / 100))
     t.metric('load_steps', (report?.steps ?? []).map((s) => ({ label: s.label, people: s.people, sockets: s.sockets, rps: s.requests_per_s, p95: s.delivery?.p95_ms, within: s.delivery?.within_target_pct, missed: s.delivery?.missed, server: s.server })))
     t.metric('load_reconnects', report?.totals?.reconnects)
     t.metric('load_routes', (report?.totals?.routes ?? []).slice(0, 8))
@@ -202,7 +206,7 @@ export async function run({ only, args }) {
     // Server-side event-loop lag (nodejs_eventloop_lag_seconds p99 per scrape) is the verdict;
     // the time:sync round trip also crosses Docker's port forwarding and this generator's own
     // loop, so it is reported only.
-    for (const n of socketNodes()) {
+    for (const n of socketNodes().filter((x) => atPeak[x]?.at_peak_sockets?.sockets)) {
       const lag = atPeak[n]?.lag_p99_max
       t.check(`${n} event-loop lag p99 (server metric) under 500 ms`, lag != null && lag < 500, { lag_p99_max: lag, rtt: rttPct[n] })
     }
