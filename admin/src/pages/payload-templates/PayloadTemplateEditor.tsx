@@ -50,10 +50,10 @@ import { HistoryPanel } from './HistoryPanel'
 import { PreviewPane, type PreviewView } from './PreviewPane'
 import { PublishPanel } from './PublishPanel'
 import {
-  defaultLookupsOf,
   defaultOf,
   draftLookupsOf,
   liveLookupsOf,
+  newerDefaultState,
   sameLookups,
   serverErrors
 } from './panel-api'
@@ -685,7 +685,9 @@ function ConflictBanner({
     'h-7 rounded-md px-2.5 font-medium underline underline-offset-2 hover:bg-amber-100 dark:hover:bg-amber-500/15'
   return (
     <div
-      className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-[12.5px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+      // Sticky so it stays in view when the stacked layout scrolls; opaque (amber-500/10 over
+      // the page background, flattened) so rows never show through it.
+      className='sticky top-0 z-10 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-[12.5px] text-amber-900 dark:border-amber-500/30 dark:bg-[#292218] dark:text-amber-200'
       role='alert'
       data-payload-conflict
     >
@@ -711,10 +713,12 @@ function ConflictBanner({
 function NewerDefaultBanner({
   template,
   draft,
+  nothingToPublish,
   onReview
 }: {
   template: TemplateDetail
   draft: DraftBody
+  nothingToPublish: boolean
   onReview: () => void
 }) {
   const owner = template.owner ?? 'The extension'
@@ -722,8 +726,8 @@ function NewerDefaultBanner({
   const def = defaultOf(template)
   const live = publishedOf(template)
   const draftLk = draftLookupsOf(template)
-  const holdsDefault =
-    !!def && sameBody(def, draft) && sameLookups(defaultLookupsOf(template), draftLk)
+  const state = newerDefaultState(template, draft, nothingToPublish)
+  const holdsDefault = state === 'holds'
   // Nothing unpublished and no mode switch → nothing to lose, so no extra step.
   const direct =
     !!def &&
@@ -736,6 +740,8 @@ function NewerDefaultBanner({
     const err = await take()
     if (err) toast.error(err)
   }
+  // The default is already live: nothing to say.
+  if (state === 'hidden') return null
   return (
     <div
       className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-200 bg-white px-5 py-2 text-[12.5px] text-slate-700 dark:border-border dark:bg-card dark:text-slate-200'
@@ -1109,6 +1115,7 @@ export function PayloadTemplateEditorPage() {
           <NewerDefaultBanner
             template={template}
             draft={editor.draft}
+            nothingToPublish={nothingToPublish}
             onReview={() => setPanel('default')}
           />
         )}

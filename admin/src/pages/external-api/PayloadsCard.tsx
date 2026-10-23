@@ -284,7 +284,7 @@ function CreateForm({
         <button
           type='submit'
           disabled={!canCreate}
-          className='h-8 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:hover:bg-slate-200 dark:disabled:bg-muted dark:disabled:text-muted-foreground'
+          className='h-8 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:hover:bg-slate-200 dark:disabled:border dark:disabled:border-border dark:disabled:bg-transparent dark:disabled:!text-slate-500 dark:disabled:hover:bg-transparent'
         >
           {create.isPending ? 'Creating…' : 'Create payload'}
         </button>

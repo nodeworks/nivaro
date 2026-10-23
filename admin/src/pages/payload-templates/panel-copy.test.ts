@@ -4,7 +4,13 @@ import { orderResults, summarize } from './CheckRecentPanel'
 import { conflictText } from './ConflictPanel'
 import { defaultCopy } from './DefaultPanel'
 import { restoreCopy, seedAuthor } from './HistoryPanel'
-import { type CheckResult, draftLookupsOf, liveLookupsOf, sameLookups } from './panel-api'
+import {
+  type CheckResult,
+  draftLookupsOf,
+  liveLookupsOf,
+  newerDefaultState,
+  sameLookups
+} from './panel-api'
 
 const row = (over: Partial<TemplateDetail>): TemplateDetail =>
   ({ key: 'k', published_version: 7, ...over }) as TemplateDetail
@@ -105,5 +111,50 @@ describe('seedAuthor', () => {
     )
     expect(seedAuthor(v({ note: 'Seeded from efp-ops', published_by: 'u1' }), 'efp-ops')).toBeNull()
     expect(seedAuthor(v({ note: 'Fix the PO number' }), 'efp-ops')).toBeNull()
+  })
+})
+
+describe('newerDefaultState', () => {
+  const spec = (k: string) =>
+    JSON.stringify({ v: 1, fields: [{ id: k, key: k, type: 'text', include: 'always' }] })
+  const t = (draft: string, live: string, def: string) =>
+    ({
+      key: 'k',
+      newer_default: true,
+      draft_mode: 'map',
+      draft_body: draft,
+      published_mode: 'map',
+      published_body: live,
+      published_version: 2,
+      default_mode: 'map',
+      default_body: def,
+      lookups: null,
+      draft_lookups: null,
+      default_lookups: null
+    }) as unknown as TemplateDetail
+  const draftOf = (b: string) => ({ mode: 'map' as const, body: JSON.parse(b) })
+
+  it('hides the banner when the default is already live (draft = live = default)', () => {
+    const a = spec('a')
+    expect(newerDefaultState(t(a, a, a), draftOf(a), true)).toBe('hidden')
+  })
+
+  it('says the draft holds the default only while it is not live yet', () => {
+    expect(newerDefaultState(t(spec('b'), spec('a'), spec('b')), draftOf(spec('b')), false)).toBe(
+      'holds'
+    )
+  })
+
+  it('offers the default when the draft is something else', () => {
+    expect(newerDefaultState(t(spec('a'), spec('a'), spec('b')), draftOf(spec('a')), true)).toBe(
+      'offer'
+    )
+  })
+
+  it('says nothing without a newer default', () => {
+    const a = spec('a')
+    expect(
+      newerDefaultState({ ...t(a, a, spec('b')), newer_default: false }, draftOf(a), true)
+    ).toBe('hidden')
   })
 })

@@ -7,6 +7,7 @@ import {
   type Problem,
   payloadKeys,
   type RecordOption,
+  sameBody,
   type TemplateDetail,
   type TemplateMode,
   toDraftBody
@@ -325,6 +326,23 @@ export function defaultOf(t: TemplateDetail): DraftBody | null {
   const isMap =
     !!parsed && typeof parsed === 'object' && Array.isArray((parsed as { fields?: unknown }).fields)
   return toDraftBody(isMap ? 'map' : 'code', t.default_body)
+}
+
+/**
+ * What the "newer default" banner says: `hidden` when the draft already is the default and
+ * nothing is left to publish (the default is live — the banner would contradict the page),
+ * `holds` when the draft holds it but it is not live yet, `offer` otherwise.
+ */
+export function newerDefaultState(
+  t: TemplateDetail,
+  draft: DraftBody,
+  nothingToPublish: boolean
+): 'hidden' | 'holds' | 'offer' {
+  if (!t.newer_default) return 'hidden'
+  const def = defaultOf(t)
+  const holds = !!def && sameBody(def, draft) && sameLookups(defaultLookupsOf(t), draftLookupsOf(t))
+  if (!holds) return 'offer'
+  return nothingToPublish ? 'hidden' : 'holds'
 }
 
 /** Business collections a lookup may read (system collections never; the server re-checks). */

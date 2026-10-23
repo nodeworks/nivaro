@@ -97,6 +97,23 @@ export function collectionWord(display: string): string {
     .join(' ')
 }
 
+/**
+ * A lookup whose rows only carry a relation (`pos[0].purchase_order_data.number`,
+ * `materials[0].material_data.x`): its own name repeats the hop ("POs" = purchase orders),
+ * so the label starts at the relation — "Purchase order → Number".
+ */
+function lookupRedundant(rest: string[]): boolean {
+  if (rest.length < 3 || !rest[1].endsWith('_data')) return false
+  const key = singular(rest[0].replace(/\[\d*\]/g, '').toLowerCase())
+  const hop = rest[1].replace(/_data$/, '').toLowerCase()
+  const initials = hop
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w[0])
+    .join('')
+  return key === hop || key.replace(/_/g, '') === initials
+}
+
 /** `record.shipping_location.inventory_org` → "Shipping location → Inventory org". */
 export function humanizePath(
   path: string,
@@ -113,6 +130,7 @@ export function humanizePath(
   else if (head === 'context') {
     rest = parts.slice(1)
     prefix = ''
+    if (lookupRedundant(rest)) rest = rest.slice(1)
   } else if (itemAlias && head === itemAlias) {
     rest = parts.slice(1)
     prefix = `Each ${humanizeSegment(itemAlias).toLowerCase()}`
