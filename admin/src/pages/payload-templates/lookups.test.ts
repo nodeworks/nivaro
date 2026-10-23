@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { describeLookups, findErpAction } from './lookups'
+import {
+  buildLookups,
+  describeLookups,
+  emptyLookupRow,
+  findErpAction,
+  rowsFromLookups
+} from './lookups'
 
 describe('describeLookups', () => {
   it('describes filters, sort, limit and expansions in plain words', () => {
@@ -54,5 +60,40 @@ describe('findErpAction', () => {
     expect(findErpAction(actions, 'k')).toEqual(actions[2])
     expect(findErpAction(actions, 'none')).toBeNull()
     expect(findErpAction(null, 'k')).toBeNull()
+  })
+})
+
+describe('lookup editor rows', () => {
+  it('round-trips lookups through rows, keeping settings it has no input for', () => {
+    const raw = {
+      lines: {
+        collection: 'materials',
+        filter: { workflow: '$id' },
+        junction_filter: { junction: 'mw', fk_to_row: 'm', field: 'w', value: 1 },
+        sort: '-id',
+        limit: 50,
+        expand: { item: { collection: 'items', fields: ['code'] } }
+      }
+    }
+    const built = buildLookups(rowsFromLookups(raw))
+    expect(built.errors).toEqual({})
+    expect(built.value).toEqual(raw)
+    expect(buildLookups([]).value).toBeNull()
+  })
+
+  it('names what is wrong with each row', () => {
+    const a = { ...emptyLookupRow(), name: '1x', filterText: '[1]', limit: '0', sort: 'a b' }
+    const b = { ...emptyLookupRow(), name: 'ok', collection: 'items', expandText: '{bad' }
+    const c = { ...emptyLookupRow(), name: 'ok', collection: 'items' }
+    const { errors } = buildLookups([a, b, c])
+    expect(errors[a.uid]).toEqual([
+      'Name: letters, digits and _, not starting with a digit',
+      'Pick the collection it reads',
+      'Filter must be a JSON object',
+      "Sort: a field name, '-' first for newest first",
+      'Limit: a whole number from 1 to 2000'
+    ])
+    expect(errors[b.uid]?.[0]).toMatch(/^Expand isn't valid JSON/)
+    expect(errors[c.uid]).toEqual(['Another lookup is already named ok'])
   })
 })

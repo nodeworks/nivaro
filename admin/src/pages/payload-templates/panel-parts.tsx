@@ -13,7 +13,52 @@ export const OUTLINE_BTN =
 export const PRIMARY_BTN =
   'inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 dark:focus-visible:ring-offset-background'
 
+/** A solid neutral button for confirming a draft-changing step (cyan stays Publish-only). */
+export const STRONG_BTN = cn(
+  OUTLINE_BTN,
+  'border-slate-900 bg-slate-900 text-white hover:bg-slate-800 dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white'
+)
+
 export const SECTION_LABEL = 'text-[12px] font-semibold text-slate-700 dark:text-slate-200'
+
+export type SegmentOption<T extends string> = { value: T; label: ReactNode; off?: string }
+
+/** The page's segmented toggle (same look and a11y as the preview's Draft · Live · Diff). */
+export function Segmented<T extends string>({
+  legend,
+  value,
+  options,
+  onChange
+}: {
+  legend: string
+  value: T
+  options: SegmentOption<T>[]
+  onChange: (v: T) => void
+}) {
+  return (
+    <fieldset className='inline-flex shrink-0 rounded-md border border-slate-200 p-0.5 dark:border-border'>
+      <legend className='sr-only'>{legend}</legend>
+      {options.map((o) => (
+        <span key={o.value} data-tip={o.off}>
+          <button
+            type='button'
+            aria-pressed={value === o.value}
+            disabled={!!o.off}
+            onClick={() => onChange(o.value)}
+            className={cn(
+              'rounded px-2.5 py-1 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40',
+              value === o.value
+                ? 'bg-slate-100 text-slate-900 dark:bg-muted dark:text-foreground'
+                : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+            )}
+          >
+            {o.label}
+          </button>
+        </span>
+      ))}
+    </fieldset>
+  )
+}
 
 /** Title bar + scrolling body (+ optional pinned footer) in the preview column. */
 export function PanelFrame({
@@ -196,7 +241,11 @@ export function BodyCompare({
         }}
       />
     )
-  } else if ((before.body && !beforeQ.data) || (after.body && !afterQ.data)) {
+  } else if (
+    (before.body && (!beforeQ.data || beforeQ.isPlaceholderData)) ||
+    (after.body && (!afterQ.data || afterQ.isPlaceholderData))
+  ) {
+    // A placeholder is the previous record's render: never diff it against this record's.
     body = <Bars rows={[72, 48, 64, 40, 56]} />
   } else {
     const skipped = afterQ.data?.skipped ?? beforeQ.data?.skipped
@@ -221,29 +270,15 @@ export function BodyCompare({
   return (
     <div data-payload-compare>
       <div className='mb-2.5 flex flex-wrap items-center gap-2'>
-        <div
-          className='inline-flex shrink-0 rounded-md border border-slate-200 p-0.5 dark:border-border'
-          role='tablist'
-          aria-label='Compare'
-        >
-          {(['payload', 'template'] as const).map((v) => (
-            <button
-              key={v}
-              type='button'
-              role='tab'
-              aria-selected={view === v}
-              onClick={() => setView(v)}
-              className={cn(
-                'rounded px-2.5 py-1 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
-                view === v
-                  ? 'bg-slate-100 text-slate-900 dark:bg-muted dark:text-foreground'
-                  : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
-              )}
-            >
-              {v === 'payload' ? 'Payload' : 'Template'}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          legend='Compare'
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'payload', label: 'Payload' },
+            { value: 'template', label: 'Template' }
+          ]}
+        />
         {view === 'payload' && (
           <RecordPicker
             templateKey={templateKey}

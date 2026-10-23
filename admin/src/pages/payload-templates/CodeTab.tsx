@@ -16,8 +16,16 @@ import {
 import { parseSpecText } from './code-tab-lib'
 import { usePayloadEditor } from './editor-context'
 import { shortValue } from './json-diff'
-import { type ConvertDiff, convertDiffs, fetchNewestRecords, useConvert } from './panel-api'
-import { OUTLINE_BTN } from './panel-parts'
+import {
+  type ConvertDiff,
+  convertDiffs,
+  convertSkipped,
+  fetchNewestRecords,
+  fetchRecentIds,
+  toText,
+  useConvert
+} from './panel-api'
+import { OUTLINE_BTN, STRONG_BTN } from './panel-parts'
 
 export interface CodeTabProps {
   template: TemplateDetail
@@ -121,7 +129,7 @@ function ConvertDiffs({
             {d.index >= 0 && <span className='font-medium'>{labelOf(d.index)} · </span>}
             {d.path && <span className='font-mono text-[11.5px]'>{d.path}</span>}
             {d.message ? (
-              <span> {d.message}</span>
+              <span> {toText(d.message)}</span>
             ) : (
               <span className='text-red-800/80 dark:text-red-200/80'>
                 {' '}
@@ -156,10 +164,12 @@ function ConvertSection({
   const [stage, setStage] = useState<'idle' | 'confirm' | 'running'>('idle')
   const [diffs, setDiffs] = useState<ConvertDiff[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const sent = useRef<RecordOption[]>([])
+  // The records the server compared, in its order (recent set minus the ones it left out).
+  const compared = useRef<RecordOption[]>([])
+  const [leftOut, setLeftOut] = useState<Array<{ id: string; message: string }>>([])
 
   const labelOf = (i: number) => {
-    const r = sent.current[i]
+    const r = compared.current[i]
     return r ? r.label || `#${r.id}` : `Record ${i + 1}`
   }
 
@@ -167,6 +177,9 @@ function ConvertSection({
     setStage('running')
     setDiffs(null)
     setError(null)
+    setLeftOut([])
+    let recent: string[] = []
+    let labels = new Map<string, string>()
     try {
       const saved = await ctxRef.current.saveNow()
       if (!saved) {
@@ -174,26 +187,15 @@ function ConvertSection({
         setError(`The draft has to save before it converts${why ? `: ${why}` : '.'}`)
         return
       }
-      // The preview record first, then the newest records (the picker's own list); when that
-      // list can't load, the server checks its recent set.
-      const newest = await fetchNewestRecords(qc, template.key).catch(() => [] as RecordOption[])
-      const rid = ctxRef.current.recordId
-      const list: RecordOption[] = []
-      const seen = new Set<string>()
-      const add = (r: RecordOption) => {
-        if (!seen.has(r.id)) {
-          seen.add(r.id)
-          list.push(r)
-        }
-      }
-      if (rid) add(newest.find((r) => r.id === rid) ?? { id: rid, label: '' })
-      for (const r of newest) add(r)
-      const top = newest.length ? list.slice(0, 21) : []
-      sent.current = top
-      await convert.mutateAsync({
-        ...(top.length ? { ids: top.map((r) => r.id) } : {}),
-        base_rev: ctxRef.current.getRev() ?? 0
-      })
+      // The server compares over its recent-records set (the same one Check uses); these reads
+      // only name the records in a refusal.
+      ;[recent, labels] = await Promise.all([
+        fetchRecentIds(template.key).catch(() => [] as string[]),
+        fetchNewestRecords(qc, template.key)
+          .then((rows) => new Map(rows.map((r) => [r.id, r.label])))
+          .catch(() => new Map<string, string>())
+      ])
+      await convert.mutateAsync({ base_rev: ctxRef.current.getRev() ?? 0 })
       await ctxRef.current.adoptServerDraft()
       toast.success('Converted to Liquid', {
         description: 'Both versions sent identical bodies. Nothing goes live until you publish.'
@@ -201,8 +203,15 @@ function ConvertSection({
     } catch (e) {
       const d = convertDiffs(e)
       const current = staleCurrent(e)
-      if (d) setDiffs(d)
-      else if (current) {
+      if (d) {
+        const skipped = convertSkipped(e)
+        const gone = new Set(skipped.map((x) => x.id))
+        compared.current = recent
+          .filter((id) => !gone.has(id))
+          .map((id) => ({ id, label: labels.get(id) ?? '' }))
+        setLeftOut(skipped)
+        setDiffs(d)
+      } else if (current) {
         ctxRef.current.raiseConflict(current)
         setError('The draft changed on the server before it converted. See the banner above.')
       } else if (httpStatus(e) === 501)
@@ -223,9 +232,9 @@ function ConvertSection({
         Convert to Liquid
       </h3>
       <p className='text-[12.5px] text-slate-600 dark:text-slate-300'>
-        For a body the field map can’t express. Nivaro writes the Liquid for you, then renders the
-        preview record and up to 20 recent records both ways; it converts only when every body comes
-        out identical.
+        For a body the field map can’t express. Nivaro writes the Liquid for you, then renders up to
+        20 recent records (the same ones Check recent records uses) both ways; it converts only when
+        every body comes out identical.
       </p>
       {stage === 'confirm' ? (
         <div
@@ -244,10 +253,7 @@ function ConvertSection({
             <button
               type='button'
               onClick={() => void run()}
-              className={cn(
-                OUTLINE_BTN,
-                'border-slate-900 bg-slate-900 text-white hover:bg-slate-800 dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white'
-              )}
+              className={STRONG_BTN}
               data-payload-convert-go
             >
               Convert to Liquid
@@ -279,6 +285,17 @@ function ConvertSection({
       )}
       {error && <Errors items={[error]} />}
       {diffs && <ConvertDiffs diffs={diffs} labelOf={labelOf} />}
+      {diffs && leftOut.length > 0 && (
+        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+          {leftOut.length} recent {leftOut.length === 1 ? 'record was' : 'records were'} left out
+          because {leftOut.length === 1 ? 'its' : 'their'} data couldn't be read:{' '}
+          {leftOut
+            .slice(0, 3)
+            .map((x) => `#${x.id} (${x.message})`)
+            .join(', ')}
+          {leftOut.length > 3 ? ' …' : ''}
+        </p>
+      )}
     </section>
   )
 }

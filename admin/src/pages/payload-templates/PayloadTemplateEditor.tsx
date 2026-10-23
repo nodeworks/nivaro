@@ -47,7 +47,8 @@ import { PayloadEditorContext, type PayloadEditorCtx } from './editor-context'
 import { HistoryPanel } from './HistoryPanel'
 import { PreviewPane, type PreviewView } from './PreviewPane'
 import { PublishPanel } from './PublishPanel'
-import { defaultOf } from './panel-api'
+import { defaultOf, serverErrors } from './panel-api'
+import { OUTLINE_BTN } from './panel-parts'
 import { TemplateList } from './TemplateList'
 
 /** What the preview column shows instead of the preview. */
@@ -84,12 +85,6 @@ type SaveState =
   | { kind: 'error'; message: string; errors: string[] }
   | { kind: 'conflict'; current: TemplateDetail }
 
-/** validateSpec's list from a 400 on draft save, when the server sent one. */
-function saveErrors(e: unknown): string[] {
-  const list = (e as { response?: { data?: { errors?: unknown } } })?.response?.data?.errors
-  return Array.isArray(list) ? list.map(String) : []
-}
-
 /**
  * The editor's local draft + autosave. Edits are kept locally and PUT ~800 ms
  * after the last change with `base_rev`; saves never overlap (a change made
@@ -97,7 +92,7 @@ function saveErrors(e: unknown): string[] {
  * and stops autosave until the person reloads or keeps their draft. Switching
  * templates or leaving the page flushes a pending save immediately.
  */
-function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) {
+export function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) {
   const save = useSaveDraft()
   // The mutation result is a new object every render; run() must stay stable.
   const saveRef = useRef(save)
@@ -119,16 +114,18 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
   const failed = useRef(false)
   const [rev, setRev] = useState<number | null>(null)
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runOnce only reads refs and setters
+  // The save loop lives in a ref, refreshed every render, so `run` stays stable and never calls
+  // a stale closure.
+  const runOnceRef = useRef<() => Promise<void>>(async () => {})
   const run = useCallback((): Promise<void> => {
     if (inFlight.current) return current.current ?? Promise.resolve()
     if (blocked.current || !pending.current) return Promise.resolve()
-    const p = runOnce()
+    const p = runOnceRef.current()
     current.current = p
     return p
   }, [])
 
-  async function runOnce() {
+  runOnceRef.current = async function runOnce() {
     if (!pending.current) return
     const job = pending.current
     pending.current = null
@@ -165,7 +162,7 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
           setState({
             kind: 'error',
             message: errorMessage(e, 'The draft was not saved'),
-            errors: saveErrors(e)
+            errors: serverErrors(e)
           })
       }
     } finally {
@@ -174,6 +171,11 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
       if (pending.current && !blocked.current && !waitForRetry) void run()
     }
   }
+
+  /** Our own publish moved the live version: later saves are not conflicts with it. */
+  const markPublished = useCallback((k: string, version: number) => {
+    loadedVersions.current[k] = version
+  }, [])
 
   const flush = useCallback(() => {
     if (timer.current) clearTimeout(timer.current)
@@ -301,15 +303,13 @@ function useDraftEditor(key: string | null, detail: TemplateDetail | undefined) 
     saveNow,
     discardPending,
     raiseConflict,
+    markPublished,
     rev,
     getRev
   }
 }
 
 // ─── Header pieces ───────────────────────────────────────────────────────────
-
-const OUTLINE_BTN =
-  'inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:bg-muted'
 
 function SaveStatus({ state, onRetry }: { state: SaveState; onRetry: () => void }) {
   if (state.kind === 'idle' || state.kind === 'conflict') return null
@@ -843,6 +843,8 @@ export function PayloadTemplateEditorPage() {
       discardPending: editor.discardPending,
       adoptServerDraft,
       raiseConflict: editor.raiseConflict,
+      markPublished: editor.markPublished,
+      conflicted: saveState.kind === 'conflict',
       saveError:
         saveState.kind === 'error'
           ? { message: saveState.message, errors: saveState.errors }
@@ -856,6 +858,7 @@ export function PayloadTemplateEditorPage() {
       editor.saveNow,
       editor.discardPending,
       editor.raiseConflict,
+      editor.markPublished,
       editor.rev,
       editor.getRev,
       adoptServerDraft,

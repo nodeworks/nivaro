@@ -450,3 +450,112 @@ export async function withPeopleNames(row: TemplateRow): Promise<NamedTemplateRo
     draft_updated_by_name: nameOf(row.draft_updated_by)
   }
 }
+
+// ─── Template lookups (Data tab) ─────────────────────────────────────────────
+
+const LOOKUP_KEYS = new Set(['collection', 'filter', 'junction_filter', 'sort', 'limit', 'expand'])
+const SORT_RE = /^-?[A-Za-z_][A-Za-z0-9_]*$/
+const MAX_LOOKUPS = 20
+const MAX_LOOKUP_LIMIT = 2000
+
+const isScalar = (v: unknown) =>
+  v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+
+function collectionError(c: unknown, at: string): string | null {
+  if (typeof c !== 'string' || !IDENT_RE.test(c)) return `${at} must be a collection name`
+  if (isSystemCollection(c)) return `${at}: '${c}' is a system collection and can't be read here`
+  return null
+}
+
+/**
+ * Check template lookups — the erp_submit `context` shape (workflow-actions.ts ContextQueryDef):
+ * `{ <name>: { collection, filter?, junction_filter?, sort?, limit?, expand? } }`. Every
+ * collection, junction and expansion passes the system-collection guard. Null clears them.
+ */
+export function validateLookups(
+  raw: unknown
+): { ok: true; value: Record<string, unknown> | null } | { ok: false; errors: string[] } {
+  if (raw === null) return { ok: true, value: null }
+  if (!isObj(raw)) return { ok: false, errors: ['lookups must be an object of named lookups'] }
+  const errors: string[] = []
+  const names = Object.keys(raw)
+  if (names.length > MAX_LOOKUPS) errors.push(`at most ${MAX_LOOKUPS} lookups`)
+  for (const name of names) {
+    const d = raw[name]
+    if (!IDENT_RE.test(name)) {
+      errors.push(`'${name}': a lookup name is letters, digits and _ (not starting with a digit)`)
+      continue
+    }
+    if (!isObj(d)) {
+      errors.push(`${name} must be an object { collection, filter?, sort?, limit?, expand? }`)
+      continue
+    }
+    for (const k of Object.keys(d))
+      if (!LOOKUP_KEYS.has(k)) errors.push(`${name}.${k} is not a lookup setting`)
+    const ce = collectionError(d.collection, `${name}.collection`)
+    if (ce) errors.push(ce)
+    if (d.filter !== undefined) {
+      if (!isObj(d.filter)) errors.push(`${name}.filter must be an object { field: value }`)
+      else
+        for (const [f, v] of Object.entries(d.filter)) {
+          if (!IDENT_RE.test(f)) errors.push(`${name}.filter: '${f}' is not a field name`)
+          if (!isScalar(v))
+            errors.push(`${name}.filter.${f} must be text, a number, true/false or null`)
+        }
+    }
+    if (d.junction_filter !== undefined) {
+      const j = d.junction_filter
+      if (!isObj(j)) errors.push(`${name}.junction_filter must be an object`)
+      else {
+        const je = collectionError(j.junction, `${name}.junction_filter.junction`)
+        if (je) errors.push(je)
+        for (const f of ['fk_to_row', 'field'] as const)
+          if (typeof j[f] !== 'string' || !IDENT_RE.test(j[f] as string))
+            errors.push(`${name}.junction_filter.${f} must be a field name`)
+        if (!isScalar(j.value)) errors.push(`${name}.junction_filter.value must be a plain value`)
+      }
+    }
+    if (d.sort !== undefined && (typeof d.sort !== 'string' || !SORT_RE.test(d.sort)))
+      errors.push(`${name}.sort must be a field name, '-' first for newest first`)
+    if (
+      d.limit !== undefined &&
+      (!Number.isInteger(d.limit) ||
+        (d.limit as number) < 1 ||
+        (d.limit as number) > MAX_LOOKUP_LIMIT)
+    )
+      errors.push(`${name}.limit must be a whole number from 1 to ${MAX_LOOKUP_LIMIT}`)
+    if (d.expand !== undefined) {
+      if (!isObj(d.expand))
+        errors.push(`${name}.expand must be an object { fk: { collection, fields } }`)
+      else
+        for (const [fk, exp] of Object.entries(d.expand)) {
+          const at = `${name}.expand.${fk}`
+          if (!IDENT_RE.test(fk)) errors.push(`${name}.expand: '${fk}' is not a field name`)
+          if (!isObj(exp)) {
+            errors.push(`${at} must be an object { collection, fields }`)
+            continue
+          }
+          const ee = collectionError(exp.collection, `${at}.collection`)
+          if (ee) errors.push(ee)
+          if (
+            !Array.isArray(exp.fields) ||
+            !exp.fields.length ||
+            !exp.fields.every((f) => typeof f === 'string' && IDENT_RE.test(f))
+          )
+            errors.push(`${at}.fields must be a list of field names`)
+        }
+    }
+  }
+  return errors.length ? { ok: false, errors } : { ok: true, value: raw }
+}
+
+/** Store a template's own lookups (already validated). */
+export async function saveTemplateLookups(
+  id: number,
+  lookups: Record<string, unknown> | null
+): Promise<void> {
+  await db(T)
+    .where({ id })
+    .update({ lookups: toJsonStr(lookups), updated_at: new Date() })
+  bustPayloadTemplateCache()
+}

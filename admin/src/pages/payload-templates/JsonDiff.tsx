@@ -1,5 +1,5 @@
 import { ChevronsUpDown } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
 import {
   countChanges,
@@ -78,6 +78,12 @@ export function JsonDiff({
   )
   const [open, setOpen] = useState<Set<number>>(() => new Set())
   const [allPaths, setAllPaths] = useState(false)
+  // Fold indices belong to one pair of bodies: new bodies start folded again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the texts change
+  useEffect(() => {
+    setOpen(new Set())
+    setAllPaths(false)
+  }, [a, b])
 
   if (a === b)
     return (

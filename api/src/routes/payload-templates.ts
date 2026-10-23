@@ -29,12 +29,14 @@ import {
   deleteTemplate,
   RecordNotFoundError,
   recentIds,
+  saveTemplateLookups,
   scopeForRecord,
   TemplateExistsError,
   transitionUseCount,
   useCount,
   usedBy,
   usedByCounts,
+  validateLookups,
   withPeopleNames
 } from '../services/payload-templates/queries.js'
 import { blockingProblems } from '../services/payload-templates/render.js'
@@ -173,6 +175,21 @@ async function sendStale(reply: FastifyReply, current: TemplateRow) {
 
 const parseWhich = (w: unknown): Which => (w === 'published' ? 'published' : 'draft')
 
+/** `limit` in 1..CHECK_MAX (default CHECK_DEFAULT). */
+function clampLimit(raw: unknown): number {
+  const n = Math.floor(Number(raw ?? CHECK_DEFAULT))
+  return Math.min(CHECK_MAX, Math.max(1, Number.isFinite(n) ? n : CHECK_DEFAULT))
+}
+
+/** Explicit record ids for /check: up to CHECK_MAX, each a plain id. Null = none given. */
+function parseIds(raw: unknown): string[] | null | 'invalid' {
+  if (raw === undefined || raw === null) return null
+  if (!Array.isArray(raw) || raw.length > CHECK_MAX) return 'invalid'
+  const ids = raw.map((x) => (typeof x === 'number' || typeof x === 'string' ? String(x) : ''))
+  if (ids.some((x) => !x || x.length > 64)) return 'invalid'
+  return [...new Set(ids)]
+}
+
 export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
@@ -276,60 +293,110 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
   })
 
   // ── check recent records ──
-  app.post<{ Params: { key: string }; Body: { which?: Which; limit?: number } }>(
-    '/:key/check',
+  // ── the recent-records set Check and Convert use (registrar recent() or newest records) ──
+  app.get<{ Params: { key: string }; Querystring: { limit?: string } }>(
+    '/:key/recent',
     async (req, reply) => {
-      markConfigRead(req)
-      const b = req.body ?? {}
-      const n = Math.floor(Number(b.limit ?? CHECK_DEFAULT))
-      const limit = Math.min(CHECK_MAX, Math.max(1, Number.isFinite(n) ? n : CHECK_DEFAULT))
-      const which = parseWhich(b.which)
       const row = await loadReadable(req.params.key, reply)
       if (!row) return reply
-      if (which === 'published' && row.published_version == null) {
-        return reply.code(409).send({ error: 'unpublished', message: 'Nothing is published yet' })
+      try {
+        return { ids: await recentIds(row, clampLimit(req.query.limit)) }
+      } catch (e) {
+        return sendError(reply, e)
       }
-      const user = reader(req)
-      const results = await withReadGate(
-        req.user?.id,
-        async () => {
-          const ids = await recentIds(row, limit)
-          const memo = new Map<string, Promise<unknown>>()
-          const labels = ids.length
-            ? await getLabels(new Map([[row.collection, new Set(ids)]])).catch(
-                () => ({}) as Record<string, string>
-              )
-            : {}
-          const out: Array<{
-            id: string
-            label: string
-            ok: boolean
-            problems: Problem[]
-            skipped: string | null
-          }> = []
-          for (const id of ids) {
-            const label = labels[`${row.collection}:${id}`] ?? id
-            try {
-              const r = await renderFor(row, id, which, undefined, user, memo)
-              // A record the sender would skip is not a failure: it never sends.
-              const ok = !!r.skipped || blockingProblems(r.problems).length === 0
-              out.push({ id, label, ok, problems: r.problems, skipped: r.skipped })
-            } catch (e) {
-              const message = e instanceof Error ? e.message : String(e)
-              out.push({
-                id,
-                label,
-                ok: false,
-                problems: [{ field_id: '', path: '', message, severity: 'error' }],
-                skipped: null
-              })
-            }
+    }
+  )
+
+  // ── check recent records (or exactly `ids`, so the editor can check in chunks) ──
+  app.post<{
+    Params: { key: string }
+    Body: { which?: Which; limit?: number; ids?: Array<string | number> }
+  }>('/:key/check', async (req, reply) => {
+    markConfigRead(req)
+    const b = req.body ?? {}
+    const limit = clampLimit(b.limit)
+    const given = parseIds(b.ids)
+    if (given === 'invalid') {
+      return reply.code(400).send({
+        error: 'invalid',
+        message: `ids must be a list of at most ${CHECK_MAX} record ids`
+      })
+    }
+    const which = parseWhich(b.which)
+    const row = await loadReadable(req.params.key, reply)
+    if (!row) return reply
+    if (which === 'published' && row.published_version == null) {
+      return reply.code(409).send({ error: 'unpublished', message: 'Nothing is published yet' })
+    }
+    const user = reader(req)
+    const results = await withReadGate(
+      req.user?.id,
+      async () => {
+        const ids = given ?? (await recentIds(row, limit))
+        const memo = new Map<string, Promise<unknown>>()
+        const labels = ids.length
+          ? await getLabels(new Map([[row.collection, new Set(ids)]])).catch(
+              () => ({}) as Record<string, string>
+            )
+          : {}
+        const out: Array<{
+          id: string
+          label: string
+          ok: boolean
+          problems: Problem[]
+          skipped: string | null
+        }> = []
+        for (const id of ids) {
+          const label = labels[`${row.collection}:${id}`] ?? id
+          try {
+            const r = await renderFor(row, id, which, undefined, user, memo)
+            // A record the sender would skip is not a failure: it never sends.
+            const ok = !!r.skipped || blockingProblems(r.problems).length === 0
+            out.push({ id, label, ok, problems: r.problems, skipped: r.skipped })
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e)
+            out.push({
+              id,
+              label,
+              ok: false,
+              problems: [{ field_id: '', path: '', message, severity: 'error' }],
+              skipped: null
+            })
           }
-          return out
-        },
-        { label: `payload-templates:check:${row.key}` }
-      )
-      return { results }
+        }
+        return out
+      },
+      { label: `payload-templates:check:${row.key}` }
+    )
+    return { results }
+  })
+
+  // ── the template's own lookups (UI-created templates; a registrar's follow its code) ──
+  app.put<{ Params: { key: string }; Body: { lookups?: unknown } }>(
+    '/:key/lookups',
+    async (req, reply) => {
+      const row = await loadOr404(req.params.key, reply)
+      if (!row) return reply
+      if (row.owner || registeredDef(row.key)) {
+        return reply.code(409).send({
+          error: 'registered',
+          message: `${row.owner ?? 'An extension'} sets this payload's lookups in code; change them there`
+        })
+      }
+      const b = req.body ?? {}
+      if (!('lookups' in b))
+        return reply.code(400).send({ error: 'invalid', errors: ['lookups is required'] })
+      const v = validateLookups(b.lookups)
+      if (!v.ok) return reply.code(400).send({ error: 'invalid', errors: v.errors })
+      await saveTemplateLookups(row.id, v.value)
+      await logActivity({
+        action: 'payload-template-lookups',
+        user: req.user?.id ?? null,
+        collection: TABLE,
+        item: row.key,
+        comment: `Changed the lookups of payload template ${row.label}`
+      })
+      return { data: { lookups: v.value } }
     }
   )
 

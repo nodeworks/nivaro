@@ -1,11 +1,12 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Ban, CheckCircle2, Eye, RefreshCw, XCircle } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
 import type { TemplateDetail } from './api'
 import { usePayloadEditor } from './editor-context'
-import { CHECK_LIMIT, type CheckResult, useCheck } from './panel-api'
-import { InlineError, OUTLINE_BTN, PanelFrame, SECTION_LABEL } from './panel-parts'
+import { CHECK_LIMIT, type CheckResult, useChunkedCheck } from './panel-api'
+import { InlineError, OUTLINE_BTN, PanelFrame, SECTION_LABEL, Segmented } from './panel-parts'
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
@@ -23,34 +24,45 @@ export function summarize(results: CheckResult[]) {
   return { failed, skipped, passed: results.length - failed - skipped, total: results.length }
 }
 
-function useElapsed(running: boolean) {
-  const [s, setS] = useState(0)
-  useEffect(() => {
-    if (!running) return
-    setS(0)
-    const t = setInterval(() => setS((x) => x + 1), 1000)
-    return () => clearInterval(t)
-  }, [running])
-  return s
-}
-
-/** "Checking up to 20 recent records…" while the one request runs (it answers all at once). */
-export function CheckProgress({ what }: { what: string }) {
-  const s = useElapsed(true)
+/** Determinate progress: "12 / 20" records rendered (chunks of CHECK_CHUNK, as they finish). */
+export function CheckProgress({
+  what,
+  done,
+  total
+}: {
+  what: string
+  done: number
+  total: number | null
+}) {
+  const pct = total ? Math.round((done / total) * 100) : 0
   return (
     <div className='space-y-2' role='status' aria-live='polite' data-payload-check-progress>
-      <div className='flex items-center justify-between text-[12.5px] text-slate-600 dark:text-slate-300'>
+      <div className='flex items-center justify-between gap-3 text-[12.5px] text-slate-600 dark:text-slate-300'>
         <span>
-          Rendering up to {CHECK_LIMIT} recent records with {what}…
+          {total == null ? 'Finding the recent records…' : `Rendering recent records with ${what}…`}
         </span>
-        <span className='tabular-nums text-slate-400'>{s > 1 ? `${s} s` : ''}</span>
+        {total != null && (
+          <span className='shrink-0 tabular-nums font-medium text-slate-700 dark:text-slate-200'>
+            {done} / {total}
+          </span>
+        )}
       </div>
-      <div className='h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-muted'>
-        <div className='h-full w-full rounded-full bg-nvr-cyan/40 motion-safe:animate-pulse' />
+      <div
+        className='h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-muted'
+        role='progressbar'
+        aria-valuemin={0}
+        aria-valuemax={total ?? 0}
+        aria-valuenow={done}
+        aria-label='Records checked'
+      >
+        <div
+          className={cn(
+            'h-full rounded-full bg-nvr-cyan transition-[width] duration-200',
+            total == null && 'w-full bg-nvr-cyan/30 motion-safe:animate-pulse'
+          )}
+          style={total == null ? undefined : { width: `${pct}%` }}
+        />
       </div>
-      <p className='text-[11.5px] text-slate-400'>
-        Each record renders on the server; this usually takes a few seconds.
-      </p>
     </div>
   )
 }
@@ -193,9 +205,9 @@ export function CheckSummary({
 }
 
 /**
- * Check recent records: renders the newest records (or the registrar's recent
- * set) through the saved draft — or what is live — and lists which would fail
- * and why, with links to each record.
+ * Check recent records: renders the recent-records set (the registrar's recent() or the newest
+ * records) through the saved draft — or what is live — CHECK_CHUNK at a time, showing "N / M",
+ * and lists which would fail and why, with links to each record.
  */
 export function CheckRecentPanel({
   template,
@@ -209,32 +221,41 @@ export function CheckRecentPanel({
   const ctx = usePayloadEditor()
   const ctxRef = useRef(ctx)
   ctxRef.current = ctx
+  const qc = useQueryClient()
   const hasLive = template.published_version != null
   const [which, setWhich] = useState<'draft' | 'published'>('draft')
-  const [run, setRun] = useState<{ rev: number; saved: boolean } | null>(null)
+  // One run of the draft check: the saved rev it covers + a counter for "Run again".
+  const [run, setRun] = useState<{ rev: number; n: number; saved: boolean } | null>(null)
   const [preparing, setPreparing] = useState(false)
+  const [liveN, setLiveN] = useState(0)
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (n: number) => {
     setPreparing(true)
     const saved = await ctxRef.current.saveNow()
     setPreparing(false)
-    setRun({ rev: ctxRef.current.getRev() ?? 0, saved })
+    setRun({ rev: ctxRef.current.getRev() ?? 0, n, saved })
   }, [])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: run once when the panel opens
   useEffect(() => {
-    void start()
+    void start(0)
   }, [])
 
-  const checkRev = which === 'published' ? (template.published_version ?? 0) : (run?.rev ?? null)
-  const q = useCheck(template.key, which, checkRev, which === 'published' || !!run)
+  const runKey =
+    which === 'published'
+      ? `v${template.published_version ?? 0}:${liveN}`
+      : run
+        ? `${run.rev}:${run.n}`
+        : null
+  const check = useChunkedCheck(template.key, which, runKey)
+  const running = preparing || check.status === 'running' || (which === 'draft' && !run)
   const draftMoved = which === 'draft' && run != null && ctx.rev != null && ctx.rev !== run.rev
 
-  const runAgain = async () => {
-    if (which === 'published') return void q.refetch()
-    const before = run?.rev
-    await start()
-    if (ctxRef.current.getRev() === before) void q.refetch()
+  const runAgain = () => {
+    // A new run key starts over; drop the cached result so it really re-renders.
+    void qc.removeQueries({ queryKey: ['payload-templates', 'check', template.key] })
+    if (which === 'published') setLiveN((x) => x + 1)
+    else void start((run?.n ?? 0) + 1)
   }
 
   return (
@@ -245,8 +266,8 @@ export function CheckRecentPanel({
       actions={
         <button
           type='button'
-          onClick={() => void runAgain()}
-          disabled={q.isFetching || preparing}
+          onClick={runAgain}
+          disabled={running}
           className={cn(OUTLINE_BTN, 'h-7 px-2.5 text-[12px]')}
         >
           <RefreshCw className='h-3 w-3' />
@@ -257,49 +278,34 @@ export function CheckRecentPanel({
       <div className='space-y-3 px-4 py-3'>
         <div className='flex flex-wrap items-center gap-2'>
           <span className={SECTION_LABEL}>Check</span>
-          <div
-            className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'
-            role='tablist'
-            aria-label='Which version to check'
-          >
-            {(['draft', 'published'] as const).map((w) => {
-              const off = w === 'published' && !hasLive
-              return (
-                <span key={w} data-tip={off ? 'Nothing is published yet' : undefined}>
-                  <button
-                    type='button'
-                    role='tab'
-                    aria-selected={which === w}
-                    disabled={off}
-                    onClick={() => setWhich(w)}
-                    className={cn(
-                      'rounded px-2.5 py-1 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40',
-                      which === w
-                        ? 'bg-slate-100 text-slate-900 dark:bg-muted dark:text-foreground'
-                        : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
-                    )}
-                  >
-                    {w === 'draft' ? 'Your draft' : `Live v${template.published_version ?? ''}`}
-                  </button>
-                </span>
-              )
-            })}
-          </div>
+          <Segmented
+            legend='Which version to check'
+            value={which}
+            onChange={setWhich}
+            options={[
+              { value: 'draft', label: 'Your draft' },
+              {
+                value: 'published',
+                label: `Live v${template.published_version ?? ''}`,
+                off: hasLive ? undefined : 'Nothing is published yet'
+              }
+            ]}
+          />
         </div>
 
         {which === 'draft' && run && !run.saved && (
           <p className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'>
-            Your latest edit didn't save
-            {ctx.saveError ? ` (${ctx.saveError.message})` : ''}, so this checks the last saved
-            draft.
+            {ctx.conflicted
+              ? 'Saving is paused while the conflict above stands, so this checks the last saved draft.'
+              : `Your latest edit didn't save${ctx.saveError ? ` (${ctx.saveError.message})` : ''}, so this checks the last saved draft.`}
           </p>
         )}
-        {draftMoved && !q.isFetching && (
+        {draftMoved && !running && (
           <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
             You've edited the draft since this check.{' '}
             <button
               type='button'
-              onClick={() => void runAgain()}
+              onClick={runAgain}
               className='font-medium text-slate-800 underline underline-offset-2 dark:text-foreground'
             >
               Run again
@@ -307,27 +313,24 @@ export function CheckRecentPanel({
           </p>
         )}
 
-        {preparing || (q.isFetching && !q.data) || (which === 'draft' && !run) ? (
-          <CheckProgress what={which === 'draft' ? 'your draft' : 'the live version'} />
-        ) : q.isError ? (
-          <InlineError
-            title='The check could not run.'
-            error={q.error}
-            onRetry={() => void q.refetch()}
+        {running && (
+          <CheckProgress
+            what={which === 'draft' ? 'your draft' : 'the live version'}
+            done={check.done}
+            total={preparing || (which === 'draft' && !run) ? null : check.total}
           />
-        ) : q.data ? (
-          <>
-            {q.isFetching && (
-              <CheckProgress what={which === 'draft' ? 'your draft' : 'the live version'} />
-            )}
-            <CheckSummary results={q.data} collection={template.collection} />
-            <CheckResultsList
-              results={q.data}
-              collection={template.collection}
-              onPreview={onPreview}
-            />
-          </>
-        ) : null}
+        )}
+        {check.status === 'error' && (
+          <InlineError title='The check could not finish.' error={check.error} onRetry={runAgain} />
+        )}
+        {check.status === 'done' && (
+          <CheckSummary results={check.results} collection={template.collection} />
+        )}
+        <CheckResultsList
+          results={check.results}
+          collection={template.collection}
+          onPreview={onPreview}
+        />
       </div>
     </PanelFrame>
   )

@@ -1,9 +1,29 @@
-import { ArrowRight, Code2 } from 'lucide-react'
+import { ArrowRight, Check, ChevronsUpDown, Code2, Plus, Trash2 } from 'lucide-react'
+import { useId, useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import type { TemplateDetail } from './api'
-import { describeLookups, findErpAction, type LookupLine } from './lookups'
-import { usePipeline } from './panel-api'
-import { Bars, InlineError } from './panel-parts'
+import { toast } from 'sonner'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { cn } from '@/lib/utils'
+import { errorMessage, type TemplateDetail } from './api'
+import {
+  buildLookups,
+  describeLookups,
+  emptyLookupRow,
+  findErpAction,
+  type LookupLine,
+  type LookupRow,
+  rowsFromLookups
+} from './lookups'
+import { serverErrors, useLookupCollections, usePipeline, useSaveLookups } from './panel-api'
+import { Bars, InlineError, OUTLINE_BTN, STRONG_BTN } from './panel-parts'
 
 export interface DataTabProps {
   template: TemplateDetail
@@ -97,6 +117,333 @@ function ActionLookups({ template }: { template: TemplateDetail }) {
   )
 }
 
+const INPUT =
+  'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-800 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100'
+const JSON_INPUT =
+  'block min-h-[56px] w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-mono text-[11.5px] leading-[1.55] text-slate-800 placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+const FIELD_LABEL = 'mb-1 block text-[11.5px] font-medium text-slate-600 dark:text-slate-300'
+
+function CollectionPicker({
+  id,
+  value,
+  onChange
+}: {
+  id: string
+  value: string
+  onChange: (c: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const q = useLookupCollections(open || !!value)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          id={id}
+          type='button'
+          role='combobox'
+          aria-expanded={open}
+          className={cn(INPUT, 'flex items-center gap-2 text-left')}
+        >
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate font-mono text-[12px]',
+              !value && 'font-sans text-slate-400'
+            )}
+          >
+            {value || 'Pick a collection'}
+          </span>
+          <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[280px] p-0' align='start'>
+        <Command>
+          <CommandInput placeholder='Search collections…' className='h-8 text-[12px]' />
+          <CommandList>
+            {q.isError ? (
+              <p className='px-3 py-3 text-[12px] text-red-600 dark:text-red-400'>
+                {errorMessage(q.error, 'Collections could not load')}
+              </p>
+            ) : q.isLoading ? (
+              <div className='space-y-1.5 p-2' aria-hidden>
+                {[0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className='h-6 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))]'
+                  />
+                ))}
+              </div>
+            ) : (
+              <>
+                <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+                  No collection matches
+                </CommandEmpty>
+                <CommandGroup>
+                  {(q.data ?? []).map((c) => (
+                    <CommandItem
+                      key={c}
+                      value={c}
+                      onSelect={() => {
+                        onChange(c)
+                        setOpen(false)
+                      }}
+                      className='gap-2 font-mono text-[12px]'
+                    >
+                      <Check
+                        className={cn(
+                          'h-3 w-3 shrink-0',
+                          c === value ? 'opacity-100' : 'opacity-0'
+                        )}
+                      />
+                      {c}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function LookupRowEditor({
+  row,
+  errors,
+  onChange,
+  onRemove
+}: {
+  row: LookupRow
+  errors: string[]
+  onChange: (next: LookupRow) => void
+  onRemove: () => void
+}) {
+  const id = useId()
+  const set = (patch: Partial<LookupRow>) => onChange({ ...row, ...patch })
+  const kept = Object.keys(row.extra)
+  return (
+    <li className='space-y-2.5 px-3 py-3' data-payload-lookup-row>
+      <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-2'>
+        <div>
+          <label htmlFor={`${id}-name`} className={FIELD_LABEL}>
+            Name <span className='font-normal text-slate-400'>(read as context.name)</span>
+          </label>
+          <input
+            id={`${id}-name`}
+            value={row.name}
+            onChange={(e) => set({ name: e.target.value })}
+            placeholder='lines'
+            spellCheck={false}
+            className={cn(INPUT, 'font-mono text-[12px]')}
+          />
+        </div>
+        <div>
+          <label htmlFor={`${id}-col`} className={FIELD_LABEL}>
+            Rows of
+          </label>
+          <CollectionPicker
+            id={`${id}-col`}
+            value={row.collection}
+            onChange={(c) => set({ collection: c })}
+          />
+        </div>
+      </div>
+      <div>
+        <label htmlFor={`${id}-filter`} className={FIELD_LABEL}>
+          Filter <span className='font-normal text-slate-400'>(JSON, optional)</span>
+        </label>
+        <textarea
+          id={`${id}-filter`}
+          value={row.filterText}
+          onChange={(e) => set({ filterText: e.target.value })}
+          placeholder={'{ "workflow": "$id" }'}
+          spellCheck={false}
+          className={JSON_INPUT}
+        />
+        <p className='mt-1 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          <span className='font-mono'>$id</span> = this record,{' '}
+          <span className='font-mono'>$record.field</span> = a field on it,{' '}
+          <span className='font-mono'>$user</span> = whoever moved it.
+        </p>
+      </div>
+      <div className='grid grid-cols-2 gap-2.5'>
+        <div>
+          <label htmlFor={`${id}-sort`} className={FIELD_LABEL}>
+            Sort
+          </label>
+          <input
+            id={`${id}-sort`}
+            value={row.sort}
+            onChange={(e) => set({ sort: e.target.value })}
+            placeholder='-id'
+            spellCheck={false}
+            className={cn(INPUT, 'font-mono text-[12px]')}
+          />
+        </div>
+        <div>
+          <label htmlFor={`${id}-limit`} className={FIELD_LABEL}>
+            Up to (rows)
+          </label>
+          <input
+            id={`${id}-limit`}
+            value={row.limit}
+            onChange={(e) => set({ limit: e.target.value })}
+            placeholder='500'
+            inputMode='numeric'
+            className={cn(INPUT, 'tabular-nums')}
+          />
+        </div>
+      </div>
+      <div>
+        <label htmlFor={`${id}-expand`} className={FIELD_LABEL}>
+          Expand <span className='font-normal text-slate-400'>(JSON, optional — adds fk_data)</span>
+        </label>
+        <textarea
+          id={`${id}-expand`}
+          value={row.expandText}
+          onChange={(e) => set({ expandText: e.target.value })}
+          placeholder={'{ "item": { "collection": "items", "fields": ["code", "name"] } }'}
+          spellCheck={false}
+          className={JSON_INPUT}
+        />
+      </div>
+      {kept.length > 0 && (
+        <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          Also keeps <span className='font-mono'>{kept.join(', ')}</span> as set elsewhere.
+        </p>
+      )}
+      {errors.length > 0 && (
+        <ul className='space-y-0.5 text-[12px] text-red-700 dark:text-red-300' role='alert'>
+          {errors.map((m) => (
+            <li key={m}>{m}</li>
+          ))}
+        </ul>
+      )}
+      <button
+        type='button'
+        onClick={onRemove}
+        className='inline-flex items-center gap-1 text-[12px] font-medium text-slate-500 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:text-red-300'
+      >
+        <Trash2 className='h-3 w-3' />
+        Remove lookup
+      </button>
+    </li>
+  )
+}
+
+const isBlank = (r: LookupRow) =>
+  !r.name && !r.collection && !r.filterText && !r.expandText && !r.sort && !r.limit
+
+/** A UI-created template's own lookups: edit, check, save (PUT /:key/lookups). */
+function LookupsEditor({ template }: { template: TemplateDetail }) {
+  const initial = useMemo(() => rowsFromLookups(template.lookups), [template.lookups])
+  const [rows, setRows] = useState<LookupRow[]>(initial)
+  const save = useSaveLookups(template.key)
+  const built = useMemo(() => buildLookups(rows), [rows])
+  const baseline = useMemo(() => JSON.stringify(buildLookups(initial).value), [initial])
+  const dirty = JSON.stringify(built.value) !== baseline
+  const hasErrors = Object.keys(built.errors).length > 0
+  const srvErrors = save.isError ? serverErrors(save.error) : []
+
+  const update = (uid: string, next: LookupRow) =>
+    setRows((rs) => rs.map((r) => (r.uid === uid ? next : r)))
+
+  const doSave = async () => {
+    try {
+      const saved = await save.mutateAsync(built.value)
+      setRows(rowsFromLookups(saved.lookups))
+      toast.success('Lookups saved', {
+        description: 'Previews and pushes read them from now on.'
+      })
+    } catch {
+      /* shown inline */
+    }
+  }
+
+  return (
+    <div className='space-y-2.5' data-payload-lookups-editor>
+      {rows.length === 0 ? (
+        <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+          None yet. Add one when a field needs rows from another collection — e.g. the lines of this
+          record.
+        </p>
+      ) : (
+        <ul className='divide-y divide-slate-100 rounded-md border border-slate-200 dark:divide-border dark:border-border'>
+          {rows.map((r) => (
+            <LookupRowEditor
+              key={r.uid}
+              row={r}
+              errors={
+                isBlank(r)
+                  ? ['Fill in a name and the collection it reads, or remove it.']
+                  : (built.errors[r.uid] ?? [])
+              }
+              onChange={(n) => update(r.uid, n)}
+              onRemove={() => setRows((rs) => rs.filter((x) => x.uid !== r.uid))}
+            />
+          ))}
+        </ul>
+      )}
+      {srvErrors.length > 0 ? (
+        <ul className='space-y-0.5 text-[12px] text-red-700 dark:text-red-300' role='alert'>
+          {srvErrors.map((m) => (
+            <li key={m}>{m}</li>
+          ))}
+        </ul>
+      ) : save.isError ? (
+        <p className='text-[12px] text-red-700 dark:text-red-300' role='alert'>
+          {errorMessage(save.error, 'The lookups were not saved')}
+        </p>
+      ) : null}
+      <div className='flex flex-wrap items-center gap-2'>
+        <button
+          type='button'
+          onClick={() => setRows((rs) => [...rs, emptyLookupRow()])}
+          className={OUTLINE_BTN}
+        >
+          <Plus className='h-3.5 w-3.5 text-slate-400' />
+          Add lookup
+        </button>
+        <span
+          data-tip={
+            !dirty
+              ? 'No changes to save'
+              : hasErrors
+                ? 'Fix the lookups marked in red first'
+                : undefined
+          }
+        >
+          <button
+            type='button'
+            disabled={!dirty || hasErrors || save.isPending}
+            onClick={() => void doSave()}
+            className={STRONG_BTN}
+            data-payload-lookups-save
+          >
+            {save.isPending ? 'Saving…' : 'Save lookups'}
+          </button>
+        </span>
+        {dirty && (
+          <button
+            type='button'
+            onClick={() => {
+              setRows(rowsFromLookups(template.lookups))
+              save.reset()
+            }}
+            className='text-[12px] font-medium text-slate-500 underline underline-offset-2 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+          >
+            Discard changes
+          </button>
+        )}
+      </div>
+      <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+        Lookups aren’t part of the draft: saving changes what every push of this payload reads right
+        away, live version included.
+      </p>
+    </div>
+  )
+}
+
 /**
  * Data tab: what a field path can read — the record, the lookups (from the
  * pipeline action that sends the payload, read-only here, plus the
@@ -107,6 +454,8 @@ export function DataTab({ template }: DataTabProps) {
   const own = describeLookups(template.lookups)
   const codeSenders = template.used_by.filter((u) => u.kind === 'code')
   const hasTransitions = template.used_by.some((u) => u.kind === 'transition')
+  // Built by an extension's code (its scope() documents the variables in the description).
+  const codeBuilt = codeSenders.length > 0 || (!!template.owner && !hasTransitions)
   return (
     <div className='space-y-5 px-5 py-4' data-payload-data-tab>
       <section className='space-y-1.5' aria-label='The record'>
@@ -124,15 +473,19 @@ export function DataTab({ template }: DataTabProps) {
         <h3 className={H}>This payload’s own lookups</h3>
         <p className={P}>
           {template.owner
-            ? `Set by ${template.owner} when it registers this payload. A pipeline action’s lookup with the same name wins.`
-            : 'Lookups every sender of this payload gets. A pipeline action’s lookup with the same name wins.'}
+            ? `Set by ${template.owner} in code when it registers this payload, so they're read-only here. A pipeline action’s lookup with the same name wins.`
+            : 'Extra rows every sender of this payload reads. A pipeline action’s lookup with the same name wins.'}
         </p>
-        <LookupList
-          lines={own}
-          empty={
-            hasTransitions ? 'None — the pipeline action above supplies the extra data.' : 'None.'
-          }
-        />
+        {template.owner ? (
+          <LookupList
+            lines={own}
+            empty={
+              hasTransitions ? 'None — the pipeline action above supplies the extra data.' : 'None.'
+            }
+          />
+        ) : (
+          <LookupsEditor key={template.key} template={template} />
+        )}
       </section>
 
       {codeSenders.length > 0 && (
@@ -153,6 +506,18 @@ export function DataTab({ template }: DataTabProps) {
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {codeBuilt && template.description?.trim() && (
+        <section className='space-y-1.5' aria-label='What the push provides'>
+          <h3 className={H}>What {template.owner ?? 'the extension'} provides</h3>
+          <p
+            className='whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300'
+            data-payload-scope-doc
+          >
+            {template.description}
+          </p>
         </section>
       )}
 

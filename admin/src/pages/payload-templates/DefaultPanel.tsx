@@ -1,11 +1,10 @@
 import { RotateCcw } from 'lucide-react'
 import { useCallback, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
 import { type DraftBody, errorMessage, publishedOf, sameBody, type TemplateDetail } from './api'
 import { usePayloadEditor } from './editor-context'
 import { defaultOf, useResetDefault } from './panel-api'
-import { BodyCompare, OUTLINE_BTN, PanelFrame } from './panel-parts'
+import { BodyCompare, OUTLINE_BTN, PanelFrame, STRONG_BTN } from './panel-parts'
 
 /** What taking the default does to a draft, in words (a mode switch said out loud). */
 export function defaultCopy(owner: string, def: DraftBody, draft: DraftBody): string {
@@ -114,10 +113,7 @@ export function DefaultPanel({
                 type='button'
                 disabled={matches || pending}
                 onClick={() => (needsConfirm && !confirming ? setConfirming(true) : void go())}
-                className={cn(
-                  OUTLINE_BTN,
-                  'border-slate-900 bg-slate-900 text-white hover:bg-slate-800 dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white'
-                )}
+                className={STRONG_BTN}
                 data-payload-default-go
               >
                 <RotateCcw className='h-3.5 w-3.5' />

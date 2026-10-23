@@ -824,4 +824,89 @@ describe('payload template routes', () => {
     expect(res.status).toBe(403)
     expect(res.body).toEqual({ error: 'search_failed', message: 'Forbidden' })
   })
+
+  it('answers the recent-records set and checks exactly the ids given', async () => {
+    const recent = await call('GET', '/mwf-ir-order/recent?limit=20')
+    expect(recent.status).toBe(200)
+    expect(recent.body).toEqual({ ids: ['12', '11'] })
+    expect((await call('GET', '/mwf-ir-order/recent?limit=1')).body).toEqual({ ids: ['12'] })
+
+    const one = await call('POST', '/mwf-ir-order/check', { which: 'draft', ids: ['11'] })
+    expect(one.status).toBe(200)
+    expect(one.body.results).toEqual([
+      expect.objectContaining({ id: '11', label: 'IR-11', ok: true })
+    ])
+    expect(withReadGate).toHaveBeenCalledTimes(1)
+
+    const tooMany = await call('POST', '/mwf-ir-order/check', {
+      which: 'draft',
+      ids: Array.from({ length: 51 }, (_, i) => String(i))
+    })
+    expect(tooMany.status).toBe(400)
+    expect((await call('POST', '/mwf-ir-order/check', { ids: [{}] })).status).toBe(400)
+  })
+
+  it('never answers recent ids for a system collection', async () => {
+    svc.rows.set('sys', tpl({ id: 50, key: 'sys', collection: 'nivaro_users' }))
+    fake.reads.length = 0
+    const res = await call('GET', '/sys/recent')
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('collection_refused')
+    expect(fake.reads).not.toContain('nivaro_users')
+  })
+
+  it('saves a UI-created template’s lookups after checking them', async () => {
+    fake.tables.nivaro_payload_templates = [{ id: 1, key: 'mwf-ir-order', lookups: null }]
+    const lookups = {
+      lines: {
+        collection: 'materials',
+        filter: { workflow: '$id' },
+        sort: '-id',
+        limit: 50,
+        expand: { item: { collection: 'items', fields: ['code'] } }
+      }
+    }
+    const ok = await call('PUT', '/mwf-ir-order/lookups', { lookups })
+    expect(ok.status).toBe(200)
+    expect(ok.body.data.lookups).toEqual(lookups)
+    expect(JSON.parse(String(fake.tables.nivaro_payload_templates[0].lookups))).toEqual(lookups)
+    expect(bustPayloadTemplateCache).toHaveBeenCalled()
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'payload-template-lookups', item: 'mwf-ir-order' })
+    )
+
+    const cleared = await call('PUT', '/mwf-ir-order/lookups', { lookups: null })
+    expect(cleared.status).toBe(200)
+    expect(fake.tables.nivaro_payload_templates[0].lookups).toBeNull()
+  })
+
+  it('refuses bad lookups, system collections and a registrar’s lookups', async () => {
+    fake.tables.nivaro_payload_templates = [{ id: 1, key: 'mwf-ir-order', lookups: null }]
+    const bad = await call('PUT', '/mwf-ir-order/lookups', {
+      lookups: {
+        a: { collection: 'nivaro_users' },
+        b: { collection: 'items', expand: { u: { collection: 'directus_users', fields: ['x'] } } },
+        c: { collection: 'items', limit: 0, sort: 'id; drop', extra: 1 },
+        '1x': { collection: 'items' }
+      }
+    })
+    expect(bad.status).toBe(400)
+    expect(bad.body.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^a\.collection: 'nivaro_users' is a system collection/),
+        expect.stringMatching(/^b\.expand\.u\.collection: 'directus_users' is a system/),
+        'c.extra is not a lookup setting',
+        expect.stringMatching(/^c\.limit/),
+        expect.stringMatching(/^c\.sort/),
+        expect.stringMatching(/^'1x'/)
+      ])
+    )
+    expect(fake.tables.nivaro_payload_templates[0].lookups).toBeNull()
+    expect((await call('PUT', '/mwf-ir-order/lookups', {})).status).toBe(400)
+
+    const owned = await call('PUT', '/fusion-transfer-order/lookups', { lookups: null })
+    expect(owned.status).toBe(409)
+    expect(owned.body.error).toBe('registered')
+    expect((await call('PUT', '/nope/lookups', { lookups: null })).status).toBe(404)
+  })
 })

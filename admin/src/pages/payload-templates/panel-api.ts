@@ -1,4 +1,5 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import {
   type DraftBody,
@@ -51,8 +52,8 @@ export const CHECK_LIMIT = 20
 export const panelKeys = {
   versions: (key: string) => ['payload-templates', 'versions', key] as const,
   version: (key: string, v: number) => ['payload-templates', 'version', key, v] as const,
-  check: (key: string, which: 'draft' | 'published', rev: number) =>
-    ['payload-templates', 'check', key, which, rev] as const,
+  check: (key: string, which: 'draft' | 'published', run: string) =>
+    ['payload-templates', 'check', key, which, run] as const,
   people: (ids: string[]) => ['payload-templates', 'people', ids] as const,
   pipeline: (id: string) => ['payload-templates', 'pipeline', id] as const
 }
@@ -87,35 +88,89 @@ export function versionBody(v: Pick<VersionDetail, 'mode' | 'body'>): DraftBody 
   return toDraftBody(v.mode, v.body)
 }
 
-/** Render the recent records through the saved draft (or live). `rev` = the saved draft it checks. */
-export function useCheck(
+export const CHECK_CHUNK = 4
+
+export interface ChunkedCheck {
+  status: 'idle' | 'running' | 'done' | 'error'
+  /** Records rendered so far / records in the set (null until the set is known). */
+  done: number
+  total: number | null
+  results: CheckResult[]
+  error: unknown
+}
+
+const IDLE: ChunkedCheck = { status: 'idle', done: 0, total: null, results: [], error: null }
+
+function normResults(raw: unknown): CheckResult[] {
+  return (Array.isArray(raw) ? raw : []).map((x: CheckResult) => ({
+    ...x,
+    id: String(x.id),
+    label: x.label ? String(x.label) : String(x.id),
+    problems: Array.isArray(x.problems) ? x.problems : [],
+    skipped: x.skipped ?? null
+  }))
+}
+
+/**
+ * Check recent records in chunks, so the panel can say "12 / 20": GET /recent for the set, then
+ * POST /check with CHECK_CHUNK ids at a time. `run` names one run (e.g. `<rev>:<n>`); a new value
+ * starts over, null waits. A finished run is kept in the query cache under (key, which, run), so
+ * Check and Publish reuse it; unmount or a new run aborts the requests in flight.
+ */
+export function useChunkedCheck(
   key: string,
   which: 'draft' | 'published',
-  rev: number | null,
-  enabled = true
-) {
-  return useQuery({
-    queryKey: panelKeys.check(key, which, rev ?? -1),
-    queryFn: ({ signal }) =>
-      api
-        .post<{ results: CheckResult[] }>(
-          `/payload-templates/${enc(key)}/check`,
-          { which, limit: CHECK_LIMIT },
-          { signal }
+  run: string | null
+): ChunkedCheck {
+  const qc = useQueryClient()
+  const [state, setState] = useState<ChunkedCheck>(IDLE)
+  useEffect(() => {
+    if (!key || run == null) return
+    const cacheKey = panelKeys.check(key, which, run)
+    const cached = qc.getQueryData<CheckResult[]>(cacheKey)
+    if (cached) {
+      setState({
+        status: 'done',
+        done: cached.length,
+        total: cached.length,
+        results: cached,
+        error: null
+      })
+      return
+    }
+    const ac = new AbortController()
+    setState({ ...IDLE, status: 'running' })
+    void (async () => {
+      try {
+        const r = await api.get<{ ids: Array<string | number> }>(
+          `/payload-templates/${enc(key)}/recent`,
+          { params: { limit: CHECK_LIMIT }, signal: ac.signal }
         )
-        .then((r) =>
-          (r.data.results ?? []).map((x) => ({
-            ...x,
-            id: String(x.id),
-            label: x.label ? String(x.label) : String(x.id),
-            problems: Array.isArray(x.problems) ? x.problems : [],
-            skipped: x.skipped ?? null
-          }))
-        ),
-    enabled: !!key && rev != null && enabled,
-    staleTime: 60_000,
-    retry: false
-  })
+        const ids = (r.data.ids ?? []).map(String)
+        setState((s) => ({ ...s, total: ids.length }))
+        let all: CheckResult[] = []
+        for (let i = 0; i < ids.length; i += CHECK_CHUNK) {
+          const res = await api.post<{ results: CheckResult[] }>(
+            `/payload-templates/${enc(key)}/check`,
+            { which, ids: ids.slice(i, i + CHECK_CHUNK) },
+            { signal: ac.signal }
+          )
+          if (ac.signal.aborted) return
+          all = [...all, ...normResults(res.data.results)]
+          const now = all
+          setState((s) => ({ ...s, done: now.length, results: now }))
+        }
+        if (ac.signal.aborted) return
+        qc.setQueryData(cacheKey, all)
+        setState({ status: 'done', done: all.length, total: ids.length, results: all, error: null })
+      } catch (e) {
+        if (ac.signal.aborted) return
+        setState((s) => ({ ...s, status: 'error', error: e }))
+      }
+    })()
+    return () => ac.abort()
+  }, [key, which, run, qc])
+  return state
 }
 
 function invalidateTemplate(qc: ReturnType<typeof useQueryClient>, key: string) {
@@ -160,12 +215,32 @@ export function useResetDefault(key: string) {
 export function useConvert(key: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (args: { ids?: string[]; base_rev: number }) =>
+    mutationFn: (args: { base_rev: number }) =>
       api
         .post<{ rev?: number; liquid?: string }>(`/payload-templates/${enc(key)}/convert`, args)
         .then((r) => r.data),
     onSuccess: () => invalidateTemplate(qc, key)
   })
+}
+
+/** The records a Convert left out (their scope could not be built), from its 422. */
+export function convertSkipped(e: unknown): Array<{ id: string; message: string }> {
+  const d = (e as { response?: { data?: { skipped?: unknown } } }).response?.data?.skipped
+  return Array.isArray(d)
+    ? d.map((x: { id?: unknown; message?: unknown }) => ({
+        id: String(x?.id ?? ''),
+        message: toText(x?.message ?? '')
+      }))
+    : []
+}
+
+/** The recent-records set Check and Convert use (registrar recent() or the newest records). */
+export function fetchRecentIds(key: string, limit = CHECK_LIMIT): Promise<string[]> {
+  return api
+    .get<{ ids: Array<string | number> }>(`/payload-templates/${enc(key)}/recent`, {
+      params: { limit }
+    })
+    .then((r) => (r.data.ids ?? []).map(String))
 }
 
 /** The diffs a 422 `not_equal` from Convert carries; null for any other error. */
@@ -234,9 +309,75 @@ export function usePipeline(id: string | null | undefined) {
 
 /** The file default a registrar ships, when the route sends it. */
 export function defaultOf(t: TemplateDetail): DraftBody | null {
-  const x = t as TemplateDetail & { has_default?: boolean; default_mode?: TemplateMode }
-  if (x.default_body == null) return null
-  return toDraftBody(x.default_mode ?? 'map', x.default_body)
+  if (t.default_body == null) return null
+  if (t.default_mode) return toDraftBody(t.default_mode, t.default_body)
+  // An older server without default_mode: a body that is not a field map is Liquid.
+  let parsed: unknown = t.default_body
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed)
+    } catch {
+      parsed = null
+    }
+  }
+  const isMap =
+    !!parsed && typeof parsed === 'object' && Array.isArray((parsed as { fields?: unknown }).fields)
+  return toDraftBody(isMap ? 'map' : 'code', t.default_body)
+}
+
+/** Business collections a lookup may read (system collections never; the server re-checks). */
+export function useLookupCollections(enabled = true) {
+  return useQuery({
+    queryKey: ['payload-templates', 'collections'],
+    queryFn: () =>
+      api.get<{ data: Array<{ collection: string }> }>('/collections').then((r) =>
+        (r.data.data ?? [])
+          .map((c) => String(c.collection))
+          .filter((c) => !/^(nivaro_|directus_)/i.test(c))
+          .sort()
+      ),
+    enabled,
+    staleTime: 5 * 60_000
+  })
+}
+
+export function useSaveLookups(key: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (lookups: Record<string, unknown> | null) =>
+      api
+        .put<{ data: { lookups: Record<string, unknown> | null } }>(
+          `/payload-templates/${enc(key)}/lookups`,
+          { lookups }
+        )
+        .then((r) => r.data.data),
+    onSuccess: (data) => {
+      qc.setQueryData<{ data: TemplateDetail; warning: string | null }>(
+        payloadKeys.detail(key),
+        (old) => (old ? { ...old, data: { ...old.data, lookups: data.lookups } } : old)
+      )
+      // Previews read the lookups: render again.
+      void qc.invalidateQueries({ queryKey: ['payload-templates', 'preview', key] })
+    }
+  })
+}
+
+/** Server text that may arrive as something other than a string, rendered safely. */
+export function toText(v: unknown): string {
+  if (typeof v === 'string') return v
+  if (v && typeof v === 'object' && typeof (v as { message?: unknown }).message === 'string')
+    return (v as { message: string }).message
+  try {
+    return JSON.stringify(v) ?? String(v)
+  } catch {
+    return String(v)
+  }
+}
+
+/** The list a 400 carried (`errors[]`), each rendered as text. */
+export function serverErrors(e: unknown): string[] {
+  const list = (e as { response?: { data?: { errors?: unknown } } })?.response?.data?.errors
+  return Array.isArray(list) ? list.map(toText) : []
 }
 
 /**

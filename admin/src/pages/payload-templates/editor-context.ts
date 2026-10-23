@@ -14,6 +14,10 @@ export interface PayloadEditorCtx {
   adoptServerDraft: () => Promise<void>
   /** A 409 seen outside autosave (publish, convert): show the conflict banner. */
   raiseConflict: (current: TemplateDetail) => void
+  /** This editor published `version` of template `key`: later saves are based on it. */
+  markPublished: (key: string, version: number) => void
+  /** A 409 stands (the banner is up); saving is blocked until Reload or Keep my draft. */
+  conflicted: boolean
   /** The last draft save the server refused, with validateSpec's errors when it sent them. */
   saveError: { message: string; errors: string[] } | null
   /** The draft_rev the editor holds, null until the template loads. */
@@ -32,6 +36,8 @@ export const PayloadEditorContext = createContext<PayloadEditorCtx>({
   discardPending: noop,
   adoptServerDraft: noop,
   raiseConflict: () => {},
+  markPublished: () => {},
+  conflicted: false,
   saveError: null,
   rev: null,
   getRev: () => null,

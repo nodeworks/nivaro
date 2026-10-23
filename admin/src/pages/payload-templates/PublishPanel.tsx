@@ -10,11 +10,12 @@ import {
   summarize
 } from './CheckRecentPanel'
 import { usePayloadEditor } from './editor-context'
-import { useCheck, usePublish } from './panel-api'
+import { useChunkedCheck, usePublish } from './panel-api'
 import {
   BodyCompare,
   EditWarningNote,
   InlineError,
+  OUTLINE_BTN,
   PanelFrame,
   PRIMARY_BTN,
   SECTION_LABEL
@@ -59,18 +60,30 @@ export function PublishPanel({
   const live = publishedOf(template)
 
   // Send any waiting edit now, so the check below covers what will be published.
+  const [mountSave, setMountSave] = useState<'pending' | 'ok' | 'failed'>('pending')
   useEffect(() => {
-    void ctxRef.current.saveNow()
+    void ctxRef.current.saveNow().then((ok) => setMountSave(ok ? 'ok' : 'failed'))
   }, [])
   // The saved draft the check covers: follows each save, never an edit still in flight.
   const [checkRev, setCheckRev] = useState<number | null>(null)
   useEffect(() => {
     if (!ctx.saving && ctx.rev != null) setCheckRev(ctx.rev)
   }, [ctx.saving, ctx.rev])
-  const check = useCheck(template.key, 'draft', checkRev, !nothingToPublish)
-  const checking = ctx.saving || check.isFetching || (checkRev == null && !nothingToPublish)
-  const results = check.data ?? []
+  const [retryN, setRetryN] = useState(0)
+  const check = useChunkedCheck(
+    template.key,
+    'draft',
+    checkRev != null && !nothingToPublish ? `${checkRev}:${retryN}` : null
+  )
+  const checking =
+    ctx.saving || check.status === 'running' || (checkRev == null && !nothingToPublish)
+  const results = check.results
   const s = summarize(results)
+  // Failing records ask for a second, explicit step; a new check asks again.
+  const [anyway, setAnyway] = useState(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset per checked draft
+  useEffect(() => setAnyway(false), [checkRev])
+  const failing = check.status === 'done' ? s.failed : 0
 
   const transitions = template.used_by.filter((u) => u.kind === 'transition').length
   const codePushes = template.used_by.filter((u) => u.kind === 'code').length
@@ -87,8 +100,12 @@ export function PublishPanel({
         ? 'Waiting for the record check'
         : undefined
 
-  const doPublish = async () => {
+  const doPublish = async (confirmed = false) => {
     if (blockedTip || busy) return
+    if (failing > 0 && !confirmed) {
+      setAnyway(true)
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -96,12 +113,15 @@ export function PublishPanel({
       if (!saved) {
         const why = ctxRef.current.saveError?.message
         setError(
-          `Your latest edit didn't save${why ? ` (${why})` : ''}. Fix it, or undo it, before publishing.`
+          ctxRef.current.conflicted
+            ? 'Saving is paused by the conflict above. Reload, or keep your draft, before publishing.'
+            : `Your latest edit didn't save${why ? ` (${why})` : ''}. Fix it, or undo it, before publishing.`
         )
         return
       }
       const rev = ctxRef.current.getRev()
       const r = await publish.mutateAsync({ base_rev: rev ?? 0, note: note.trim() })
+      ctxRef.current.markPublished(template.key, r.version)
       toast.success(`Published v${r.version} of ${template.label}`, {
         description: 'Every push that uses this payload sends it from now on.'
       })
@@ -132,7 +152,7 @@ export function PublishPanel({
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault()
-              void doPublish()
+              void doPublish(anyway)
             }
           }}
           placeholder='What changed and why — e.g. "Send the PO number to Fusion as sourceTrxReference"'
@@ -146,24 +166,60 @@ export function PublishPanel({
           {error}
         </p>
       )}
-      <div className='flex flex-wrap items-center gap-2'>
-        <span data-tip={blockedTip}>
-          <button
-            type='button'
-            disabled={!!blockedTip || busy}
-            onClick={() => void doPublish()}
-            className={PRIMARY_BTN}
-            data-payload-publish-confirm
-          >
-            {busy ? 'Publishing…' : `Publish v${next}`}
-          </button>
-        </span>
-        {!nothingToPublish && s.failed > 0 && !checking && (
-          <span className='text-[12px] text-red-700 dark:text-red-300'>
-            {s.failed} of {s.total} recent records would fail with this version
+      {anyway && failing > 0 ? (
+        <div
+          className='space-y-2 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 dark:border-red-500/30 dark:bg-red-500/10'
+          data-payload-publish-anyway
+        >
+          <p className='text-[12.5px] text-red-900 dark:text-red-100'>
+            <span className='font-medium'>
+              {failing} of {s.total} recent records would fail with v{next}.
+            </span>{' '}
+            A push for a record like these is refused before anything is sent and recorded as a
+            failed submission.
+          </p>
+          <div className='flex flex-wrap items-center gap-2'>
+            <span data-tip={blockedTip}>
+              <button
+                type='button'
+                disabled={!!blockedTip || busy}
+                onClick={() => void doPublish(true)}
+                className={PRIMARY_BTN}
+                data-payload-publish-anyway-go
+              >
+                {busy ? 'Publishing…' : `Publish anyway — ${plural(failing, 'record')} would fail`}
+              </button>
+            </span>
+            <button
+              type='button'
+              onClick={() => setAnyway(false)}
+              disabled={busy}
+              className={OUTLINE_BTN}
+            >
+              Keep editing
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className='flex flex-wrap items-center gap-2'>
+          <span data-tip={blockedTip}>
+            <button
+              type='button'
+              disabled={!!blockedTip || busy}
+              onClick={() => void doPublish()}
+              className={PRIMARY_BTN}
+              data-payload-publish-confirm
+            >
+              {busy ? 'Publishing…' : `Publish v${next}`}
+            </button>
           </span>
-        )}
-      </div>
+          {!nothingToPublish && failing > 0 && (
+            <span className='text-[12px] text-red-700 dark:text-red-300'>
+              {failing} of {s.total} recent records would fail with this version
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 
@@ -187,21 +243,39 @@ export function PublishPanel({
           </p>
         )}
 
+        {!nothingToPublish && mountSave === 'failed' && (
+          <p
+            className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+            role='status'
+            data-payload-publish-unsaved
+          >
+            {ctx.conflicted
+              ? 'Saving is paused by the conflict above, so the check below covers the last saved draft. Reload, or keep your draft, before publishing.'
+              : `Your latest edit didn't save${ctx.saveError ? ` (${ctx.saveError.message})` : ''}, so the check below covers the last saved draft. Fix it before publishing.`}
+          </p>
+        )}
+
         {!nothingToPublish && (
           <section aria-label='Recent records' className='space-y-2'>
             <h3 className={SECTION_LABEL}>Recent records with this draft</h3>
-            {checking && !check.data ? (
-              <CheckProgress what='your draft' />
-            ) : check.isError ? (
+            {checking && (
+              <CheckProgress
+                what='your draft'
+                done={check.done}
+                total={checkRev == null || ctx.saving ? null : check.total}
+              />
+            )}
+            {check.status === 'error' ? (
               <InlineError
                 title="The recent records couldn't be checked. You can still publish."
                 error={check.error}
-                onRetry={() => void check.refetch()}
+                onRetry={() => setRetryN((n) => n + 1)}
               />
             ) : (
               <>
-                {checking && <CheckProgress what='your latest draft' />}
-                <CheckSummary results={results} collection={template.collection} />
+                {check.status === 'done' && (
+                  <CheckSummary results={results} collection={template.collection} />
+                )}
                 <CheckResultsList
                   results={results}
                   collection={template.collection}

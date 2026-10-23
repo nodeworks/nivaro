@@ -1,7 +1,6 @@
 import { ArrowLeft, ChevronRight, RotateCcw } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
 import {
   type DraftBody,
   errorMessage,
@@ -26,7 +25,9 @@ import {
   InlineError,
   OUTLINE_BTN,
   PanelFrame,
-  SECTION_LABEL
+  SECTION_LABEL,
+  Segmented,
+  STRONG_BTN
 } from './panel-parts'
 
 /** What restoring `v` does to a draft in `draftMode`, in words (mode switches said out loud). */
@@ -179,39 +180,19 @@ function VersionDetailView({
         <>
           <div className='flex flex-wrap items-center gap-2'>
             <span className={SECTION_LABEL}>Compare with</span>
-            <div
-              className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'
-              role='tablist'
-              aria-label='Compare with'
-            >
-              {(['draft', 'live'] as const).map((a) => {
-                const off = a === 'live' && (!live || isLive)
-                return (
-                  <span
-                    key={a}
-                    data-tip={
-                      off ? (isLive ? 'This is the live version' : 'Nothing is live') : undefined
-                    }
-                  >
-                    <button
-                      type='button'
-                      role='tab'
-                      aria-selected={against === a}
-                      disabled={off}
-                      onClick={() => setAgainst(a)}
-                      className={cn(
-                        'rounded px-2.5 py-1 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-40',
-                        against === a
-                          ? 'bg-slate-100 text-slate-900 dark:bg-muted dark:text-foreground'
-                          : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
-                      )}
-                    >
-                      {a === 'draft' ? 'Your draft' : `Live v${template.published_version ?? ''}`}
-                    </button>
-                  </span>
-                )
-              })}
-            </div>
+            <Segmented
+              legend='Compare with'
+              value={against}
+              onChange={setAgainst}
+              options={[
+                { value: 'draft', label: 'Your draft' },
+                {
+                  value: 'live',
+                  label: `Live v${template.published_version ?? ''}`,
+                  off: !live ? 'Nothing is live' : isLive ? 'This is the live version' : undefined
+                }
+              ]}
+            />
           </div>
           <BodyCompare
             templateKey={template.key}
@@ -254,10 +235,7 @@ function VersionDetailView({
                   type='button'
                   onClick={() => void doRestore()}
                   disabled={restore.isPending}
-                  className={cn(
-                    OUTLINE_BTN,
-                    'border-slate-900 bg-slate-900 text-white hover:bg-slate-800 dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white'
-                  )}
+                  className={STRONG_BTN}
                   data-payload-restore-go
                 >
                   <RotateCcw className='h-3.5 w-3.5' />
