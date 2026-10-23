@@ -4,6 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // Mock the requireAdmin middleware so routes don't need real auth in these
 // tests, and stamp req.user so logActivity has something to read.
 vi.mock('../../../middleware/authenticate.js', () => ({
+  // GET signs in with authenticate and reads the whole row only for an admin;
+  // these tests exercise the admin view (ai-settings-public.test.ts covers the rest).
+  authenticate: vi.fn(async (req: { user?: { id: string }; isAdmin?: boolean }) => {
+    req.user = { id: 'test-admin' }
+    req.isAdmin = true
+  }),
   requireAdmin: vi.fn(async (req: { user?: { id: string } }) => {
     req.user = { id: 'test-admin' }
   })

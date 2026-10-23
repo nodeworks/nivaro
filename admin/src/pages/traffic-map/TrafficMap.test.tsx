@@ -45,6 +45,14 @@ import { SummaryStrip } from './SummaryStrip'
 import TrafficMap from './TrafficMap'
 
 const T0 = 1_800_000_000
+
+// The page writes its view (selection, window, filters) into the address bar 250 ms after a
+// change (#1166) and reads it back on mount. jsdom keeps ONE location for the whole file, so a
+// test that ran past those 250 ms (any test on a loaded machine, e.g. the full suite) handed its
+// selection to the next test's mount: 'SQL Server' selected instead of the busiest entity.
+beforeEach(() => {
+  window.history.replaceState(null, '', '/')
+})
 const snapshot = {
   instance: 'test-node',
   node_scope: 'this API process only',
@@ -704,6 +712,8 @@ describe('inspector history — down nodes and live', () => {
     await waitFor(() =>
       expect(screen.getByTestId('tm-inspector-name').textContent).toBe('SQL Server')
     )
+    // #1166: the selection reaches the address bar (and the next test must not inherit it)
+    await waitFor(() => expect(window.location.search).toContain('sel=down%3Adb'))
     expect(historyCalls()).toBe(0)
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: '6h' }))

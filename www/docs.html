@@ -573,6 +573,7 @@
           <a class="docs-nav-item" data-section="health-dashboard" href="#health-dashboard">Health Dashboard</a>
           <a class="docs-nav-item" data-section="realtime-pipeline" href="#realtime-pipeline">Realtime Event Pipeline</a>
           <a class="docs-nav-item" data-section="realtime-load-test" href="#realtime-load-test">Realtime Load Test</a>
+          <a class="docs-nav-item" data-section="realtime-presence-load" href="#realtime-presence-load">Presence Load &amp; Stall Alerts</a>
           <a class="docs-nav-item" data-section="db-health" href="#db-health">DB &amp; Runtime Health</a>
           <a class="docs-nav-item" data-section="db-tuning" href="#db-tuning">Database Tuning</a>
           <a class="docs-nav-item" data-section="sql-checks" href="#sql-checks">SQL Checks</a>
@@ -18054,7 +18055,8 @@ GET|POST /api/traffic-map/debug-windows            → debug windows (DELETE /:i
 GET|POST /api/traffic-map/temp-caches              → temporary caches (DELETE /:id stops one)
 GET|PUT  /api/traffic-map/detectors                → detector settings for this environment
 GET  /api/traffic-map/ext-lenses[/:key?window=]    → extension lenses and their data
-socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per second while watched</code></pre>
+socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per API process per second while watched
+socket  admin:join {room: 'traffic-map', frames: 'batch'} → one 'traffic-map:batch' per second: every process's frames, unchanged fields left out (same / ext_same); emit 'traffic-map:resync' for a full one</code></pre>
           <!-- /SYNC:traffic-map-platform -->
         </div>
 
@@ -18524,6 +18526,44 @@ cd api &amp;&amp; npx tsx ../scripts/realtime-load-test.mts --api-pid &lt;pid&gt
               <tr><td>cleanup</td><td>Whether the throwaway table, metadata rows and user are gone</td></tr></tr></tbody>
           </table></div>
           <!-- /SYNC:realtime-load-test -->
+        </div>
+
+        <div class="doc-section" id="s-realtime-presence-load" data-toc='[{"id":"realtime-presence-load","label":"Presence Load &amp; Stall Alerts"},{"id":"presence-load-script","label":"The presence load script"},{"id":"presence-load-alerts","label":"Stall, rate-jump and per-node delivery monitors"}]'>
+          <!-- SYNC:realtime-presence-load -->
+          <h1 class="doc-h1" id="realtime-presence-load">Presence Load &amp; Stall Alerts</h1>
+          <p class="doc-p">A busy morning can stall the API without a single error: every open tab refetching the online list on every presence event keeps each process's JavaScript thread at 100%, the event loop lags by seconds, socket events arrive late and requests queue. Two tools cover it: a repeatable load script shaped like real signed-in browsers, and three monitors that fire while it happens.</p>
+          <h2 class="doc-h2" id="presence-load-script">The presence load script</h2>
+          <p class="doc-p"><code class="doc-code">scripts/realtime-load.mjs</code> opens N signed-in browser sessions against a target API. Each person keeps one tab, or two (<code class="doc-code">--two-tab-share</code>, default 0.6: 250 people ≈ 400 sockets), and each tab behaves like the app today: its own socket (signed in with a one-time <code class="doc-code">ws-token</code>, in the <code class="doc-code">user_presence</code> collection room), a presence ping every 15 s, a presence-row heartbeat every 25 s, an idle flip now and then, an occasional reconnect, and a refetch of <code class="doc-code">/api/presence/online</code> on every presence event (joining a fetch already in flight). It never creates users or business data: sessions sign in with the tokens you give it, and the only writes are the ones an open tab makes about itself.</p>
+          <pre class="doc-pre"><code>node scripts/realtime-load.mjs --target https://staging.example.com \
+  --allow-shared-host staging.example.com \
+  --tokens-file ~/load-tokens.txt --admin-token "$ADMIN_BEARER" \
+  --people 250 --ramp-minutes 10 --steps 5 --hold-minutes 5 --out rt-250.json
+
+# what it would do, without opening anything
+node scripts/realtime-load.mjs --target http://127.0.0.1:3099 --people 250 --dry-run</code></pre>
+          <ul class="doc-ul">
+            <li>**Tokens**: <code class="doc-code">--tokens a,b</code>, <code class="doc-code">--tokens-file</code> (one per line), <code class="doc-code">REALTIME_LOAD_TOKENS</code>, or one <code class="doc-code">--api-key</code>. View-as tokens (<code class="doc-code">nvm_…</code>) make every session a different person; one API key looks like one person with many tabs. Tokens are reused round-robin when there are fewer than people.</li>
+            <li>**Ramp**: <code class="doc-code">--start 0 --people 250 --ramp-minutes 10 --steps 5</code> adds people in five steps and prints one row per step (people, sockets, req/s, online-list p95, delivery p95 and share within 2 s, missed events, server event-loop lag, pool used and waiting, the generator's own lag), then holds the full load for <code class="doc-code">--hold-minutes</code>. The row where lag climbs is the capacity edge.</li>
+            <li>**Server figures** come from <code class="doc-code">GET /api/ops-runtime/runtime</code> (administrator bearer: <code class="doc-code">--admin-token</code>), sampled twice every 5 s so a load balancer spreads them across processes; each process is reported by host.</li>
+            <li>**Delivery latency** is measured from each presence write (idle flip, heartbeat) to every tab that receives its event; a coalesced event delivers several writes at once. Sampled events are acknowledged like real clients, so the delivery SLO sees the run too.</li>
+            <li>**Client fixes**: <code class="doc-code">--refetch-debounce-ms 2000</code> models a debounced online list, <code class="doc-code">--refetch off</code> none; compare runs to size a fix before shipping it.</li>
+            <li>**Refusals**: no default target; a host whose name says prod or production is always refused; this checkout's <code class="doc-code">PUBLIC_URL</code> / <code class="doc-code">ADMIN_URL</code> / <code class="doc-code">DB_HOST</code> and <code class="doc-code">TRAFFIC_REPLAY_SHARED_HOSTS</code> need <code class="doc-code">--allow-shared-host &lt;host&gt;</code> naming them exactly; over 300 people needs <code class="doc-code">--confirm-scale &lt;host&gt;</code>.</li>
+            <li>One machine holds 400 sockets comfortably. If the generator lag column passes ~200 ms, its own latency figures are suspect: lower <code class="doc-code">--max-inflight</code> or split the run across two machines.</li>
+          </ul>
+          <h2 class="doc-h2" id="presence-load-alerts">Stall, rate-jump and per-node delivery monitors</h2>
+          <p class="doc-p">Three monitor types on Health → Monitors (**New monitor**). They are off until an administrator creates one, run every 5 minutes with the other monitors, and a failing flip raises an issue and notifies the creator and subscribers. Every API process publishes its own figures to Redis every 30 seconds, so the process that runs the monitors judges all of them — including the web processes that serve the traffic.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Monitor</th><th>Fails when</th><th>Defaults</th></tr></thead>
+            <tbody><tr><tr><td>Event-loop stall</td><td>Any API process peaked above the lag limit in that many of 5 consecutive minutes (searched over the last 9 minutes, so a stall between two runs is caught). A lone GC pause never fires.</td><td>1000 ms, 3 of 5 minutes</td></tr>
+              <tr><td>Route rate jump</td><td>A route (all processes together) runs at that many times its own trailing hour and above the floor for 2 minutes in a row, while its share of all requests at least doubles. The share rule keeps a morning sign-in wave quiet: everything grows together. An optional ceiling fails any route above it.</td><td>5×, 20 req/s, share ×2 — sized for ~250 people (≈120 req/s in total)</td></tr>
+              <tr><td>Delivery by node</td><td>Any process delivers fewer than the target share of realtime events within the SLO time over the last 15 minutes (probe and real browsers' acknowledgements). The overall SLO can look fine while one process lags.</td><td>The SLO targets (95% within 2 s), 20 samples minimum</td></tr></tr></tbody>
+          </table></div>
+          <ul class="doc-ul">
+            <li>Config keys: event-loop <code class="doc-code">threshold_ms</code>, <code class="doc-code">breach_minutes</code>, <code class="doc-code">window_minutes</code>; route jump <code class="doc-code">factor</code>, <code class="doc-code">min_rps</code>, <code class="doc-code">sustain_minutes</code>, <code class="doc-code">share_factor</code> (0 = off), <code class="doc-code">min_history_minutes</code> (processes younger than this stay out of the comparison), <code class="doc-code">ceiling_rps</code>; delivery <code class="doc-code">window_minutes</code>, <code class="doc-code">min_samples</code>, <code class="doc-code">target_ms</code>, <code class="doc-code">good_pct</code>.</li>
+            <li>Route templates come from the route definition (<code class="doc-code">GET /api/items/:collection</code>), never raw ids.</li>
+            <li>Cloud mode: all three answer "unknown" — process figures are shared by every tenant on a process and are not kept per tenant.</li>
+          </ul>
+          <!-- /SYNC:realtime-presence-load -->
         </div>
 
         <div class="doc-section" id="s-db-health" data-toc='[{"id":"db-health","label":"Database"},{"id":"config-since","label":"Environment Config — what drifted since"},{"id":"config-restore","label":"Environment Config — restore points"},{"id":"layout-drift","label":"Layout drift"},{"id":"custom-query-dependents","label":"Custom queries — used by, and procedure shape"},{"id":"dead-columns","label":"Dead columns"},{"id":"proc-transaction-guards","label":"Open transactions on the pool"},{"id":"erp-payload-retention","label":"ERP push payload retention"},{"id":"cache-health","label":"Cache health (custom queries)"},{"id":"cache-warm","label":"Cache warm after boot and before business hours"},{"id":"background-pool","label":"Background connection pool"}]'>
