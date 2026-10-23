@@ -1011,7 +1011,14 @@ export function QueryTable({
           ref={setScrollEl}
           className={sticky ? 'min-h-0 flex-1 overflow-auto' : 'overflow-x-auto'}
         >
-          <table className='w-full text-[12px]'>
+          {/* Separate borders, drawn per cell: a collapsed row border is
+              painted by the table, and on fractional row heights a pinned
+              (sticky, composited) cell covers it, so some rows lost their line
+              in the pinned column. Header cells already carry their own
+              borders; body and totals rows pass their colour down. The last
+              body row drops its line above the totals row so the two don't
+              stack into a double rule. */}
+          <table className='w-full border-separate border-spacing-0 text-[12px] [&>tbody>tr.border-b>td]:border-b [&>tbody>tr.border-b>td]:[border-bottom-color:inherit] [&>tbody:has(+tfoot)>tr:last-child>td]:border-b-0 [&>tfoot>tr.border-t>td]:border-t [&>tfoot>tr.border-t>td]:[border-top-color:inherit]'>
             <thead>
               {hasGroups ? (
                 <>

@@ -7896,7 +7896,13 @@ export function CollectionBrowserView({
             ) : (
               <table
                 data-copy-cells=''
-                className={`w-full ${density === 'comfortable' ? '[&_tbody_td]:py-2.5 [&_tbody_tr]:h-11 [&_tbody]:text-[12.5px]' : ''}`}
+                // Separate borders, drawn per cell: a collapsed row border is
+                // painted by the table, and on fractional row heights a pinned
+                // (sticky, composited) cell covers it, so some rows lost their
+                // line in the pinned columns. Each row's border-b class still
+                // picks the colour; the cells inherit it. The last body row
+                // drops its line above the totals row so the two don't stack.
+                className={`w-full border-separate border-spacing-0 [&>thead>tr.border-b>th]:border-b [&>thead>tr.border-b>th]:[border-bottom-color:inherit] [&>tbody>tr.border-b>td]:border-b [&>tbody>tr.border-b>td]:[border-bottom-color:inherit] [&>tbody:has(+tfoot)>tr:last-child>td]:border-b-0 [&>tfoot>tr>td]:border-t-2 [&>tfoot>tr>td]:[border-top-color:inherit] ${density === 'comfortable' ? '[&_tbody_td]:py-2.5 [&_tbody_tr]:h-11 [&_tbody]:text-[12.5px]' : ''}`}
                 style={{ fontVariantNumeric: 'tabular-nums' }}
               >
                 <thead>
