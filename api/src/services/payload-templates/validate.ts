@@ -57,6 +57,16 @@ function checkRuleList(rules: unknown, at: string, errors: string[]): void {
   })
 }
 
+function usesSecret(v: unknown): boolean {
+  if (!isObj(v)) return false
+  if (v.source === 'secret') return true
+  if (v.source !== 'switch') return false
+  return (
+    (Array.isArray(v.cases) && v.cases.some((c) => isObj(c) && usesSecret(c.value))) ||
+    usesSecret(v.else)
+  )
+}
+
 function checkValueSpec(v: unknown, at: string, errors: string[]): void {
   if (!isObj(v)) {
     errors.push(`${at} must be an object`)
@@ -142,6 +152,9 @@ function checkField(f: unknown, at: string, ids: Set<string>, errors: string[]):
     errors.push(`${at}.include must be always, not_empty or { when: [...] }`)
   }
   if (f.value !== undefined) checkValueSpec(f.value, `${at}.value`, errors)
+  if (f.type !== 'text' && usesSecret(f.value)) {
+    errors.push(`${at}.value: A secret can only be sent as text`)
+  }
   if (f.children !== undefined) {
     if (!Array.isArray(f.children)) errors.push(`${at}.children must be a list`)
     else {

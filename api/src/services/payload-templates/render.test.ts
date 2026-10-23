@@ -31,6 +31,18 @@ describe('renderBody code mode', () => {
     expect(r.problems[0].message).toMatch(/JSON/i)
   })
 
+  it('code mode: a secret is not a number (| plus: 0)', async () => {
+    const r = await renderBody(
+      'code',
+      '{"n": {{ secrets.token | plus: 0 }}}',
+      {},
+      {
+        secretNames: ['token']
+      }
+    )
+    expect(r.body).toEqual({ n: 0 }) // the token is not numeric: no random big number
+  })
+
   it('code mode secrets.token emits the placeholder', async () => {
     const r = await renderBody(
       'code',

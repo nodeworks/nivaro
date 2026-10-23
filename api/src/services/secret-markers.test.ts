@@ -23,13 +23,15 @@ describe('neutralizeSecretMarkers', () => {
       x = ph
     }
     const d = new Date(5)
+    const set = new Set([ph])
     const m = new Map([['a', ph]])
     const buf = Buffer.from('x')
-    const out = neutralizeSecretMarkers({ c: new C(), d, m, s: new Set([ph]), buf }) as any
+    const out = neutralizeSecretMarkers({ c: new C(), d, m, s: set, buf }) as any
     expect(out.c).toEqual({ x: '⟦nvr-secret​:token⟧' })
     expect(out.d).toEqual(d)
     expect(out.d).not.toBe(d)
     expect(out.m).toBe(m)
+    expect(out.s).toBe(set)
     expect(out.buf).toBe(buf)
   })
   it('keeps cycles and an own __proto__ key', () => {
@@ -78,9 +80,18 @@ describe('makeSecretTokens', () => {
   it('tokens are per call: another factory leaves them as text', () => {
     const a = makeSecretTokens()
     const b = makeSecretTokens()
+    b.token('token')
     const tok = a.token('token')
     expect(b.finish(tok)).toBe(tok)
     expect(b.finish(tok)).not.toContain('⟦nvr-secret:')
+  })
+})
+
+describe('token shape', () => {
+  it('is not a number and a nameless token mints nothing', () => {
+    const t = makeSecretTokens()
+    expect(Number.isFinite(Number(t.token('x')))).toBe(false)
+    expect(t.token(undefined as any)).toBe('')
   })
 })
 

@@ -800,6 +800,23 @@ describe('evaluateMap', () => {
   })
 })
 
+describe('secret typed as non-text', () => {
+  it('a number-typed secret field is a blocking problem, not a number', async () => {
+    const s = spec([
+      f({ id: 'a', key: 'n', type: 'number', value: { source: 'secret', name: 'token' } })
+    ])
+    const { problems } = await evaluateMap(s, {}, { secretNames: ['token'] })
+    expect(problems.some((p) => p.severity === 'error')).toBe(true)
+  })
+  it('validateSpec rejects a secret on a non-text type', () => {
+    const r = validateSpec(
+      spec([f({ id: 'a', key: 'n', type: 'number', value: { source: 'secret', name: 'token' } })])
+    )
+    expect(r.ok).toBe(false)
+    expect(JSON.stringify(r)).toContain('A secret can only be sent as text')
+  })
+})
+
 describe('validateSpec', () => {
   it('accepts a well-formed spec', () => {
     const s: MapSpec = spec([

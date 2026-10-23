@@ -12,7 +12,7 @@ export const SECRET_PLACEHOLDER = (name: string): string => `⟦nvr-secret:${nam
 
 /** Matches one placeholder; group 1 = the secret name. */
 export const PLACEHOLDER_RE = /⟦nvr-secret:([^⟧]*)⟧/g
-const MARKER = '⟦nvr-secret:'
+export const MARKER = '⟦nvr-secret:'
 /** The marker with a zero-width space after "secret": reads the same, never matches. */
 const NEUTRAL_MARKER = '⟦nvr-secret\u200b:'
 
@@ -88,7 +88,7 @@ export function neutralizeSecretMarkers(value: unknown): unknown {
 
 /**
  * A per-call, unforgeable token factory for the places that must emit a real placeholder while
- * data is still flowing through. `token(name)` returns a private token (random digits: case
+ * data is still flowing through. `token(name)` returns a private token (underscore-wrapped random digits: not a number, case
  * filters leave it alone, JSON text carries it unescaped, data cannot guess it). `finish(value)`
  * is the ONE final pass: neutralize every string value and key (so record text, JSON text decoded
  * along the way, fixed text and formula output can never forge a marker), and only then swap the
@@ -103,7 +103,7 @@ export function makeSecretTokens(): {
   const nonce = Array.from(randomBytes(24), (b) => String(b % 10)).join('')
   const names: string[] = []
   const used = new Set<string>()
-  const tokenRe = new RegExp(`${nonce}(\\d{6})`, 'g')
+  const tokenRe = new RegExp(`_${nonce}(\\d{6})_`, 'g')
   const back = (s: string, inKey: boolean): string =>
     names.length === 0 || !s.includes(nonce)
       ? s
@@ -117,8 +117,10 @@ export function makeSecretTokens(): {
         })
   return {
     token: (name) => {
+      // Not a real name (e.g. `{{ __secret_token.token }}` called with nothing): no token.
+      if (typeof name !== 'string' || name === '') return ''
       names.push(name)
-      return `${nonce}${String(names.length - 1).padStart(6, '0')}`
+      return `_${nonce}${String(names.length - 1).padStart(6, '0')}_`
     },
     finish: (value) =>
       mapStrings(

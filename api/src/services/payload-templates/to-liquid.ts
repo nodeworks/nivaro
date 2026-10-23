@@ -1,4 +1,5 @@
 import { payloadLiquid } from '../payload-filters.js'
+import { MARKER } from '../secret-markers.js'
 import type { ConditionRule } from '../workflow-conditions.js'
 import {
   evaluateMap,
@@ -61,7 +62,6 @@ export type ConvertDiff = {
 
 export type ConvertResult = { ok: true; liquid: string } | { ok: false; diffs: ConvertDiff[] }
 
-const MARKER = '⟦nvr-secret:'
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const LIQUID_WORDS = new Set([
   'true',
