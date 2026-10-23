@@ -19,6 +19,7 @@ vi.mock('./chaos/faults/partner.js', () => ({
 
 import { db } from '../db/index.js'
 import {
+  BODY_ERROR_GENERIC,
   BodySecretError,
   bodySecretNames,
   hasBodySecret,
@@ -551,5 +552,22 @@ describe('scrubbedExcerpt / scrubbedBodyMessage / responseLogScrubber', () => {
     expect(bad.headers({ x: 'S3CRET-TOKEN' })).toEqual({ x: SCRUB_FAILED_HEADER })
     const none = responseLogScrubber(null)
     expect(none.text('a b')).toBe('a b')
+  })
+})
+
+describe('scrubbedBodyMessage never falls back to a raw-body message', () => {
+  it('a refusal whose secret straddles the cut and whose scrubbed build is null → fixed text', async () => {
+    // A builder that cuts at 500 and only reads the RAW shape as a refusal.
+    const build = (b: unknown) => {
+      const m = String((b as { m?: unknown }).m ?? '')
+      return m.includes('⟦') ? null : m.slice(0, 500)
+    }
+    const body = { m: `${'x'.repeat(495)}S3CRET-TOKEN` }
+    expect(build(body)).toContain('S3CRE') // the raw message carries a half secret
+    const out = await scrubbedBodyMessage('MWF', body, build)
+    expect(out).toBe(BODY_ERROR_GENERIC)
+    expect(out).not.toMatch(/S3C|CRET|TOKEN/)
+    // No refusal on the raw body → null, nothing invented.
+    expect(await scrubbedBodyMessage('MWF', { m: '⟦' }, build)).toBeNull()
   })
 })

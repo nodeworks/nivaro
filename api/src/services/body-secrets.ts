@@ -280,6 +280,9 @@ export async function scrubbedExcerpt(
   return scrubSecretValues(text, s).slice(0, max)
 }
 
+/** The stored text for a refusal whose message cannot be rebuilt from the scrubbed body. */
+export const BODY_ERROR_GENERIC = 'Partner response reported an error'
+
 /**
  * A message built FROM a partner's body (detectDefaultBodyRejection / detectConfiguredBodyError
  * quote its fields) for stored error text. The decision is made on the raw body (null = no
@@ -298,7 +301,11 @@ export async function scrubbedBodyMessage(
   if (Object.keys(secrets).length === 0) return raw
   const scrubbedBody =
     typeof body === 'string' ? scrubSecretValues(body, secrets) : scrubDeep(body, secrets)
-  return scrubSecretValues(build(scrubbedBody) ?? raw, secrets)
+  // Never fall back to the raw-body message: the builder may have cut a secret in half, and a
+  // half secret survives scrubSecretValues. A refusal the scrubbed body no longer reads as one
+  // gets fixed text.
+  const scrubbed = build(scrubbedBody)
+  return scrubbed == null ? BODY_ERROR_GENERIC : scrubSecretValues(scrubbed, secrets)
 }
 
 /**
