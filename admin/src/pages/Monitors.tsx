@@ -24,7 +24,16 @@ import { cn } from '@/lib/utils'
 
 interface Monitor {
   id: number
-  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'ssl_cert' | 'traffic' | 'realtime'
+  type:
+    | 'freshness'
+    | 'deploy_regression'
+    | 'synthetic'
+    | 'ssl_cert'
+    | 'traffic'
+    | 'realtime'
+    | 'event_loop'
+    | 'route_spike'
+    | 'delivery_node'
   name: string
   config: Record<string, unknown> | null
   is_active: boolean
@@ -40,6 +49,10 @@ const TYPE_LABEL: Record<Monitor['type'], string> = {
   ssl_cert: 'SSL certificate',
   // #1682 — a synthetic socket client measures write-to-delivery time.
   realtime: 'Realtime delivery',
+  // Post-mortem 2026-10-23: each API process publishes its lag peaks and route rates.
+  event_loop: 'Event-loop stall',
+  route_spike: 'Route rate jump',
+  delivery_node: 'Delivery by node',
   // Created from a Traffic Map node (#1124), not from this form.
   traffic: 'Traffic threshold'
 }
@@ -238,6 +251,16 @@ function CreateForm({ onDone }: { onDone: () => void }) {
   const [warnDays, setWarnDays] = useState('30')
   // realtime
   const [rtThreshold, setRtThreshold] = useState('2000')
+  // event_loop
+  const [lagMs, setLagMs] = useState('1000')
+  const [lagBreaches, setLagBreaches] = useState('3')
+  // route_spike — sized for ~250 people online (≈120 req/s in total)
+  const [spikeFactor, setSpikeFactor] = useState('5')
+  const [spikeMinRps, setSpikeMinRps] = useState('20')
+  const [spikeCeiling, setSpikeCeiling] = useState('')
+  // delivery_node — blank = the SLO targets (Settings → SLOs)
+  const [dlvGoodPct, setDlvGoodPct] = useState('')
+  const [dlvMinSamples, setDlvMinSamples] = useState('20')
 
   const create = useMutation({
     mutationFn: () => {
@@ -250,7 +273,25 @@ function CreateForm({ onDone }: { onDone: () => void }) {
               ? { host: sslHost.trim(), warn_days: Number(warnDays) || 30 }
               : type === 'realtime'
                 ? { threshold_ms: Number(rtThreshold) || 2000 }
-                : { p95_worsen_pct: Number(worsen) || 50 }
+                : type === 'event_loop'
+                  ? {
+                      threshold_ms: Number(lagMs) || 1000,
+                      breach_minutes: Number(lagBreaches) || 3,
+                      window_minutes: 5
+                    }
+                  : type === 'route_spike'
+                    ? {
+                        factor: Number(spikeFactor) || 5,
+                        min_rps: Number(spikeMinRps) || 20,
+                        ...(Number(spikeCeiling) > 0 ? { ceiling_rps: Number(spikeCeiling) } : {})
+                      }
+                    : type === 'delivery_node'
+                      ? {
+                          window_minutes: 15,
+                          min_samples: Number(dlvMinSamples) || 20,
+                          ...(Number(dlvGoodPct) > 0 ? { good_pct: Number(dlvGoodPct) } : {})
+                        }
+                      : { p95_worsen_pct: Number(worsen) || 50 }
       return api.post('/monitors', { type, name: name.trim(), config })
     },
     onSuccess: () => {
@@ -277,7 +318,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
       <div className='mt-3 grid max-w-[720px] grid-cols-1 gap-3 sm:grid-cols-3'>
         <div className='sm:col-span-3'>
           <Field label='Type'>
-            <span className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+            <span className='inline-flex flex-wrap rounded-md border border-slate-200 p-0.5 dark:border-border'>
               {(Object.keys(TYPE_LABEL) as Monitor['type'][])
                 .filter((t) => t !== 'traffic')
                 .map((t) => (
@@ -361,6 +402,78 @@ function CreateForm({ onDone }: { onDone: () => void }) {
             />
           </Field>
         )}
+        {type === 'event_loop' && (
+          <>
+            <Field label='Lag limit (ms)'>
+              <input
+                value={lagMs}
+                onChange={(e) => setLagMs(e.target.value)}
+                type='number'
+                className={inputCls}
+              />
+            </Field>
+            <Field label='Minutes over, of 5'>
+              <input
+                value={lagBreaches}
+                onChange={(e) => setLagBreaches(e.target.value)}
+                type='number'
+                min={1}
+                max={5}
+                className={inputCls}
+              />
+            </Field>
+          </>
+        )}
+        {type === 'route_spike' && (
+          <>
+            <Field label='Times its last hour'>
+              <input
+                value={spikeFactor}
+                onChange={(e) => setSpikeFactor(e.target.value)}
+                type='number'
+                className={inputCls}
+              />
+            </Field>
+            <Field label='And at least (req/s)'>
+              <input
+                value={spikeMinRps}
+                onChange={(e) => setSpikeMinRps(e.target.value)}
+                type='number'
+                className={inputCls}
+              />
+            </Field>
+            <Field label='Ceiling (req/s, optional)'>
+              <input
+                value={spikeCeiling}
+                onChange={(e) => setSpikeCeiling(e.target.value)}
+                type='number'
+                placeholder='Off'
+                className={inputCls}
+              />
+            </Field>
+          </>
+        )}
+        {type === 'delivery_node' && (
+          <>
+            <Field label='Within target (%)'>
+              <input
+                value={dlvGoodPct}
+                onChange={(e) => setDlvGoodPct(e.target.value)}
+                type='number'
+                placeholder='SLO target'
+                className={inputCls}
+              />
+            </Field>
+            <Field label='Minimum samples'>
+              <input
+                value={dlvMinSamples}
+                onChange={(e) => setDlvMinSamples(e.target.value)}
+                type='number'
+                className={inputCls}
+              />
+            </Field>
+          </>
+        )}
         {type === 'ssl_cert' && (
           <>
             <Field label='Domain'>
@@ -404,6 +517,29 @@ function CreateForm({ onDone }: { onDone: () => void }) {
           Every 5 minutes a test connection inside the server joins a private room and a probe event
           goes out through the normal path (journal, Redis stream). Slow or missing delivery fails
           the check and raises an issue. Results also show on the Realtime console.
+        </p>
+      )}
+      {type === 'event_loop' && (
+        <p className='mt-2 text-[11.5px] text-slate-400'>
+          Every API process records its worst event-loop lag each minute. Fails when any process was
+          over the limit in that many of 5 consecutive minutes — the process is busy and every
+          request and socket event on it waits. A single slow minute (a GC pause) never fires.
+        </p>
+      )}
+      {type === 'route_spike' && (
+        <p className='mt-2 text-[11.5px] text-slate-400'>
+          Compares each route's requests per second, all API processes together, with its own last
+          hour. Fails when a route runs that many times faster and above the floor for 2 minutes in
+          a row while its share of all traffic at least doubles — a refetch storm, not a busy
+          morning. The ceiling, when set, fails any route above it.
+        </p>
+      )}
+      {type === 'delivery_node' && (
+        <p className='mt-2 text-[11.5px] text-slate-400'>
+          Reads the realtime delivery figures per API process over the last 15 minutes (the probe
+          and real browsers' acknowledgements). Fails when any process delivers less than the target
+          share of events within the SLO time — the overall SLO can look fine while one process
+          lags.
         </p>
       )}
       {type === 'ssl_cert' && (
@@ -466,7 +602,7 @@ export default function Monitors() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar
-        description='Always-on checks, evaluated every 5 minutes: data freshness, post-deploy performance, synthetic probes, SSL certificates. Failures raise issues and notify the creator plus any subscribers.'
+        description='Always-on checks, evaluated every 5 minutes: data freshness, post-deploy performance, synthetic probes, SSL certificates, realtime delivery, event-loop stalls and route rate jumps. Failures raise issues and notify the creator plus any subscribers.'
         actions={
           <button
             type='button'
