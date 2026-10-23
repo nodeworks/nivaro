@@ -1,3 +1,4 @@
+import type React from 'react'
 import { cn } from '@/lib/utils'
 import type { DraftBody, MapSpec, Problem, TemplateDetail } from './api'
 import { CodeTab } from './CodeTab'
@@ -16,6 +17,8 @@ export interface EditorTabsProps {
   values: Record<string, unknown>
   problems: Problem[]
   secretNames: string[]
+  /** The draft preview is still loading (rows show a skeleton for their value). */
+  valuesPending?: boolean
 }
 
 const TABS: { id: EditorTab; label: string }[] = [
@@ -37,16 +40,35 @@ export function EditorTabs({
   onDraftChange,
   values,
   problems,
-  secretNames
+  secretNames,
+  valuesPending
 }: EditorTabsProps) {
   const isCode = draft.mode === 'code'
   const active: EditorTab = isCode && tab === 'map' ? 'code' : tab
+  const enabled = TABS.filter((t) => !(t.id === 'map' && isCode))
+  // Roving tabs: ←/→ (and Home/End) move between the enabled tabs and select them.
+  const onTabKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+    if (!keys.includes(e.key)) return
+    e.preventDefault()
+    const i = enabled.findIndex((t) => t.id === active)
+    const next =
+      e.key === 'Home'
+        ? enabled[0]
+        : e.key === 'End'
+          ? enabled[enabled.length - 1]
+          : enabled[(i + (e.key === 'ArrowRight' ? 1 : enabled.length - 1)) % enabled.length]
+    if (!next) return
+    onTabChange(next.id)
+    e.currentTarget.querySelector<HTMLElement>(`[data-editor-tab="${next.id}"]`)?.focus()
+  }
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
       <div
         className='flex shrink-0 items-end gap-1 border-b border-slate-200 px-4 dark:border-border'
         role='tablist'
         aria-label='Editor'
+        onKeyDown={onTabKey}
       >
         {TABS.map((t) => {
           const off = t.id === 'map' && isCode
@@ -61,7 +83,10 @@ export function EditorTabs({
               <button
                 type='button'
                 role='tab'
+                id={`payload-tab-${t.id}`}
                 aria-selected={active === t.id}
+                aria-controls={active === t.id ? 'payload-tabpanel' : undefined}
+                tabIndex={active === t.id ? 0 : -1}
                 disabled={off}
                 onClick={() => onTabChange(t.id)}
                 className={cn(
@@ -78,7 +103,12 @@ export function EditorTabs({
           )
         })}
       </div>
-      <div className='min-h-0 flex-1 overflow-y-auto' role='tabpanel'>
+      <div
+        className='min-h-0 flex-1 overflow-y-auto'
+        role='tabpanel'
+        id='payload-tabpanel'
+        aria-labelledby={`payload-tab-${active}`}
+      >
         {active === 'map' && draft.mode === 'map' ? (
           <FieldMap
             spec={draft.body}
@@ -88,6 +118,10 @@ export function EditorTabs({
             lockedKeys={template.locked_keys}
             secretNames={secretNames}
             collection={template.collection}
+            historyKey={template.key}
+            lookups={template.lookups}
+            partner={template.external_api}
+            valuesPending={valuesPending}
           />
         ) : active === 'code' ? (
           <CodeTab template={template} draft={draft} onChange={onDraftChange} problems={problems} />
