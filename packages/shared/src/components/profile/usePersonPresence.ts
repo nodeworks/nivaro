@@ -2,7 +2,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useLiveEvent } from '../../lib/live'
-import { prettyPagePath } from '../../lib/presence-state'
+import { usePresenceOnlinePoll } from '../../lib/presence-live'
+import { presenceChangeTouches, prettyPagePath } from '../../lib/presence-state'
 import { PERSON_PROFILE_KEY } from './types'
 
 interface OnlineRow {
@@ -23,16 +24,22 @@ export function usePersonPresence(userId: string | null | undefined): { page: st
   useLiveEvent(
     'presence:changed',
     () => {
-      void qc.invalidateQueries({ queryKey: [PERSON_PROFILE_KEY, userId] })
-      void qc.invalidateQueries({ queryKey: ['presence-online'] })
+      // The online list itself refreshes through the tab's one shared listener
+      // (usePresenceOnlinePoll below), never once per reader.
+      void qc.invalidateQueries(
+        { queryKey: [PERSON_PROFILE_KEY, userId] },
+        { cancelRefetch: false }
+      )
     },
     {
       enabled: !!userId,
-      debounceMs: 500,
+      debounceMs: 1000,
       includeOwn: true,
-      match: (p) => String(p?.user_id ?? '').toUpperCase() === String(userId ?? '').toUpperCase()
+      // Coalesced server events list every changed id (`user_ids`); older ones carry `user_id`.
+      match: (p) => presenceChangeTouches(p, userId)
     }
   )
+  const poll = usePresenceOnlinePoll(15_000, !!userId)
   const { data } = useQuery({
     queryKey: ['presence-online'],
     queryFn: () =>
@@ -40,7 +47,7 @@ export function usePersonPresence(userId: string | null | undefined): { page: st
         get('/presence/online')
       ),
     enabled: !!userId,
-    refetchInterval: 15_000,
+    refetchInterval: poll,
     staleTime: 5_000
   })
   const row = data?.data?.find(
@@ -66,12 +73,13 @@ export function useCardPresence(
   enabled: boolean
 ): { word: 'online' | 'idle' | 'away' | null; page: string | null; minutes: number | null } {
   const client = useNivaroClient()
+  const poll = usePresenceOnlinePoll(15_000, enabled && !!userId)
   const { data } = useQuery({
     queryKey: ['presence-online'],
     queryFn: () =>
       client.request<{ data: CardRow[]; config?: { fields?: string[] } }>(get('/presence/online')),
     enabled: enabled && !!userId,
-    refetchInterval: enabled ? 15_000 : false,
+    refetchInterval: poll,
     staleTime: 5_000
   })
   const row = data?.data?.find(

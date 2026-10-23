@@ -711,6 +711,12 @@ export {
   useTyping
 } from './lib/presence-hooks'
 export {
+  PRESENCE_ONLINE_KEY,
+  PRESENCE_POLL_BACKSTOP_MS,
+  usePresenceOnlineLive,
+  usePresenceOnlinePoll
+} from './lib/presence-live'
+export {
   applySignal,
   expirePeers,
   type RecordSignalKind,
@@ -726,7 +732,7 @@ export {
   useTopicPresence,
   whoText
 } from './lib/presence-signals'
-export { type StuckState, stuckText } from './lib/presence-state'
+export { presenceChangeTouches, type StuckState, stuckText } from './lib/presence-state'
 export * from './lib/query-stats'
 export * from './lib/queue-grouping'
 export {

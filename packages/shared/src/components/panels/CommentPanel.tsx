@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
+import { usePresenceOnlinePoll } from '../../lib/presence-live'
 import {
   signalSentence,
   useRecordSignalPeers,
@@ -147,6 +148,7 @@ function MentionTextarea({
   })
   // Online people first (#2405). Same query key + shape as the chat panel's
   // presence read, so the two share one cache entry.
+  const presencePoll = usePresenceOnlinePoll(15_000, !!mention)
   const { data: presence } = useQuery({
     queryKey: ['presence-online'],
     queryFn: () =>
@@ -154,7 +156,7 @@ function MentionTextarea({
         get('/presence/online')
       ),
     enabled: !!mention,
-    refetchInterval: 15_000,
+    refetchInterval: presencePoll,
     staleTime: 5_000
   })
   const onlineState = (id: string): 0 | 1 | 2 => {
