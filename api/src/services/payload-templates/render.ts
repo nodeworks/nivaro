@@ -51,6 +51,9 @@ const USED_VAR = '__secret_used'
 const NAME_RE = /^[A-Za-z0-9_.-]+$/
 const nonceToken = (nonce: string, name: string): string => `⟦nvr-nonce:${nonce}:${name}⟧`
 
+// Registered once on the shared engine at first use. Safe: the filter is inert
+// (returns '') unless the render scope carries this render's nonce variable, so
+// other users of the shared engine never see a placeholder from it.
 let filterRegistered = false
 function ensureSecretFilter(): void {
   if (filterRegistered) return
@@ -169,9 +172,15 @@ function ruleMessages(path: string, value: unknown, r: Rules): string[] {
   }
   if (r.pattern !== undefined) {
     try {
-      if (!new RegExp(r.pattern).test(s)) out.push(`${path} "${s}" does not match ${r.pattern}`)
-    } catch {
-      out.push(`${path} has a rule pattern that is not a valid expression: ${r.pattern}`)
+      if (r.pattern.length > 200) throw new Error('Pattern is too long')
+      if (!new RegExp(r.pattern).test(s.slice(0, 10_000)))
+        out.push(`${path} "${s}" does not match ${r.pattern}`)
+    } catch (e) {
+      out.push(
+        r.pattern.length > 200
+          ? `${path}: Pattern is too long (200 characters at most)`
+          : `${path} has a rule pattern that is not a valid expression: ${r.pattern}`
+      )
     }
   }
   if (r.min !== undefined || r.max !== undefined) {
@@ -192,6 +201,14 @@ function checkMapRules(fields: Field[], node: unknown, prefix: string, out: Prob
     if (!(field.key in node)) continue
     const path = prefix ? `${prefix}.${field.key}` : field.key
     const value = node[field.key]
+    if ((field.type === 'object' || field.type === 'list') && field.rules) {
+      out.push({
+        field_id: field.id,
+        path,
+        message: 'Rules on a group or list are ignored',
+        severity: 'warning'
+      })
+    }
     if (field.type === 'object' && field.children) {
       checkMapRules(field.children, value, path, out)
     } else if (field.type === 'list' && field.children && Array.isArray(value)) {
@@ -223,17 +240,29 @@ function findFieldId(fields: Field[], path: string): string {
   return id
 }
 
-function checkLocked(
+/** Map mode: locked = the spec still has a field at the path; the output may omit it (not_empty). */
+function checkLockedSpec(fields: Field[], locked: string[] | undefined, out: Problem[]): void {
+  for (const key of locked ?? []) {
+    if (!findFieldId(fields, key)) {
+      out.push(err('', key, `Locked key \`${key}\` is missing from the field map`))
+    }
+  }
+}
+
+/** Code mode: a locked key absent from the output is a warning (no field map to protect). */
+function checkLockedOutput(
   body: Record<string, unknown>,
   locked: string[] | undefined,
-  fields: Field[] | null,
   out: Problem[]
 ): void {
   for (const key of locked ?? []) {
     if (getPath(body, key) === undefined) {
-      out.push(
-        err(fields ? findFieldId(fields, key) : '', key, `Required key \`${key}\` is missing`)
-      )
+      out.push({
+        field_id: '',
+        path: key,
+        message: `Locked key \`${key}\` is missing from the output`,
+        severity: 'warning'
+      })
     }
   }
 }
@@ -261,7 +290,7 @@ export async function renderBody(
   if (mode === 'code') {
     const r = await renderCode(body, scope, opts)
     if (r.body) {
-      checkLocked(r.body, opts.lockedKeys, null, r.problems)
+      checkLockedOutput(r.body, opts.lockedKeys, r.problems)
       checkCodeRules(r.body, opts.rules, r.problems)
     }
     return r
@@ -278,7 +307,7 @@ export async function renderBody(
   }
   const r = await evaluateMap(spec, scope, { secretNames: opts.secretNames })
   const fields = Array.isArray(spec?.fields) ? spec.fields : []
-  checkLocked(r.body, opts.lockedKeys, fields, r.problems)
+  checkLockedSpec(fields, opts.lockedKeys, r.problems)
   checkMapRules(fields, r.body, '', r.problems)
   return r
 }

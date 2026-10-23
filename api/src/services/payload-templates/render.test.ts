@@ -82,13 +82,14 @@ describe('renderBody code mode', () => {
     expect(msgs).toMatch(/efp_state/)
     expect(msgs).toMatch(/a\.b/)
     expect(msgs).toMatch(/a\.c/)
-    expect(r.problems.every((p) => p.field_id === '' && p.severity === 'error')).toBe(true)
+    expect(r.problems.every((p) => p.field_id === '')).toBe(true)
+    expect(r.problems.find((p) => p.path === 'efp_state')?.severity).toBe('warning')
     expect(r.problems.filter((p) => p.path === 'a.b')).toHaveLength(1)
   })
 })
 
 describe('renderBody map mode', () => {
-  it('missing locked key is an error', async () => {
+  it('map: locked key with no spec field is an error', async () => {
     const r = await renderBody(
       'map',
       spec([f({ id: 'f1', key: 'a', value: fixed('x') })]),
@@ -100,6 +101,45 @@ describe('renderBody map mode', () => {
     const p = r.problems.find((x) => x.path === 'efp_state')
     expect(p?.severity).toBe('error')
     expect(blockingProblems(r.problems)).toContain(p)
+  })
+
+  it('map: locked not_empty field absent from output is fine', async () => {
+    const r = await renderBody(
+      'map',
+      spec([
+        f({
+          id: 'f1',
+          key: 'po_number',
+          include: 'not_empty',
+          value: { source: 'path', path: 'record.po' }
+        })
+      ]),
+      {},
+      { lockedKeys: ['po_number'] }
+    )
+    expect(r.body).toEqual({})
+    expect(r.problems).toEqual([])
+  })
+
+  it('code: locked key missing from output is a warning', async () => {
+    const r = await renderBody('code', '{"a": 1}', {}, { lockedKeys: ['efp_state'] })
+    expect(r.problems).toHaveLength(1)
+    expect(r.problems[0].severity).toBe('warning')
+    expect(blockingProblems(r.problems)).toEqual([])
+  })
+
+  it('pattern too long is an error; rules on a group warn', async () => {
+    const r = await renderBody(
+      'map',
+      spec([
+        f({ id: 'p', key: 'p', value: fixed('a'), rules: { pattern: 'a'.repeat(201) } }),
+        f({ id: 'g', key: 'g', type: 'object', children: [], rules: { max_length: 1 } })
+      ]),
+      {},
+      {}
+    )
+    expect(r.problems.find((x) => x.field_id === 'p')?.message).toMatch(/too long/)
+    expect(r.problems.find((x) => x.field_id === 'g')?.severity).toBe('warning')
   })
 
   it('rules: required, max_length, allowed, pattern, min/max each report', async () => {
