@@ -502,8 +502,14 @@ describe('finished recordings never saved as a video (I1)', () => {
 
 describe('uploaded files (picked, not recorded)', () => {
   const mp4 = Buffer.from('\0\0\0\x18ftypmp42 and the rest of the file', 'latin1')
+  // Until the background job is done — not only its status: the parts are deleted AFTER the
+  // final status is written, so a wait on the status alone raced that delete under load.
   const settle = async () => {
-    for (let i = 0; i < 200 && rows.some((r) => r.status === 'finalizing'); i++)
+    for (
+      let i = 0;
+      i < 200 && (rows.some((r) => r.status === 'finalizing') || up.uploadsProcessing() > 0);
+      i++
+    )
       await new Promise((r) => setTimeout(r, 5))
   }
   async function sent(head = mp4) {

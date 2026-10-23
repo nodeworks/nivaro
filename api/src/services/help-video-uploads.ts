@@ -532,6 +532,12 @@ export interface ProcessingUpload {
 /** Uploaded files being checked or converted on this process, by upload id. */
 const processing = new Map<string, AbortController>()
 
+/** How many uploaded files this process is still working on (the background job, including
+ *  the clean-up after its final status is written). Tests wait on it. */
+export function uploadsProcessing(): number {
+  return processing.size
+}
+
 function uploadThreads(): number {
   const n = Number(process.env.VIDEO_RENDER_THREADS)
   return Number.isFinite(n) && n >= 1 ? Math.min(8, Math.floor(n)) : 2
