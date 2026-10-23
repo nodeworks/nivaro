@@ -133,6 +133,7 @@ export async function opsLogsRoutes(app: FastifyInstance) {
       'RUNTIME_RSS_WARN_MB',
       'IMPORT_STATEMENT_TIMEOUT_MS',
       'SQL_CHECKS',
+      'CREATE_SCOPE_GUARD',
       'SQL_LINT_URL',
       'SQL_LINT_TOKEN',
       'NIVARO_IMAGE_VARIANT',
