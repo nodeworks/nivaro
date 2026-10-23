@@ -117,6 +117,45 @@ export function buildReport(dir, compareDir = null) {
   return { md, summary }
 }
 
+/**
+ * One table over several run folders (e.g. every suite in single mode and in tier mode): a row
+ * per suite/case, a column per run. Suites a run did not have show "—".
+ */
+export function buildMatrix(dirs, outFile) {
+  const runs = dirs.map((d) => ({ dir: d, suites: loadRun(d) }))
+  const label = (r) => `${basename(r.dir)} (${r.suites[0]?.mode ?? '?'})`
+  const rows = new Map()
+  for (const [i, r] of runs.entries())
+    for (const s of r.suites)
+      for (const c of s.cases ?? []) {
+        const key = `${s.suite} › ${c.name}`
+        if (!rows.has(key)) rows.set(key, Array(runs.length).fill('—'))
+        const failed = (c.checks ?? []).filter((x) => !x.ok).map((x) => x.label)
+        rows.get(key)[i] =
+          c.status === 'pass' ? 'pass' : c.status === 'skip' ? 'skip' : `**FAIL**${failed.length ? `: ${failed.slice(0, 2).join('; ')}` : c.error ? ': error' : ''}`
+      }
+  const lines = ['# Realtime CI — matrix', '', `| Case | ${runs.map(label).join(' | ')} |`, `|---|${runs.map(() => '---').join('|')}|`]
+  for (const [k, v] of [...rows].sort((a, b) => a[0].localeCompare(b[0]))) lines.push(`| ${esc(k)} | ${v.map(esc).join(' | ')} |`)
+  lines.push('')
+  for (const r of runs) {
+    const t = { pass: 0, fail: 0, skip: 0 }
+    for (const s of r.suites) for (const k of Object.keys(t)) t[k] += s.counts?.[k] ?? 0
+    lines.push(`- ${label(r)}: ${t.pass} pass, ${t.fail} fail, ${t.skip} skip — suites ${r.suites.map((s) => s.suite).join(', ')}`)
+  }
+  const md = `${lines.join('\n')}\n`
+  if (outFile) writeFileSync(outFile, md)
+  return md
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--matrix') {
+  const rest = process.argv.slice(3)
+  const oi = rest.indexOf('--out')
+  const out = oi >= 0 ? resolve(rest[oi + 1]) : null
+  const dirs = rest.filter((_, i) => i !== oi && i !== oi + 1 || oi < 0).map((d) => resolve(d))
+  console.log(buildMatrix(dirs, out))
+  process.exit(0)
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = process.argv[2]
   if (!dir) {

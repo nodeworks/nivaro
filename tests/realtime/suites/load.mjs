@@ -45,6 +45,7 @@ export async function run({ only, args }) {
     t.cleanup(fx.closeAll)
     const samples = []
     const probeLat = []
+    const writeLat = []
     const rtt = Object.fromEntries(socketNodes().map((n) => [n, []]))
     let stopped = false
 
@@ -52,7 +53,9 @@ export async function run({ only, args }) {
     // Traefik for record-event delivery.
     const direct = {}
     for (const n of socketNodes()) {
-      const c = await fx.browser('carol', { base: directUrl(n) })
+      // Signed in through Traefik (a realtime process has no sign-in route); the socket itself
+      // goes straight to the process.
+      const c = await fx.browser('carol')
       direct[n] = new LiveSocket(c, { base: directUrl(n) })
       await direct[n].open()
     }
@@ -78,10 +81,14 @@ export async function run({ only, args }) {
         const t0 = Date.now()
         const marks = probes.map((p) => p.mark())
         const r = await fx.admin.post('/api/items/rt_items', { title: 'load probe', status: 'probe' }).catch(() => null)
+        const t1 = Date.now()
         if (r?.ok) {
+          writeLat.push(t1 - t0)
           const id = String(r.json.data.id)
+          // Delivery is timed from the write's RESPONSE (the event is emitted after it), so a
+          // slow web request does not count as slow delivery; the write time is kept apart.
           void Promise.all(probes.map((p, i) => p.next('collection:update', (x) => String(x.item) === id, { from: marks[i], timeoutMs: 15_000 }))).then((got) => {
-            for (const g of got) probeLat.push(g ? g.at - t0 : null)
+            for (const g of got) probeLat.push(g ? Math.max(0, g.at - t1) : null)
           })
         }
         await sleep(Math.max(0, 1000 - (Date.now() - t0)))
@@ -143,6 +150,7 @@ export async function run({ only, args }) {
     t.metric('load_routes', (report?.totals?.routes ?? []).slice(0, 8))
     const pl = pct(probeLat.filter((x) => x != null))
     t.metric('probe_delivery_ms', { ...pl, lost: probeLat.filter((x) => x == null).length })
+    t.metric('probe_write_ms', pct(writeLat))
     const rttPct = Object.fromEntries(Object.entries(rtt).map(([n, v]) => [n, pct(v.filter((x) => x.at >= tLoad && x.at <= loadEnded).map((x) => x.ms))]))
     t.metric('event_loop_rtt_ms', rttPct)
 
