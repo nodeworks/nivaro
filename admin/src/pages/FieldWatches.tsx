@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -179,25 +180,21 @@ export function FieldWatchesPage() {
   })
 
   return (
-    <div className='flex flex-col h-full'>
-      {/* Header */}
-      <div className='flex items-center justify-between border-b border-border px-6 py-4 shrink-0'>
-        <div>
-          <h1 className='text-lg font-semibold'>Field Watches</h1>
-          <p className='text-sm text-muted-foreground'>
-            Get notified when specific fields change on any record
-          </p>
-        </div>
-        {isAdmin && (
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className='h-4 w-4 mr-1.5' />
-            New Watch
-          </Button>
-        )}
-      </div>
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description='Get notified when specific fields change on any record. Admins define the watches; anyone can subscribe.'
+        actions={
+          isAdmin && (
+            <Button size='sm' className='h-8 text-[12px]' onClick={() => setCreateOpen(true)}>
+              <Plus className='h-4 w-4 mr-1.5' />
+              New Watch
+            </Button>
+          )
+        }
+      />
 
       {/* Body */}
-      <div className='flex-1 overflow-auto p-6'>
+      <div className='flex-1 overflow-auto p-4 sm:p-6'>
         {isLoading ? (
           <div className='space-y-3'>
             {[1, 2, 3].map((i) => (
@@ -380,8 +377,8 @@ export function FieldWatchesPage() {
           <DialogBody>
             <p className='text-sm text-muted-foreground'>
               Are you sure you want to delete{' '}
-              <span className='font-medium text-foreground'>{deleting?.name}</span>? All subscriptions
-              will also be removed. This cannot be undone.
+              <span className='font-medium text-foreground'>{deleting?.name}</span>? All
+              subscriptions will also be removed. This cannot be undone.
             </p>
           </DialogBody>
           <DialogFooter>

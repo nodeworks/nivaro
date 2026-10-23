@@ -110,7 +110,7 @@ export const wallboardPulseDocs: DocSection = {
     { type: 'h2', id: 'pulse', text: 'Pulse (live activity stream)' },
     {
       type: 'p',
-      text: '/pulse streams every activity entry the moment it happens over an admin-only Socket.io room, with a per-minute sparkline. Use it to watch a migration, an import, or a busy Monday in real time.'
+      text: '/activity/live streams every activity entry the moment it happens over an admin-only Socket.io room, with a per-minute sparkline. Use it to watch a migration, an import, or a busy Monday in real time.'
     },
     {
       type: 'note',

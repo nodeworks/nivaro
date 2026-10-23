@@ -80,7 +80,7 @@ export const contentOpsScheduledChanges: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'On any item edit page, the Schedule button in the header opens a dialog to queue a change for that record — pick the change type, the values, and the date/time. All pending and past changes across collections are managed on the /scheduled-changes page, where each change can be edited, cancelled, or executed immediately.'
+      text: 'On any item edit page, the Schedule button in the header opens a dialog to queue a change for that record — pick the change type, the values, and the date/time. All pending and past changes across collections are managed on the /deadlines/scheduled page, where each change can be edited, cancelled, or executed immediately.'
     },
     { type: 'h3', text: 'Creating a scheduled change via API' },
     {
@@ -1152,7 +1152,7 @@ export const contentOpsCollectionPresets: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Presets are installed from the /collection-presets page (also reachable via Collections → "Install preset"). Each preset card shows what it will create; click Install and the collections appear in the registry immediately.'
+      text: 'Presets are installed from the /promotion/starter-kits page (also reachable via Collections → "Install preset"). Each preset card shows what it will create; click Install and the collections appear in the registry immediately.'
     },
     { type: 'h3', text: 'Available presets' },
     {

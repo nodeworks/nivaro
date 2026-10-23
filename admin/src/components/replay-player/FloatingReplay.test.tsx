@@ -97,7 +97,7 @@ describe('FloatingReplayHost', () => {
     act(() => {
       fireEvent.click(document.querySelector('[data-replay-float-close]') as HTMLElement)
     })
-    expect(navigate).toHaveBeenCalledWith('/session-replays')
+    expect(navigate).toHaveBeenCalledWith('/analytics/replays')
     expect(getDockRequest()).toEqual({ recording: { id: 'R1' }, at: 42_000 })
     expect(document.querySelector('[data-replay-floating]')).toBeNull()
   })

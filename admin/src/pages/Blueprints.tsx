@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Check, Download, FileUp, Loader2, Package } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
@@ -131,23 +132,10 @@ export function BlueprintsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <Package className='h-4.5 w-4.5 text-nvr-cyan' />
-          <div>
-            <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              App Blueprints
-            </h1>
-            <p className='text-[12px] text-muted-foreground'>
-              Package schema, workflows, layouts, queues and rules into one installable artifact.
-              Data rows are not included — use Content Promotion for those.
-            </p>
-          </div>
-        </div>
-      </header>
+      <HubToolbar description='Package schema, workflows, layouts, queues and rules into one installable artifact. Data rows are not included; use the Content tab for those.' />
 
       <div className='flex flex-1 min-h-0 overflow-y-auto'>
-        <div className='grid w-full max-w-4xl grid-cols-1 gap-6 p-8 md:grid-cols-2'>
+        <div className='grid w-full max-w-4xl grid-cols-1 gap-6 p-4 sm:p-6 md:grid-cols-2'>
           {/* Publish */}
           <section className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
             <h2 className='mb-1 text-[14px] font-semibold text-slate-900 dark:text-foreground'>

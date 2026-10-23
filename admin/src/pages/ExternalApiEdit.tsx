@@ -119,7 +119,7 @@ export function ExternalApiEditPage() {
   const { id } = useParams<{ id: string }>()
   const isNew = id === 'new'
   const navigate = useNavigate()
-  const goBack = useGoBack('/external-apis')
+  const goBack = useGoBack('/connections')
   const queryClient = useQueryClient()
   const [form, setForm] = useState<FormState>(EMPTY)
 
@@ -244,7 +244,7 @@ export function ExternalApiEditPage() {
       queryClient.invalidateQueries({ queryKey: ['external-apis'] })
       queryClient.invalidateQueries({ queryKey: ['external-api', String(saved.id)] })
       toast.success(isNew ? 'API created' : 'API saved')
-      navigate('/external-apis')
+      navigate('/connections')
     },
     onError: () => toast.error('Failed to save')
   })
@@ -2407,7 +2407,7 @@ function ConnectorCard({ apiId, apiName }: { apiId: number; apiName: string }) {
     },
     onSuccess: () => {
       toast.success('Sync job created — review and activate it')
-      navigate('/sync-jobs')
+      navigate('/connections/sync-jobs')
     },
     onError: (err: { response?: { data?: { error?: string } } }) =>
       toast.error(err.response?.data?.error ?? 'Failed to create sync job')

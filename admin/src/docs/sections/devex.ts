@@ -383,7 +383,7 @@ export const devexWebhookDeliveries: DocSection = {
     },
     {
       type: 'p',
-      text: 'When a delivery exhausts its retry attempts and still fails, it lands in the dead letter queue instead of being silently dropped. Inspect and manually retry from the /dead-letters admin page.'
+      text: 'When a delivery exhausts its retry attempts and still fails, it lands in the dead letter queue instead of being silently dropped. Inspect and manually retry from the /flows/dead-letters admin page.'
     },
     {
       type: 'note',
@@ -730,7 +730,7 @@ export const devexPersistedQueries: DocSection = {
     },
     {
       type: 'p',
-      text: 'The /persisted-queries admin page lists all registered queries with usage stats. Register a new query by name and GraphQL text, edit existing registrations, or delete.'
+      text: 'The /graphql/persisted admin page lists all registered queries with usage stats. Register a new query by name and GraphQL text, edit existing registrations, or delete.'
     },
     {
       type: 'pre',
@@ -824,7 +824,7 @@ export const devexDeadLetters: DocSection = {
     { type: 'h1', id: 'dead-letters', text: 'Dead Letter Queue' },
     {
       type: 'p',
-      text: 'Webhook deliveries, flow runs, and notification sends that exhaust their retry attempts land in the dead letter queue. Inspect failures, manually retry, or discard from the /dead-letters admin page. Nothing is silently dropped.'
+      text: 'Webhook deliveries, flow runs, and notification sends that exhaust their retry attempts land in the dead letter queue. Inspect failures, manually retry, or discard from the /flows/dead-letters admin page. Nothing is silently dropped.'
     },
     {
       type: 'h3',
@@ -892,7 +892,7 @@ DELETE /api/dead-letters/dlq-123  # Discard`
       type: 'ul',
       items: [
         'Dead letters are retained indefinitely (manual action required)',
-        'Use the /dead-letters page to purge old entries',
+        'Use the /flows/dead-letters page to purge old entries',
         'Export for audit before deleting'
       ]
     },
@@ -1475,7 +1475,7 @@ export const devexDevTooling: DocSection = {
     { type: 'h2', id: 'dev-tooling-release-notes', text: 'What changed in this release' },
     {
       type: 'p',
-      text: 'When the API is redeployed under an open tab, the update banner offers "What changed since <version>" — a link to the Changelog page scoped to the releases between the version the tab loaded against and the one now being served (`/changelog?since=&to=`). The page leads with that window and marks each release in it "New since you loaded". The notes come from `changelog.json`, generated from the release tags at build time.'
+      text: 'When the API is redeployed under an open tab, the update banner offers "What changed since <version>" — a link to the Changelog page scoped to the releases between the version the tab loaded against and the one now being served (`/docs/releases?since=&to=`). The page leads with that window and marks each release in it "New since you loaded". The notes come from `changelog.json`, generated from the release tags at build time.'
     },
     {
       type: 'h2',

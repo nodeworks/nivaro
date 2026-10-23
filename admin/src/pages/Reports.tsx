@@ -1,7 +1,8 @@
 import { QueryErrorState } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
-import { Download, FileBarChart, FilterX } from 'lucide-react'
+import { Download, FilterX } from 'lucide-react'
 import { useState } from 'react'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -358,27 +359,28 @@ export function ReportsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <div className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-2.5'>
-            <div className='flex h-7 w-7 items-center justify-center rounded-lg bg-[#00ceff]/10'>
-              <FileBarChart className='h-3.5 w-3.5 text-[#00ceff]' />
-            </div>
-            <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              Audit Reports
-            </h1>
+      <HubToolbar
+        description='Filter the activity log by date, user, collection and action, see the totals, and export what matches as CSV.'
+        actions={
+          <>
             {hasActiveFilters(filters) && (
-              <span className='inline-flex items-center rounded-full bg-[#00ceff]/10 px-2 py-0.5 text-[11px] font-medium text-[#00ceff]'>
+              <span className='inline-flex items-center rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-nvr-navy dark:text-nvr-cyan'>
                 Filtered
               </span>
             )}
-          </div>
-          <Button size='sm' variant='outline' onClick={exportCSV} disabled={exporting}>
-            <Download className='mr-1.5 h-3.5 w-3.5' />
-            {exporting ? 'Exporting…' : 'Export CSV'}
-          </Button>
-        </div>
-      </div>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 text-[12px]'
+              onClick={exportCSV}
+              disabled={exporting}
+            >
+              <Download className='mr-1.5 h-3.5 w-3.5' aria-hidden />
+              {exporting ? 'Exporting…' : 'Export CSV'}
+            </Button>
+          </>
+        }
+      />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         <FilterSidebar

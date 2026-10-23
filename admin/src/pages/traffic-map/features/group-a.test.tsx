@@ -144,7 +144,7 @@ describe('links (#1090 #1091)', () => {
       caller: 'k7'
     })
     const p = new URLSearchParams(url.split('?')[1])
-    expect(url.startsWith('/api-analytics?')).toBe(true)
+    expect(url.startsWith('/analytics/api?')).toBe(true)
     expect(p.get('req_path')).toBe('/api/items/workflows/12')
     expect(p.get('req_method')).toBe('PATCH')
     expect(p.get('req_status')).toBe('422')

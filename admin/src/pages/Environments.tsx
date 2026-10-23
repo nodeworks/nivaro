@@ -17,6 +17,7 @@ import {
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { EnvPresencePanel } from '@/components/env-presence-panel'
+import { HubToolbar } from '@/components/hub-page'
 import { QualityChecksCard } from '@/components/quality-checks-card'
 import { ReleaseCard } from '@/components/release-card'
 import { RunbooksCard } from '@/components/runbooks-card'
@@ -103,19 +104,12 @@ export default function Environments() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Environments
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              The deployment stack — every tier&rsquo;s components, live versions, pipelines and
-              deployments in one place.
-            </p>
-          </div>
+      <HubToolbar
+        description='The deployment stack: every tier’s components, live versions, pipelines and deployments in one place.'
+        actions={
           <Button
             size='sm'
+            className='h-8 text-[12px]'
             onClick={() => {
               const name = window.prompt('Environment name (e.g. Production)')
               if (name?.trim()) createEnv.mutate(name.trim())
@@ -123,8 +117,8 @@ export default function Environments() {
           >
             <Plus className='h-3.5 w-3.5' /> New environment
           </Button>
-        </div>
-      </header>
+        }
+      />
       <ReleaseCard />
       <RunbooksCard />
       <QualityChecksCard />

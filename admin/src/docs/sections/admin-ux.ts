@@ -60,7 +60,7 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
     {
       "type": "page",
       "label": "SLA Rules",
-      "route": "/sla-rules",
+      "route": "/deadlines",
       "category": "Monitoring",
       "icon": "Clock"
     },
@@ -109,7 +109,7 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
     { type: 'h2', id: 'global-search-analytics', text: 'Search analytics' },
     {
       type: 'p',
-      text: 'Administrators can see what people search for under Usage → Search Analytics (`/search-analytics`). Searches typed into Cmd+K and into a collection list’s search box are logged with the query text, how many results came back, how long it took and, when the person opens one, whether it was a record or a page (the collection and id, never the record’s content). The page lists the top searches, searches that found nothing, searches where results appeared but nothing was opened, and slow searches, with a link beside each empty search to try it in the list, check which fields the list searches, or ask the assistant where the thing lives.'
+      text: 'Administrators can see what people search for under Insights → Usage → Search (`/analytics/search`). Searches typed into Cmd+K and into a collection list’s search box are logged with the query text, how many results came back, how long it took and, when the person opens one, whether it was a record or a page (the collection and id, never the record’s content). The page lists the top searches, searches that found nothing, searches where results appeared but nothing was opened, and slow searches, with a link beside each empty search to try it in the list, check which fields the list searches, or ask the assistant where the thing lives.'
     },
     {
       type: 'ul',
@@ -846,40 +846,53 @@ export const adminUxNavigation: DocSection = {
       type: 'table',
       head: ['Category', 'What lives there'],
       rows: [
-        ['Home', 'Overview, My Work, Tasks, Dashboards, Command Center, Ask AI, Chat, Support'],
+        [
+          'Home',
+          'Overview, My Work, Tasks, Dashboards, Command Center, Ask AI, AI Plans, Chat, Support, Videos, Ideas'
+        ],
         [
           'Data',
           'Records (collections, files, trash), structure (data model, hierarchies, virtual collections, ID sequences), templates & forms, bulk changes (imports, find & replace, M2M matrix, data integrity)'
         ],
         [
           'Workflow',
-          'Processes (pipelines, approvals, queues), automations (flows, rules, automation tests), deadlines & risk (SLA, at-risk, scheduled changes, blackout dates)'
+          'Pipelines, approvals, queues, Automations (flows, rules, tests, dead letters), Deadlines & risk (SLA rules, at-risk rules, scheduled changes, blackout dates)'
         ],
         [
           'People',
-          'Directory, access (roles, user scopes, access requests, access audit), availability (delegation, coverage gaps, presence), security & privacy'
+          'Directory (users, teams, workspaces), access (roles, user scopes, Access reviews), oversight (Coverage, Security & privacy)'
         ],
         [
           'Notifications',
-          'Alerts & watching, messages (broadcasts, mail templates), delivery (mail log, notification analytics, notification bench)'
+          'Alerts (field, metric & widget alerts, field watches, your subscriptions), broadcasts, Delivery (mail log, templates, analytics, bench)'
         ],
-        ['Insights', 'Reports, usage analytics, session replays, and change history'],
+        [
+          'Insights',
+          'Reports, Activity (log, live, audit report, value history, provenance), Usage, AI'
+        ],
         [
           'Integrations',
-          'Integration health, ERP submissions, dead letters, and partner connections'
+          'Integration Health (incl. ERP submissions) and Connections (external APIs, webhooks, sync jobs, inbound mappings)'
         ],
         [
           'Operations',
-          'Health (status, monitors, telemetry), issues, database, jobs, ops tools, and release (environments, config diff, readiness, promotion, blueprints, change sets)'
+          'Health, issues, database, traffic map, infrastructure, realtime, chaos, jobs, ops console, and release (Environments, Promotion)'
         ],
-        ['Developer', 'APIs, queries, extensions and test tooling, reference docs'],
-        ['System', 'Settings, feature flags, config health, config search, setup checklist']
+        [
+          'Developer',
+          'API keys, MCP, GraphQL, playground, Queries, procedures, extensions, widgets, dev tools, docs'
+        ],
+        ['System', 'Settings, feature flags, config hygiene, setup checklist']
       ]
     },
     { type: 'h3', id: 'admin-navigation-hubs', text: 'Pages with tabs' },
     {
       type: 'p',
-      text: 'Some entries open a page whose views are tabs, each at its own address: Jobs (/jobs — Runs & schedules, Timeline /jobs/timeline, Calendar /jobs/calendar, Repair tasks /jobs/tasks), Database (/database — Overview, Tuning /database/tuning, SQL checks /database/sql-checks, Redis keys /database/redis) and Health (/health — Status, Monitors /health/monitors, Telemetry /health/telemetry). The arrow keys move between tabs. Each was once its own page; the old addresses (/background-jobs, /cron-timeline, /ops-calendar, /ops-tasks, /db-health, /db-tuning, /sql-checks, /ops-redis, /monitors, /telemetry) still work and open the matching tab with any filters in the link kept, so bookmarks, favorites and links in emails keep working.'
+      text: 'Most entries open a page whose views are tabs, each at its own address — the first tab at the page’s own path, the others under it (Automations at /flows: Flows, Rules /flows/rules, Tests /flows/tests, Dead letters /flows/dead-letters). The arrow keys, Home and End move between tabs, and the browser tab title names the tab. The pages with tabs are Jobs, Database, Health, Environments, Promotion, Connections, Reports, Activity, Usage, AI, Alerts, Delivery, Automations, Deadlines & risk, Coverage, Security & privacy, Access reviews, MCP, Queries, GraphQL, Docs, Dev tools and Config hygiene. Each tab was once its own page: the old addresses (for example /background-jobs, /rules, /field-watches, /mail-log, /pulse, /mcp-tools, /config-review) still work and open the matching tab with any filters in the link kept, so bookmarks, favorites and links in emails keep working. The audit report that lived at /reports is now Activity → Audit report (/activity/audit); /reports opens Reports. ERP submissions became a tab of Integration Health (/integration-health?tab=erp).'
+    },
+    {
+      type: 'p',
+      text: 'Role UI permissions still work per tab: Roles → UI lists each tab of a page separately (under the tab’s old address), so a role can hide one tab — say Rules — and keep the rest of Automations. A page’s sidebar entry shows while any of its tabs is allowed and opens the first allowed one.'
     },
     { type: 'h3', id: 'admin-navigation-find', text: 'Find a page' },
     {

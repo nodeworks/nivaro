@@ -17,6 +17,7 @@ import {
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -464,20 +465,15 @@ export function FlowsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      {/* ── Page header ───────────────────────────────────────── */}
-      <div className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-2.5'>
-            <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              Flows
-            </h1>
+      <HubToolbar
+        description='Automations that run steps on a trigger: a record event, a schedule, a webhook or a manual run. Rows open the editor.'
+        actions={
+          <>
             {data && (
               <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-muted dark:text-muted-foreground'>
-                {flows.length}
+                {flows.length} {flows.length === 1 ? 'flow' : 'flows'}
               </span>
             )}
-          </div>
-          <div className='flex items-center gap-2'>
             <input
               ref={importInputRef}
               type='file'
@@ -485,52 +481,57 @@ export function FlowsPage() {
               className='hidden'
               onChange={handleImportFlow}
             />
-            <Button size='sm' variant='outline' onClick={() => importInputRef.current?.click()}>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 text-[12px]'
+              onClick={() => importInputRef.current?.click()}
+            >
               <Upload className='mr-1.5 h-3.5 w-3.5' /> Import
             </Button>
             <Button
               size='sm'
               variant='outline'
-              className='gap-1.5'
+              className='h-8 gap-1.5 text-[12px]'
               onClick={() => setAiOpen((v) => !v)}
             >
               <Sparkles className='h-3.5 w-3.5' /> Build with AI
             </Button>
-            <Button size='sm' onClick={() => setShowCreate(true)}>
+            <Button size='sm' className='h-8 text-[12px]' onClick={() => setShowCreate(true)}>
               <Plus className='mr-1.5 h-3.5 w-3.5' /> Create Flow
             </Button>
-          </div>
-        </div>
-      </div>
-
-      {aiOpen && (
-        <div className='border-b border-slate-200 bg-white px-6 py-3 dark:border-border dark:bg-card'>
-          {/* AI flow builder (#447): prose → an INACTIVE drafted flow, opened
+          </>
+        }
+      >
+        {aiOpen && (
+          <div className='mt-3'>
+            {/* AI flow builder (#447): prose → an INACTIVE drafted flow, opened
               in the editor for review — nothing runs until activated. */}
-          <form
-            className='flex items-center gap-2'
-            onSubmit={(e) => {
-              e.preventDefault()
-              void buildWithAi()
-            }}
-          >
-            <Input
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder='e.g. "When an invoice is created over $50k, read its workflow and email the internal contact"'
-              className='h-9 flex-1 text-[13px]'
-              autoFocus
-            />
-            <Button type='submit' size='sm' disabled={aiBusy || !aiPrompt.trim()}>
-              {aiBusy ? 'Drafting…' : 'Draft flow'}
-            </Button>
-          </form>
-          <p className='mt-1 text-[11px] text-slate-400'>
-            The draft is created INACTIVE with wired steps — review every operation in the editor
-            before activating.
-          </p>
-        </div>
-      )}
+            <form
+              className='flex items-center gap-2'
+              onSubmit={(e) => {
+                e.preventDefault()
+                void buildWithAi()
+              }}
+            >
+              <Input
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder='e.g. "When an invoice is created over $50k, read its workflow and email the internal contact"'
+                className='h-9 flex-1 text-[13px]'
+                autoFocus
+              />
+              <Button type='submit' size='sm' disabled={aiBusy || !aiPrompt.trim()}>
+                {aiBusy ? 'Drafting…' : 'Draft flow'}
+              </Button>
+            </form>
+            <p className='mt-1 text-[11px] text-slate-400'>
+              The draft is created INACTIVE with wired steps — review every operation in the editor
+              before activating.
+            </p>
+          </div>
+        )}
+      </HubToolbar>
 
       {/* ── Full-width list — rows open the editor directly ───── */}
       <div className='flex flex-1 min-h-0 flex-col overflow-hidden bg-white dark:bg-card'>

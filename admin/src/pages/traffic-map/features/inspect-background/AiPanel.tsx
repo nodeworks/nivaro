@@ -120,7 +120,7 @@ export function AiPanel({ inspectRef, anchor, windowSec }: InspectPanelProps) {
       <Note hook='ai-retention'>
         AI calls are kept {d.kept_days} days.{' '}
         <Link
-          to='/ai-analytics'
+          to='/ai'
           className='text-[var(--tm-accent-ink)] hover:underline'
           data-tm-inspect-ai-full=''
         >

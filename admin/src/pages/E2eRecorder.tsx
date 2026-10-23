@@ -1,17 +1,9 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import {
-  Circle,
-  Clapperboard,
-  Copy,
-  Download,
-  FolderInput,
-  Square,
-  Trash2,
-  Video
-} from 'lucide-react'
+import { Circle, Clapperboard, Copy, Download, FolderInput, Square, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -138,34 +130,43 @@ export function E2eRecorderPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col' data-e2e-recorder>
-      <header className='flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <Video className='h-4 w-4 text-nvr-navy dark:text-nvr-cyan' />
-        <div>
-          <h1 className='text-[15px] font-semibold text-slate-900 dark:text-foreground'>
-            Golden-path recorder
-          </h1>
-          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
-            Record a click path through the admin, then save it as a Playwright spec. Passwords are
-            never captured; the spec signs in with a static token.
-          </p>
-        </div>
-        <div className='ml-auto flex items-center gap-2'>
-          {state.recording ? (
-            <Button size='sm' variant='destructive' onClick={() => stopRecording()} data-e2e-stop>
-              <Square className='mr-1 h-3.5 w-3.5' /> Stop recording
-            </Button>
-          ) : (
-            <Button size='sm' onClick={() => startRecording()} data-e2e-start>
-              <Circle className='mr-1 h-3.5 w-3.5 fill-current text-red-500' /> Record
-            </Button>
-          )}
-          {state.steps.length > 0 && !state.recording && (
-            <Button size='sm' variant='outline' onClick={() => clearRecording()}>
-              <Trash2 className='mr-1 h-3.5 w-3.5' /> Clear
-            </Button>
-          )}
-        </div>
-      </header>
+      <HubToolbar
+        description='Record a click path through the admin, then save it as a Playwright spec. Passwords are never captured; the spec signs in with a static token.'
+        actions={
+          <>
+            {state.recording ? (
+              <Button
+                size='sm'
+                variant='destructive'
+                className='h-8 text-[12px]'
+                onClick={() => stopRecording()}
+                data-e2e-stop
+              >
+                <Square className='mr-1 h-3.5 w-3.5' /> Stop recording
+              </Button>
+            ) : (
+              <Button
+                size='sm'
+                className='h-8 text-[12px]'
+                onClick={() => startRecording()}
+                data-e2e-start
+              >
+                <Circle className='mr-1 h-3.5 w-3.5 fill-current text-red-500' /> Record
+              </Button>
+            )}
+            {state.steps.length > 0 && !state.recording && (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-8 text-[12px]'
+                onClick={() => clearRecording()}
+              >
+                <Trash2 className='mr-1 h-3.5 w-3.5' /> Clear
+              </Button>
+            )}
+          </>
+        }
+      />
 
       <div className='flex min-h-0 flex-1 overflow-hidden'>
         <aside className='flex w-[380px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
@@ -189,7 +190,7 @@ export function E2eRecorderPage() {
                 <Clapperboard className='h-3.5 w-3.5 text-violet-500' />
                 From a session recording
                 <Link
-                  to={`/session-replays?recording=${source.recordingId}${source.fromMs != null ? `&t=${source.fromMs}` : ''}`}
+                  to={`/analytics/replays?recording=${source.recordingId}${source.fromMs != null ? `&t=${source.fromMs}` : ''}`}
                   className='ml-auto font-normal text-nvr-navy hover:underline dark:text-nvr-cyan'
                 >
                   Watch it

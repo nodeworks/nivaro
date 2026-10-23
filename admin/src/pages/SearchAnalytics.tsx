@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { Search } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
+import { HubToolbar } from '@/components/hub-page'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn, formatNumber } from '@/lib/utils'
@@ -204,39 +204,31 @@ export function SearchAnalyticsPage() {
 
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
-      <header className='flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-3'>
-          <div className='flex h-9 w-9 items-center justify-center rounded-lg bg-nvr-cyan/15'>
-            <Search className='h-4 w-4 text-nvr-navy dark:text-nvr-cyan' />
-          </div>
-          <div>
-            <h1 className='text-base font-semibold'>Search Analytics</h1>
-            <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-              What people search for, what finds nothing, and what goes unopened.
-            </p>
-          </div>
-        </div>
-        <span className='flex shrink-0 rounded-md border border-slate-200 p-0.5 dark:border-border'>
-          {WINDOWS.map((d) => (
-            <button
-              key={d}
-              type='button'
-              onClick={() => setDays(d)}
-              aria-pressed={days === d}
-              aria-label={`Last ${d} days`}
-              className={cn(
-                'rounded px-2.5 py-1 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
-                days === d
-                  ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
-                  : 'text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
-              )}
-            >
-              {d}d
-            </button>
-          ))}
-        </span>
-      </header>
-      <div className='flex-1 space-y-4 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+      <HubToolbar
+        description='What people search for, what finds nothing, what goes unopened and what runs slow. Add a synonym where a search came back empty.'
+        actions={
+          <span className='flex h-8 shrink-0 items-center rounded-md border border-slate-200 p-0.5 dark:border-border'>
+            {WINDOWS.map((d) => (
+              <button
+                key={d}
+                type='button'
+                onClick={() => setDays(d)}
+                aria-pressed={days === d}
+                aria-label={`Last ${d} days`}
+                className={cn(
+                  'rounded px-2.5 py-1 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                  days === d
+                    ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                    : 'text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+                )}
+              >
+                {d}d
+              </button>
+            ))}
+          </span>
+        }
+      />
+      <div className='flex-1 space-y-4 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {isLoading ? (
           <>
             <Skeleton className='h-20 w-full' />

@@ -604,7 +604,7 @@ function AiPanel({ sel }: { sel: Selection }) {
             {top?.ai?.fallbacks_since_boot ? ` (${top.ai.fallbacks_since_boot} since boot)` : ''}.
           </Empty>
         )}
-        <Link to='/ai-analytics' className={cn(LINK, 'mt-2 inline-block text-[12px]')}>
+        <Link to='/ai' className={cn(LINK, 'mt-2 inline-block text-[12px]')}>
           Open AI analytics
         </Link>
       </Section>

@@ -6,7 +6,6 @@ import {
   Play,
   Plus,
   Search,
-  ShieldCheck,
   Trash2,
   UserRound,
   X
@@ -14,8 +13,16 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
@@ -92,24 +99,27 @@ function StatusDot({ run }: { run: AuditRun | null }) {
   )
 }
 
-function CollectionCombobox({
-  value,
-  onChange
-}: {
-  value: string
-  onChange: (v: string) => void
-}) {
+function CollectionCombobox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false)
   const { data: collections = [] } = useQuery<Array<{ collection: string }>>({
     queryKey: ['collections-list'],
-    queryFn: () => api.get('/collections').then((r: { data: { data?: Array<{ collection: string }> } }) => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get('/collections')
+        .then((r: { data: { data?: Array<{ collection: string }> } }) => r.data.data ?? []),
     staleTime: 60_000
   })
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant='outline' size='sm' className='h-8 w-full justify-between text-[12px] font-normal'>
-          <span className={cn('truncate', !value && 'text-slate-400')}>{value || 'Collection…'}</span>
+        <Button
+          variant='outline'
+          size='sm'
+          className='h-8 w-full justify-between text-[12px] font-normal'
+        >
+          <span className={cn('truncate', !value && 'text-slate-400')}>
+            {value || 'Collection…'}
+          </span>
           <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 opacity-50' />
         </Button>
       </PopoverTrigger>
@@ -131,7 +141,12 @@ function CollectionCombobox({
                     }}
                     className='text-[12px]'
                   >
-                    <Check className={cn('mr-2 h-3.5 w-3.5', value === c.collection ? 'opacity-100' : 'opacity-0')} />
+                    <Check
+                      className={cn(
+                        'mr-2 h-3.5 w-3.5',
+                        value === c.collection ? 'opacity-100' : 'opacity-0'
+                      )}
+                    />
                     {c.collection}
                   </CommandItem>
                 ))}
@@ -159,7 +174,8 @@ export default function AccessAuditPage() {
 
   const { data: audits = [], isLoading } = useQuery<AuditDef[]>({
     queryKey: ['access-audits'],
-    queryFn: () => api.get('/access-audits').then((r: { data: { data?: AuditDef[] } }) => r.data.data ?? []),
+    queryFn: () =>
+      api.get('/access-audits').then((r: { data: { data?: AuditDef[] } }) => r.data.data ?? []),
     // Poll while any run is active so the list status flips without a reload.
     refetchInterval: (q) =>
       (q.state.data ?? []).some((a) => a.latest_run?.status === 'running') ? 3000 : false
@@ -171,7 +187,10 @@ export default function AccessAuditPage() {
 
   const { data: runs = [] } = useQuery<AuditRun[]>({
     queryKey: ['access-audit-runs', selected?.id],
-    queryFn: () => api.get(`/access-audits/${selected!.id}/runs`).then((r: { data: { data?: AuditRun[] } }) => r.data.data ?? []),
+    queryFn: () =>
+      api
+        .get(`/access-audits/${selected!.id}/runs`)
+        .then((r: { data: { data?: AuditRun[] } }) => r.data.data ?? []),
     enabled: !!selected,
     refetchInterval: (q) =>
       (q.state.data ?? []).some((r) => r.status === 'running') ? 3000 : false
@@ -200,13 +219,31 @@ export default function AccessAuditPage() {
     enabled: !!activeRun && activeRun.status !== 'running'
   })
   const { data: byUser = [] } = useQuery<
-    Array<{ user: string; email: string | null; first_name: string | null; last_name: string | null; last_access: string | null; finding_count: number }>
+    Array<{
+      user: string
+      email: string | null
+      first_name: string | null
+      last_name: string | null
+      last_access: string | null
+      finding_count: number
+    }>
   >({
     queryKey: ['access-audit-by-user', activeRun?.id],
     queryFn: () =>
-      api
-        .get(`/access-audits/runs/${activeRun!.id}/by-user`)
-        .then((r: { data: { data?: Array<{ user: string; email: string | null; first_name: string | null; last_name: string | null; last_access: string | null; finding_count: number }> } }) => r.data.data ?? []),
+      api.get(`/access-audits/runs/${activeRun!.id}/by-user`).then(
+        (r: {
+          data: {
+            data?: Array<{
+              user: string
+              email: string | null
+              first_name: string | null
+              last_name: string | null
+              last_access: string | null
+              finding_count: number
+            }>
+          }
+        }) => r.data.data ?? []
+      ),
     enabled: !!activeRun && activeRun.status === 'completed' && viewMode === 'people'
   })
   const findings = findingsData?.data ?? []
@@ -260,17 +297,7 @@ export default function AccessAuditPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <ShieldCheck className='h-[18px] w-[18px] text-slate-400' />
-          <h1 className='text-[15px] font-semibold text-slate-800 dark:text-slate-100'>Access Audit</h1>
-        </div>
-        <p className='mt-0.5 max-w-[72ch] text-[12px] text-slate-500 dark:text-slate-400'>
-          Checks that every stakeholder of a record — its creator, contacts, and current pipeline
-          owners — can still open it. Data edits and scope changes can quietly revoke access;
-          rerun an audit any time and each finding names the exact rule that hides the record.
-        </p>
-      </header>
+      <HubToolbar description='Checks that every stakeholder of a record (its creator, contacts and current pipeline owners) can still open it. Each finding names the exact rule that hides the record.' />
 
       <ExplainAccessBar />
 
@@ -281,7 +308,10 @@ export default function AccessAuditPage() {
             {isLoading ? (
               <div className='space-y-2 p-3'>
                 {[1, 2].map((i) => (
-                  <div key={i} className='animate-pulse h-12 rounded-lg bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                  <div
+                    key={i}
+                    className='animate-pulse h-12 rounded-lg bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]'
+                  />
                 ))}
               </div>
             ) : (
@@ -307,7 +337,11 @@ export default function AccessAuditPage() {
                     <span className='block text-[11px] text-slate-400'>
                       {a.collection}
                       {a.latest_run && a.latest_run.status === 'completed' && (
-                        <> · {a.latest_run.violation_count} finding{a.latest_run.violation_count === 1 ? '' : 's'}</>
+                        <>
+                          {' '}
+                          · {a.latest_run.violation_count} finding
+                          {a.latest_run.violation_count === 1 ? '' : 's'}
+                        </>
                       )}
                       {a.latest_run?.status === 'running' && <> · running…</>}
                     </span>
@@ -348,9 +382,18 @@ export default function AccessAuditPage() {
                     disabled={!newCollection || createMut.isPending}
                     onClick={() => createMut.mutate()}
                   >
-                    {createMut.isPending ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Create'}
+                    {createMut.isPending ? (
+                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                    ) : (
+                      'Create'
+                    )}
                   </Button>
-                  <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setCreating(false)}>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 text-[12px]'
+                    onClick={() => setCreating(false)}
+                  >
                     <X className='h-3.5 w-3.5' />
                   </Button>
                 </div>
@@ -379,11 +422,17 @@ export default function AccessAuditPage() {
             <div className='space-y-5 p-6'>
               <div className='flex items-start justify-between gap-4'>
                 <div>
-                  <h2 className='text-[14px] font-semibold text-slate-800 dark:text-slate-100'>{selected.name}</h2>
+                  <h2 className='text-[14px] font-semibold text-slate-800 dark:text-slate-100'>
+                    {selected.name}
+                  </h2>
                   <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400'>
                     Checking{' '}
                     {selected.subjects
-                      .map((s) => (s.type === 'pipeline_owners' ? 'current pipeline owners' : `"${s.label || s.field}"`))
+                      .map((s) =>
+                        s.type === 'pipeline_owners'
+                          ? 'current pipeline owners'
+                          : `"${s.label || s.field}"`
+                      )
                       .join(', ')}{' '}
                     on <span className='font-medium'>{selected.collection}</span>.
                   </p>
@@ -392,16 +441,31 @@ export default function AccessAuditPage() {
                   {confirmDelete ? (
                     <>
                       <span className='text-[12px] text-slate-500'>Delete?</span>
-                      <Button size='sm' variant='destructive' className='h-7 text-[12px]' onClick={() => deleteMut.mutate(selected.id)}>
+                      <Button
+                        size='sm'
+                        variant='destructive'
+                        className='h-7 text-[12px]'
+                        onClick={() => deleteMut.mutate(selected.id)}
+                      >
                         Confirm
                       </Button>
-                      <Button size='sm' variant='outline' className='h-7 text-[12px]' onClick={() => setConfirmDelete(false)}>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        className='h-7 text-[12px]'
+                        onClick={() => setConfirmDelete(false)}
+                      >
                         Cancel
                       </Button>
                     </>
                   ) : (
                     <>
-                      <Button size='sm' variant='outline' className='h-7 gap-1.5 text-[12px] text-slate-500' onClick={() => setConfirmDelete(true)}>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        className='h-7 gap-1.5 text-[12px] text-slate-500'
+                        onClick={() => setConfirmDelete(true)}
+                      >
                         <Trash2 className='h-3.5 w-3.5' />
                       </Button>
                       <Button
@@ -438,7 +502,9 @@ export default function AccessAuditPage() {
                     ['Duration', activeRun.status === 'running' ? 'running…' : (runDuration ?? '—')]
                   ].map(([label, value]) => (
                     <div key={label} className='bg-white px-4 py-3 dark:bg-card'>
-                      <p className='text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>{label}</p>
+                      <p className='text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
+                        {label}
+                      </p>
                       <p
                         className={cn(
                           'mt-0.5 text-[15px] font-semibold tabular-nums',
@@ -493,7 +559,9 @@ export default function AccessAuditPage() {
                   <div className='flex items-center gap-3 border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
                     <p className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
                       Findings
-                      <span className='ml-1.5 text-[11px] font-normal text-slate-400'>{findingsTotal.toLocaleString()}</span>
+                      <span className='ml-1.5 text-[11px] font-normal text-slate-400'>
+                        {findingsTotal.toLocaleString()}
+                      </span>
                     </p>
                     <div className='flex overflow-hidden rounded-md border border-slate-200 dark:border-border'>
                       {(
@@ -555,7 +623,10 @@ export default function AccessAuditPage() {
                     ) : (
                       <div className='divide-y divide-slate-100 dark:divide-border/60'>
                         {byUser.map((u) => {
-                          const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || u.user
+                          const name =
+                            [u.first_name, u.last_name].filter(Boolean).join(' ') ||
+                            u.email ||
+                            u.user
                           return (
                             <div
                               key={u.user}
@@ -574,14 +645,25 @@ export default function AccessAuditPage() {
                               className='flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.02]'
                             >
                               <span className='flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10.5px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
-                                {(((u.first_name?.[0] ?? '') + (u.last_name?.[0] ?? '')) || (u.email?.[0] ?? '?')).toUpperCase()}
+                                {(
+                                  (u.first_name?.[0] ?? '') + (u.last_name?.[0] ?? '') ||
+                                  (u.email?.[0] ?? '?')
+                                ).toUpperCase()}
                               </span>
                               <span className='min-w-0 flex-1'>
-                                <span className='block truncate text-[12.5px] text-slate-700 dark:text-slate-200'>{name}</span>
-                                {u.email && <span className='block truncate text-[11px] text-slate-400'>{u.email}</span>}
+                                <span className='block truncate text-[12.5px] text-slate-700 dark:text-slate-200'>
+                                  {name}
+                                </span>
+                                {u.email && (
+                                  <span className='block truncate text-[11px] text-slate-400'>
+                                    {u.email}
+                                  </span>
+                                )}
                               </span>
                               <span className='shrink-0 text-[11px] text-slate-400'>
-                                {u.last_access ? `Last seen ${formatRelative(u.last_access)}` : 'Never signed in'}
+                                {u.last_access
+                                  ? `Last seen ${formatRelative(u.last_access)}`
+                                  : 'Never signed in'}
                               </span>
                               <Link
                                 to={`/users/${u.user}`}
@@ -632,16 +714,24 @@ export default function AccessAuditPage() {
                                 to={`/users/${f.user}`}
                                 className='block w-fit text-slate-700 underline decoration-slate-300 decoration-dotted underline-offset-2 hover:decoration-nvr-cyan dark:text-slate-200'
                               >
-                                {[f.first_name, f.last_name].filter(Boolean).join(' ') || f.user_email || f.user}
+                                {[f.first_name, f.last_name].filter(Boolean).join(' ') ||
+                                  f.user_email ||
+                                  f.user}
                               </Link>
                               {f.user_email && (
-                                <span className='block text-[11px] text-slate-400'>{f.user_email}</span>
+                                <span className='block text-[11px] text-slate-400'>
+                                  {f.user_email}
+                                </span>
                               )}
                               <span className='block text-[11px] text-slate-400'>
-                                {f.last_access ? `Last seen ${formatRelative(f.last_access)}` : 'Never signed in'}
+                                {f.last_access
+                                  ? `Last seen ${formatRelative(f.last_access)}`
+                                  : 'Never signed in'}
                               </span>
                             </td>
-                            <td className='px-3 py-2.5 text-slate-500 dark:text-slate-400'>{f.subject}</td>
+                            <td className='px-3 py-2.5 text-slate-500 dark:text-slate-400'>
+                              {f.subject}
+                            </td>
                             <td className='px-3 py-2.5'>
                               {f.reasons.some((r) => r.record_values !== undefined) ? (
                                 <div className='space-y-1'>
@@ -649,13 +739,17 @@ export default function AccessAuditPage() {
                                     .filter((r) => r.record_values !== undefined)
                                     .map((r, i) => (
                                       <p key={i} className='whitespace-nowrap'>
-                                        <span className='text-slate-400'>{r.dimension_label}: </span>
+                                        <span className='text-slate-400'>
+                                          {r.dimension_label}:{' '}
+                                        </span>
                                         {(r.record_values ?? []).length > 0 ? (
                                           <span className='text-slate-700 dark:text-slate-200'>
                                             {(r.record_values ?? []).join(', ')}
                                           </span>
                                         ) : (
-                                          <span className='italic text-amber-600 dark:text-amber-400'>none linked</span>
+                                          <span className='italic text-amber-600 dark:text-amber-400'>
+                                            none linked
+                                          </span>
                                         )}
                                       </p>
                                     ))}
@@ -716,7 +810,6 @@ export default function AccessAuditPage() {
   )
 }
 
-
 // ─── Admin access explain (#120): any user × any record, gate by gate ────────
 
 function ExplainAccessBar() {
@@ -729,14 +822,20 @@ function ExplainAccessBar() {
     reasons: Array<{ type: string; message: string }>
     act?: { can_act: boolean; summary: string }
   } | null>(null)
-  const { data: users = [] } = useQuery<Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>>({
+  const { data: users = [] } = useQuery<
+    Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>
+  >({
     queryKey: ['explain-user-search', userQ],
     queryFn: () =>
       api
-        .get<{ data: Array<{ id: string; first_name: string | null; last_name: string | null; email: string }> }>(
-          '/users',
-          { params: { limit: 8, search: userQ } }
-        )
+        .get<{
+          data: Array<{
+            id: string
+            first_name: string | null
+            last_name: string | null
+            email: string
+          }>
+        }>('/users', { params: { limit: 8, search: userQ } })
         .then((r) => r.data.data),
     enabled: userQ.length >= 2,
     staleTime: 30_000
@@ -750,10 +849,9 @@ function ExplainAccessBar() {
             reasons: Array<{ type: string; message: string }>
             act?: { can_act: boolean; summary: string }
           }
-        }>(
-          `/access-explain/${collection.trim()}/${recordId.trim()}`,
-          { params: { user_id: userId, act: '1' } }
-        )
+        }>(`/access-explain/${collection.trim()}/${recordId.trim()}`, {
+          params: { user_id: userId, act: '1' }
+        })
         .then((r) => r.data.data),
     onSuccess: setResult,
     onError: (e: { response?: { data?: { error?: string } } }) =>
@@ -768,7 +866,12 @@ function ExplainAccessBar() {
         </span>
         <div className='relative'>
           <Input
-            value={pickedUser ? `${pickedUser.first_name ?? ''} ${pickedUser.last_name ?? ''}`.trim() || pickedUser.email : userQ}
+            value={
+              pickedUser
+                ? `${pickedUser.first_name ?? ''} ${pickedUser.last_name ?? ''}`.trim() ||
+                  pickedUser.email
+                : userQ
+            }
             onChange={(e) => {
               setUserQ(e.target.value)
               setUserId(null)
@@ -814,7 +917,12 @@ function ExplainAccessBar() {
           {explain.isPending ? 'Checking…' : 'Explain'}
         </Button>
         {result && (
-          <span className={cn('text-[12.5px] font-medium', result.access ? 'text-emerald-600' : 'text-red-600')}>
+          <span
+            className={cn(
+              'text-[12.5px] font-medium',
+              result.access ? 'text-emerald-600' : 'text-red-600'
+            )}
+          >
             {result.access ? 'CAN see it' : 'CANNOT see it'}
           </span>
         )}

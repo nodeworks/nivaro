@@ -257,7 +257,7 @@ export function ReadShapesPanel({ sel }: { sel: Selection }) {
             {d.columns.some((c) => c.indexed === false) && (
               <p className='mt-1 text-[11.5px] text-[var(--tm-muted)]'>
                 The{' '}
-                <Link to='/api-analytics' className='text-[var(--tm-accent-ink)] underline'>
+                <Link to='/analytics/api' className='text-[var(--tm-accent-ink)] underline'>
                   index advisor
                 </Link>{' '}
                 lists these as live evidence on large tables.

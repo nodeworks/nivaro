@@ -798,7 +798,7 @@ export function PayloadTemplateEditorPage() {
   const currentApi =
     apis.find((a) => String(a.id) === id) ?? apis.find((a) => a.name === id) ?? null
   const apiId = currentApi?.id ?? null
-  const goBack = useGoBack(apiId != null ? `/external-apis/${apiId}` : '/external-apis')
+  const goBack = useGoBack(apiId != null ? `/external-apis/${apiId}` : '/connections')
 
   // Older links name the API instead of its id.
   useEffect(() => {
@@ -981,7 +981,7 @@ export function PayloadTemplateEditorPage() {
       <Notice title={`No external API “${id}”`}>
         It may have been renamed or removed.{' '}
         <Link
-          to='/external-apis'
+          to='/connections'
           className='font-medium text-slate-900 underline underline-offset-2 dark:text-foreground'
         >
           All external APIs
@@ -1273,7 +1273,7 @@ export function PayloadTemplateRedirectPage() {
       <Notice title={`No external API “${apiName}”`}>
         The payload names an API that no longer exists.{' '}
         <Link
-          to='/external-apis'
+          to='/connections'
           className='font-medium text-slate-900 underline underline-offset-2 dark:text-foreground'
         >
           All external APIs

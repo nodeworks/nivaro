@@ -32,7 +32,7 @@ export function entityUrl(lane: string, entity: string): string | null {
     case 'queries':
       return '/custom-queries'
     case 'inbound':
-      return '/inbound-mappings'
+      return '/connections/inbound'
     case 'extension':
       return '/extensions'
     default:
@@ -116,5 +116,5 @@ export function requestUrl(
   else if (u) p.set('req_user', u[1])
   p.set('from', new Date(ev.t - 5_000).toISOString())
   p.set('to', new Date(ev.t + 15_000).toISOString())
-  return `/api-analytics?${p.toString()}`
+  return `/analytics/api?${p.toString()}`
 }

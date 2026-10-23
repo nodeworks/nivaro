@@ -15,7 +15,7 @@ export function NotificationSubscriptionsPage() {
   return (
     <NivaroProvider client={sharedClient}>
       <NavigationContext.Provider value={nav}>
-        <NotificationSubscriptionsView />
+        <NotificationSubscriptionsView compactHeader />
       </NavigationContext.Provider>
     </NivaroProvider>
   )

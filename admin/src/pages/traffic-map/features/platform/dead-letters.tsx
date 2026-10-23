@@ -286,7 +286,7 @@ function DeadLetterActions() {
           }
         />
       )}
-      <SafeLink to='/dead-letters' className={LINK}>
+      <SafeLink to='/flows/dead-letters' className={LINK}>
         Open the queue
       </SafeLink>
       {note && <Note tone={note.tone}>{note.text}</Note>}

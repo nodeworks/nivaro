@@ -3,6 +3,7 @@ import { Database, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -367,26 +368,28 @@ export function CustomQueriesPage() {
   })
 
   return (
-    <>
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-3'>
-            <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900'>
-              Custom Queries
-            </h1>
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description='Parameterized SQL saved under a slug and exposed as a named endpoint, with its own access rule and cache.'
+        actions={
+          <>
             {data && (
-              <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500'>
-                {queries.length}
+              <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-muted dark:text-muted-foreground'>
+                {queries.length} {queries.length === 1 ? 'query' : 'queries'}
               </span>
             )}
-          </div>
-          <Button size='sm' onClick={() => navigate('/custom-queries/new')}>
-            <Plus className='mr-1.5 h-3.5 w-3.5' /> New Query
-          </Button>
-        </div>
-      </div>
+            <Button
+              size='sm'
+              className='h-8 text-[12px]'
+              onClick={() => navigate('/custom-queries/new')}
+            >
+              <Plus className='mr-1.5 h-3.5 w-3.5' /> New Query
+            </Button>
+          </>
+        }
+      />
 
-      <div className='p-8'>
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         <CacheHealthCard />
         {isLoading ? (
           <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
@@ -507,6 +510,6 @@ export function CustomQueriesPage() {
           </div>
         )}
       </div>
-    </>
+    </div>
   )
 }

@@ -1046,7 +1046,7 @@ function ActionCard({
 export function RuleEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const goBack = useGoBack('/rules')
+  const goBack = useGoBack('/flows/rules')
   const queryClient = useQueryClient()
   const isNew = id === 'new'
 
@@ -1127,7 +1127,7 @@ export function RuleEditPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['rules'] })
       toast.success(isNew ? 'Rule created' : 'Rule saved')
-      navigate('/rules')
+      navigate('/flows/rules')
     },
     onError: () => toast.error('Failed to save rule')
   })

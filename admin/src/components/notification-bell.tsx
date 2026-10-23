@@ -28,12 +28,12 @@ const NOTIF_ROUTES: NotificationRouteMap = {
   report: (id) => `/report-studio/${id}`,
   queue: (id) => `/queues/${id}`,
   dashboard: (id) => `/dashboards/${id}`,
-  alerts: () => '/alert-manager',
+  alerts: () => '/alerts/metrics',
   imports: () => '/imports',
   issues: () => '/issues',
   tasks: () => '/tasks',
   approvals: () => '/approvals',
-  access_requests: () => '/access-requests',
+  access_requests: () => '/access',
   my_work: () => '/my-work',
   support: (id) => (id ? `/support?ticket=${id}` : '/support')
 }
@@ -123,9 +123,9 @@ export function NotificationBell({
         app='admin'
         subscribe={subscribe}
         extraBadge={pendingAccess}
-        mailLogUrl={(id) => `/mail-log?id=${id}`}
+        mailLogUrl={(id) => `/delivery?id=${id}`}
         allPath='/notifications'
-        subscriptionsPath='/notification-subscriptions'
+        subscriptionsPath='/alerts/subscriptions'
         onActionError={(m) => toast.error(m)}
         // The sidebar footer sits bottom-left inside an overflow-clipped rail:
         // portal the panel beside the trigger instead of below it.
@@ -158,7 +158,7 @@ export function NotificationBell({
           pendingAccess > 0 ? (
             <button
               type='button'
-              onClick={() => navigate('/access-requests')}
+              onClick={() => navigate('/access')}
               className='flex w-full items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2 text-left text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/15'
             >
               <KeyRound className='h-3.5 w-3.5 shrink-0' />

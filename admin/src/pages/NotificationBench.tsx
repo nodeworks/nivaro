@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, FlaskConical, Send, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -184,22 +185,9 @@ export default function NotificationBench() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <FlaskConical className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Notification Bench
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              See what a person would receive before they ask. Samples are real sends to you; the
-              simulator never sends.
-            </p>
-          </div>
-        </div>
-      </header>
+      <HubToolbar description='See what a person would receive before they ask. Samples are real sends to you; the simulator never sends.' />
 
-      <div className='flex-1 overflow-y-auto p-6'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
         <div className='grid grid-cols-[380px_1fr] gap-6'>
           {/* Left: samples + simulator form */}
           <div className='space-y-5'>

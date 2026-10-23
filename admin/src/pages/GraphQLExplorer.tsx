@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, KeyRound, Save, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import {
   Command,
   CommandEmpty,
@@ -18,6 +19,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { useTheme } from '@/lib/theme'
 
 interface KeyRow {
   id: string | number
@@ -227,6 +229,7 @@ function FixturesToolbar({
 }
 
 export function GraphQLExplorerPage() {
+  const { resolvedTheme } = useTheme()
   const { user } = useAuth()
   const explorer = useMemo(() => explorerPlugin({ showAttribution: false }), [])
 
@@ -297,100 +300,104 @@ export function GraphQLExplorerPage() {
   }
 
   return (
-    <div className='flex h-full flex-col'>
-      {keys.length > 0 && (
-        <div
-          data-gql-run-as-bar
-          className={`flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5 text-[12px] ${
-            runAs
-              ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100'
-              : 'border-border bg-background text-muted-foreground'
-          }`}
-        >
-          <KeyRound className='h-3.5 w-3.5' />
-          <span>Run as</span>
-          <Popover open={pickOpen} onOpenChange={setPickOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type='button'
-                data-gql-run-as
-                className='inline-flex h-7 items-center gap-1 rounded-md border border-input bg-background px-2 font-medium text-foreground'
-              >
-                {runAs ? `key · ${runAs.key.name}` : `me · ${user?.email ?? 'signed in'}`}
-                <ChevronsUpDown className='h-3 w-3 opacity-60' />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align='start' className='w-[380px] p-0'>
-              <Command>
-                <CommandInput placeholder='Search API keys…' />
-                <CommandList>
-                  <CommandEmpty>No key matches.</CommandEmpty>
-                  <CommandGroup>
-                    <CommandItem
-                      value='__me__'
-                      onSelect={() => {
-                        void runAsKey(null)
-                        setPickOpen(false)
-                      }}
-                    >
-                      <Check className={`mr-2 h-3.5 w-3.5 ${runAs ? 'opacity-0' : ''}`} />
-                      <span>Me — {user?.email}</span>
-                    </CommandItem>
-                    {keys.map((k) => (
-                      <CommandItem
-                        key={String(k.id)}
-                        value={`${k.name} ${k.prefix}`}
-                        data-gql-run-as-key={k.name}
-                        onSelect={() => {
-                          void runAsKey(k.id)
-                          setPickOpen(false)
-                        }}
-                      >
-                        <Check
-                          className={`mr-2 h-3.5 w-3.5 ${
-                            runAs && String(runAs.key.id) === String(k.id) ? '' : 'opacity-0'
-                          }`}
-                        />
-                        <span className='flex-1'>
-                          <span className='block'>{k.name}</span>
-                          <span className='block text-[10.5px] text-muted-foreground'>
-                            {k.prefix}… · {describeKey(k)}
-                          </span>
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
-          {runAs ? (
-            <>
-              <span data-gql-run-as-detail>
-                {describeKey(runAs.key)} — scope, depth and sandbox refusals read exactly as that
-                key's holder sees them. Nothing counts against the key.
-              </span>
-              <span className='ml-auto tabular-nums' data-gql-run-as-expires>
-                {minutesLeft > 0
-                  ? `${minutesLeft} min left`
-                  : 'session lapsed — pick the key again'}
-              </span>
-              <button
-                type='button'
-                onClick={() => void runAsKey(null)}
-                data-gql-run-as-stop
-                className='inline-flex h-7 items-center gap-1 rounded-md border border-amber-400 bg-white px-2 font-medium dark:bg-transparent'
-              >
-                <X className='h-3 w-3' /> Back to me
-              </button>
-            </>
-          ) : (
-            <span>Pick a partner's key to see the API as that key does.</span>
-          )}
-        </div>
-      )}
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description='Write and run queries against the GraphQL API as yourself, or as a partner’s API key to see exactly what that key gets.'
+        actions={
+          keys.length > 0 ? (
+            <div
+              data-gql-run-as-bar
+              className={`flex flex-wrap items-center gap-2 text-[12px] ${
+                runAs
+                  ? 'rounded-md border border-amber-300 bg-amber-50 py-0.5 pr-0.5 pl-2 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100'
+                  : 'text-muted-foreground'
+              }`}
+            >
+              <KeyRound className='h-3.5 w-3.5' />
+              <span>Run as</span>
+              <Popover open={pickOpen} onOpenChange={setPickOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type='button'
+                    data-gql-run-as
+                    className='inline-flex h-7 items-center gap-1 rounded-md border border-input bg-background px-2 font-medium text-foreground'
+                  >
+                    {runAs ? `key · ${runAs.key.name}` : `me · ${user?.email ?? 'signed in'}`}
+                    <ChevronsUpDown className='h-3 w-3 opacity-60' />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align='start' className='w-[380px] p-0'>
+                  <Command>
+                    <CommandInput placeholder='Search API keys…' />
+                    <CommandList>
+                      <CommandEmpty>No key matches.</CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem
+                          value='__me__'
+                          onSelect={() => {
+                            void runAsKey(null)
+                            setPickOpen(false)
+                          }}
+                        >
+                          <Check className={`mr-2 h-3.5 w-3.5 ${runAs ? 'opacity-0' : ''}`} />
+                          <span>Me — {user?.email}</span>
+                        </CommandItem>
+                        {keys.map((k) => (
+                          <CommandItem
+                            key={String(k.id)}
+                            value={`${k.name} ${k.prefix}`}
+                            data-gql-run-as-key={k.name}
+                            onSelect={() => {
+                              void runAsKey(k.id)
+                              setPickOpen(false)
+                            }}
+                          >
+                            <Check
+                              className={`mr-2 h-3.5 w-3.5 ${
+                                runAs && String(runAs.key.id) === String(k.id) ? '' : 'opacity-0'
+                              }`}
+                            />
+                            <span className='flex-1'>
+                              <span className='block'>{k.name}</span>
+                              <span className='block text-[10.5px] text-muted-foreground'>
+                                {k.prefix}… · {describeKey(k)}
+                              </span>
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+              {runAs ? (
+                <>
+                  <span data-gql-run-as-detail>
+                    {describeKey(runAs.key)} — scope, depth and sandbox refusals read exactly as
+                    that key's holder sees them. Nothing counts against the key.
+                  </span>
+                  <span className='ml-auto tabular-nums' data-gql-run-as-expires>
+                    {minutesLeft > 0
+                      ? `${minutesLeft} min left`
+                      : 'session lapsed — pick the key again'}
+                  </span>
+                  <button
+                    type='button'
+                    onClick={() => void runAsKey(null)}
+                    data-gql-run-as-stop
+                    className='inline-flex h-7 items-center gap-1 rounded-md border border-amber-400 bg-white px-2 font-medium dark:bg-transparent'
+                  >
+                    <X className='h-3 w-3' /> Back to me
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : undefined
+        }
+      />
       <div className='min-h-0 flex-1 [&_.graphiql-container]:h-full [&_.graphiql-container]:rounded-none'>
         <GraphiQL
+          forcedTheme={resolvedTheme}
           fetcher={fetcher}
           plugins={[explorer]}
           defaultEditorToolsVisibility

@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { FileSearch } from 'lucide-react'
+import { ChevronsUpDown } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { ChevronsUpDown } from 'lucide-react'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -13,8 +13,8 @@ import {
   CommandList
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
 /**
  * Revision value search (#98), collection-wide: "which records ever held this
@@ -69,19 +69,7 @@ export default function RevisionSearch() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <FileSearch className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              History Search
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Search recorded changes by VALUE — which records ever held it, who wrote it, when.
-              Mined from revision history, newest first.
-            </p>
-          </div>
-        </div>
+      <HubToolbar description='Search recorded changes by value: which records ever held it, who wrote it, and when. Mined from revision history, newest first.'>
         <form
           className='mt-3 flex flex-wrap items-end gap-2'
           onSubmit={(e) => {
@@ -123,18 +111,18 @@ export default function RevisionSearch() {
           <button
             type='submit'
             disabled={!collection || q.trim().length < 2}
-            className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white disabled:opacity-50'
+            className='h-8 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white disabled:opacity-50'
           >
             Search
           </button>
         </form>
-      </header>
+      </HubToolbar>
 
-      <div className='flex-1 overflow-y-auto p-6'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
         {!applied ? (
           <p className='text-[13px] text-slate-400'>
-            Pick a collection and a value. Scoped to changed fields (deltas) — a value a record
-            was CREATED with and never changed appears under its create revision.
+            Pick a collection and a value. Scoped to changed fields (deltas) — a value a record was
+            CREATED with and never changed appears under its create revision.
           </p>
         ) : isFetching ? (
           <p className='text-[13px] text-slate-400'>Scanning revision history…</p>
@@ -182,7 +170,6 @@ export default function RevisionSearch() {
     </div>
   )
 }
-
 
 // Local combobox — the admin has no shared one; this mirrors the per-page
 // pattern (SyncJobs/FieldRulesSection) per the no-native-select convention.

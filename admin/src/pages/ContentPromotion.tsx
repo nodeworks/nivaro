@@ -4,6 +4,7 @@ import { ArrowRightLeft, Check, Download, FileUp, Loader2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { HelpVideoPromotion } from '@/components/help-video-promotion'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -222,23 +223,10 @@ export function ContentPromotionPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <ArrowRightLeft className='h-4.5 w-4.5 text-nvr-cyan' />
-          <div>
-            <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              Content Promotion
-            </h1>
-            <p className='text-[12px] text-muted-foreground'>
-              Export a content bundle here, preview and apply it on another instance — upserts by
-              id, never deletes.
-            </p>
-          </div>
-        </div>
-      </header>
+      <HubToolbar description='Export a content bundle here, then preview and apply it on another instance. Upserts by id, never deletes.' />
 
       <div className='flex flex-1 min-h-0 overflow-y-auto'>
-        <div className='grid w-full max-w-4xl grid-cols-1 gap-6 p-8 md:grid-cols-2'>
+        <div className='grid w-full max-w-4xl grid-cols-1 gap-6 p-4 sm:p-6 md:grid-cols-2'>
           {/* Export */}
           <section className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
             <h2 className='mb-1 text-[14px] font-semibold text-slate-900 dark:text-foreground'>

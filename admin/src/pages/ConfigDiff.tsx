@@ -1,13 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  Download,
-  GitCompare,
-  Upload
-} from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Download, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn, formatNumber } from '@/lib/utils'
@@ -519,50 +513,44 @@ export function ConfigDiffPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-slate-200 px-6 py-4 dark:border-border'>
-        <div className='flex min-w-0 items-center gap-2.5'>
-          <GitCompare className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-lg font-semibold'>Environment Config</h1>
-            <p className='text-[11px] text-muted-foreground'>
-              What differs between this instance and another one.
-            </p>
-          </div>
-        </div>
-        <div className='flex flex-wrap items-center gap-2'>
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-8 gap-1.5 text-[12px]'
-            onClick={download}
-          >
-            <Download className='h-3.5 w-3.5' />
-            Download snapshot
-          </Button>
-          <Button
-            size='sm'
-            className='h-8 gap-1.5 text-[12px]'
-            disabled={compare.isPending}
-            onClick={() => fileRef.current?.click()}
-          >
-            <Upload className='h-3.5 w-3.5' />
-            {compare.isPending ? 'Comparing…' : 'Compare a snapshot'}
-          </Button>
-          <input
-            ref={fileRef}
-            type='file'
-            accept='application/json,.json'
-            className='hidden'
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) void onFile(f)
-              e.target.value = ''
-            }}
-          />
-        </div>
-      </header>
+      <HubToolbar
+        description='Download this instance’s config as a snapshot, upload another instance’s to see field by field what differs, or roll back to a stored restore point.'
+        actions={
+          <>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 gap-1.5 text-[12px]'
+              onClick={download}
+            >
+              <Download className='h-3.5 w-3.5' />
+              Download snapshot
+            </Button>
+            <Button
+              size='sm'
+              className='h-8 gap-1.5 text-[12px]'
+              disabled={compare.isPending}
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload className='h-3.5 w-3.5' />
+              {compare.isPending ? 'Comparing…' : 'Compare a snapshot'}
+            </Button>
+            <input
+              ref={fileRef}
+              type='file'
+              accept='application/json,.json'
+              className='hidden'
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void onFile(f)
+                e.target.value = ''
+              }}
+            />
+          </>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         <div className='mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4'>
           <Stat label='This instance' value={inventory?.instance.database ?? '—'} />
           <Stat

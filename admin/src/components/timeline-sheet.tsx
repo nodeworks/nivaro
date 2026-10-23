@@ -110,7 +110,7 @@ export function TimelineSheet({
             {/* #1374 — session replays are admin-only, like the link. */}
             {user?.is_admin && (
               <Link
-                to={`/session-replays?tab=search&collection=${encodeURIComponent(collection)}&item=${encodeURIComponent(item)}`}
+                to={`/analytics/replays?tab=search&collection=${encodeURIComponent(collection)}&item=${encodeURIComponent(item)}`}
                 className='ml-auto mr-6 inline-flex items-center gap-1 text-[12px] font-normal text-slate-500 hover:text-nvr-navy dark:hover:text-nvr-cyan'
                 title='Session recordings that opened this record'
               >

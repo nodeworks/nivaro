@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query'
-import { BarChart3, Play, Plus, Sparkles, Table2, TerminalSquare, Wand2, X } from 'lucide-react'
+import { BarChart3, Play, Plus, Sparkles, Table2, Wand2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import {
@@ -17,6 +17,7 @@ import {
   YAxis
 } from 'recharts'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import {
   Select,
   SelectContent,
@@ -270,23 +271,10 @@ export default function SqlScratchpad() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <TerminalSquare className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              SQL Scratchpad
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Read-only queries against the live database. SELECT only — writes are rejected — and
-              every run lands in the activity log.
-            </p>
-          </div>
-        </div>
-      </header>
+      <HubToolbar description='Read-only queries against the live database. SELECT only, writes are rejected, and every run lands in the activity log.' />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
-        <div className='flex min-w-0 flex-1 flex-col overflow-y-auto p-6'>
+        <div className='flex min-w-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6'>
           {/* Tabs (#430) */}
           <div className='mb-2 flex items-center gap-1'>
             {tabs.map((t) => (

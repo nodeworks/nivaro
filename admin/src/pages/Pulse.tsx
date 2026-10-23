@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Activity, Radio } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
+import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
@@ -105,39 +106,40 @@ export function PulsePage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-3'>
-          <Radio className={cn('h-4 w-4', connected ? 'text-green-500' : 'text-slate-300')} />
-          <div>
-            <h1 className='text-[16px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              Pulse
-            </h1>
-            <p className='text-[12px] text-muted-foreground'>
-              {connected ? 'Live — every action as it happens' : 'Connecting…'}
-            </p>
-          </div>
-          {/* per-minute sparkline */}
-          <div
-            className='ml-auto flex h-10 items-end gap-[3px]'
-            title='Events per minute, last 30 min'
-          >
-            {spark.map((v, i) => (
-              <span
-                // biome-ignore lint/suspicious/noArrayIndexKey: fixed buckets
-                key={i}
-                className='w-1.5 rounded-sm bg-nvr-cyan transition-all duration-500'
-                style={{
-                  height: `${Math.max(8, (v / sparkMax) * 100)}%`,
-                  opacity: v === 0 ? 0.15 : 0.9
-                }}
+      <HubToolbar
+        description='Every action across the instance, streamed as it happens over the most recent 40. The bars count events per minute for the last 30 minutes.'
+        actions={
+          <>
+            <span
+              className='inline-flex items-center gap-1.5 text-[12px] text-muted-foreground'
+              role='status'
+            >
+              <Radio
+                className={cn('h-3.5 w-3.5', connected ? 'text-green-500' : 'text-slate-300')}
+                aria-hidden
               />
-            ))}
-          </div>
-        </div>
-      </header>
+              {connected ? 'Live' : 'Connecting…'}
+            </span>
+            {/* per-minute sparkline */}
+            <div className='flex h-8 items-end gap-[3px]' title='Events per minute, last 30 min'>
+              {spark.map((v, i) => (
+                <span
+                  // biome-ignore lint/suspicious/noArrayIndexKey: fixed buckets
+                  key={i}
+                  className='w-1.5 rounded-sm bg-nvr-cyan transition-all duration-500'
+                  style={{
+                    height: `${Math.max(8, (v / sparkMax) * 100)}%`,
+                    opacity: v === 0 ? 0.15 : 0.9
+                  }}
+                />
+              ))}
+            </div>
+          </>
+        }
+      />
 
       <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
-        <div className='mx-auto max-w-3xl space-y-1 p-6'>
+        <div className='max-w-3xl space-y-1 p-4 sm:p-6'>
           {events.length === 0 && (
             <div className='pt-16 text-center text-slate-400'>
               <Activity className='mx-auto h-8 w-8 opacity-40' />

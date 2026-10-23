@@ -42,6 +42,19 @@ export async function schemaRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Invalid token' })
     }
     const safeToken = raw || null
+    // The admin embeds this page in Docs → API downloads (?embed=1&theme=dark|light): the hub
+    // already titles it, so the top bar and info block go; dark mode inverts the light theme.
+    const q = req.query as Record<string, string>
+    const embedded = q.embed === '1'
+    const dark = q.theme === 'dark'
+    const extraCss = [
+      embedded
+        ? '.swagger-ui .topbar, .swagger-ui .information-container { display: none; } .swagger-ui .wrapper { padding: 0 24px; }'
+        : '',
+      dark
+        ? 'html { filter: invert(0.88) hue-rotate(180deg); background: #fff; } img, svg image { filter: invert(1) hue-rotate(180deg); }'
+        : ''
+    ].join('\n')
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -53,6 +66,7 @@ export async function schemaRoutes(app: FastifyInstance) {
     body { margin: 0; }
     .swagger-ui .topbar { background: #172940; }
     .swagger-ui .topbar .download-url-wrapper { display: none; }
+    ${extraCss}
   </style>
 </head>
 <body>

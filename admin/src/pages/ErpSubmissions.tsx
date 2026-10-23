@@ -351,7 +351,8 @@ function SubmissionRow({
   )
 }
 
-export function ErpSubmissionsPage() {
+/** `embedded`: rendered as the Integrations console's ERP submissions tab (no page chrome). */
+export function ErpSubmissionsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { user } = useAuth()
   const queryClient = useQueryClient()
   // A record's file chips deep-link here as ?collection=&item= (#1288) — the
@@ -436,19 +437,24 @@ export function ErpSubmissionsPage() {
   })
 
   return (
-    <div className='flex flex-1 min-h-0 flex-col'>
-      {/* Page header */}
-      <header className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-          ERP Submissions
-        </h1>
-        <p className='mt-0.5 text-[12px] text-slate-400 dark:text-muted-foreground'>
-          Inspect, retry and override the submission history of a record sent to an external ERP
-          system.
-        </p>
-      </header>
+    <div className={embedded ? undefined : 'flex flex-1 min-h-0 flex-col'}>
+      {!embedded && (
+        <header className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
+          <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
+            ERP Submissions
+          </h1>
+          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Inspect, retry and override the submission history of a record sent to an external ERP
+            system.
+          </p>
+        </header>
+      )}
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+      <div
+        className={
+          embedded ? undefined : 'flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'
+        }
+      >
         {/* Lookup bar */}
         <form
           className='mb-4 flex flex-wrap items-end gap-2'
@@ -474,7 +480,12 @@ export function ErpSubmissionsPage() {
               className='h-8 w-44 font-mono text-[13px]'
             />
           </div>
-          <Button type='submit' size='sm' className='h-8' disabled={!collection || !itemId.trim()}>
+          <Button
+            type='submit'
+            size='sm'
+            className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90 text-[12px]'
+            disabled={!collection || !itemId.trim()}
+          >
             <Search className='mr-1.5 h-3.5 w-3.5' />
             Load history
           </Button>

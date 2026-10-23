@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FlaskConical, Play } from 'lucide-react'
+import { ChevronsUpDown, Play } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -13,7 +14,6 @@ import {
   CommandList
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { ChevronsUpDown } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -182,25 +182,14 @@ export default function AutomationTests() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-2.5'>
-            <FlaskConical className='h-5 w-5 text-muted-foreground' />
-            <div>
-              <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-                Automation Tests
-              </h1>
-              <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-                Saved regression cases for flows — each dry-runs with a fixed payload and asserts
-                against the trace. Run the suite after any deploy or flow edit.
-              </p>
-            </div>
-          </div>
-          <div className='flex items-center gap-2'>
+      <HubToolbar
+        description='Saved regression cases for flows. Each dry-runs with a fixed payload and asserts against the trace; run the suite after any deploy or flow edit.'
+        actions={
+          <>
             <button
               type='button'
               onClick={() => setShowCreate((v) => !v)}
-              className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] text-slate-600 hover:border-slate-300 dark:border-border dark:text-muted-foreground'
+              className='h-8 rounded-md border border-slate-200 px-3 text-[12px] text-slate-600 hover:border-slate-300 dark:border-border dark:text-muted-foreground'
             >
               {showCreate ? 'Close' : '＋ New test'}
             </button>
@@ -208,16 +197,16 @@ export default function AutomationTests() {
               type='button'
               disabled={runningId != null || tests.filter((t) => t.is_active).length === 0}
               onClick={() => void runSuite()}
-              className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-medium text-white disabled:opacity-50'
+              className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-4 text-[12px] font-medium text-white disabled:opacity-50'
             >
               <Play className='h-3.5 w-3.5' strokeWidth={2} />
               {runningId === 'suite' ? 'Running…' : 'Run suite'}
             </button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
-      <div className='flex-1 space-y-3 overflow-y-auto p-6'>
+      <div className='flex-1 space-y-3 overflow-y-auto p-4 sm:p-6'>
         {failing > 0 && (
           <div className='rounded-lg border border-red-200 bg-red-50/60 px-4 py-2.5 text-[12.5px] font-medium text-red-700 dark:border-red-500/30 dark:bg-red-500/5 dark:text-red-400'>
             {failing} test{failing === 1 ? '' : 's'} failing
@@ -227,7 +216,12 @@ export default function AutomationTests() {
         {showCreate && (
           <div className='max-w-[760px] rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
             <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder='Test name' className={inputCls} />
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder='Test name'
+                className={inputCls}
+              />
               <FlowCombobox
                 value={flowId}
                 onChange={setFlowId}
@@ -246,10 +240,9 @@ export default function AutomationTests() {
                 onClick={() => {
                   setGenerating(true)
                   void api
-                    .post<{ data: Array<{ name: string; payload: unknown; expectations: unknown }> }>(
-                      '/automation-tests/generate',
-                      { flow_id: flowId }
-                    )
+                    .post<{
+                      data: Array<{ name: string; payload: unknown; expectations: unknown }>
+                    }>('/automation-tests/generate', { flow_id: flowId })
                     .then(async (r) => {
                       const cases = r.data.data
                       for (const c of cases) {
@@ -260,7 +253,9 @@ export default function AutomationTests() {
                           expectations: c.expectations
                         })
                       }
-                      toast.success(`${cases.length} test case(s) generated — review before trusting them`)
+                      toast.success(
+                        `${cases.length} test case(s) generated — review before trusting them`
+                      )
                       invalidate()
                       setShowCreate(false)
                     })
@@ -272,7 +267,9 @@ export default function AutomationTests() {
                 {generating ? 'Generating…' : '✨ Generate test cases with AI'}
               </button>
             )}
-            <p className='mt-2 text-[11px] text-slate-400'>Trigger payload (what the flow receives):</p>
+            <p className='mt-2 text-[11px] text-slate-400'>
+              Trigger payload (what the flow receives):
+            </p>
             <textarea
               value={payloadText}
               onChange={(e) => setPayloadText(e.target.value)}
@@ -302,7 +299,9 @@ export default function AutomationTests() {
 
         {tests.length === 0 && !showCreate && (
           <div className='rounded-lg border border-dashed border-slate-300 p-8 text-center dark:border-border'>
-            <p className='text-[13px] font-medium text-slate-600 dark:text-foreground'>No tests yet</p>
+            <p className='text-[13px] font-medium text-slate-600 dark:text-foreground'>
+              No tests yet
+            </p>
             <p className='mt-1 text-[12px] text-slate-400'>
               Save a regression case for a critical flow (an ERP push, owner notifications) so a
               deploy can't silently break it.

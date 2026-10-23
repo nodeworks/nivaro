@@ -6,11 +6,11 @@ import {
   NivaroProvider
 } from '@nivaro/shared'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { BarChart2 } from 'lucide-react'
 import React, { Fragment, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ExplainButton } from '@/components/explain-button'
+import { HubToolbar } from '@/components/hub-page'
 import { SlowTracesPanel } from '@/components/slow-traces'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -107,7 +107,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 type RequestLinkFilters = ApiRequestLogFilters & { from?: string; to?: string; focus?: boolean }
 
 /**
- * #1090 — `/api-analytics?req_path=…&req_method=…&req_status=…&req_user=…&req_key=…&from=…&to=…`
+ * #1090 — `/analytics/api?req_path=…&req_method=…&req_status=…&req_user=…&req_key=…&from=…&to=…`
  * (the Traffic Map's "Open request" link) seeds the request list and opens the match.
  */
 export function requestLinkFilters(params: URLSearchParams): RequestLinkFilters | null {
@@ -212,43 +212,42 @@ export function ApiAnalyticsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-6 py-4 dark:border-border'>
-        <div className='flex items-center gap-2.5'>
-          <BarChart2 className='h-5 w-5 text-muted-foreground' />
-          <h1 className='text-lg font-semibold'>API Analytics</h1>
-        </div>
-        <div className='flex flex-wrap items-center gap-1'>
-          <Button
-            size='sm'
-            variant={allInstances ? 'default' : 'outline'}
-            className='mr-2 h-7 px-2.5 text-[12px]'
-            aria-pressed={allInstances}
-            onClick={() => setAllInstances((v) => !v)}
-            data-api-analytics-all-instances
-            data-tip='Development instances (laptops, probes) write to the same database. Their rows are hidden unless this is on, and pruned after 3 hours.'
-          >
-            {allInstances ? 'Incl. dev instances' : 'Deployed instances'}
-          </Button>
-          {ranges.map((r) => (
+      <HubToolbar
+        description='Request volume, latency and errors across the API, by route, key and GraphQL operation. Ask the logs in plain words, or open slow and failed requests.'
+        actions={
+          <div className='flex flex-wrap items-center gap-1'>
             <Button
-              key={r.hours}
               size='sm'
-              variant={hours === r.hours ? 'default' : 'outline'}
-              className='h-7 px-2.5 text-[12px]'
-              aria-pressed={hours === r.hours}
-              data-tip={`Last ${r.full}`}
-              onClick={() => {
-                setHours(r.hours)
-                setAskHours(null)
-              }}
+              variant={allInstances ? 'default' : 'outline'}
+              className='mr-2 h-8 px-2.5 text-[12px]'
+              aria-pressed={allInstances}
+              onClick={() => setAllInstances((v) => !v)}
+              data-api-analytics-all-instances
+              data-tip='Development instances (laptops, probes) write to the same database. Their rows are hidden unless this is on, and pruned after 3 hours.'
             >
-              {r.label}
+              {allInstances ? 'Incl. dev instances' : 'Deployed instances'}
             </Button>
-          ))}
-        </div>
-      </header>
+            {ranges.map((r) => (
+              <Button
+                key={r.hours}
+                size='sm'
+                variant={hours === r.hours ? 'default' : 'outline'}
+                className='h-8 px-2.5 text-[12px]'
+                aria-pressed={hours === r.hours}
+                data-tip={`Last ${r.full}`}
+                onClick={() => {
+                  setHours(r.hours)
+                  setAskHours(null)
+                }}
+              >
+                {r.label}
+              </Button>
+            ))}
+          </div>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         <NivaroProvider client={sharedClient}>
           <AskTheLogs
             className='mb-6'
@@ -955,7 +954,7 @@ function DeadClickPanel() {
                     <td className='py-1 text-right'>
                       {e.replay ? (
                         <Link
-                          to={`/session-replays?recording=${e.replay.recording}&t=${e.replay.t}`}
+                          to={`/analytics/replays?recording=${e.replay.recording}&t=${e.replay.t}`}
                           className='text-[11.5px] font-medium text-cyan-700 hover:underline dark:text-nvr-cyan'
                         >
                           Watch

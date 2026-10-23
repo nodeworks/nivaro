@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -736,21 +737,19 @@ export function SyncJobsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <RefreshCw className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-lg font-semibold text-slate-900 dark:text-slate-100'>Sync Jobs</h1>
-            <p className='text-[12px] text-slate-400'>
-              Bi-directional data sync between collections and external systems.
-            </p>
-          </div>
-        </div>
-        <Button size='sm' className='gap-1.5' onClick={() => setSelectedId('new')}>
-          <Plus className='h-4 w-4' />
-          New Sync Job
-        </Button>
-      </header>
+      <HubToolbar
+        description='Two-way data sync between collections and external systems: pull records in or push them out, on a schedule or on demand.'
+        actions={
+          <Button
+            size='sm'
+            className='h-8 gap-1.5 text-[12px]'
+            onClick={() => setSelectedId('new')}
+          >
+            <Plus className='h-3.5 w-3.5' />
+            New Sync Job
+          </Button>
+        }
+      />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         <aside className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-card'>

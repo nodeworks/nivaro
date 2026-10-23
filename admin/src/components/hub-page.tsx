@@ -54,7 +54,7 @@ export function HubPage({
             <Icon className='h-4.5 w-4.5 text-nvr-navy dark:text-nvr-cyan' aria-hidden />
           </div>
           <div className='min-w-0'>
-            <h1 className='m-0 text-base font-semibold text-slate-900 dark:text-foreground'>
+            <h1 className='m-0 truncate text-base font-semibold text-slate-900 dark:text-foreground'>
               {hub.title}
             </h1>
             <p className='m-0 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>

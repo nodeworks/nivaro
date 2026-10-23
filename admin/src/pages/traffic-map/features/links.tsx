@@ -164,7 +164,7 @@ function NodeLinks({ sel }: { sel: import('../types').Selection }) {
     if (e && !e.entity.startsWith('__'))
       links.push({
         label: 'Requests',
-        url: `/api-analytics?req_path=${encodeURIComponent(e.lane === 'items' || e.lane === 'system' ? `/api/items/${e.entity}` : e.entity)}`,
+        url: `/analytics/api?req_path=${encodeURIComponent(e.lane === 'items' || e.lane === 'system' ? `/api/items/${e.entity}` : e.entity)}`,
         id: 'tm-entity-requests'
       })
   } else if (sel.kind === 'down') {

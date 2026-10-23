@@ -1,6 +1,7 @@
 import { DeliveryChips, EmptyState, ErrorSurface, NotificationDetailBits } from '@nivaro/shared'
-import { Contrast, Inbox, Play } from 'lucide-react'
+import { Inbox, Play } from 'lucide-react'
 import { useCallback, useRef, useState } from 'react'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -261,29 +262,34 @@ export function ContrastAuditPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col' data-contrast-audit>
-      <header className='flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <Contrast className='h-4 w-4 text-nvr-navy dark:text-nvr-cyan' />
-        <div>
-          <h1 className='text-[15px] font-semibold text-slate-900 dark:text-foreground'>
-            Contrast audit
-          </h1>
-          <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
-            The shared and admin components rendered in both themes, measured against WCAG (4.5:1
-            body, 3:1 large). Rerun after any shared className change.
-          </p>
-        </div>
-        <div className='ml-auto flex items-center gap-2'>
-          <Button size='sm' variant='outline' onClick={() => run(true)} disabled={running}>
-            Audit this page
-          </Button>
-          <Button size='sm' onClick={() => run(false)} disabled={running} data-contrast-run>
-            <Play className='mr-1 h-3.5 w-3.5' />
-            {running ? 'Measuring…' : 'Run audit'}
-          </Button>
-        </div>
-      </header>
+      <HubToolbar
+        description='The shared and admin components rendered in both themes, measured against WCAG (4.5:1 body, 3:1 large). Rerun after any shared className change.'
+        actions={
+          <>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 text-[12px]'
+              onClick={() => run(true)}
+              disabled={running}
+            >
+              Audit this page
+            </Button>
+            <Button
+              size='sm'
+              className='h-8 text-[12px]'
+              onClick={() => run(false)}
+              disabled={running}
+              data-contrast-run
+            >
+              <Play className='mr-1 h-3.5 w-3.5' />
+              {running ? 'Measuring…' : 'Run audit'}
+            </Button>
+          </>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 px-6 py-5 dark:bg-background'>
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {results.length > 0 && (
           <div
             className={cn(

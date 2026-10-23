@@ -42,6 +42,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { navCategories } from '@/layouts/AppLayout'
+import { hubAtBase, tabPermissionKey } from '@/lib/hubs'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -71,8 +72,18 @@ type Policy = {
 type Collection = { collection: string; display_name: string | null }
 type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate' | 'compare' | 'views'
 
+// A hub entry is listed tab by tab, keyed by each tab's permission key (its
+// old standalone path), so a role can still hide one tab of a hub.
 const ALL_NAV_ITEMS = navCategories.flatMap((cat) =>
-  cat.items.map((item) => ({ category: cat.label, label: item.label, to: item.to }))
+  cat.items.flatMap((item) => {
+    const hub = hubAtBase(item.to)
+    if (!hub) return [{ category: cat.label, label: item.label, to: item.to }]
+    return hub.tabs.map((tab) => ({
+      category: cat.label,
+      label: hub.tabs.length > 1 ? `${item.label} › ${tab.label}` : item.label,
+      to: tabPermissionKey(hub, tab)
+    }))
+  })
 )
 
 const ACTIONS = ['create', 'read', 'update', 'delete'] as const

@@ -134,7 +134,11 @@ export function OpsRedisPage() {
               placeholder='Pattern, e.g. sess:* or nvr:*'
               className='h-8 font-mono text-[12px]'
             />
-            <Button size='sm' className='h-8 gap-1.5 text-[12px]' onClick={() => runScan(true)}>
+            <Button
+              size='sm'
+              className='h-8 gap-1.5 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan/90'
+              onClick={() => runScan(true)}
+            >
               <Search className='h-3.5 w-3.5' />
               Scan
             </Button>

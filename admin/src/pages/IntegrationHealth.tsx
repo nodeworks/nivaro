@@ -16,7 +16,9 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
+import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn, formatRelative } from '@/lib/utils'
+import { ErpSubmissionsPage } from '@/pages/ErpSubmissions'
 
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
   timeoutMs: 90_000
@@ -89,21 +91,47 @@ function verdict(a: ApiHealth): { label: string; cls: string } {
  * the URL (?tab=, ?signal=) so a notification can deep-link. The previous
  * page body lives on as the admin-only "Jobs" tab so nothing was lost.
  */
+const TAB_TITLES: Record<string, string> = {
+  firefight: 'Firefight',
+  partners: 'Partners',
+  events: 'Events',
+  erp: 'ERP submissions',
+  jobs: 'Jobs',
+  inbound: 'Inbound',
+  alerts: 'Alerts'
+}
+
 export function IntegrationHealthPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const disabledPaths = useUiPermissions()
   const [params, setParams] = useSearchParams()
   const tab = params.get('tab') ?? 'firefight'
+  // Name the tab in the browser tab and history, like the hub pages do.
+  useEffect(() => {
+    const label = TAB_TITLES[tab] ?? 'Integration Health'
+    const app = document.title.split(' — ').pop() ?? document.title
+    document.title = `${label} · Integration Health — ${app}`
+    return () => {
+      document.title = app
+    }
+  }, [tab])
   const focusSignal = params.get('signal') ?? undefined
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 items-center gap-2.5 border-b border-slate-200 px-6 py-4 dark:border-border'>
-        <Link2 className='h-5 w-5 text-muted-foreground' />
-        <div>
-          <h1 className='text-lg font-semibold'>Integrations</h1>
-          <p className='text-[12px] text-muted-foreground'>
-            Every outside system this instance talks to — what is broken right now, how each partner
-            is doing, and what they reported.
+      {/* Same header as the hub pages (components/hub-page.tsx); the tabs are the shared
+          console's own (?tab=), since efp-new hosts the same console. */}
+      <header className='flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-6 sm:py-4 dark:border-border dark:bg-card'>
+        <div className='flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-nvr-cyan/15'>
+          <Link2 className='h-4.5 w-4.5 text-nvr-navy dark:text-nvr-cyan' aria-hidden />
+        </div>
+        <div className='min-w-0'>
+          <h1 className='m-0 truncate text-base font-semibold text-slate-900 dark:text-foreground'>
+            Integration Health
+          </h1>
+          <p className='m-0 truncate text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Every outside system this instance talks to: what is broken now, how each partner is
+            doing, and what they reported.
           </p>
         </div>
       </header>
@@ -130,11 +158,22 @@ export function IntegrationHealthPage() {
                   )
                 }
                 onOpenRecord={(c, id) => navigate(`/collections/${c}/${id}`)}
-                extraTabs={
-                  user?.is_admin
+                extraTabs={[
+                  // ERP submissions (#merge 2026-10-23): the former /erp-submissions page,
+                  // which now redirects here with its ?collection=&item= kept.
+                  ...(disabledPaths.has('/erp-submissions')
+                    ? []
+                    : [
+                        {
+                          key: 'erp',
+                          label: 'ERP submissions',
+                          render: () => <ErpSubmissionsPage embedded />
+                        }
+                      ]),
+                  ...(user?.is_admin
                     ? [{ key: 'jobs', label: 'Jobs', render: () => <IntegrationJobsTab /> }]
-                    : []
-                }
+                    : [])
+                ]}
               />
             </ItemEditAuthContext.Provider>
           </NavigationContext.Provider>
@@ -331,7 +370,7 @@ function IntegrationJobsTab() {
                   .join(' · ') || 'none'}
               </span>
               <Link
-                to='/dead-letters'
+                to='/flows/dead-letters'
                 className='rounded-full border border-slate-200 bg-white px-3 py-1 hover:bg-muted dark:border-border dark:bg-card'
               >
                 Dead letters 24h:{' '}

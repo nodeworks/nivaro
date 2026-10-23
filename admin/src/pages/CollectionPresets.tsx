@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Package, X } from 'lucide-react'
+import { Check, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -213,19 +214,10 @@ export default function CollectionPresetsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      {/* Header */}
-      <header className='shrink-0 border-b border-border px-6 py-4'>
-        <div className='flex items-center gap-2.5 mb-0.5'>
-          <Package className='h-5 w-5 text-muted-foreground' />
-          <h1 className='text-lg font-semibold'>Collection Presets</h1>
-        </div>
-        <p className='text-[13px] text-muted-foreground mt-1'>
-          One-click starter kits for common use cases
-        </p>
-      </header>
+      <HubToolbar description='One-click starter kits for common use cases. Installing a kit creates its collections and fields on this instance.' />
 
       {/* Grid */}
-      <div className='flex-1 overflow-y-auto p-6'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
         {isLoading ? (
           <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-3'>
             {[1, 2, 3, 4].map((i) => (

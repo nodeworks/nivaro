@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, Package, PlayCircle, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
+import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
@@ -260,21 +261,22 @@ export default function Changelog() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4'>
-        <h1 className='text-[15px] font-semibold text-slate-900'>Changelog</h1>
-        <p className='mt-0.5 text-[12px] text-slate-500'>
-          Every released version, newest first, taken from the release tags.
-          {running && (
-            <>
-              {' '}
-              This instance is running <span className='font-medium text-slate-700'>{running}</span>
-              .
-            </>
-          )}
-        </p>
-      </header>
+      <HubToolbar
+        description={
+          <>
+            Every released version, newest first, taken from the release tags.
+            {running && (
+              <>
+                {' '}
+                This instance is running{' '}
+                <span className='font-medium text-slate-700 dark:text-foreground'>{running}</span>.
+              </>
+            )}
+          </>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 px-6 py-5'>
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {isLoading && <p className='text-[12px] text-slate-400'>Loading…</p>}
 
         {!isLoading && releases.length === 0 && (
@@ -284,7 +286,7 @@ export default function Changelog() {
           </p>
         )}
 
-        <div className='mx-auto max-w-3xl space-y-4'>
+        <div className='max-w-3xl space-y-4'>
           {since && (
             <div
               className='flex flex-wrap items-center gap-2 rounded-xl border border-nvr-cyan/40 bg-nvr-cyan/10 px-4 py-3 text-[12.5px] text-slate-800 dark:text-slate-100'

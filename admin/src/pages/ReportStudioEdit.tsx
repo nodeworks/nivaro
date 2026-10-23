@@ -3415,7 +3415,7 @@ function AiBuildPopover({
 export function ReportStudioEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const goBack = useGoBack('/report-studio')
+  const goBack = useGoBack('/reports')
   const queryClient = useQueryClient()
   const [editMode, setEditMode] = useState(false)
   const [widgets, setWidgets] = useState<Widget[]>([])
@@ -4136,7 +4136,7 @@ export function ReportStudioEditPage() {
                     ) {
                       void api.delete(`/report-studio/${report.id}`).then(() => {
                         toast.success('Report deleted')
-                        navigate('/report-studio')
+                        navigate('/reports')
                       })
                     }
                   }}

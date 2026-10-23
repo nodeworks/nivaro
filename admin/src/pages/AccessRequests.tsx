@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { KeyRound } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
+import { ScrollTabStrip } from '@/components/tab-strip'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
 
 /**
  * Collection access requests (#55): "Request access" on a denied collection
@@ -80,41 +80,27 @@ export default function AccessRequests() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <KeyRound className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Access Requests
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Requests from people who hit an access wall — a whole collection or one record. Each
-              one names why it was denied and what granting will change: widen the scope that
-              excludes the record, or give their role read access. Wider grants live on the Roles
-              and user pages.
-            </p>
-          </div>
-        </div>
-        <div className='mt-3 flex gap-1'>
-          {(['pending', 'granted', 'denied'] as const).map((t) => (
-            <button
-              key={t}
-              type='button'
-              onClick={() => setTab(t)}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-[12.5px] font-medium capitalize',
-                tab === t
-                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
-                  : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-muted/50'
-              )}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      </header>
+      <HubToolbar description='Requests from people who hit an access wall on a collection or one record. Each names why it was denied and what granting changes; wider grants live on Roles and user pages.' />
+      <ScrollTabStrip
+        variant='sub'
+        className='shrink-0 border-b border-slate-200 bg-slate-50 dark:border-border dark:bg-background'
+        tabs={(['pending', 'granted', 'denied'] as const).map((t) => ({
+          id: t,
+          label: t[0].toUpperCase() + t.slice(1)
+        }))}
+        active={tab}
+        onSelect={(t) => setTab(t as typeof tab)}
+        ariaLabel='Access requests by status'
+        tabDomId={(t) => `access-requests-tab-${t}`}
+        panelId='access-requests-panel'
+      />
 
-      <div className='flex-1 space-y-2 overflow-y-auto p-6'>
+      <div
+        id='access-requests-panel'
+        role='tabpanel'
+        aria-labelledby={`access-requests-tab-${tab}`}
+        className='flex-1 space-y-2 overflow-y-auto p-4 sm:p-6'
+      >
         {rows.length === 0 && (
           <p className='text-[13px] text-slate-400'>
             {tab === 'pending' ? 'No pending requests — all clear.' : `No ${tab} requests.`}

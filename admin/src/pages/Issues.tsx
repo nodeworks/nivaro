@@ -389,7 +389,7 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
     <div className='space-y-4 bg-slate-50 px-6 py-4 dark:bg-muted/30'>
       {replayId && (
         <Link
-          to={`/session-replays?recording=${replayId}${replayOffset != null ? `&t=${replayOffset}` : ''}`}
+          to={`/analytics/replays?recording=${replayId}${replayOffset != null ? `&t=${replayOffset}` : ''}`}
           className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-1.5 text-[12px] font-medium text-slate-800 hover:bg-nvr-cyan/20 dark:text-slate-100'
         >
           <PlayCircle className='h-3.5 w-3.5' />

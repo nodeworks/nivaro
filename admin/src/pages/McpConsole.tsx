@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -711,7 +712,10 @@ function ToolDetail({ tool }: { tool: ToolRow }) {
             onClick={submit}
             disabled={run.isPending}
             variant={confirmReal ? 'destructive' : 'default'}
-            className='h-8 text-[13px]'
+            className={cn(
+              'h-8 text-[12px]',
+              !confirmReal && 'bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+            )}
           >
             {confirmReal ? (
               <ShieldAlert className='mr-1.5 h-3.5 w-3.5' />
@@ -795,21 +799,16 @@ export function McpConsolePage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-            MCP console
-          </h1>
-          {data && (
+      <HubToolbar
+        description='The tools an AI app connected as you would get. Try one here, with writes as a dry run if you like, before an assistant does.'
+        actions={
+          data && (
             <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-muted dark:text-muted-foreground'>
-              {tools.length}
+              {tools.length} {tools.length === 1 ? 'tool' : 'tools'}
             </span>
-          )}
-        </div>
-        <p className='mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
-          The tools an AI app connected as you would get. Try one here before an assistant does.
-        </p>
-      </header>
+          )
+        }
+      />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         <aside className='flex w-[272px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>

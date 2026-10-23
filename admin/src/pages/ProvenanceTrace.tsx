@@ -3,7 +3,6 @@ import {
   ArrowRight,
   Check,
   ChevronsUpDown,
-  GitBranch,
   Loader2,
   Search,
   Sigma,
@@ -13,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -191,22 +191,9 @@ export function ProvenanceTracePage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <GitBranch className='h-4.5 w-4.5 text-nvr-cyan' />
-          <div>
-            <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              Value Provenance
-            </h1>
-            <p className='text-[12px] text-muted-foreground'>
-              Why does this field hold this value — how it can be derived, and every actual change
-              with who, when and how.
-            </p>
-          </div>
-        </div>
-      </header>
+      <HubToolbar description='Why a field holds its value: how it can be derived, and every actual change with who, when and how. Pick a collection, record and field, then Trace.' />
 
-      <div className='flex flex-1 min-h-0 flex-col gap-6 overflow-y-auto p-8'>
+      <div className='flex flex-1 min-h-0 flex-col gap-6 overflow-y-auto p-4 sm:p-6'>
         {/* Pickers */}
         <section className='w-full max-w-3xl rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
           <div className='flex flex-wrap items-end gap-3'>

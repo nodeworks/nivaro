@@ -70,7 +70,7 @@ export function FloatingReplayHost() {
   const backToPage = () => {
     const at = controlsRef.current?.getTime() ?? floating.at
     dockFloatingReplay(at)
-    navigate('/session-replays')
+    navigate('/analytics/replays')
   }
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {

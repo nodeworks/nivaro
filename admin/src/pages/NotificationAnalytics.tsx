@@ -9,7 +9,7 @@ const sharedClient = createNivaro(typeof window !== 'undefined' ? window.locatio
 export default function NotificationAnalytics() {
   return (
     <NivaroProvider client={sharedClient}>
-      <NotificationAnalyticsView />
+      <NotificationAnalyticsView compactHeader />
     </NivaroProvider>
   )
 }

@@ -648,7 +648,7 @@ function HistoryBody({
                 eh.slow_traces.map((s) => (
                   <Link
                     key={s.id}
-                    to='/api-analytics'
+                    to='/analytics/api'
                     id={`tm-slow-${s.id}`}
                     title={s.route}
                     className={cn(

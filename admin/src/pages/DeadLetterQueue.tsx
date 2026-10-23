@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
@@ -167,12 +167,13 @@ export function DeadLetterQueuePage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <div className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-2.5'>
-            <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              Dead Letter Queue
-            </h1>
+      <HubToolbar
+        description='Background jobs and flow runs that failed, with their error and payload. Retry one, or all of them once the cause is fixed.'
+        actions={
+          <>
+            {isFetching && !isLoading && (
+              <span className='text-[11px] text-slate-400'>refreshing…</span>
+            )}
             {data && (
               <span
                 className={cn(
@@ -182,29 +183,26 @@ export function DeadLetterQueuePage() {
                     : 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-muted-foreground'
                 )}
               >
-                {letters.length}
+                {letters.length} failed
               </span>
             )}
-            {isFetching && !isLoading && (
-              <span className='text-[11px] text-slate-400'>refreshing…</span>
+            {letters.length > 0 && (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-8 gap-1.5 text-[12px]'
+                disabled={retryAllMut.isPending}
+                onClick={() => retryAllMut.mutate()}
+              >
+                <RotateCcw className={cn('h-3.5 w-3.5', retryAllMut.isPending && 'animate-spin')} />
+                {retryAllMut.isPending ? 'Retrying…' : 'Retry all'}
+              </Button>
             )}
-          </div>
-          {letters.length > 0 && (
-            <Button
-              size='sm'
-              variant='outline'
-              className='gap-1.5'
-              disabled={retryAllMut.isPending}
-              onClick={() => retryAllMut.mutate()}
-            >
-              <RotateCcw className={cn('h-3.5 w-3.5', retryAllMut.isPending && 'animate-spin')} />
-              {retryAllMut.isPending ? 'Retrying…' : 'Retry all'}
-            </Button>
-          )}
-        </div>
-      </div>
+          </>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto p-6'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
         {isLoading ? (
           <div className='space-y-px overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
             {[1, 2, 3].map((k) => (

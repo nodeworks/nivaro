@@ -3,6 +3,7 @@ import { Link2, Pencil, Play, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -93,148 +94,157 @@ export function ExternalApisPage() {
   const apis = data ?? []
 
   return (
-    <div className='p-8'>
-      <div className='mb-6 flex items-start justify-between'>
-        <div>
-          <h1 className='text-2xl font-bold text-slate-900'>External APIs</h1>
-          <p className='mt-1 text-muted-foreground'>
-            Configure outbound integrations with varying authentication methods.
-          </p>
-        </div>
-        <Button onClick={() => navigate('/external-apis/new')} className='gap-1.5'>
-          <Plus className='h-4 w-4' />
-          Add API
-        </Button>
-      </div>
-
-      {isLoading ? (
-        <div className='space-y-3'>
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className='h-12 rounded-lg' />
-          ))}
-        </div>
-      ) : apis.length === 0 ? (
-        <Card className='flex flex-col items-center justify-center py-20 text-center'>
-          <Link2 className='mb-4 h-10 w-10 text-slate-300' />
-          <p className='text-[15px] font-medium text-slate-600'>No external APIs yet</p>
-          <p className='mt-1 text-[13px] text-slate-400'>
-            Add an API to connect outbound integrations.
-          </p>
-          <Button onClick={() => navigate('/external-apis/new')} className='mt-5 gap-1.5' size='sm'>
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description='Outbound integrations: base URL, authentication, endpoints and payloads for each partner API this instance calls.'
+        actions={
+          <Button
+            size='sm'
+            onClick={() => navigate('/external-apis/new')}
+            className='h-8 gap-1.5 text-[12px]'
+          >
             <Plus className='h-3.5 w-3.5' />
             Add API
           </Button>
-        </Card>
-      ) : (
-        <Card className='overflow-hidden'>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Base URL</TableHead>
-                <TableHead>Auth Type</TableHead>
-                <TableHead>Enabled</TableHead>
-                <TableHead className='text-right'>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {apis.map((a) => (
-                <TableRow key={a.id}>
-                  <TableCell className='font-medium text-slate-900'>
-                    {a.name}
-                    {(a as { mock_active?: boolean }).mock_active && (
-                      <span
-                        className='ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
-                        data-tip='Answering from mock rules on this instance'
-                        data-mock-badge={a.id}
-                      >
-                        mock
-                      </span>
-                    )}
-                    {(() => {
-                      const env = (
-                        a as {
-                          endpoint_environment?: { environment: string; reason: string | null }
-                        }
-                      ).endpoint_environment
-                      if (!env || env.environment === 'live' || env.environment === 'unknown')
-                        return null
-                      return (
-                        <span
-                          className={
-                            env.environment === 'test'
-                              ? 'ml-2 rounded bg-[#fbefd9] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#8f5400] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'
-                              : 'ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-500/15 dark:text-slate-300'
-                          }
-                          data-tip={
-                            env.environment === 'test'
-                              ? `The host this instance calls looks like a test endpoint (${env.reason}). Traffic after go-live would land there.`
-                              : 'Points at a local address'
-                          }
-                          data-endpoint-env={env.environment}
-                        >
-                          {env.environment}
-                        </span>
-                      )
-                    })()}
-                  </TableCell>
-                  <TableCell className='font-mono text-[12px] text-slate-500 max-w-[280px] truncate'>
-                    {a.base_url}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant='secondary' className='text-[11px]'>
-                      {AUTH_LABELS[a.auth_type]}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Switch
-                      checked={a.enabled}
-                      onCheckedChange={(enabled) => toggleEnabled.mutate({ id: a.id, enabled })}
-                    />
-                  </TableCell>
-                  <TableCell className='text-right'>
-                    <div className='flex items-center justify-end gap-1'>
-                      <Button
-                        variant='ghost'
-                        size='sm'
-                        className='h-8 gap-1.5'
-                        onClick={() => setTestingId(testingId === a.id ? null : a.id)}
-                      >
-                        <Play className='h-3.5 w-3.5' />
-                        Test
-                      </Button>
-                      <Button
-                        variant='ghost'
-                        size='sm'
-                        className='h-8 w-8 p-0'
-                        onClick={() => navigate(`/external-apis/${a.id}`)}
-                        aria-label='Edit'
-                      >
-                        <Pencil className='h-3.5 w-3.5' />
-                      </Button>
-                      <Button
-                        variant='ghost'
-                        size='sm'
-                        className='h-8 w-8 p-0 text-slate-400 hover:text-red-500'
-                        onClick={() => {
-                          if (confirm(`Delete "${a.name}"?`)) remove.mutate(a.id)
-                        }}
-                        aria-label='Delete'
-                      >
-                        <Trash2 className='h-3.5 w-3.5' />
-                      </Button>
-                    </div>
-                  </TableCell>
+        }
+      />
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
+        {isLoading ? (
+          <div className='space-y-3'>
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className='h-12 rounded-lg' />
+            ))}
+          </div>
+        ) : apis.length === 0 ? (
+          <Card className='flex flex-col items-center justify-center py-20 text-center'>
+            <Link2 className='mb-4 h-10 w-10 text-slate-300' />
+            <p className='text-[15px] font-medium text-slate-600'>No external APIs yet</p>
+            <p className='mt-1 text-[13px] text-slate-400'>
+              Add an API to connect outbound integrations.
+            </p>
+            <Button
+              onClick={() => navigate('/external-apis/new')}
+              className='mt-5 gap-1.5'
+              size='sm'
+            >
+              <Plus className='h-3.5 w-3.5' />
+              Add API
+            </Button>
+          </Card>
+        ) : (
+          <Card className='overflow-hidden'>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Base URL</TableHead>
+                  <TableHead>Auth Type</TableHead>
+                  <TableHead>Enabled</TableHead>
+                  <TableHead className='text-right'>Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      )}
+              </TableHeader>
+              <TableBody>
+                {apis.map((a) => (
+                  <TableRow key={a.id}>
+                    <TableCell className='font-medium text-slate-900'>
+                      {a.name}
+                      {(a as { mock_active?: boolean }).mock_active && (
+                        <span
+                          className='ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
+                          data-tip='Answering from mock rules on this instance'
+                          data-mock-badge={a.id}
+                        >
+                          mock
+                        </span>
+                      )}
+                      {(() => {
+                        const env = (
+                          a as {
+                            endpoint_environment?: { environment: string; reason: string | null }
+                          }
+                        ).endpoint_environment
+                        if (!env || env.environment === 'live' || env.environment === 'unknown')
+                          return null
+                        return (
+                          <span
+                            className={
+                              env.environment === 'test'
+                                ? 'ml-2 rounded bg-[#fbefd9] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#8f5400] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'
+                                : 'ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-500/15 dark:text-slate-300'
+                            }
+                            data-tip={
+                              env.environment === 'test'
+                                ? `The host this instance calls looks like a test endpoint (${env.reason}). Traffic after go-live would land there.`
+                                : 'Points at a local address'
+                            }
+                            data-endpoint-env={env.environment}
+                          >
+                            {env.environment}
+                          </span>
+                        )
+                      })()}
+                    </TableCell>
+                    <TableCell className='font-mono text-[12px] text-slate-500 max-w-[280px] truncate'>
+                      {a.base_url}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant='secondary' className='text-[11px]'>
+                        {AUTH_LABELS[a.auth_type]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Switch
+                        checked={a.enabled}
+                        onCheckedChange={(enabled) => toggleEnabled.mutate({ id: a.id, enabled })}
+                      />
+                    </TableCell>
+                    <TableCell className='text-right'>
+                      <div className='flex items-center justify-end gap-1'>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          className='h-8 gap-1.5'
+                          onClick={() => setTestingId(testingId === a.id ? null : a.id)}
+                        >
+                          <Play className='h-3.5 w-3.5' />
+                          Test
+                        </Button>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          className='h-8 w-8 p-0'
+                          onClick={() => navigate(`/external-apis/${a.id}`)}
+                          aria-label='Edit'
+                        >
+                          <Pencil className='h-3.5 w-3.5' />
+                        </Button>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          className='h-8 w-8 p-0 text-slate-400 hover:text-red-500'
+                          onClick={() => {
+                            if (confirm(`Delete "${a.name}"?`)) remove.mutate(a.id)
+                          }}
+                          aria-label='Delete'
+                        >
+                          <Trash2 className='h-3.5 w-3.5' />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
+        )}
 
-      {testingId !== null && (
-        <TestPanel api={apis.find((a) => a.id === testingId)!} onClose={() => setTestingId(null)} />
-      )}
+        {testingId !== null && (
+          <TestPanel
+            api={apis.find((a) => a.id === testingId)!}
+            onClose={() => setTestingId(null)}
+          />
+        )}
+      </div>
     </div>
   )
 }

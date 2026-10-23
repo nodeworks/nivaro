@@ -7,7 +7,7 @@ import { HubRedirect } from '@/components/hub-page'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
-import { HUBS, hubTabPath } from '@/lib/hubs'
+import { HUB_REDIRECTS, HUBS, hubTabPath } from '@/lib/hubs'
 import { I18nProvider } from '@/lib/i18n'
 // #2448 — lazy that remembers its loader, so nav hover can preload a screen's chunk
 import { lazy, PreloadRoutes } from '@/lib/route-preload'
@@ -42,9 +42,6 @@ function safeRedirectPath(raw: string | null | undefined, fallback = '/'): strin
  *  URL) — it must be a full page load, not a client-side navigation. */
 const isServerPath = (path: string) => /^\/(oauth|api)\//.test(path)
 
-const ActivityPage = lazy(() =>
-  import('@/pages/Activity').then((m) => ({ default: m.ActivityPage }))
-)
 const ActivityDetailPage = lazy(() =>
   import('@/pages/ActivityDetail').then((m) => ({ default: m.ActivityDetailPage }))
 )
@@ -57,7 +54,6 @@ const CollectionsPage = lazy(() =>
 const DashboardPage = lazy(() =>
   import('@/pages/Dashboard').then((m) => ({ default: m.DashboardPage }))
 )
-const DocsPage = lazy(() => import('@/pages/Docs').then((m) => ({ default: m.DocsPage })))
 const ExtensionsPage = lazy(() =>
   import('@/pages/Extensions').then((m) => ({ default: m.ExtensionsPage }))
 )
@@ -65,7 +61,6 @@ const FilesPage = lazy(() => import('@/pages/Files').then((m) => ({ default: m.F
 const FlowEditPage = lazy(() =>
   import('@/pages/FlowEdit').then((m) => ({ default: m.FlowEditPage }))
 )
-const FlowsPage = lazy(() => import('@/pages/Flows').then((m) => ({ default: m.FlowsPage })))
 const ItemEditPage = lazy(() =>
   import('@/pages/ItemEdit').then((m) => ({ default: m.ItemEditPage }))
 )
@@ -91,9 +86,6 @@ const PipelineEditPage = lazy(() =>
 const PipelinesPage = lazy(() =>
   import('@/pages/Pipelines').then((m) => ({ default: m.PipelinesPage }))
 )
-const ExternalApisPage = lazy(() =>
-  import('@/pages/ExternalApis').then((m) => ({ default: m.ExternalApisPage }))
-)
 const ExternalApiEditPage = lazy(() =>
   import('@/pages/ExternalApiEdit').then((m) => ({ default: m.ExternalApiEditPage }))
 )
@@ -107,18 +99,8 @@ const PayloadTemplateRedirectPage = lazy(() =>
     default: m.PayloadTemplateRedirectPage
   }))
 )
-const GraphQLExplorerPage = lazy(() =>
-  import('@/pages/GraphQLExplorer').then((m) => ({ default: m.GraphQLExplorerPage }))
-)
-const ApiDocsPage = lazy(() => import('@/pages/ApiDocs').then((m) => ({ default: m.ApiDocsPage })))
-const WebhooksPage = lazy(() =>
-  import('@/pages/Webhooks').then((m) => ({ default: m.WebhooksPage }))
-)
 const WebhookEditPage = lazy(() =>
   import('@/pages/WebhookEdit').then((m) => ({ default: m.WebhookEditPage }))
-)
-const CustomQueriesPage = lazy(() =>
-  import('@/pages/CustomQueries').then((m) => ({ default: m.CustomQueriesPage }))
 )
 const ProceduresPage = lazy(() =>
   import('@/pages/Procedures').then((m) => ({ default: m.ProceduresPage }))
@@ -128,31 +110,12 @@ const CustomQueryEditPage = lazy(() =>
 )
 const AskPage = lazy(() => import('@/pages/Ask').then((m) => ({ default: m.AskPage })))
 const ChatPage = lazy(() => import('@/pages/Chat').then((m) => ({ default: m.ChatPage })))
-const ScheduledReportsPage = lazy(() =>
-  import('@/pages/ScheduledReports').then((m) => ({ default: m.ScheduledReportsPage }))
-)
-const PulsePage = lazy(() => import('@/pages/Pulse').then((m) => ({ default: m.PulsePage })))
 const WallboardPage = lazy(() =>
   import('@/pages/Wallboard').then((m) => ({ default: m.WallboardPage }))
 )
-const BlueprintsPage = lazy(() =>
-  import('@/pages/Blueprints').then((m) => ({ default: m.BlueprintsPage }))
-)
-const ChangeSetsPage = lazy(() =>
-  import('@/pages/ChangeSets').then((m) => ({ default: m.ChangeSetsPage }))
-)
-const ProvenanceTracePage = lazy(() =>
-  import('@/pages/ProvenanceTrace').then((m) => ({ default: m.ProvenanceTracePage }))
-)
 const TrashPage = lazy(() => import('@/pages/Trash').then((m) => ({ default: m.TrashPage })))
-const ReportStudioPage = lazy(() =>
-  import('@/pages/ReportStudio').then((m) => ({ default: m.ReportStudioPage }))
-)
 const ReportStudioEditPage = lazy(() =>
   import('@/pages/ReportStudioEdit').then((m) => ({ default: m.ReportStudioEditPage }))
-)
-const SessionReplaysPage = lazy(() =>
-  import('@/pages/SessionReplays').then((m) => ({ default: m.SessionReplaysPage }))
 )
 const PublicDashboardPage = lazy(() =>
   import('@/pages/PublicDashboard').then((m) => ({ default: m.PublicDashboardPage }))
@@ -161,12 +124,6 @@ const ErdViewPage = lazy(() => import('@/pages/ErdView').then((m) => ({ default:
 const SchemaGraphPage = lazy(() =>
   import('@/pages/SchemaGraph').then((m) => ({ default: m.SchemaGraphPage }))
 )
-const ConfigDiffPage = lazy(() =>
-  import('@/pages/ConfigDiff').then((m) => ({ default: m.ConfigDiffPage }))
-)
-const EnvironmentsPage = lazy(() => import('@/pages/Environments'))
-const QualityChecksPage = lazy(() => import('@/pages/QualityChecks'))
-const ReadinessPage = lazy(() => import('@/pages/Readiness'))
 const DataIntegrityPage = lazy(() => import('@/pages/DataIntegrity'))
 const AnnouncementsPage = lazy(() => import('@/pages/Announcements'))
 const MyWorkPage = lazy(() => import('@/pages/MyWork').then((m) => ({ default: m.MyWorkPage })))
@@ -178,48 +135,17 @@ const IdeaDetailPage = lazy(() =>
 const HelpVideosPage = lazy(() =>
   import('@/pages/HelpVideos').then((m) => ({ default: m.HelpVideosPage }))
 )
-const CoverageGapsPage = lazy(() =>
-  import('@/pages/CoverageGaps').then((m) => ({ default: m.CoverageGapsPage }))
-)
 const IntegrationHealthPage = lazy(() =>
   import('@/pages/IntegrationHealth').then((m) => ({ default: m.IntegrationHealthPage }))
-)
-const InboundMappingsPage = lazy(() =>
-  import('@/pages/InboundMappings').then((m) => ({ default: m.InboundMappingsPage }))
 )
 const Realtime = lazy(() => import('@/pages/Realtime'))
 const TrafficMap = lazy(() => import('@/pages/traffic-map/TrafficMap'))
 
-const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
-const ConfigHealth = lazy(() => import('@/pages/ConfigHealth'))
-const ConfigReview = lazy(() => import('@/pages/ConfigReview'))
-const LegalHolds = lazy(() => import('@/pages/LegalHolds'))
 const FindReplace = lazy(() => import('@/pages/FindReplace'))
 const M2MMatrix = lazy(() => import('@/pages/M2MMatrix'))
-const MailTemplates = lazy(() => import('@/pages/MailTemplates'))
 const SetupChecklist = lazy(() => import('@/pages/SetupChecklist'))
-const ConfigSearch = lazy(() => import('@/pages/ConfigSearch'))
-const AccessRequests = lazy(() => import('@/pages/AccessRequests'))
-const MailLog = lazy(() => import('@/pages/MailLog'))
-const NotificationBench = lazy(() => import('@/pages/NotificationBench'))
-const NotificationAnalytics = lazy(() => import('@/pages/NotificationAnalytics'))
-const DelegationConsole = lazy(() => import('@/pages/DelegationConsole'))
 const Sequences = lazy(() => import('@/pages/Sequences'))
-const SqlScratchpad = lazy(() => import('@/pages/SqlScratchpad'))
-const RevisionSearch = lazy(() => import('@/pages/RevisionSearch'))
 
-const QueryCatalogPage = lazy(() => import('@/pages/QueryCatalog'))
-const AutomationTests = lazy(() => import('@/pages/AutomationTests'))
-const ContentPromotionPage = lazy(() =>
-  import('@/pages/ContentPromotion').then((m) => ({ default: m.ContentPromotionPage }))
-)
-const SchemaSnapshotPage = lazy(() =>
-  import('@/pages/SchemaSnapshot').then((m) => ({ default: m.SchemaSnapshotPage }))
-)
-const BlackoutDatesPage = lazy(() =>
-  import('@/pages/BlackoutDates').then((m) => ({ default: m.BlackoutDatesPage }))
-)
-const RulesPage = lazy(() => import('@/pages/Rules').then((m) => ({ default: m.RulesPage })))
 const RuleEditPage = lazy(() =>
   import('@/pages/RuleEdit').then((m) => ({ default: m.RuleEditPage }))
 )
@@ -232,7 +158,6 @@ const DashboardDraftPage = lazy(() =>
 const DashboardEditPage = lazy(() =>
   import('@/pages/DashboardEdit').then((m) => ({ default: m.DashboardEditPage }))
 )
-const ReportsPage = lazy(() => import('@/pages/Reports').then((m) => ({ default: m.ReportsPage })))
 const ProfilePage = lazy(() => import('@/pages/Profile').then((m) => ({ default: m.ProfilePage })))
 const WorkspacesPage = lazy(() =>
   import('@/pages/Workspaces').then((m) => ({ default: m.WorkspacesPage }))
@@ -240,38 +165,13 @@ const WorkspacesPage = lazy(() =>
 const ScopeDimensionsPage = lazy(() =>
   import('@/pages/ScopeDimensions').then((m) => ({ default: m.ScopeDimensionsPage }))
 )
-const PresencePage = lazy(() =>
-  import('@/pages/Presence').then((m) => ({ default: m.PresencePage }))
-)
-const AnalyticsPage = lazy(() =>
-  import('@/pages/Analytics').then((m) => ({ default: m.AnalyticsPage }))
-)
 const SubmissionFormsPage = lazy(() =>
   import('@/pages/SubmissionForms').then((m) => ({ default: m.SubmissionFormsPage }))
 )
 const SubmissionFormEditPage = lazy(() =>
   import('@/pages/SubmissionFormEdit').then((m) => ({ default: m.SubmissionFormEditPage }))
 )
-const FieldWatchesPage = lazy(() =>
-  import('@/pages/FieldWatches').then((m) => ({ default: m.FieldWatchesPage }))
-)
-const NotificationSubscriptionsPage = lazy(() =>
-  import('@/pages/NotificationSubscriptions').then((m) => ({
-    default: m.NotificationSubscriptionsPage
-  }))
-)
 const ImportsPage = lazy(() => import('@/pages/Imports').then((m) => ({ default: m.ImportsPage })))
-const SlaRulesPage = lazy(() =>
-  import('@/pages/SlaRules').then((m) => ({ default: m.SlaRulesPage }))
-)
-const TeamThroughputPage = lazy(() =>
-  import('@/pages/TeamThroughput').then((m) => ({ default: m.TeamThroughputPage }))
-)
-const AccessAuditPage = lazy(() => import('@/pages/AccessAudit'))
-const AlertsPage = lazy(() => import('@/pages/Alerts').then((m) => ({ default: m.AlertsPage })))
-const AlertManagerPage = lazy(() =>
-  import('@/pages/AlertManager').then((m) => ({ default: m.AlertManager }))
-)
 const AlertEditPage = lazy(() =>
   import('@/pages/AlertEdit').then((m) => ({ default: m.AlertEditPage }))
 )
@@ -282,33 +182,16 @@ const HierarchyViewPage = lazy(() =>
   import('@/pages/HierarchyView').then((m) => ({ default: m.HierarchyViewPage }))
 )
 const RecordTemplatesPage = lazy(() => import('@/pages/RecordTemplates'))
-const ScheduledChangesPage = lazy(() => import('@/pages/ScheduledChanges'))
-const CollectionPresetsPage = lazy(() => import('@/pages/CollectionPresets'))
 const VirtualCollectionsPage = lazy(() => import('@/pages/VirtualCollections'))
 const ApiKeysPage = lazy(() => import('@/pages/ApiKeys').then((m) => ({ default: m.ApiKeysPage })))
-const McpConnectionsPage = lazy(() =>
-  import('@/pages/McpConnections').then((m) => ({ default: m.McpConnectionsPage }))
-)
-const McpToolsPage = lazy(() =>
-  import('@/pages/McpTools').then((m) => ({ default: m.McpToolsPage }))
-)
 const NotificationsCenterPage = lazy(() =>
   import('@/pages/NotificationsCenter').then((m) => ({ default: m.NotificationsCenterPage }))
-)
-const SyncJobsPage = lazy(() =>
-  import('@/pages/SyncJobs').then((m) => ({ default: m.SyncJobsPage }))
 )
 const PdfTemplatesPage = lazy(() =>
   import('@/pages/PdfTemplates').then((m) => ({ default: m.PdfTemplatesPage }))
 )
-const McpConsolePage = lazy(() =>
-  import('@/pages/McpConsole').then((m) => ({ default: m.McpConsolePage }))
-)
 const PlaygroundPage = lazy(() =>
   import('@/pages/Playground').then((m) => ({ default: m.PlaygroundPage }))
-)
-const DeadLetterQueuePage = lazy(() =>
-  import('@/pages/DeadLetterQueue').then((m) => ({ default: m.DeadLetterQueuePage }))
 )
 const PagesAdminPage = lazy(() =>
   import('@/pages/PagesAdmin').then((m) => ({ default: m.PagesAdminPage }))
@@ -319,31 +202,8 @@ const PageEditPage = lazy(() =>
 const PageViewPage = lazy(() =>
   import('@/pages/PageView').then((m) => ({ default: m.PageViewPage }))
 )
-const ApiAnalyticsPage = lazy(() =>
-  import('@/pages/ApiAnalytics').then((m) => ({ default: m.ApiAnalyticsPage }))
-)
-const SearchAnalyticsPage = lazy(() =>
-  import('@/pages/SearchAnalytics').then((m) => ({ default: m.SearchAnalyticsPage }))
-)
-const ChatAnalyticsPage = lazy(() =>
-  import('@/pages/ChatAnalytics').then((m) => ({ default: m.ChatAnalyticsPage }))
-)
-const AiQualityPage = lazy(() =>
-  import('@/pages/AiQuality').then((m) => ({ default: m.AiQualityPage }))
-)
-const AiAnalyticsPage = lazy(() =>
-  import('@/pages/AiAnalytics').then((m) => ({ default: m.AiAnalyticsPage }))
-)
 const AiPlansPage = lazy(() => import('@/pages/AiPlans').then((m) => ({ default: m.AiPlansPage })))
-const AiKnowledgePage = lazy(() =>
-  import('@/pages/AiKnowledge').then((m) => ({ default: m.AiKnowledgePage }))
-)
-const ChangelogPage = lazy(() => import('@/pages/Changelog'))
-const ContrastAuditPage = lazy(() => import('@/pages/ContrastAudit'))
-const E2eRecorderPage = lazy(() => import('@/pages/E2eRecorder'))
-const JobsHub = lazy(() => import('@/pages/OpsHubs').then((m) => ({ default: m.JobsHub })))
-const DatabaseHub = lazy(() => import('@/pages/OpsHubs').then((m) => ({ default: m.DatabaseHub })))
-const HealthHub = lazy(() => import('@/pages/OpsHubs').then((m) => ({ default: m.HealthHub })))
+const HubRoute = lazy(() => import('@/pages/Hubs').then((m) => ({ default: m.HubRoute })))
 const InfrastructurePage = lazy(() =>
   import('@/pages/Infrastructure').then((m) => ({ default: m.InfrastructurePage }))
 )
@@ -364,24 +224,23 @@ const CommandCenterPage = lazy(() =>
   import('@/pages/CommandCenter').then((m) => ({ default: m.CommandCenterPage }))
 )
 
-const RetentionPoliciesPage = lazy(() =>
-  import('@/pages/RetentionPolicies').then((m) => ({ default: m.RetentionPoliciesPage }))
-)
 const IssuesPage = lazy(() => import('@/pages/Issues').then((m) => ({ default: m.IssuesPage })))
 
 const WidgetsPage = lazy(() => import('@/pages/Widgets').then((m) => ({ default: m.WidgetsPage })))
-const PersistedQueriesPage = lazy(() =>
-  import('@/pages/PersistedQueries').then((m) => ({ default: m.PersistedQueriesPage }))
-)
-const ErpSubmissionsPage = lazy(() =>
-  import('@/pages/ErpSubmissions').then((m) => ({ default: m.ErpSubmissionsPage }))
-)
 const TasksPage = lazy(() => import('@/pages/Tasks').then((m) => ({ default: m.TasksPage })))
 // /workflows/:id was the standalone workflow-template editor (parallel
 // branches); it now lives inside the pipeline editor.
 function WorkflowTemplateRedirect() {
   const { id } = useParams<{ id: string }>()
   return <Navigate to={`/pipelines/${id ?? ''}`} replace />
+}
+
+/** ERP submissions became a tab of the Integrations console; record links
+ *  (?collection=&item=) keep their lookup. */
+function ErpSubmissionsRedirect() {
+  const params = new URLSearchParams(useLocation().search)
+  params.set('tab', 'erp')
+  return <Navigate to={`/integration-health?${params}`} replace />
 }
 
 /** #743 — the classic browser was retired; old links land on the shared one. */
@@ -397,7 +256,6 @@ const QueuesPage = lazy(() => import('@/pages/Queues').then((m) => ({ default: m
 const QueueDetailPage = lazy(() =>
   import('@/pages/QueueDetail').then((m) => ({ default: m.QueueDetailPage }))
 )
-const AtRiskPage = lazy(() => import('@/pages/AtRisk').then((m) => ({ default: m.AtRiskPage })))
 const AccountPage = lazy(() => import('@/pages/Account').then((m) => ({ default: m.AccountPage })))
 
 const queryClient = new QueryClient({
@@ -573,10 +431,8 @@ export default function App() {
                   <Route path='users' element={<UsersPage />} />
                   <Route path='users/:id' element={<UserEditPage />} />
                   <Route path='roles' element={<RolesPage />} />
-                  <Route path='flows' element={<FlowsPage />} />
                   <Route path='flows/:id' element={<FlowEditPage />} />
                   <Route path='files' element={<FilesPage />} />
-                  <Route path='activity' element={<ActivityPage />} />
                   <Route path='activity/:id' element={<ActivityDetailPage />} />
                   <Route path='data-model' element={<DataModelPage />} />
                   <Route path='data-model/erd' element={<ErdViewPage />} />
@@ -584,7 +440,6 @@ export default function App() {
                   <Route path='data-model/:table' element={<TableEditorPage />} />
                   <Route path='pipelines' element={<PipelinesPage />} />
                   <Route path='pipelines/:id' element={<PipelineEditPage />} />
-                  <Route path='external-apis' element={<ExternalApisPage />} />
                   <Route path='external-apis/:id' element={<ExternalApiEditPage />} />
                   <Route
                     path='external-apis/:id/payloads/:key?'
@@ -593,24 +448,11 @@ export default function App() {
                   <Route path='payload-templates/:key' element={<PayloadTemplateRedirectPage />} />
                   <Route path='extensions' element={<ExtensionsPage />} />
                   <Route path='settings' element={<SettingsPage />} />
-                  <Route path='docs' element={<DocsPage />} />
-                  <Route path='graphql' element={<GraphQLExplorerPage />} />
-                  <Route path='api-docs' element={<ApiDocsPage />} />
-                  <Route path='webhooks' element={<WebhooksPage />} />
                   <Route path='webhooks/:id' element={<WebhookEditPage />} />
-                  <Route path='custom-queries' element={<CustomQueriesPage />} />
                   <Route path='procedures' element={<ProceduresPage />} />
                   <Route path='custom-queries/:id' element={<CustomQueryEditPage />} />
-                  <Route path='schema-snapshot' element={<SchemaSnapshotPage />} />
-                  <Route path='content-promotion' element={<ContentPromotionPage />} />
-                  <Route path='config-diff' element={<ConfigDiffPage />} />
-                  <Route path='environments' element={<EnvironmentsPage />} />
-                  <Route path='quality-checks' element={<QualityChecksPage />} />
-                  <Route path='readiness' element={<ReadinessPage />} />
                   <Route path='data-integrity' element={<DataIntegrityPage />} />
                   <Route path='announcements' element={<AnnouncementsPage />} />
-                  <Route path='coverage-gaps' element={<CoverageGapsPage />} />
-                  <Route path='delegation' element={<DelegationConsole />} />
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='support' element={<SupportPage />} />
                   <Route path='help-videos' element={<HelpVideosPage />} />
@@ -621,109 +463,57 @@ export default function App() {
                     path='integration-events'
                     element={<Navigate to='/integration-health?tab=events' replace />}
                   />
-                  <Route path='inbound-mappings' element={<InboundMappingsPage />} />
                   <Route path='realtime' element={<Realtime />} />
                   <Route path='traffic-map' element={<TrafficMap />} />
-                  <Route path='security-center' element={<SecurityCenter />} />
-                  <Route path='config-health' element={<ConfigHealth />} />
-                  <Route path='config-review' element={<ConfigReview />} />
-                  <Route path='legal-holds' element={<LegalHolds />} />
                   <Route path='find-replace' element={<FindReplace />} />
                   <Route path='m2m-matrix' element={<M2MMatrix />} />
-                  <Route path='mail-templates' element={<MailTemplates />} />
                   <Route path='setup-checklist' element={<SetupChecklist />} />
-                  <Route path='config-search' element={<ConfigSearch />} />
-                  <Route path='access-requests' element={<AccessRequests />} />
-                  <Route path='mail-log' element={<MailLog />} />
-                  <Route path='notification-bench' element={<NotificationBench />} />
-                  <Route path='notification-analytics' element={<NotificationAnalytics />} />
                   <Route path='sequences' element={<Sequences />} />
-                  <Route path='sql-scratchpad' element={<SqlScratchpad />} />
-                  <Route path='query-catalog' element={<QueryCatalogPage />} />
-                  <Route path='revision-search' element={<RevisionSearch />} />
-                  <Route path='automation-tests' element={<AutomationTests />} />
-                  <Route path='blueprints' element={<BlueprintsPage />} />
-                  <Route path='change-sets' element={<ChangeSetsPage />} />
-                  <Route path='provenance' element={<ProvenanceTracePage />} />
                   <Route path='trash' element={<TrashPage />} />
-                  <Route path='session-replays' element={<SessionReplaysPage />} />
-                  <Route path='report-studio' element={<ReportStudioPage />} />
                   <Route path='report-studio/:id' element={<ReportStudioEditPage />} />
-                  <Route path='pulse' element={<PulsePage />} />
-                  <Route path='scheduled-reports' element={<ScheduledReportsPage />} />
-                  <Route path='blackout-dates' element={<BlackoutDatesPage />} />
-                  <Route path='rules' element={<RulesPage />} />
                   <Route path='rules/:id' element={<RuleEditPage />} />
                   <Route path='dashboards' element={<DashboardsPage />} />
                   <Route path='ask' element={<AskPage />} />
                   <Route path='chat' element={<ChatPage />} />
                   <Route path='dashboards/draft' element={<DashboardDraftPage />} />
                   <Route path='dashboards/:id' element={<DashboardEditPage />} />
-                  <Route path='reports' element={<ReportsPage />} />
                   <Route path='profile' element={<ProfilePage />} />
                   <Route path='workspaces' element={<WorkspacesPage />} />
                   <Route path='scope-dimensions' element={<ScopeDimensionsPage />} />
-                  <Route path='presence' element={<PresencePage />} />
-                  <Route path='analytics' element={<AnalyticsPage />} />
                   <Route path='submission-forms' element={<SubmissionFormsPage />} />
                   <Route path='submission-forms/:id' element={<SubmissionFormEditPage />} />
-                  <Route path='field-watches' element={<FieldWatchesPage />} />
-                  <Route
-                    path='notification-subscriptions'
-                    element={<NotificationSubscriptionsPage />}
-                  />
                   <Route path='imports' element={<ImportsPage />} />
                   <Route path='imports/:id' element={<ImportsPage />} />
-                  <Route path='sla-rules' element={<SlaRulesPage />} />
-                  <Route path='team-throughput' element={<TeamThroughputPage />} />
-                  <Route path='access-audit' element={<AccessAuditPage />} />
-                  <Route path='alerts' element={<AlertsPage />} />
-                  <Route path='alert-manager' element={<AlertManagerPage />} />
                   <Route path='alerts/:id' element={<AlertEditPage />} />
                   <Route path='hierarchies' element={<HierarchiesPage />} />
                   <Route path='hierarchies/:id' element={<HierarchiesPage />} />
                   <Route path='hierarchies/:id/tree' element={<HierarchyViewPage />} />
                   <Route path='record-templates' element={<RecordTemplatesPage />} />
-                  <Route path='scheduled-changes' element={<ScheduledChangesPage />} />
-                  <Route path='collection-presets' element={<CollectionPresetsPage />} />
                   <Route path='virtual-collections' element={<VirtualCollectionsPage />} />
                   <Route path='api-keys' element={<ApiKeysPage />} />
-                  <Route path='mcp-connections' element={<McpConnectionsPage />} />
-                  <Route path='mcp-tools' element={<McpToolsPage />} />
                   <Route path='notifications' element={<NotificationsCenterPage />} />
-                  <Route path='sync-jobs' element={<SyncJobsPage />} />
                   <Route path='pdf-templates' element={<PdfTemplatesPage />} />
                   <Route path='playground' element={<PlaygroundPage />} />
-                  <Route path='mcp-console' element={<McpConsolePage />} />
-                  <Route path='dead-letters' element={<DeadLetterQueuePage />} />
                   <Route path='pages-admin' element={<PagesAdminPage />} />
                   <Route path='pages-admin/:id/edit' element={<PageEditPage />} />
                   <Route path='p/:slug' element={<PageViewPage />} />
-                  <Route path='api-analytics' element={<ApiAnalyticsPage />} />
-                  <Route path='ai-analytics' element={<AiAnalyticsPage />} />
-                  <Route path='ai-quality' element={<AiQualityPage />} />
-                  <Route path='ai-knowledge' element={<AiKnowledgePage />} />
                   <Route path='ai-plans' element={<AiPlansPage />} />
-                  <Route path='chat-analytics' element={<ChatAnalyticsPage />} />
-                  <Route path='search-analytics' element={<SearchAnalyticsPage />} />
-                  {/* Operations hubs: the old standalone pages are tabs now; their paths
-                      redirect with the query string kept (components/hub-page.tsx). */}
-                  <Route path='jobs/*' element={<JobsHub />} />
-                  <Route path='database/*' element={<DatabaseHub />} />
-                  <Route path='health/*' element={<HealthHub />} />
+                  {/* Hub pages (lib/hubs.ts): one route per tab; the old standalone
+                      paths redirect onto their tab with the query string kept. */}
                   {HUBS.flatMap((hub) =>
-                    hub.tabs.flatMap((tab) =>
-                      tab.legacy
-                        ? [
-                            <Route
-                              key={tab.legacy}
-                              path={tab.legacy.slice(1)}
-                              element={<HubRedirect to={hubTabPath(hub, tab)} />}
-                            />
-                          ]
-                        : []
-                    )
+                    hub.tabs.map((tab) => {
+                      const path = hubTabPath(hub, tab)
+                      return <Route key={path} path={path.slice(1)} element={<HubRoute />} />
+                    })
                   )}
+                  {HUB_REDIRECTS.map((r) => (
+                    <Route
+                      key={r.from}
+                      path={r.from.slice(1)}
+                      element={<HubRedirect to={r.to} />}
+                    />
+                  ))}
+                  <Route path='erp-submissions' element={<ErpSubmissionsRedirect />} />
                   <Route path='infrastructure' element={<InfrastructurePage />} />
                   <Route path='chaos' element={<ChaosPage />} />
                   <Route path='chaos/runs/:id' element={<ChaosRunReport />} />
@@ -731,14 +521,10 @@ export default function App() {
                   <Route path='user-groups' element={<UserGroupsPage />} />
                   <Route path='feature-flags' element={<FeatureFlagsPage />} />
                   <Route path='command' element={<CommandCenterPage />} />
-                  <Route path='changelog' element={<ChangelogPage />} />
-                  <Route path='contrast-audit' element={<ContrastAuditPage />} />
-                  <Route path='e2e-recorder' element={<E2eRecorderPage />} />
                   <Route
                     path='data-quality'
                     element={<Navigate to='/data-integrity?tab=quality' replace />}
                   />
-                  <Route path='privacy-retention' element={<RetentionPoliciesPage />} />
                   <Route path='issues' element={<IssuesPage />} />
                   <Route path='issues/:id' element={<IssuesPage />} />
                   {/* The workflow template editor merged into /pipelines —
@@ -746,13 +532,10 @@ export default function App() {
                   <Route path='workflows' element={<Navigate to='/pipelines' replace />} />
                   <Route path='workflows/:id' element={<WorkflowTemplateRedirect />} />
                   <Route path='widgets' element={<WidgetsPage />} />
-                  <Route path='persisted-queries' element={<PersistedQueriesPage />} />
-                  <Route path='erp-submissions' element={<ErpSubmissionsPage />} />
                   <Route path='tasks' element={<TasksPage />} />
                   <Route path='approvals' element={<ApprovalsPage />} />
                   <Route path='queues' element={<QueuesPage />} />
                   <Route path='queues/:id' element={<QueueDetailPage />} />
-                  <Route path='at-risk' element={<AtRiskPage />} />
                   <Route path='account' element={<AccountPage />} />
                   <Route
                     path='extensions/ui/*'

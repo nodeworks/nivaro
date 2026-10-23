@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ShieldCheck } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
+import { ScrollTabStrip } from '@/components/tab-strip'
 import { Button } from '@/components/ui/button'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
@@ -52,6 +53,8 @@ const inputCls =
   'h-8 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
 const cardCls = 'rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
 
+const aiQualityTabId = (id: string) => `ai-quality-tab-${id}`
+
 /** AI Quality — review queue, budgets, provider health, model comparison, replay, live calls. */
 export function AiQualityPage() {
   const [params, setParams] = useSearchParams()
@@ -65,42 +68,23 @@ export function AiQualityPage() {
   }
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
-      <header className='flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex h-9 w-9 items-center justify-center rounded-lg bg-nvr-cyan/15'>
-          <ShieldCheck className='h-4.5 w-4.5 text-nvr-navy dark:text-nvr-cyan' />
-        </div>
-        <div>
-          <h1 className='text-base font-semibold'>AI Quality</h1>
-          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-            Poor answers to fix, what AI costs and where it goes, provider health, and trying
-            another model first.
-          </p>
-        </div>
-      </header>
+      <HubToolbar description='Poor answers to fix, what AI costs and where it goes, provider health, and trying another model first.' />
+      <ScrollTabStrip
+        variant='sub'
+        className='shrink-0 border-b border-slate-200 bg-slate-50 dark:border-border dark:bg-background'
+        tabs={TABS.map((t) => ({ id: t.id, label: t.label }))}
+        active={tab}
+        onSelect={(id) => setTab(id as Tab)}
+        ariaLabel='AI quality views'
+        tabDomId={aiQualityTabId}
+        panelId='ai-quality-panel'
+      />
       <div
-        role='tablist'
-        aria-label='AI quality views'
-        className='flex shrink-0 gap-1 overflow-x-auto border-b border-slate-200 bg-white px-4 dark:border-border dark:bg-card'
+        id='ai-quality-panel'
+        role='tabpanel'
+        aria-labelledby={aiQualityTabId(tab)}
+        className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'
       >
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type='button'
-            role='tab'
-            aria-selected={tab === t.id}
-            onClick={() => setTab(t.id)}
-            className={cn(
-              'shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
-              tab === t.id
-                ? 'border-nvr-cyan text-slate-900 dark:text-foreground'
-                : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
         {tab === 'review' && <ReviewTab />}
         {tab === 'spend' && <SpendTab />}
         {tab === 'budgets' && <BudgetsTab />}

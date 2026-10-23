@@ -71,7 +71,7 @@ describe('#1178 follow one person', () => {
 describe('#1181 client crash replay', () => {
   const crash = { issue_id: 7, recording_id: 'abc', offset_ms: 4200.4, message: 'x' }
   it('links the replay seeked to the error and the issue', () => {
-    expect(replayUrl(crash)).toBe('/session-replays?recording=abc&t=4200')
+    expect(replayUrl(crash)).toBe('/analytics/replays?recording=abc&t=4200')
     expect(replayUrl({ ...crash, recording_id: null })).toBeNull()
     const ev = {
       t: 1,

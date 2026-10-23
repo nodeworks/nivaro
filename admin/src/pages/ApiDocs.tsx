@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, Download, FileCode2, ServerCog } from 'lucide-react'
 import { useState } from 'react'
+import { HubToolbar } from '@/components/hub-page'
+import { Button } from '@/components/ui/button'
 import {
   Command,
   CommandEmpty,
@@ -11,6 +13,7 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
+import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
 /**
@@ -19,6 +22,7 @@ import { cn } from '@/lib/utils'
  * the REST/GraphQL surface changelogs (#163/#315).
  */
 export function ApiDocsPage() {
+  const { resolvedTheme } = useTheme()
   const [showChangelog, setShowChangelog] = useState(false)
   const [specRole, setSpecRole] = useState<{ id: string; name: string } | null>(null)
 
@@ -35,58 +39,71 @@ export function ApiDocsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2 dark:border-border dark:bg-card'>
-        <span className='mr-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
-          Developer downloads
-        </span>
-        <ToolButton
-          icon={FileCode2}
-          label='types.ts'
-          tip='TypeScript interfaces for every collection'
-          onClick={() => download('/dev-tools/types.ts', 'types.ts')}
-        />
-        <ToolButton
-          icon={FileCode2}
-          label='typed-client.ts'
-          tip='Typed @nivaro/sdk wrapper — item reads/writes autocomplete against this instance'
-          onClick={() => download('/dev-tools/typed-client.ts', 'typed-client.ts')}
-        />
-        <ToolButton
-          icon={ServerCog}
-          label='mock-server.mjs'
-          tip='Dependency-free mock API generated from this schema — offline frontend dev'
-          onClick={() => download('/dev-tools/mock-server.mjs', 'mock-server.mjs')}
-        />
-        <div className='inline-flex items-center gap-1' data-openapi-role>
+      <HubToolbar
+        description='The REST reference for this instance’s schema, plus generated types, a typed SDK client, a mock server and the OpenAPI spec to download.'
+        actions={
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-8 text-[12px]'
+            aria-expanded={showChangelog}
+            onClick={() => setShowChangelog((v) => !v)}
+          >
+            {showChangelog ? 'Hide' : 'Show'} API changelog
+          </Button>
+        }
+      >
+        <div className='mt-2 flex flex-wrap items-center gap-2'>
+          <span className='mr-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
+            Developer downloads
+          </span>
           <ToolButton
-            icon={Download}
-            label='openapi.json'
-            tip={
-              specRole
-                ? `OpenAPI 3 spec narrowed to what the ${specRole.name} role can read and write`
-                : 'OpenAPI 3 spec — every collection'
-            }
-            onClick={() =>
-              specRole
-                ? download(
-                    `/dev-tools/openapi.json?role=${encodeURIComponent(specRole.id)}`,
-                    `openapi.${slug(specRole.name)}.json`
-                  )
-                : download('/dev-tools/openapi.json', 'openapi.json')
-            }
+            icon={FileCode2}
+            label='types.ts'
+            tip='TypeScript interfaces for every collection'
+            onClick={() => download('/dev-tools/types.ts', 'types.ts')}
           />
-          <RolePicker value={specRole} onChange={setSpecRole} />
+          <ToolButton
+            icon={FileCode2}
+            label='typed-client.ts'
+            tip='Typed @nivaro/sdk wrapper — item reads/writes autocomplete against this instance'
+            onClick={() => download('/dev-tools/typed-client.ts', 'typed-client.ts')}
+          />
+          <ToolButton
+            icon={ServerCog}
+            label='mock-server.mjs'
+            tip='Dependency-free mock API generated from this schema — offline frontend dev'
+            onClick={() => download('/dev-tools/mock-server.mjs', 'mock-server.mjs')}
+          />
+          <div className='inline-flex items-center gap-1' data-openapi-role>
+            <ToolButton
+              icon={Download}
+              label='openapi.json'
+              tip={
+                specRole
+                  ? `OpenAPI 3 spec narrowed to what the ${specRole.name} role can read and write`
+                  : 'OpenAPI 3 spec — every collection'
+              }
+              onClick={() =>
+                specRole
+                  ? download(
+                      `/dev-tools/openapi.json?role=${encodeURIComponent(specRole.id)}`,
+                      `openapi.${slug(specRole.name)}.json`
+                    )
+                  : download('/dev-tools/openapi.json', 'openapi.json')
+              }
+            />
+            <RolePicker value={specRole} onChange={setSpecRole} />
+          </div>
         </div>
-        <button
-          type='button'
-          onClick={() => setShowChangelog((v) => !v)}
-          className='ml-auto rounded-md border border-slate-200 px-2.5 py-1 text-[12px] text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
-        >
-          {showChangelog ? 'Hide' : 'Show'} API changelog
-        </button>
-      </div>
+      </HubToolbar>
       {showChangelog && <ChangelogPanel />}
-      <iframe src='/api/schema' className='flex-1 w-full border-0 min-h-0' title='API Reference' />
+      <iframe
+        key={resolvedTheme}
+        src={`/api/schema?embed=1&theme=${resolvedTheme}`}
+        className='flex-1 w-full border-0 min-h-0'
+        title='API Reference'
+      />
     </div>
   )
 }

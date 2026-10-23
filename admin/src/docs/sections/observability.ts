@@ -7,7 +7,7 @@ export const obsApiAnalytics: DocSection = {
     { type: 'h1', id: 'api-analytics', text: 'API Analytics' },
     {
       type: 'p',
-      text: 'Every API request is sampled into `nivaro_api_logs`, a ring buffer retaining 14 days of traffic. The /api-analytics page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.'
+      text: 'Every API request is sampled into `nivaro_api_logs`, a ring buffer retaining 14 days of traffic. The /analytics/api page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.'
     },
     {
       type: 'ul',

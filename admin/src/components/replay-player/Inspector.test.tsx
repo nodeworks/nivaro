@@ -54,7 +54,7 @@ describe('InspectorPanel (#1372)', () => {
     expect(screen.getByText('1 other recording')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /open in search/i })).toHaveAttribute(
       'href',
-      `/session-replays?tab=search&selector=${encodeURIComponent(info.selector)}`
+      `/analytics/replays?tab=search&selector=${encodeURIComponent(info.selector)}`
     )
   })
 

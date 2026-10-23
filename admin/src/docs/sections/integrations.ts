@@ -12,7 +12,7 @@ export const integrationsErp: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'The /erp-submissions page lists every submission across collections with status filters — drill into a submission to see its payload, the ERP response, and the retry history. On the record itself, the item edit page shows the latest status badge with the full history in a panel, including a Retry button for rejected submissions.'
+      text: 'The ERP submissions tab of Integration Health (/integration-health?tab=erp) lists every submission across collections with status filters — drill into a submission to see its payload, the ERP response, and the retry history. On the record itself, the item edit page shows the latest status badge with the full history in a panel, including a Retry button for rejected submissions.'
     },
     { type: 'h3', text: 'API' },
     {
@@ -79,7 +79,7 @@ export const integrationsSyncJobs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Manage jobs at /sync-jobs — each job shows last run, rows processed, and errors.',
+        'Manage jobs at /connections/sync-jobs — each job shows last run, rows processed, and errors.',
         '"Run now" triggers an immediate sync outside the schedule.',
         'manual conflict strategy parks conflicting rows for review instead of overwriting either side.'
       ]
@@ -107,7 +107,7 @@ export const integrationsConnector: DocSection = {
         '1. Open an External API → Connector tab → set the sample endpoint and click "Fetch sample".',
         '2. The response is rendered as an expandable field tree (arrays and nested objects supported).',
         '3. Map fields: pick a target collection, then pair external paths with collection fields.',
-        '4. Click "Generate sync job" — a pre-configured pull job appears in /sync-jobs ready to schedule.'
+        '4. Click "Generate sync job" — a pre-configured pull job appears in /connections/sync-jobs ready to schedule.'
       ]
     },
     {
@@ -352,7 +352,7 @@ GET  /api/external-apis/contracts                     // targets
     { type: 'h2', id: 'integration-events-inbound', text: 'Inbound mappings' },
     {
       type: 'p',
-      text: "Monitoring → Inbound Mappings defines a key an integration POSTs its OWN payload shape to. The mapping's rules are the import-template header-rule format (trim / remap / expression / lookup / const; source = a key on the posted object) and its target is a collection; mode `create` always inserts, `upsert` matches on the listed mapped fields first. `POST /api/inbound/<key>` takes one object or an array (≤500) from any authenticated caller and writes through the items service AS THAT CALLER — permissions, validation, hooks, activity all apply. The reply lists per-entry `created | updated | rejected` with the mapped values and issues (207 when some entries were rejected, 422 when all were). The editor's “Try a payload” panel dry-runs the rules as currently edited."
+      text: "Integrations → Connections → Inbound mappings (/connections/inbound) defines a key an integration POSTs its OWN payload shape to. The mapping's rules are the import-template header-rule format (trim / remap / expression / lookup / const; source = a key on the posted object) and its target is a collection; mode `create` always inserts, `upsert` matches on the listed mapped fields first. `POST /api/inbound/<key>` takes one object or an array (≤500) from any authenticated caller and writes through the items service AS THAT CALLER — permissions, validation, hooks, activity all apply. The reply lists per-entry `created | updated | rejected` with the mapped values and issues (207 when some entries were rejected, 422 when all were). The editor's “Try a payload” panel dry-runs the rules as currently edited."
     },
     { type: 'h3', id: 'integration-events-inbound-children', text: 'Child rows' },
     {

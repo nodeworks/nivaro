@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Bell, BellOff, Clock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -188,292 +189,296 @@ export function AlertsPage() {
   const activeCount = definitions.filter((d) => d.is_active).length
 
   return (
-    <div className='space-y-6 p-6'>
-      {/* Header */}
-      <div className='flex items-center justify-between'>
-        <div>
-          <h1 className='text-2xl font-semibold tracking-tight'>Alert Manager</h1>
-          <p className='text-sm text-muted-foreground mt-0.5'>
-            Monitor field thresholds and notify subscribers automatically
-          </p>
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description='Thresholds on record fields, checked as records change. Subscribers are notified when a value crosses its limit.'
+        actions={
+          <>
+            <Button
+              variant='outline'
+              size='sm'
+              className='h-8 text-[12px]'
+              onClick={() => evaluateMutation.mutate()}
+              disabled={evaluateMutation.isPending}
+            >
+              <RefreshCw
+                className={cn('mr-1.5 h-4 w-4', evaluateMutation.isPending && 'animate-spin')}
+              />
+              Evaluate now
+            </Button>
+            <Button
+              size='sm'
+              className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90 text-[12px]'
+              onClick={() => navigate('/alerts/new')}
+            >
+              <Plus className='mr-1.5 h-4 w-4' />
+              New alert
+            </Button>
+          </>
+        }
+      />
+      <div className='flex-1 space-y-6 overflow-y-auto p-4 sm:p-6'>
+        {/* Stats */}
+        <div className='grid grid-cols-3 gap-4'>
+          <Card>
+            <CardHeader className='pb-1 pt-4 px-4'>
+              <CardTitle className='text-xs font-medium text-muted-foreground uppercase tracking-wide'>
+                Total Alerts
+              </CardTitle>
+            </CardHeader>
+            <CardContent className='px-4 pb-4'>
+              <p className='text-2xl font-bold'>{definitions.length}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className='pb-1 pt-4 px-4'>
+              <CardTitle className='text-xs font-medium text-muted-foreground uppercase tracking-wide'>
+                Active
+              </CardTitle>
+            </CardHeader>
+            <CardContent className='px-4 pb-4'>
+              <p className='text-2xl font-bold text-green-600 dark:text-green-400'>{activeCount}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className='pb-1 pt-4 px-4'>
+              <CardTitle className='text-xs font-medium text-muted-foreground uppercase tracking-wide'>
+                Recent Triggers (last 100)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className='px-4 pb-4'>
+              <p className='text-2xl font-bold text-orange-600 dark:text-orange-400'>
+                {logEntries.length}
+              </p>
+            </CardContent>
+          </Card>
         </div>
-        <div className='flex items-center gap-2'>
-          <Button
-            variant='outline'
-            size='sm'
-            onClick={() => evaluateMutation.mutate()}
-            disabled={evaluateMutation.isPending}
-          >
-            <RefreshCw
-              className={cn('mr-1.5 h-4 w-4', evaluateMutation.isPending && 'animate-spin')}
-            />
-            Evaluate Now
-          </Button>
-          <Button size='sm' onClick={() => navigate('/alerts/new')}>
-            <Plus className='mr-1.5 h-4 w-4' />
-            New Alert
-          </Button>
-        </div>
-      </div>
 
-      {/* Stats */}
-      <div className='grid grid-cols-3 gap-4'>
+        {/* Definitions table with category tabs */}
         <Card>
-          <CardHeader className='pb-1 pt-4 px-4'>
-            <CardTitle className='text-xs font-medium text-muted-foreground uppercase tracking-wide'>
-              Total Alerts
-            </CardTitle>
+          <CardHeader className='px-4 py-3 border-b'>
+            <CardTitle className='text-sm font-semibold'>Alert Definitions</CardTitle>
           </CardHeader>
-          <CardContent className='px-4 pb-4'>
-            <p className='text-2xl font-bold'>{definitions.length}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className='pb-1 pt-4 px-4'>
-            <CardTitle className='text-xs font-medium text-muted-foreground uppercase tracking-wide'>
-              Active
-            </CardTitle>
-          </CardHeader>
-          <CardContent className='px-4 pb-4'>
-            <p className='text-2xl font-bold text-green-600 dark:text-green-400'>{activeCount}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className='pb-1 pt-4 px-4'>
-            <CardTitle className='text-xs font-medium text-muted-foreground uppercase tracking-wide'>
-              Recent Triggers (last 100)
-            </CardTitle>
-          </CardHeader>
-          <CardContent className='px-4 pb-4'>
-            <p className='text-2xl font-bold text-orange-600 dark:text-orange-400'>
-              {logEntries.length}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+          <CardContent className='p-0'>
+            <Tabs value={activeTab} onValueChange={setActiveTab}>
+              <div className='px-4 pt-3 border-b'>
+                <TabsList className='h-8'>
+                  {CATEGORIES.map((cat) => (
+                    <TabsTrigger key={cat} value={cat} className='h-7 text-[12px] capitalize'>
+                      {cat === 'all' ? 'All' : cat}
+                      {cat !== 'all' && (
+                        <span className='ml-1 text-[10px] opacity-60'>
+                          {definitions.filter((d) => d.category === cat).length}
+                        </span>
+                      )}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </div>
 
-      {/* Definitions table with category tabs */}
-      <Card>
-        <CardHeader className='px-4 py-3 border-b'>
-          <CardTitle className='text-sm font-semibold'>Alert Definitions</CardTitle>
-        </CardHeader>
-        <CardContent className='p-0'>
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <div className='px-4 pt-3 border-b'>
-              <TabsList className='h-8'>
-                {CATEGORIES.map((cat) => (
-                  <TabsTrigger key={cat} value={cat} className='h-7 text-xs capitalize'>
-                    {cat === 'all' ? 'All' : cat}
-                    {cat !== 'all' && (
-                      <span className='ml-1 text-[10px] opacity-60'>
-                        {definitions.filter((d) => d.category === cat).length}
-                      </span>
-                    )}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </div>
+              {CATEGORIES.map((cat) => (
+                <TabsContent key={cat} value={cat} className='m-0'>
+                  {defsLoading ? (
+                    <div className='space-y-2 p-4'>
+                      {[1, 2, 3].map((i) => (
+                        <Skeleton key={i} className='h-10 w-full' />
+                      ))}
+                    </div>
+                  ) : filtered.length === 0 ? (
+                    <div className='flex flex-col items-center gap-2 py-12 text-muted-foreground'>
+                      <AlertTriangle className='h-8 w-8 opacity-30' />
+                      <p className='text-sm'>No alerts defined</p>
+                      <Button variant='outline' size='sm' onClick={() => navigate('/alerts/new')}>
+                        <Plus className='mr-1.5 h-3.5 w-3.5' />
+                        Create alert
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className='divide-y'>
+                      {filtered.map((def) => {
+                        const sub = subMap.get(def.id)
+                        return (
+                          <div
+                            key={def.id}
+                            className='flex items-center gap-4 px-4 py-3 hover:bg-muted/30 transition-colors'
+                          >
+                            {/* Active toggle */}
+                            <Switch
+                              checked={def.is_active}
+                              onCheckedChange={(checked) =>
+                                toggleActiveMutation.mutate({ id: def.id, is_active: checked })
+                              }
+                            />
 
-            {CATEGORIES.map((cat) => (
-              <TabsContent key={cat} value={cat} className='m-0'>
-                {defsLoading ? (
-                  <div className='space-y-2 p-4'>
-                    {[1, 2, 3].map((i) => (
-                      <Skeleton key={i} className='h-10 w-full' />
-                    ))}
-                  </div>
-                ) : filtered.length === 0 ? (
-                  <div className='flex flex-col items-center gap-2 py-12 text-muted-foreground'>
-                    <AlertTriangle className='h-8 w-8 opacity-30' />
-                    <p className='text-sm'>No alerts defined</p>
-                    <Button variant='outline' size='sm' onClick={() => navigate('/alerts/new')}>
-                      <Plus className='mr-1.5 h-3.5 w-3.5' />
-                      Create alert
-                    </Button>
-                  </div>
-                ) : (
-                  <div className='divide-y'>
-                    {filtered.map((def) => {
-                      const sub = subMap.get(def.id)
-                      return (
-                        <div
-                          key={def.id}
-                          className='flex items-center gap-4 px-4 py-3 hover:bg-muted/30 transition-colors'
-                        >
-                          {/* Active toggle */}
-                          <Switch
-                            checked={def.is_active}
-                            onCheckedChange={(checked) =>
-                              toggleActiveMutation.mutate({ id: def.id, is_active: checked })
-                            }
-                          />
-
-                          {/* Name + condition */}
-                          <div className='flex-1 min-w-0'>
-                            <div className='flex items-center gap-2'>
-                              <span className='font-medium text-sm truncate'>{def.name}</span>
-                              <CategoryBadge category={def.category} />
-                            </div>
-                            <div className='flex items-center gap-3 mt-0.5'>
-                              <span className='text-xs text-muted-foreground'>
-                                <span className='font-mono bg-muted px-1 rounded'>
-                                  {def.collection}
+                            {/* Name + condition */}
+                            <div className='flex-1 min-w-0'>
+                              <div className='flex items-center gap-2'>
+                                <span className='font-medium text-sm truncate'>{def.name}</span>
+                                <CategoryBadge category={def.category} />
+                              </div>
+                              <div className='flex items-center gap-3 mt-0.5'>
+                                <span className='text-xs text-muted-foreground'>
+                                  <span className='font-mono bg-muted px-1 rounded'>
+                                    {def.collection}
+                                  </span>
+                                  {' · '}
+                                  <span className='font-mono'>{formatCondition(def)}</span>
                                 </span>
-                                {' · '}
-                                <span className='font-mono'>{formatCondition(def)}</span>
+                              </div>
+                            </div>
+
+                            {/* Subscribers */}
+                            <div className='text-xs text-muted-foreground text-right min-w-[60px]'>
+                              <span className='font-medium'>{def.subscriber_count}</span>
+                              <span className='opacity-60'>
+                                {' '}
+                                sub{def.subscriber_count !== 1 ? 's' : ''}
                               </span>
                             </div>
-                          </div>
 
-                          {/* Subscribers */}
-                          <div className='text-xs text-muted-foreground text-right min-w-[60px]'>
-                            <span className='font-medium'>{def.subscriber_count}</span>
-                            <span className='opacity-60'>
-                              {' '}
-                              sub{def.subscriber_count !== 1 ? 's' : ''}
+                            {/* Last triggered */}
+                            <div className='text-xs text-muted-foreground text-right min-w-[100px] hidden md:block'>
+                              {def.last_triggered ? (
+                                <span className='flex items-center gap-1 justify-end'>
+                                  <Clock className='h-3 w-3 opacity-50' />
+                                  {formatDate(def.last_triggered)}
+                                </span>
+                              ) : (
+                                <span className='opacity-40'>Never triggered</span>
+                              )}
+                            </div>
+
+                            {/* Actions */}
+                            <div className='flex items-center gap-1'>
+                              {/* Subscribe / Unsubscribe toggle */}
+                              {sub ? (
+                                <Button
+                                  variant='ghost'
+                                  size='icon'
+                                  className='h-7 w-7 text-nvr-cyan'
+                                  title='Unsubscribe'
+                                  onClick={() => unsubscribeMutation.mutate(sub.id)}
+                                  disabled={unsubscribeMutation.isPending}
+                                >
+                                  <Bell className='h-3.5 w-3.5' />
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant='ghost'
+                                  size='icon'
+                                  className='h-7 w-7 text-muted-foreground'
+                                  title='Subscribe'
+                                  onClick={() => subscribeMutation.mutate(def.id)}
+                                  disabled={subscribeMutation.isPending}
+                                >
+                                  <BellOff className='h-3.5 w-3.5' />
+                                </Button>
+                              )}
+
+                              <Button
+                                variant='ghost'
+                                size='icon'
+                                className='h-7 w-7'
+                                onClick={() => navigate(`/alerts/${def.id}`)}
+                              >
+                                <Pencil className='h-3.5 w-3.5' />
+                              </Button>
+
+                              <Button
+                                variant='ghost'
+                                size='icon'
+                                className='h-7 w-7 text-destructive hover:text-destructive'
+                                onClick={() => {
+                                  if (
+                                    confirm(`Delete alert "${def.name}"? This cannot be undone.`)
+                                  ) {
+                                    deleteMutation.mutate(def.id)
+                                  }
+                                }}
+                                disabled={deleteMutation.isPending}
+                              >
+                                <Trash2 className='h-3.5 w-3.5' />
+                              </Button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </TabsContent>
+              ))}
+            </Tabs>
+          </CardContent>
+        </Card>
+
+        {/* Recent Alert Log */}
+        <Card>
+          <CardHeader className='px-4 py-3 border-b'>
+            <CardTitle className='text-sm font-semibold'>Recent Alert Log</CardTitle>
+          </CardHeader>
+          <CardContent className='p-0'>
+            {logLoading ? (
+              <div className='space-y-2 p-4'>
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className='h-8 w-full' />
+                ))}
+              </div>
+            ) : logEntries.length === 0 ? (
+              <div className='py-10 text-center text-sm text-muted-foreground'>
+                No alerts have been triggered yet
+              </div>
+            ) : (
+              <div className='overflow-x-auto'>
+                <table className='w-full text-sm'>
+                  <thead>
+                    <tr className='border-b bg-muted/40'>
+                      <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
+                        Alert
+                      </th>
+                      <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
+                        Collection
+                      </th>
+                      <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
+                        Item
+                      </th>
+                      <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
+                        Value
+                      </th>
+                      <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
+                        Triggered
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className='divide-y'>
+                    {logEntries.slice(0, 20).map((entry) => (
+                      <tr key={entry.id} className='hover:bg-muted/20'>
+                        <td className='px-4 py-2'>
+                          <div className='flex items-center gap-1.5'>
+                            <CategoryBadge category={entry.category} />
+                            <span className='font-medium truncate max-w-[140px]'>
+                              {entry.definition_name}
                             </span>
                           </div>
-
-                          {/* Last triggered */}
-                          <div className='text-xs text-muted-foreground text-right min-w-[100px] hidden md:block'>
-                            {def.last_triggered ? (
-                              <span className='flex items-center gap-1 justify-end'>
-                                <Clock className='h-3 w-3 opacity-50' />
-                                {formatDate(def.last_triggered)}
-                              </span>
-                            ) : (
-                              <span className='opacity-40'>Never triggered</span>
-                            )}
-                          </div>
-
-                          {/* Actions */}
-                          <div className='flex items-center gap-1'>
-                            {/* Subscribe / Unsubscribe toggle */}
-                            {sub ? (
-                              <Button
-                                variant='ghost'
-                                size='icon'
-                                className='h-7 w-7 text-nvr-cyan'
-                                title='Unsubscribe'
-                                onClick={() => unsubscribeMutation.mutate(sub.id)}
-                                disabled={unsubscribeMutation.isPending}
-                              >
-                                <Bell className='h-3.5 w-3.5' />
-                              </Button>
-                            ) : (
-                              <Button
-                                variant='ghost'
-                                size='icon'
-                                className='h-7 w-7 text-muted-foreground'
-                                title='Subscribe'
-                                onClick={() => subscribeMutation.mutate(def.id)}
-                                disabled={subscribeMutation.isPending}
-                              >
-                                <BellOff className='h-3.5 w-3.5' />
-                              </Button>
-                            )}
-
-                            <Button
-                              variant='ghost'
-                              size='icon'
-                              className='h-7 w-7'
-                              onClick={() => navigate(`/alerts/${def.id}`)}
-                            >
-                              <Pencil className='h-3.5 w-3.5' />
-                            </Button>
-
-                            <Button
-                              variant='ghost'
-                              size='icon'
-                              className='h-7 w-7 text-destructive hover:text-destructive'
-                              onClick={() => {
-                                if (confirm(`Delete alert "${def.name}"? This cannot be undone.`)) {
-                                  deleteMutation.mutate(def.id)
-                                }
-                              }}
-                              disabled={deleteMutation.isPending}
-                            >
-                              <Trash2 className='h-3.5 w-3.5' />
-                            </Button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </TabsContent>
-            ))}
-          </Tabs>
-        </CardContent>
-      </Card>
-
-      {/* Recent Alert Log */}
-      <Card>
-        <CardHeader className='px-4 py-3 border-b'>
-          <CardTitle className='text-sm font-semibold'>Recent Alert Log</CardTitle>
-        </CardHeader>
-        <CardContent className='p-0'>
-          {logLoading ? (
-            <div className='space-y-2 p-4'>
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className='h-8 w-full' />
-              ))}
-            </div>
-          ) : logEntries.length === 0 ? (
-            <div className='py-10 text-center text-sm text-muted-foreground'>
-              No alerts have been triggered yet
-            </div>
-          ) : (
-            <div className='overflow-x-auto'>
-              <table className='w-full text-sm'>
-                <thead>
-                  <tr className='border-b bg-muted/40'>
-                    <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
-                      Alert
-                    </th>
-                    <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
-                      Collection
-                    </th>
-                    <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
-                      Item
-                    </th>
-                    <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
-                      Value
-                    </th>
-                    <th className='px-4 py-2 text-left text-xs font-medium text-muted-foreground'>
-                      Triggered
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className='divide-y'>
-                  {logEntries.slice(0, 20).map((entry) => (
-                    <tr key={entry.id} className='hover:bg-muted/20'>
-                      <td className='px-4 py-2'>
-                        <div className='flex items-center gap-1.5'>
-                          <CategoryBadge category={entry.category} />
-                          <span className='font-medium truncate max-w-[140px]'>
-                            {entry.definition_name}
-                          </span>
-                        </div>
-                      </td>
-                      <td className='px-4 py-2 font-mono text-xs text-muted-foreground'>
-                        {entry.collection}
-                      </td>
-                      <td className='px-4 py-2 font-mono text-xs'>{entry.item}</td>
-                      <td className='px-4 py-2 font-mono text-xs'>
-                        {entry.field_value ?? <span className='opacity-40'>—</span>}
-                      </td>
-                      <td className='px-4 py-2 text-xs text-muted-foreground'>
-                        {formatDate(entry.triggered_at)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                        </td>
+                        <td className='px-4 py-2 font-mono text-xs text-muted-foreground'>
+                          {entry.collection}
+                        </td>
+                        <td className='px-4 py-2 font-mono text-xs'>{entry.item}</td>
+                        <td className='px-4 py-2 font-mono text-xs'>
+                          {entry.field_value ?? <span className='opacity-40'>—</span>}
+                        </td>
+                        <td className='px-4 py-2 text-xs text-muted-foreground'>
+                          {formatDate(entry.triggered_at)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   )
 }

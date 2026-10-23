@@ -1,9 +1,10 @@
 import { createNivaro } from '@nivaro/sdk'
 import { NivaroProvider, NotificationTemplatesView } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Braces, Mail, RotateCcw, Send } from 'lucide-react'
+import { Braces, RotateCcw, Send } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { MailHarness } from '@/components/mail-harness'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -144,22 +145,15 @@ export default function MailTemplates() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <Mail className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Mail Templates
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              {tab === 'harness'
-                ? 'Every email this instance sends, rendered from real data — preview it, send it to yourself, or to the people who would actually get it.'
-                : tab === 'notifications'
-                  ? 'The wording of every in-app notification (bell, inbox, push), previewed against a real recent event. First line = subject, the rest = message.'
-                  : 'Edit the Liquid emails this instance sends. Saving stores a database override — the file template stays the baseline you can always revert to.'}
-            </p>
-          </div>
-          <span className='flex-1' />
+      <HubToolbar
+        description={
+          tab === 'harness'
+            ? 'Every email this instance sends, rendered from real data — preview it, send it to yourself, or to the people who would actually get it.'
+            : tab === 'notifications'
+              ? 'The wording of every in-app notification (bell, inbox, push), previewed against a real recent event. First line = subject, the rest = message.'
+              : 'Edit the Liquid emails this instance sends. Saving stores a database override — the file template stays the baseline you can always revert to.'
+        }
+        actions={
           <div className='inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
             {(['harness', 'templates', 'notifications'] as const).map((t) => (
               <button
@@ -182,8 +176,8 @@ export default function MailTemplates() {
               </button>
             ))}
           </div>
-        </div>
-      </header>
+        }
+      />
 
       {tab === 'harness' ? (
         <MailHarness />

@@ -696,7 +696,7 @@ export function DashboardPage() {
                   </span>
                   <button
                     type='button'
-                    onClick={() => navigate('/presence')}
+                    onClick={() => navigate('/security-center/presence')}
                     className='text-[11px] text-nvr-cyan hover:underline'
                   >
                     View all

@@ -157,7 +157,7 @@ export function QualityChecksCard() {
           Quality checks
         </h2>
         <Link
-          to='/quality-checks'
+          to='/environments/quality'
           data-quality-card-link
           className='text-[12px] font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
         >

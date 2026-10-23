@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, CircleSlash, Loader2, RefreshCw, XCircle }
 import { useRef } from 'react'
 import { toast } from 'sonner'
 import { ExplainButton } from '@/components/explain-button'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { WeeklySummaryToggle } from '@/components/weekly-summary-toggle'
 import { api } from '@/lib/api'
@@ -138,18 +139,10 @@ export default function Readiness() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Go-Live Readiness
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Continuously answerable: can we cut over? Each check shows when it last ran; a result
-              past its window re-runs in the background, and Re-run checks runs them all live now.
-            </p>
-          </div>
-          <div className='flex items-center gap-3'>
+      <HubToolbar
+        description='Can we cut over? Each check shows when it last ran; a result past its window re-runs in the background, and Re-run checks runs them all live now.'
+        actions={
+          <>
             <WeeklySummaryToggle />
             {data?.computed_at && (
               <span
@@ -160,15 +153,21 @@ export default function Readiness() {
                 {data.refreshing ? ' · refreshing…' : ''}
               </span>
             )}
-            <Button size='sm' variant='outline' disabled={isFetching} onClick={rerun}>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 text-[12px]'
+              disabled={isFetching}
+              onClick={rerun}
+            >
               <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} /> Re-run
               checks
             </Button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         <div className='max-w-[880px] space-y-4'>
           {!data && isFetching && <p className='text-[12.5px] text-slate-400'>Running checks…</p>}
           {data && data.checks.length === 0 && (

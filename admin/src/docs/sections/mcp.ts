@@ -74,7 +74,7 @@ export const mcpDocs: DocSection = {
     { type: 'h2', id: 'mcp-instance-tools', text: 'This instance’s own tools' },
     {
       type: 'p',
-      text: 'Beyond the built-in set, an instance can offer tools of its own, managed on **Developer → Assistant Tools** (`/mcp-tools`). An administrator can expose a saved query or a flow as a named tool: the query’s parameters (or the inputs you list, for a flow) become the tool’s input, and it runs as the person calling — the query’s own access level and user scopes decide what comes back, and a flow runs with the caller as the person who triggered it. Choose who may call it (administrators, or everyone signed in) and whether it only reads. An API key limited to named collections never gets flow tools (a flow runs as the person and would reach past the key’s collections), and an administrator on such a key is not treated as an administrator here. Extensions add tools with `ctx.mcp.registerTool`; they are listed on the same page.'
+      text: 'Beyond the built-in set, an instance can offer tools of its own, managed on **Developer → MCP → Assistant tools** (`/mcp/tools`). An administrator can expose a saved query or a flow as a named tool: the query’s parameters (or the inputs you list, for a flow) become the tool’s input, and it runs as the person calling — the query’s own access level and user scopes decide what comes back, and a flow runs with the caller as the person who triggered it. Choose who may call it (administrators, or everyone signed in) and whether it only reads. An API key limited to named collections never gets flow tools (a flow runs as the person and would reach past the key’s collections), and an administrator on such a key is not treated as an administrator here. Extensions add tools with `ctx.mcp.registerTool`; they are listed on the same page.'
     },
     {
       type: 'p',
@@ -112,7 +112,7 @@ export const mcpDocs: DocSection = {
     { type: 'h2', id: 'mcp-console', text: 'MCP console' },
     {
       type: 'p',
-      text: 'Developer → MCP Console (`/mcp-console`, administrators) lists the tools an assistant connected as you would get, with a form built from each tool’s inputs (or JSON, for the raw arguments). Running a tool goes through the same MCP server the endpoint uses, as you, and shows the result as the assistant sees it, the raw JSON answer, how long it took, how large it is, and every API call the tool made.'
+      text: 'Developer → MCP → Console (`/mcp/console`, administrators) lists the tools an assistant connected as you would get, with a form built from each tool’s inputs (or JSON, for the raw arguments). Running a tool goes through the same MCP server the endpoint uses, as you, and shows the result as the assistant sees it, the raw JSON answer, how long it took, how large it is, and every API call the tool made.'
     },
     {
       type: 'p',
@@ -126,7 +126,7 @@ export const mcpDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        '**MCP Connections** (`/mcp-connections`, under APIs) lists every assistant connected to this instance across people, with the same 14-day figures, and lets you disconnect a sign-in or switch off a key.',
+        '**MCP → Connections** (`/mcp`) lists every assistant connected to this instance across people, with the same 14-day figures, and lets you disconnect a sign-in or switch off a key.',
         'Each connection may make a set number of tool calls a minute (default 120; 0 means no limit), and you can give one connection its own limit. Over the limit the assistant gets HTTP 429 with Retry-After and a message saying why, so it can tell its person and wait.',
         'Idle review: a signed-in connection unused for 60 days is pointed out to its owner, the owner is warned seven days before 90 days, and at 90 days it is disconnected (job `mcp-idle-review`, daily on deployed instances). Both day counts are settings at the top of the page; the Idle tab shows what the next run will do.',
         'On the Traffic Map each app is its own caller, named `MCP: <app>` — the name the app registered with, or the API key’s name — grouped under AI assistants.',

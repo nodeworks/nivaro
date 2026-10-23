@@ -247,7 +247,7 @@ export const scheduledReportsDocs: DocSection = {
     { type: 'h1', id: 'scheduled-reports', text: 'Scheduled Reports' },
     {
       type: 'p',
-      text: 'Email a PDF snapshot of a collection (filtered rows as a table) or a queue (stat strip + items) on a cron schedule. Managed at /scheduled-reports.'
+      text: 'Email a PDF snapshot of a collection (filtered rows as a table) or a queue (stat strip + items) on a cron schedule. Managed at /reports/scheduled.'
     },
     {
       type: 'ul',
@@ -369,7 +369,7 @@ export const aiQualityDocs: DocSection = {
     { type: 'h1', id: 'ai-quality', text: 'AI Quality & Budgets' },
     {
       type: 'p',
-      text: 'Admin page /ai-quality (Usage nav). Review poor answers, set optional daily spend caps, watch provider health, and try another model before switching.'
+      text: 'Admin page /ai/quality (Insights → AI → Quality). Review poor answers, set optional daily spend caps, watch provider health, and try another model before switching.'
     },
     { type: 'h2', id: 'ai-quality-review', text: 'Review queue' },
     {

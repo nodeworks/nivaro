@@ -7,8 +7,8 @@ import { get, post } from '../../lib/commands'
 import { useLiveOps } from '../../lib/live-ops'
 import { cn } from '../../lib/utils'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
-import { DelegationCard } from '../ProfileView'
 import { UserChip } from '../item-edit/UserChip'
+import { DelegationCard } from '../ProfileView'
 
 /**
  * Delegation console — one page for absence coverage: who is out, who is
@@ -88,7 +88,17 @@ const PROBLEM_TEXT: Record<NonNullable<Entry['delegate_problem']>, string> = {
   out: 'delegate is out too'
 }
 
-function Tile({ label, value, tone, hint }: { label: string; value: string | number; tone?: 'warn' | 'bad'; hint?: string }) {
+function Tile({
+  label,
+  value,
+  tone,
+  hint
+}: {
+  label: string
+  value: string | number
+  tone?: 'warn' | 'bad'
+  hint?: string
+}) {
   return (
     <div className='rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
       <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>{label}</p>
@@ -109,12 +119,24 @@ function Tile({ label, value, tone, hint }: { label: string; value: string | num
   )
 }
 
-function Card({ title, hint, children, tone }: { title: string; hint?: string; children: React.ReactNode; tone?: 'bad' }) {
+function Card({
+  title,
+  hint,
+  children,
+  tone
+}: {
+  title: string
+  hint?: string
+  children: React.ReactNode
+  tone?: 'bad'
+}) {
   return (
     <div
       className={cn(
         'rounded-lg border bg-white dark:bg-card',
-        tone === 'bad' ? 'border-red-300 dark:border-red-500/40' : 'border-slate-200 dark:border-border'
+        tone === 'bad'
+          ? 'border-red-300 dark:border-red-500/40'
+          : 'border-slate-200 dark:border-border'
       )}
     >
       <header className='border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
@@ -220,7 +242,17 @@ function AssignDelegate({ entry, onDone }: { entry: Entry; onDone: () => void })
   )
 }
 
-function EntryTable({ rows, isAdmin, onChanged, showWindow }: { rows: Entry[]; isAdmin: boolean; onChanged: () => void; showWindow: boolean }) {
+function EntryTable({
+  rows,
+  isAdmin,
+  onChanged,
+  showWindow
+}: {
+  rows: Entry[]
+  isAdmin: boolean
+  onChanged: () => void
+  showWindow: boolean
+}) {
   if (rows.length === 0) return <p className='px-4 py-4 text-[12px] text-slate-400'>Nobody.</p>
   return (
     <table className='w-full text-[12px]'>
@@ -291,11 +323,17 @@ function EntryTable({ rows, isAdmin, onChanged, showWindow }: { rows: Entry[]; i
 
 export interface DelegationConsoleViewProps {
   className?: string
+  /** Host already shows the title (a tab of a page): drop the icon and heading. */
+  compactHeader?: boolean
   /** Host toast hook. */
   onNotice?: (message: string) => void
 }
 
-export function DelegationConsoleView({ className, onNotice }: DelegationConsoleViewProps) {
+export function DelegationConsoleView({
+  className,
+  onNotice,
+  compactHeader = false
+}: DelegationConsoleViewProps) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const auth = useItemEditAuth()
@@ -340,14 +378,28 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
 
   return (
     <div className={cn('flex flex-1 min-h-0 flex-col', className)} data-nvr-delegation-console>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
+      <header
+        className={cn(
+          compactHeader
+            ? 'flex min-h-16 shrink-0 flex-col justify-center border-b border-slate-200 bg-white px-4 py-3 sm:px-6 dark:border-border dark:bg-card'
+            : 'shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'
+        )}
+      >
         <div className='flex items-center gap-2.5'>
-          <Users className='h-5 w-5 text-muted-foreground' />
+          {!compactHeader && <Users className='h-5 w-5 text-muted-foreground' />}
           <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Delegation
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+            {!compactHeader && (
+              <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
+                Delegation
+              </h1>
+            )}
+            <p
+              className={cn(
+                compactHeader
+                  ? 'm-0 max-w-[72ch] text-[12px] leading-relaxed text-slate-600 dark:text-muted-foreground'
+                  : 'mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'
+              )}
+            >
               Who is out, who covers them, what expires soon, and whose absence leaves approvals
               with nobody — plus your own delegate.
             </p>
@@ -384,7 +436,13 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
               <Tile
                 label='Expiring'
                 value={data.totals.expiring}
-                tone={data.expiring.some((e) => e.expired) ? 'bad' : data.totals.expiring ? 'warn' : undefined}
+                tone={
+                  data.expiring.some((e) => e.expired)
+                    ? 'bad'
+                    : data.totals.expiring
+                      ? 'warn'
+                      : undefined
+                }
                 hint={`delegations ending in ${days}d`}
               />
               <Tile
@@ -407,28 +465,52 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
                 title='Would go unowned — no working delegate'
                 hint='Out now, or entering an OOO window within 24 hours, with nobody able to act for them. Pending = open items sitting in states they help cover.'
               >
-                <EntryTable rows={data.uncovered} isAdmin={isAdmin} onChanged={refresh} showWindow />
+                <EntryTable
+                  rows={data.uncovered}
+                  isAdmin={isAdmin}
+                  onChanged={refresh}
+                  showWindow
+                />
               </Card>
             )}
 
             <div className='grid grid-cols-1 gap-4 xl:grid-cols-2'>
               <div className='space-y-4'>
                 <Card title='Out now' hint='Currently out of office.'>
-                  <EntryTable rows={data.out_now} isAdmin={isAdmin} onChanged={refresh} showWindow />
+                  <EntryTable
+                    rows={data.out_now}
+                    isAdmin={isAdmin}
+                    onChanged={refresh}
+                    showWindow
+                  />
                 </Card>
-                <Card title={`Coming up (next ${days} days)`} hint='Scheduled OOO windows — the flag flips on entry and clears on exit.'>
-                  <EntryTable rows={data.upcoming} isAdmin={isAdmin} onChanged={refresh} showWindow />
+                <Card
+                  title={`Coming up (next ${days} days)`}
+                  hint='Scheduled OOO windows — the flag flips on entry and clears on exit.'
+                >
+                  <EntryTable
+                    rows={data.upcoming}
+                    isAdmin={isAdmin}
+                    onChanged={refresh}
+                    showWindow
+                  />
                 </Card>
               </div>
               <div className='space-y-4'>
                 {me && <DelegationCard user={me} onSaved={refresh} />}
-                <Card title='Who covers whom' hint='Active delegations: the delegate and everyone routing to them right now.'>
+                <Card
+                  title='Who covers whom'
+                  hint='Active delegations: the delegate and everyone routing to them right now.'
+                >
                   {data.covering.length === 0 ? (
                     <p className='px-4 py-4 text-[12px] text-slate-400'>No active delegations.</p>
                   ) : (
                     <ul className='divide-y divide-slate-100 dark:divide-border'>
                       {data.covering.map((c) => (
-                        <li key={c.delegate.id} className='flex flex-wrap items-start gap-2 px-4 py-2 text-[12px]'>
+                        <li
+                          key={c.delegate.id}
+                          className='flex flex-wrap items-start gap-2 px-4 py-2 text-[12px]'
+                        >
                           <UserChip userId={c.delegate.id} size='compact' />
                           <span className='mt-1 text-slate-400'>covers</span>
                           <span className='flex flex-wrap gap-1'>
@@ -436,7 +518,9 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
                               <span key={p.id} className='inline-flex items-center gap-1'>
                                 <UserChip userId={p.id} size='compact' />
                                 {p.expires_at && (
-                                  <span className='text-[10.5px] text-slate-400'>until {fmtDate(p.expires_at)}</span>
+                                  <span className='text-[10.5px] text-slate-400'>
+                                    until {fmtDate(p.expires_at)}
+                                  </span>
                                 )}
                               </span>
                             ))}
@@ -446,19 +530,39 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
                     </ul>
                   )}
                 </Card>
-                <Card title='Expiring delegations' hint={`Ending within ${days} days — an expired one while the person is still out means approvals are stalling.`}>
+                <Card
+                  title='Expiring delegations'
+                  hint={`Ending within ${days} days — an expired one while the person is still out means approvals are stalling.`}
+                >
                   {data.expiring.length === 0 ? (
                     <p className='px-4 py-4 text-[12px] text-slate-400'>Nothing expiring.</p>
                   ) : (
                     <ul className='divide-y divide-slate-100 dark:divide-border'>
                       {data.expiring.map((x) => (
-                        <li key={x.user.id} className='flex flex-wrap items-center gap-2 px-4 py-2 text-[12px]'>
-                          <CalendarClock className={cn('h-3.5 w-3.5', x.expired ? 'text-red-500' : 'text-amber-500')} />
+                        <li
+                          key={x.user.id}
+                          className='flex flex-wrap items-center gap-2 px-4 py-2 text-[12px]'
+                        >
+                          <CalendarClock
+                            className={cn(
+                              'h-3.5 w-3.5',
+                              x.expired ? 'text-red-500' : 'text-amber-500'
+                            )}
+                          />
                           <UserChip userId={x.user.id} size='compact' />
                           <span className='text-slate-400'>→</span>
                           <UserChip userId={x.delegate.id} size='compact' />
-                          <span className={cn('ml-auto text-[11.5px]', x.expired ? 'font-semibold text-red-600 dark:text-red-400' : 'text-slate-500')}>
-                            {x.expired ? `expired ${fmtDate(x.expires_at)}${x.currently_out ? ' · still out' : ''}` : `ends ${fmtDate(x.expires_at)}`}
+                          <span
+                            className={cn(
+                              'ml-auto text-[11.5px]',
+                              x.expired
+                                ? 'font-semibold text-red-600 dark:text-red-400'
+                                : 'text-slate-500'
+                            )}
+                          >
+                            {x.expired
+                              ? `expired ${fmtDate(x.expires_at)}${x.currently_out ? ' · still out' : ''}`
+                              : `ends ${fmtDate(x.expires_at)}`}
                           </span>
                         </li>
                       ))}
@@ -478,7 +582,8 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
                 ) : gaps.blocked.length === 0 ? (
                   <p className='px-4 py-4 text-[12px] text-slate-400'>
                     Nothing blocked — every open record has at least one owner who can act.
-                    {gaps.no_owner_count > 0 && ` (${gaps.no_owner_count} resolve no owners at all — an owner-matrix coverage question, see Coverage Gaps.)`}
+                    {gaps.no_owner_count > 0 &&
+                      ` (${gaps.no_owner_count} resolve no owners at all — an owner-matrix coverage question, see Coverage Gaps.)`}
                   </p>
                 ) : (
                   <>
@@ -492,20 +597,31 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
                       </thead>
                       <tbody>
                         {gaps.blocked.slice(0, 40).map((g) => (
-                          <tr key={`${g.collection}:${g.item}`} className='border-t border-slate-100 dark:border-border'>
+                          <tr
+                            key={`${g.collection}:${g.item}`}
+                            className='border-t border-slate-100 dark:border-border'
+                          >
                             <td className='px-4 py-1.5'>
                               <button
                                 type='button'
-                                onClick={() => nav.navigate(`/collections/${g.collection}/${g.item}`)}
+                                onClick={() =>
+                                  nav.navigate(`/collections/${g.collection}/${g.item}`)
+                                }
                                 className='text-nvr-navy underline decoration-dotted underline-offset-2 dark:text-nvr-cyan'
                               >
                                 {g.label}
                               </button>
-                              <span className='ml-1 text-[10.5px] text-slate-400'>{g.collection.replace(/_/g, ' ')}</span>
+                              <span className='ml-1 text-[10.5px] text-slate-400'>
+                                {g.collection.replace(/_/g, ' ')}
+                              </span>
                             </td>
-                            <td className='px-2 py-1.5 text-slate-600 dark:text-muted-foreground'>{g.state ?? '—'}</td>
                             <td className='px-2 py-1.5 text-slate-600 dark:text-muted-foreground'>
-                              {g.owners.map((o) => `${o.name} (${o.reason.replace(/_/g, ' ')})`).join(', ')}
+                              {g.state ?? '—'}
+                            </td>
+                            <td className='px-2 py-1.5 text-slate-600 dark:text-muted-foreground'>
+                              {g.owners
+                                .map((o) => `${o.name} (${o.reason.replace(/_/g, ' ')})`)
+                                .join(', ')}
                             </td>
                           </tr>
                         ))}
@@ -515,7 +631,11 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
                       <p className='px-4 py-2 text-[11.5px] text-slate-400'>
                         {gaps.blocked.length > 40 ? `Showing 40 of ${gaps.blocked.length}. ` : ''}
                         {gapsPath && (
-                          <button type='button' onClick={() => nav.navigate(gapsPath)} className='underline decoration-dotted underline-offset-2'>
+                          <button
+                            type='button'
+                            onClick={() => nav.navigate(gapsPath)}
+                            className='underline decoration-dotted underline-offset-2'
+                          >
                             Full coverage-gap report →
                           </button>
                         )}
@@ -526,7 +646,8 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
               </Card>
             )}
             <p className='flex items-center gap-1 text-[11px] text-slate-400'>
-              <UserRound className='h-3 w-3' /> Computed live at {new Date(data.generated_at).toLocaleTimeString()}.
+              <UserRound className='h-3 w-3' /> Computed live at{' '}
+              {new Date(data.generated_at).toLocaleTimeString()}.
             </p>
           </div>
         )}

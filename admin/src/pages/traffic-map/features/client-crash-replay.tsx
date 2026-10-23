@@ -23,7 +23,7 @@ export function crashOf(ev: TrafficEventWire): ClientCrash | null {
 /** The replay page link (`t` = the error offset, which the player seeks to). */
 export function replayUrl(c: ClientCrash): string | null {
   if (!c.recording_id) return null
-  return `/session-replays?recording=${encodeURIComponent(c.recording_id)}${
+  return `/analytics/replays?recording=${encodeURIComponent(c.recording_id)}${
     c.offset_ms != null ? `&t=${Math.max(0, Math.round(c.offset_ms))}` : ''
   }`
 }

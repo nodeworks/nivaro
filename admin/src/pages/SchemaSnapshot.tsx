@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowLeftRight, Download, GitCompare, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
@@ -459,15 +460,11 @@ export function SchemaSnapshotPage() {
   const counts = importResult?.imported ?? null
 
   return (
-    <>
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900'>
-          Schema Snapshot
-        </h1>
-      </div>
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar description='Export every collection, field and relation as a JSON snapshot, import one from another instance, or compare and sync schema with another environment.' />
 
-      <div className='p-8'>
-        <div className='mx-auto max-w-2xl space-y-5'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
+        <div className='max-w-2xl space-y-5'>
           {/* Export */}
           <div className='rounded-xl border border-slate-200 bg-white p-6'>
             <div className='flex items-center justify-between'>
@@ -561,6 +558,6 @@ export function SchemaSnapshotPage() {
           <EnvironmentSyncCard />
         </div>
       </div>
-    </>
+    </div>
   )
 }

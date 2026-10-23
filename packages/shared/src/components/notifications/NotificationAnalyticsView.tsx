@@ -216,7 +216,14 @@ function ChannelCard({ title, counts }: { title: string; counts: Record<string, 
   )
 }
 
-export function NotificationAnalyticsView({ className }: { className?: string }) {
+export function NotificationAnalyticsView({
+  className,
+  compactHeader = false
+}: {
+  className?: string
+  /** Host already shows the title (a tab of a page): drop the icon and heading. */
+  compactHeader?: boolean
+}) {
   const client = useNivaroClient()
   const [days, setDays] = useState<7 | 30 | 90>(30)
   const [actedHours, setActedHours] = useState<4 | 24 | 72>(24)
@@ -233,14 +240,28 @@ export function NotificationAnalyticsView({ className }: { className?: string })
   const maxDay = Math.max(1, ...series.map((s) => s.sent))
   return (
     <div className={cn('flex flex-1 min-h-0 flex-col', className)} data-nvr-notification-analytics>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
+      <header
+        className={cn(
+          compactHeader
+            ? 'flex min-h-16 shrink-0 flex-col justify-center border-b border-slate-200 bg-white px-4 py-3 sm:px-6 dark:border-border dark:bg-card'
+            : 'shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'
+        )}
+      >
         <div className='flex items-center gap-2.5'>
-          <BarChart3 className='h-5 w-5 text-muted-foreground' />
+          {!compactHeader && <BarChart3 className='h-5 w-5 text-muted-foreground' />}
           <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Notification analytics
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+            {!compactHeader && (
+              <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
+                Notification analytics
+              </h1>
+            )}
+            <p
+              className={cn(
+                compactHeader
+                  ? 'm-0 max-w-[72ch] text-[12px] leading-relaxed text-slate-600 dark:text-muted-foreground'
+                  : 'mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'
+              )}
+            >
               Where the noise comes from and whether anyone reads it — by category, sender,
               collection and channel, plus what people have muted.
             </p>

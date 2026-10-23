@@ -19,7 +19,14 @@ const sharedClient = createNivaro(typeof window !== 'undefined' ? window.locatio
 export default function DelegationConsole() {
   const navigate = useNavigate()
   const { user } = useAuth()
-  const nav = useMemo(() => ({ navigate: (path: string) => navigate(path) }), [navigate])
+  // The shared view links admin-shaped paths; Coverage gaps is now this hub's other tab.
+  const nav = useMemo(
+    () => ({
+      navigate: (path: string) => navigate(path),
+      consoleUrl: (path: string) => (path === '/coverage-gaps' ? '/coverage/gaps' : path)
+    }),
+    [navigate]
+  )
   const auth = useMemo(
     () => ({ userId: String(user?.id ?? ''), isAdmin: !!user?.is_admin }),
     [user?.id, user?.is_admin]
@@ -28,7 +35,7 @@ export default function DelegationConsole() {
     <NivaroProvider client={sharedClient}>
       <NavigationContext.Provider value={nav}>
         <ItemEditAuthContext.Provider value={auth}>
-          <DelegationConsoleView onNotice={(m) => toast.success(m)} />
+          <DelegationConsoleView compactHeader onNotice={(m) => toast.success(m)} />
         </ItemEditAuthContext.Provider>
       </NavigationContext.Provider>
     </NivaroProvider>

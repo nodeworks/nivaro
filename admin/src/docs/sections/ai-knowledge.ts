@@ -7,7 +7,7 @@ export const aiKnowledgeDocs: DocSection = {
     { type: 'h1', id: 'ai-knowledge', text: 'AI Knowledge' },
     {
       type: 'p',
-      text: 'What Ask AI knows beyond the data itself: the in-app docs, a shared glossary of business terms and a data guide per collection. Admins manage it all on /ai-knowledge (Monitoring → Usage → AI Knowledge); everyone else sees the glossary there.'
+      text: 'What Ask AI knows beyond the data itself: the in-app docs, a shared glossary of business terms and a data guide per collection. Admins manage it all on /ai/knowledge (Insights → AI → Knowledge); everyone else sees the glossary there.'
     },
     { type: 'h2', id: 'ai-knowledge-docs', text: 'Docs search' },
     {

@@ -109,7 +109,7 @@ export default function RecordingPanel(props: InspectPanelProps) {
         {!d.recording_on && (
           <Note hook='recording-off'>
             To record this person from now on, turn on session recording under{' '}
-            <Link to='/session-replays' className={LINK}>
+            <Link to='/analytics/replays' className={LINK}>
               Session replays
             </Link>
             .
@@ -134,7 +134,7 @@ export default function RecordingPanel(props: InspectPanelProps) {
           ) : null}
         </p>
         <Link
-          to={`/session-replays?recording=${encodeURIComponent(r.id)}${d.offset_ms != null ? `&t=${d.offset_ms}` : ''}`}
+          to={`/analytics/replays?recording=${encodeURIComponent(r.id)}${d.offset_ms != null ? `&t=${d.offset_ms}` : ''}`}
           className={`${LINK} text-[12px]`}
           data-tm-inspect-recording-page=''
         >

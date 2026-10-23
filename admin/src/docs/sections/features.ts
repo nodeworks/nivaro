@@ -93,7 +93,7 @@ export const userExternalApisGuide: DocSection = {
       type: 'p',
       text: 'External APIs lets you configure connections to third-party services (Oracle EBS, SAP, Azure, etc.) with stored authentication credentials. Configured APIs can be tested from the admin UI and called programmatically from extensions.'
     },
-    { type: 'h3', text: 'Admin UI — /external-apis' },
+    { type: 'h3', text: 'Admin UI — /connections' },
     {
       type: 'p',
       text: 'Navigate to External APIs in the sidebar. Each entry shows the base URL, auth type, and enabled state. Click an entry to open the editor with three tabs: config, predefined endpoints, and the live test panel.'
@@ -1554,7 +1554,7 @@ export const analyticsGuide: DocSection = {
       text: 'The script hooks `history.pushState` and the `popstate` event so single-page app route changes are tracked automatically. Each navigation closes the previous view (recording its duration) and opens a new one.'
     },
     { type: 'h3', text: 'Analytics page' },
-    { type: 'p', text: 'Navigate to Monitoring → Analytics. The page shows:' },
+    { type: 'p', text: 'Navigate to Insights → Usage → Pages. The page shows:' },
     {
       type: 'table',
       head: ['Panel', 'Description'],

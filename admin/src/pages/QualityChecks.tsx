@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Download, ExternalLink, RotateCw } from 'luc
 import { type ReactNode, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import {
   isStaleVerifying,
   pickTarget,
@@ -15,6 +16,7 @@ import {
   TotalsLine,
   useQualityConfig
 } from '@/components/quality-checks-card'
+import { ScrollTabStrip } from '@/components/tab-strip'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -188,6 +190,8 @@ function RedSparkline({ runs }: { runs: QualityRun[] }) {
   )
 }
 
+const qualityTabId = (key: string) => `quality-checks-tab-${key}`
+
 export default function QualityChecksPage() {
   const [params, setParams] = useSearchParams()
   const qc = useQueryClient()
@@ -271,21 +275,13 @@ export default function QualityChecksPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex flex-wrap items-start justify-between gap-4'>
-          <div className='min-w-0'>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Quality checks
-            </h1>
-            <p className='mt-0.5 max-w-[72ch] text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Production figures captured right after each clone{target ? ` of ${target}` : ''},
-              compared with the converted database. Red means a difference nobody has explained yet;
-              amber means it is expected.
-            </p>
-          </div>
+      <HubToolbar
+        description={`Production figures captured after each clone${target ? ` of ${target}` : ''}, compared with the converted database. Red is a difference nobody has explained yet; amber is expected.`}
+        actions={
           <Button
             size='sm'
             variant='outline'
+            className='h-8 text-[12px]'
             data-checks-rerun
             disabled={
               rerun.isPending || rebuildActive || runs.length === 0 || !cfg?.rerun || !target
@@ -302,7 +298,8 @@ export default function QualityChecksPage() {
             <RotateCw className={cn('h-3.5 w-3.5', rerun.isPending && 'animate-spin')} /> Re-run
             checks
           </Button>
-        </div>
+        }
+      >
         {runs.length > 0 && (
           <div className='mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px]'>
             {targets.length > 1 && (
@@ -360,32 +357,28 @@ export default function QualityChecksPage() {
             {run.error}
           </p>
         )}
-        <div className='-mb-4 mt-3 flex gap-1' role='tablist'>
-          {(['checks', 'known'] as const).map((t) => (
-            <button
-              key={t}
-              type='button'
-              role='tab'
-              aria-selected={tab === t}
-              data-quality-tab={t}
-              onClick={() => setParam('tab', t === 'checks' ? null : t)}
-              className={cn(
-                'relative px-3 py-2 text-[12.5px] font-medium transition-colors',
-                tab === t
-                  ? 'text-slate-900 dark:text-foreground'
-                  : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
-              )}
-            >
-              {t === 'checks' ? 'Checks' : 'Known differences'}
-              {tab === t && (
-                <span className='absolute inset-x-0 bottom-0 h-0.5 bg-nvr-cyan' aria-hidden />
-              )}
-            </button>
-          ))}
-        </div>
-      </header>
+      </HubToolbar>
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 px-6 py-5 dark:bg-background'>
+      <ScrollTabStrip
+        variant='sub'
+        className='shrink-0 border-b border-slate-200 bg-slate-50 dark:border-border dark:bg-background'
+        tabs={[
+          { id: 'checks', label: 'Checks' },
+          { id: 'known', label: 'Known differences' }
+        ]}
+        active={tab}
+        onSelect={(t) => setParam('tab', t === 'checks' ? null : t)}
+        ariaLabel='Quality checks sections'
+        tabDomId={qualityTabId}
+        panelId='quality-checks-panel'
+      />
+
+      <div
+        id='quality-checks-panel'
+        role='tabpanel'
+        aria-labelledby={qualityTabId(tab)}
+        className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'
+      >
         {cfgQ.isLoading || (!!target && runsQ.isLoading) ? (
           <p className='text-[12px] text-slate-400'>Loading…</p>
         ) : cfg && !cfg.available ? (

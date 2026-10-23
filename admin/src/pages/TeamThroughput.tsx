@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { TrendingUp } from 'lucide-react'
 import { Fragment, useMemo, useState } from 'react'
+import { HubToolbar } from '@/components/hub-page'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -154,12 +154,7 @@ export function TeamThroughputPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-border px-6 py-4'>
-        <div className='flex items-center gap-2.5'>
-          <TrendingUp className='h-5 w-5 text-muted-foreground' />
-          <h1 className='text-lg font-semibold'>Team Throughput</h1>
-        </div>
-      </header>
+      <HubToolbar description='Workflow moves per person over a date range: transitions, completions, send-backs and how long each took to act. Administrators only.' />
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         <aside className='w-[224px] shrink-0 space-y-4 overflow-y-auto border-r border-border p-4'>
           <div className='space-y-1.5'>

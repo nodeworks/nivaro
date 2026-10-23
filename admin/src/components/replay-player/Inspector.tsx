@@ -163,7 +163,7 @@ export function InspectorPanel({
     enabled: finding && info.anchored
   })
   const elsewhere = (others ?? []).filter((h) => h.id !== recordingId)
-  const searchHref = `/session-replays?tab=search&selector=${encodeURIComponent(info.selector)}`
+  const searchHref = `/analytics/replays?tab=search&selector=${encodeURIComponent(info.selector)}`
 
   function copy() {
     void navigator.clipboard

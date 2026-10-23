@@ -549,7 +549,7 @@ describe('inspector history', () => {
       'href',
       '/issues/9120'
     )
-    expect(screen.getByText(/4\.1 s/).closest('a')).toHaveAttribute('href', '/api-analytics')
+    expect(screen.getByText(/4\.1 s/).closest('a')).toHaveAttribute('href', '/analytics/api')
     expect(screen.getByText('422')).toBeInTheDocument()
     expect(screen.getByText(/Requests per 5 minutes · last 6 hours/)).toBeInTheDocument()
     expect(document.getElementById('tm-history-truncated')).not.toBeNull()

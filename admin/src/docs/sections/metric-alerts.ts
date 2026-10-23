@@ -7,7 +7,7 @@ export const metricAlertsGuide: DocSection = {
     { type: 'h1', id: 'metric-alerts-guide', text: 'Alert Manager — Metric Alerts & Anomaly Detection' },
     {
       type: 'p',
-      text: 'The Alert Manager (Monitoring → Alert Manager) is a metric-level alert engine: admins publish a catalog of metric definitions, any user creates threshold rules against them, subscribes for delivery, and the engine maintains a firing/resolved state per rule. It is separate from the per-record Alert & Threshold Engine.'
+      text: 'The Alert Manager (Notifications → Alerts → Metric & widget alerts, /alerts/metrics) is a metric-level alert engine: admins publish a catalog of metric definitions, any user creates threshold rules against them, subscribes for delivery, and the engine maintains a firing/resolved state per rule. It is separate from the per-record Alert & Threshold Engine.'
     },
     { type: 'h2', id: 'metric-alerts-concepts', text: 'Concepts' },
     {

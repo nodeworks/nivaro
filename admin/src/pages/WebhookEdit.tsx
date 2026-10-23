@@ -107,7 +107,7 @@ function pairsToHeaders(pairs: HeaderPair[]): Record<string, string> {
 export function WebhookEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const goBack = useGoBack('/webhooks')
+  const goBack = useGoBack('/connections/webhooks')
   const queryClient = useQueryClient()
   const isNew = id === 'new'
 
@@ -181,7 +181,7 @@ export function WebhookEditPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['webhooks'] })
       toast.success(isNew ? 'Webhook created' : 'Webhook saved')
-      navigate('/webhooks')
+      navigate('/connections/webhooks')
     },
     onError: () => toast.error('Failed to save webhook')
   })

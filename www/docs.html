@@ -1032,7 +1032,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
               <tr><td>ai_gateway_model</td><td>—</td><td>Model id as the gateway knows it (e.g. claude-4-5-haiku). Replaces the model on every AI call while the gateway is active. POST /ai/test round-trips one prompt.</td></tr>
               <tr><td>ai_gateway_chat_model</td><td>—</td><td>Gateway model id for Ask AI and the chat bot only (the multi-step tool loop). Blank = ai_gateway_model. Lets a stronger model answer questions while the one-shot features stay on a cheap one.</td></tr>
               <tr><td>ai_prompt_caching</td><td>on</td><td>Marks the stable prefix of every AI call with cache_control so tool loops and chats re-read it from the provider cache: system prompt, tool definitions and the conversation so far on Anthropic directly or an Anthropic-native gateway; the system prompt (which covers the tools) on the OpenAI-compatible format, where the marker rides as a content part. Prompts under the model minimum (1,024 tokens; 4,096 on Haiku 4.5) never cache. POST /ai/test repeats a padded prompt and reports the tokens read back.</td></tr>
-              <tr><td>AI Analytics (page)</td><td>/ai-analytics</td><td>Every model call through the provider is logged to nivaro_ai_calls (feature, person, model, tokens, list-price cost, latency, capped request/response, 30-day retention). GET /ai/analytics + /ai/calls (admin).</td></tr>
+              <tr><td>AI Analytics (page)</td><td>/ai</td><td>Every model call through the provider is logged to nivaro_ai_calls (feature, person, model, tokens, list-price cost, latency, capped request/response, 30-day retention). GET /ai/analytics + /ai/calls (admin).</td></tr>
               <tr><td>ai_chat_guide</td><td>—</td><td>Free text appended to the Ask AI system prompt: how this instance's data hangs together (which collection bridges two others, what human ids look like, everyday names for fields). The model cannot infer a deployment's domain from column names alone.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Presence Tracking</h3>
@@ -1312,7 +1312,7 @@ const article = await nivaro.request(readItem('articles', '123'))
           <!-- SYNC:external-apis-guide -->
           <h1 class="doc-h1" id="external-apis-guide">External APIs</h1>
           <p class="doc-p">External APIs lets you configure connections to third-party services (Oracle EBS, SAP, Azure, etc.) with stored authentication credentials. Configured APIs can be tested from the admin UI and called programmatically from extensions.</p>
-          <h3 class="doc-h3">Admin UI — /external-apis</h3>
+          <h3 class="doc-h3">Admin UI — /connections</h3>
           <p class="doc-p">Navigate to External APIs in the sidebar. Each entry shows the base URL, auth type, and enabled state. Click an entry to open the editor with three tabs: config, predefined endpoints, and the live test panel.</p>
           <h3 class="doc-h3">Auth types</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -1475,7 +1475,7 @@ deals.forEach(deal =&gt; {
           <h3 class="doc-h3">SPA navigation</h3>
           <p class="doc-p">The script hooks <code class="doc-code">history.pushState</code> and the <code class="doc-code">popstate</code> event so single-page app route changes are tracked automatically. Each navigation closes the previous view (recording its duration) and opens a new one.</p>
           <h3 class="doc-h3">Analytics page</h3>
-          <p class="doc-p">Navigate to Monitoring → Analytics. The page shows:</p>
+          <p class="doc-p">Navigate to Insights → Usage → Pages. The page shows:</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Panel</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>Stat cards</td><td>Total views, unique sessions, and unique pages for the selected period.</td></tr>
@@ -8311,7 +8311,7 @@ ctx.mcp?.registerTool('ping_crm', { type: 'object', properties: {} }, async () =
         <div class="doc-section" id="s-ai-knowledge" data-toc='[{"id":"ai-knowledge","label":"AI Knowledge"},{"id":"ai-knowledge-docs","label":"Docs search"},{"id":"ai-knowledge-glossary","label":"Glossary"},{"id":"ai-knowledge-guides","label":"Data guides per collection"},{"id":"ai-knowledge-gaps","label":"Docs gaps"},{"id":"ai-knowledge-conflicts","label":"Conflict check"},{"id":"ai-knowledge-topics","label":"Topic map"},{"id":"ai-knowledge-index","label":"Search index"},{"id":"ai-knowledge-first-week","label":"First-week checklists"}]'>
           <!-- SYNC:ai-knowledge -->
           <h1 class="doc-h1" id="ai-knowledge">AI Knowledge</h1>
-          <p class="doc-p">What Ask AI knows beyond the data itself: the in-app docs, a shared glossary of business terms and a data guide per collection. Admins manage it all on /ai-knowledge (Monitoring → Usage → AI Knowledge); everyone else sees the glossary there.</p>
+          <p class="doc-p">What Ask AI knows beyond the data itself: the in-app docs, a shared glossary of business terms and a data guide per collection. Admins manage it all on /ai/knowledge (Insights → AI → Knowledge); everyone else sees the glossary there.</p>
           <h2 class="doc-h2" id="ai-knowledge-docs">Docs search</h2>
           <p class="doc-p">Ask AI has a <code class="doc-code">search_docs</code> tool over these Docs pages. For "how do I…" questions it quotes the passage and links the section (<code class="doc-code">/docs?section=&lt;id&gt;</code> opens this page there), next to the help-video search. Sections outside the Overview, User Guide and Collaboration groups are administrator material and are left out for people who are not administrators (a section can set its own <code class="doc-code">audience</code>). The search reads <code class="doc-code">api/src/services/docs-index.json</code>, regenerated by <code class="doc-code">pnpm docs:ai-index</code> and by <code class="doc-code">pnpm sync-docs</code>.</p>
           <h2 class="doc-h2" id="ai-knowledge-glossary">Glossary</h2>
@@ -8871,7 +8871,7 @@ bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
             <li>Administrators also get layout tools: describe_layout (a form in plain terms, or every form of a collection), which_form (which form a record gets for a role, and why), explain_field (why a field shows, hides or is read-only for a role on a record) and propose_layout_ops. A proposal never changes a form: it waits under Proposals in the layout editor until an administrator tries it on the canvas and keeps it, or rejects it.</li>
           </ul>
           <h2 class="doc-h2" id="mcp-instance-tools">This instance’s own tools</h2>
-          <p class="doc-p">Beyond the built-in set, an instance can offer tools of its own, managed on **Developer → Assistant Tools** (<code class="doc-code">/mcp-tools</code>). An administrator can expose a saved query or a flow as a named tool: the query’s parameters (or the inputs you list, for a flow) become the tool’s input, and it runs as the person calling — the query’s own access level and user scopes decide what comes back, and a flow runs with the caller as the person who triggered it. Choose who may call it (administrators, or everyone signed in) and whether it only reads. An API key limited to named collections never gets flow tools (a flow runs as the person and would reach past the key’s collections), and an administrator on such a key is not treated as an administrator here. Extensions add tools with <code class="doc-code">ctx.mcp.registerTool</code>; they are listed on the same page.</p>
+          <p class="doc-p">Beyond the built-in set, an instance can offer tools of its own, managed on **Developer → MCP → Assistant tools** (<code class="doc-code">/mcp/tools</code>). An administrator can expose a saved query or a flow as a named tool: the query’s parameters (or the inputs you list, for a flow) become the tool’s input, and it runs as the person calling — the query’s own access level and user scopes decide what comes back, and a flow runs with the caller as the person who triggered it. Choose who may call it (administrators, or everyone signed in) and whether it only reads. An API key limited to named collections never gets flow tools (a flow runs as the person and would reach past the key’s collections), and an administrator on such a key is not treated as an administrator here. Extensions add tools with <code class="doc-code">ctx.mcp.registerTool</code>; they are listed on the same page.</p>
           <p class="doc-p">The hosted endpoint lists each of these tools by name. The npm server reaches the same tools through <code class="doc-code">list_instance_tools</code> and <code class="doc-code">call_instance_tool</code>. Both call <code class="doc-code">GET /api/mcp-tools</code> and <code class="doc-code">POST /api/mcp-tools/:name/call</code> as the key’s user; named tools are stored in <code class="doc-code">nivaro_settings.mcp_tools</code> (migration 473).</p>
           <h2 class="doc-h2" id="mcp-keys">Sign-in or API key</h2>
           <p class="doc-p">Signing in (OAuth) connects the assistant as you, with your permissions, and needs nothing stored on your machine; access tokens last an hour and renew themselves for 30 days of use. An API key gives you finer control: a key with **narrowed scopes** is held to them, a key with **row restrictions** sees only those rows, and a **sandbox** key can explore everything and never changes anything — a safe way to try an assistant out.</p>
@@ -8888,12 +8888,12 @@ bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
             <li>A plain <code class="doc-code">/api/mcp</code> connection works exactly as before, with no session.</li>
           </ul>
           <h2 class="doc-h2" id="mcp-console">MCP console</h2>
-          <p class="doc-p">Developer → MCP Console (<code class="doc-code">/mcp-console</code>, administrators) lists the tools an assistant connected as you would get, with a form built from each tool’s inputs (or JSON, for the raw arguments). Running a tool goes through the same MCP server the endpoint uses, as you, and shows the result as the assistant sees it, the raw JSON answer, how long it took, how large it is, and every API call the tool made.</p>
+          <p class="doc-p">Developer → MCP → Console (<code class="doc-code">/mcp/console</code>, administrators) lists the tools an assistant connected as you would get, with a form built from each tool’s inputs (or JSON, for the raw arguments). Running a tool goes through the same MCP server the endpoint uses, as you, and shows the result as the assistant sees it, the raw JSON answer, how long it took, how large it is, and every API call the tool made.</p>
           <p class="doc-p">Tools that change data start in **dry run**. A tool that can rehearse (create_item) rehearses: rules and validation run and nothing is stored. Any other tool runs but its changes are held: the console does not send them and lists each one under API calls. Turn dry run off and confirm to run it for real.</p>
           <p class="doc-p">Your profile has a **What my agents did** tab (<code class="doc-code">/profile?tab=agents</code>). It lists each connected app with its last 14 days of tool calls (calls a day, refused and failed calls, the tools it used most, how much it read back) and a Disconnect button, then every tool call newest first: the app, the tool, the record it touched and how it ended. Open a call to see the changes it made. Each change can be undone while nothing else has changed the record since: an edit puts back the values from before, a new record is deleted. Undo runs as you, so your permissions and the record’s rules apply, and it is logged (<code class="doc-code">mcp-undo</code>).</p>
           <h2 class="doc-h2" id="mcp-admin">For administrators</h2>
           <ul class="doc-ul">
-            <li>**MCP Connections** (<code class="doc-code">/mcp-connections</code>, under APIs) lists every assistant connected to this instance across people, with the same 14-day figures, and lets you disconnect a sign-in or switch off a key.</li>
+            <li>**MCP → Connections** (<code class="doc-code">/mcp</code>) lists every assistant connected to this instance across people, with the same 14-day figures, and lets you disconnect a sign-in or switch off a key.</li>
             <li>Each connection may make a set number of tool calls a minute (default 120; 0 means no limit), and you can give one connection its own limit. Over the limit the assistant gets HTTP 429 with Retry-After and a message saying why, so it can tell its person and wait.</li>
             <li>Idle review: a signed-in connection unused for 60 days is pointed out to its owner, the owner is warned seven days before 90 days, and at 90 days it is disconnected (job <code class="doc-code">mcp-idle-review</code>, daily on deployed instances). Both day counts are settings at the top of the page; the Idle tab shows what the next run will do.</li>
             <li>On the Traffic Map each app is its own caller, named <code class="doc-code">MCP: &lt;app&gt;</code> — the name the app registered with, or the API key’s name — grouped under AI assistants.</li>
@@ -8942,7 +8942,7 @@ bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
           <h1 class="doc-h1" id="sla-tracking-guide">SLA Tracking</h1>
           <p class="doc-p">SLA Rules define time limits for how long a workflow instance can remain in a given state. The system tracks warning thresholds (% of duration elapsed) and full breaches, with optional escalation user notifications.</p>
           <h3 class="doc-h3">Creating an SLA rule</h3>
-          <p class="doc-p">Navigate to Monitoring → SLA Rules. Click New Rule:</p>
+          <p class="doc-p">Navigate to Workflow → Deadlines &amp; risk → SLA rules. Click New Rule:</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Field</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>Name</td><td>Display label for the rule.</td></tr>
@@ -9006,7 +9006,7 @@ bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
           <h1 class="doc-h1" id="alert-engine-guide">Alert &amp; Threshold Engine</h1>
           <p class="doc-p">Alert Definitions watch collection fields for threshold conditions and notify subscribed users when conditions are met. Alerts fire on item create/update hooks and can also be triggered manually.</p>
           <h3 class="doc-h3">Creating an alert definition</h3>
-          <p class="doc-p">Navigate to Monitoring → Alerts. Click New Alert (admin only):</p>
+          <p class="doc-p">Navigate to Notifications → Alerts. Click New Alert (admin only):</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Field</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>Name</td><td>Display label.</td></tr>
@@ -9040,7 +9040,7 @@ bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
         <div class="doc-section" id="s-metric-alerts-guide" data-toc='[{"id":"metric-alerts-guide","label":"Alert Manager — Metric Alerts &amp; Anomaly Detection"},{"id":"metric-alerts-concepts","label":"Concepts"},{"id":"metric-alerts-scheduling","label":"Scheduling"},{"id":"metric-alerts-api","label":"REST API"}]'>
           <!-- SYNC:metric-alerts-guide -->
           <h1 class="doc-h1" id="metric-alerts-guide">Alert Manager — Metric Alerts &amp; Anomaly Detection</h1>
-          <p class="doc-p">The Alert Manager (Monitoring → Alert Manager) is a metric-level alert engine: admins publish a catalog of metric definitions, any user creates threshold rules against them, subscribes for delivery, and the engine maintains a firing/resolved state per rule. It is separate from the per-record Alert &amp; Threshold Engine.</p>
+          <p class="doc-p">The Alert Manager (Notifications → Alerts → Metric &amp; widget alerts, /alerts/metrics) is a metric-level alert engine: admins publish a catalog of metric definitions, any user creates threshold rules against them, subscribes for delivery, and the engine maintains a firing/resolved state per rule. It is separate from the per-record Alert &amp; Threshold Engine.</p>
           <h2 class="doc-h2" id="metric-alerts-concepts">Concepts</h2>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Object</th><th>Purpose</th></tr></thead>
@@ -9524,7 +9524,7 @@ const { data: created } = await cms.request(
         <div class="doc-section" id="s-scheduled-reports" data-toc='[{"id":"scheduled-reports","label":"Scheduled Reports"}]'>
           <!-- SYNC:scheduled-reports -->
           <h1 class="doc-h1" id="scheduled-reports">Scheduled Reports</h1>
-          <p class="doc-p">Email a PDF snapshot of a collection (filtered rows as a table) or a queue (stat strip + items) on a cron schedule. Managed at /scheduled-reports.</p>
+          <p class="doc-p">Email a PDF snapshot of a collection (filtered rows as a table) or a queue (stat strip + items) on a cron schedule. Managed at /reports/scheduled.</p>
           <ul class="doc-ul">
             <li>Recipients get the PDF as an attachment; subject carries the date.</li>
             <li>Send now runs the same path as the cron for instant verification.</li>
@@ -9587,7 +9587,7 @@ DELETE /api/sla/override/:collection/:item   ?reason=…   — back to the rule'
           <h1 class="doc-h1" id="field-watches-guide">Field-Level Watches (Changelog)</h1>
           <p class="doc-p">Field Watches let users subscribe to changes on specific fields across a collection. When a watched field changes on any record, subscribed users receive an in-app notification with the old and new values.</p>
           <h3 class="doc-h3">Creating a watch</h3>
-          <p class="doc-p">Navigate to Monitoring → Field Watches. Click New Watch:</p>
+          <p class="doc-p">Navigate to Notifications → Alerts → Field watches. Click New Watch:</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Field</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>Name</td><td>Label for this watch, e.g. "Status changes on Projects".</td></tr>
@@ -9611,7 +9611,7 @@ DELETE /api/sla/override/:collection/:item   ?reason=…   — back to the rule'
           <h3 class="doc-h3">Watching one line</h3>
           <p class="doc-p">Every saved row in a record's grid has its own bell (beside Row history). Watching a line — one forecast year, one PO line — notifies you only when that row changes, and the notification names the row and the record it belongs to ("workflow line items CM26-79811 · Line 4: 2 changes by …"). It is an ordinary subscription on the child collection scoped to the row id, listed on the Notification Subscriptions page like any other.</p>
           <h3 class="doc-h3">Creating a subscription</h3>
-          <p class="doc-p">Navigate to Monitoring → Notification Subscriptions. Users manage their own subscriptions; admins can view all subscriptions.</p>
+          <p class="doc-p">Navigate to Notifications → Alerts → My subscriptions. Users manage their own subscriptions; admins can view all subscriptions.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Field</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>Collection</td><td>The collection to subscribe to.</td></tr>
@@ -12601,7 +12601,7 @@ Authorization: Bearer &lt;admin-token&gt;
           <h1 class="doc-h1" id="content-ops-scheduled-changes">Content Scheduling</h1>
           <p class="doc-p">Scheduled changes let you queue a field update, workflow transition, or publish/unpublish action to execute at a future date and time. Changes are stored in <code class="doc-code">nivaro_scheduled_changes</code> with a <code class="doc-code">pending</code> status and are executed manually (POST /:id/execute or the Execute button) — nothing runs them automatically at scheduled_at yet.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">On any item edit page, the Schedule button in the header opens a dialog to queue a change for that record — pick the change type, the values, and the date/time. All pending and past changes across collections are managed on the /scheduled-changes page, where each change can be edited, cancelled, or executed immediately.</p>
+          <p class="doc-p">On any item edit page, the Schedule button in the header opens a dialog to queue a change for that record — pick the change type, the values, and the date/time. All pending and past changes across collections are managed on the /deadlines/scheduled page, where each change can be edited, cancelled, or executed immediately.</p>
           <h3 class="doc-h3">Creating a scheduled change via API</h3>
           <pre class="doc-pre"><code>POST /api/scheduled-changes
 Authorization: Bearer &lt;admin-token&gt;
@@ -13348,7 +13348,7 @@ Authorization: Bearer &lt;token&gt;
           <h1 class="doc-h1" id="content-ops-collection-presets">Collection Presets (Starter Kits)</h1>
           <p class="doc-p">Collection presets are pre-built schema bundles that scaffold complete collections with fields, relations, workflows, and dashboards in a single click. They are designed for common use cases and save hours of manual schema setup.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Presets are installed from the /collection-presets page (also reachable via Collections → "Install preset"). Each preset card shows what it will create; click Install and the collections appear in the registry immediately.</p>
+          <p class="doc-p">Presets are installed from the /promotion/starter-kits page (also reachable via Collections → "Install preset"). Each preset card shows what it will create; click Install and the collections appear in the registry immediately.</p>
           <h3 class="doc-h3">Available presets</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Preset</th><th>Collections created</th><th>Description</th></tr></thead>
@@ -14378,7 +14378,7 @@ cms.request(getTypes())</code></pre>
           <h2 class="doc-h2" id="dev-tooling-contrast">Contrast audit page</h2>
           <p class="doc-p">Data Tools → Contrast Audit renders a fixed showcase of the shared and admin components in BOTH themes side by side and measures every text node against WCAG (4.5:1 body, 3:1 large), listing offenders with ratio, selector and the exact foreground/background it measured. Rerun it after any shared className change; "Audit this page" measures whatever page you are on instead (the same auditor the command palette exposes).</p>
           <h2 class="doc-h2" id="dev-tooling-release-notes">What changed in this release</h2>
-          <p class="doc-p">When the API is redeployed under an open tab, the update banner offers "What changed since &lt;version&gt;" — a link to the Changelog page scoped to the releases between the version the tab loaded against and the one now being served (<code class="doc-code">/changelog?since=&amp;to=</code>). The page leads with that window and marks each release in it "New since you loaded". The notes come from <code class="doc-code">changelog.json</code>, generated from the release tags at build time.</p>
+          <p class="doc-p">When the API is redeployed under an open tab, the update banner offers "What changed since &lt;version&gt;" — a link to the Changelog page scoped to the releases between the version the tab loaded against and the one now being served (<code class="doc-code">/docs/releases?since=&amp;to=</code>). The page leads with that window and marks each release in it "New since you loaded". The notes come from <code class="doc-code">changelog.json</code>, generated from the release tags at build time.</p>
           <h2 class="doc-h2" id="dev-tooling-shared-code">Is the frontend on the same shared code as admin?</h2>
           <p class="doc-p">Admin and a headless frontend render the same <code class="doc-code">@nivaro/react</code> components but deploy on separate schedules, so a form that behaves differently in the two apps is usually two different shared-code versions. <code class="doc-code">GET /api/version</code> reports <code class="doc-code">react</code> — the <code class="doc-code">@nivaro/react</code> version the admin build carries — and a frontend built with the <code class="doc-code">nivaro_react</code> stamp in its <code class="doc-code">version.json</code> reports its installed pin. The Environments page compares every probed component of a tier and shows **Shared code aligned** or an amber **Shared code diverged** strip naming each version; the API card also carries a Shared code stat.</p>
           <pre class="doc-pre"><code>// vite.config.ts — stamp the pin into version.json
@@ -14530,7 +14530,7 @@ responses:
   ]
 }</code></pre>
           <h3 class="doc-h3" id="webhook-deliveries-dead-letter">Dead Letter Queue</h3>
-          <p class="doc-p">When a delivery exhausts its retry attempts and still fails, it lands in the dead letter queue instead of being silently dropped. Inspect and manually retry from the /dead-letters admin page.</p>
+          <p class="doc-p">When a delivery exhausts its retry attempts and still fails, it lands in the dead letter queue instead of being silently dropped. Inspect and manually retry from the /flows/dead-letters admin page.</p>
           <div class="doc-note">Deliveries retain their original request ID and timestamp for correlation. Use the delivery log to audit all webhook activity.</div>
           <!-- /SYNC:webhook-deliveries -->
         </div>
@@ -14726,7 +14726,7 @@ eventSource.addEventListener('error', () =&gt; {
           <h1 class="doc-h1" id="persisted-queries">GraphQL Persisted Queries</h1>
           <p class="doc-p">Pre-register GraphQL queries and execute them by ID, reducing payload size and locking the query surface for security. Supports both explicit IDs and Apollo-style Automatic Persisted Queries (APQ). Stored in <code class="doc-code">nivaro_persisted_queries</code>.</p>
           <h3 class="doc-h3" id="persisted-queries-management">Managing Queries</h3>
-          <p class="doc-p">The /persisted-queries admin page lists all registered queries with usage stats. Register a new query by name and GraphQL text, edit existing registrations, or delete.</p>
+          <p class="doc-p">The /graphql/persisted admin page lists all registered queries with usage stats. Register a new query by name and GraphQL text, edit existing registrations, or delete.</p>
           <pre class="doc-pre"><code>POST /api/persisted-queries
 {
   "id": "dashboard-articles",
@@ -14786,7 +14786,7 @@ POST /api/graphql
         <div class="doc-section" id="s-dead-letters" data-toc='[{"id":"dead-letters","label":"Dead Letter Queue"},{"id":"dead-letters-sources","label":"What Lands in DLQ"},{"id":"dead-letters-api","label":"API Reference"},{"id":"dead-letters-retry-workflow","label":"Retry Workflow"},{"id":"dead-letters-retention","label":"Retention"}]'>
           <!-- SYNC:dead-letters -->
           <h1 class="doc-h1" id="dead-letters">Dead Letter Queue</h1>
-          <p class="doc-p">Webhook deliveries, flow runs, and notification sends that exhaust their retry attempts land in the dead letter queue. Inspect failures, manually retry, or discard from the /dead-letters admin page. Nothing is silently dropped.</p>
+          <p class="doc-p">Webhook deliveries, flow runs, and notification sends that exhaust their retry attempts land in the dead letter queue. Inspect failures, manually retry, or discard from the /flows/dead-letters admin page. Nothing is silently dropped.</p>
           <h3 class="doc-h3" id="dead-letters-sources">What Lands in DLQ</h3>
           <ul class="doc-ul">
             <li>Webhook delivery: final attempt failed after N retries</li>
@@ -14826,7 +14826,7 @@ DELETE /api/dead-letters/dlq-123  # Discard</code></pre>
           <h3 class="doc-h3" id="dead-letters-retention">Retention</h3>
           <ul class="doc-ul">
             <li>Dead letters are retained indefinitely (manual action required)</li>
-            <li>Use the /dead-letters page to purge old entries</li>
+            <li>Use the /flows/dead-letters page to purge old entries</li>
             <li>Export for audit before deleting</li>
           </ul>
           <div class="doc-note">Retry that fails again increments the attempt count and creates a fresh dead letter entry, preserving the failure history. Full payload is retained for context.</div>
@@ -15596,7 +15596,7 @@ const stored = await ctx.payloadTemplates.scrubResponse('MWF', res.body)</code><
           <h1 class="doc-h1" id="erp-submissions">ERP Submission Status Tracking</h1>
           <p class="doc-p">When records are pushed to an external ERP (or any downstream system), each push is tracked in <code class="doc-code">nivaro_erp_submissions</code> with a status lifecycle: submitted → pending → accepted / rejected. The item editor shows a status badge for the latest submission, and rejected submissions can be retried.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">The /erp-submissions page lists every submission across collections with status filters — drill into a submission to see its payload, the ERP response, and the retry history. On the record itself, the item edit page shows the latest status badge with the full history in a panel, including a Retry button for rejected submissions.</p>
+          <p class="doc-p">The ERP submissions tab of Integration Health (/integration-health?tab=erp) lists every submission across collections with status filters — drill into a submission to see its payload, the ERP response, and the retry history. On the record itself, the item edit page shows the latest status badge with the full history in a panel, including a Retry button for rejected submissions.</p>
           <h3 class="doc-h3">API</h3>
           <pre class="doc-pre"><code>GET  /api/erp-submissions?collection=orders&amp;item=42   # history for a record
 POST /api/erp-submissions                              # record a submission
@@ -15787,7 +15787,7 @@ GET  /api/external-apis/contracts                     // targets
 // endpoint raises one deduped issue; readiness check external-api-contracts</code></pre>
           <p class="doc-p">The verdict is stamped on the endpoint (<code class="doc-code">contract_last_run</code>, <code class="doc-code">contract_last_ok</code>, <code class="doc-code">contract_last_detail</code>) and rendered as a pass / fail chip with a Run button on the endpoint row. Mock mode and instance overrides apply, so a contract can be exercised against mocked answers.</p>
           <h2 class="doc-h2" id="integration-events-inbound">Inbound mappings</h2>
-          <p class="doc-p">Monitoring → Inbound Mappings defines a key an integration POSTs its OWN payload shape to. The mapping's rules are the import-template header-rule format (trim / remap / expression / lookup / const; source = a key on the posted object) and its target is a collection; mode <code class="doc-code">create</code> always inserts, <code class="doc-code">upsert</code> matches on the listed mapped fields first. <code class="doc-code">POST /api/inbound/&lt;key&gt;</code> takes one object or an array (≤500) from any authenticated caller and writes through the items service AS THAT CALLER — permissions, validation, hooks, activity all apply. The reply lists per-entry <code class="doc-code">created | updated | rejected</code> with the mapped values and issues (207 when some entries were rejected, 422 when all were). The editor's “Try a payload” panel dry-runs the rules as currently edited.</p>
+          <p class="doc-p">Integrations → Connections → Inbound mappings (/connections/inbound) defines a key an integration POSTs its OWN payload shape to. The mapping's rules are the import-template header-rule format (trim / remap / expression / lookup / const; source = a key on the posted object) and its target is a collection; mode <code class="doc-code">create</code> always inserts, <code class="doc-code">upsert</code> matches on the listed mapped fields first. <code class="doc-code">POST /api/inbound/&lt;key&gt;</code> takes one object or an array (≤500) from any authenticated caller and writes through the items service AS THAT CALLER — permissions, validation, hooks, activity all apply. The reply lists per-entry <code class="doc-code">created | updated | rejected</code> with the mapped values and issues (207 when some entries were rejected, 422 when all were). The editor's “Try a payload” panel dry-runs the rules as currently edited.</p>
           <h3 class="doc-h3" id="integration-events-inbound-children">Child rows</h3>
           <p class="doc-p">A mapping may also fill one-to-many fields. Each child set names the field, the payload path that holds the rows (<code class="doc-code">order.lines</code>; a single object reads as one row) and its own row rules — the import-template line format, with an optional row filter; <code class="doc-code">{{$resolved.&lt;field&gt;}}</code> reads a value the record rules produced. The record and all its rows go to the items service as ONE nested payload, so the write is all or nothing: a refused row removes everything, and the entry's result carries <code class="doc-code">child_error {field, index, message}</code> naming the payload row. On an upsert that finds the record, a set either adds its rows (<code class="doc-code">append</code>) or replaces the record's rows with exactly these (<code class="doc-code">replace</code>). Record rules may read nested payload keys with dots (<code class="doc-code">customer.name</code>).</p>
           <pre class="doc-pre"><code>"children": [
@@ -15842,7 +15842,7 @@ POST /api/inbound-mappings/:id/versions/:vid/restore</code></pre>
               <tr><td>schedule</td><td>cron expression</td><td>Optional; jobs can also be run manually</td></tr></tr></tbody>
           </table></div>
           <ul class="doc-ul">
-            <li>Manage jobs at /sync-jobs — each job shows last run, rows processed, and errors.</li>
+            <li>Manage jobs at /connections/sync-jobs — each job shows last run, rows processed, and errors.</li>
             <li>"Run now" triggers an immediate sync outside the schedule.</li>
             <li>manual conflict strategy parks conflicting rows for review instead of overwriting either side.</li>
           </ul>
@@ -15860,7 +15860,7 @@ POST /api/inbound-mappings/:id/versions/:vid/restore</code></pre>
             <li>1. Open an External API → Connector tab → set the sample endpoint and click "Fetch sample".</li>
             <li>2. The response is rendered as an expandable field tree (arrays and nested objects supported).</li>
             <li>3. Map fields: pick a target collection, then pair external paths with collection fields.</li>
-            <li>4. Click "Generate sync job" — a pre-configured pull job appears in /sync-jobs ready to schedule.</li>
+            <li>4. Click "Generate sync job" — a pre-configured pull job appears in /connections/sync-jobs ready to schedule.</li>
           </ul>
           <div class="doc-note">The generated job is a normal sync job — edit its mapping, conflict strategy, or schedule afterwards like any other.</div>
           <!-- /SYNC:api-connector -->
@@ -16059,7 +16059,7 @@ DELETE /api/tasks/:id</code></pre>
             <li>**Request types** (<code class="doc-code">nivaro_task_categories</code>, administrators, Request types tab): a type tied to a collection is offered on those records only; with no team a request goes to every administrator; a default assignee skips the desk.</li>
             <li>**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague's record task list.</li>
             <li>**Report a problem** (portals): @nivaro/react exports ReportProblemButton for a host shell to mount (<code class="doc-code">&lt;ReportProblemButton app='efp' /&gt;</code>, a corner button, or inline with floating={false}). The person writes one sentence; a screenshot is taken before the dialog opens with every typed value masked (html2canvas, an optional peer dependency: without it the report goes without a picture), plus the same what-they-saw context as below. It files an issue (source client, raised by the person, screenshot and details attached) AND a support request linked to it (nivaro_tasks.issue_id), which they follow under My requests; the desk sees Issue #N on the ticket.</li>
-            <li>**What they saw** (ticked by default, the requester can untick it): Get help and Request a change take the moment the dialog opens. With Error clips on, the last minute of the screen becomes an app='support-clip' recording (inputs masked); with full recording on, the live recording is marked at that moment. A text attachment (what-they-saw-….txt) carries the page, the last 30 console warnings/errors and the last 20 requests (method, route pattern, status, ms; no bodies or query strings, secrets redacted). Nothing uploads unless the request is sent. On the desk, the ticket shows Watch what they saw, opening /session-replays?recording=&lt;id&gt;&amp;t=&lt;ms&gt; at the moment of asking (administrators only).</li>
+            <li>**What they saw** (ticked by default, the requester can untick it): Get help and Request a change take the moment the dialog opens. With Error clips on, the last minute of the screen becomes an app='support-clip' recording (inputs masked); with full recording on, the live recording is marked at that moment. A text attachment (what-they-saw-….txt) carries the page, the last 30 console warnings/errors and the last 20 requests (method, route pattern, status, ms; no bodies or query strings, secrets redacted). Nothing uploads unless the request is sent. On the desk, the ticket shows Watch what they saw, opening /analytics/replays?recording=&lt;id&gt;&amp;t=&lt;ms&gt; at the moment of asking (administrators only).</li>
           </ul>
           <pre class="doc-pre"><code>POST /api/support/tickets
 { "title": "Change the ship-to address", "description": "…", "category_id": 3,
@@ -16245,7 +16245,7 @@ GET /api/approvals/decisions?instance=X
             <li>Edit — hover your own message and pick Edit. The window is 15 minutes from when it was sent; after that the option disappears. Edited messages show an "(edited)" marker, and an edit never re-fires mentions — nobody is notified again.</li>
             <li>Delete — you can delete your own messages at any time, and admins can delete anyone’s. A delete leaves a "Message removed" tombstone so the thread’s shape survives, but the text and attachments are gone and its reactions are cleared. Admin deletions of someone else’s message are recorded in the audit log with the original sender named.</li>
             <li>Deleted messages stop counting: they are excluded from the sidebar’s room previews and from unread counts, so a removed message can’t leave a phantom badge.</li>
-            <li>Message history — the text and attachments as they were before each edit or delete are kept and shown to admins only, under Previous versions in the message detail of the admin message log at <code class="doc-code">/chat-analytics</code>. Room members never see it. History is purged after 90 days by default (<code class="doc-code">chat_history_retention_days</code> in settings; 0 keeps it forever).</li>
+            <li>Message history — the text and attachments as they were before each edit or delete are kept and shown to admins only, under Previous versions in the message detail of the admin message log at <code class="doc-code">/analytics/chat</code>. Room members never see it. History is purged after 90 days by default (<code class="doc-code">chat_history_retention_days</code> in settings; 0 keeps it forever).</li>
           </ul>
           <div class="doc-note">To reach a whole group at once, use @channel in a channel room — it notifies up to 300 members and is limited to the channel’s creator or an admin. Regular @mentions are per-person.</div>
           <h2 class="doc-h2" id="collab-chat-polls">Polls, slash commands and search by meaning</h2>
@@ -16856,19 +16856,20 @@ POST   /api/ideas/:id/link                 admin: { collection, id } → 'relate
           <p class="doc-p">The sidebar rail groups every admin page by the job you came to do. Hover a rail icon to see what its category covers; each category opens a panel split into short named sections. A thin rule in the rail separates the day-to-day categories from the ones for running the instance itself.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Category</th><th>What lives there</th></tr></thead>
-            <tbody><tr><tr><td>Home</td><td>Overview, My Work, Tasks, Dashboards, Command Center, Ask AI, Chat, Support</td></tr>
+            <tbody><tr><tr><td>Home</td><td>Overview, My Work, Tasks, Dashboards, Command Center, Ask AI, AI Plans, Chat, Support, Videos, Ideas</td></tr>
               <tr><td>Data</td><td>Records (collections, files, trash), structure (data model, hierarchies, virtual collections, ID sequences), templates &amp; forms, bulk changes (imports, find &amp; replace, M2M matrix, data integrity)</td></tr>
-              <tr><td>Workflow</td><td>Processes (pipelines, approvals, queues), automations (flows, rules, automation tests), deadlines &amp; risk (SLA, at-risk, scheduled changes, blackout dates)</td></tr>
-              <tr><td>People</td><td>Directory, access (roles, user scopes, access requests, access audit), availability (delegation, coverage gaps, presence), security &amp; privacy</td></tr>
-              <tr><td>Notifications</td><td>Alerts &amp; watching, messages (broadcasts, mail templates), delivery (mail log, notification analytics, notification bench)</td></tr>
-              <tr><td>Insights</td><td>Reports, usage analytics, session replays, and change history</td></tr>
-              <tr><td>Integrations</td><td>Integration health, ERP submissions, dead letters, and partner connections</td></tr>
-              <tr><td>Operations</td><td>Health (status, monitors, telemetry), issues, database, jobs, ops tools, and release (environments, config diff, readiness, promotion, blueprints, change sets)</td></tr>
-              <tr><td>Developer</td><td>APIs, queries, extensions and test tooling, reference docs</td></tr>
-              <tr><td>System</td><td>Settings, feature flags, config health, config search, setup checklist</td></tr></tr></tbody>
+              <tr><td>Workflow</td><td>Pipelines, approvals, queues, Automations (flows, rules, tests, dead letters), Deadlines &amp; risk (SLA rules, at-risk rules, scheduled changes, blackout dates)</td></tr>
+              <tr><td>People</td><td>Directory (users, teams, workspaces), access (roles, user scopes, Access reviews), oversight (Coverage, Security &amp; privacy)</td></tr>
+              <tr><td>Notifications</td><td>Alerts (field, metric &amp; widget alerts, field watches, your subscriptions), broadcasts, Delivery (mail log, templates, analytics, bench)</td></tr>
+              <tr><td>Insights</td><td>Reports, Activity (log, live, audit report, value history, provenance), Usage, AI</td></tr>
+              <tr><td>Integrations</td><td>Integration Health (incl. ERP submissions) and Connections (external APIs, webhooks, sync jobs, inbound mappings)</td></tr>
+              <tr><td>Operations</td><td>Health, issues, database, traffic map, infrastructure, realtime, chaos, jobs, ops console, and release (Environments, Promotion)</td></tr>
+              <tr><td>Developer</td><td>API keys, MCP, GraphQL, playground, Queries, procedures, extensions, widgets, dev tools, docs</td></tr>
+              <tr><td>System</td><td>Settings, feature flags, config hygiene, setup checklist</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3" id="admin-navigation-hubs">Pages with tabs</h3>
-          <p class="doc-p">Some entries open a page whose views are tabs, each at its own address: Jobs (/jobs — Runs &amp; schedules, Timeline /jobs/timeline, Calendar /jobs/calendar, Repair tasks /jobs/tasks), Database (/database — Overview, Tuning /database/tuning, SQL checks /database/sql-checks, Redis keys /database/redis) and Health (/health — Status, Monitors /health/monitors, Telemetry /health/telemetry). The arrow keys move between tabs. Each was once its own page; the old addresses (/background-jobs, /cron-timeline, /ops-calendar, /ops-tasks, /db-health, /db-tuning, /sql-checks, /ops-redis, /monitors, /telemetry) still work and open the matching tab with any filters in the link kept, so bookmarks, favorites and links in emails keep working.</p>
+          <p class="doc-p">Most entries open a page whose views are tabs, each at its own address — the first tab at the page’s own path, the others under it (Automations at /flows: Flows, Rules /flows/rules, Tests /flows/tests, Dead letters /flows/dead-letters). The arrow keys, Home and End move between tabs, and the browser tab title names the tab. The pages with tabs are Jobs, Database, Health, Environments, Promotion, Connections, Reports, Activity, Usage, AI, Alerts, Delivery, Automations, Deadlines &amp; risk, Coverage, Security &amp; privacy, Access reviews, MCP, Queries, GraphQL, Docs, Dev tools and Config hygiene. Each tab was once its own page: the old addresses (for example /background-jobs, /rules, /field-watches, /mail-log, /pulse, /mcp-tools, /config-review) still work and open the matching tab with any filters in the link kept, so bookmarks, favorites and links in emails keep working. The audit report that lived at /reports is now Activity → Audit report (/activity/audit); /reports opens Reports. ERP submissions became a tab of Integration Health (/integration-health?tab=erp).</p>
+          <p class="doc-p">Role UI permissions still work per tab: Roles → UI lists each tab of a page separately (under the tab’s old address), so a role can hide one tab — say Rules — and keep the rest of Automations. A page’s sidebar entry shows while any of its tabs is allowed and opens the first allowed one.</p>
           <h3 class="doc-h3" id="admin-navigation-find">Find a page</h3>
           <p class="doc-p">The Find box at the top of the panel searches every category at once — page names, section names and common synonyms ("email" finds Mail Log, "cron" finds Jobs). Each hit shows under its category so you learn where it lives. Enter opens the best match; Escape clears.</p>
           <h3 class="doc-h3" id="admin-navigation-favorites">Favorites</h3>
@@ -16916,7 +16917,7 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
     {
       "type": "page",
       "label": "SLA Rules",
-      "route": "/sla-rules",
+      "route": "/deadlines",
       "category": "Monitoring",
       "icon": "Clock"
     },
@@ -16948,7 +16949,7 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
           <h3 class="doc-h3" id="global-search-integration">Integration</h3>
           <p class="doc-p">Global search is built into AppLayout header and available on every admin page. No SDK method needed — it is UI-only and uses the same backend search as collection browser keyword filtering.</p>
           <h2 class="doc-h2" id="global-search-analytics">Search analytics</h2>
-          <p class="doc-p">Administrators can see what people search for under Usage → Search Analytics (<code class="doc-code">/search-analytics</code>). Searches typed into Cmd+K and into a collection list’s search box are logged with the query text, how many results came back, how long it took and, when the person opens one, whether it was a record or a page (the collection and id, never the record’s content). The page lists the top searches, searches that found nothing, searches where results appeared but nothing was opened, and slow searches, with a link beside each empty search to try it in the list, check which fields the list searches, or ask the assistant where the thing lives.</p>
+          <p class="doc-p">Administrators can see what people search for under Insights → Usage → Search (<code class="doc-code">/analytics/search</code>). Searches typed into Cmd+K and into a collection list’s search box are logged with the query text, how many results came back, how long it took and, when the person opens one, whether it was a record or a page (the collection and id, never the record’s content). The page lists the top searches, searches that found nothing, searches where results appeared but nothing was opened, and slow searches, with a link beside each empty search to try it in the list, check which fields the list searches, or ask the assistant where the thing lives.</p>
           <ul class="doc-ul">
             <li>Search text is personal data: only administrators can read it, and rows are deleted after 60 days (<code class="doc-code">SEARCH_LOG_RETENTION_DAYS</code>, 1–3650). The search results themselves are never stored.</li>
             <li>Stored in <code class="doc-code">nivaro_search_log</code> (migration 485). <code class="doc-code">GET /api/search-analytics/summary?days=</code> (admin); signed-in clients log with <code class="doc-code">POST /api/search-analytics/log</code> and add the opened result with <code class="doc-code">POST /api/search-analytics/log/:id/open</code> (only the person who ran the search can).</li>
@@ -17448,7 +17449,7 @@ POST /api/search/semantic/reindex
         <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"config-read-cache-shared","label":"Shared across processes (Redis)"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"permission-cache","label":"Permission cache"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"},{"id":"api-analytics-dependencies","label":"Partner dependencies"},{"id":"api-analytics-dead-clicks","label":"Dead and rage clicks"},{"id":"api-analytics-widget-timing","label":"Per-widget timing on dashboards"}]'>
           <!-- SYNC:api-analytics -->
           <h1 class="doc-h1" id="api-analytics">API Analytics</h1>
-          <p class="doc-p">Every API request is sampled into <code class="doc-code">nivaro_api_logs</code>, a ring buffer retaining 14 days of traffic. The /api-analytics page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.</p>
+          <p class="doc-p">Every API request is sampled into <code class="doc-code">nivaro_api_logs</code>, a ring buffer retaining 14 days of traffic. The /analytics/api page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.</p>
           <ul class="doc-ul">
             <li>Filter by time range, route, method, status class, and user.</li>
             <li>p50/p95 are computed over the selected window; the error-rate card breaks down 4xx vs 5xx.</li>
@@ -18135,7 +18136,7 @@ socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' p
           <h2 class="doc-h2" id="wallboard">Wallboard (TV mode)</h2>
           <p class="doc-p">/wallboard renders a chrome-free, dark, full-screen queue dashboard for ops-floor displays: giant stat tiles (total, unowned, SLA warning/breached, at risk) and a by-state distribution, auto-rotating across your queues every 20 seconds and refreshing every minute.</p>
           <h2 class="doc-h2" id="pulse">Pulse (live activity stream)</h2>
-          <p class="doc-p">/pulse streams every activity entry the moment it happens over an admin-only Socket.io room, with a per-minute sparkline. Use it to watch a migration, an import, or a busy Monday in real time.</p>
+          <p class="doc-p">/activity/live streams every activity entry the moment it happens over an admin-only Socket.io room, with a per-minute sparkline. Use it to watch a migration, an import, or a busy Monday in real time.</p>
           <div class="doc-note">Both are read-only surfaces over existing data — no new tables, no configuration.</div>
           <!-- /SYNC:wallboard-pulse -->
         </div>
@@ -19021,7 +19022,7 @@ GET /api/environments/env-presence         → every registered API, compared</c
           <h2 class="doc-h2" id="notification-targets">What a notification click does</h2>
           <p class="doc-p">Every notification carries a structured target (record, task, approval, access request, SLA, chat room, queue, report, alerts, issue, import, dashboard, My Work) plus the action a click should offer. Each app maps the target onto ITS routes — the admin opens /collections/:c/:id or /tasks, the portal opens /records/:c/:id or My Work — and when a host has no page for the kind, it falls back to the server-resolved URL for the recipient's preferred app (same origin = in-app, foreign = new tab). Rows can carry an inline action the server declares safe to fire from a click: Mark task done, Acknowledge SLA. Rows written before targets existed are derived from collection + item + subject.</p>
           <h2 class="doc-h2" id="delegation-console">Delegation console</h2>
-          <p class="doc-p">Monitoring → Delegation: one page for absence coverage. Stat strip (out now, out in the next N days, people covering, expiring, uncovered, approvals at risk), a red "would go unowned" section for anyone out — or entering an OOO window within 24 hours — with no working delegate (none, expired, suspended, or out themselves) and the open items in states they cover, the out-now and coming-up rosters, who covers whom, delegations ending soon (an expired one while the person is still out is flagged), the records blocked right now (admin; the coverage-gap resolver), and your own Out-of-office card. Admins assign or change a delegate for someone inline.</p>
+          <p class="doc-p">People → Coverage → Delegation (/coverage): one page for absence coverage. Stat strip (out now, out in the next N days, people covering, expiring, uncovered, approvals at risk), a red "would go unowned" section for anyone out — or entering an OOO window within 24 hours — with no working delegate (none, expired, suspended, or out themselves) and the open items in states they cover, the out-now and coming-up rosters, who covers whom, delegations ending soon (an expired one while the person is still out is flagged), the records blocked right now (admin; the coverage-gap resolver), and your own Out-of-office card. Admins assign or change a delegate for someone inline.</p>
           <pre class="doc-pre"><code>GET  /api/delegation/overview?days=14
 POST /api/delegation/:userId/delegate   { delegate_id, delegate_expires_at?, is_out_of_office? }   # admin</code></pre>
           <h2 class="doc-h2" id="notification-templates">In-app notification templates</h2>

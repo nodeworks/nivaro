@@ -1,18 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CronBuilder } from '@nivaro/shared'
-import {
-  Check,
-  ChevronsUpDown,
-  Clock,
-  FileDown,
-  Loader2,
-  Mail,
-  Plus,
-  Send,
-  Trash2
-} from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Check, ChevronsUpDown, Clock, Loader2, Mail, Plus, Send, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -191,27 +182,21 @@ export function ScheduledReportsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-2.5'>
-            <FileDown className='h-4 w-4 text-nvr-cyan' />
-            <div>
-              <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-                Scheduled Reports
-              </h1>
-              <p className='text-[12px] text-muted-foreground'>
-                PDF snapshots of collections or queues, emailed on a schedule.
-              </p>
-            </div>
-          </div>
-          <Button size='sm' onClick={() => setCreating((v) => !v)}>
-            <Plus className='mr-1.5 h-3.5 w-3.5' /> New report
+      <HubToolbar
+        description='PDF snapshots of a collection or a queue, emailed to a list of people on a schedule you set.'
+        actions={
+          <Button
+            size='sm'
+            className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90 text-[12px]'
+            onClick={() => setCreating((v) => !v)}
+          >
+            <Plus className='mr-1.5 h-3.5 w-3.5' aria-hidden /> New report
           </Button>
-        </div>
-      </header>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-8 dark:bg-background'>
-        <div className='mx-auto max-w-3xl space-y-4'>
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+        <div className='max-w-3xl space-y-4'>
           {creating && (
             <div className='space-y-3 rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
               <div className='flex flex-wrap items-end gap-3'>

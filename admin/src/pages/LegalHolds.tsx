@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Scale } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -39,7 +39,9 @@ export default function LegalHolds() {
         .get('/legal-holds', { params: { include_released: showReleased || undefined } })
         .then((r) => r.data.data)
   })
-  const { data: users = [] } = useQuery<Array<{ id: string; first_name: string; last_name: string; email: string }>>({
+  const { data: users = [] } = useQuery<
+    Array<{ id: string; first_name: string; last_name: string; email: string }>
+  >({
     queryKey: ['legal-hold-users', userSearch],
     queryFn: () =>
       api.get('/users', { params: { search: userSearch, limit: 10 } }).then((r) => r.data.data),
@@ -51,7 +53,9 @@ export default function LegalHolds() {
     mutationFn: () =>
       api.post('/legal-holds', {
         reason,
-        ...(kind === 'record' ? { collection: collection.trim(), item_id: itemId.trim() } : { user: userId })
+        ...(kind === 'record'
+          ? { collection: collection.trim(), item_id: itemId.trim() }
+          : { user: userId })
       }),
     onSuccess: () => {
       toast.success('Hold placed')
@@ -74,26 +78,19 @@ export default function LegalHolds() {
 
   const canPlace =
     reason.trim().length > 0 &&
-    (kind === 'record' ? collection.trim().length > 0 && itemId.trim().length > 0 : userId.length > 0)
+    (kind === 'record'
+      ? collection.trim().length > 0 && itemId.trim().length > 0
+      : userId.length > 0)
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <Scale className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>Legal Holds</h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              A held record survives trash purges; a held user is exempt from every retention
-              policy. Holds are audited — reason, placer, release.
-            </p>
-          </div>
-        </div>
-      </header>
+      <HubToolbar description='A held record survives trash purges; a held person is exempt from every retention policy. Every hold is audited: reason, who placed it, and its release.' />
 
-      <div className='flex-1 space-y-4 overflow-y-auto p-6'>
+      <div className='flex-1 space-y-4 overflow-y-auto p-4 sm:p-6'>
         <div className='max-w-[720px] rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
-          <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>Place a hold</p>
+          <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+            Place a hold
+          </p>
           <div className='mt-2 flex flex-wrap items-center gap-2'>
             <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
               {(['record', 'user'] as const).map((k) => (
@@ -103,7 +100,9 @@ export default function LegalHolds() {
                   onClick={() => setKind(k)}
                   className={cn(
                     'rounded px-2.5 py-1 text-[12px] font-medium capitalize',
-                    kind === k ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground' : 'text-slate-400'
+                    kind === k
+                      ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                      : 'text-slate-400'
                   )}
                 >
                   {k}
@@ -144,7 +143,9 @@ export default function LegalHolds() {
                         type='button'
                         onClick={() => {
                           setUserId(u.id)
-                          setUserSearch(`${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email)
+                          setUserSearch(
+                            `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email
+                          )
                         }}
                         className='block w-full px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-foreground'
                       >
@@ -194,13 +195,17 @@ export default function LegalHolds() {
               key={h.id}
               className={cn(
                 'flex items-start gap-3 rounded-lg border bg-white px-4 py-2.5 dark:bg-card',
-                h.released_at ? 'border-slate-200 opacity-60 dark:border-border' : 'border-amber-200 dark:border-amber-500/30'
+                h.released_at
+                  ? 'border-slate-200 opacity-60 dark:border-border'
+                  : 'border-amber-200 dark:border-amber-500/30'
               )}
             >
               <div className='min-w-0 flex-1'>
                 <p className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
                   {h.collection ? (
-                    <span className='font-mono'>{h.collection} / {h.item_id}</span>
+                    <span className='font-mono'>
+                      {h.collection} / {h.item_id}
+                    </span>
                   ) : (
                     <>User: {h.user_name || h.user}</>
                   )}
@@ -210,9 +215,12 @@ export default function LegalHolds() {
                     </span>
                   )}
                 </p>
-                <p className='mt-0.5 text-[12px] text-slate-600 dark:text-muted-foreground'>{h.reason}</p>
+                <p className='mt-0.5 text-[12px] text-slate-600 dark:text-muted-foreground'>
+                  {h.reason}
+                </p>
                 <p className='mt-0.5 text-[11px] text-slate-400'>
-                  placed by {h.placed_by_name || 'unknown'} · {new Date(h.created_at).toLocaleString()}
+                  placed by {h.placed_by_name || 'unknown'} ·{' '}
+                  {new Date(h.created_at).toLocaleString()}
                   {h.released_at && ` · released ${new Date(h.released_at).toLocaleString()}`}
                 </p>
               </div>
@@ -220,7 +228,11 @@ export default function LegalHolds() {
                 <button
                   type='button'
                   onClick={() => {
-                    if (window.confirm('Release this hold? The record/user re-enters normal retention.')) {
+                    if (
+                      window.confirm(
+                        'Release this hold? The record/user re-enters normal retention.'
+                      )
+                    ) {
                       release.mutate(h.id)
                     }
                   }}

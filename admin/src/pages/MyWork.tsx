@@ -37,7 +37,7 @@ export function MyWorkPage() {
                 report: (id) => `/report-studio/${id}`,
                 queue: (id) => `/queues/${id}`,
                 dashboard: (id) => `/dashboards/${id}`,
-                alerts: () => '/alert-manager',
+                alerts: () => '/alerts/metrics',
                 imports: () => '/imports',
                 issues: () => '/issues',
                 support: (id) => (id ? `/support?ticket=${id}` : '/support')

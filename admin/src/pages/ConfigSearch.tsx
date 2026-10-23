@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { SearchCode } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
+import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
 
 /**
@@ -36,19 +36,7 @@ export default function ConfigSearch() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <SearchCode className='h-5 w-5 text-muted-foreground' />
-          <div className='flex-1'>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Config Search
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Search every configuration surface at once — find who references an endpoint, a
-              field, a state key, a template.
-            </p>
-          </div>
-        </div>
+      <HubToolbar description='Search every configuration surface at once: find what references an endpoint, a field, a state key or a template.'>
         <input
           // biome-ignore lint/a11y/noAutofocus: the page IS the search box
           autoFocus
@@ -57,9 +45,9 @@ export default function ConfigSearch() {
           placeholder='e.g. update_order.php, total_amount, waiting_on_review…'
           className='mt-3 h-9 w-full max-w-[640px] rounded-md border border-slate-200 bg-background px-3 font-mono text-[13px] dark:border-border'
         />
-      </header>
+      </HubToolbar>
 
-      <div className='flex-1 overflow-y-auto p-6'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
         {q.length < 2 ? (
           <p className='text-[13px] text-slate-400'>Type at least two characters.</p>
         ) : isFetching ? (
@@ -79,7 +67,9 @@ export default function ConfigSearch() {
               >
                 <p className='border-b border-slate-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:border-border/60'>
                   {g.surface}
-                  <span className='ml-1.5 font-normal normal-case text-slate-400'>{g.hits.length}</span>
+                  <span className='ml-1.5 font-normal normal-case text-slate-400'>
+                    {g.hits.length}
+                  </span>
                 </p>
                 <div className='divide-y divide-slate-50 dark:divide-border/40'>
                   {g.hits.map((h, i) => (

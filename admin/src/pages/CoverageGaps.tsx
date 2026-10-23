@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { UserX } from 'lucide-react'
 import { Link } from 'react-router'
+import { HubToolbar } from '@/components/hub-page'
+import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn, formatNumber } from '@/lib/utils'
 
@@ -106,57 +107,54 @@ export function CoverageGapsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
-        <div className='flex items-center gap-2.5'>
-          <UserX className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-lg font-semibold'>Coverage Gaps</h1>
-            <p className='text-[11px] text-muted-foreground'>
-              {tab === 'now'
-                ? 'Open records every owner of which is suspended, redacted, or out with no delegate.'
-                : 'Scheduled absences over the next three weeks vs the approval load they touch — the gap BEFORE it happens.'}
-            </p>
-          </div>
-        </div>
-        <div className='flex items-center gap-3'>
-          <div className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
-            {(
-              [
-                ['now', 'Right now'],
-                ['runway', 'Runway']
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type='button'
-                onClick={() => setTab(key)}
-                className={
-                  tab === key
-                    ? 'rounded bg-nvr-cyan/10 px-2.5 py-1 text-[12px] font-medium text-nvr-navy dark:text-nvr-cyan'
-                    : 'rounded px-2.5 py-1 text-[12px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {tab === 'now' && dataUpdatedAt > 0 && (
-            <span className='text-[11px] text-muted-foreground'>
-              Checked {new Date(dataUpdatedAt).toLocaleTimeString()}
-            </span>
-          )}
-          <button
-            type='button'
-            onClick={() => refetch()}
-            disabled={isFetching}
-            className='rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] hover:bg-muted disabled:opacity-50 dark:border-border'
-          >
-            {isFetching ? 'Checking…' : 'Re-check'}
-          </button>
-        </div>
-      </header>
+      <HubToolbar
+        description={
+          tab === 'now'
+            ? 'Open records every owner of which is suspended, redacted, or out with no delegate.'
+            : 'Scheduled absences over the next three weeks against the approval load they touch: the gap before it happens.'
+        }
+        actions={
+          <>
+            <div className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+              {(
+                [
+                  ['now', 'Right now'],
+                  ['runway', 'Runway']
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type='button'
+                  onClick={() => setTab(key)}
+                  className={
+                    tab === key
+                      ? 'rounded bg-nvr-cyan/10 px-2.5 py-1 text-[12px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                      : 'rounded px-2.5 py-1 text-[12px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {tab === 'now' && dataUpdatedAt > 0 && (
+              <span className='text-[11px] text-muted-foreground'>
+                Checked {new Date(dataUpdatedAt).toLocaleTimeString()}
+              </span>
+            )}
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 text-[12px]'
+              onClick={() => refetch()}
+              disabled={isFetching}
+            >
+              {isFetching ? 'Checking…' : 'Re-check'}
+            </Button>
+          </>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {tab === 'runway' ? (
           <RunwayTab
             entries={runway.data?.entries ?? []}
@@ -278,7 +276,6 @@ export function CoverageGapsPage() {
   )
 }
 
-
 // ─── OOO runway (#727) ───────────────────────────────────────────────────────
 
 function RunwayTab({
@@ -370,7 +367,10 @@ function RunwayTab({
                   <td className='px-3 py-2 text-right font-semibold text-slate-800 dark:text-foreground'>
                     {e.pending_estimate.toLocaleString()}
                   </td>
-                  <td className='max-w-[240px] truncate px-3 py-2 text-[11.5px] text-slate-500 dark:text-muted-foreground' title={e.states.join(', ')}>
+                  <td
+                    className='max-w-[240px] truncate px-3 py-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'
+                    title={e.states.join(', ')}
+                  >
                     {e.states.join(', ') || '—'}
                   </td>
                 </tr>

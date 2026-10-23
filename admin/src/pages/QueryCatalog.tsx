@@ -1,10 +1,11 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { BookOpen, Play } from 'lucide-react'
+import { Play } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { api } from '@/lib/api'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { api } from '@/lib/api'
 
 /**
  * Query catalog (#238): the runnable custom queries any authenticated user
@@ -25,20 +26,22 @@ export default function QueryCatalogPage() {
   const [search, setSearch] = useState('')
   const [openSlug, setOpenSlug] = useState<string | null>(null)
   const [paramValues, setParamValues] = useState<Record<string, string>>({})
-  const [result, setResult] = useState<{ slug: string; rows: Array<Record<string, unknown>> } | null>(null)
+  const [result, setResult] = useState<{
+    slug: string
+    rows: Array<Record<string, unknown>>
+  } | null>(null)
 
   const { data: queries = [], isLoading } = useQuery<CatalogQuery[]>({
     queryKey: ['query-catalog'],
-    queryFn: () => api.get<{ data: CatalogQuery[] }>('/custom-queries/catalog').then((r) => r.data.data)
+    queryFn: () =>
+      api.get<{ data: CatalogQuery[] }>('/custom-queries/catalog').then((r) => r.data.data)
   })
 
   const run = useMutation({
     mutationFn: (q: CatalogQuery) =>
       api
         .post<{ data: Array<Record<string, unknown>> }>(`/custom-queries/${q.slug}/execute`, {
-          params: Object.fromEntries(
-            Object.entries(paramValues).filter(([, v]) => v !== '')
-          )
+          params: Object.fromEntries(Object.entries(paramValues).filter(([, v]) => v !== ''))
         })
         .then((r) => ({ slug: q.slug, rows: r.data.data ?? [] })),
     onSuccess: setResult,
@@ -50,34 +53,27 @@ export default function QueryCatalogPage() {
   const visible = needle
     ? queries.filter(
         (q) =>
-          q.name.toLowerCase().includes(needle) || (q.description ?? '').toLowerCase().includes(needle)
+          q.name.toLowerCase().includes(needle) ||
+          (q.description ?? '').toLowerCase().includes(needle)
       )
     : queries
   const cols = result?.rows[0] ? Object.keys(result.rows[0]) : []
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <BookOpen className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Query Catalog
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Saved queries you can run — fill the parameters and go. Your data scopes apply.
-            </p>
-          </div>
+      <HubToolbar
+        description='Saved queries you can run: fill in the parameters and go. Your data scopes apply.'
+        actions={
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder='Search queries…'
-            className='ml-auto h-8 w-64 text-[13px]'
+            className='h-8 w-64 text-[13px]'
           />
-        </div>
-      </header>
+        }
+      />
 
-      <div className='flex-1 overflow-y-auto p-6'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
         {isLoading ? (
           <p className='text-[13px] text-slate-400'>Loading…</p>
         ) : visible.length === 0 ? (
@@ -89,7 +85,10 @@ export default function QueryCatalogPage() {
             {visible.map((q) => {
               const open = openSlug === q.slug
               return (
-                <div key={q.id} className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+                <div
+                  key={q.id}
+                  className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+                >
                   <button
                     type='button'
                     onClick={() => {
@@ -102,7 +101,9 @@ export default function QueryCatalogPage() {
                     className='flex w-full items-center justify-between px-4 py-3 text-left'
                   >
                     <div>
-                      <p className='text-[13.5px] font-medium text-slate-800 dark:text-slate-100'>{q.name}</p>
+                      <p className='text-[13.5px] font-medium text-slate-800 dark:text-slate-100'>
+                        {q.name}
+                      </p>
                       {q.description && (
                         <p className='mt-0.5 text-[12px] text-slate-500'>{q.description}</p>
                       )}
@@ -154,7 +155,9 @@ export default function QueryCatalogPage() {
                               <thead>
                                 <tr className='text-left text-[10px] uppercase tracking-wide text-slate-400'>
                                   {cols.map((c) => (
-                                    <th key={c} className='whitespace-nowrap px-2.5 py-1.5'>{c}</th>
+                                    <th key={c} className='whitespace-nowrap px-2.5 py-1.5'>
+                                      {c}
+                                    </th>
                                   ))}
                                 </tr>
                               </thead>
@@ -163,7 +166,10 @@ export default function QueryCatalogPage() {
                                   // biome-ignore lint/suspicious/noArrayIndexKey: result rows
                                   <tr key={i}>
                                     {cols.map((c) => (
-                                      <td key={c} className='max-w-[260px] truncate whitespace-nowrap px-2.5 py-1 text-slate-700 dark:text-slate-200'>
+                                      <td
+                                        key={c}
+                                        className='max-w-[260px] truncate whitespace-nowrap px-2.5 py-1 text-slate-700 dark:text-slate-200'
+                                      >
                                         {r[c] == null ? '—' : String(r[c])}
                                       </td>
                                     ))}

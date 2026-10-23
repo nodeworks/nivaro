@@ -127,7 +127,7 @@ export function RecordingExport({
         toast.success('Spec ready in the E2E recorder', {
           description: 'Fill in the masked values, then save it into an extension or download it.'
         })
-        navigate('/e2e-recorder')
+        navigate('/dev-tools')
       } else if (kind === 'html') toast.success('Replay exported — open the file in any browser')
       else
         toast.success('WebM export started', {

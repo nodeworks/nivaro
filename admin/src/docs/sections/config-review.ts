@@ -7,7 +7,7 @@ export const configReviewDocs: DocSection = {
     { type: 'h1', id: 'config-review', text: 'Config Review' },
     {
       type: 'p',
-      text: 'The Config Review page at /config-review (System nav) is a monthly report on the configuration itself. It runs on the 1st of each month at 04:20 and tells the administrators when it finds something; Run review now runs it on demand. Every finding says why it matters and links to the editor that owns it. Where a fix is safe, the finding offers one: you see the exact change set first, apply it with the same writes the editors make, and undo it from the Fixed list. Admins only.'
+      text: 'The Config Review page at /config/review (System → Config hygiene → Review) is a monthly report on the configuration itself. It runs on the 1st of each month at 04:20 and tells the administrators when it finds something; Run review now runs it on demand. Every finding says why it matters and links to the editor that owns it. Where a fix is safe, the finding offers one: you see the exact change set first, apply it with the same writes the editors make, and undo it from the Fixed list. Admins only.'
     },
     { type: 'h2', id: 'config-review-review', text: 'Review — configuration problems' },
     {

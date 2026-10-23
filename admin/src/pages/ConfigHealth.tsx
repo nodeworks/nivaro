@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
+import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -122,32 +123,21 @@ export default function ConfigHealth() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-2.5'>
-            <Sparkles className='h-5 w-5 text-muted-foreground' />
-            <div>
-              <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-                Config Health
-              </h1>
-              <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-                Configuration nobody uses and configuration that breaks its own conventions — swept
-                nightly, each finding linking to the surface that fixes it.
-              </p>
-            </div>
-          </div>
-          <button
-            type='button'
+      <HubToolbar
+        description='A nightly sweep of the configuration. Each finding names what is unused or breaks a convention, and links to the screen that fixes it.'
+        actions={
+          <Button
+            size='sm'
+            className='h-8 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan/90'
             disabled={run.isPending}
             onClick={() => run.mutate()}
-            className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-medium text-white disabled:opacity-50'
           >
             {run.isPending ? 'Sweeping…' : 'Run sweep now'}
-          </button>
-        </div>
-      </header>
+          </Button>
+        }
+      />
 
-      <div className='flex-1 space-y-3 overflow-y-auto p-6'>
+      <div className='flex-1 space-y-3 overflow-y-auto p-4 sm:p-6'>
         <div className='flex flex-wrap items-center gap-2'>
           <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
             {(

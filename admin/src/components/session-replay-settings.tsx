@@ -464,7 +464,7 @@ export function SessionReplaySettingsSection() {
         </h2>
         <p className='mb-6 mt-1 text-[12px] text-muted-foreground'>
           Recording on/off, error clips and how long recordings are kept live on the{' '}
-          <Link to='/session-replays' className='underline'>
+          <Link to='/analytics/replays' className='underline'>
             Session Replays
           </Link>{' '}
           page. These settings shape what the recorders capture.

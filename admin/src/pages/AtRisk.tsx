@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Power, RefreshCw } from 'lucide-react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,7 +25,8 @@ const BADGE_CLS: Record<string, string> = {
   red: 'text-[11px] bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20',
   amber: 'text-[11px] bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20',
   yellow: 'text-[11px] bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20',
-  green: 'text-[11px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20',
+  green:
+    'text-[11px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20',
   blue: 'text-[11px] bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/20',
   purple: 'text-[11px] bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/20'
 }
@@ -92,25 +94,25 @@ export function AtRiskPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-border px-6 py-4 flex items-center justify-between'>
-        <div className='flex items-center gap-2.5'>
-          <AlertTriangle className='h-5 w-5 text-muted-foreground' />
-          <h1 className='text-lg font-semibold'>At-Risk Rules</h1>
-        </div>
-        <Button
-          variant='outline'
-          size='sm'
-          onClick={() => {
-            qc.invalidateQueries({ queryKey: ['at-risk-summary'] })
-            qc.invalidateQueries({ queryKey: ['at-risk-rules'] })
-          }}
-        >
-          <RefreshCw className='h-3.5 w-3.5 mr-1.5' />
-          Refresh
-        </Button>
-      </header>
+      <HubToolbar
+        description='Every at-risk rule across collections, with how many records match now. Rules are created per collection in Data Model; switch them on or off here.'
+        actions={
+          <Button
+            variant='outline'
+            size='sm'
+            className='h-8 text-[12px]'
+            onClick={() => {
+              qc.invalidateQueries({ queryKey: ['at-risk-summary'] })
+              qc.invalidateQueries({ queryKey: ['at-risk-rules'] })
+            }}
+          >
+            <RefreshCw className='h-3.5 w-3.5 mr-1.5' />
+            Refresh
+          </Button>
+        }
+      />
 
-      <div className='flex-1 overflow-auto p-6 space-y-6'>
+      <div className='flex-1 overflow-auto p-4 sm:p-6 space-y-6'>
         {/* Summary strip */}
         {summary.length > 0 && (
           <div className='grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4'>
@@ -192,9 +194,7 @@ export function AtRiskPage() {
                       <TableCell>
                         <Badge
                           variant='outline'
-                          className={
-                            BADGE_CLS[rule.highlight_color] ?? BADGE_CLS.red
-                          }
+                          className={BADGE_CLS[rule.highlight_color] ?? BADGE_CLS.red}
                         >
                           {rule.highlight_color}
                         </Badge>

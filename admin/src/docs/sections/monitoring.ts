@@ -54,7 +54,7 @@ export const fieldWatchesGuide: DocSection = {
       text: 'Field Watches let users subscribe to changes on specific fields across a collection. When a watched field changes on any record, subscribed users receive an in-app notification with the old and new values.'
     },
     { type: 'h3', text: 'Creating a watch' },
-    { type: 'p', text: 'Navigate to Monitoring → Field Watches. Click New Watch:' },
+    { type: 'p', text: 'Navigate to Notifications → Alerts → Field watches. Click New Watch:' },
     {
       type: 'table',
       head: ['Field', 'Description'],
@@ -103,7 +103,7 @@ export const notificationSubscriptionsGuide: DocSection = {
     { type: 'h3', text: 'Creating a subscription' },
     {
       type: 'p',
-      text: 'Navigate to Monitoring → Notification Subscriptions. Users manage their own subscriptions; admins can view all subscriptions.'
+      text: 'Navigate to Notifications → Alerts → My subscriptions. Users manage their own subscriptions; admins can view all subscriptions.'
     },
     {
       type: 'table',
@@ -412,7 +412,7 @@ export const slaTrackingGuide: DocSection = {
       text: 'SLA Rules define time limits for how long a workflow instance can remain in a given state. The system tracks warning thresholds (% of duration elapsed) and full breaches, with optional escalation user notifications.'
     },
     { type: 'h3', text: 'Creating an SLA rule' },
-    { type: 'p', text: 'Navigate to Monitoring → SLA Rules. Click New Rule:' },
+    { type: 'p', text: 'Navigate to Workflow → Deadlines & risk → SLA rules. Click New Rule:' },
     {
       type: 'table',
       head: ['Field', 'Description'],
@@ -466,7 +466,7 @@ export const alertEngineGuide: DocSection = {
       text: 'Alert Definitions watch collection fields for threshold conditions and notify subscribed users when conditions are met. Alerts fire on item create/update hooks and can also be triggered manually.'
     },
     { type: 'h3', text: 'Creating an alert definition' },
-    { type: 'p', text: 'Navigate to Monitoring → Alerts. Click New Alert (admin only):' },
+    { type: 'p', text: 'Navigate to Notifications → Alerts. Click New Alert (admin only):' },
     {
       type: 'table',
       head: ['Field', 'Description'],

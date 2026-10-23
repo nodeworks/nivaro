@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Copy, FileCode2, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -78,20 +79,12 @@ export function PersistedQueriesPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      {/* Page header */}
-      <header className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div>
-            <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              Persisted Queries
-            </h1>
-            <p className='mt-0.5 text-[12px] text-slate-400 dark:text-muted-foreground'>
-              Pre-registered GraphQL queries executed by hash — smaller requests, locked-down
-              surface.
-            </p>
-          </div>
+      <HubToolbar
+        description='GraphQL queries registered ahead of time and run by their hash: smaller requests and a locked-down surface.'
+        actions={
           <Button
             size='sm'
+            className='h-8 text-[12px]'
             onClick={() => {
               setCreating(true)
               setSelectedId(null)
@@ -101,8 +94,8 @@ export function PersistedQueriesPage() {
             <Plus className='mr-1.5 h-3.5 w-3.5' />
             New query
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         {/* Left list */}

@@ -16,12 +16,12 @@ const NOTIF_ROUTES: NotificationRouteMap = {
   report: (id) => `/report-studio/${id}`,
   queue: (id) => `/queues/${id}`,
   dashboard: (id) => `/dashboards/${id}`,
-  alerts: () => '/alert-manager',
+  alerts: () => '/alerts/metrics',
   imports: () => '/imports',
   issues: () => '/issues',
   tasks: () => '/tasks',
   approvals: () => '/approvals',
-  access_requests: () => '/access-requests',
+  access_requests: () => '/access',
   my_work: () => '/my-work',
   support: (id) => (id ? `/support?ticket=${id}` : '/support')
 }
@@ -42,8 +42,8 @@ export function NotificationsCenterPage() {
           routes={NOTIF_ROUTES}
           onNavigate={(p) => navigate(p)}
           app='admin'
-          mailLogUrl={(id) => `/mail-log?id=${id}`}
-          subscriptionsPath='/notification-subscriptions'
+          mailLogUrl={(id) => `/delivery?id=${id}`}
+          subscriptionsPath='/alerts/subscriptions'
           onNotice={(m) => toast.success(m)}
           onError={(m) => toast.error(m)}
         />

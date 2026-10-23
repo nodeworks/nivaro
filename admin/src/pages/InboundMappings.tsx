@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, History, Inbox, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { InboundMappingVersions } from '@/components/inbound-mapping-versions'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -250,27 +251,19 @@ export function InboundMappingsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-3'>
-          <div>
-            <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              Inbound Mappings
-            </h1>
-            <p className='mt-0.5 text-[12px] text-slate-400 dark:text-muted-foreground'>
-              Let an integration post its own payload shape. Rules map it onto a collection; the
-              write runs as the caller.
-            </p>
-          </div>
+      <HubToolbar
+        description='Let an integration post its own payload shape to /api/inbound/<key>. Rules map it onto a collection; the write runs as the caller.'
+        actions={
           <Button
             size='sm'
-            className='ml-auto h-8'
+            className='h-8 text-[12px]'
             onClick={() => setSelected('new')}
             data-inbound-new
           >
             <Plus className='mr-1.5 h-3.5 w-3.5' /> New mapping
           </Button>
-        </div>
-      </header>
+        }
+      />
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         <aside className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
           {isLoading ? (

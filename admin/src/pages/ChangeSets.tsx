@@ -4,7 +4,6 @@ import {
   Check,
   CheckCircle2,
   ChevronsUpDown,
-  ClipboardList,
   Loader2,
   Play,
   Plus,
@@ -14,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -274,22 +274,9 @@ export function ChangeSetsPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <ClipboardList className='h-4.5 w-4.5 text-nvr-cyan' />
-          <div>
-            <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              Schema Change Sets
-            </h1>
-            <p className='text-[12px] text-muted-foreground'>
-              Batch schema edits, reviewed before applying. Operations run in order and stop at the
-              first failure — nothing is rolled back, so preview first.
-            </p>
-          </div>
-        </div>
-      </header>
+      <HubToolbar description='Batch schema edits, reviewed before applying. Operations run in order and stop at the first failure; nothing is rolled back, so preview first.' />
 
-      <div className='flex flex-1 min-h-0 flex-col gap-6 overflow-y-auto p-8'>
+      <div className='flex flex-1 min-h-0 flex-col gap-6 overflow-y-auto p-4 sm:p-6'>
         {/* Builder */}
         <section className='w-full max-w-3xl rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
           <h2 className='mb-1 text-[14px] font-semibold text-slate-900 dark:text-foreground'>

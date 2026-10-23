@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, Hammer, Plus, Puzzle, Trash2, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -139,28 +140,21 @@ export function McpToolsPage() {
 
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
-      <header className='flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex h-9 w-9 items-center justify-center rounded-lg bg-nvr-cyan/15'>
-          <Hammer className='h-4.5 w-4.5 text-nvr-navy dark:text-nvr-cyan' />
-        </div>
-        <div className='min-w-0 flex-1'>
-          <h1 className='text-base font-semibold'>Assistant tools</h1>
-          <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-            Tools that MCP clients (Claude, ChatGPT, Codex) can call on this instance, beyond the
-            built-in set. Each one runs as the person calling it.
-          </p>
-        </div>
-        <Button
-          size='sm'
-          className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
-          disabled={!config.data?.ready}
-          onClick={() => setSel({ kind: 'new' })}
-        >
-          <Plus className='mr-1 h-3.5 w-3.5' /> New tool
-        </Button>
-      </header>
+      <HubToolbar
+        description='Tools MCP clients (Claude, ChatGPT, Codex) can call on this instance beyond the built-in set: a custom query or a flow under a name. Each runs as the person calling it.'
+        actions={
+          <Button
+            size='sm'
+            className='h-8 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan/90'
+            disabled={!config.data?.ready}
+            onClick={() => setSel({ kind: 'new' })}
+          >
+            <Plus className='mr-1 h-3.5 w-3.5' /> New tool
+          </Button>
+        }
+      />
       {config.data && !config.data.ready && (
-        <div className='shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'>
+        <div className='shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 sm:px-6 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'>
           Named tools need database migration 473. Extension tools below work already; you can add
           named tools once the migration has run.
         </div>

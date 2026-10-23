@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -451,20 +452,12 @@ export function RetentionPoliciesPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      {/* Header */}
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-white/[0.07] dark:bg-[#0d1117]'>
-        <div className='flex items-center justify-between'>
-          <div>
-            <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-slate-100'>
-              Privacy & Retention
-            </h1>
-            <p className='mt-0.5 text-[12px] text-slate-400'>
-              Configure policies to redact or delete inactive users to comply with data retention
-              requirements.
-            </p>
-          </div>
+      <HubToolbar
+        description='Policies that redact or delete people who have been inactive for a set time, to meet data retention requirements. Preview a run before it touches anyone.'
+        actions={
           <Button
             size='sm'
+            className='h-8 text-[12px]'
             onClick={() => {
               setCreating(true)
               setEditingId(null)
@@ -473,8 +466,8 @@ export function RetentionPoliciesPage() {
             <Plus className='mr-1.5 h-3.5 w-3.5' />
             New policy
           </Button>
-        </div>
-      </div>
+        }
+      />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         {/* Left — policy list */}

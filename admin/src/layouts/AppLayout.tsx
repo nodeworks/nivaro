@@ -108,7 +108,7 @@ import { useCloudPlugins, useExtensionPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
-import { hubForPath } from '@/lib/hubs'
+import { allowedHubTabs, hubAtBase, hubForPath, hubTabPath, isPathDisabled } from '@/lib/hubs'
 import { useT } from '@/lib/i18n'
 import { openViewAsTab, readMasquerade, stopMasquerade } from '@/lib/masquerade'
 import { usePagePresence } from '@/lib/use-page-presence'
@@ -491,7 +491,14 @@ export function AppLayout() {
   const visibleCategories = navCategories
     .map((cat) => ({
       ...cat,
-      items: cat.items.filter((item) => !disabledPaths.has(item.to))
+      // A hub entry shows while any of its tabs is allowed, and opens the first
+      // allowed one (a role's ui_permissions key hub tabs by their old paths).
+      items: cat.items.flatMap((item) => {
+        const hub = hubAtBase(item.to)
+        if (!hub) return disabledPaths.has(item.to) ? [] : [item]
+        const tabs = allowedHubTabs(hub, disabledPaths)
+        return tabs.length === 0 ? [] : [{ ...item, to: hubTabPath(hub, tabs[0]) }]
+      })
     }))
     .filter((cat) => cat.items.length > 0)
 
@@ -551,7 +558,7 @@ export function AppLayout() {
           <ApiUpdateBanner
             appName='Nivaro'
             releaseNotesUrl={(u) =>
-              `/changelog?since=${encodeURIComponent(u.from ?? '')}&to=${encodeURIComponent(u.version)}`
+              `/docs/releases?since=${encodeURIComponent(u.from ?? '')}&to=${encodeURIComponent(u.version)}`
             }
           />
           <ViewAsBar />
@@ -684,11 +691,11 @@ export function AppLayout() {
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Link
-                        to='/changelog'
+                        to='/docs/releases'
                         aria-label='Changelog'
                         className={cn(
                           'flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-white/[0.05] hover:text-white',
-                          location.pathname === '/changelog'
+                          location.pathname === '/docs/releases'
                             ? 'bg-white/[0.08] text-white'
                             : 'text-slate-400'
                         )}
@@ -874,8 +881,7 @@ export function AppLayout() {
               <HelpVideoHost>
                 <PageErrorBoundary key={pageKey}>
                   <Suspense fallback={null}>
-                    {disabledPaths.size > 0 &&
-                    [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
+                    {isPathDisabled(location.pathname, disabledPaths) ? (
                       <Navigate to='/' replace />
                     ) : (
                       <div
@@ -1057,7 +1063,7 @@ function RecorderBadge() {
   if (!rec.recording) return null
   return (
     <Link
-      to='/e2e-recorder'
+      to='/dev-tools'
       data-nvr-dock-aware
       className='fixed bottom-4 right-4 z-[120] inline-flex items-center gap-2 rounded-full border border-red-200 bg-white px-3 py-1.5 text-[11.5px] font-medium text-red-600 shadow-lg hover:bg-red-50 dark:border-red-500/30 dark:bg-card dark:text-red-300'
       data-e2e-recorder

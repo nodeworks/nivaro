@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, Check, ChevronsUpDown, Play, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -360,38 +361,36 @@ export default function ScheduledChangesPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      {/* Header */}
-      <header className='shrink-0 border-b border-border px-6 py-4 flex items-center justify-between gap-4'>
-        <div className='flex items-center gap-2.5'>
-          <CalendarClock className='h-5 w-5 text-muted-foreground' />
-          <h1 className='text-lg font-semibold'>Scheduled Changes</h1>
-        </div>
-        <div className='flex items-center gap-2'>
-          {/* Status filter */}
-          <FieldCombobox
-            value={statusFilter}
-            onChange={setStatusFilter}
-            options={STATUS_OPTIONS}
-            placeholder='All Statuses'
-            className='w-[160px] h-8 text-[13px]'
-          />
-          {/* Collection filter */}
-          <FieldCombobox
-            value={collectionFilter}
-            onChange={setCollectionFilter}
-            options={collectionFilterOptions}
-            placeholder='All Collections'
-            className='w-[180px] h-8 text-[13px]'
-          />
-          <Button size='sm' onClick={() => setSheetOpen(true)}>
-            <Plus className='h-4 w-4 mr-1.5' />
-            Schedule Change
-          </Button>
-        </div>
-      </header>
+      <HubToolbar
+        description='Field updates, workflow transitions and publish actions queued to apply to a record at a set time. Execute a pending one early, or delete it.'
+        actions={
+          <>
+            {/* Status filter */}
+            <FieldCombobox
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={STATUS_OPTIONS}
+              placeholder='All Statuses'
+              className='w-[160px] h-8 text-[13px]'
+            />
+            {/* Collection filter */}
+            <FieldCombobox
+              value={collectionFilter}
+              onChange={setCollectionFilter}
+              options={collectionFilterOptions}
+              placeholder='All Collections'
+              className='w-[180px] h-8 text-[13px]'
+            />
+            <Button size='sm' className='h-8 text-[12px]' onClick={() => setSheetOpen(true)}>
+              <Plus className='h-4 w-4 mr-1.5' />
+              Schedule Change
+            </Button>
+          </>
+        }
+      />
 
       {/* Table */}
-      <div className='flex-1 overflow-auto p-6'>
+      <div className='flex-1 overflow-auto p-4 sm:p-6'>
         {isLoading ? (
           <div className='space-y-2'>
             {[1, 2, 3, 4, 5].map((i) => (

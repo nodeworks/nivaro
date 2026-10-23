@@ -3,6 +3,7 @@ import { Check, ChevronsUpDown, GripVertical, Plus, ScrollText, Search, Trash2 }
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -202,31 +203,29 @@ export function RulesPage() {
   })
 
   return (
-    <>
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-3'>
-            <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900'>Rules</h1>
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description='Conditions and actions that run before or after a record is created or updated, in their sort order.'
+        actions={
+          <>
             {data && (
-              <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500'>
-                {allRules.length}
+              <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-muted dark:text-muted-foreground'>
+                {allRules.length} {allRules.length === 1 ? 'rule' : 'rules'}
               </span>
             )}
-          </div>
-          <div className='flex items-center gap-2'>
             <CollectionFilterCombobox
               collections={filterCollections}
               value={collectionFilter}
               onChange={setCollectionFilter}
             />
-            <Button size='sm' onClick={() => navigate('/rules/new')}>
+            <Button size='sm' className='h-8 text-[12px]' onClick={() => navigate('/rules/new')}>
               <Plus className='mr-1.5 h-3.5 w-3.5' /> New Rule
             </Button>
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
-      <div className='p-8'>
+      <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
         {isLoading ? (
           <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
             <div className='divide-y divide-slate-100'>
@@ -339,6 +338,6 @@ export function RulesPage() {
           </div>
         )}
       </div>
-    </>
+    </div>
   )
 }
