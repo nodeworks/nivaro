@@ -182,8 +182,11 @@ afterEach(() => {
   host.remove()
 })
 
-async function settle(until: () => boolean) {
-  for (let i = 0; i < 100 && !until(); i++) {
+// Waits on the clock, not a step count: 100 × 10 ms gave a loaded full run
+// only about a second, and the staged-edit save path missed it now and then.
+async function settle(until: () => boolean, budgetMs = 5000) {
+  const end = Date.now() + budgetMs
+  while (!until() && Date.now() < end) {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 10))
     })
