@@ -186,3 +186,53 @@ describe('GraphQL schema watcher (second review)', () => {
     w.stop()
   })
 })
+
+describe('peer board changes re-tell viewer lists (harness parity)', () => {
+  afterEach(() => resetBoard())
+
+  const board = (node: string, viewers: Record<string, string[]>, topics = {}) => ({
+    node,
+    at: Date.now(),
+    sockets: 1,
+    users: [],
+    viewers: Object.fromEntries(
+      Object.entries(viewers).map(([room, ids]) => [
+        room,
+        ids.map((id) => ({ socket: `s-${id}`, id, name: id }))
+      ])
+    ),
+    pages: [],
+    topics
+  })
+
+  it('names the rooms whose other-process viewers changed', async () => {
+    const { changedPeerRooms } = await import('../../../services/realtime-board.js')
+    const a = [board('rt-b', { 'record:projects:1': ['alice'], 'record:projects:2': ['bob'] })]
+    // alice left record 1; record 2 unchanged; a topic room appeared.
+    const b = [
+      board(
+        'rt-b',
+        { 'record:projects:2': ['bob'] },
+        { 'ops:issue-view:7': [{ socket: 's9', id: 'cy', name: 'cy' }] }
+      )
+    ]
+    expect(changedPeerRooms(a, b).sort()).toEqual(['ops:issue-view:7', 'record:projects:1'])
+    expect(changedPeerRooms(b, b)).toEqual([])
+  })
+
+  it('a realtime peer reader reports the change after a read', async () => {
+    const { onPeerBoardChange } = await import('../../../services/realtime-board.js')
+    const redis = memRedis()
+    const seen: string[][] = []
+    onPeerBoardChange((rooms) => seen.push(rooms))
+    // Another process publishes a viewer; this one reads as a peer.
+    redis.kv.set(
+      'nvr:rt:board:test:rt-b:live',
+      JSON.stringify(board('rt-b', { 'record:projects:1': ['alice'] }))
+    )
+    await redis.zadd('nvr:rt:board:test:nodes', Date.now(), 'rt-b')
+    startBoardReader(redis as never, { peers: true })
+    await vi.waitFor(() => expect(seen).toEqual([['record:projects:1']]))
+    onPeerBoardChange(null)
+  })
+})

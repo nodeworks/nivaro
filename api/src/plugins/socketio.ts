@@ -73,6 +73,7 @@ import {
   boardUsersOnPathPrefix,
   isGateRoom,
   type LocalBoard,
+  onPeerBoardChange,
   PAGE_AT_KEY,
   type PageAtData
 } from '../services/realtime-board.js'
@@ -439,6 +440,32 @@ export function collectLocalBoard(io: SocketIOServer | null = _ioRef): LocalBoar
       rooms: stats.rooms
     }
   }
+}
+
+/**
+ * `record:viewers` (and `presence:rows` for lists watching the row) for one record room: this
+ * process's viewers, current, plus — with several realtime processes — the others' from the
+ * board (a second or two old). `local`: to this process's sockets only.
+ */
+function emitRecordViewers(io: SocketIOServer, room: string, local: boolean): void {
+  const viewers = [
+    ...(recordViewers.get(room)?.values() ?? []),
+    ...boardPeerViewers(room).map(({ id, name }) => ({ id, name }))
+  ]
+  const m = /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room)
+  const to = (r: string) => (local ? io.local.to(r) : io.to(r))
+  to(room).emit('record:viewers', {
+    collection: m?.[1] ?? null,
+    item: m?.[2] ?? null,
+    viewers
+  })
+  // #2486 — lists watching this row (ids only; names come from /presence/people).
+  if (m)
+    to(rowsRoomName(room)).emit('presence:rows', {
+      collection: m[1],
+      item: m[2],
+      user_ids: distinctViewerIds(viewers)
+    })
 }
 
 /** Now-editing pulse (#273): per-node record-room viewers snapshot. */
@@ -1590,27 +1617,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // and a bare `{viewers}` was applied by EVERY tab's hook — two people
     // sharing one background tab each saw the other "also viewing" the record
     // they actually had open (2026-09-14).
-    const broadcastViewers = (room: string) => {
-      // Post-mortem 3.3 — with several realtime processes, the others' viewers come from the
-      // board (a few seconds old); this process's own are current. Single process: none.
-      const viewers = [
-        ...(recordViewers.get(room)?.values() ?? []),
-        ...boardPeerViewers(room).map(({ id, name }) => ({ id, name }))
-      ]
-      const m = /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room)
-      io.to(room).emit('record:viewers', {
-        collection: m?.[1] ?? null,
-        item: m?.[2] ?? null,
-        viewers
-      })
-      // #2486 — lists watching this row (ids only; names come from /presence/people).
-      if (m)
-        io.to(rowsRoomName(room)).emit('presence:rows', {
-          collection: m[1],
-          item: m[2],
-          user_ids: distinctViewerIds(viewers)
-        })
-    }
+    const broadcastViewers = (room: string) => emitRecordViewers(io, room, false)
     /** `{collection, item}` of a record room, so a record-room event names its record and a
      *  client holding several records on one socket (#2475) can route it. */
     const recordOf = (room: string | null): { collection: string | null; item: string | null } => {
@@ -1927,6 +1934,24 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (gone && pagePresence.delete(socket.id)) broadcastPresenceMap(gone.tenant)
       app.log.debug({ socketId: socket.id }, 'Socket disconnected')
     })
+  })
+
+  // Post-mortem 3.3 — the other realtime processes' viewers changed on the board: tell this
+  // process's own sockets in those rooms the current list (a join or leave elsewhere, or two
+  // joins at the same moment, otherwise never converge). Local emit: every process tells its own.
+  onPeerBoardChange((rooms) => {
+    for (const room of rooms) {
+      const name = splitTenantRoom(room).room
+      if (name.startsWith('record:')) {
+        if ((io.sockets.adapter.rooms.get(room)?.size ?? 0) > 0) emitRecordViewers(io, room, true)
+      } else if (name.startsWith('ops:') && (io.sockets.adapter.rooms.get(room)?.size ?? 0) > 0) {
+        io.local.to(room).emit('ops:changed', {
+          topic: name.slice(4),
+          viewers: topicViewers(room),
+          at: Date.now()
+        })
+      }
+    }
   })
 
   // #1720 — another replica asked for a room re-check; run this node's share.
