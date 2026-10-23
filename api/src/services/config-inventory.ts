@@ -37,6 +37,7 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_field_groups',
   'nivaro_collection_layouts',
   'nivaro_layout_field_assignments',
+  'nivaro_layout_templates', //        saved form templates + section library (migration 458)
   'nivaro_field_rules',
   'nivaro_attribute_definitions',
   // workflow / pipeline config
@@ -366,7 +367,19 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_chat_message_history', // migration 454 — edit history of chat messages
   'nivaro_comment_versions', // migration 454 — edit history of comments
   'nivaro_idea_votes', // migration 446 — one row per voter per idea
-  'nivaro_issue_occurrences' // migration 445 — each sighting of a logged issue
+  'nivaro_issue_occurrences', // migration 445 — each sighting of a logged issue
+
+  // ── classified 2026-10-23 — this environment's schedules, usage and drills ──
+  'nivaro_layout_schedules', // migration 457 — layout changes queued against THIS instance's revs
+  'nivaro_layout_usage_daily', // migration 461 — form usage per layout per day
+  'nivaro_layout_usage_seen',
+  'nivaro_chat_huddle_schedules', // migration 495 — huddles planned here, with invitees
+  'nivaro_chat_huddle_sessions', // migration 496 — finished huddles, counts and timings
+  'nivaro_chaos_runs', // migration 497 — fault drills run on this instance
+  'nivaro_chaos_run_events',
+  // Not a migration: a deployment's one-off data-move scratch table, staged by an extension
+  // script and carried by database copies. Classified so it never reads as a new migration.
+  'nivaro_forecast_stage'
 ]
 
 /**
