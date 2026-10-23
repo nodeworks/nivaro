@@ -253,7 +253,8 @@ export async function buildServer() {
       const { startSseRemoteBridge } = await import('./services/sse-hub.js')
       startSseRemoteBridge()
       const { wireJournalFallback } = await import('./services/event-journal.js')
-      wireJournalFallback(app.io)
+      const stopFallback = wireJournalFallback(app.redis)
+      app.addHook('onClose', async () => stopFallback())
       // SOCKETS=off: what the realtime processes' sockets know (viewers, pages, socket list).
       const { socketsServed } = await import('./services/process-role.js')
       if (!socketsServed()) {

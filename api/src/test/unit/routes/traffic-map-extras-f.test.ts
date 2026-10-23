@@ -9,7 +9,8 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   })
 }))
 vi.mock('../../../plugins/socketio.js', () => ({
-  getRealtimeStats: () => ({ sockets: [], rooms: [] })
+  getRealtimeStats: () => ({ sockets: [], rooms: [] }),
+  getLocalRealtimeStats: () => ({ sockets: [], rooms: [] })
 }))
 vi.mock('../../../services/event-journal.js', () => ({ currentSeq: vi.fn(async () => 1) }))
 vi.mock('../../../services/request-trace.js', () => ({

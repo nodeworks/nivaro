@@ -183,24 +183,24 @@ describe('SSE remote bridge', () => {
 })
 
 describe('journal entries sent by the adapter path', () => {
-  it('reach the other processes as remote entries', async () => {
-    const { wireJournalFallback, JOURNAL_FALLBACK_EVENT } = await import(
-      '../../../services/event-journal.js'
-    )
+  it('reach the other processes as remote entries over the Redis fallback channel', async () => {
+    const { receiveJournalFallback } = await import('../../../services/event-journal.js')
     const { onJournalEntry } = await import('../../../services/journal-listeners.js')
-    const handlers = new Map<string, (e: unknown) => void>()
-    wireJournalFallback({
-      on: (ev: string, fn: (e: never) => void) => handlers.set(ev, fn as (e: unknown) => void)
-    })
     const got: Array<[unknown, string]> = []
     const off = onJournalEntry((e, origin) => got.push([e.room, origin]))
-    handlers.get(JOURNAL_FALLBACK_EVENT)?.({
-      seq: 3,
-      room: 'collection:projects',
-      event: 'collection:update',
-      payload: { collection: 'projects', item: 1 }
-    })
-    handlers.get(JOURNAL_FALLBACK_EVENT)?.({ nonsense: true })
+    receiveJournalFallback(
+      JSON.stringify({
+        node: 'another-process',
+        entry: {
+          seq: 3,
+          room: 'collection:projects',
+          event: 'collection:update',
+          payload: { collection: 'projects', item: 1 }
+        }
+      })
+    )
+    receiveJournalFallback(JSON.stringify({ node: 'x', entry: { nonsense: true } }))
+    receiveJournalFallback('not json')
     expect(got).toEqual([['collection:projects', 'remote']])
     off()
   })

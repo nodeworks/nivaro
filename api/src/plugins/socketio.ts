@@ -52,6 +52,7 @@ import {
   cleanSignalState,
   isPresenceTopic,
   isSelectionTopic,
+  localTopicViewerEntries,
   RECORD_SIGNAL_KINDS,
   removeSocketFromTopics,
   removeTopicViewer,
@@ -288,6 +289,15 @@ export function getRealtimeStats(): ReturnType<typeof localRealtimeStats> {
   return localRealtimeStats()
 }
 
+/**
+ * This process's own sockets, never the board — for per-node figures another process merges
+ * (Traffic Map cluster snapshots), which would otherwise count a realtime process's sockets
+ * once on it and again on every SOCKETS=off process.
+ */
+export function getLocalRealtimeStats(): ReturnType<typeof localRealtimeStats> {
+  return localRealtimeStats()
+}
+
 function localRealtimeStats(io: SocketIOServer | null = _ioRef): {
   sockets: Array<SocketMeta & { id: string; tenant: string | null; rooms: string[] }>
   rooms: Array<{ room: string; size: number }>
@@ -421,7 +431,8 @@ export function collectLocalBoard(io: SocketIOServer | null = _ioRef): LocalBoar
       users: [...users],
       viewers,
       pages,
-      rooms
+      rooms,
+      topics: localTopicViewerEntries()
     },
     stats: {
       sockets: stats.sockets as unknown as LocalBoard['stats']['sockets'],
@@ -568,12 +579,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   // REDIS_CHANNEL_PREFIX keeps them apart; unset = the historic channel names.
   io.adapter(
     createAdapter(pubClient, subClient, {
-      key: `${process.env.REDIS_CHANNEL_PREFIX ?? ''}socket.io`
+      key: `${process.env.REDIS_CHANNEL_PREFIX ?? ''}socket.io`,
+      // Answers to a fetchSockets go to the asker's own channel, not to every process.
+      publishOnSpecificResponseChannel: true
     })
   )
   // Post-mortem 3.3 — SOCKETS=off: publish only. This process decodes no broadcasts and stays
   // out of the request quorum, so a busy request thread never slows another's fetchSockets.
-  if (!socketsServed()) emitterOnlyAdapter(io.of('/').adapter, subClient)
+  if (!socketsServed())
+    void emitterOnlyAdapter(io.of('/').adapter, subClient, (msg, err) => app.log.warn({ err }, msg))
   // #1730 — byte accounting per room: every broadcast (local or relayed from another replica)
   // writes to its sockets inside adapter.apply, so the room in flight is known there.
   {

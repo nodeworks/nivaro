@@ -1,7 +1,7 @@
 // api/src/routes/traffic-map-extras/compare.ts
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
-import { getRealtimeStats } from '../../plugins/socketio.js'
+import { getLocalRealtimeStats } from '../../plugins/socketio.js'
 import { trafficClusterRelay } from '../../services/traffic-cluster.js'
 import { buildSnapshot, type TrafficSnapshot } from '../../services/traffic-map.js'
 import { diffInstances, mergeSnapshots } from '../../services/traffic-merge.js'
@@ -53,7 +53,8 @@ async function fetchJson(
 }
 
 function localSnapshot(window: number): TrafficSnapshot {
-  const stats = getRealtimeStats()
+  // Per node (merged across nodes): this process's own sockets, never the realtime board.
+  const stats = getLocalRealtimeStats()
   return buildSnapshot(window as 60 | 300 | 900, {
     sockets: stats.sockets.length,
     users: 0,

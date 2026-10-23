@@ -28,6 +28,7 @@ const bus = vi.hoisted(() => {
   const clients = new Set<any>()
   /** One key space for every client (string values only; TTLs are not modelled). */
   const kv = new Map<string, string>()
+  const zsets = new Map<string, Map<string, number>>()
   /** Anything not modelled: a chainable, awaitable no-op (resolves to null). */
   const noop: any = new Proxy(() => {}, {
     get: (_t, k) =>
@@ -82,17 +83,39 @@ const bus = vi.hoisted(() => {
       kv.set(key, value)
       return 'OK'
     }
+    async del(...keys: string[]) {
+      for (const k of keys) {
+        kv.delete(k)
+        zsets.delete(k)
+      }
+      return keys.length
+    }
     async mget(...keys: Array<string | string[]>) {
       return keys.flat().map((k) => kv.get(k) ?? null)
     }
-    async scan(_cursor: string, _m: string, pattern: string) {
-      const re = new RegExp(
-        `^${pattern
-          .split('*')
-          .map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-          .join('.*')}$`
-      )
-      return ['0', [...kv.keys()].filter((k) => re.test(k))]
+    async zadd(key: string, score: number, member: string) {
+      const z = zsets.get(key) ?? new Map<string, number>()
+      z.set(member, Number(score))
+      zsets.set(key, z)
+      return 1
+    }
+    async zrem(key: string, member: string) {
+      return zsets.get(key)?.delete(member) ? 1 : 0
+    }
+    async zrangebyscore(key: string, min: number | string, max: number | string) {
+      const lo = min === '-inf' ? -Infinity : Number(min)
+      const hi = max === '+inf' ? Infinity : Number(max)
+      return [...(zsets.get(key) ?? new Map<string, number>())]
+        .filter(([, sc]) => sc >= lo && sc <= hi)
+        .map(([m]) => m)
+    }
+    async zremrangebyscore(key: string, min: number | string, max: number | string) {
+      const gone = await this.zrangebyscore(key, min, max)
+      for (const m of gone) zsets.get(key)?.delete(m)
+      return gone.length
+    }
+    async pexpire() {
+      return 1
     }
     async publish(channel: string, msg: string | Buffer) {
       const m = Buffer.isBuffer(msg) ? msg : Buffer.from(msg)
@@ -417,6 +440,27 @@ describe('realtime tier (NIVARO_ROLE=realtime + SOCKETS=off)', () => {
         }
       ])
       expect(board.boardPeerViewers('record:projects:42').map((v) => v.id)).toEqual(['u-3'])
+      // Ops topic viewers (issue / ticket / layout pages) merge the same way.
+      const topics = await import('../../services/presence-topics.js')
+      topics.addTopicViewer('ops:issue-view:7', 'local-1', { id: 'me', name: 'Me' })
+      board.setBoardsForTests([
+        {
+          node: 'rt-b',
+          at: Date.now(),
+          sockets: 2,
+          users: ['u-3', 'me'],
+          viewers: {},
+          pages: [],
+          topics: {
+            'ops:issue-view:7': [
+              { socket: 's3', id: 'u-3', name: 'Cy' },
+              { socket: 's4', id: 'ME', name: 'Me' }
+            ]
+          }
+        }
+      ])
+      expect(topics.topicViewers('ops:issue-view:7').map((v) => v.id)).toEqual(['me', 'u-3'])
+      topics.removeTopicViewer('ops:issue-view:7', 'local-1')
     } finally {
       board.resetBoard()
     }

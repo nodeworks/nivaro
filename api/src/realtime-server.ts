@@ -1,3 +1,4 @@
+import { STATUS_CODES } from 'node:http'
 import fastifyCors from '@fastify/cors'
 import fastify, { type FastifyInstance } from 'fastify'
 import { registerSession } from './auth/session.js'
@@ -151,7 +152,8 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     const { startSseRemoteBridge } = await import('./services/sse-hub.js')
     startSseRemoteBridge()
     const { wireJournalFallback } = await import('./services/event-journal.js')
-    wireJournalFallback(app.io)
+    const stopFallback = wireJournalFallback(app.redis)
+    app.addHook('onClose', async () => stopFallback())
     app.addHook('onClose', async () => {
       await flushJournal().catch(() => {})
       await closeEventStream()
@@ -163,10 +165,43 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     const pc = await import('./services/permission-cache.js')
     if (pc.permissionCacheEnabled()) pc.setPermissionCacheRedis(app.redis)
     // What this process's sockets know, for the SOCKETS=off processes (services/realtime-board.ts).
-    const { startBoardPublisher, startBoardReader } = await import('./services/realtime-board.js')
+    // Traffic Map: the watch room's presence/resync events live with the sockets, and the
+    // cluster relay announces this process's watchers so the web processes send it their
+    // frames (and answers snapshot requests). On web both start from the map's route plugins.
+    const { attachTrafficPresence } = await import('./services/traffic-map-presence.js')
+    attachTrafficPresence(app.io)
+    if (process.env.NODE_ENV !== 'test') {
+      const { startInflightCluster } = await import('./services/inflight-cluster.js')
+      const stopInflight = startInflightCluster(app.redis)
+      app.addHook('onClose', async () => stopInflight())
+      try {
+        const { startTrafficCluster } = await import('./services/traffic-cluster.js')
+        const { localSnapshot } = await import('./routes/traffic-map-extras/cluster.js')
+        const { getIo } = await import('./services/io-holder.js')
+        const { listInstances } = await import('./services/instance-roster.js')
+        const stopCluster = await startTrafficCluster(app.redis, {
+          node: INSTANCE_ID,
+          io: () => getIo() as never,
+          snapshotOf: localSnapshot,
+          peers: {
+            list: async () => (await listInstances()).map((r) => String(r.id ?? '')).filter(Boolean)
+          }
+        })
+        app.addHook('onClose', async () => stopCluster())
+      } catch (err) {
+        app.log.warn({ err }, 'traffic-map cluster relay did not start on this realtime process')
+      }
+    }
+    const { startBoardPublisher, startBoardReader, withdrawBoard } = await import(
+      './services/realtime-board.js'
+    )
     const stopBoard = startBoardPublisher(app.redis, () => collectLocalBoard(app.io))
     // The other realtime processes' viewers, so `record:viewers` lists everyone on the record.
     const stopPeers = startBoardReader(app.redis, { peers: true })
+    // Off the board as soon as the drain starts, so nobody trusts this process's viewers.
+    app.addHook('preClose', async () => {
+      await withdrawBoard()
+    })
     app.addHook('onClose', async () => {
       stopBoard()
       stopPeers()
@@ -182,22 +217,24 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
       './db/config-epoch.js'
     )
     const { bustAllCaches } = await import('./services/cache-registry.js')
-    // A configuration change elsewhere: drop caches and rebuild the GraphQL schema the
-    // subscriptions run on (a web process rebuilds its own on the write; this one never writes).
-    let schemaTimer: ReturnType<typeof setTimeout> | null = null
-    const rebuildSchemaSoon = () => {
-      if (schemaTimer) return
-      schemaTimer = setTimeout(() => {
-        schemaTimer = null
-        void rebuildGraphQLSchema().catch((err) =>
-          app.log.warn({ err }, 'GraphQL schema rebuild after a configuration change failed')
-        )
-      }, 2_000)
-      schemaTimer.unref?.()
-    }
-    app.addHook('onClose', async () => {
-      if (schemaTimer) clearTimeout(schemaTimer)
+    // A configuration change elsewhere: drop caches, and rebuild the GraphQL schema the
+    // subscriptions run on only when what it is built from changed (collections, fields,
+    // relations, pipeline bindings) — most moves are layout autosaves, rules, settings. One check
+    // at a time; a move during a check runs one more after it.
+    const { schemaInputsFingerprint } = await import('./services/schema-builder.js')
+    const { createSchemaWatcher } = await import('./services/schema-watch.js')
+    const schemaWatch = createSchemaWatcher({
+      fingerprint: schemaInputsFingerprint,
+      rebuild: rebuildGraphQLSchema,
+      warn: (err) =>
+        app.log.warn({ err }, 'GraphQL schema check after a configuration change failed')
     })
+    const rebuildSchemaSoon = () => schemaWatch.moved()
+    // Baseline once the boot build has run.
+    app.addHook('onReady', async () => {
+      void schemaWatch.baseline()
+    })
+    app.addHook('onClose', async () => schemaWatch.stop())
     onEpoch(CONFIG_EPOCH, () => {
       bustAllCaches()
       rebuildSchemaSoon()
@@ -216,6 +253,10 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     app.addHook('onClose', async () => stopEpochWatch())
     const { startInstanceRoster } = await import('./services/instance-roster.js')
     startInstanceRoster(app.redis)
+    // Per-minute event-loop lag peaks for the stall monitor (ops-signals.ts): realtime processes
+    // are judged like every other node.
+    const { startOpsSignals } = await import('./services/ops-signals.js')
+    void startOpsSignals(app.redis ?? null).catch(() => {})
     const { startPoolAttribution } = await import('./services/pool-attribution.js')
     startPoolAttribution()
     const { startDbHealthProbe, isDbHealthy } = await import('./services/db-health.js')
@@ -231,7 +272,8 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
 
   app.addHook('preHandler', resolveWorkspace)
 
-  // 5xx → the issue log, as on web (without the request sketch: no request bodies here).
+  // 5xx → the issue log, as on web (without the request sketch: no request bodies here). The
+  // answer has web's shape: a coded 4xx keeps its machine code.
   app.setErrorHandler((err: Error & { statusCode?: number; code?: string }, req, reply) => {
     const status = err.statusCode ?? 500
     if (status >= 500)
@@ -243,7 +285,13 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
         userId: req.user?.id ?? null
       }).catch(() => {})
     req.log.error(err)
-    return reply.code(status).send({ statusCode: status, error: err.name, message: err.message })
+    const coded = !!err.code && status < 500 && /^[A-Z][A-Z0-9_]+$/.test(err.code)
+    return reply.code(status).send({
+      statusCode: status,
+      error: STATUS_CODES[status] ?? 'Error',
+      message: err.message,
+      ...(coded ? { code: err.code } : {})
+    })
   })
 
   await app.register(realtimeHealthRoutes, { prefix: '/api' })
