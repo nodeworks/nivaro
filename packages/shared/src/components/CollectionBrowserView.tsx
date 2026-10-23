@@ -5234,8 +5234,10 @@ export function CollectionBrowserView({
     retry: false
   })
   const templateId = pipelineData?.binding?.template
+  // Admins read the whole template; everyone else its outline (states + the
+  // transitions their role may run) — GET /pipelines/:id answers them 403.
   const { data: pipelineTemplate } = useQuery({
-    queryKey: ['cbv-pipeline-template', templateId],
+    queryKey: ['cbv-pipeline-template', templateId, isAdmin ? 'full' : 'outline'],
     queryFn: () =>
       client
         .request<{
@@ -5243,7 +5245,7 @@ export function CollectionBrowserView({
             transitions: Array<{ id: string; label: string }>
             states?: Array<{ id: string; key: string; label: string; color?: string | null }>
           }
-        }>(get(`/pipelines/${templateId}`))
+        }>(get(isAdmin ? `/pipelines/${templateId}` : `/pipelines/${templateId}/outline`))
         .then((r) => r.data),
     enabled: !!templateId,
     retry: false
@@ -7896,7 +7898,13 @@ export function CollectionBrowserView({
             ) : (
               <table
                 data-copy-cells=''
-                className={`w-full ${density === 'comfortable' ? '[&_tbody_td]:py-2.5 [&_tbody_tr]:h-11 [&_tbody]:text-[12.5px]' : ''}`}
+                // Separate borders, drawn per cell: a collapsed row border is
+                // painted by the table, and on fractional row heights a pinned
+                // (sticky, composited) cell covers it, so some rows lost their
+                // line in the pinned columns. Each row's border-b class still
+                // picks the colour; the cells inherit it. The last body row
+                // drops its line above the totals row so the two don't stack.
+                className={`w-full border-separate border-spacing-0 [&>thead>tr.border-b>th]:border-b [&>thead>tr.border-b>th]:[border-bottom-color:inherit] [&>tbody>tr.border-b>td]:border-b [&>tbody>tr.border-b>td]:[border-bottom-color:inherit] [&>tbody:has(+tfoot)>tr:last-child>td]:border-b-0 [&>tfoot>tr>td]:border-t-2 [&>tfoot>tr>td]:[border-top-color:inherit] ${density === 'comfortable' ? '[&_tbody_td]:py-2.5 [&_tbody_tr]:h-11 [&_tbody]:text-[12.5px]' : ''}`}
                 style={{ fontVariantNumeric: 'tabular-nums' }}
               >
                 <thead>

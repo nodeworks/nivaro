@@ -27,6 +27,9 @@ export interface MonitorRow {
     | 'ssl_cert'
     | 'traffic'
     | 'realtime'
+    | 'event_loop'
+    | 'route_spike'
+    | 'delivery_node'
   name: string
   config: string | null
   state: string | null
@@ -305,7 +308,12 @@ async function raiseIssue(
     } else {
       await db('nivaro_issues').insert({
         title: `Monitor failing: ${monitor.name}`,
-        severity: monitor.type === 'synthetic' || monitor.type === 'journey' ? 'error' : 'warning',
+        severity:
+          monitor.type === 'synthetic' ||
+          monitor.type === 'journey' ||
+          monitor.type === 'event_loop'
+            ? 'error'
+            : 'warning',
         status: 'open',
         source: 'server',
         details: detail,
@@ -460,6 +468,40 @@ async function evalSslCert(cfg: {
   }
 }
 
+/**
+ * Realtime delivery per node: the delivery SLO's histograms (probe + client acks, per replica)
+ * over a recent window, judged against the SLO targets (Settings → SLOs) unless the monitor
+ * overrides them. Config: { window_minutes?, min_samples?, target_ms?, good_pct? }.
+ */
+async function evalDeliveryByNode(cfg: Record<string, unknown>): Promise<EvalResult> {
+  if (process.env.CLOUD_META_DB_URL)
+    return {
+      status: 'unknown',
+      detail: 'Not available in cloud mode: delivery histograms are not kept per tenant'
+    }
+  const [{ deliveryByNodeRecent, judgeDeliveryByNode }, { parseSloTargets }] = await Promise.all([
+    import('./realtime-delivery-slo.js'),
+    import('./slo.js')
+  ])
+  const row = await db('nivaro_settings')
+    .first('slo_targets')
+    .catch(() => null)
+  const targets = parseSloTargets((row as { slo_targets?: unknown } | null)?.slo_targets)
+  const num = (v: unknown, d: number, lo: number, hi: number) => {
+    const n = Number(v)
+    return v != null && v !== '' && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d
+  }
+  const windowMinutes = Math.round(num(cfg.window_minutes, 15, 5, 240))
+  const judge = {
+    target_ms: num(cfg.target_ms, targets.delivery_p95_ms, 50, 60_000),
+    good_pct: num(cfg.good_pct, targets.delivery_good_pct, 1, 100),
+    min_samples: Math.round(num(cfg.min_samples, 20, 1, 100_000))
+  }
+  const rows = await deliveryByNodeRecent(windowMinutes, judge.target_ms)
+  if (rows == null) return { status: 'unknown', detail: 'Delivery figures need Redis' }
+  return judgeDeliveryByNode(rows, judge, windowMinutes)
+}
+
 export async function evaluateMonitor(
   monitor: MonitorRow,
   app: FastifyInstance | null
@@ -494,6 +536,17 @@ export async function evaluateMonitor(
           ...(r.delivery_ms != null ? { metric: r.delivery_ms } : {})
         }
       }
+    } else if (monitor.type === 'event_loop') {
+      // Post-mortem 2026-10-23 4.3a — sustained event-loop stalls on any API process.
+      const { evalEventLoop } = await import('./ops-signals.js')
+      result = await evalEventLoop(cfg)
+    } else if (monitor.type === 'route_spike') {
+      // Post-mortem 2026-10-23 4.3b — one route's request rate jumping (all processes together).
+      const { evalRouteSpike } = await import('./ops-signals.js')
+      result = await evalRouteSpike(cfg)
+    } else if (monitor.type === 'delivery_node') {
+      // Post-mortem 2026-10-23 3.2 — one node's realtime delivery under the SLO target.
+      result = await evalDeliveryByNode(cfg)
     } else {
       const r = await evalDeployRegression(cfg, state)
       result = r.result

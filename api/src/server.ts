@@ -331,6 +331,11 @@ export async function buildServer() {
     app.addHook('onClose', async () => stopEpochWatch())
     const { startInstanceRoster } = await import('./services/instance-roster.js')
     startInstanceRoster(app.redis)
+    // Post-mortem 2026-10-23 4.3: per-minute lag peaks + route rates for the event-loop and
+    // route-rate monitors, published to Redis so the cron process can judge every node.
+    const { startOpsSignals } = await import('./services/ops-signals.js')
+    // Never holds or fails boot: the monitors answer unknown without it.
+    void startOpsSignals(app.redis ?? null).catch(() => {})
     const { startPoolAttribution } = await import('./services/pool-attribution.js')
     startPoolAttribution()
   }

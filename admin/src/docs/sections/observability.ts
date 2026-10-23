@@ -1354,7 +1354,8 @@ GET|POST /api/traffic-map/debug-windows            → debug windows (DELETE /:i
 GET|POST /api/traffic-map/temp-caches              → temporary caches (DELETE /:id stops one)
 GET|PUT  /api/traffic-map/detectors                → detector settings for this environment
 GET  /api/traffic-map/ext-lenses[/:key?window=]    → extension lenses and their data
-socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per second while watched`
+socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per API process per second while watched
+socket  admin:join {room: 'traffic-map', frames: 'batch'} → one 'traffic-map:batch' per second: every process's frames, unchanged fields left out (same / ext_same); emit 'traffic-map:resync' for a full one`
     }
   ]
 }
