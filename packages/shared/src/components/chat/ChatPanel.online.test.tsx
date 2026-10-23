@@ -159,3 +159,24 @@ describe('ChatPanel Online tab — old build badge (#1048)', () => {
     }
   })
 })
+
+describe('ChatPanel Online tab — order', () => {
+  it('lists people by name, whatever order the presence rows arrive in', () => {
+    const row = (id: string, name: string) => ({ ...ZONED, user_id: id, display_name: name })
+    const user = (id: string, name: string) => ({
+      user_id: id,
+      display_name: name,
+      role_name: null
+    })
+    // The API used to answer freshest-heartbeat first, so this order changed every ~25 s.
+    const rows = [row('u3', 'zoe Zimmer'), row('u1', 'Andrew Chura'), row('u2', 'ken Arreola')]
+    const users = [user('u3', 'zoe Zimmer'), user('u1', 'Andrew Chura'), user('u2', 'ken Arreola')]
+    const html = render({ rows, users })
+    const a = html.indexOf('Andrew Chura')
+    const k = html.indexOf('ken Arreola')
+    const z = html.indexOf('zoe Zimmer')
+    expect(a).toBeGreaterThan(-1)
+    expect(a).toBeLessThan(k)
+    expect(k).toBeLessThan(z)
+  })
+})

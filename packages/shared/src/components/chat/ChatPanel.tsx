@@ -92,6 +92,7 @@ import {
   openDmWith,
   REACTION_EMOJI,
   type RoomInfo,
+  sortOnlineUsers,
   useArchivedRooms,
   useChannelAdmin,
   useChannelDirectory,
@@ -4327,7 +4328,9 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
   // restricted the same way, plus admins). Defer to it once it has answered —
   // before that, show nothing rather than briefly leaking the full list.
   const users = presenceExtras.loaded
-    ? cfg.onlineUsers.filter((u) => presenceExtras.byUser.has(String(u.user_id).toUpperCase()))
+    ? sortOnlineUsers(
+        cfg.onlineUsers.filter((u) => presenceExtras.byUser.has(String(u.user_id).toUpperCase()))
+      )
     : []
   const onlineSections = useMemo(
     () => buildOnlineSections(users, groupBy, presenceExtras.byUser),

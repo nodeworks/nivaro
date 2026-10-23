@@ -13,6 +13,7 @@ import {
   dmRoom,
   type StaleBuild,
   StaleBuildChip,
+  sortOnlineUsers,
   useChatConfig,
   useChatRooms
 } from '@nivaro/shared'
@@ -86,7 +87,7 @@ function useStaleBuilds(enabled: boolean): Map<string, StaleBuild[]> {
 
 function OnlineList({ onOpenDm }: { onOpenDm: (u: ChatOnlineUser) => void }) {
   const cfg = useChatConfig()
-  const users = cfg.onlineUsers
+  const users = sortOnlineUsers(cfg.onlineUsers)
   const { user: me } = useAuth()
   const stale = useStaleBuilds(!!me?.is_admin)
   if (users.length === 0) {

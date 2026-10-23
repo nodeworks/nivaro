@@ -745,6 +745,18 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       /* decoration only */
     }
 
+    // A stable order (name, then id). The query reads the 200 freshest rows, but last_seen
+    // moves on every heartbeat, so an answer in that order reshuffled the list each poll.
+    visibleRows.sort((a, b) => {
+      const an = String(a.display_name ?? '').trim()
+      const bn = String(b.display_name ?? '').trim()
+      if (!an !== !bn) return an ? -1 : 1
+      return (
+        an.localeCompare(bn, undefined, { sensitivity: 'base' }) ||
+        String(a.user_id ?? '').localeCompare(String(b.user_id ?? ''))
+      )
+    })
+
     return reply.send({
       data: visibleRows.map((r) => {
         const uid = String(r.user_id ?? '').toUpperCase()

@@ -5,10 +5,10 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch as patch2, post } from '../../lib/commands'
 import { isDndActive } from '../../lib/dnd'
-import { holdNotification, huddleHolds } from './huddle/huddle-hold'
 import { playNotificationSound } from '../../lib/notification-sound'
 import { announceLocalPrefs } from '../../lib/user-sync'
 import { bindChatOutbox, enqueueChatOutbox } from './chat-outbox'
+import { holdNotification, huddleHolds } from './huddle/huddle-hold'
 
 /**
  * Nivaro chat — data layer.
@@ -1420,6 +1420,25 @@ export function chatAvatarColorIndex(id: string): number {
 /** The palette colour in slot `i`, or null for a slot that does not exist. */
 export function chatAvatarColorAt(i: number): string | null {
   return Number.isInteger(i) && i >= 0 && i < AVATAR_COLORS.length ? AVATAR_COLORS[i] : null
+}
+
+/**
+ * The Online list's order: by name (case-insensitive), then id; people without a name last.
+ * Never by `last_seen` — every live tab rewrites it about every 25 s, so a list sorted on it
+ * reshuffled itself constantly.
+ */
+export function sortOnlineUsers<
+  T extends { user_id: string | number; display_name?: string | null }
+>(list: readonly T[]): T[] {
+  return [...list].sort((a, b) => {
+    const an = (a.display_name ?? '').trim()
+    const bn = (b.display_name ?? '').trim()
+    if (!an !== !bn) return an ? -1 : 1
+    return (
+      an.localeCompare(bn, undefined, { sensitivity: 'base' }) ||
+      String(a.user_id).localeCompare(String(b.user_id))
+    )
+  })
 }
 
 export function chatInitials(name: string | null): string {
