@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { Problem } from '../api'
+import type { Issue } from './spec-ops'
 
 // Per-row facts that change often (problems, structural issues, preview
 // values, locks) live in a small external store so a keystroke in one row
@@ -9,7 +10,7 @@ import type { Problem } from '../api'
 export interface RowMeta {
   lock: 'self' | 'inside' | null
   /** Client-side shape checks (empty / duplicate key …). */
-  issues: string[]
+  issues: Issue[]
   /** Server problems for this row (from the preview). */
   problems: Problem[]
   value: unknown
@@ -37,6 +38,12 @@ function sameList<T>(a: T[], b: T[]): boolean {
   return true
 }
 
+function sameIssues(a: Issue[], b: Issue[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  return a.every((x, i) => x.code === b[i].code && x.message === b[i].message)
+}
+
 function sameMeta(a: RowMeta, b: RowMeta): boolean {
   return (
     a.lock === b.lock &&
@@ -44,7 +51,7 @@ function sameMeta(a: RowMeta, b: RowMeta): boolean {
     a.collapsed === b.collapsed &&
     a.fresh === b.fresh &&
     Object.is(a.value, b.value) &&
-    sameList(a.issues, b.issues) &&
+    sameIssues(a.issues, b.issues) &&
     sameList(a.problems, b.problems)
   )
 }

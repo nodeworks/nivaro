@@ -4,6 +4,7 @@ import {
   addField,
   duplicateField,
   findField,
+  latchLocks,
   lockState,
   moveField,
   moveFieldTo,
@@ -34,6 +35,7 @@ function spec(fields: Field[]): MapSpec {
 
 let n = 0
 const ids = () => `new${++n}`
+const none = new Set<string>()
 
 const base = () =>
   spec([
@@ -96,7 +98,8 @@ describe('addField', () => {
 })
 
 describe('locked fields', () => {
-  const locked = ['efp_state', 'lines.sku']
+  const lockedKeys = ['efp_state', 'lines.sku']
+  const locked = latchLocks(base(), lockedKeys)
 
   it('removeField refuses a locked field', () => {
     const s = base()
@@ -122,7 +125,7 @@ describe('locked fields', () => {
         children: [f('only', '')]
       }
     ])
-    expect(removeField(s, 'only', []).ok).toBe(false)
+    expect(removeField(s, 'only', new Set()).ok).toBe(false)
   })
 
   it('removeField removes an unlocked field', () => {
@@ -155,12 +158,48 @@ describe('locked fields', () => {
 
   it('a field flagged locked in the spec is locked too', () => {
     const s = spec([f('x', 'id', { locked: true })])
-    expect(removeField(s, 'x', []).ok).toBe(false)
-    expect(lockState(s, []).get('x')?.self).toBe(true)
+    const ids = latchLocks(s, [])
+    expect(removeField(s, 'x', ids).ok).toBe(false)
+    expect(lockState(s, ids).get('x')?.self).toBe(true)
+  })
+
+  it('typing through a locked name never locks the row', () => {
+    // po_number is renamed letter by letter through "efp_state" and on to "efp_state_2".
+    let s = base()
+    const ids = latchLocks(s, lockedKeys)
+    for (const k of ['e', 'efp', 'efp_state', 'efp_state_', 'efp_state_2']) {
+      const r = renameKey(s, 'b', k, ids)
+      expect(r.ok).toBe(true)
+      s = r.spec
+    }
+    expect(s.fields[1].key).toBe('efp_state_2')
+    // and while it held the locked name it stayed removable, the original stayed locked
+    const mid = renameKey(base(), 'b', 'efp_state', ids).spec
+    expect(removeField(mid, 'b', ids).ok).toBe(true)
+    expect(removeField(mid, 'a', ids).ok).toBe(false)
+  })
+
+  it('a duplicate of a locked key can be removed', () => {
+    const s = duplicateField(base(), 'a', ids).spec
+    const latched = latchLocks(s, lockedKeys)
+    const copy = s.fields[1]
+    // the copy is renamed back onto the locked name — still just a duplicate
+    const dup = renameKey(s, copy.id, 'efp_state', latched).spec
+    expect(removeField(dup, copy.id, latched).ok).toBe(true)
+    expect(renameKey(dup, copy.id, 'other', latched).ok).toBe(true)
+    expect(removeField(dup, 'a', latched).ok).toBe(false)
+  })
+
+  it('latches one row per locked path; a reload keeps the row it had', () => {
+    const s = spec([f('x', 'efp_state'), f('y', 'efp_state')])
+    expect([...latchLocks(s, ['efp_state'])]).toEqual(['x'])
+    // the second row was the latched one before the reload
+    expect([...latchLocks(s, ['efp_state'], new Set(['y']))]).toEqual(['y'])
   })
 
   it('lockState marks locked rows and the groups that hold them', () => {
     const st = lockState(base(), locked)
+    expect(locked.size).toBe(2)
     expect(st.get('a')).toEqual({ self: true, inside: false })
     expect(st.get('c2')).toEqual({ self: true, inside: false })
     expect(st.get('g')).toEqual({ self: false, inside: true })
@@ -200,7 +239,7 @@ describe('moveField', () => {
 
 describe('other ops', () => {
   it('setType to a list starts a list spec and drops the value', () => {
-    const r = setType(base(), 'b', 'list', [])
+    const r = setType(base(), 'b', 'list', none)
     const x = findField(r.spec, 'b')?.field
     expect(x?.type).toBe('list')
     expect(x?.value).toBeUndefined()
@@ -209,7 +248,7 @@ describe('other ops', () => {
   })
 
   it('setType from a group to text drops children and starts a value', () => {
-    const r = setType(base(), 'g', 'text', [])
+    const r = setType(base(), 'g', 'text', none)
     const x = findField(r.spec, 'g')?.field
     expect(x?.children).toBeUndefined()
     expect(x?.list).toBeUndefined()
@@ -276,7 +315,8 @@ describe('renameListAlias', () => {
         ]
       }
     ])
-    const r = renameListAlias(s, 'g', 'line', 'row')
+    const { spec: r, rewrote } = renameListAlias(s, 'g', 'line', 'row')
+    expect(rewrote).toBe(true)
     const g = findField(r, 'g')?.field
     expect(g?.list?.item).toBe('row')
     expect(g?.list?.where?.[0].field).toBe('row.qty')
@@ -300,7 +340,93 @@ describe('renameListAlias', () => {
   it('only sets the alias when the old or new name is empty', () => {
     const s = base()
     const r = renameListAlias(s, 'g', 'line', '')
-    expect(findField(r, 'g')?.field.list?.item).toBe('')
+    expect(r.rewrote).toBe(false)
+    expect(findField(r.spec, 'g')?.field.list?.item).toBe('')
+  })
+})
+
+describe('renameListAlias safety', () => {
+  const nested = () =>
+    spec([
+      {
+        id: 'outer',
+        key: 'orders',
+        type: 'list',
+        include: 'always',
+        list: { source: 'context.orders', item: 'order' },
+        children: [
+          {
+            id: 'g',
+            key: 'lines',
+            type: 'list',
+            include: 'always',
+            list: { source: 'order.lines', item: 'line' },
+            children: [
+              f('a', 'qty', { value: { source: 'path', path: 'line.qty' } }),
+              f('r', 'rec', { value: { source: 'path', path: 'record.id' } }),
+              {
+                id: 'inner',
+                key: 'parts',
+                type: 'list',
+                include: 'always',
+                list: {
+                  source: 'line.parts',
+                  item: 'part',
+                  sort: '-line.rank',
+                  where: [{ field: 'line.ok', op: 'eq', value: 1 }]
+                },
+                children: [f('p', 'pn', { value: { source: 'path', path: 'line.code' } })]
+              },
+              {
+                id: 'shadow',
+                key: 'subs',
+                type: 'list',
+                include: 'always',
+                list: { source: 'line.subs', item: 'line', sort: 'line.n' },
+                children: [f('s', 'sn', { value: { source: 'path', path: 'line.name' } })]
+              }
+            ]
+          }
+        ]
+      }
+    ])
+
+  it('a reserved or outer name only sets the name and rewrites nothing', () => {
+    for (const bad of ['record', 'context', 'state', 'list', 'order', 'part']) {
+      const r = renameListAlias(nested(), 'g', 'line', bad)
+      expect(r.rewrote).toBe(false)
+      const g = findField(r.spec, 'g')?.field
+      expect(g?.list?.item).toBe(bad)
+      expect(findField(r.spec, 'a')?.field.value).toEqual({ source: 'path', path: 'line.qty' })
+      expect(findField(r.spec, 'r')?.field.value).toEqual({ source: 'path', path: 'record.id' })
+    }
+  })
+
+  it('typing "rec" → "record" → "records" rewrites from the last safe name only', () => {
+    let s = nested()
+    let last = 'line'
+    for (const typed of ['rec', 'record', 'records']) {
+      const r = renameListAlias(s, 'g', last, typed)
+      if (r.rewrote) last = typed
+      s = r.spec
+    }
+    expect(last).toBe('records')
+    expect(findField(s, 'a')?.field.value).toEqual({ source: 'path', path: 'records.qty' })
+    // record.id was never captured by the alias
+    expect(findField(s, 'r')?.field.value).toEqual({ source: 'path', path: 'record.id' })
+  })
+
+  it("rewrites a nested list's source, filter and sort, but not inside a list that reuses the name", () => {
+    const { spec: s } = renameListAlias(nested(), 'g', 'line', 'row')
+    const inner = findField(s, 'inner')?.field
+    expect(inner?.list?.source).toBe('row.parts')
+    expect(inner?.list?.sort).toBe('-row.rank')
+    expect(inner?.list?.where?.[0].field).toBe('row.ok')
+    expect(findField(s, 'p')?.field.value).toEqual({ source: 'path', path: 'row.code' })
+    const shadow = findField(s, 'shadow')?.field
+    expect(shadow?.list?.source).toBe('row.subs') // read in our scope
+    expect(shadow?.list?.sort).toBe('line.n') // its own rows
+    expect(findField(s, 's')?.field.value).toEqual({ source: 'path', path: 'line.name' })
   })
 })
 
@@ -320,11 +446,11 @@ describe('structuralIssues', () => {
       }
     ])
     const issues = structuralIssues(s)
-    expect(issues.get('a')?.[0]).toMatch(/already called/)
-    expect(issues.get('b')?.[0]).toMatch(/already called/)
-    expect(issues.get('c')?.[0]).toMatch(/key/)
+    expect(issues.get('a')?.[0].code).toBe('duplicate_key')
+    expect(issues.get('b')?.[0].message).toMatch(/already called/)
+    expect(issues.get('c')?.[0].code).toBe('empty_key')
     expect(issues.get('d')).toBeUndefined()
-    expect(issues.get('g')?.join(' ')).toMatch(/comes from/)
+    expect(issues.get('g')?.map((i) => i.code)).toContain('list_no_source')
   })
 
   it('ignores the key of a plain-values list child', () => {
@@ -352,22 +478,22 @@ describe('structuralIssues', () => {
         children: []
       }
     ])
-    expect(structuralIssues(s).get('g')?.[0]).toMatch(/already a name/)
+    expect(structuralIssues(s).get('g')?.[0].code).toBe('alias_reserved')
   })
 
   it('flags stray spaces and a bad pattern', () => {
     const s = spec([f('a', ' id'), f('b', 'code', { rules: { pattern: '([a-z' } })])
     const issues = structuralIssues(s)
-    expect(issues.get('a')?.[0]).toMatch(/space/)
-    expect(issues.get('b')?.[0]).toMatch(/pattern/)
+    expect(issues.get('a')?.[0].code).toBe('key_spaces')
+    expect(issues.get('b')?.[0].code).toBe('bad_pattern')
   })
 })
 
 describe('undo / redo', () => {
   it('undo/redo restore previous specs', () => {
     const s0 = base()
-    const s1 = renameKey(s0, 'b', 'po', []).spec
-    const s2 = removeField(s1, 'd', []).spec
+    const s1 = renameKey(s0, 'b', 'po', none).spec
+    const s2 = removeField(s1, 'd', none).spec
     let h = emptyHistory()
     h = recordHistory(h, s0)
     h = recordHistory(h, s1)
@@ -385,7 +511,7 @@ describe('undo / redo', () => {
 
   it('a new change after undo drops the redo stack', () => {
     const s0 = base()
-    const s1 = renameKey(s0, 'b', 'po', []).spec
+    const s1 = renameKey(s0, 'b', 'po', none).spec
     let h = recordHistory(emptyHistory(), s0)
     const u = undoHistory(h, s1)!
     h = recordHistory(u.history, u.spec)
@@ -394,8 +520,8 @@ describe('undo / redo', () => {
 
   it('coalesces a burst of edits to the same input into one step', () => {
     const s0 = base()
-    const s1 = renameKey(s0, 'b', 'p', []).spec
-    const s2 = renameKey(s1, 'b', 'po', []).spec
+    const s1 = renameKey(s0, 'b', 'p', none).spec
+    const s2 = renameKey(s1, 'b', 'po', none).spec
     let h = recordHistory(emptyHistory(), s0, 'key:b', 1000)
     h = recordHistory(h, s1, 'key:b', 1400)
     expect(h.past).toHaveLength(1)

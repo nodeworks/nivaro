@@ -111,29 +111,69 @@ export interface LockInfo {
   inside: boolean
 }
 
-/** Every row that is locked or holds a locked row. Rows absent from the map are free. */
-export function lockState(spec: MapSpec, lockedKeys: string[]): Map<string, LockInfo> {
-  const keys = new Set(lockedKeys.map(normPath))
-  const out = new Map<string, LockInfo>()
-  const walk = (fields: Field[], prefix: string): boolean => {
-    let any = false
+/**
+ * Latch each locked output path onto ONE row, by identity: the row flagged
+ * `locked: true`, else (per path) the row already latched in `prev` if it
+ * still sits on that path, else the first row on it in display order.
+ *
+ * Locks follow the row, never the name: a row that is only now typed into a
+ * locked name is not locked, and a duplicate of a locked key stays free to be
+ * renamed or removed.
+ */
+export function latchLocks(
+  spec: MapSpec,
+  lockedKeys: string[],
+  prev?: ReadonlySet<string>
+): Set<string> {
+  const paths = new Set(lockedKeys.map(normPath).filter(Boolean))
+  const out = new Set<string>()
+  const onPath = new Map<string, string[]>()
+  const walk = (fields: Field[], prefix: string) => {
     for (const f of fields) {
       const path = prefix ? `${prefix}.${f.key}` : f.key
-      const self = !!f.locked || keys.has(path)
-      const inside = f.children?.length ? walk(f.children, path) : false
+      if (f.locked) out.add(f.id)
+      if (paths.has(path)) {
+        const list = onPath.get(path)
+        if (list) list.push(f.id)
+        else onPath.set(path, [f.id])
+      }
+      if (f.children?.length) walk(f.children, path)
+    }
+  }
+  walk(spec.fields ?? [], '')
+  for (const ids of onPath.values()) {
+    if (ids.some((id) => out.has(id))) continue
+    out.add(ids.find((id) => prev?.has(id)) ?? ids[0])
+  }
+  return out
+}
+
+/** Rows that are locked (`self`) or hold a locked row (`inside`), from latched ids. */
+export function lockState(spec: MapSpec, locked: ReadonlySet<string>): Map<string, LockInfo> {
+  const out = new Map<string, LockInfo>()
+  const walk = (fields: Field[]): boolean => {
+    let any = false
+    for (const f of fields) {
+      const self = locked.has(f.id)
+      const inside = f.children?.length ? walk(f.children) : false
       if (self || inside) out.set(f.id, { self, inside })
       any = any || self || inside
     }
     return any
   }
-  walk(spec.fields ?? [], '')
+  walk(spec.fields ?? [])
   return out
 }
 
-function lockReason(spec: MapSpec, id: string, lockedKeys: string[], verb: string): string | null {
+function lockReason(
+  spec: MapSpec,
+  id: string,
+  locked: ReadonlySet<string>,
+  verb: string
+): string | null {
   const at = findField(spec, id)
   if (!at) return null
-  const info = lockState(spec, lockedKeys).get(id)
+  const info = lockState(spec, locked).get(id)
   if (!info) return null
   if (info.self) return `“${at.path}” is read back by Nivaro — it can't be ${verb}.`
   return `“${at.path}” holds a field Nivaro reads back — it can't be ${verb}.`
@@ -195,19 +235,24 @@ export function inScalarList(spec: MapSpec, id: string): boolean {
 export const SCALAR_ONE_FIELD =
   'A plain-values list has exactly one field. Turn off “Plain values” in the list settings first.'
 
-export function removeField(spec: MapSpec, id: string, lockedKeys: string[]): OpResult {
-  const reason = lockReason(spec, id, lockedKeys, 'removed')
+export function removeField(spec: MapSpec, id: string, locked: ReadonlySet<string>): OpResult {
+  const reason = lockReason(spec, id, locked, 'removed')
   if (reason) return { ok: false, spec, reason }
   if (inScalarList(spec, id)) return { ok: false, spec, reason: SCALAR_ONE_FIELD }
   const next = mapSiblings(spec, id, (siblings, i) => siblings.filter((_, j) => j !== i))
   return next ? { ok: true, spec: next } : { ok: false, spec, reason: 'That field is gone.' }
 }
 
-export function renameKey(spec: MapSpec, id: string, key: string, lockedKeys: string[]): OpResult {
+export function renameKey(
+  spec: MapSpec,
+  id: string,
+  key: string,
+  locked: ReadonlySet<string>
+): OpResult {
   const at = findField(spec, id)
   if (!at) return { ok: false, spec, reason: 'That field is gone.' }
   if (at.field.key === key) return { ok: true, spec }
-  const reason = lockReason(spec, id, lockedKeys, 'renamed')
+  const reason = lockReason(spec, id, locked, 'renamed')
   if (reason) return { ok: false, spec, reason }
   return { ok: true, spec: mapField(spec, id, (f) => ({ ...f, key })) }
 }
@@ -217,12 +262,12 @@ export function setType(
   spec: MapSpec,
   id: string,
   type: FieldType,
-  lockedKeys: string[]
+  locked: ReadonlySet<string>
 ): OpResult {
   const at = findField(spec, id)
   if (!at) return { ok: false, spec, reason: 'That field is gone.' }
   if (at.field.type === type) return { ok: true, spec }
-  const reason = lockReason(spec, id, lockedKeys, 'retyped')
+  const reason = lockReason(spec, id, locked, 'retyped')
   if (reason) return { ok: false, spec, reason }
   const next = mapField(spec, id, (f) => {
     const { value, children, list, ...rest } = f
@@ -321,36 +366,84 @@ function rewriteValue(v: ValueSpec | undefined, from: string, to: string): Value
   return out
 }
 
+function rewriteSort(sort: string, from: string, to: string): string {
+  const desc = sort.startsWith('-')
+  const out = rewritePath(desc ? sort.slice(1) : sort, from, to)
+  return desc ? `-${out}` : out
+}
+
 function rewriteField(f: Field, from: string, to: string): Field {
   const out: Field = { ...f }
   if (f.value) out.value = rewriteValue(f.value, from, to)
   if (f.include && typeof f.include === 'object')
     out.include = { when: rewriteRules(f.include.when, from, to) ?? [] }
   if (f.list) {
+    // The source is read in the outer scope; filter, sort and children in the inner one.
     out.list = { ...f.list, source: rewritePath(f.list.source, from, to) }
+    // A nested list that names its rows `from` shadows ours: inside it, `from` is its own row.
+    if ((f.list.item || 'line') === from) return out
     if (f.list.where) out.list.where = rewriteRules(f.list.where, from, to)
+    if (f.list.sort) out.list.sort = rewriteSort(f.list.sort, from, to)
   }
   if (f.children) out.children = f.children.map((c) => rewriteField(c, from, to))
   return out
 }
 
+/** Names a list's rows can't take: scope roots, and the row names of the lists around and inside it. */
+export function aliasConflict(spec: MapSpec, id: string, name: string): string | null {
+  const n = name.trim()
+  if (!n) return null
+  if (RESERVED_ALIASES.has(n)) return `“${n}” is already a name in the payload`
+  const outer: string[] = []
+  const walk = (fields: Field[], aliases: string[]): boolean => {
+    for (const f of fields) {
+      if (f.id === id) {
+        outer.push(...aliases)
+        const inner: string[] = []
+        const down = (fs: Field[]) => {
+          for (const c of fs) {
+            if (c.type === 'list') inner.push(c.list?.item || 'line')
+            if (c.children?.length) down(c.children)
+          }
+        }
+        down(f.children ?? [])
+        outer.push(...inner)
+        return true
+      }
+      const next = f.type === 'list' ? [...aliases, f.list?.item || 'line'] : aliases
+      if (f.children?.length && walk(f.children, next)) return true
+    }
+    return false
+  }
+  walk(spec.fields ?? [], [])
+  return outer.includes(n) ? `“${n}” already names the rows of another list here` : null
+}
+
 /**
  * Rename a list's item alias and every path inside the list that reads it
  * (`line.qty` → `row.qty`): values, fallbacks, If/then rules, include rules,
- * nested list sources, the list's own filter and sort, and Liquid formulas.
+ * nested list sources/filters/sorts (not inside a nested list that reuses the
+ * name), the list's own filter and sort, and Liquid formulas.
+ *
+ * A name that would capture other paths (`record`, `context`, another list's
+ * row name — see aliasConflict) only sets `item`; nothing is rewritten and
+ * `rewrote` is false, so the caller keeps rewriting from the last safe name.
  */
-export function renameListAlias(spec: MapSpec, id: string, from: string, to: string): MapSpec {
-  return mapField(spec, id, (f) => {
+export function renameListAlias(
+  spec: MapSpec,
+  id: string,
+  from: string,
+  to: string
+): { spec: MapSpec; rewrote: boolean } {
+  const unsafe = !from || !to || from === to || !!aliasConflict(spec, id, to)
+  const next = mapField(spec, id, (f) => {
     const list: ListSpec = { ...(f.list ?? { source: '', item: from }), item: to }
-    if (!from || !to || from === to) return { ...f, list }
+    if (unsafe) return { ...f, list }
     if (list.where) list.where = rewriteRules(list.where, from, to)
-    if (list.sort) {
-      const desc = list.sort.startsWith('-')
-      const s = rewritePath(desc ? list.sort.slice(1) : list.sort, from, to)
-      list.sort = desc ? `-${s}` : s
-    }
+    if (list.sort) list.sort = rewriteSort(list.sort, from, to)
     return { ...f, list, children: f.children?.map((c) => rewriteField(c, from, to)) }
   })
+  return { spec: next, rewrote: !unsafe }
 }
 
 /** Move a row one place up (-1) or down (+1) inside its own group. */
@@ -418,39 +511,69 @@ export function duplicateField(
 
 // ─── Structural checks (client-side shape only — never evaluation) ───────────
 
-/** Messages per row id: empty key, duplicate sibling key, stray spaces, list without source, bad pattern. */
-export function structuralIssues(spec: MapSpec): Map<string, string[]> {
-  const out = new Map<string, string[]>()
-  const add = (id: string, msg: string) => {
+export type IssueCode =
+  | 'empty_key'
+  | 'duplicate_key'
+  | 'key_spaces'
+  | 'list_no_source'
+  | 'alias_reserved'
+  | 'bad_pattern'
+
+export interface Issue {
+  code: IssueCode
+  message: string
+}
+
+/** Codes that are about the key itself (the key input turns red). */
+export const KEY_ISSUES: ReadonlySet<IssueCode> = new Set([
+  'empty_key',
+  'duplicate_key',
+  'key_spaces'
+])
+
+/** Shape problems per row id: empty / duplicate key, stray spaces, list without source, bad pattern. */
+export function structuralIssues(spec: MapSpec): Map<string, Issue[]> {
+  const out = new Map<string, Issue[]>()
+  const add = (id: string, code: IssueCode, message: string) => {
     const list = out.get(id)
-    if (list) list.push(msg)
-    else out.set(id, [msg])
+    if (list) list.push({ code, message })
+    else out.set(id, [{ code, message }])
   }
   const walk = (fields: Field[], scalarParent: boolean) => {
     const seen = new Map<string, number>()
     if (!scalarParent) for (const f of fields) seen.set(f.key, (seen.get(f.key) ?? 0) + 1)
     for (const f of fields) {
       if (!scalarParent) {
-        if (!f.key.trim()) add(f.id, 'Give this field a key — the partner reads it by name.')
+        if (!f.key.trim())
+          add(f.id, 'empty_key', 'Give this field a key — the partner reads it by name.')
         else {
           if ((seen.get(f.key) ?? 0) > 1)
-            add(f.id, `Another field here is already called “${f.key}”. Keys must be unique.`)
+            add(
+              f.id,
+              'duplicate_key',
+              `Another field here is already called “${f.key}”. Keys must be unique.`
+            )
           if (f.key !== f.key.trim())
-            add(f.id, 'This key has a space at the start or end — the partner will not match it.')
+            add(
+              f.id,
+              'key_spaces',
+              'This key has a space at the start or end — the partner will not match it.'
+            )
         }
       }
       if (f.type === 'list' && !f.list?.source?.trim())
-        add(f.id, 'Choose what this list comes from.')
+        add(f.id, 'list_no_source', 'Choose what this list comes from.')
       if (f.type === 'list' && f.list?.item && RESERVED_ALIASES.has(f.list.item.trim()))
         add(
           f.id,
+          'alias_reserved',
           `“${f.list.item}” is already a name in the payload — call each row something else.`
         )
       if (f.rules?.pattern) {
         try {
           new RegExp(f.rules.pattern)
         } catch {
-          add(f.id, 'The pattern rule is not a valid pattern.')
+          add(f.id, 'bad_pattern', 'The pattern rule is not a valid pattern.')
         }
       }
       if (f.children?.length) walk(f.children, f.type === 'list' && !!f.list?.scalar)

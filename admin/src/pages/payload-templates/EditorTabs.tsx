@@ -19,6 +19,8 @@ export interface EditorTabsProps {
   secretNames: string[]
   /** The draft preview is still loading (rows show a skeleton for their value). */
   valuesPending?: boolean
+  /** The API's Body secrets card (`/external-apis/<id>#body-secrets`) — links from the field map. */
+  secretsHref?: string | null
 }
 
 const TABS: { id: EditorTab; label: string }[] = [
@@ -41,7 +43,8 @@ export function EditorTabs({
   values,
   problems,
   secretNames,
-  valuesPending
+  valuesPending,
+  secretsHref
 }: EditorTabsProps) {
   const isCode = draft.mode === 'code'
   const active: EditorTab = isCode && tab === 'map' ? 'code' : tab
@@ -85,7 +88,7 @@ export function EditorTabs({
                 role='tab'
                 id={`payload-tab-${t.id}`}
                 aria-selected={active === t.id}
-                aria-controls={active === t.id ? 'payload-tabpanel' : undefined}
+                aria-controls='payload-tabpanel'
                 tabIndex={active === t.id ? 0 : -1}
                 disabled={off}
                 onClick={() => onTabChange(t.id)}
@@ -122,6 +125,8 @@ export function EditorTabs({
             lookups={template.lookups}
             partner={template.external_api}
             valuesPending={valuesPending}
+            contextKeys={template.context_keys}
+            secretsHref={secretsHref}
           />
         ) : active === 'code' ? (
           <CodeTab template={template} draft={draft} onChange={onDraftChange} problems={problems} />

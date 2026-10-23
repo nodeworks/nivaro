@@ -28,7 +28,7 @@ function ListSettings({
   outerScope: ItemScope | null
   itemCollection?: string
   onPatch: (patch: Partial<ListSpec>) => void
-  onRenameAlias: (from: string, to: string) => void
+  onRenameAlias: (from: string, to: string) => boolean
 }) {
   // The last non-empty row name: typing "line" → "" → "row" rewrites paths line → row.
   const lastAlias = useRef(list.item || 'line')
@@ -71,8 +71,9 @@ function ListSettings({
               const to = v.replace(/\s+/g, '')
               lastSet.current = to
               if (to) {
-                onRenameAlias(lastAlias.current, to)
-                lastAlias.current = to
+                // An unsafe name (record, another list's rows…) only sets the name; paths keep
+                // the last safe one until the next safe keystroke rewrites them from it.
+                if (onRenameAlias(lastAlias.current, to)) lastAlias.current = to
               } else onPatch({ item: '' })
             }}
             placeholder='line'
@@ -185,7 +186,7 @@ function GroupHeaderImpl({
   itemCollection?: string
   collapsed: boolean
   onPatchList: (id: string, patch: Partial<ListSpec>) => void
-  onRenameAlias: (id: string, from: string, to: string) => void
+  onRenameAlias: (id: string, from: string, to: string) => boolean
 }) {
   // A list without a source can't be saved: open its settings the moment it appears.
   const [open, setOpen] = useState(() => field.type === 'list' && !field.list?.source)

@@ -11,7 +11,7 @@ import {
   Type,
   X
 } from 'lucide-react'
-import { memo, type ReactNode, useState } from 'react'
+import { memo, type ReactNode, useId, useState } from 'react'
 import { Link } from 'react-router'
 import { Popover, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
@@ -120,18 +120,18 @@ function FixedPanel({
         </FmField>
       ) : (
         <FmField label='Value'>
-          <TextField
-            mono
-            autoFocus
-            value={cur == null ? '' : String(cur)}
-            disabled={isNull}
-            onChange={(t) => {
-              if (type === 'number' && t.trim() !== '' && Number.isFinite(Number(t)))
-                commit(Number(t))
-              else commit(t)
-            }}
-            placeholder={type === 'date' ? 'YYYY-MM-DD' : type === 'number' ? '0' : 'Text to send'}
-          />
+          {type === 'number' ? (
+            <FixedNumberInput value={cur} disabled={isNull} onCommit={commit} />
+          ) : (
+            <TextField
+              mono
+              autoFocus
+              value={cur == null ? '' : String(cur)}
+              disabled={isNull}
+              onChange={commit}
+              placeholder={type === 'date' ? 'YYYY-MM-DD' : 'Text to send'}
+            />
+          )}
           {type === 'number' && typeof cur === 'string' && cur.trim() !== '' && (
             <Hint className='mt-1 text-amber-700 dark:text-amber-300'>
               That is not a number — the preview will flag it.
@@ -149,6 +149,48 @@ function FixedPanel({
         Send <span className='font-mono'>null</span>
       </label>
     </div>
+  )
+}
+
+/**
+ * A fixed number typed naturally: the box keeps exactly what was typed ("1.",
+ * "0.250", "-") while the value it commits is the number it reads as. Text that
+ * is not a number is committed as text, so the preview flags it.
+ */
+function FixedNumberInput({
+  value,
+  disabled,
+  onCommit
+}: {
+  value: string | number | boolean | null | undefined
+  disabled: boolean
+  onCommit: (v: string | number) => void
+}) {
+  const shown = value == null ? '' : String(value)
+  const [text, setText] = useState(shown)
+  const [seen, setSeen] = useState(value)
+  if (value !== seen) {
+    setSeen(value)
+    // Our own echo (1.50 → 1.5) keeps the typed text; an undo or another control replaces it.
+    const t = text.trim()
+    const ours =
+      typeof value === 'number' ? t !== '' && Number(t) === value : String(value ?? '') === text
+    if (!ours) setText(shown)
+  }
+  return (
+    <TextField
+      mono
+      autoFocus
+      inputMode='decimal'
+      value={text}
+      disabled={disabled}
+      onChange={(t) => {
+        setText(t)
+        const n = t.trim()
+        onCommit(n !== '' && Number.isFinite(Number(n)) ? Number(n) : t)
+      }}
+      placeholder='0'
+    />
   )
 }
 
@@ -329,12 +371,15 @@ function SwitchPanel({
         className={cn(smallAction, '-ml-2')}
         onClick={() => {
           setFresh(cases.length)
+          // Turning a plain value into If/then keeps it as "Otherwise" — nothing is lost.
+          const keep =
+            !cur && value && !valueIsBlank(value) ? withMeta(value, undefined) : cur?.else
           commit({
             cases: [
               ...cases,
               { when: [{ field: '', op: 'eq', value: '' }], value: { source: 'fixed', value: '' } }
             ],
-            else: cur?.else
+            else: keep
           })
         }}
       >
@@ -404,6 +449,7 @@ export function ValueEditor({
   onChange: (v: ValueSpec | undefined) => void
 }) {
   const [tab, setTab] = useState<Tab>(() => tabOf(value))
+  const uid = useId()
   const [freshFallback, setFreshFallback] = useState<number | null>(null)
   const fallbacks = value?.fallbacks ?? []
   const setFallbacks = (next: ValueSpec[]) => {
@@ -468,6 +514,8 @@ export function ValueEditor({
                 key={t.id}
                 type='button'
                 role='tab'
+                id={`${uid}-tab-${t.id}`}
+                aria-controls={`${uid}-panel`}
                 data-vtab={t.id}
                 aria-selected={tab === t.id}
                 tabIndex={tab === t.id ? 0 : -1}
@@ -493,7 +541,12 @@ export function ValueEditor({
             )
           })}
         </div>
-        <div className='min-w-0 flex-1 overflow-y-auto p-3' role='tabpanel'>
+        <div
+          className='min-w-0 flex-1 overflow-y-auto p-3'
+          role='tabpanel'
+          id={`${uid}-panel`}
+          aria-labelledby={`${uid}-tab-${tab}`}
+        >
           {panel[tab]}
           {tab !== active && value && !valueIsBlank(value) && (
             <Hint className='mt-3'>

@@ -5,8 +5,11 @@ import type { MapSpec } from '../api'
 // The shell owns the draft (and autosaves it); this only remembers earlier
 // specs and hands one back through the same onChange. History is kept per
 // template key in a module map, so switching to the Code tab and back keeps
-// it. A spec that arrives from outside (Code tab edit, conflict reload) is
-// recorded as a step too, so it can be undone like any other change.
+// it. A spec that arrives from outside:
+//  - found on mount (edited in the Code tab meanwhile) → an undoable step;
+//  - while the map is open (conflict Reload, someone else's publish, Restore
+//    as draft, Reset to default) → history starts over, so an undo can never
+//    put back what the person chose to replace.
 
 const LIMIT = 200
 /** Edits to the same input closer together than this are one undo step (typing a key). */
@@ -83,6 +86,8 @@ export interface SpecHistoryApi {
   redo: () => boolean
   canUndo: boolean
   canRedo: boolean
+  /** This spec object is the one the map last saw or produced (not a change from outside). */
+  isKnown: (spec: MapSpec) => boolean
 }
 
 export function useSpecHistory(
@@ -105,13 +110,15 @@ export function useSpecHistory(
     setFlags((f) => (f.undo === next.undo && f.redo === next.redo ? f : next))
   }, [])
 
-  // A spec from outside (another tab, a reload) becomes a step of its own.
+  const mounted = useRef(false)
   useLayoutEffect(() => {
     const s = storeRef.current?.store
     if (!s) return
-    // Same content in a new object (the shell re-read the draft) is not a step.
-    if (s.seen && s.seen !== spec && JSON.stringify(s.seen) !== JSON.stringify(spec))
-      s.history = recordHistory(s.history, s.seen)
+    // Same content in a new object (the shell re-read the draft) is not a change.
+    if (s.seen && s.seen !== spec && JSON.stringify(s.seen) !== JSON.stringify(spec)) {
+      s.history = mounted.current ? emptyHistory() : recordHistory(s.history, s.seen)
+    }
+    mounted.current = true
     s.seen = spec
     latest.current = spec
     sync()
@@ -158,10 +165,11 @@ export function useSpecHistory(
   }, [emit])
 
   const current = useCallback(() => latest.current, [])
+  const isKnown = useCallback((sp: MapSpec) => storeRef.current?.store.seen === sp, [])
 
   // `flags` only re-renders; the store is the truth (it outlives a remount).
   void flags
   const canUndo = !!store.history.past.length
   const canRedo = !!store.history.future.length
-  return { apply, current, undo, redo, canUndo, canRedo }
+  return { apply, current, undo, redo, canUndo, canRedo, isKnown }
 }

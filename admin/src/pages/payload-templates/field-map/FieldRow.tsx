@@ -20,7 +20,7 @@ import { IncludeControl } from './IncludeControl'
 import { showValue, TYPE_HINTS, TYPE_LABELS } from './labels'
 import { RulesPopover } from './RulesPopover'
 import type { RowMeta } from './row-store'
-import type { AddFieldArgs, FieldType } from './spec-ops'
+import { type AddFieldArgs, type FieldType, KEY_ISSUES } from './spec-ops'
 import { FmPopoverContent, type ItemScope, OptionMenu, quietButton, useFieldMapEnv } from './ui'
 import { ValueChip } from './ValuePopover'
 
@@ -36,7 +36,8 @@ export interface RowActions {
   setRules: (id: string, r: Field['rules']) => void
   setNote: (id: string, note: string | undefined) => void
   patchList: (id: string, patch: Partial<ListSpec>) => void
-  renameAlias: (id: string, from: string, to: string) => void
+  /** Renames a list's rows; false = `to` is unsafe, only `item` changed (rewrite later from `from`). */
+  renameAlias: (id: string, from: string, to: string) => boolean
   /** Adds a row and focuses its key. Returns the new id. */
   add: (args: AddFieldArgs) => string
   remove: (id: string) => void
@@ -283,10 +284,9 @@ export function FieldRow({
   const locked = meta.lock != null
   const lockTip = `Nivaro reads this back to confirm ${env.partner} got it. It can't be renamed or removed.`
   const insideTip = `A field in here is read back by Nivaro to confirm ${env.partner} got it, so this can't be renamed, retyped or removed.`
-  const issues = meta.fresh
-    ? meta.issues.filter((m) => !m.startsWith('Give this field a key'))
-    : meta.issues
-  const keyBad = !meta.fresh && issues.some((m) => /key|already called/i.test(m))
+  // A just-added row's empty key is not an error until the person leaves it.
+  const issues = meta.fresh ? meta.issues.filter((m) => m.code !== 'empty_key') : meta.issues
+  const keyBad = issues.some((m) => KEY_ISSUES.has(m.code))
   const keyWidth = Math.max(96, (narrow ? 152 : 184) - depth * INDENT)
   const pad = 4 + depth * INDENT
 
@@ -508,10 +508,11 @@ export function FieldRow({
         <ul className='space-y-0.5 pb-1.5' style={{ paddingLeft: pad + 42 }} aria-live='polite'>
           {issues.map((m) => (
             <li
-              key={`i:${m}`}
+              key={`i:${m.code}:${m.message}`}
+              data-issue={m.code}
               className='text-[11.5px] leading-snug text-red-600 dark:text-red-400'
             >
-              {m}
+              {m.message}
             </li>
           ))}
           {meta.problems.map((p: Problem, i) => (

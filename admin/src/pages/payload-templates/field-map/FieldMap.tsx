@@ -27,7 +27,6 @@ import {
   useRef,
   useState
 } from 'react'
-import { useParams } from 'react-router'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { Field, MapSpec, Problem } from '../api'
@@ -40,6 +39,7 @@ import {
   duplicateField,
   findField,
   inScalarList,
+  latchLocks,
   lockState,
   moveField,
   moveFieldTo,
@@ -83,7 +83,14 @@ export interface FieldMapProps {
   partner?: string | null
   /** The preview for the current draft is still loading. */
   valuesPending?: boolean
+  /** `context.<key>` names a render can read (GET /:key `context_keys`) — offered as Related data. */
+  contextKeys?: string[]
+  /** Link to the API's Body secrets card (`/external-apis/<id>#body-secrets`); null = plain text. */
+  secretsHref?: string | null
 }
+
+// Locks latched per template (row ids), kept across remounts like the undo history.
+const latches = new Map<string, Set<string>>()
 
 const NARROW_BELOW = 820
 
@@ -103,8 +110,9 @@ function isMod(e: KeyboardEvent | ReactKeyboardEvent) {
   return e.metaKey || e.ctrlKey
 }
 
-function lookupsFrom(raw: unknown, spec: MapSpec): LookupInfo[] {
+function lookupsFrom(raw: unknown, contextKeys: string[], spec: MapSpec): LookupInfo[] {
   const out = new Map<string, LookupInfo>()
+  for (const key of contextKeys) if (key) out.set(key, { key })
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     for (const [key, def] of Object.entries(raw as Record<string, unknown>)) {
       const collection =
@@ -113,11 +121,10 @@ function lookupsFrom(raw: unknown, spec: MapSpec): LookupInfo[] {
         typeof (def as { collection?: unknown }).collection === 'string'
           ? (def as { collection: string }).collection
           : undefined
-      out.set(key, { key, collection })
+      out.set(key, { key, collection: collection ?? out.get(key)?.collection })
     }
   }
-  // The referencing action's context keys are not in the template row; the paths
-  // the map already reads name them.
+  // Older rows without context_keys: the paths the map already reads name them.
   const seen = (p: string | undefined) => {
     const c = p ? parseContextPath(p) : null
     if (c && !out.has(c.key)) out.set(c.key, { key: c.key })
@@ -322,8 +329,7 @@ export function FieldMap(props: FieldMapProps) {
   const { spec, values, problems, lockedKeys } = props
   const history = useSpecHistory(spec, props.onChange, props.historyKey)
   // The functions are stable; the object is not (canUndo/canRedo change).
-  const { apply, current, undo, redo } = history
-  const params = useParams<{ id?: string }>()
+  const { apply, current, undo, redo, isKnown } = history
   const rootRef = useRef<HTMLDivElement>(null)
   const [narrow, setNarrow] = useState(false)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
@@ -349,12 +355,12 @@ export function FieldMap(props: FieldMapProps) {
   // its content holds, so rows reading the env do not all re-render on every keystroke.
   const lookupsRef = useRef<{ sig: string; list: LookupInfo[] } | null>(null)
   const lookups = useMemo(() => {
-    const list = lookupsFrom(props.lookups, spec)
+    const list = lookupsFrom(props.lookups, props.contextKeys ?? [], spec)
     const sig = list.map((l) => `${l.key}\u0001${l.collection ?? ''}`).join('\u0002')
     if (lookupsRef.current?.sig === sig) return lookupsRef.current.list
     lookupsRef.current = { sig, list }
     return list
-  }, [props.lookups, spec])
+  }, [props.lookups, props.contextKeys, spec])
   // Same names → same array, whatever the caller passes (an inline [] re-renders every row).
   const secretSig = props.secretNames.join('\u0001')
   const secretNames = useMemo(() => (secretSig ? secretSig.split('\u0001') : []), [secretSig])
@@ -364,13 +370,33 @@ export function FieldMap(props: FieldMapProps) {
       lookups,
       secretNames,
       partner: props.partner?.trim() || 'the partner',
-      secretsHref: params.id ? `/external-apis/${params.id}#body-secrets` : null
+      secretsHref: props.secretsHref ?? null
     }),
-    [props.collection, lookups, secretNames, props.partner, params.id]
+    [props.collection, lookups, secretNames, props.partner, props.secretsHref]
   )
 
   // ── Per-row facts → row store (one row re-renders, not all of them) ──
-  const locks = useMemo(() => lockState(spec, lockedKeys), [spec, lockedKeys])
+  // Locks follow rows, not names (spec-ops latchLocks): latched when a spec comes in from
+  // outside (load, reload, Code tab) and kept while the person edits here, so typing a row
+  // through a locked name never locks it and a duplicate of a locked key stays removable.
+  const lockSig = lockedKeys.join('\u0001')
+  const latchRef = useRef<{ ids: Set<string>; sig: string; key: string | undefined } | null>(null)
+  const lockedIds = useMemo(() => {
+    const prev =
+      latchRef.current?.key === props.historyKey
+        ? latchRef.current
+        : props.historyKey && latches.has(props.historyKey)
+          ? { ids: latches.get(props.historyKey) as Set<string>, sig: '', key: props.historyKey }
+          : null
+    if (prev && prev.sig === lockSig && isKnown(spec)) return prev.ids
+    const ids = latchLocks(spec, lockSig ? lockSig.split('\u0001') : [], prev?.ids)
+    latchRef.current = { ids, sig: lockSig, key: props.historyKey }
+    if (props.historyKey) latches.set(props.historyKey, ids)
+    return ids
+  }, [spec, lockSig, props.historyKey, isKnown])
+  const lockedRef = useRef(lockedIds)
+  lockedRef.current = lockedIds
+  const locks = useMemo(() => lockState(spec, lockedIds), [spec, lockedIds])
   const issues = useMemo(() => structuralIssues(spec), [spec])
   const { byRow, pageProblems } = useMemo(() => {
     const ids = new Set<string>()
@@ -389,8 +415,11 @@ export function FieldMap(props: FieldMapProps) {
         page.push(p)
         continue
       }
-      // A stale preview may name a row that is gone; it re-renders in a moment.
-      if (!ids.has(p.field_id)) continue
+      // A row the map no longer has (or never had): say it above the map, never drop it.
+      if (!ids.has(p.field_id)) {
+        page.push(p)
+        continue
+      }
       // A list repeats a problem per row — show it once.
       const dedupe = `${p.field_id}\u0001${p.severity}\u0001${p.message}`
       if (seen.has(dedupe)) continue
@@ -437,8 +466,6 @@ export function FieldMap(props: FieldMapProps) {
   // ── Ops ──
   const collapsedRef = useRef(collapsed)
   collapsedRef.current = collapsed
-  const lockedRef = useRef(lockedKeys)
-  lockedRef.current = lockedKeys
   const focusAfter = useRef<{ id: string; target: 'key' | 'row' } | null>(null)
 
   const actions = useMemo<RowActions>(() => {
@@ -456,7 +483,11 @@ export function FieldMap(props: FieldMapProps) {
       setRules: (id, r) => apply(updateField(cur(), id, { rules: r }), `rules:${id}`),
       setNote: (id, note) => apply(updateField(cur(), id, { note }), `note:${id}`),
       patchList: (id, patch) => apply(updateList(cur(), id, patch), `list:${id}`),
-      renameAlias: (id, from, to) => apply(renameListAlias(cur(), id, from, to), `alias:${id}`),
+      renameAlias: (id, from, to) => {
+        const r = renameListAlias(cur(), id, from, to)
+        apply(r.spec, `alias:${id}`)
+        return r.rewrote
+      },
       add: (args) => {
         if (args.after && inScalarList(cur(), args.after)) {
           toast.error(SCALAR_ONE_FIELD)
@@ -678,7 +709,8 @@ export function FieldMap(props: FieldMapProps) {
       if (!e.over || e.active.id === e.over.id) return
       const r = moveFieldTo(current(), String(e.active.id), String(e.over.id))
       if (r.ok) apply(r.spec)
-      // Dropping into another group is refused quietly — the row springs back.
+      // The row springs back; say why when it was dropped into another group.
+      else if (r.reason !== 'Same place.') toast.message(r.reason)
     },
     [apply, current]
   )

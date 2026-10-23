@@ -4,6 +4,19 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Field, MapSpec } from '../api'
 import { FieldMap } from './FieldMap'
 
+// Count FieldRow renders (the real component, wrapped) — the 200-row test asserts on it.
+const renders = vi.hoisted(() => ({ rows: 0 }))
+vi.mock('./FieldRow', async (orig) => {
+  const real = (await orig()) as typeof import('./FieldRow')
+  return {
+    ...real,
+    FieldRow: (p: Parameters<typeof real.FieldRow>[0]) => {
+      renders.rows++
+      return real.FieldRow(p)
+    }
+  }
+})
+
 beforeAll(() => {
   // jsdom has neither
   globalThis.ResizeObserver ??= class {
@@ -44,6 +57,8 @@ const start: MapSpec = {
 }
 
 let latest: MapSpec = start
+/** Stands in for the shell replacing the draft (409 Reload, someone else's publish). */
+let replaceFromOutside: (s: MapSpec) => void = () => {}
 let key = 0
 
 function Harness({
@@ -53,6 +68,7 @@ function Harness({
 }) {
   const [spec, setSpec] = useState(start)
   latest = spec
+  replaceFromOutside = setSpec
   return (
     <FieldMap
       spec={spec}
@@ -153,13 +169,14 @@ describe('FieldMap', () => {
             severity: 'warning'
           },
           { field_id: '', path: '', message: 'MWF API has no token secret yet', severity: 'error' },
-          { field_id: 'gone', path: 'x', message: 'stale', severity: 'error' }
+          { field_id: 'gone', path: 'x', message: 'Row that is not in the map', severity: 'error' }
         ]}
       />
     )
     expect(screen.getAllByText('IR-36514 has no PO yet')).toHaveLength(1)
     expect(screen.getByText('MWF API has no token secret yet')).toBeInTheDocument()
-    expect(screen.queryByText('stale')).toBeNull()
+    // a problem naming no row is never dropped — it shows above the map
+    expect(screen.getByText('Row that is not in the map')).toBeInTheDocument()
   })
 
   it('⌫ on a focused row removes it; a locked row stays', async () => {
@@ -201,7 +218,7 @@ describe('FieldMap', () => {
     expect(latest.fields[1].value).toEqual({ source: 'fixed', value: 'PO' })
   })
 
-  it('stays quick with 200 rows', () => {
+  it('a keystroke re-renders only its own row (200 rows)', () => {
     key++
     const many: MapSpec = {
       v: 1,
@@ -226,11 +243,74 @@ describe('FieldMap', () => {
     render(<Big />)
     const inputs = keyInputs()
     expect(inputs).toHaveLength(200)
-    const t0 = performance.now()
+    renders.rows = 0
     for (let i = 0; i < 10; i++) fireEvent.change(inputs[100], { target: { value: `k${i}` } })
-    const per = (performance.now() - t0) / 10
     expect(latest.fields[100].key).toBe('k9')
-    // One keystroke re-renders one row (~10 ms in jsdom); every row re-rendering was ~180 ms.
-    expect(per).toBeLessThan(80)
+    // One keystroke re-renders the edited row only — never all 200.
+    expect(renders.rows).toBe(10)
+  })
+
+  it('a row typed through the locked name stays editable and removable', () => {
+    key++
+    render(<Harness />)
+    for (const k of ['e', 'efp_stat', 'efp_state'])
+      fireEvent.change(keyInputs()[1], { target: { value: k } })
+    expect(keyInputs()[1].readOnly).toBe(false)
+    fireEvent.change(keyInputs()[1], { target: { value: 'efp_state_2' } })
+    expect(latest.fields[1].key).toBe('efp_state_2')
+    expect(keyInputs()[0].readOnly).toBe(true)
+  })
+
+  it('a draft replaced from outside while the map is open starts the undo history over', () => {
+    key++
+    render(<Harness />)
+    fireEvent.change(keyInputs()[1], { target: { value: 'po' } })
+    act(() => {
+      replaceFromOutside({ v: 1, fields: [f('z', 'from_someone_else')] })
+    })
+    expect(keys()).toEqual(['from_someone_else'])
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true })
+    expect(latest.fields.map((x) => x.key)).toEqual(['from_someone_else'])
+    expect(screen.getByLabelText('Undo')).toBeDisabled()
+  })
+
+  it('a fixed number types naturally (1. → 1.5 → 1.50) and commits the number', () => {
+    key++
+    render(<Harness />)
+    // turn po_number into a Number row, then open its value
+    act(() => {
+      fireEvent.click(screen.getAllByLabelText(/^Type: /)[1])
+    })
+    act(() => {
+      fireEvent.click(screen.getByText('Number'))
+    })
+    act(() => {
+      fireEvent.click(document.querySelectorAll<HTMLElement>('[data-value-chip]')[1])
+    })
+    const box = screen.getByPlaceholderText('0') as HTMLInputElement
+    for (const t of ['1', '1.', '1.5', '1.50']) fireEvent.change(box, { target: { value: t } })
+    expect(box.value).toBe('1.50')
+    expect(latest.fields[1].value).toEqual({ source: 'fixed', value: 1.5 })
+    fireEvent.change(box, { target: { value: 'abc' } })
+    expect(latest.fields[1].value).toEqual({ source: 'fixed', value: 'abc' })
+  })
+
+  it('the first If/then case keeps the current value as Otherwise', () => {
+    key++
+    render(<Harness />)
+    act(() => {
+      fireEvent.click(document.querySelectorAll<HTMLElement>('[data-value-chip]')[0])
+    })
+    const pop = document.querySelector('[data-field-map-popover]') as HTMLElement
+    act(() => {
+      fireEvent.click(within(pop).getByRole('tab', { name: /If \/ then/ }))
+    })
+    act(() => {
+      fireEvent.click(within(pop).getByText('Add a case'))
+    })
+    const v = latest.fields[0].value as { source: string; cases: unknown[]; else?: unknown }
+    expect(v.source).toBe('switch')
+    expect(v.cases).toHaveLength(1)
+    expect(v.else).toEqual({ source: 'builtin', name: 'state.label' })
   })
 })
