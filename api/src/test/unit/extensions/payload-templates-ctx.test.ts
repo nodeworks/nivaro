@@ -14,6 +14,13 @@ vi.mock('../../../db/index.js', () => {
   return { db }
 })
 
+vi.mock('../../../services/body-secrets.js', () => ({
+  hasBodySecret: vi.fn(async (api: string, name: string) => {
+    if (api === 'Broken') throw new Error('config unreadable')
+    return api === 'MWF' && name === 'token'
+  })
+}))
+
 const svc = vi.hoisted(() => ({
   register: vi.fn(async (_owner: string, def: { key?: string }) => {
     if (!def.key || !/^[a-z0-9-]+$/.test(def.key)) throw new Error('key must be lowercase')
@@ -70,12 +77,13 @@ describe('ctx.payloadTemplates', () => {
     expect(noted).toEqual(['payload-templates'])
   })
 
-  it('rejects an invalid definition and stamps nothing', async () => {
-    const { m, owned } = members()
+  it('rejects an invalid definition and notes or stamps nothing', async () => {
+    const { m, owned, noted } = members()
     await expect(m.payloadTemplates.register({ ...def, key: 'Bad Key' })).rejects.toThrow(
       /lowercase/
     )
     expect(owned).toEqual([])
+    expect(noted).toEqual([])
   })
 
   it('renders the published version: body, problems and version only', async () => {
@@ -85,8 +93,10 @@ describe('ctx.payloadTemplates', () => {
     expect(r).toEqual({ body: { a: 1 }, problems: [], version: 4 })
   })
 
-  it('answers hasBodySecret false (never throws) when it cannot tell', async () => {
+  it('answers hasBodySecret from the API config, false (never throws) when it cannot tell', async () => {
     const { m } = members()
-    await expect(m.payloadTemplates.hasBodySecret('MWF', 'token')).resolves.toBe(false)
+    await expect(m.payloadTemplates.hasBodySecret('MWF', 'token')).resolves.toBe(true)
+    await expect(m.payloadTemplates.hasBodySecret('MWF', 'other')).resolves.toBe(false)
+    await expect(m.payloadTemplates.hasBodySecret('Broken', 'token')).resolves.toBe(false)
   })
 })

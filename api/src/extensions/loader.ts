@@ -738,11 +738,11 @@ export function registrationMembers(
       }
     },
     payloadTemplates: {
-      // Validates before any side effect (a bad definition rejects; nothing is registered or
-      // seeded); a database failure while seeding is logged by the service, never thrown.
+      // Validates before any side effect (a bad definition rejects; nothing is registered,
+      // seeded, noted or owned); a database failure while seeding is logged, never thrown.
       register: async (def) => {
-        note('payload-templates')
         await registerPayloadTemplate(extId, def)
+        note('payload-templates')
         own('payload_templates', `${def.key} · ${def.label}`)
       },
       render: async (key, scope) => {

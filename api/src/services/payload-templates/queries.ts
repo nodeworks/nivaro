@@ -1,7 +1,6 @@
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import { skipReason } from '../integration-obligations.js'
-import { readOne } from '../items.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { isSystemCollection } from '../system-collections.js'
 import { buildContext } from '../workflow-actions.js'
@@ -194,17 +193,13 @@ export function assertRecordCollection(collection: unknown): asserts collection 
   }
 }
 
-/** One record through the items service (permission-aware projection; null = not visible). */
-async function readRecord(
-  reader: User,
-  collection: string,
-  id: string
-): Promise<Record<string, unknown>> {
+/**
+ * The raw row, exactly as runTransitionActions / previewErpActions read it (preview == push),
+ * and only after the system-collection guard.
+ */
+async function readRecord(collection: string, id: string): Promise<Record<string, unknown>> {
   assertRecordCollection(collection)
-  const row = (await readOne(reader, collection, id, undefined, ['*'])) as
-    | Record<string, unknown>
-    | null
-    | undefined
+  const row = (await db(collection).where({ id }).first()) as Record<string, unknown> | undefined
   if (!row) throw new RecordNotFoundError(collection, id)
   return row
 }
@@ -223,7 +218,11 @@ async function stateOf(stateId: string | null): Promise<Record<string, unknown> 
   }
 }
 
-/** The gates previewErpActions applies before rendering (skip_when_empty, skip_unless_any, guard). */
+/**
+ * The gates previewErpActions applies before rendering (skip_when_empty, skip_unless_any, guard),
+ * as a skip reason. Kept in this one function on purpose.
+ * TODO(T7 merge): replace with erpActionGate(action, record, context) from workflow-actions.ts.
+ */
 function gateReason(
   action: ErpActionLike,
   record: Record<string, unknown>,
@@ -263,19 +262,29 @@ function gateReason(
 
 type BuildContextDefs = Parameters<typeof buildContext>[0]
 
+/** The template-level lookups (same shape as an action's `context`), resolved for one record. */
+async function lookupContext(
+  row: TemplateRow,
+  id: string,
+  record: Record<string, unknown>,
+  userId: string | null
+): Promise<Record<string, unknown>> {
+  return row.lookups ? buildContext(row.lookups as BuildContextDefs, id, record, userId) : {}
+}
+
 /**
  * The render scope a sender would build for one record:
  *  1. the first transition action naming the template → `{ record, context, state, responses,
  *     response }` as previewErpActions builds it (template lookups merged under the action's
  *     context, the action wins a key clash) plus that action's gates as `skipped`;
  *  2. else the registrar's `scope(id)`;
- *  3. else `{ record }` from the template's collection.
+ *  3. else `{ record, context: <template lookups>, state: null, responses: [], response: null }`.
  * `acting_user` is the person previewing (a push uses whoever moved the record).
  */
 export async function scopeForRecord(
   row: TemplateRow,
   id: string,
-  /** The admin previewing: records are read as them, and they are the scope's acting_user. */
+  /** The admin previewing: the scope's acting_user (a push uses whoever moved the record). */
   reader: User,
   /** Share across records of one template (Check recent records): the referencing action and
    *  its target state are read once. */
@@ -299,13 +308,11 @@ export async function scopeForRecord(
     last_name: u.last_name ?? null,
     employee_id: u.employee_id ?? null
   }
+  const userId = reader.id ?? null
   const [ref] = await once(`refs:${row.key}`, () => referencingTransitions(row.key))
   if (ref) {
-    const record = await readRecord(reader, row.collection, id)
-    const userId = reader.id ?? null
-    const lookups = row.lookups
-      ? await buildContext(row.lookups as BuildContextDefs, id, record, userId)
-      : {}
+    const record = await readRecord(row.collection, id)
+    const lookups = await lookupContext(row, id, record, userId)
     const own = await buildContext(ref.action.context as BuildContextDefs, id, record, userId)
     const context = { ...lookups, ...own }
     return {
@@ -326,8 +333,18 @@ export async function scopeForRecord(
     if (!isObj(scope)) throw new RecordNotFoundError(row.collection, id)
     return { scope: { acting_user: acting, ...scope }, skipped: null }
   }
+  // Neither a transition nor a registrar: the record plus the template's own lookups, in the
+  // same scope shape an erp_submit render gets.
+  const record = await readRecord(row.collection, id)
   return {
-    scope: { record: await readRecord(reader, row.collection, id), acting_user: acting },
+    scope: {
+      record,
+      context: await lookupContext(row, id, record, userId),
+      state: null,
+      responses: [],
+      response: null,
+      acting_user: acting
+    },
     skipped: null
   }
 }
@@ -359,9 +376,27 @@ export type CreateTemplateInput = {
   body: string
 }
 
+export class TemplateExistsError extends Error {
+  constructor(key: string) {
+    super(`'${key}' already exists`)
+    this.name = 'TemplateExistsError'
+  }
+}
+
+/** MSSQL 2627 / 2601 (duplicate key), also when knex wraps it in an AggregateError. */
+function isUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const isCode = (n: unknown) => n === 2627 || n === 2601
+  const top = err as { number?: unknown; errors?: unknown }
+  if (isCode(top.number)) return true
+  return (
+    Array.isArray(top.errors) && top.errors.some((e) => isCode((e as { number?: unknown })?.number))
+  )
+}
+
 /**
  * Insert a UI-created template (no owner, not published) and its first draft (rev 1) in one
- * transaction, then bust the published cache.
+ * transaction, then bust the published cache. A key taken meanwhile → TemplateExistsError.
  */
 export async function createTemplate(
   input: CreateTemplateInput,
@@ -369,6 +404,20 @@ export async function createTemplate(
 ): Promise<void> {
   assertRecordCollection(input.collection)
   const now = new Date()
+  try {
+    await insertTemplate(input, userId, now)
+  } catch (e) {
+    if (isUniqueViolation(e)) throw new TemplateExistsError(input.key)
+    throw e
+  }
+  bustPayloadTemplateCache()
+}
+
+async function insertTemplate(
+  input: CreateTemplateInput,
+  userId: string | null,
+  now: Date
+): Promise<void> {
   await db.transaction(async (trx) => {
     await trx(T).insert({
       key: input.key,
@@ -396,7 +445,6 @@ export async function createTemplate(
       updated_at: now
     })
   })
-  bustPayloadTemplateCache()
 }
 
 /** Remove a template with its draft and versions (callers check it is unreferenced first). */
@@ -407,4 +455,40 @@ export async function deleteTemplate(id: number): Promise<void> {
     await trx(T).where({ id }).delete()
   })
   bustPayloadTemplateCache()
+}
+
+// ─── People names on a template row ──────────────────────────────────────────
+
+export type NamedTemplateRow = TemplateRow & {
+  published_by_name: string | null
+  draft_updated_by_name: string | null
+}
+
+/** Add `published_by_name` / `draft_updated_by_name` (first + last name) to a template row. */
+export async function withPeopleNames(row: TemplateRow): Promise<NamedTemplateRow> {
+  const ids = [...new Set([row.published_by, row.draft_updated_by].filter(Boolean))] as string[]
+  const names = new Map<string, string>()
+  if (ids.length) {
+    try {
+      const users = (await db('nivaro_users')
+        .whereIn('id', ids)
+        .select('id', 'first_name', 'last_name')) as Array<{
+        id: string
+        first_name: string | null
+        last_name: string | null
+      }>
+      for (const u of users) {
+        const name = [u.first_name, u.last_name].filter((x) => x != null && x !== '').join(' ')
+        if (name) names.set(String(u.id).toLowerCase(), name)
+      }
+    } catch {
+      /* names are decoration */
+    }
+  }
+  const nameOf = (id: string | null) => (id ? (names.get(String(id).toLowerCase()) ?? null) : null)
+  return {
+    ...row,
+    published_by_name: nameOf(row.published_by),
+    draft_updated_by_name: nameOf(row.draft_updated_by)
+  }
 }

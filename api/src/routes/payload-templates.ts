@@ -30,10 +30,12 @@ import {
   RecordNotFoundError,
   recentIds,
   scopeForRecord,
+  TemplateExistsError,
   transitionUseCount,
   useCount,
   usedBy,
-  usedByCounts
+  usedByCounts,
+  withPeopleNames
 } from '../services/payload-templates/queries.js'
 import { blockingProblems } from '../services/payload-templates/render.js'
 import { convertTemplate } from '../services/payload-templates/to-liquid.js'
@@ -95,6 +97,9 @@ function sendError(reply: FastifyReply, e: unknown) {
   }
   if (e instanceof CollectionRefusedError) {
     return reply.code(400).send({ error: 'collection_refused', message: e.message })
+  }
+  if (e instanceof TemplateExistsError) {
+    return reply.code(409).send({ error: 'exists', message: e.message })
   }
   if (e instanceof RecordNotFoundError) {
     return reply.code(404).send({ error: 'record_not_found', message: e.message })
@@ -161,6 +166,11 @@ async function renderFor(
   }
 }
 
+/** 409 for a stale draft / publish: the current row, with the people's names. */
+async function sendStale(reply: FastifyReply, current: TemplateRow) {
+  return reply.code(409).send({ error: 'stale', current: await withPeopleNames(current) })
+}
+
 const parseWhich = (w: unknown): Which => (w === 'published' ? 'published' : 'draft')
 
 export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void> {
@@ -194,10 +204,9 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     const def = registeredDef(row.key)
     return {
       data: {
-        ...row,
+        ...(await withPeopleNames(row)),
         status: statusOf(row),
         used_by: await usedBy(row.key),
-        locked_keys: row.locked_keys,
         newer_default: hasNewerDefault(row),
         has_default: !!def,
         ...(def ? { default_mode: def.default.mode, default_body: def.default.body } : {})
@@ -209,12 +218,25 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
   // ── draft ──
   app.put<{
     Params: { key: string }
-    Body: { mode?: PayloadMode; body?: string; base_rev?: number }
+    Body: {
+      mode?: PayloadMode
+      body?: string
+      base_rev?: number
+      /** The published version the editor last saw; someone publishing since = stale. */
+      base_published_version?: number | null
+    }
   }>('/:key/draft', async (req, reply) => {
     const input = req.body ?? {}
     const errors = bodyErrors(input)
     if (errors) return reply.code(400).send({ error: 'invalid', errors })
     try {
+      if (input.base_published_version !== undefined) {
+        const row = await loadOr404(req.params.key, reply)
+        if (!row) return reply
+        const seen =
+          input.base_published_version == null ? null : Number(input.base_published_version)
+        if (seen !== row.published_version) return sendStale(reply, row)
+      }
       const r = await saveDraft(
         req.params.key,
         {
@@ -224,7 +246,7 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
         },
         req.user?.id ?? null
       )
-      if (!r.ok) return reply.code(409).send({ error: 'stale', current: r.current })
+      if (!r.ok) return sendStale(reply, r.current)
       return { rev: r.rev }
     } catch (e) {
       return sendError(reply, e)
@@ -324,7 +346,7 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
           { base_rev: Number(b.base_rev), note },
           req.user?.id ?? null
         )
-        if (!r.ok) return reply.code(409).send({ error: 'stale', current: r.current })
+        if (!r.ok) return sendStale(reply, r.current)
         return { version: r.version }
       } catch (e) {
         return sendError(reply, e)
@@ -380,6 +402,11 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
   app.post<{ Params: { key: string }; Body: { base_rev?: number } }>(
     '/:key/convert',
     async (req, reply) => {
+      const b = req.body ?? {}
+      const baseRev = Number(b.base_rev)
+      if (b.base_rev == null || !Number.isInteger(baseRev) || baseRev < 0) {
+        return reply.code(400).send({ error: 'invalid', message: 'base_rev is required' })
+      }
       const row = await loadReadable(req.params.key, reply)
       if (!row) return reply
       if (row.draft_mode !== 'map' || !row.draft_body) {
@@ -387,7 +414,6 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
           .code(400)
           .send({ error: 'invalid', message: 'Only a field map can be converted' })
       }
-      const b = req.body ?? {}
       try {
         let spec: MapSpec
         try {
@@ -399,27 +425,30 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
           })
         }
         // The same records and scopes as Check recent records / Preview. A record whose scope
-        // cannot be built (gone, refused by the registrar) is left out; none left = refused below.
+        // cannot be built (gone, the registrar's scope() failed) is left out and reported, as
+        // Check reports it; none left = convertTemplate refuses.
         const user = reader(req)
         const memo = new Map<string, Promise<unknown>>()
         const scopes: Record<string, unknown>[] = []
+        const skipped: Array<{ id: string; message: string }> = []
         for (const id of await recentIds(row, CHECK_DEFAULT)) {
           try {
             scopes.push((await scopeForRecord(row, id, user, memo)).scope)
           } catch (e) {
-            if (!(e instanceof RecordNotFoundError)) throw e
+            if (e instanceof CollectionRefusedError) throw e
+            skipped.push({ id, message: e instanceof Error ? e.message : String(e) })
           }
         }
         const r = await convertTemplate(spec, scopes)
-        if (!r.ok) return reply.code(422).send({ error: 'not_equal', diffs: r.diffs })
+        if (!r.ok) return reply.code(422).send({ error: 'not_equal', diffs: r.diffs, skipped })
         const saved = await saveDraft(
           row.key,
-          { mode: 'code', body: r.liquid, base_rev: Number(b.base_rev ?? row.draft_rev) },
+          { mode: 'code', body: r.liquid, base_rev: baseRev },
           req.user?.id ?? null,
           { convert: true }
         )
-        if (!saved.ok) return reply.code(409).send({ error: 'stale', current: saved.current })
-        return { rev: saved.rev, liquid: r.liquid }
+        if (!saved.ok) return sendStale(reply, saved.current)
+        return { rev: saved.rev, liquid: r.liquid, skipped }
       } catch (e) {
         return sendError(reply, e)
       }
@@ -460,6 +489,11 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
           { err: e, collection: row.collection },
           'payload-templates: record search failed'
         )
+        const status = Number((e as { statusCode?: unknown })?.statusCode)
+        return reply.code(status >= 400 && status < 600 ? status : 500).send({
+          error: 'search_failed',
+          message: e instanceof Error ? e.message : String(e)
+        })
       }
       const top = ids.slice(0, SEARCH_LIMIT)
       const labels = top.length
@@ -506,19 +540,23 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     if (await getTemplate(key)) {
       return reply.code(409).send({ error: 'exists', message: `'${key}' already exists` })
     }
-    await createTemplate(
-      {
-        key,
-        label,
-        description: b.description ?? null,
-        external_api: b.external_api ? String(b.external_api) : null,
-        endpoint_path: b.endpoint_path ? String(b.endpoint_path) : null,
-        collection,
-        mode,
-        body
-      },
-      req.user?.id ?? null
-    )
+    try {
+      await createTemplate(
+        {
+          key,
+          label,
+          description: b.description ?? null,
+          external_api: b.external_api ? String(b.external_api) : null,
+          endpoint_path: b.endpoint_path ? String(b.endpoint_path) : null,
+          collection,
+          mode,
+          body
+        },
+        req.user?.id ?? null
+      )
+    } catch (e) {
+      return sendError(reply, e)
+    }
     await logActivity({
       action: 'payload-template-create',
       user: req.user?.id ?? null,

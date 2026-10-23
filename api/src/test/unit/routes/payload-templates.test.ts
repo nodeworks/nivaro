@@ -23,7 +23,10 @@ const fake = vi.hoisted(() => {
     )
     return re.test(String(value ?? ''))
   }
+  const reads: string[] = []
+  const failInsert: { table: string | null; err: unknown } = { table: null, err: null }
   const chain = (table: string) => {
+    reads.push(table)
     const preds: Array<(r: Row) => boolean> = []
     const order: Array<[string, string]> = []
     let lim: number | undefined
@@ -80,6 +83,7 @@ const fake = vi.hoisted(() => {
       return rows.length
     }
     q.insert = async (data: Row | Row[]) => {
+      if (failInsert.table === table) throw failInsert.err
       const list = (Array.isArray(data) ? data : [data]).map((d) => ({ id: nextId++, ...d }))
       tables[table] = [...(tables[table] ?? []), ...list]
       return list.map((r) => r.id)
@@ -100,11 +104,13 @@ const fake = vi.hoisted(() => {
     schema: { hasTable: async (t: string) => t in tables }
   })
   const reset = (seed: Record<string, Row[]>) => {
+    reads.length = 0
+    failInsert.table = null
     for (const k of Object.keys(tables)) delete tables[k]
     for (const [k, v] of Object.entries(seed)) tables[k] = v.map((r) => ({ ...r }))
     nextId = 900
   }
-  return { db, tables, reset }
+  return { db, tables, reset, reads, failInsert }
 })
 
 const auth = vi.hoisted(() => ({ admin: true }))
@@ -136,17 +142,12 @@ vi.mock('../../../services/queues.js', () => ({
     return out
   })
 }))
-// Records are read through the items service (permission-aware projection); here it answers
-// from the stand-in tables.
+// Record search goes through the items service; here it answers from the stand-in tables.
 vi.mock('../../../services/items.js', () => ({
   readItems: vi.fn(async (_u: unknown, collection: string, q: { filter?: Row }) => {
     const id = (q.filter?.id as { _eq?: unknown } | undefined)?._eq
     const rows = (fake.tables[collection] ?? []).filter((r) => id == null || String(r.id) === id)
     return { data: rows.map((r) => ({ id: r.id })).reverse() }
-  }),
-  readOne: vi.fn(async (_u: unknown, collection: string, id: string) => {
-    const r = (fake.tables[collection] ?? []).find((x) => String(x.id) === String(id))
-    return r ? { ...r } : null
   })
 }))
 vi.mock('../../../services/body-secrets.js', () => ({
@@ -295,7 +296,7 @@ vi.mock('../../../services/payload-templates/index.js', async (orig) => {
 import { payloadTemplateRoutes } from '../../../routes/payload-templates.js'
 import { logActivity } from '../../../services/activity.js'
 import { markConfigRead } from '../../../services/config-live.js'
-import { readItems, readOne } from '../../../services/items.js'
+import { readItems } from '../../../services/items.js'
 import { bustPayloadTemplateCache } from '../../../services/payload-templates/index.js'
 import { withReadGate } from '../../../services/read-gate.js'
 
@@ -409,14 +410,17 @@ beforeEach(() => {
     nivaro_payload_templates: [],
     nivaro_payload_template_versions: [],
     nivaro_payload_template_drafts: [],
-    nivaro_users: [{ id: 'u1', email: 'x@y', static_token: 'secret' }],
+    nivaro_users: [
+      { id: 'u1', email: 'x@y', static_token: 'secret' },
+      { id: 'u-9', first_name: 'Rob', last_name: 'Lee' },
+      { id: 'admin-1', first_name: 'Ada', last_name: 'Admin' }
+    ],
     directus_users: [{ id: 'u1', email: 'x@y', password: 'secret' }]
   })
   vi.mocked(markConfigRead).mockClear()
   vi.mocked(withReadGate).mockClear()
   vi.mocked(bustPayloadTemplateCache).mockClear()
   vi.mocked(logActivity).mockClear()
-  vi.mocked(readOne).mockClear()
   vi.mocked(readItems).mockClear()
 })
 
@@ -714,9 +718,9 @@ describe('payload template routes', () => {
   it('never reads a system collection, whatever the stored row says', async () => {
     for (const collection of ['nivaro_users', 'directus_users']) {
       svc.rows.set('sys', tpl({ id: 50, key: 'sys', collection }))
-      vi.mocked(readOne).mockClear()
       vi.mocked(readItems).mockClear()
       vi.mocked(withReadGate).mockClear()
+      fake.reads.length = 0
       const preview = await call('POST', '/sys/preview', { id: 'u1', which: 'draft' })
       expect(preview.status).toBe(400)
       expect(preview.body.error).toBe('collection_refused')
@@ -729,9 +733,94 @@ describe('payload template routes', () => {
       expect(search.body.data).toBeUndefined()
       const convert = await call('POST', '/sys/convert', { base_rev: 3 })
       expect(convert.status).toBe(400)
-      expect(readOne).not.toHaveBeenCalled()
+      expect(fake.reads).not.toContain(collection)
       expect(readItems).not.toHaveBeenCalled()
       expect(withReadGate).not.toHaveBeenCalled()
     }
+  })
+
+  it('builds the plain-record scope with the template lookups when nothing else applies', async () => {
+    fake.tables.nivaro_workflow_transitions = []
+    const row = svc.rows.get('mwf-ir-order') as FakeRow
+    row.lookups = { mwf_queue: { collection: 'mwf_queue', filter: { ir: '$id' } } }
+    const res = await call('POST', '/mwf-ir-order/preview', { id: '11', which: 'draft' })
+    expect(res.status).toBe(200)
+    // Raw row, lookups as context, no state.
+    expect(res.body.body).toEqual({ workflow_id: 'WF-11', efp_state: null, queue: 'Q-7' })
+    expect(fake.reads).toContain('inventory_request')
+  })
+
+  it('refuses a draft save when someone published since the editor loaded, with names', async () => {
+    const row = svc.rows.get('mwf-ir-order') as FakeRow
+    Object.assign(row, { published_by: 'u-9', draft_updated_by: 'admin-1' })
+    const stale = await call('PUT', '/mwf-ir-order/draft', {
+      mode: 'map',
+      body: SPEC,
+      base_rev: 3,
+      base_published_version: 1
+    })
+    expect(stale.status).toBe(409)
+    expect(stale.body.error).toBe('stale')
+    expect(stale.body.current).toMatchObject({
+      published_version: 2,
+      published_by_name: 'Rob Lee',
+      draft_updated_by_name: 'Ada Admin'
+    })
+    expect(row.draft_rev).toBe(3)
+    const ok = await call('PUT', '/mwf-ir-order/draft', {
+      mode: 'map',
+      body: SPEC,
+      base_rev: 3,
+      base_published_version: 2
+    })
+    expect(ok.body).toEqual({ rev: 4 })
+    const one = await call('GET', '/mwf-ir-order')
+    expect(one.body.data).toMatchObject({
+      published_by_name: 'Rob Lee',
+      has_default: false
+    })
+  })
+
+  it('needs base_rev to convert and reports records whose registrar scope failed', async () => {
+    expect((await call('POST', '/mwf-ir-order/convert', {})).status).toBe(400)
+    svc.registered.set('fusion-transfer-order', {
+      key: 'fusion-transfer-order',
+      owner: 'efp-ops',
+      default: { mode: 'map', body: SPEC },
+      recent: async () => ['5', '6'],
+      scope: async (id: string) => {
+        if (id === '6') throw new Error('workflow 6 has no lines')
+        return { record: { workflow_id: `REG-${id}` }, state: { label: 'X' } }
+      }
+    })
+    const res = await call('POST', '/fusion-transfer-order/convert', { base_rev: 3 })
+    expect(res.status).toBe(200)
+    expect(res.body.skipped).toEqual([{ id: '6', message: 'workflow 6 has no lines' }])
+    const one = await call('GET', '/fusion-transfer-order')
+    expect(one.body.data).toMatchObject({ has_default: true, default_mode: 'map' })
+  })
+
+  it('maps a duplicate key raced past the check to 409 exists', async () => {
+    fake.failInsert.table = 'nivaro_payload_templates'
+    fake.failInsert.err = Object.assign(new Error('Violation of UNIQUE KEY'), { number: 2627 })
+    const res = await call('POST', '', {
+      key: 'race-key',
+      label: 'Race',
+      external_api: 'MWF',
+      collection: 'inventory_request',
+      mode: 'code',
+      body: '{"a": 1}'
+    })
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('exists')
+  })
+
+  it('answers a failed record search with its error', async () => {
+    vi.mocked(readItems).mockRejectedValueOnce(
+      Object.assign(new Error('Forbidden'), { statusCode: 403 })
+    )
+    const res = await call('GET', '/mwf-ir-order/record-search?q=WF')
+    expect(res.status).toBe(403)
+    expect(res.body).toEqual({ error: 'search_failed', message: 'Forbidden' })
   })
 })
