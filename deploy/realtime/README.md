@@ -118,7 +118,13 @@ not care. So:
   a board entry younger than 3 s (a deliver beats a wrong skip), and a process takes its
   entries off the board as its drain starts. Self-hosted only.
 - The admin `/api/stream` also hears the writes made on the other processes (their journaled
-  record changes); before, it heard only the writes of the process it connected to.
+  record changes, stamped with the write time); before, it heard only the writes of the
+  process it connected to. An admin API key narrowed to named collections sees only those.
+  Gaps: a collection with live updates off journals nothing (its writes elsewhere do not
+  show), and a trash restore shows from other processes but not from the one that restored.
+- If Redis stops answering, every process falls back to its own sockets within 6 s (no frozen
+  viewers from the last good read). In development each API port is its own board slot, so a
+  throwaway API beside the dev API never joins its board.
 - Counts from `POST /api/presence/record-viewers` are given only for records the caller may
   read. The socket inspector (`/api/realtime/sockets/:id/inspect`) answers 409
   `SOCKET_ON_REALTIME` with the process name for a socket held by a realtime process.

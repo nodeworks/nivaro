@@ -10,7 +10,7 @@ import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { graphqlPlugin, rebuildGraphQLSchema } from './plugins/graphql.js'
 import { metricsPlugin } from './plugins/metrics.js'
 import { redisPlugin } from './plugins/redis.js'
-import { collectLocalBoard, socketioPlugin } from './plugins/socketio.js'
+import { localBoardCollector, socketioPlugin } from './plugins/socketio.js'
 import { eventsStreamRoutes } from './routes/events-stream.js'
 import { viewStreamRoutes } from './routes/view-stream.js'
 import { bootState } from './services/boot-phases.js'
@@ -197,7 +197,7 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     const { startBoard } = await import('./services/realtime-board.js')
     const stopBoard = startBoard(app.redis, {
       serves: true,
-      collect: () => collectLocalBoard(app.io)
+      collect: localBoardCollector(app.io)
     })
     // Off the board as soon as the drain starts, so nobody trusts this process's viewers.
     app.addHook('preClose', async () => stopBoard())

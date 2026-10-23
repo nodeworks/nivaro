@@ -355,7 +355,7 @@ describe('realtime tier (NIVARO_ROLE=realtime + SOCKETS=off)', () => {
       expect(sock.usersOnPath('/collections/projects')).toEqual([])
 
       // The realtime process publishes; the SOCKETS=off process reads.
-      board.startBoardPublisher(realtime.redis as never, () => sock.collectLocalBoard(realtime.io))
+      board.startBoardPublisher(realtime.redis as never, sock.localBoardCollector(realtime.io))
       board.startBoardReader(web.redis as never, { includeOwn: true })
       await waitFor(
         () => board.boardFresh() && sock.usersOnPath('/collections/projects').length > 0
