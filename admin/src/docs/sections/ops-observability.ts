@@ -2,12 +2,12 @@ import type { DocSection } from '../types.js'
 
 export const dbHealthDocs: DocSection = {
   id: 'db-health',
-  label: 'DB & Runtime Health',
+  label: 'Database',
   content: [
-    { type: 'h1', id: 'db-health', text: 'DB & Runtime Health' },
+    { type: 'h1', id: 'db-health', text: 'Database' },
     {
       type: 'p',
-      text: 'The DB & Runtime page at /db-health (Monitoring → DB & Runtime) is a read-mostly console over the database server, Redis, and the API process itself. Every endpoint behind it is admin-only. Panels that need database-server visibility degrade honestly: if the database login lacks the VIEW SERVER STATE permission, the panel shows an amber note saying exactly that instead of failing.'
+      text: 'The Database page at /database (Operations → Database) has four tabs: Overview, Tuning (/database/tuning), SQL checks (/database/sql-checks) and Redis keys (/database/redis). Overview is a read-mostly console over the database server, Redis, and the API process itself. Every endpoint behind it is admin-only. Panels that need database-server visibility degrade honestly: if the database login lacks the VIEW SERVER STATE permission, the panel shows an amber note saying exactly that instead of failing.'
     },
     { type: 'h3', text: 'What the panels show' },
     {
@@ -242,12 +242,12 @@ export const opsConsoleDocs: DocSection = {
     { type: 'h1', id: 'ops-console', text: 'Ops Console' },
     {
       type: 'p',
-      text: 'The Ops Console at /ops-console (Monitoring → Ops Console) is the operational side of the API process: the live log, log-based alerting, environment inspection, maintenance windows, and controlled restart. Admin-only throughout.'
+      text: 'The Ops Console at /ops-console (Operations → Ops Console) is the operational side of the API process: the live log, log-based alerting, environment inspection, maintenance windows, and controlled restart. Admin-only throughout.'
     },
     { type: 'h2', id: 'ops-console-crons', text: 'Scheduled jobs: pause, override, revert' },
     {
       type: 'p',
-      text: 'Background Jobs (Monitoring nav) lists every cron the process registered — core schedules and extension-registered ones alike — with its effective schedule, last outcome and next run. Each row can be paused/resumed, run now, and have its schedule OVERRIDDEN from the admin: click the expression, type a new cron expression (the next fire times preview live; an invalid expression is refused with the parser message), Save. Revert puts the job back on the schedule its code registered.'
+      text: 'Jobs (Operations → Jobs, /jobs) lists every cron the process registered — core schedules and extension-registered ones alike — with its effective schedule, last outcome and next run. Each row can be paused/resumed, run now, and have its schedule OVERRIDDEN from the admin: click the expression, type a new cron expression (the next fire times preview live; an invalid expression is refused with the parser message), Save. Revert puts the job back on the schedule its code registered.'
     },
     {
       type: 'ul',
@@ -265,7 +265,7 @@ export const opsConsoleDocs: DocSection = {
     { type: 'h3', text: 'Gated jobs' },
     {
       type: 'p',
-      text: 'A job that no-ops behind a deployment flag says so on the Background Jobs page: a green `<FLAG> on` badge when the flag names it, an amber `<FLAG> off · inert` badge when every tick returns without doing anything. Extensions declare it with `cron.annotate(id, { gate: { flag, enabled } })`; a readiness check can still add up the coverage, but the per-job truth sits beside the job.'
+      text: 'A job that no-ops behind a deployment flag says so on the Jobs page: a green `<FLAG> on` badge when the flag names it, an amber `<FLAG> off · inert` badge when every tick returns without doing anything. Extensions declare it with `cron.annotate(id, { gate: { flag, enabled } })`; a readiness check can still add up the coverage, but the per-job truth sits beside the job.'
     },
     { type: 'h2', id: 'ops-console-logs', text: 'Log tail and log alert rules' },
     {
@@ -437,7 +437,15 @@ GET /api/environments/env-presence         → every registered API, compared`
     { type: 'h2', id: 'deploys-tab-versions', text: 'Open tabs by version' },
     {
       type: 'p',
-      text: 'Every front end reports the build it runs on each call (`x-nivaro-client: build=…; api=…; tab=…; loaded=…`) and in the socket’s `client:hello`. /realtime → Sockets & rooms lists open tabs per app and build, against the API version they first talked to. An app’s current build is the one its newest page load reported. Force client refresh → Old versions reloads only tabs on another build, or loaded before the API update; like the app filter, it reaches sockets on this API process only. The Traffic Map’s Old tabs tile shows the same count over its window.'
+      text: 'Every front end reports the build it runs on each call (`x-nivaro-client: build=…; api=…; tab=…; loaded=…`) and in the socket’s `client:hello`. /realtime → Sockets & rooms lists open tabs per app and build, against the API version they first talked to. The list covers every API replica: each socket publishes its report on its own connection data, which every replica answers for; when one does not answer in time the page says only this replica’s tabs are counted. Each row names who is on that build.'
+    },
+    {
+      type: 'p',
+      text: 'Which build is current survives a rolling deploy. Admin is served by the API itself, so its current build is the one version every API replica serves (the instance roster) once a tab reports it; while replicas serve two versions, admin and the "loaded before the API update" reason are not judged. Any other app takes its newest page load, but while two of its builds have loaded within 10 minutes it reads "Deploy in progress" and is not judged. Force client refresh → Old versions reloads only tabs on another build, or loaded before the API update, on every replica, and leaves an app that is still deploying alone (the toast says so). The Traffic Map’s Old tabs tile still counts per process over its window.'
+    },
+    {
+      type: 'p',
+      text: 'Administrators also see an "Old build" pill beside a person in the Online list (chat panel and /chat) while any of their tabs runs an old build; the tip names the app, the build and the current one. `GET /presence/online` sends `stale_build` to administrators only, and only for people with an old tab.'
     },
     {
       type: 'p',

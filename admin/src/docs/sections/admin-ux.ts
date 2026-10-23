@@ -870,16 +870,21 @@ export const adminUxNavigation: DocSection = {
         ],
         [
           'Operations',
-          'Health, background jobs, ops tools, and release (environments, config diff, readiness, promotion, blueprints, change sets)'
+          'Health (status, monitors, telemetry), issues, database, jobs, ops tools, and release (environments, config diff, readiness, promotion, blueprints, change sets)'
         ],
         ['Developer', 'APIs, queries, extensions and test tooling, reference docs'],
         ['System', 'Settings, feature flags, config health, config search, setup checklist']
       ]
     },
+    { type: 'h3', id: 'admin-navigation-hubs', text: 'Pages with tabs' },
+    {
+      type: 'p',
+      text: 'Some entries open a page whose views are tabs, each at its own address: Jobs (/jobs — Runs & schedules, Timeline /jobs/timeline, Calendar /jobs/calendar, Repair tasks /jobs/tasks), Database (/database — Overview, Tuning /database/tuning, SQL checks /database/sql-checks, Redis keys /database/redis) and Health (/health — Status, Monitors /health/monitors, Telemetry /health/telemetry). The arrow keys move between tabs. Each was once its own page; the old addresses (/background-jobs, /cron-timeline, /ops-calendar, /ops-tasks, /db-health, /db-tuning, /sql-checks, /ops-redis, /monitors, /telemetry) still work and open the matching tab with any filters in the link kept, so bookmarks, favorites and links in emails keep working.'
+    },
     { type: 'h3', id: 'admin-navigation-find', text: 'Find a page' },
     {
       type: 'p',
-      text: 'The Find box at the top of the panel searches every category at once — page names, section names and common synonyms ("email" finds Mail Log, "cron" finds Background Jobs). Each hit shows under its category so you learn where it lives. Enter opens the best match; Escape clears.'
+      text: 'The Find box at the top of the panel searches every category at once — page names, section names and common synonyms ("email" finds Mail Log, "cron" finds Jobs). Each hit shows under its category so you learn where it lives. Enter opens the best match; Escape clears.'
     },
     { type: 'h3', id: 'admin-navigation-favorites', text: 'Favorites' },
     {

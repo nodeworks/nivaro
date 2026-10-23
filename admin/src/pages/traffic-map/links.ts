@@ -54,7 +54,7 @@ export interface CallerLink {
  */
 export function callerLinks(key: string, catalog: TrafficCatalog | null): CallerLink[] {
   if (key === 'cron' || key.startsWith('cron:'))
-    return [{ kind: 'jobs', label: 'Background jobs', url: '/background-jobs' }]
+    return [{ kind: 'jobs', label: 'Jobs', url: '/jobs' }]
   const m = key.match(/^k(\d{1,12})$/)
   if (m) {
     return [

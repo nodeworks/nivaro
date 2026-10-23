@@ -240,12 +240,12 @@ export const collabLiveOps: DocSection = {
           'A running sweep shows a progress bar per collection (records checked of the table’s size, issues so far) and its findings appear in the run as the sweep goes. Sweeps started by someone else or by the nightly schedule appear too.'
         ],
         [
-          'Background Jobs',
+          'Jobs',
           'Running jobs, next-run countdowns and each job’s last outcome update as jobs start and finish. Open the arrow on a run to see its log lines and progress as the job writes them (kept for a day).'
         ],
         [
           'Header (administrators)',
-          'While a heavy job, bulk run, render or import is running, a pill reads "System busy: nightly reforecast running, about 12 minutes left". The estimate is the median of that job’s last completed runs; with no history it only says "running". Click it to open Background Jobs.'
+          'While a heavy job, bulk run, render or import is running, a pill reads "System busy: nightly reforecast running, about 12 minutes left". The estimate is the median of that job’s last completed runs; with no history it only says "running". Click it to open Jobs.'
         ],
         [
           'Help videos',
@@ -301,6 +301,7 @@ useLiveEvent('conformance:progress', (p) => setProgress(p), { includeOwn: true }
         "Tasks: assigning, claiming, editing, completing and deleting a task refresh the record's Tasks section (`$tasks`).",
         'Record chips in chat and linked record tokens update their state pill when the record moves. No state name travels in the notice; each viewer re-reads the pill with their own access.',
         'Queue item sheets follow their record (state, comments) the way the full record page does; drill sheets rendered by the record form already did.',
+        'A record open in a drill-down sheet counts as open: the sheet joins the record room, so the people on that record see the viewer, and its strip shows who else has it open.',
         "Realtime console, Sockets and rooms, Inspect: pick a connected client to see its rooms and the last 100 events sent to it (name, room, size, time, never the payload). Recording is off until an administrator opens the panel and stops when it closes or after 10 minutes unread. Routes (administrators only, caller's tenant only): `GET|POST|DELETE /realtime/sockets/:id/inspect`.",
         'The inspector also lists the events the client sent, with how long the server took to handle each one, and how many bytes are waiting to reach that client.'
       ]

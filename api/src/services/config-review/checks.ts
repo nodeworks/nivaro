@@ -510,7 +510,7 @@ async function mirroredFindings(): Promise<ReviewFinding[]> {
         subject: `column:${d.table}.${d.column}`,
         title: `${d.table}.${d.column} is retired but still present`,
         severity: 'info',
-        href: '/db-health',
+        href: '/database',
         detail: {
           reason: `Replaced by ${d.replaced_by} since ${d.since}; nothing reads it any more.`,
           fix: null

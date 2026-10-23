@@ -11,12 +11,12 @@ import {
   RefreshCw,
   Send,
   SlidersHorizontal,
-  Telescope,
   Timer,
   XCircle
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { DrillTag, useAdminDrillWindows } from '@/components/chaos-drill-tag'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
@@ -621,47 +621,40 @@ export function TelemetryPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 px-4 py-4 sm:px-6 dark:border-border'>
-        <div className='flex min-w-0 items-center gap-2.5'>
-          <Telescope className='h-5 w-5 shrink-0 text-muted-foreground' aria-hidden='true' />
-          <div className='min-w-0'>
-            <h1 className='m-0 text-lg font-semibold'>Telemetry</h1>
-            <p className='m-0 text-[12px] text-muted-foreground'>
-              The monitoring stack beside this instance: what Nivaro sends, what arrived, and how
-              the stack is doing.
-            </p>
-          </div>
-        </div>
-        <div className='ml-auto flex flex-wrap items-center gap-2'>
-          {q.dataUpdatedAt > 0 && (
-            <span className='text-[11px] text-muted-foreground'>
-              Updated {new Date(q.dataUpdatedAt).toLocaleTimeString()} · refreshes every 30s
-            </span>
-          )}
-          <Button
-            size='sm'
-            variant='outline'
-            onClick={() => void q.refetch()}
-            disabled={q.isFetching}
-            className='h-8 text-[12.5px] [&_svg]:size-3.5'
-          >
-            <RefreshCw className={cn(q.isFetching && 'animate-spin')} aria-hidden='true' />
-            Refresh
-          </Button>
-          {s?.settings.grafana_url && (
+      <HubToolbar
+        description='The monitoring stack beside this instance: what Nivaro sends, what arrived, and how the stack is doing.'
+        actions={
+          <>
+            {q.dataUpdatedAt > 0 && (
+              <span className='text-[11px] text-muted-foreground'>
+                Updated {new Date(q.dataUpdatedAt).toLocaleTimeString()} · refreshes every 30s
+              </span>
+            )}
             <Button
-              asChild
               size='sm'
-              className='h-8 bg-nvr-cyan text-[12.5px] text-white hover:bg-nvr-cyan/90 [&_svg]:size-3.5'
+              variant='outline'
+              onClick={() => void q.refetch()}
+              disabled={q.isFetching}
+              className='h-8 text-[12.5px] [&_svg]:size-3.5'
             >
-              <a href={s.settings.grafana_url} target='_blank' rel='noopener noreferrer'>
-                Open Grafana
-                <ArrowUpRight aria-hidden='true' />
-              </a>
+              <RefreshCw className={cn(q.isFetching && 'animate-spin')} aria-hidden='true' />
+              Refresh
             </Button>
-          )}
-        </div>
-      </header>
+            {s?.settings.grafana_url && (
+              <Button
+                asChild
+                size='sm'
+                className='h-8 bg-nvr-cyan text-[12.5px] text-white hover:bg-nvr-cyan/90 [&_svg]:size-3.5'
+              >
+                <a href={s.settings.grafana_url} target='_blank' rel='noopener noreferrer'>
+                  Open Grafana
+                  <ArrowUpRight aria-hidden='true' />
+                </a>
+              </Button>
+            )}
+          </>
+        }
+      />
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {q.isLoading ? (

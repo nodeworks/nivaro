@@ -62,7 +62,7 @@ GET   /api/telemetry/restore-drill/runs/:id        one drill's stored result`
         'Log backups are not applied: the copy is the full (+ differential) point, and the result says how many log backups came after it.',
         'Smoke check: the nivaro_ key tables (plus any business tables listed in the settings) must exist in the copy and hold rows wherever they hold rows live. Row counts and CHECKSUM_AGG over small configuration tables are recorded beside the live ones; differences are expected (the copy is older) and never fail the drill. DBCC CHECKDB (physical only) is optional.',
         'The login needs CREATE ANY DATABASE (dbcreator) and SELECT on msdb, and the SQL Server needs disk for a full copy (checked against the target volume before restoring). Each missing piece is recorded as the reason the drill could not run.',
-        'Each run’s result lives on its nivaro_job_runs row (job restore-drill, progress column) — no table of its own. Background Jobs shows the runs; a failed drill reads failed there.'
+        'Each run’s result lives on its nivaro_job_runs row (job restore-drill, progress column) — no table of its own. Jobs shows the runs; a failed drill reads failed there.'
       ]
     },
     {
@@ -86,7 +86,7 @@ GET   /api/telemetry/restore-drill/runs/:id        one drill's stored result`
     },
     {
       type: 'note',
-      text: 'Ask AI on the Telemetry page (and the ops assistant) has a recovery_status tool with the same judged rows, so "could we recover right now?" and "did last night’s restore drill pass?" answer from the same facts. DB Health shows a red strip while any recovery row is red.'
+      text: 'Ask AI on the Telemetry page (and the ops assistant) has a recovery_status tool with the same judged rows, so "could we recover right now?" and "did last night’s restore drill pass?" answer from the same facts. The Database page’s Overview tab shows a red strip while any recovery row is red.'
     }
   ]
 }

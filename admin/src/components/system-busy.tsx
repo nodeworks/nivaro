@@ -104,7 +104,7 @@ function SystemBusyPill() {
       <button
         type='button'
         data-system-busy
-        onClick={() => navigate('/background-jobs')}
+        onClick={() => navigate('/jobs')}
         className='flex w-full items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[12px] font-medium text-amber-800 shadow-sm transition-colors hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300 dark:hover:bg-amber-500/20'
       >
         <Loader2 className='h-3 w-3 shrink-0 animate-spin motion-reduce:animate-none' aria-hidden />

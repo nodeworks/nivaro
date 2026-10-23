@@ -310,8 +310,8 @@ function BulkPanel({ sel }: { sel: Selection }) {
           {r.collection ? ` · into ${r.collection}` : ''}
         </p>
         <p className={HINT}>The node goes away when the run finishes.</p>
-        <SafeLink to='/background-jobs' className={`${LINK} w-fit text-[12px]`}>
-          Open Background Jobs
+        <SafeLink to='/jobs' className={`${LINK} w-fit text-[12px]`}>
+          Open Jobs
         </SafeLink>
       </div>
     </Section>
@@ -460,7 +460,7 @@ function EntityTuningPanel({ sel }: { sel: Selection }) {
     <Section title={`Tuning proposals · ${t.count}`}>
       <div className='grid gap-2'>
         <TuningList items={items} />
-        <SafeLink to='/db-tuning' className={`${LINK} w-fit text-[12px]`} id='tm-tuning-link'>
+        <SafeLink to='/database/tuning' className={`${LINK} w-fit text-[12px]`} id='tm-tuning-link'>
           Open Database tuning
         </SafeLink>
       </div>
@@ -481,7 +481,7 @@ function StatementTuningFooter({ inspectRef, anchor, windowSec }: InspectPanelPr
         Tuning proposals for these tables · {hits.length}
       </h3>
       <TuningList items={hits} />
-      <SafeLink to='/db-tuning' className={`${LINK} w-fit text-[12px]`}>
+      <SafeLink to='/database/tuning' className={`${LINK} w-fit text-[12px]`}>
         Open Database tuning
       </SafeLink>
     </div>

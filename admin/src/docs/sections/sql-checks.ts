@@ -7,7 +7,7 @@ export const sqlChecksDocs: DocSection = {
     { type: 'h1', id: 'sql-checks', text: 'SQL Checks' },
     {
       type: 'p',
-      text: 'The SQL checks page at /sql-checks (Operations → Health) checks the SQL that runs against the database for mistakes that corrupt or slow data. It reads every procedure, function, view and trigger definition from the database itself (sys.sql_modules), plus the SQL bodies Nivaro keeps in its own tables: import definitions’ stored procedure bodies and custom queries. Findings are tracked across runs, so a finding has a history: when it first appeared, how many runs saw it, and when it went away. Checks only read; nothing is changed by a run. Two kinds of procedure fix can be applied from a finding by a person (see Applying a fix). Admins only; SQL Server only.'
+      text: 'SQL checks, the SQL checks tab of the Database page (/database/sql-checks, Operations → Database), checks the SQL that runs against the database for mistakes that corrupt or slow data. It reads every procedure, function, view and trigger definition from the database itself (sys.sql_modules), plus the SQL bodies Nivaro keeps in its own tables: import definitions’ stored procedure bodies and custom queries. Findings are tracked across runs, so a finding has a history: when it first appeared, how many runs saw it, and when it went away. Checks only read; nothing is changed by a run. Two kinds of procedure fix can be applied from a finding by a person (see Applying a fix). Admins only; SQL Server only.'
     },
     { type: 'h2', id: 'sql-checks-checks', text: 'What it checks' },
     {
@@ -74,13 +74,13 @@ export const sqlChecksDocs: DocSection = {
         'Trends: open findings per run by severity, new and resolved per run, open findings by check and the objects with the most.',
         'Fixes: cleanups and guard indexes logged by fix scripts, and “Procedure changed” rows Nivaro logs itself when a run finds that findings went away because their procedure or query was edited.',
         'Runs: every run with its duration, counts, SQLFluff status and errors.',
-        'DB & Runtime Health shows a strip linking here while critical findings are open.'
+        'The Database page’s Overview tab shows a strip linking here while critical findings are open.'
       ]
     },
     { type: 'h2', id: 'sql-checks-settings', text: 'Settings and schedule' },
     {
       type: 'p',
-      text: 'Settings live on the page (nivaro_settings.sql_checks): run nightly (off by default), count NULL keys and copies (reads the tables a MERGE writes; tables over the row cap, 5,000,000 by default, are skipped), the per-table count timeout (120 s), and whether to check import definitions and custom queries. The nightly run is the `sql-checks` job at 03:30 (Background Jobs can move it); it only ticks on deployed instances. SQL_CHECKS=on or off in the server environment forces the nightly run on or off whatever the setting says, for databases rebuilt nightly from another one (the setting would be wiped); the page then shows the switch as set by the server’s configuration. Run now always works.'
+      text: 'Settings live on the tab (nivaro_settings.sql_checks): run nightly (off by default), count NULL keys and copies (reads the tables a MERGE writes; tables over the row cap, 5,000,000 by default, are skipped), the per-table count timeout (120 s), and whether to check import definitions and custom queries. The nightly run is the `sql-checks` job at 03:30 (Jobs can move it); it only ticks on deployed instances. SQL_CHECKS=on or off in the server environment forces the nightly run on or off whatever the setting says, for databases rebuilt nightly from another one (the setting would be wiped); the page then shows the switch as set by the server’s configuration. Run now always works.'
     },
     { type: 'h2', id: 'sql-checks-sqlfluff', text: 'SQLFluff sidecar' },
     {

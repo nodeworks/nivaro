@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { CalendarClock, RotateCw } from 'lucide-react'
+import { RotateCw } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -144,15 +145,10 @@ export function CronTimelinePage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-background'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-2.5'>
-            <CalendarClock className='h-5 w-5 text-muted-foreground' />
-            <h1 className='text-[15px] font-semibold text-slate-900 dark:text-slate-100'>
-              Cron Timeline
-            </h1>
-          </div>
-          <div className='flex items-center gap-2'>
+      <HubToolbar
+        description='Faint ticks mark the schedule, solid bars what actually ran. Red bands are wall-clock spans where two heavy jobs ran at once.'
+        actions={
+          <>
             <div className='flex overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
               {WINDOW_CHOICES.map((h) => (
                 <button
@@ -179,13 +175,9 @@ export function CronTimelinePage() {
               <RotateCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
               Refresh
             </Button>
-          </div>
-        </div>
-        <p className='mt-1 max-w-[80ch] text-[12px] text-slate-500'>
-          Faint ticks mark the schedule, solid bars what actually ran. Red bands are wall-clock
-          spans where two heavy jobs ran at once.
-        </p>
-      </header>
+          </>
+        }
+      />
 
       <div className='flex-1 overflow-auto bg-slate-50 p-6 dark:bg-background'>
         {isLoading || !data ? (

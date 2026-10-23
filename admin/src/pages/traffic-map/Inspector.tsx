@@ -498,8 +498,8 @@ function HistoryBody({
       <div className='grid gap-2 px-3.5 py-3 text-[12.5px]' id='tm-history-note'>
         <p className='text-[var(--tm-fg-2)]'>{dh.note}</p>
         {(selKey === 'db' || selKey === 'redis' || selKey === 'store') && (
-          <Link to='/db-health' id='tm-history-db-health' className={cn(LINK, 'w-fit text-[12px]')}>
-            Open DB Health
+          <Link to='/database' id='tm-history-db-health' className={cn(LINK, 'w-fit text-[12px]')}>
+            Open Database
           </Link>
         )}
       </div>

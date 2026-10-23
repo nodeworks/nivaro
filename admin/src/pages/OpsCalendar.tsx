@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { CalendarClock, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
+import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -27,7 +28,10 @@ const KIND_META: Record<string, { label: string; cls: string }> = {
   retention: { label: 'Retention', cls: 'bg-red-500/10 text-red-600 dark:text-red-400' },
   blackout: { label: 'Blackout', cls: 'bg-amber-500/10 text-amber-700 dark:text-amber-400' },
   ooo: { label: 'OOO', cls: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
-  announcement: { label: 'Broadcast', cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' }
+  announcement: {
+    label: 'Broadcast',
+    cls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+  }
 }
 
 const DAY = 86_400_000
@@ -75,18 +79,9 @@ export default function OpsCalendar() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex flex-wrap items-center gap-3'>
-          <CalendarClock className='h-5 w-5 text-muted-foreground' />
-          <div className='min-w-0 flex-1'>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Ops Calendar
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Everything scheduled on this instance — crons, changes, reports, retention,
-              blackouts, OOO, broadcasts.
-            </p>
-          </div>
+      <HubToolbar
+        description='Everything scheduled on this instance — crons, changes, reports, retention, blackouts, OOO, broadcasts.'
+        actions={
           <div className='flex items-center gap-1.5'>
             <button
               type='button'
@@ -117,7 +112,8 @@ export default function OpsCalendar() {
               <ChevronRight className='h-4 w-4' />
             </button>
           </div>
-        </div>
+        }
+      >
         <div className='mt-3 flex flex-wrap gap-1.5'>
           {Object.entries(KIND_META).map(([kind, meta]) => (
             <button
@@ -142,7 +138,7 @@ export default function OpsCalendar() {
             </button>
           ))}
         </div>
-      </header>
+      </HubToolbar>
 
       <div className='flex-1 overflow-y-auto p-4'>
         {isLoading ? (
@@ -167,8 +163,14 @@ export default function OpsCalendar() {
                         : 'border-slate-100 text-slate-600 dark:border-border/60 dark:text-slate-300'
                     )}
                   >
-                    {d.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-                    {isToday && <span className='ml-1.5 text-[10px] font-medium uppercase'>today</span>}
+                    {d.date.toLocaleDateString(undefined, {
+                      weekday: 'short',
+                      month: 'short',
+                      day: 'numeric'
+                    })}
+                    {isToday && (
+                      <span className='ml-1.5 text-[10px] font-medium uppercase'>today</span>
+                    )}
                   </div>
                   <div className='max-h-[440px] space-y-1 overflow-y-auto p-2'>
                     {d.events.length === 0 && (
@@ -182,13 +184,20 @@ export default function OpsCalendar() {
                       })
                       const body = (
                         <>
-                          <span className={cn('rounded px-1 py-px text-[9.5px] font-semibold uppercase', meta.cls)}>
+                          <span
+                            className={cn(
+                              'rounded px-1 py-px text-[9.5px] font-semibold uppercase',
+                              meta.cls
+                            )}
+                          >
                             {meta.label}
                           </span>
                           <span className='min-w-0 flex-1 truncate text-[11.5px] text-slate-700 dark:text-slate-200'>
                             {e.label}
                           </span>
-                          <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>{time}</span>
+                          <span className='shrink-0 text-[10.5px] tabular-nums text-slate-400'>
+                            {time}
+                          </span>
                         </>
                       )
                       const key = `${e.kind}-${e.label}-${e.at}-${i}`
@@ -202,7 +211,11 @@ export default function OpsCalendar() {
                           {body}
                         </Link>
                       ) : (
-                        <div key={key} className='flex items-center gap-1.5 rounded-md px-1.5 py-1' data-tip={e.detail ?? undefined}>
+                        <div
+                          key={key}
+                          className='flex items-center gap-1.5 rounded-md px-1.5 py-1'
+                          data-tip={e.detail ?? undefined}
+                        >
                           {body}
                         </div>
                       )

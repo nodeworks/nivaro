@@ -457,7 +457,7 @@ async function gatherStoredTrace(id: string): Promise<ExplainFacts> {
     },
     instructions:
       'Explain where the time of this request went (database waiting vs application time vs a repeated statement = N+1) and what would help most. Phases are nested by depth (0 = directly under the request) and can overlap the statements inside them; unaccounted_ms is request time outside any SQL. Statement values were left out on purpose.',
-    links: [{ label: 'Open database health', href: '/db-health' }]
+    links: [{ label: 'Open Database', href: '/database' }]
   }
 }
 
@@ -520,8 +520,8 @@ const gatherTrace: Gatherer = async (params) => {
     instructions:
       'Explain where the time of this request went (database waiting vs application time vs a repeated statement = N+1) and what would help most. If an existing tuning proposal covers it, say so by title. Statement bindings were left out on purpose.',
     links: related.length
-      ? [{ label: 'Open database tuning', href: '/db-tuning' }]
-      : [{ label: 'Open database health', href: '/db-health' }]
+      ? [{ label: 'Open database tuning', href: '/database/tuning' }]
+      : [{ label: 'Open Database', href: '/database' }]
   }
 }
 
@@ -674,7 +674,7 @@ const gatherJobRun: Gatherer = async (params) => {
     },
     instructions:
       'Explain why this background job run failed (or ran long) in plain words from its error and outcome, whether it has failed before, and the fix. Say whether running it again is safe.',
-    links: [{ label: 'Open background jobs', href: '/background-jobs' }]
+    links: [{ label: 'Open Jobs', href: '/jobs' }]
   }
 }
 

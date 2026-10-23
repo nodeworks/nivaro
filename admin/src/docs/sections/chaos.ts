@@ -63,7 +63,7 @@ export const chaosDocs: DocSection = {
     { type: 'h2', id: 'chaos-runs', text: 'Runs and verdicts' },
     {
       type: 'p',
-      text: 'Every run is a row with a timeline: armed, each sample, alerts and readiness changes, notes, the stop or abort. While it runs the Runs tab shows the cockpit; afterwards a summary with the verdict, what was armed on what, how long it ran, which limits held and the timeline. Every run is also a job run (kind `chaos`) on the Background Jobs console. Runs made outside the registry — a CI job with toxiproxy, a game-day step measured by hand — are posted to `POST /api/chaos/runs/record` and appear in the same list.'
+      text: 'Every run is a row with a timeline: armed, each sample, alerts and readiness changes, notes, the stop or abort. While it runs the Runs tab shows the cockpit; afterwards a summary with the verdict, what was armed on what, how long it ran, which limits held and the timeline. Every run is also a job run (kind `chaos`) on the Jobs console. Runs made outside the registry — a CI job with toxiproxy, a game-day step measured by hand — are posted to `POST /api/chaos/runs/record` and appear in the same list.'
     },
     {
       type: 'ul',

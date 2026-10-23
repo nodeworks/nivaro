@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Suspense, useEffect, useRef } from 'react'
 import { BrowserRouter, Navigate, Route, useLocation, useNavigate, useParams } from 'react-router'
 import { Toaster } from 'sonner'
+import { HubRedirect } from '@/components/hub-page'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
@@ -185,11 +186,9 @@ const IntegrationHealthPage = lazy(() =>
 const InboundMappingsPage = lazy(() =>
   import('@/pages/InboundMappings').then((m) => ({ default: m.InboundMappingsPage }))
 )
-const BackgroundJobs = lazy(() => import('@/pages/BackgroundJobs'))
 const Realtime = lazy(() => import('@/pages/Realtime'))
 const TrafficMap = lazy(() => import('@/pages/traffic-map/TrafficMap'))
 
-const MonitorsPage = lazy(() => import('@/pages/Monitors'))
 const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
 const ConfigHealth = lazy(() => import('@/pages/ConfigHealth'))
 const ConfigReview = lazy(() => import('@/pages/ConfigReview'))
@@ -197,7 +196,6 @@ const LegalHolds = lazy(() => import('@/pages/LegalHolds'))
 const FindReplace = lazy(() => import('@/pages/FindReplace'))
 const M2MMatrix = lazy(() => import('@/pages/M2MMatrix'))
 const MailTemplates = lazy(() => import('@/pages/MailTemplates'))
-const OpsCalendar = lazy(() => import('@/pages/OpsCalendar'))
 const SetupChecklist = lazy(() => import('@/pages/SetupChecklist'))
 const ConfigSearch = lazy(() => import('@/pages/ConfigSearch'))
 const AccessRequests = lazy(() => import('@/pages/AccessRequests'))
@@ -205,9 +203,6 @@ const MailLog = lazy(() => import('@/pages/MailLog'))
 const NotificationBench = lazy(() => import('@/pages/NotificationBench'))
 const NotificationAnalytics = lazy(() => import('@/pages/NotificationAnalytics'))
 const DelegationConsole = lazy(() => import('@/pages/DelegationConsole'))
-const OpsTasks = lazy(() => import('@/pages/OpsTasks'))
-const DbTuning = lazy(() => import('@/pages/DbTuning'))
-const SqlChecks = lazy(() => import('@/pages/SqlChecks'))
 const Sequences = lazy(() => import('@/pages/Sequences'))
 const SqlScratchpad = lazy(() => import('@/pages/SqlScratchpad'))
 const RevisionSearch = lazy(() => import('@/pages/RevisionSearch'))
@@ -345,27 +340,15 @@ const AiKnowledgePage = lazy(() =>
 const ChangelogPage = lazy(() => import('@/pages/Changelog'))
 const ContrastAuditPage = lazy(() => import('@/pages/ContrastAudit'))
 const E2eRecorderPage = lazy(() => import('@/pages/E2eRecorder'))
-const TelemetryPage = lazy(() =>
-  import('@/pages/Telemetry').then((m) => ({ default: m.TelemetryPage }))
-)
+const JobsHub = lazy(() => import('@/pages/OpsHubs').then((m) => ({ default: m.JobsHub })))
+const DatabaseHub = lazy(() => import('@/pages/OpsHubs').then((m) => ({ default: m.DatabaseHub })))
+const HealthHub = lazy(() => import('@/pages/OpsHubs').then((m) => ({ default: m.HealthHub })))
 const InfrastructurePage = lazy(() =>
   import('@/pages/Infrastructure').then((m) => ({ default: m.InfrastructurePage }))
 )
 const ChaosPage = lazy(() => import('@/pages/Chaos').then((m) => ({ default: m.ChaosPage })))
 const ChaosRunReport = lazy(() =>
   import('@/pages/chaos/RunReportPage').then((m) => ({ default: m.RunReportPage }))
-)
-const HealthDashboardPage = lazy(() =>
-  import('@/pages/HealthDashboard').then((m) => ({ default: m.HealthDashboardPage }))
-)
-const DbHealthPage = lazy(() =>
-  import('@/pages/DbHealth').then((m) => ({ default: m.DbHealthPage }))
-)
-const OpsRedisPage = lazy(() =>
-  import('@/pages/OpsRedis').then((m) => ({ default: m.OpsRedisPage }))
-)
-const CronTimelinePage = lazy(() =>
-  import('@/pages/CronTimeline').then((m) => ({ default: m.CronTimelinePage }))
 )
 const UserGroupsPage = lazy(() =>
   import('@/pages/UserGroups').then((m) => ({ default: m.UserGroupsPage }))
@@ -638,10 +621,8 @@ export default function App() {
                     element={<Navigate to='/integration-health?tab=events' replace />}
                   />
                   <Route path='inbound-mappings' element={<InboundMappingsPage />} />
-                  <Route path='background-jobs' element={<BackgroundJobs />} />
                   <Route path='realtime' element={<Realtime />} />
                   <Route path='traffic-map' element={<TrafficMap />} />
-                  <Route path='monitors' element={<MonitorsPage />} />
                   <Route path='security-center' element={<SecurityCenter />} />
                   <Route path='config-health' element={<ConfigHealth />} />
                   <Route path='config-review' element={<ConfigReview />} />
@@ -649,7 +630,6 @@ export default function App() {
                   <Route path='find-replace' element={<FindReplace />} />
                   <Route path='m2m-matrix' element={<M2MMatrix />} />
                   <Route path='mail-templates' element={<MailTemplates />} />
-                  <Route path='ops-calendar' element={<OpsCalendar />} />
                   <Route path='setup-checklist' element={<SetupChecklist />} />
                   <Route path='config-search' element={<ConfigSearch />} />
                   <Route path='access-requests' element={<AccessRequests />} />
@@ -725,18 +705,25 @@ export default function App() {
                   <Route path='ai-plans' element={<AiPlansPage />} />
                   <Route path='chat-analytics' element={<ChatAnalyticsPage />} />
                   <Route path='search-analytics' element={<SearchAnalyticsPage />} />
-                  <Route path='health' element={<HealthDashboardPage />} />
-                  <Route path='telemetry' element={<TelemetryPage />} />
+                  {/* Operations hubs: the old standalone pages are tabs now; their paths
+                      redirect with the query string kept (components/hub-page.tsx). */}
+                  <Route path='jobs/*' element={<JobsHub />} />
+                  <Route path='database/*' element={<DatabaseHub />} />
+                  <Route path='health/*' element={<HealthHub />} />
+                  <Route path='background-jobs' element={<HubRedirect to='/jobs' />} />
+                  <Route path='cron-timeline' element={<HubRedirect to='/jobs/timeline' />} />
+                  <Route path='ops-calendar' element={<HubRedirect to='/jobs/calendar' />} />
+                  <Route path='ops-tasks' element={<HubRedirect to='/jobs/tasks' />} />
+                  <Route path='db-health' element={<HubRedirect to='/database' />} />
+                  <Route path='db-tuning' element={<HubRedirect to='/database/tuning' />} />
+                  <Route path='sql-checks' element={<HubRedirect to='/database/sql-checks' />} />
+                  <Route path='ops-redis' element={<HubRedirect to='/database/redis' />} />
+                  <Route path='monitors' element={<HubRedirect to='/health/monitors' />} />
+                  <Route path='telemetry' element={<HubRedirect to='/health/telemetry' />} />
                   <Route path='infrastructure' element={<InfrastructurePage />} />
                   <Route path='chaos' element={<ChaosPage />} />
                   <Route path='chaos/runs/:id' element={<ChaosRunReport />} />
-                  <Route path='db-health' element={<DbHealthPage />} />
                   <Route path='ops-console' element={<OpsConsolePage />} />
-                  <Route path='ops-tasks' element={<OpsTasks />} />
-                  <Route path='db-tuning' element={<DbTuning />} />
-                  <Route path='sql-checks' element={<SqlChecks />} />
-                  <Route path='ops-redis' element={<OpsRedisPage />} />
-                  <Route path='cron-timeline' element={<CronTimelinePage />} />
                   <Route path='user-groups' element={<UserGroupsPage />} />
                   <Route path='feature-flags' element={<FeatureFlagsPage />} />
                   <Route path='command' element={<CommandCenterPage />} />

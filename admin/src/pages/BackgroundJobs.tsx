@@ -1,12 +1,13 @@
 import { createNivaro } from '@nivaro/sdk'
 import { EventPathSheet, NivaroProvider, useLiveEvent, useLiveWatchRoom } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, ChevronRight, GitBranch, Pencil, Play, RotateCw } from 'lucide-react'
+import { ChevronRight, GitBranch, Pencil, Play, RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { ExplainButton } from '@/components/explain-button'
 import { HelpVideoRenderQueue } from '@/components/help-video-render-queue'
+import { HubToolbar } from '@/components/hub-page'
 import { JobRunLog } from '@/components/job-run-log'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
@@ -695,20 +696,7 @@ export default function BackgroundJobs() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex items-center gap-2.5'>
-          <Activity className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-              Background Jobs
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Everything running behind the scenes — cron jobs, remediations, backfills, recalcs —
-              with outcomes, durations, and history in one place.
-            </p>
-          </div>
-        </div>
-      </header>
+      <HubToolbar description='Everything running behind the scenes — cron jobs, remediations, backfills, recalcs — with outcomes, durations, and history in one place.' />
 
       <div className='flex-1 space-y-4 overflow-y-auto p-6'>
         {registry.data?.ticks_enabled === false &&

@@ -218,8 +218,8 @@ function SourcePanel({ sel }: { sel: Selection }) {
                   <span className='text-[var(--tm-muted)]'> · next {fmtTime(d.next_run)}</span>
                 ) : null}
               </p>
-              <Link to='/background-jobs' className={cn(LINK, 'w-fit')}>
-                Open Background Jobs
+              <Link to='/jobs' className={cn(LINK, 'w-fit')}>
+                Open Jobs
               </Link>
             </div>
           ) : (

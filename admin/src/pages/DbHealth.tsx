@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Database, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { PlanViewer } from '@/components/plan-viewer'
 import { formatBytes, SessionReplayCostPanel } from '@/components/session-replay-cost-panel'
 import { Button } from '@/components/ui/button'
@@ -397,17 +398,9 @@ export function DbHealthPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <div className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div>
-            <h1 className='flex items-center gap-2 text-[18px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-              <Database className='h-4.5 w-4.5 text-nvr-cyan' /> DB & Runtime Health
-            </h1>
-            <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Live diagnostics from SQL Server DMVs, this process, and Redis. In-process panels are
-              per replica.
-            </p>
-          </div>
+      <HubToolbar
+        description='Live diagnostics from SQL Server DMVs, this process, and Redis. In-process panels are per replica.'
+        actions={
           <Button
             size='sm'
             variant='outline'
@@ -415,13 +408,13 @@ export function DbHealthPage() {
           >
             <RefreshCw className='mr-1.5 h-3.5 w-3.5' /> Refresh
           </Button>
-        </div>
-      </div>
+        }
+      />
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-8 dark:bg-background'>
         {proposedCount > 0 && (
           <Link
-            to='/db-tuning'
+            to='/database/tuning'
             data-tuning-strip-link
             className='mb-5 block rounded border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-2 text-[12px] text-foreground'
           >
@@ -431,7 +424,7 @@ export function DbHealthPage() {
         )}
         {criticalSql > 0 && (
           <Link
-            to='/sql-checks?tab=findings&severity=critical'
+            to='/database/sql-checks?tab=findings&severity=critical'
             data-sql-checks-strip-link
             className='mb-5 block rounded border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15'
           >
@@ -441,7 +434,7 @@ export function DbHealthPage() {
         )}
         {recoveryBad && (
           <Link
-            to='/telemetry'
+            to='/health/telemetry'
             data-recovery-strip-link
             data-tip={recoveryBad.reason}
             className='mb-5 flex items-baseline gap-1.5 rounded border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15'

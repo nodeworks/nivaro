@@ -324,7 +324,7 @@ describe('runWatch', () => {
     expect(opts).toMatchObject({
       category: 'system',
       subject: expect.stringMatching(/rolled back/),
-      target: { kind: 'external', url: '/db-tuning?proposal=w1' }
+      target: { kind: 'external', url: '/database/tuning?proposal=w1' }
     })
   })
   it('one bad hour in the window does not roll back', async () => {

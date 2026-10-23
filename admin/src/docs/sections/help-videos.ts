@@ -33,11 +33,11 @@ export const helpVideosGuide: DocSection = {
     },
     {
       type: 'p',
-      text: "The recording controls (time, pause, mute, stop, the script) are kept out of the video when you record this tab in Chrome 132 or later: the capture is limited to the page itself, so dialogs, menus and toasts are recorded and the controls are not. In other browsers, or when you record a window or the whole screen, the controls show in the video as before; trim or blur them in the editor. The View as bar is never recorded, whether clean screen is on or off."
+      text: 'The recording controls (time, pause, mute, stop, the script) are kept out of the video when you record this tab in Chrome 132 or later: the capture is limited to the page itself, so dialogs, menus and toasts are recorded and the controls are not. In other browsers, or when you record a window or the whole screen, the controls show in the video as before; trim or blur them in the editor. The View as bar is never recorded, whether clean screen is on or off.'
     },
     {
       type: 'p',
-      text: 'Recording as someone else: an administrator who can author videos may View as another person and record from there. The video shows that person\'s screen (their navigation, their data, their permissions), while the video, its upload and every edit belong to the administrator. The help-video library and editor work as the administrator; the per-screen Videos button and required videos still show what the other person sees.'
+      text: "Recording as someone else: an administrator who can author videos may View as another person and record from there. The video shows that person's screen (their navigation, their data, their permissions), while the video, its upload and every edit belong to the administrator. The help-video library and editor work as the administrator; the per-screen Videos button and required videos still show what the other person sees."
     },
     {
       type: 'p',
@@ -89,7 +89,7 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Automatic captions' },
     {
       type: 'p',
-      text: 'Generate captions, in the editor’s Captions panel, starts a background job on the server: the sound of the draft’s recording is extracted with ffmpeg (mono, 16 kHz, never past the 30-minute limit) and transcribed, then the words are grouped into caption lines of at most 42 characters and 5 seconds, split at pauses and sentence ends, in the recording’s own time. The panel shows the job’s progress (waiting, reading the sound, transcribing) and, when it is done, the lines as a pending set to review: jump to a line to hear it, then Use these captions (replaces the video’s captions) or Merge with mine (keeps yours and adds only lines that do not overlap them), or Discard. Using them is an ordinary edit — it saves with the draft and can be undone. A pending set is kept for 24 hours; one job runs at a time on a server (a second request waits), and each run is a Background Jobs run of kind ai.'
+      text: 'Generate captions, in the editor’s Captions panel, starts a background job on the server: the sound of the draft’s recording is extracted with ffmpeg (mono, 16 kHz, never past the 30-minute limit) and transcribed, then the words are grouped into caption lines of at most 42 characters and 5 seconds, split at pauses and sentence ends, in the recording’s own time. The panel shows the job’s progress (waiting, reading the sound, transcribing) and, when it is done, the lines as a pending set to review: jump to a line to hear it, then Use these captions (replaces the video’s captions) or Merge with mine (keeps yours and adds only lines that do not overlap them), or Discard. Using them is an ordinary edit — it saves with the draft and can be undone. A pending set is kept for 24 hours; one job runs at a time on a server (a second request waits), and each run is a Jobs run of kind ai.'
     },
     {
       type: 'p',
@@ -184,7 +184,7 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Up next' },
     {
       type: 'p',
-      text: 'Up next (after the video ends, and under the player) suggests up to five published videos the viewer may watch and has not finished: first what people in the viewer’s role started within two hours after this video, then what anyone did, then other videos for the same screen. The pairs are recomputed nightly (the help-video-next job, 03:20, listed under Background Jobs) from the view rows; clicking a suggestion plays it in the same sheet.'
+      text: 'Up next (after the video ends, and under the player) suggests up to five published videos the viewer may watch and has not finished: first what people in the viewer’s role started within two hours after this video, then what anyone did, then other videos for the same screen. The pairs are recomputed nightly (the help-video-next job, 03:20, listed under Jobs) from the view rows; clicking a suggestion plays it in the same sheet.'
     },
     { type: 'h3', text: 'Stats' },
     {
@@ -194,7 +194,7 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Storage' },
     {
       type: 'p',
-      text: 'Videos → Storage (administrators) lists what help videos take up: every version of every video with the size of its recording, render, captions and poster, sortable by any column, with totals at the top. Retention removes the files of earlier cuts after a number of days (blank = keep everything, the default). The published version and its recording, the current draft, a version whose render is queued or running, and any version whose recording a kept version still uses (opening the editor or restoring copies the published recording) are always kept. Next sweep lists exactly what the coming sweep would remove and why, with sizes, before anything happens; the sweep runs every night and Run now runs it at once as a Background Jobs run. Every removed file is a row in the activity log, plus one summary line per sweep. A version whose files were removed stays in the Versions tab as "Files removed by retention" and cannot be restored; a package export refuses a video whose published version lost its files.'
+      text: 'Videos → Storage (administrators) lists what help videos take up: every version of every video with the size of its recording, render, captions and poster, sortable by any column, with totals at the top. Retention removes the files of earlier cuts after a number of days (blank = keep everything, the default). The published version and its recording, the current draft, a version whose render is queued or running, and any version whose recording a kept version still uses (opening the editor or restoring copies the published recording) are always kept. Next sweep lists exactly what the coming sweep would remove and why, with sizes, before anything happens; the sweep runs every night and Run now runs it at once as a Jobs run. Every removed file is a row in the activity log, plus one summary line per sweep. A version whose files were removed stays in the Versions tab as "Files removed by retention" and cannot be restored; a package export refuses a video whose published version lost its files.'
     }
   ]
 }
@@ -408,7 +408,7 @@ export const helpVideosApi: DocSection = {
         [
           'POST /help-videos/storage/sweep',
           'administrators',
-          'Run the retention sweep now (a Background Jobs run of help-video-storage-sweep); answers the counts and a summary line'
+          'Run the retention sweep now (a Jobs run of help-video-storage-sweep); answers the counts and a summary line'
         ],
         [
           'POST /help-videos/packages',
@@ -430,7 +430,7 @@ export const helpVideosApi: DocSection = {
     { type: 'h3', text: 'Rendering' },
     {
       type: 'p',
-      text: 'A publish queues one render: Chromium draws the callouts, the intro and end cards and the chapter banners (in the instance brand; a moving card is drawn frame by frame, only where something moves), ffmpeg composites blur and the drawings on the whole recorded frame, then the crop, zoom, cuts and speed in one pass (a cropped video comes out at the cropped size, the recording scaled so it is at most 1080p and never enlarged) to H.264 MP4 (1080p at most) with the cards joined before and after (silent when the recording has sound), plus WebVTT captions and a poster. A blank card title or subtitle uses the video’s title and description as they are when the render runs: renaming a video later does not re-render it. Each render is a Background Jobs run of kind render, and it holds the heavy job slot for its whole run. ffmpeg runs at the lowest CPU priority with a thread cap so a render never starves requests on the same server. VIDEO_RENDER_THREADS (default 2) sets the cap.'
+      text: 'A publish queues one render: Chromium draws the callouts, the intro and end cards and the chapter banners (in the instance brand; a moving card is drawn frame by frame, only where something moves), ffmpeg composites blur and the drawings on the whole recorded frame, then the crop, zoom, cuts and speed in one pass (a cropped video comes out at the cropped size, the recording scaled so it is at most 1080p and never enlarged) to H.264 MP4 (1080p at most) with the cards joined before and after (silent when the recording has sound), plus WebVTT captions and a poster. A blank card title or subtitle uses the video’s title and description as they are when the render runs: renaming a video later does not re-render it. Each render is a Jobs run of kind render, and it holds the heavy job slot for its whole run. ffmpeg runs at the lowest CPU priority with a thread cap so a render never starves requests on the same server. VIDEO_RENDER_THREADS (default 2) sets the cap.'
     },
     {
       type: 'p',
@@ -457,7 +457,7 @@ export const helpVideosApi: DocSection = {
     { type: 'h3', text: 'The render queue' },
     {
       type: 'p',
-      text: 'Background Jobs lists help-video renders while there are any: the one rendering with its progress and encoder, the ones waiting in the order they will run, and when each should be done, estimated from the median render time per minute of recording over recent renders. Cancel stops a render at once (ffmpeg and the card drawing are stopped, and the next render can start) or takes a waiting one off the queue. The version keeps playing with its edits applied live and its status says it was cancelled; nothing queues it again on its own. An author queues it again with Render again in the editor. A render running on another server stops within a few seconds.'
+      text: 'Jobs lists help-video renders while there are any: the one rendering with its progress and encoder, the ones waiting in the order they will run, and when each should be done, estimated from the median render time per minute of recording over recent renders. Cancel stops a render at once (ffmpeg and the card drawing are stopped, and the next render can start) or takes a waiting one off the queue. The version keeps playing with its edits applied live and its status says it was cancelled; nothing queues it again on its own. An author queues it again with Render again in the editor. A render running on another server stops within a few seconds.'
     },
     {
       type: 'note',

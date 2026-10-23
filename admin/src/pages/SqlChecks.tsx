@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Play, SearchCheck, Settings2 } from 'lucide-react'
+import { Loader2, Play, Settings2 } from 'lucide-react'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -93,24 +94,10 @@ export default function SqlChecks() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-4 py-4 dark:border-border dark:bg-card sm:px-6'>
-        <div className='flex flex-wrap items-start gap-3'>
-          <div className='min-w-0 flex-1'>
-            <div className='flex items-center gap-2.5'>
-              <SearchCheck className='h-5 w-5 shrink-0 text-muted-foreground' aria-hidden='true' />
-              <h1 className='m-0 text-lg font-semibold text-slate-900 dark:text-foreground'>
-                SQL checks
-              </h1>
-            </div>
-            <p className='m-0 mt-1 max-w-[80ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
-              Every procedure, function, view and trigger in the database, plus import definitions’
-              stored procedures and custom queries, checked for mistakes that corrupt or slow data:
-              MERGE keys that skip empty values, writes without WHERE, transactions left open and
-              more. Checks only read. Two kinds of procedure fix can be applied from a finding, with
-              a preview, a re-check and automatic undo.
-            </p>
-          </div>
-          <div className='flex shrink-0 flex-wrap items-center gap-2'>
+      <HubToolbar
+        description='Every procedure, function, view and trigger in the database, plus import definitions’ stored procedures and custom queries, checked for mistakes that corrupt or slow data: MERGE keys that skip empty values, writes without WHERE, transactions left open and more. Checks only read. Two kinds of procedure fix can be applied from a finding, with a preview, a re-check and automatic undo.'
+        actions={
+          <>
             <Button
               size='sm'
               variant='outline'
@@ -143,8 +130,9 @@ export default function SqlChecks() {
               )}
               {s?.is_running ? 'Running…' : armed ? 'Click again to run' : 'Run now'}
             </Button>
-          </div>
-        </div>
+          </>
+        }
+      >
         <span className='sr-only' role='status' aria-live='polite'>
           {liveMsg}
         </span>
@@ -199,7 +187,7 @@ export default function SqlChecks() {
             Last run failed: {last.error}
           </p>
         )}
-      </header>
+      </HubToolbar>
 
       {showSettings && s?.ready && (
         <SettingsCard

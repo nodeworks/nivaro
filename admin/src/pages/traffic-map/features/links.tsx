@@ -170,7 +170,7 @@ function NodeLinks({ sel }: { sel: import('../types').Selection }) {
   } else if (sel.kind === 'down') {
     const m = sel.id.match(/^ext:(\d+)$/)
     if (m) links.push({ label: 'External API', url: `/external-apis/${m[1]}`, id: 'tm-down-api' })
-    if (sel.id === 'db') links.push({ label: 'DB Health', url: '/db-health', id: 'tm-down-db' })
+    if (sel.id === 'db') links.push({ label: 'Database', url: '/database', id: 'tm-down-db' })
   }
   if (links.length === 0) return null
   return (

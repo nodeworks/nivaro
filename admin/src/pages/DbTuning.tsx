@@ -1,6 +1,7 @@
 import { createNivaro } from '@nivaro/sdk'
 import { DbTuningView, NivaroProvider } from '@nivaro/shared'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
   timeoutMs: 90_000
@@ -10,16 +11,7 @@ const sharedClient = createNivaro(typeof window !== 'undefined' ? window.locatio
 export default function DbTuning() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <h1 className='text-lg font-semibold text-slate-900 dark:text-foreground'>
-          Database tuning
-        </h1>
-        <p className='mt-1 max-w-[72ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
-          The platform watches its own query workload, proposes indexes, procedure rewrites, stored
-          rollups and query caches, and proves each one before it is listed. Nothing changes until
-          you click Apply; an applied change is watched for a week and rolled back if it regresses.
-        </p>
-      </header>
+      <HubToolbar description='The platform watches its own query workload, proposes indexes, procedure rewrites, stored rollups and query caches, and proves each one before it is listed. Nothing changes until you click Apply; an applied change is watched for a week and rolled back if it regresses.' />
       <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <NivaroProvider client={sharedClient}>
           <DbTuningView

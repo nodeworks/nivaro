@@ -218,7 +218,7 @@ export function JobsPeaks() {
           )}
           <p className='text-[11.5px] text-[var(--tm-muted)]'>
             Change a schedule on{' '}
-            <SafeLink to='/background-jobs' className={LINK}>
+            <SafeLink to='/jobs' className={LINK}>
               Background Jobs
             </SafeLink>
             . The curve is this instance&apos;s request log over the last 7 days; the jobs are their

@@ -670,7 +670,7 @@ Authorization: Bearer <token>
         'The body may be `{ "rows": [...] }` or a bare array of rows.',
         '`"atomic": true` makes the call all or nothing. It takes creates only. The first refused row stops the run, the rows created before it are removed, and the answer is `422` naming the row.',
         '`?return=ids` leaves the records out of the results and returns status and id per row.',
-        '`?async=1` queues the run and answers `202` with a `run_id`. Read the results from `GET /api/items/<collection>/bulk/<run_id>`; they are kept for 24 hours. The run also appears under Background Jobs.',
+        '`?async=1` queues the run and answers `202` with a `run_id`. Read the results from `GET /api/items/<collection>/bulk/<run_id>`; they are kept for 24 hours. The run also appears under Jobs.',
         'A refused row never stops the others unless `atomic` is set.',
         'Outbound effects of the run (webhooks, event flows, notifications, auto transitions, realtime) are held until the run ends and dropped when an atomic run rolls back — nobody hears about rows that no longer exist. Without `atomic`, every row that landed has its effects sent once the run finishes.'
       ]

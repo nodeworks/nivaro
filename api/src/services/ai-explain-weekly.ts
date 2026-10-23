@@ -178,7 +178,7 @@ export async function gatherOpsWeekly(): Promise<ExplainFacts> {
     instructions:
       'Write a short Monday operations summary for administrators in 2-4 short paragraphs: what was deployed or changed (migrations, configuration), the slowest routes, jobs/imports/partner pushes that failed, growth in storage, and AI spend (spent so far, the month-end projection against last month, anything over a budget). Skip anything the facts do not show. Put it in "summary"; steps may list up to 3 things worth a look.',
     links: [
-      { label: 'Open background jobs', href: '/background-jobs' },
+      { label: 'Open Jobs', href: '/jobs' },
       { label: 'Open API analytics', href: '/api-analytics' },
       { label: 'Open AI quality', href: '/ai-quality?tab=spend' }
     ]

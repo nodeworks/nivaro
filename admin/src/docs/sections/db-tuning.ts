@@ -7,11 +7,11 @@ export const dbTuning: DocSection = {
     { type: 'h1', id: 'db-tuning', text: 'Database Tuning' },
     {
       type: 'p',
-      text: 'The Database tuning page at /db-tuning (Operations → Health) is a propose-only tuning loop over the platform’s own workload. Each night it reads what the database and the API already record, turns what it finds into candidate changes, proves every candidate before listing it, and ranks the proposals by the time each would save per day. Nothing changes until an administrator clicks Apply. An applied change is watched (7 days by default) and rolled back on its own when it regresses. Admins only; index and procedure changes need SQL Server.'
+      text: 'Database tuning, the Tuning tab of the Database page (/database/tuning, Operations → Database), is a propose-only tuning loop over the platform’s own workload. Each night it reads what the database and the API already record, turns what it finds into candidate changes, proves every candidate before listing it, and ranks the proposals by the time each would save per day. Nothing changes until an administrator clicks Apply. An applied change is watched (7 days by default) and rolled back on its own when it regresses. Admins only; index and procedure changes need SQL Server.'
     },
     {
       type: 'p',
-      text: 'The page lists proposals in tabs: Proposed, Watching, Applied, Rolled back (failed ones too), Rejected by proof, Dismissed and Stale. Each proposal shows its evidence, its proof and the method that produced it, the exact change and its undo. DB & Runtime Health shows a strip linking here while proposals are waiting.'
+      text: 'The page lists proposals in tabs: Proposed, Watching, Applied, Rolled back (failed ones too), Rejected by proof, Dismissed and Stale. Each proposal shows its evidence, its proof and the method that produced it, the exact change and its undo. The Database page’s Overview tab shows a strip linking here while proposals are waiting.'
     },
     { type: 'h2', id: 'db-tuning-kinds', text: 'What it proposes' },
     {
@@ -123,7 +123,7 @@ export const dbTuning: DocSection = {
         'Roll back by hand from Watching or Applied. The undo is refused, and the row left Failed for a person, when the live object changed since the apply (a procedure edited since, an index dropped or rebuilt).',
         'The watch also ends an apply or rollback that died with its process: a row stuck in applying for more than 30 minutes whose job run is no longer running is marked Failed, without running the undo, so a person reads the row and its undo first.',
         'Dismiss needs a note and works on Proposed, Stale, Rejected-by-proof and Failed rows. A dismissed or rolled-back change is not proposed again for 90 days. A change rejected by proof is not proved again for 7 days. An AI rewrite counts as one attempt per procedure body, whatever the model answers. A Proposed row whose evidence has not been seen for 14 days closes as dismissed.',
-        'Apply, rollback, dismiss, re-prove and settings changes each write an activity row, which the incident timeline shows. Apply and rollback also appear in Background Jobs as runs of kind tuning.'
+        'Apply, rollback, dismiss, re-prove and settings changes each write an activity row, which the incident timeline shows. Apply and rollback also appear in Jobs as runs of kind tuning.'
       ]
     },
     { type: 'h2', id: 'db-tuning-replication', text: 'Replicated tables and procedures' },
@@ -185,7 +185,7 @@ export const dbTuning: DocSection = {
       items: [
         '`db-tuning-observe`, nightly at 03:35 (a heavy job): every observer reads its evidence (at most 10 minutes each, 60 minutes for the run), candidates are deduplicated, ones dismissed or rolled back lately, rejected by proof in the last 7 days, or on a target with a change in flight are skipped, and the 20 biggest estimates are proved. The rest carry over to the next night.',
         '`db-tuning-watch`, hourly at :55.',
-        'Both are always registered and return at once while database tuning is off. Scheduled ticks also need a process that ticks (`CRON_TICKS`); Run now in Background Jobs always works, and both have a dry run.',
+        'Both are always registered and return at once while database tuning is off. Scheduled ticks also need a process that ticks (`CRON_TICKS`); Run now in Jobs always works, and both have a dry run.',
         'Run the observer from the page: a real run starts in the background and the page follows it until it finishes. One observe run at a time per database: a run is refused (409 `TUNING_RUNNING` from the page) while another, on any process, has been running for less than 70 minutes. Dry run lists what it would prove and changes nothing.',
         'The readiness check `db-tuning` (Operations) fails on a leftover twin older than a day, and warns on an observe run older than 48 hours, a change still watching a day past its window, an apply or rollback that died, or a failed apply or rollback.'
       ]

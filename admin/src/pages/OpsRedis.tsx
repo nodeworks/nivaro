@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Database, RotateCw, Search, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -120,18 +121,7 @@ export function OpsRedisPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-background'>
-        <div className='flex items-center gap-2.5'>
-          <Database className='h-5 w-5 text-muted-foreground' />
-          <h1 className='text-[15px] font-semibold text-slate-900 dark:text-slate-100'>
-            Redis Keys
-          </h1>
-        </div>
-        <p className='mt-1 max-w-[72ch] text-[12px] text-slate-500'>
-          Browse the live Redis with cursor-paged SCAN. Values of session/token/secret keys are
-          masked — this answers what exists and how big, never what a secret is.
-        </p>
-      </header>
+      <HubToolbar description='Browse the live Redis with cursor-paged SCAN. Values of session/token/secret keys are masked — this answers what exists and how big, never what a secret is.' />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         {/* Left: pattern + key list */}

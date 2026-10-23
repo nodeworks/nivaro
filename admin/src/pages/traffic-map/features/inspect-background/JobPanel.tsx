@@ -184,11 +184,11 @@ export function JobPanel({ inspectRef, anchor, windowSec }: InspectPanelProps) {
       ) : null}
       <Note hook='job-full'>
         <Link
-          to='/background-jobs'
+          to='/jobs'
           className='text-[var(--tm-accent-ink)] hover:underline'
           data-tm-inspect-job-full=''
         >
-          Open Background Jobs
+          Open Jobs
         </Link>
       </Note>
     </div>

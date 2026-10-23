@@ -283,7 +283,7 @@ DELETE /api/integration-signals/snoozes/:id   // Undo / Unsnooze`
     },
     {
       type: 'p',
-      text: 'A scheduled job run records the chain it started (`nivaro_job_runs.chain_id`), so on Background Jobs each finished run has "Show what it wrote" — the same path sheet, opened on that run: every write, workflow move, push and message the run made. Runs from before migration 385 have no chain and show no link.'
+      text: 'A scheduled job run records the chain it started (`nivaro_job_runs.chain_id`), so on Jobs each finished run has "Show what it wrote" — the same path sheet, opened on that run: every write, workflow move, push and message the run made. Runs from before migration 385 have no chain and show no link.'
     },
     {
       type: 'note',

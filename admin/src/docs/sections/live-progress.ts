@@ -12,7 +12,7 @@ export const collabLiveProgress: DocSection = {
     { type: 'h3', id: 'live-progress-tray', text: 'The Jobs tray' },
     {
       type: 'p',
-      text: 'Bulk runs, backfills, staged imports, background exports and PDFs you started appear in a tray at the bottom of every page: a progress line while they run, then the result with a link to the details or a Download chip for the file. The tray follows you across pages and browser tabs until you dismiss an entry (Clear finished dismisses them all). It is yours alone — nobody else sees what you started, and an administrator’s tray shows their own work; the Background Jobs console is the place for everyone’s.'
+      text: 'Bulk runs, backfills, staged imports, background exports and PDFs you started appear in a tray at the bottom of every page: a progress line while they run, then the result with a link to the details or a Download chip for the file. The tray follows you across pages and browser tabs until you dismiss an entry (Clear finished dismisses them all). It is yours alone — nobody else sees what you started, and an administrator’s tray shows their own work; the Jobs console is the place for everyone’s.'
     },
     {
       type: 'table',

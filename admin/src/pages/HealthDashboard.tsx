@@ -6,11 +6,11 @@ import {
   Cpu,
   Database,
   GitBranch,
-  HeartPulse,
   ShieldAlert,
   Wifi,
   Zap
 } from 'lucide-react'
+import { HubToolbar } from '@/components/hub-page'
 import { SloPanel } from '@/components/slo-panel'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -373,17 +373,16 @@ export function HealthDashboardPage() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
-        <div className='flex items-center gap-2.5'>
-          <HeartPulse className='h-5 w-5 text-muted-foreground' />
-          <h1 className='text-lg font-semibold'>Health Dashboard</h1>
-        </div>
-        {dataUpdatedAt > 0 && (
-          <span className='text-[11px] text-muted-foreground'>
-            Updated {new Date(dataUpdatedAt).toLocaleTimeString()} · refreshes every 15s
-          </span>
-        )}
-      </header>
+      <HubToolbar
+        description='Is this instance up: database, Redis, sockets, migrations, memory and uptime, plus the deploy preflight and service levels.'
+        actions={
+          dataUpdatedAt > 0 && (
+            <span className='text-[11px] text-muted-foreground'>
+              Updated {new Date(dataUpdatedAt).toLocaleTimeString()} · refreshes every 15s
+            </span>
+          )
+        }
+      />
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
         {preflight && <PreflightPanel data={preflight} />}

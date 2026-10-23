@@ -650,10 +650,7 @@ describe('inspector history — down nodes and live', () => {
     })
     await waitFor(() => expect(document.getElementById('tm-history-note')).not.toBeNull())
     expect(screen.getByText(/Per-request attribution only/)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open DB Health' })).toHaveAttribute(
-      'href',
-      '/db-health'
-    )
+    expect(screen.getByRole('link', { name: 'Open Database' })).toHaveAttribute('href', '/database')
     expect(screen.queryByTestId('tm-inspector-req')).toBeNull()
     expect(document.querySelector('#tm-inspector svg')).toBeNull()
     expect(historyCalls()).toBe(1)

@@ -310,7 +310,7 @@ function NodeAlert({ sel, d }: { sel: Selection; d: InspectorData }) {
           {created != null && (
             <Note tone='ok'>
               Monitor #{created} created.{' '}
-              <Link to='/monitors' className={LINK}>
+              <Link to='/health/monitors' className={LINK}>
                 Open Monitors
               </Link>
             </Note>

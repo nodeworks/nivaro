@@ -181,12 +181,12 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1`
 
 export const obsHealthDashboard: DocSection = {
   id: 'health-dashboard',
-  label: 'Health Dashboard',
+  label: 'Health',
   content: [
-    { type: 'h1', id: 'health-dashboard', text: 'Health Dashboard' },
+    { type: 'h1', id: 'health-dashboard', text: 'Health' },
     {
       type: 'p',
-      text: 'The /health admin page gives a live view of every subsystem, backed by a detailed health endpoint that goes beyond the public liveness probe.'
+      text: 'The Health page at /health (Operations → Health) has three tabs: Status, Monitors (/health/monitors) and Telemetry (/health/telemetry). Status gives a live view of every subsystem, backed by a detailed health endpoint that goes beyond the public liveness probe.'
     },
     {
       type: 'pre',
@@ -278,7 +278,7 @@ export const obsHealthDashboard: DocSection = {
     },
     {
       type: 'p',
-      text: 'Background Jobs names the instance that holds the lease. GET /api/job-runs/registry and GET /api/ops-runtime/roster return it as `scheduler` ({ instance, is_leader, holder, ticks_enabled }). A process with ticks off never competes: run web replicas with CRON_TICKS=off and one worker with it on.'
+      text: 'Jobs names the instance that holds the lease. GET /api/job-runs/registry and GET /api/ops-runtime/roster return it as `scheduler` ({ instance, is_leader, holder, ticks_enabled }). A process with ticks off never competes: run web replicas with CRON_TICKS=off and one worker with it on.'
     },
     {
       type: 'p',
@@ -1196,7 +1196,7 @@ export const obsTrafficMapPlatform: DocSection = {
     { type: 'h3', id: 'telemetry-page', text: 'The Telemetry page' },
     {
       type: 'p',
-      text: 'Operations → Health → Telemetry (administrators) shows the monitoring stack from inside Nivaro: whether the history store answers, whether traces are going out, firing alerts and failing uptime checks at the top; what this process sent next to what actually arrived in the last hour; the settings this server runs with (tokens shown only as set or not set); and the stack’s own health read from its metrics store: firing alerts, uptime checks, collected sources, backups to the file share, and disk and share space. Each part is read on its own, so one failing part shows its error without blanking the rest. Silenced alerts still appear (silences only stop the email); manage them in Grafana. `GET /api/telemetry/status`; `/api/metrics` also reports access lines and trace export counts.'
+      text: 'Operations → Health → Telemetry tab (/health/telemetry, administrators) shows the monitoring stack from inside Nivaro: whether the history store answers, whether traces are going out, firing alerts and failing uptime checks at the top; what this process sent next to what actually arrived in the last hour; the settings this server runs with (tokens shown only as set or not set); and the stack’s own health read from its metrics store: firing alerts, uptime checks, collected sources, backups to the file share, and disk and share space. Each part is read on its own, so one failing part shows its error without blanking the rest. Silenced alerts still appear (silences only stop the email); manage them in Grafana. `GET /api/telemetry/status`; `/api/metrics` also reports access lines and trace export counts.'
     },
     { type: 'h3', id: 'telemetry-ai', text: 'Asking AI about the telemetry' },
     {

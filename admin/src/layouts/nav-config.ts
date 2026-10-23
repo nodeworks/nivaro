@@ -13,7 +13,6 @@ import {
   Building2,
   CalendarClock,
   CalendarOff,
-  CalendarRange,
   CheckSquare,
   Clapperboard,
   ClipboardCheck,
@@ -30,7 +29,6 @@ import {
   FileSearch,
   FileText,
   FlaskConical,
-  Gauge,
   GitBranch,
   GitCompare,
   Globe,
@@ -40,7 +38,6 @@ import {
   House,
   Inbox,
   KeyRound,
-  KeySquare,
   Layers,
   LayoutGrid,
   LifeBuoy,
@@ -69,7 +66,6 @@ import {
   ScanSearch,
   ScrollText,
   Search,
-  SearchCheck,
   SearchCode,
   ServerCog,
   Settings,
@@ -81,11 +77,9 @@ import {
   SlidersHorizontal,
   Sparkles,
   SquareFunction,
-  Telescope,
   Terminal,
   TerminalSquare,
   ThumbsUp,
-  Timer,
   ToggleLeft,
   Trash2,
   TrendingUp,
@@ -548,38 +542,24 @@ export const navCategories: NavCategory[] = [
     hint: 'Keep the instance healthy and ship changes safely',
     zone: 'platform',
     items: [
-      { icon: HeartPulse, label: 'Health', to: '/health', section: 'Health', keywords: 'slo' },
+      {
+        icon: HeartPulse,
+        label: 'Health',
+        to: '/health',
+        section: 'Health',
+        keywords:
+          'slo status preflight monitors probes ssl freshness uptime telemetry grafana traces logs metrics alerts backups monitoring'
+      },
       { icon: AlertOctagon, label: 'Issues', to: '/issues', section: 'Health', keywords: 'errors' },
-      { icon: Radar, label: 'Monitors', to: '/monitors', section: 'Health' },
       {
         icon: Database,
-        label: 'DB & Runtime',
-        to: '/db-health',
+        label: 'Database',
+        to: '/database',
         section: 'Health',
-        keywords: 'database pool indexes deadlocks'
-      },
-      {
-        icon: Gauge,
-        label: 'Database tuning',
-        to: '/db-tuning',
-        section: 'Health',
-        keywords: 'index proposals procedure rewrite cache rollup'
-      },
-      {
-        icon: SearchCheck,
-        label: 'SQL checks',
-        to: '/sql-checks',
-        section: 'Health',
-        keywords: 'procedures merge null lint sqlfluff stored procedure findings'
+        keywords:
+          'db runtime pool indexes deadlocks tuning proposals procedure rewrite cache rollup sql checks merge null lint sqlfluff findings redis keys'
       },
       { icon: Waypoints, label: 'Traffic Map', to: '/traffic-map', section: 'Health' },
-      {
-        icon: Telescope,
-        label: 'Telemetry',
-        to: '/telemetry',
-        section: 'Health',
-        keywords: 'grafana traces logs metrics uptime alerts backups monitoring'
-      },
       {
         icon: Container,
         label: 'Infrastructure',
@@ -597,14 +577,12 @@ export const navCategories: NavCategory[] = [
       },
       {
         icon: Activity,
-        label: 'Background Jobs',
-        to: '/background-jobs',
+        label: 'Jobs',
+        to: '/jobs',
         section: 'Jobs',
-        keywords: 'cron'
+        keywords:
+          'background cron runs schedules timeline calendar ops repair tasks backfill remediation'
       },
-      { icon: Timer, label: 'Cron Timeline', to: '/cron-timeline', section: 'Jobs' },
-      { icon: CalendarRange, label: 'Ops Calendar', to: '/ops-calendar', section: 'Jobs' },
-      { icon: Wrench, label: 'Ops Tasks', to: '/ops-tasks', section: 'Jobs', keywords: 'repairs' },
       {
         icon: TerminalSquare,
         label: 'Ops Console',
@@ -612,7 +590,6 @@ export const navCategories: NavCategory[] = [
         section: 'Jobs',
         keywords: 'logs maintenance restart'
       },
-      { icon: KeySquare, label: 'Redis Keys', to: '/ops-redis', section: 'Jobs' },
       {
         icon: ServerCog,
         label: 'Environments',

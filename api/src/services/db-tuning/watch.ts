@@ -273,7 +273,7 @@ async function notifyApplier(
       message: message.slice(0, 1000),
       category: 'system',
       always_inbox: true,
-      target: { kind: 'external', url: `/db-tuning?proposal=${row.id}` },
+      target: { kind: 'external', url: `/database/tuning?proposal=${row.id}` },
       source: { kind: 'db-tuning', label: 'Database tuning', id: row.id }
     })
   } catch {

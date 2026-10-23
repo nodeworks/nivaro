@@ -75,7 +75,7 @@ export function DbTimeTile() {
               ? `${data.heaviest_cron.id}: quieter at ${hourLabel(sug.quiet_hour)}`
               : `heaviest cron ${data.heaviest_cron.id} ${secs(data.heaviest_cron.ms)}`}
           </span>
-          <Link to='/background-jobs' className={`${LINK} shrink-0`}>
+          <Link to='/jobs' className={`${LINK} shrink-0`}>
             Jobs
           </Link>
         </span>

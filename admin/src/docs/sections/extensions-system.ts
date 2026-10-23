@@ -45,7 +45,7 @@ export default defineExtension({
     { type: 'h3', id: 'ext-overview-tasks', text: 'Operational tasks' },
     {
       type: 'p',
-      text: 'A repair, backfill or migration an extension owns is registered with `ctx.tasks.register(...)` and run from the admin console at System → Ops Tasks instead of a laptop shell: a dry run reports what a real run would do and writes nothing, one run at a time per task, every run a row under Background Jobs with its output kept for the console, and an activity row naming who ran what and what it left behind. A task says whether it can run on THIS host (`available()`) — one that shells out to scripts a built image does not carry shows its CLI instead of a dead button.'
+      text: 'A repair, backfill or migration an extension owns is registered with `ctx.tasks.register(...)` and run from the admin console at Operations → Jobs → Repair tasks (/jobs/tasks) instead of a laptop shell: a dry run reports what a real run would do and writes nothing, one run at a time per task, every run a row under Jobs with its output kept for the console, and an activity row naming who ran what and what it left behind. A task says whether it can run on THIS host (`available()`) — one that shells out to scripts a built image does not carry shows its CLI instead of a dead button.'
     },
     {
       type: 'pre',
@@ -498,7 +498,7 @@ ctx.cron.unschedule('daily-report');`
     },
     {
       type: 'note',
-      text: 'Cron jobs run in-process and are recorded on the Background Jobs page. With several API processes, only the one holding the scheduler lease fires them. Mark long full-table work as heavy so it waits its turn instead of piling onto the connection pool.'
+      text: 'Cron jobs run in-process and are recorded on the Jobs page. With several API processes, only the one holding the scheduler lease fires them. Mark long full-table work as heavy so it waits its turn instead of piling onto the connection pool.'
     }
   ]
 }
