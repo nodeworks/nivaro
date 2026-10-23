@@ -204,6 +204,46 @@ export async function run({ only }) {
     t.check('someone else did not', other.all('notification:new', mo).filter((e) => e.p.subject === subject).length === 0)
   })
 
+  await suite.case('notification in-app is skipped while the recipient views that record (#269)', async (t) => {
+    t.cleanup(fx.closeAll)
+    const viewing = await fx.sock('bob')
+    viewing.join('record:join', { collection: 'rt_items', item: id1 })
+    await sleep(800)
+    const alice = await fx.browser('alice')
+    // Several sends: the web process that judges "is bob viewing?" varies per request.
+    const n = 4
+    let delivered = 0
+    for (let i = 0; i < n; i++) {
+      const m = viewing.mark()
+      const subject = `viewing ${Date.now()}-${i}`
+      await alice.post('/api/notifications', { recipient: users.bob.id, subject, collection: 'rt_items', item: String(id1) })
+      if (await viewing.next('notification:new', (p) => p.subject === subject, { from: m, timeoutMs: 1500 })) delivered++
+    }
+    t.metric('delivered_while_viewing', `${delivered}/${n}`)
+    t.check(`no in-app notification while viewing (${delivered}/${n} delivered)`, delivered === 0, delivered)
+    // Control: a record bob is not viewing is delivered.
+    const m = viewing.mark()
+    const subject = `control ${Date.now()}`
+    await alice.post('/api/notifications', { recipient: users.bob.id, subject, collection: 'rt_items', item: String(id0) })
+    t.check('a record he is not viewing is delivered', !!(await viewing.next('notification:new', (p) => p.subject === subject, { from: m })))
+  })
+
+  await suite.case('page presence: GET /api/journeys/here lists a socket on that path', async (t) => {
+    t.cleanup(fx.closeAll)
+    const a = await fx.sock('alice')
+    const path = `/rtci/here-${Date.now()}`
+    a.emit('page:at', { path, app: 'rtci' })
+    await sleep(800)
+    let seen = 0
+    const n = 6
+    for (let i = 0; i < n; i++) {
+      const r = await admin.get(`/api/journeys/here?path=${encodeURIComponent(path)}`)
+      if (JSON.stringify(r.json?.data ?? []).toUpperCase().includes(String(users.alice.id).toUpperCase())) seen++
+    }
+    t.metric('here_hits', `${seen}/${n}`)
+    t.check(`every web process answers with alice (${seen}/${n})`, seen === n, seen)
+  })
+
   // ── chat ──────────────────────────────────────────────────────────────────
   await suite.case('chat: General room message, read marker', async (t) => {
     t.cleanup(fx.closeAll)
@@ -317,14 +357,14 @@ export async function run({ only }) {
     t.check('member gets no traffic-map:frame', member.all('traffic-map:frame', mm).length === 0)
   })
 
-  await suite.case('ops:join topic viewers (my-work)', async (t) => {
+  await suite.case('ops:join presence topic viewers (issue-view:1)', async (t) => {
     t.cleanup(fx.closeAll)
     const a = await fx.sock('alice')
     const b = await fx.sock('bob')
-    a.join('ops:join', { topic: 'my-work' })
+    a.join('ops:join', { topic: 'issue-view:1' })
     await sleep(300)
     const m = a.mark()
-    b.join('ops:join', { topic: 'my-work' })
+    b.join('ops:join', { topic: 'issue-view:1' })
     const ch = await a.next('ops:changed', (p) => (p.viewers ?? []).length >= 2, { from: m })
     t.check('ops:changed lists both viewers', !!ch, ch?.p)
   })
@@ -430,8 +470,12 @@ export async function run({ only }) {
     t.cleanup(() => s.close())
     await sleep(500)
     const m = s.mark()
-    await admin.must('PATCH', `/api/items/rt_secret/${fx.seed.secret}`, { title: `x ${Date.now()}` })
-    await admin.must('PATCH', `/api/items/rt_items/${id0}`, { n: 7 })
+    // Several writes of each: a stream may only hear the writes of its own process (see the
+    // cross-replica case), and this case is about the filter.
+    for (let i = 0; i < 4; i++) {
+      await admin.must('PATCH', `/api/items/rt_secret/${fx.seed.secret}`, { title: `x ${Date.now()}` })
+      await admin.must('PATCH', `/api/items/rt_items/${id0}`, { n: 7 + i })
+    }
     await s.next((e) => e.data?.collection === 'rt_items', { from: m })
     t.check('no rt_secret frame', s.events.slice(m).every((e) => e.data?.collection !== 'rt_secret'))
     t.check('rt_items frame arrived', s.events.slice(m).some((e) => e.data?.collection === 'rt_items'))

@@ -35,6 +35,7 @@ export const cfg = {
   toxi: `http://127.0.0.1:${port('RTCI_TOXI_PORT')}`,
   redisUrl: `redis://127.0.0.1:${port('RTCI_REDIS_PORT')}`,
   adminToken: env.RTCI_ADMIN_TOKEN,
+  metricsToken: 'rtci-metrics-token-0123456789abcdef',
   /** Every API process: its direct host port (bypasses Traefik + toxiproxy) and its proxies. */
   nodes: {
     'web-1': { port: port('RTCI_WEB1_PORT'), http: 'web1_http', redis: 'redis_web1', role: 'web' },

@@ -45,6 +45,8 @@ x-api-env: &api-env
   BOOT_DEPS_WAIT_MS: '180000'
   SHUTDOWN_DRAIN_DELAY_MS: '0'
   SOCKET_SWEEP_MS: '5000'
+  GRAPHQL_WS_SIGNIN_CHECK_MS: '5000'
+  METRICS_TOKEN: rtci-metrics-token-0123456789abcdef
   REALTIME_ACK_EVERY: '1'
   NIVARO_HEALTHCHECK_PATH: /api/ready
   LOG_LEVEL: ${RTCI_LOG_LEVEL:-info}
@@ -175,6 +177,7 @@ services:
 
   web-2:
     <<: *api
+    image: ${RTCI_IMAGE_WEB2:-${RTCI_IMAGE:-nivaro-rtci:local}}
     depends_on:
       worker:
         condition: service_healthy

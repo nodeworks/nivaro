@@ -26,9 +26,8 @@ await waitHttp(`${cfg.base}/api/ready`, { timeoutMs: 300_000 })
 const admin = adminClient()
 
 async function ensureTable(name, columns) {
-  const tables = await admin.get('/api/data-model/tables')
-  const list = tables.json?.data ?? []
-  if (!list.some((t) => t.name === name)) await admin.must('POST', '/api/data-model/tables', { name })
+  const made = await admin.post('/api/data-model/tables', { name })
+  if (!made.ok && made.status !== 409) throw new Error(`table ${name}: ${made.status} ${made.text}`)
   for (const c of columns) {
     const r = await admin.post(`/api/data-model/tables/${name}/columns`, c)
     if (!r.ok && r.status !== 409 && !/exist/i.test(r.text)) throw new Error(`column ${name}.${c.name}: ${r.text}`)
@@ -86,11 +85,23 @@ await ensureTable('rt_items', [
 ])
 await ensureTable('rt_secret', [{ name: 'title', type: 'string', nullable: true }])
 
+// user_presence is a legacy table (deploy/realtime-ci/legacy-tables.sql): registered as a
+// collection like EFP has it, so the typing indicator's PATCH works.
+await admin.must('POST', '/api/data-model/tables/user_presence/register', { display_name: 'User presence' })
+{
+  const have = new Set(((await admin.get('/api/collections/user_presence/fields')).json?.data ?? []).map((f) => f.field))
+  const cols = [['id', 'integer'], ['user_id', 'string'], ['last_seen', 'timestamp'], ['display_name', 'string'], ['current_path', 'string'], ['typing_room', 'string'], ['is_idle', 'boolean'], ['last_active', 'timestamp'], ['is_online', 'boolean'], ['app', 'string']]
+  for (const [i, [field, type]] of cols.entries())
+    if (!have.has(field)) await admin.post('/api/data-model/tables/user_presence/fields', { field, type, sort: i })
+}
+
 const adminRole = (await admin.must('GET', '/api/roles')).find((r) => r.name === 'RTCI Admin')
 const member = await ensureRole('RTCI Member', [
   { collection: 'rt_items', action: 'read' },
   { collection: 'rt_items', action: 'create' },
-  { collection: 'rt_items', action: 'update' }
+  { collection: 'rt_items', action: 'update' },
+  { collection: 'user_presence', action: 'read' },
+  { collection: 'user_presence', action: 'update' }
 ])
 const reader = await ensureRole('RTCI Reader', [{ collection: 'rt_items', action: 'read' }])
 

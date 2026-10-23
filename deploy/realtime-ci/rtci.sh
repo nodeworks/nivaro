@@ -54,9 +54,14 @@ sqlq() {
 }
 
 bootstrap_admin() {
+  sqlq "$(cat "$HERE/legacy-tables.sql")" | grep -E "^Msg|Level" && return 1
   # The only row written by SQL: the administrator the seed signs in as. Into this stack's own
   # empty database, after the boot migrations created the tables.
+  # A fresh self-hosted database has no default workspace row (only cloud provisioning inserts
+  # one), and roles/collections carry a FK to it — so the default workspace goes in here too.
   sqlq "
+IF NOT EXISTS (SELECT 1 FROM nivaro_workspaces WHERE id = '00000000-0000-0000-0000-000000000001')
+  INSERT INTO nivaro_workspaces (id, name, slug) VALUES ('00000000-0000-0000-0000-000000000001', 'Default', 'default');
 IF NOT EXISTS (SELECT 1 FROM nivaro_roles WHERE name = 'RTCI Admin')
   INSERT INTO nivaro_roles (id, name, admin_access, app_access) VALUES (NEWID(), 'RTCI Admin', 1, 1);
 IF NOT EXISTS (SELECT 1 FROM nivaro_users WHERE email = 'rtci-admin@example.test')
