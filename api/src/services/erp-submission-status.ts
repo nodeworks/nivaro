@@ -141,11 +141,16 @@ export async function applySendOutcome(opts: {
   // previous attempt when nobody recorded that attempt yet (its first send
   // went straight onto the row).
   const prior = attempted ? await captureSubmissionRow(opts.submissionId, opts.priorAttempts) : null
+  // A partner that echoes a body secret back must not leave it on the stored row.
+  const storedResponse = await scrubbedResponse(
+    opts.submissionId,
+    serializeResponseBody(opts.outcome.response)
+  )
   await db('nivaro_erp_submissions')
     .where({ id: opts.submissionId })
     .update({
       status: opts.outcome.status,
-      response: serializeResponseBody(opts.outcome.response),
+      response: storedResponse,
       external_ref: opts.outcome.external_ref ?? opts.priorExternalRef,
       attempts: opts.attempted === false ? opts.priorAttempts : opts.priorAttempts + 1,
       last_error: opts.outcome.error,
@@ -165,7 +170,7 @@ export async function applySendOutcome(opts: {
       status: opts.outcome.status,
       http_status: opts.outcome.http_status ?? null,
       payload: prior?.payload ?? null,
-      response: serializeResponseBody(opts.outcome.response),
+      response: storedResponse,
       error: opts.outcome.error,
       source: 'send',
       recorded_at: new Date(),
@@ -217,6 +222,24 @@ async function recordAttempt(row: AttemptRow): Promise<void> {
  * has no history row yet. Returns the row's stored payload either way, so the
  * next attempt records what it re-sent.
  */
+/** The serialized response with the submission's API body secrets scrubbed (never throws). */
+async function scrubbedResponse(
+  submissionId: number,
+  serialized: string | null
+): Promise<string | null> {
+  if (serialized == null) return serialized
+  try {
+    const row = (await db('nivaro_erp_submissions')
+      .where({ id: submissionId })
+      .first('external_api')) as { external_api?: number | null } | undefined
+    if (row?.external_api == null) return serialized
+    const { scrubSecretsFor } = await import('./body-secrets.js')
+    return await scrubSecretsFor(row.external_api, serialized)
+  } catch {
+    return serialized
+  }
+}
+
 async function captureSubmissionRow(
   submissionId: number,
   priorAttempts: number

@@ -1,7 +1,12 @@
 import { createHash, createHmac } from 'node:crypto'
 import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
-import { bodySecretsOf, scrubSecretValues, substituteBodySecrets } from './body-secrets.js'
+import {
+  bodySecretsOf,
+  isRecord,
+  scrubSecretValues,
+  substituteBodySecrets
+} from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { partnerChaosFetch, partnerFault, readChaosResponse } from './chaos/faults/partner.js'
 import {
@@ -50,10 +55,6 @@ export function instanceOverrideFor(
   const all = parseJson<Record<string, InstanceOverride>>(row.instance_overrides ?? null)
   const o = all?.[key]
   return o && typeof o === 'object' ? o : null
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return !!v && typeof v === 'object' && !Array.isArray(v)
 }
 
 /** The row with this instance's overrides folded into base_url / auth_config / headers. */
@@ -707,13 +708,25 @@ export async function callExternalApi(
 
   const cfg = parseJson<Record<string, unknown>>(row.auth_config)
   const sendsBody = method !== 'GET' && method !== 'HEAD' && body !== undefined
-  // Body secrets: placeholders become the real values only in what goes on the wire — before any
-  // token fetch, serialization or signing. An unknown name refuses the call (nothing is sent).
-  // `body` itself (the logged / recorded copy) keeps the placeholders.
+  // Body secrets (opt-in, `bodySecrets: true`): placeholders become the real values only in what
+  // goes on the wire — before any token fetch, serialization or signing. An unknown name refuses
+  // the call (nothing is sent). `body` itself (the logged / recorded copy) keeps the placeholders.
+  // Without the flag a placeholder is sent as the literal text it is.
   const bodySecrets = bodySecretsOf(cfg)
-  const wireBody = sendsBody ? substituteBodySecrets(body, bodySecrets, row.name) : body
-  // A partner may echo the request back: what we log / record of its answer is scrubbed.
-  const logText = (t: string): string => (wireBody === body ? t : scrubSecretValues(t, bodySecrets))
+  const wireBody =
+    sendsBody && options.bodySecrets === true
+      ? substituteBodySecrets(body, bodySecrets, row.name)
+      : body
+  // A partner may echo a secret back: what we log / record of its answer is scrubbed (always —
+  // a caller may have put a secret's value in the body some other way).
+  const hasSecrets = Object.keys(bodySecrets).length > 0
+  const logText = (t: string): string => (hasSecrets ? scrubSecretValues(t, bodySecrets) : t)
+  const logHeaders = (h: Record<string, string>): Record<string, string> =>
+    hasSecrets
+      ? Object.fromEntries(
+          Object.entries(h).map(([k, v]) => [k, scrubSecretValues(v, bodySecrets)])
+        )
+      : h
   const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
   const auth = await resolveAuth(row.auth_type, cfg, {
     apiId: row.id,
@@ -881,7 +894,7 @@ export async function callExternalApi(
       triggered_by: options._log?.triggeredBy ?? null,
       request_headers: reqHeaders,
       request_body: reqBodyStr,
-      response_headers: resHeaders,
+      response_headers: logHeaders(resHeaders),
       response_body: logText(text)
     }
   )
@@ -904,7 +917,7 @@ export async function callExternalApi(
       request_headers: reqHeaders,
       request_body: reqBodyStr,
       response_status: res.status,
-      response_headers: resHeaders,
+      response_headers: logHeaders(resHeaders),
       response_body: logText(text),
       duration_ms: durationMs,
       user_id: options._log.userId ?? null

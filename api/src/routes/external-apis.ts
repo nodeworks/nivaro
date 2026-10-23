@@ -3,6 +3,13 @@ import { load as yamlLoad } from 'js-yaml'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  BodySecretError,
+  bodySecretsOf,
+  isRecord,
+  scrubSecretValues,
+  substituteBodySecrets
+} from '../services/body-secrets.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
 import {
   contractTargets,
@@ -206,14 +213,11 @@ function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unk
   return out
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return !!v && typeof v === 'object' && !Array.isArray(v)
-}
-
 /**
  * The body_secrets map to store after an edit (undefined = store none):
  * - an object: per name, a still-masked value keeps the stored secret, a mask with nothing
- *   stored behind it is dropped (never saved as the mask), a name absent is removed;
+ *   stored behind it is dropped (never saved as the mask), a name absent — or set to null / '' /
+ *   anything that is not a non-empty string — is removed;
  * - null clears them all;
  * - anything else (absent, or a string — the instance-override editor flattens nested objects to
  *   text) keeps the stored map, so an unrelated auth edit never wipes the body secrets.
@@ -232,7 +236,7 @@ function nextBodySecrets(
         if (typeof prev[name] === 'string' && prev[name]) out[name] = prev[name]
         continue
       }
-      out[name] = v
+      if (typeof v === 'string' && v !== '') out[name] = v
     }
   } else {
     out = { ...prev }
@@ -882,6 +886,20 @@ export async function externalApisRoutes(app: FastifyInstance) {
     const extraHeaders = req.body?.headers ?? {}
     const cfg = parseJson<Record<string, unknown>>(row.auth_config)
     const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
+    const secrets = bodySecretsOf(cfg)
+    // An echoed secret never reaches the log or the editor's response panel.
+    const scrub = (t: string): string => scrubSecretValues(t, secrets)
+    const scrubHeaders = (h: Record<string, string>): Record<string, string> =>
+      Object.fromEntries(Object.entries(h).map(([k, v]) => [k, scrub(v)]))
+    // An unknown body secret refuses the test before anything is sent.
+    if (method !== 'GET' && method !== 'HEAD' && req.body?.body !== undefined) {
+      try {
+        substituteBodySecrets(req.body.body, secrets, row.name)
+      } catch (err) {
+        if (err instanceof BodySecretError) return reply.code(400).send({ error: err.message })
+        throw err
+      }
+    }
 
     const startMs = Date.now()
     let fetchError: string | null = null
@@ -907,14 +925,18 @@ export async function externalApisRoutes(app: FastifyInstance) {
       const headers: Record<string, string> = { ...staticHeaders, ...auth.headers, ...extraHeaders }
 
       const init: RequestInit = { method, headers }
+      // reqBodyStr (placeholders) is what the call log keeps; the wire body has the API's body
+      // secrets substituted, exactly as an opted-in real call (bodySecrets: true) would.
       let reqBodyStr: string | null = null
       if (method !== 'GET' && method !== 'HEAD' && req.body?.body !== undefined) {
         if (!Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
           headers['Content-Type'] = 'application/json'
         }
-        reqBodyStr =
-          typeof req.body.body === 'string' ? req.body.body : JSON.stringify(req.body.body)
-        init.body = reqBodyStr
+        const raw = req.body.body
+        reqBodyStr = typeof raw === 'string' ? raw : JSON.stringify(raw)
+        const wire = substituteBodySecrets(raw, secrets, row.name)
+        init.body =
+          wire === raw ? reqBodyStr : typeof wire === 'string' ? wire : JSON.stringify(wire)
       }
 
       // No SSRF guard here — external APIs are admin-only and intentionally reach
@@ -936,8 +958,9 @@ export async function externalApisRoutes(app: FastifyInstance) {
       res.headers.forEach((value, key) => {
         resHeaders[key] = value
       })
+      const shownHeaders = scrubHeaders(resHeaders)
 
-      const text = await res.text()
+      const text = scrub(await res.text())
       let parsedBody: unknown = text
       const ct = res.headers.get('content-type') ?? ''
       if (ct.includes('application/json')) {
@@ -966,7 +989,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
           request_headers: headers,
           request_body: reqBodyStr,
           response_status: res.status,
-          response_headers: resHeaders,
+          response_headers: shownHeaders,
           response_body: text,
           duration_ms: durationMs,
           user_id: req.user?.id ?? null
@@ -976,7 +999,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       return {
         data: {
           status: res.status,
-          headers: resHeaders,
+          headers: shownHeaders,
           body: parsedBody
         }
       }

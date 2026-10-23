@@ -8,18 +8,19 @@ import {
   updateAsAction
 } from './action-writes.js'
 import { logActivity } from './activity.js'
+import { neutralizeSecretMarkers, scrubSecretsFor } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
 import type { RequestedVia } from './erp-submission-status.js'
 import { callExternalApi } from './external-apis.js'
-import { dayInZone, instanceTimezone, useZonedDates, zonedDay } from './liquid-dates.js'
 import {
   type ObligationTrigger,
   openObligationForTrigger,
   resolveObligation,
   skipReason
 } from './integration-obligations.js'
+import { dayInZone, instanceTimezone, useZonedDates, zonedDay } from './liquid-dates.js'
 import { announceRecordAspect } from './record-events.js'
 import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 
@@ -909,7 +910,13 @@ export async function runTransitionActions(opts: {
 
     let body: Record<string, unknown>
     try {
-      const rendered = await engine.parseAndRender(action.payload_template, scope)
+      // Record / context / response data is neutralized first: only the template's own text may
+      // carry a real body-secret placeholder (substituted at send, bodySecrets: true). The
+      // preview renders the same way so its payload signature matches the real push.
+      const rendered = await engine.parseAndRender(
+        action.payload_template,
+        neutralizeSecretMarkers(scope) as typeof scope
+      )
       body = JSON.parse(rendered) as Record<string, unknown>
     } catch (err) {
       const submissionId = await recordSubmission(
@@ -1055,6 +1062,7 @@ export async function runTransitionActions(opts: {
         method: (action.method as 'POST' | 'PUT') ?? 'POST',
         path: action.endpoint_path,
         body,
+        bodySecrets: true,
         // `timeout_ms` on the action config wins; the default is generous
         // because a partner that validates each line (Fusion IIP) answers a
         // 30-line push in minutes, and a timeout here reads as a failed push.
@@ -1509,7 +1517,7 @@ export async function recordSubmission(
         attempts: 1,
         last_error: error,
         payload: JSON.stringify({ endpoint_path: endpointPath, body }),
-        response: serializeResponseBody(responseBody),
+        response: await scrubSecretsFor(externalApi, serializeResponseBody(responseBody)),
         change_signature: signature ?? null,
         ...requesterFields,
         ...(await chainFields('nivaro_erp_submissions')),
@@ -1787,7 +1795,13 @@ export async function previewErpActions(opts: {
     }
     let body: Record<string, unknown>
     try {
-      const rendered = await engine.parseAndRender(action.payload_template, scope)
+      // Record / context / response data is neutralized first: only the template's own text may
+      // carry a real body-secret placeholder (substituted at send, bodySecrets: true). The
+      // preview renders the same way so its payload signature matches the real push.
+      const rendered = await engine.parseAndRender(
+        action.payload_template,
+        neutralizeSecretMarkers(scope) as typeof scope
+      )
       body = JSON.parse(rendered) as Record<string, unknown>
     } catch (err) {
       out.push({

@@ -3,13 +3,21 @@
  * payload, not a header). They live only in `nivaro_external_apis.auth_config.body_secrets`
  * ({name: value}, masked on every read). Payload templates, previews, stored submissions and call
  * logs carry the placeholder `⟦nvr-secret:<name>⟧`; `callExternalApi` swaps the real value in at
- * send time, after the body is resolved and before it is serialized and signed. A retry re-sends
- * the stored body through the same path, so it is substituted again.
+ * send time — only for callers that opt in with `bodySecrets: true` — after the body is resolved
+ * and before it is serialized and signed. A retry re-sends the stored body through the same path,
+ * so it is substituted again.
+ *
+ * Only ADMIN-AUTHORED template text may carry a real placeholder. Record, trigger and response
+ * data is passed through `neutralizeSecretMarkers` before it is merged into a body, so a record
+ * field holding `⟦nvr-secret:token⟧` is sent as inert text and never pulls the secret in.
  */
 import { db } from '../db/index.js'
 
 /** Matches one placeholder; group 1 = the secret name. */
 const PLACEHOLDER_RE = /⟦nvr-secret:([^⟧]*)⟧/g
+const MARKER = '⟦nvr-secret:'
+/** The marker with a zero-width space after "secret": reads the same, never matches. */
+const NEUTRAL_MARKER = '⟦nvr-secret\u200b:'
 
 export function secretPlaceholder(name: string): string {
   return `⟦nvr-secret:${name}⟧`
@@ -22,12 +30,41 @@ export class BodySecretError extends Error {
   }
 }
 
+export function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (!v || typeof v !== 'object') return false
+  const proto = Object.getPrototypeOf(v)
+  return proto === Object.prototype || proto === null
+}
+
+/**
+ * A deep copy of `value` in which no string can be a secret placeholder: every `⟦nvr-secret:` (in
+ * string values and object keys) becomes `⟦nvr-secret<ZWSP>:`. Arrays and plain objects are
+ * walked; every other value (numbers, Dates, Buffers…) is returned unchanged. Apply it to record
+ * / trigger / response data BEFORE it is interpolated into an admin-authored body.
+ */
+export function neutralizeSecretMarkers(value: unknown): unknown {
+  if (typeof value === 'string') return value.split(MARKER).join(NEUTRAL_MARKER)
+  if (Array.isArray(value)) return value.map(neutralizeSecretMarkers)
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value)) {
+      out[k.split(MARKER).join(NEUTRAL_MARKER)] = neutralizeSecretMarkers(v)
+    }
+    return out
+  }
+  return value
+}
+
 /** The usable `{name: value}` map from a parsed auth_config (empty / non-string values dropped). */
 export function bodySecretsOf(authConfig: Record<string, unknown> | null): Record<string, string> {
   const raw = authConfig?.body_secrets
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  if (!isRecord(raw)) return {}
   const out: Record<string, string> = {}
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+  for (const [k, v] of Object.entries(raw)) {
     if (typeof v === 'string' && v !== '') out[k] = v
   }
   return out
@@ -57,12 +94,6 @@ function isJsonText(s: string): boolean {
   } catch {
     return false
   }
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  if (!v || typeof v !== 'object') return false
-  const proto = Object.getPrototypeOf(v)
-  return proto === Object.prototype || proto === null
 }
 
 function walk(v: unknown, secrets: Record<string, string>, apiName: string): unknown {
@@ -106,9 +137,10 @@ export function substituteBodySecrets(
 }
 
 /**
- * For logs: every occurrence of a sent secret's value (raw or JSON-escaped) in a partner's
- * response text becomes its placeholder again, so an API that echoes the request back cannot
- * leave the credential on a log screen. Values shorter than 4 characters are left alone.
+ * For logs and stored responses: every occurrence of a secret's exact value (raw or JSON-escaped)
+ * in a partner's response text becomes its placeholder again, so an API that echoes the request
+ * back cannot leave the credential on a log screen or a submission row. The empty string is
+ * never a secret value.
  */
 export function scrubSecretValues(text: string, secrets: Record<string, string>): string {
   if (!text) return text
@@ -116,7 +148,7 @@ export function scrubSecretValues(text: string, secrets: Record<string, string>)
   // Longest first, so a secret that contains another is replaced whole.
   const entries = Object.entries(secrets).sort((a, b) => b[1].length - a[1].length)
   for (const [name, value] of entries) {
-    if (value.length < 4) continue
+    if (typeof value !== 'string' || value.length === 0) continue
     const ph = secretPlaceholder(name)
     out = out.split(value).join(ph)
     const escaped = JSON.stringify(value).slice(1, -1)
@@ -125,8 +157,40 @@ export function scrubSecretValues(text: string, secrets: Record<string, string>)
   return out
 }
 
-async function resolvedSecrets(apiName: string): Promise<Record<string, string>> {
-  const stored = await db('nivaro_external_apis').where({ name: apiName }).first()
+/** Deep scrub: strings via scrubSecretValues, arrays / plain objects walked, the rest as-is. */
+function scrubDeep(v: unknown, secrets: Record<string, string>): unknown {
+  if (typeof v === 'string') return scrubSecretValues(v, secrets)
+  if (Array.isArray(v)) return v.map((x) => scrubDeep(x, secrets))
+  if (isPlainObject(v)) {
+    const out: Record<string, unknown> = {}
+    for (const [k, x] of Object.entries(v)) out[k] = scrubDeep(x, secrets)
+    return out
+  }
+  return v
+}
+
+/**
+ * `value` with every body secret of this API (instance-resolved) put back as its placeholder —
+ * for what gets STORED from a partner's answer (nivaro_erp_submissions.response, attempt rows).
+ * Never use it on the body handed back to a caller (ack parsing reads that). A failed lookup
+ * returns the value unchanged; it never throws.
+ */
+export async function scrubSecretsFor<T>(apiNameOrId: string | number, value: T): Promise<T> {
+  if (value === null || value === undefined) return value
+  try {
+    const secrets = await resolvedSecrets(apiNameOrId)
+    if (Object.keys(secrets).length === 0) return value
+    return scrubDeep(value, secrets) as T
+  } catch {
+    return value
+  }
+}
+
+async function resolvedSecrets(apiNameOrId: string | number): Promise<Record<string, string>> {
+  const byId = typeof apiNameOrId === 'number' || /^\d+$/.test(String(apiNameOrId))
+  const stored = await db('nivaro_external_apis')
+    .where(byId ? { id: Number(apiNameOrId) } : { name: apiNameOrId })
+    .first()
   if (!stored) return {}
   // Lazy: external-apis.ts imports this module.
   const { resolveInstanceRow } = await import('./external-apis.js')

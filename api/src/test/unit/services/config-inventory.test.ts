@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   CONFIG_TABLES,
   type ConfigSnapshot,
-  DERIVED_TABLES,
-  RUNTIME_TABLES,
   classifyTables,
+  DERIVED_TABLES,
   diffSnapshots,
   hashRow,
-  redactRow
+  RUNTIME_TABLES,
+  redactRow,
+  restoreInstanceOverrides
 } from '../../../services/config-inventory.js'
 
 function snapshot(
@@ -92,6 +93,78 @@ describe('redactRow', () => {
   it('leaves an unlisted table untouched apart from the global secrets', () => {
     const row = redactRow('nivaro_queues', { id: 'q', name: 'Work', key_hash: 'x' })
     expect(row).toEqual({ id: 'q', name: 'Work' })
+  })
+})
+
+describe('external API instance_overrides — redacted by value', () => {
+  const live = {
+    production: {
+      base_url: 'https://prod.example',
+      auth_config: { token: 'BEARER-PROD', body_secrets: { token: 'BODY-PROD' } },
+      headers: { 'X-Api-Key': 'HDR-SECRET', 'X-Env': 'prod' }
+    },
+    staging: { base_url: 'https://stg.example', headers: { 'X-Client-Secret': 'S' } }
+  }
+
+  it('snapshots drop every auth_config and secret-looking header, keeping the plain parts', () => {
+    const row = redactRow('nivaro_external_apis', {
+      id: 4,
+      name: 'MWF',
+      auth_config: '{"token":"x"}',
+      instance_overrides: JSON.stringify(live)
+    })
+    expect(row.auth_config).toBeUndefined()
+    expect(JSON.parse(String(row.instance_overrides))).toEqual({
+      production: { base_url: 'https://prod.example', headers: { 'X-Env': 'prod' } },
+      staging: { base_url: 'https://stg.example' }
+    })
+    for (const secret of ['BEARER-PROD', 'BODY-PROD', 'HDR-SECRET', '"S"']) {
+      expect(String(row.instance_overrides)).not.toContain(secret)
+    }
+  })
+
+  it('an unparseable value is dropped whole, null stays null', () => {
+    expect(redactRow('nivaro_external_apis', { instance_overrides: 'not json' })).toEqual({
+      instance_overrides: null
+    })
+    expect(redactRow('nivaro_external_apis', { instance_overrides: null })).toEqual({
+      instance_overrides: null
+    })
+  })
+
+  it('restore merges the credential parts back from the live value, never from the snapshot', () => {
+    const snap = JSON.stringify({
+      production: {
+        base_url: 'https://prod-OLD.example',
+        headers: { 'X-Env': 'prod-old' },
+        // An uploaded file could carry one — it is never written.
+        auth_config: { token: 'FROM-FILE' }
+      },
+      dev: { base_url: 'https://dev.example' }
+    })
+    const out = JSON.parse(String(restoreInstanceOverrides(snap, JSON.stringify(live))))
+    expect(out).toEqual({
+      production: {
+        base_url: 'https://prod-OLD.example',
+        headers: { 'X-Env': 'prod-old', 'X-Api-Key': 'HDR-SECRET' },
+        auth_config: { token: 'BEARER-PROD', body_secrets: { token: 'BODY-PROD' } }
+      },
+      // Not live: no credentials to bring back.
+      dev: { base_url: 'https://dev.example' }
+    })
+    expect(JSON.stringify(out)).not.toContain('FROM-FILE')
+  })
+
+  it('a restored value redacts back to the snapshot (no phantom diff after a restore)', () => {
+    const snapRow = redactRow('nivaro_external_apis', { instance_overrides: JSON.stringify(live) })
+    const restored = restoreInstanceOverrides(snapRow.instance_overrides, JSON.stringify(live))
+    const again = redactRow('nivaro_external_apis', { instance_overrides: restored })
+    expect(again.instance_overrides).toBe(snapRow.instance_overrides)
+    expect(JSON.parse(String(restored))).toEqual(live)
+  })
+
+  it('a snapshot with no overrides restores to null', () => {
+    expect(restoreInstanceOverrides(null, JSON.stringify(live))).toBeNull()
   })
 })
 

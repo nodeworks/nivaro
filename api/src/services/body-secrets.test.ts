@@ -22,6 +22,10 @@ import {
   BodySecretError,
   bodySecretNames,
   hasBodySecret,
+  isRecord,
+  neutralizeSecretMarkers,
+  scrubSecretsFor,
+  scrubSecretValues,
   secretPlaceholder,
   substituteBodySecrets
 } from './body-secrets.js'
@@ -76,6 +80,53 @@ describe('substituteBodySecrets', () => {
   })
 })
 
+describe('neutralizeSecretMarkers', () => {
+  it('inserts a zero-width space after "secret" in every string, deep, as a copy', () => {
+    const when = new Date('2026-10-22T00:00:00Z')
+    const input = {
+      note: `a ${P('token')} b ${P('x')}`,
+      list: [P('token'), 3, null, { deep: P('token') }],
+      [P('k')]: true,
+      when
+    }
+    const out = neutralizeSecretMarkers(input) as Record<string, unknown>
+    expect(out.note).toBe('a ⟦nvr-secret\u200b:token⟧ b ⟦nvr-secret\u200b:x⟧')
+    expect(out.list).toEqual([
+      '⟦nvr-secret\u200b:token⟧',
+      3,
+      null,
+      { deep: '⟦nvr-secret\u200b:token⟧' }
+    ])
+    expect(out['⟦nvr-secret\u200b:k⟧']).toBe(true)
+    expect(out.when).toBe(when)
+    expect(input.note).toBe(`a ${P('token')} b ${P('x')}`)
+    expect(out).not.toBe(input)
+    // A neutralized marker is never substituted and never refused.
+    expect(substituteBodySecrets(out, {}, 'MWF')).toBe(out)
+  })
+
+  it('leaves non-string scalars alone', () => {
+    expect(neutralizeSecretMarkers(5)).toBe(5)
+    expect(neutralizeSecretMarkers(null)).toBe(null)
+    expect(neutralizeSecretMarkers(undefined)).toBe(undefined)
+  })
+})
+
+describe('scrubbing', () => {
+  it('scrubs exact secret values of any length, never the empty string', () => {
+    expect(scrubSecretValues('a-7-b', { pin: '7' })).toBe(`a-${P('pin')}-b`)
+    expect(scrubSecretValues('abc', { e: '' })).toBe('abc')
+    expect(scrubSecretValues('{"v":"a\\"b"}', { q: 'a"b' })).toBe(`{"v":"${P('q')}"}`)
+  })
+
+  it('isRecord is true only for non-array objects', () => {
+    expect(isRecord({})).toBe(true)
+    expect(isRecord([])).toBe(false)
+    expect(isRecord(null)).toBe(false)
+    expect(isRecord('x')).toBe(false)
+  })
+})
+
 // ─── callExternalApi ────────────────────────────────────────────────────────
 
 type Row = Record<string, unknown>
@@ -124,15 +175,37 @@ afterEach(() => {
 
 describe('callExternalApi body secrets', () => {
   it('sends the secret value in the request body', async () => {
-    await callExternalApi('MWF', { method: 'POST', path: '/status', body: { t: P('token') } })
+    await callExternalApi('MWF', {
+      method: 'POST',
+      path: '/status',
+      body: { t: P('token') },
+      bodySecrets: true
+    })
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const init = fetchMock.mock.calls[0][1] as RequestInit
     expect(JSON.parse(String(init.body))).toEqual({ t: 'S3CRET-TOKEN' })
   })
 
+  it('without bodySecrets flag placeholders are not substituted', async () => {
+    await callExternalApi('MWF', {
+      method: 'POST',
+      path: '/status',
+      body: { t: P('token'), u: P('unknown') }
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(JSON.parse(String(init.body))).toEqual({ t: P('token'), u: P('unknown') })
+    expect(String(init.body)).not.toContain('S3CRET-TOKEN')
+  })
+
   it('unknown secret name refuses the call', async () => {
     await expect(
-      callExternalApi('MWF', { method: 'POST', path: '/status', body: { t: P('nope') } })
+      callExternalApi('MWF', {
+        method: 'POST',
+        path: '/status',
+        body: { t: P('nope') },
+        bodySecrets: true
+      })
     ).rejects.toThrow("MWF API has no body secret 'nope'")
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -142,6 +215,7 @@ describe('callExternalApi body secrets', () => {
       method: 'POST',
       path: '/status',
       body: { status: 'done', note: P('token') },
+      bodySecrets: true,
       _log: { triggeredBy: 'erp-submission' }
     })
     expect(logInserts).toHaveLength(1)
@@ -149,7 +223,7 @@ describe('callExternalApi body secrets', () => {
     expect(logged).toContain(P('token'))
     expect(logged).not.toContain('S3CRET-TOKEN')
     // The flight recorder detail gets the pre-substitution body too.
-    await new Promise((r) => setTimeout(r, 0))
+    await vi.waitFor(() => expect(outboundDetailFields).toHaveBeenCalled())
     const detail = vi.mocked(outboundDetailFields).mock.calls.at(-1)?.[1] as {
       request_body: string
     }
@@ -161,31 +235,44 @@ describe('callExternalApi body secrets', () => {
     fetchMock.mockResolvedValueOnce(
       new Response('{"error":"bad request","echo":{"note":"S3CRET-TOKEN"}}', {
         status: 400,
-        headers: { 'content-type': 'application/json' }
+        headers: { 'content-type': 'application/json', 'x-echo': 'got S3CRET-TOKEN' }
       })
     )
-    await callExternalApi('MWF', {
+    const res = await callExternalApi('MWF', {
       method: 'POST',
       path: '/status',
       body: { note: P('token') },
+      bodySecrets: true,
       _log: { triggeredBy: 'erp-submission' }
     })
     const logged = String(logInserts[0].response_body)
     expect(logged).not.toContain('S3CRET-TOKEN')
     expect(logged).toContain(P('token'))
-    await new Promise((r) => setTimeout(r, 0))
+    // Response headers in the log are scrubbed too.
+    expect(String(logInserts[0].response_headers)).not.toContain('S3CRET-TOKEN')
+    await vi.waitFor(() => expect(outboundDetailFields).toHaveBeenCalled())
     const detail = vi.mocked(outboundDetailFields).mock.calls.at(-1)?.[1] as {
       response_body: string
+      response_headers: Record<string, string>
     }
     expect(detail.response_body).not.toContain('S3CRET-TOKEN')
+    expect(JSON.stringify(detail.response_headers)).not.toContain('S3CRET-TOKEN')
+    // The body handed back to the caller is untouched (ack parsing reads it).
+    expect(res.body).toEqual({ error: 'bad request', echo: { note: 'S3CRET-TOKEN' } })
   })
 
   it('hmac signs the substituted body, not the placeholder', async () => {
     apiRow.auth_type = 'hmac'
     apiRow.auth_config = JSON.stringify({ secret: 'k', body_secrets: { token: 'S3CRET-TOKEN' } })
-    await callExternalApi('MWF', { method: 'POST', path: '/s', body: { t: P('token') } })
+    await callExternalApi('MWF', {
+      method: 'POST',
+      path: '/s',
+      body: { t: P('token') },
+      bodySecrets: true
+    })
     const init = fetchMock.mock.calls[0][1] as RequestInit
     const sent = String(init.body)
+    expect(sent).toContain('S3CRET-TOKEN')
     const sig = createHmac('sha256', 'k').update(sent).digest('hex')
     expect((init.headers as Record<string, string>)['X-Signature']).toBe(sig)
   })
@@ -197,6 +284,7 @@ describe('callExternalApi body secrets', () => {
       method: 'POST',
       path: '/s',
       body: { t: P('nope') },
+      bodySecrets: true,
       _log: { triggeredBy: 'test' }
     })
     expect(res.mock).toBe(true)
@@ -205,7 +293,12 @@ describe('callExternalApi body secrets', () => {
   })
 
   it('a GET carries no body, so its placeholders are never resolved', async () => {
-    await callExternalApi('MWF', { method: 'GET', path: '/s', body: { t: P('nope') } })
+    await callExternalApi('MWF', {
+      method: 'GET',
+      path: '/s',
+      body: { t: P('nope') },
+      bodySecrets: true
+    })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
@@ -244,5 +337,18 @@ describe('instance overrides', () => {
     expect(await hasBodySecret('MWF', 'nope')).toBe(false)
     apiRow = undefined as never
     expect(await bodySecretNames('Missing')).toEqual([])
+  })
+
+  it('scrubSecretsFor puts the instance-resolved secrets back as placeholders, by id or name', async () => {
+    process.env.NIVARO_INSTANCE = 'production'
+    apiRow.instance_overrides = JSON.stringify({
+      production: { auth_config: { body_secrets: { token: 'PROD-T' } } }
+    })
+    expect(await scrubSecretsFor(5, '{"echo":"PROD-T"}')).toBe(`{"echo":"${P('token')}"}`)
+    expect(await scrubSecretsFor('MWF', { a: ['PROD-T'], n: 1 })).toEqual({
+      a: [P('token')],
+      n: 1
+    })
+    expect(await scrubSecretsFor(5, null)).toBe(null)
   })
 })

@@ -426,11 +426,129 @@ export function isRedactedColumn(table: string, column: string): boolean {
   return SECRET_NAME_RE.test(column) && !SECRET_NAME_ALLOW.has(`${table}.${column}`)
 }
 
+// ─── Redaction by value ─────────────────────────────────────────────────────
+// Some config columns hold credentials INSIDE a JSON value next to plain config: per-instance
+// overrides of an external API carry each instance's auth_config (tokens, body secrets) beside
+// its base_url. Dropping the whole column would lose the base_url overrides from diffs and make a
+// restore wipe them, so these columns are redacted by value: the snapshot keeps the plain parts,
+// and a restore merges the credential parts back from the live row it writes to.
+
+const SECRET_HEADER_RE = /secret|token|password|key/i
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+/** A JSON text / object column value as an object; undefined when it is not one. */
+function jsonObject(v: unknown): Record<string, unknown> | undefined {
+  if (isObj(v)) return v
+  if (typeof v !== 'string' || v.trim() === '') return undefined
+  try {
+    const parsed = JSON.parse(v)
+    return isObj(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function plainHeaders(h: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(h).filter(([k]) => !SECRET_HEADER_RE.test(k)))
+}
+
+/**
+ * `nivaro_external_apis.instance_overrides` without credentials: every `<instance>.auth_config`
+ * dropped, every secret-looking `<instance>.headers` entry dropped (an emptied headers object
+ * goes too). A value that is not a JSON object is dropped whole (it cannot be vouched for).
+ */
+export function redactInstanceOverrides(v: unknown): unknown {
+  if (v === null || v === undefined) return v
+  const all = jsonObject(v)
+  if (!all) return null
+  const out: Record<string, unknown> = {}
+  for (const [inst, entry] of Object.entries(all)) {
+    if (!isObj(entry)) {
+      out[inst] = entry
+      continue
+    }
+    const e: Record<string, unknown> = { ...entry }
+    delete e.auth_config
+    if (isObj(e.headers)) {
+      const h = plainHeaders(e.headers)
+      if (Object.keys(h).length) e.headers = h
+      else delete e.headers
+    }
+    out[inst] = e
+  }
+  return typeof v === 'string' ? JSON.stringify(out) : out
+}
+
+/**
+ * The value a restore writes for instance_overrides: the snapshot's plain parts, with each
+ * instance's auth_config and secret-looking headers taken from the CURRENT live value (never from
+ * the snapshot, even if an uploaded file carries them). An instance the snapshot lacks is gone;
+ * one the live row lacks gets no credentials. Always JSON text (the column is text) or null.
+ */
+export function restoreInstanceOverrides(snapshotValue: unknown, currentValue: unknown): unknown {
+  if (snapshotValue === null || snapshotValue === undefined) return null
+  const snap = jsonObject(snapshotValue)
+  if (!snap) return null
+  const current = jsonObject(currentValue) ?? {}
+  const out: Record<string, unknown> = {}
+  for (const [inst, entry] of Object.entries(snap)) {
+    if (!isObj(entry)) {
+      out[inst] = entry
+      continue
+    }
+    const e: Record<string, unknown> = { ...entry }
+    delete e.auth_config
+    const cur = isObj(current[inst]) ? (current[inst] as Record<string, unknown>) : {}
+    const curHeaders = isObj(cur.headers) ? cur.headers : {}
+    const secretHeaders = Object.fromEntries(
+      Object.entries(curHeaders).filter(([k]) => SECRET_HEADER_RE.test(k))
+    )
+    const headers = { ...(isObj(e.headers) ? plainHeaders(e.headers) : {}), ...secretHeaders }
+    if (Object.keys(headers).length) e.headers = headers
+    else delete e.headers
+    if (isObj(cur.auth_config)) e.auth_config = cur.auth_config
+    out[inst] = e
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null
+}
+
+const VALUE_REDACTED: Record<
+  string,
+  Record<
+    string,
+    { redact: (v: unknown) => unknown; restore: (snap: unknown, current: unknown) => unknown }
+  >
+> = {
+  nivaro_external_apis: {
+    instance_overrides: { redact: redactInstanceOverrides, restore: restoreInstanceOverrides }
+  }
+}
+
+/** Whether a column is redacted by value (its credential parts come back from the live row). */
+export function isValueRedactedColumn(table: string, column: string): boolean {
+  return !!VALUE_REDACTED[table]?.[column]
+}
+
+/** What a restore writes for a value-redacted column, given the live row's current value. */
+export function restoreRedactedValue(
+  table: string,
+  column: string,
+  snapshotValue: unknown,
+  currentValue: unknown
+): unknown {
+  const r = VALUE_REDACTED[table]?.[column]
+  return r ? r.restore(snapshotValue, currentValue) : snapshotValue
+}
+
 export function redactRow(table: string, row: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
+  const byValue = VALUE_REDACTED[table]
   for (const [k, v] of Object.entries(row)) {
     if (isRedactedColumn(table, k)) continue
-    out[k] = v
+    out[k] = byValue?.[k] ? byValue[k].redact(v) : v
   }
   return out
 }

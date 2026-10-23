@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { clearAutoFailures } from '../services/auto-transition-memory.js'
+import { neutralizeSecretMarkers, scrubSecretsFor } from '../services/body-secrets.js'
 import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { requesterInsertFields } from '../services/erp-requester-columns.js'
@@ -151,6 +152,9 @@ export async function sendPayload(
       method: 'POST',
       path: stored.endpoint_path,
       body: stored.body,
+      // Stored bodies carry only template-authored placeholders (record data is neutralized
+      // before it becomes a payload), so a retry substitutes the API's body secrets again.
+      bodySecrets: true,
       timeoutMs: 30_000,
       _log: { triggeredBy: 'erp-submission', userId }
     })
@@ -247,7 +251,11 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       body = { ...row }
     }
 
-    const stored: StoredPayload = { endpoint_path, body }
+    // The body here is pure record data: no field may forge a body-secret placeholder.
+    const stored: StoredPayload = {
+      endpoint_path,
+      body: neutralizeSecretMarkers(body) as Record<string, unknown>
+    }
     const outcome = await sendPayload(external_api, stored, req.user?.id)
 
     const now = new Date()
@@ -265,7 +273,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         external_api,
         external_ref: outcome.external_ref,
         status: outcome.status,
-        response: serializeResponseBody(outcome.response),
+        response: await scrubSecretsFor(external_api, serializeResponseBody(outcome.response)),
         attempts: 1,
         last_error: outcome.error,
         payload: JSON.stringify(stored),
