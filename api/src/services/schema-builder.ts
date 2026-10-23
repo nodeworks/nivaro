@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   GraphQLBoolean,
   GraphQLEnumType,
@@ -479,6 +480,28 @@ async function applyNestedListArgs(
     if (!(args.sort ?? []).length) q.orderBy(`${collection}.id`, 'asc')
     q.offset(args.offset)
   }
+}
+
+/**
+ * What the schema is built from, as one hash: every collection, field and relation row and the
+ * pipeline-bound collections. A process that did not make a configuration write compares it
+ * before rebuilding (post-mortem 3.3: a realtime process hears every configuration move — layout
+ * autosaves, settings, rules — and only a change here needs a new schema).
+ */
+export async function schemaInputsFingerprint(): Promise<string> {
+  const rowsOf = async (table: string) =>
+    ((await db(table).select('*')) as Array<Record<string, unknown>>)
+      .map((r) => JSON.stringify(r))
+      .sort()
+  const [collections, fields, relations] = await Promise.all([
+    rowsOf('nivaro_collections'),
+    rowsOf('nivaro_fields'),
+    rowsOf('nivaro_relations')
+  ])
+  const bound = [...(await boundCollections())].sort()
+  return createHash('sha1')
+    .update(JSON.stringify([collections, fields, relations, bound]))
+    .digest('hex')
 }
 
 export async function buildGraphQLSchema(): Promise<GraphQLSchema> {

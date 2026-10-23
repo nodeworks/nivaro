@@ -14,24 +14,34 @@ import { INSTANCE_ID } from './instance-roster.js'
  *
  *   nvr:rt:board:<slot>:<process>:live   viewers + page pings + counts, every 2 s, 10 s TTL
  *   nvr:rt:board:<slot>:<process>:stats  the socket list and room sizes, every 10 s, 30 s TTL
+ *   nvr:rt:board:<slot>:nodes            registry: sorted set of publishing processes, score =
+ *                                        their last publish (ms); entries older than 60 s go
  *
  * <slot> is the deployment slot (instanceKey()), so deployments sharing one Redis never read
- * each other's people.
+ * each other's people. A reader asks the registry which processes published lately and MGETs
+ * their keys: two round trips per read, whatever the size of the key space (no SCAN).
  *
  * A reader polls the live keys every 2 s and the stats keys every 10 s into memory, so the
  * socket plugin's getters stay synchronous and no request waits on another process (no
- * fetchSockets quorum). A realtime process that stopped publishing drops out with its TTL.
- * Only realtime processes publish and only SOCKETS=off processes read: a deployment without
- * the tier never touches these keys.
+ * fetchSockets quorum). A realtime process that stopped publishing drops out with its TTL; one
+ * that stops gracefully withdraws its keys at once (withdrawBoard).
+ * Only realtime processes publish and only SOCKETS=off processes (and realtime peers, for
+ * viewer lists) read: a deployment without the tier never touches these keys.
  */
 
 const LIVE_MS = 2_000
 const STATS_MS = 10_000
 const LIVE_TTL_S = 10
 const STATS_TTL_S = 30
+/** Registry entries older than this are trimmed (their keys have long expired). */
+const REGISTRY_KEEP_MS = 60_000
 /** A read older than this is stale: callers that must not guess (the concurrency sample) skip. */
 const FRESH_MS = 6_000
+/** Notification suppression trusts a board entry only this young (a deliver beats a wrong skip). */
+export const VIEWING_MAX_AGE_MS = 3_000
 const keyPrefix = () => `nvr:rt:board:${instanceKey()}:`
+const registryKey = () => `${keyPrefix()}nodes`
+const partKey = (node: string, part: 'live' | 'stats') => `${keyPrefix()}${node}:${part}`
 
 /** socket.data key the socket plugin writes on every `page:at` ping (read across processes). */
 export const PAGE_AT_KEY = 'nvrPageAt'
@@ -86,9 +96,13 @@ export interface LocalBoard {
   stats: Omit<BoardStats, 'node' | 'at'>
 }
 
-type BoardRedis = Pick<Redis, 'set' | 'scan' | 'mget'>
+type BoardRedis = Pick<
+  Redis,
+  'set' | 'mget' | 'del' | 'zadd' | 'zrem' | 'zrangebyscore' | 'zremrangebyscore' | 'pexpire'
+>
 
 let publisher: ReturnType<typeof setInterval>[] = []
+let publisherRedis: BoardRedis | null = null
 let reader: ReturnType<typeof setInterval>[] = []
 let liveBoards: BoardLive[] = []
 let statsBoards: BoardStats[] = []
@@ -98,16 +112,23 @@ let readerOn = false
 /** Realtime processes: publish this process's share. Idempotent; returns the stop function. */
 export function startBoardPublisher(redis: BoardRedis, collect: () => LocalBoard): () => void {
   stopBoardPublisher()
+  publisherRedis = redis
   const put = async (part: 'live' | 'stats') => {
     try {
       const b = collect()
-      const body = { node: INSTANCE_ID, at: Date.now(), ...(part === 'live' ? b.live : b.stats) }
+      const at = Date.now()
+      const body = { node: INSTANCE_ID, at, ...(part === 'live' ? b.live : b.stats) }
       await redis.set(
-        `${keyPrefix()}${INSTANCE_ID}:${part}`,
+        partKey(INSTANCE_ID, part),
         JSON.stringify(body),
         'EX',
         part === 'live' ? LIVE_TTL_S : STATS_TTL_S
       )
+      if (part === 'live') {
+        await redis.zadd(registryKey(), at, INSTANCE_ID)
+        await redis.zremrangebyscore(registryKey(), '-inf', at - REGISTRY_KEEP_MS)
+        await redis.pexpire(registryKey(), REGISTRY_KEEP_MS * 2)
+      }
     } catch {
       /* Redis away — the next tick tries again; readers see the TTL lapse */
     }
@@ -127,17 +148,29 @@ export function stopBoardPublisher(): void {
   publisher = []
 }
 
+/** Graceful stop: stop publishing and take this process's share off the board at once. */
+export async function withdrawBoard(): Promise<void> {
+  const redis = publisherRedis
+  stopBoardPublisher()
+  publisherRedis = null
+  if (!redis) return
+  try {
+    await redis.zrem(registryKey(), INSTANCE_ID)
+    await redis.del(partKey(INSTANCE_ID, 'live'), partKey(INSTANCE_ID, 'stats'))
+  } catch {
+    /* the TTLs clear it anyway */
+  }
+}
+
 async function readAll<T>(redis: BoardRedis, part: 'live' | 'stats'): Promise<T[]> {
-  const keys: string[] = []
-  let cursor = '0'
-  do {
-    const [next, batch] = await redis.scan(cursor, 'MATCH', `${keyPrefix()}*:${part}`, 'COUNT', 100)
-    cursor = next
-    keys.push(...batch)
-  } while (cursor !== '0' && keys.length < 200)
-  if (keys.length === 0) return []
+  const nodes = (await redis.zrangebyscore(
+    registryKey(),
+    Date.now() - REGISTRY_KEEP_MS,
+    '+inf'
+  )) as string[]
+  if (nodes.length === 0) return []
   const out: T[] = []
-  for (const v of await redis.mget(keys)) {
+  for (const v of await redis.mget(nodes.slice(0, 200).map((n) => partKey(n, part)))) {
     if (!v) continue
     try {
       out.push(JSON.parse(v) as T)
@@ -240,10 +273,21 @@ export function boardPeerTopicViewers(room: string): BoardTopicViewer[] {
   return out
 }
 
-/** Is `userId` in the (tenant-scoped) record room on any realtime process? */
-export function boardIsViewing(room: string, userId: string): boolean {
-  for (const b of liveBoards)
+/**
+ * Is `userId` in the (tenant-scoped) record room on a realtime process, by a board entry younger
+ * than `maxAgeMs`? Notification suppression asks: an older entry (a process that just crashed,
+ * a person who just left) does not skip a notification — delivering beats a wrong skip.
+ */
+export function boardIsViewing(
+  room: string,
+  userId: string,
+  maxAgeMs = VIEWING_MAX_AGE_MS,
+  now = Date.now()
+): boolean {
+  for (const b of liveBoards) {
+    if (now - Math.min(Number(b.at) || 0, now) > maxAgeMs) continue
     for (const v of b.viewers?.[room] ?? []) if (v.id === userId) return true
+  }
   return false
 }
 

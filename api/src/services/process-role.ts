@@ -207,16 +207,31 @@ interface EmitterAdapterLike {
  * requester from the subscriber count: without the +1, a request it makes would wait for one
  * realtime process fewer than there are.
  */
-export function emitterOnlyAdapter(
+export async function emitterOnlyAdapter(
   adapter: unknown,
-  sub: { punsubscribe(p: string): unknown; unsubscribe(c: string): unknown }
-): void {
+  sub: { punsubscribe(p: string): unknown; unsubscribe(c: string): unknown },
+  warn: (msg: string, err: unknown) => void = () => {}
+): Promise<boolean> {
   const a = adapter as EmitterAdapterLike
-  if (typeof a?.serverCount !== 'function' || !a.channel || !a.requestChannel) return
-  void Promise.resolve(sub.punsubscribe(`${a.channel}*`)).catch(() => {})
-  void Promise.resolve(sub.unsubscribe(a.requestChannel)).catch(() => {})
+  if (typeof a?.serverCount !== 'function' || !a.channel || !a.requestChannel) return false
+  try {
+    await sub.punsubscribe(`${a.channel}*`)
+  } catch (err) {
+    // Only a cost: broadcasts are decoded here for nobody.
+    warn('SOCKETS=off: could not leave the Socket.io broadcast feed', err)
+  }
+  try {
+    await sub.unsubscribe(a.requestChannel)
+  } catch (err) {
+    // Still in the quorum, so it still answers requests: counting itself again would make
+    // every request it makes wait for one answer too many (the 5 s timeout).
+    warn('SOCKETS=off: could not leave the Socket.io request channel; staying in the quorum', err)
+    return false
+  }
+  // Only once the unsubscribe has landed: the adapter subtracts the requester from NUMSUB.
   const count = a.serverCount.bind(a)
   a.serverCount = async () => (await count()) + 1
+  return true
 }
 
 /**

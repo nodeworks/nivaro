@@ -107,15 +107,26 @@ not care. So:
   concurrency sample, and "is anyone watching?" before the traffic feed, AI call feed, flow
   firehose and similar emits. Each realtime process publishes its share to Redis — the
   **realtime board**, `nvr:rt:board:<slot>:<process>:live` every 2 s (10 s TTL) and `:stats`
-  every 10 s — and every `SOCKETS=off` process reads it back into memory, so these answers are
-  at most ~4 s old (the socket list ~20 s) and no request waits on another process. A process
-  that serves sockets answers from its own, as before.
+  every 10 s, listed in the registry `nvr:rt:board:<slot>:nodes` (a sorted set by last
+  publish) — and every `SOCKETS=off` process reads it back into memory (registry + one MGET, no
+  key scan), so these answers are at most ~4 s old (the socket list ~20 s) and no request waits
+  on another process. A process that serves sockets answers from its own, as before. An in-app
+  notification is skipped only on a board entry younger than 3 s (a deliver beats a wrong skip),
+  and a realtime process takes its entries off the board as its drain starts.
+- Counts from `POST /api/presence/record-viewers` are given only for records the caller may
+  read. The socket inspector (`/api/realtime/sockets/:id/inspect`) answers 409
+  `SOCKET_ON_REALTIME` with the process name for a socket held by a realtime process.
+- A realtime process rebuilds its GraphQL schema after a configuration change elsewhere only
+  when collections, fields, relations or pipeline bindings changed (a fingerprint of those rows),
+  one check at a time.
 - A `SOCKETS=off` process publishes through the Redis adapter but leaves its broadcast feed and
   request channel: it decodes no broadcasts and never sits in another process's `fetchSockets`
-  quorum.
+  quorum (if leaving the request channel fails it says so in the log and stays in). Answers to a
+  `fetchSockets` go to the asker's own channel only.
 - Record changes reach the realtime processes on the event stream; if an entry goes out by the
-  adapter instead (stream append failed), it is also relayed to the other processes' saved-view
-  and SSE streams. Batched-mode collections reach SSE consumers on every process too.
+  adapter instead (stream append failed), it is also relayed on the Redis channel
+  `nvr:journal-fallback` (behind `REDIS_CHANNEL_PREFIX`) to every other process's saved-view,
+  SSE and MCP live streams. Batched-mode collections reach SSE consumers on every process too.
 - A reconnecting client re-sends its joins and then asks to catch up at once; the server now
   waits (up to 3 s) for those joins to land before replaying, so events written during the
   reconnect are no longer lost.

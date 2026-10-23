@@ -1,3 +1,4 @@
+import { STATUS_CODES } from 'node:http'
 import fastifyCors from '@fastify/cors'
 import fastify, { type FastifyInstance } from 'fastify'
 import { registerSession } from './auth/session.js'
@@ -151,7 +152,8 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     const { startSseRemoteBridge } = await import('./services/sse-hub.js')
     startSseRemoteBridge()
     const { wireJournalFallback } = await import('./services/event-journal.js')
-    wireJournalFallback(app.io)
+    const stopFallback = wireJournalFallback(app.redis)
+    app.addHook('onClose', async () => stopFallback())
     app.addHook('onClose', async () => {
       await flushJournal().catch(() => {})
       await closeEventStream()
@@ -190,10 +192,16 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
         app.log.warn({ err }, 'traffic-map cluster relay did not start on this realtime process')
       }
     }
-    const { startBoardPublisher, startBoardReader } = await import('./services/realtime-board.js')
+    const { startBoardPublisher, startBoardReader, withdrawBoard } = await import(
+      './services/realtime-board.js'
+    )
     const stopBoard = startBoardPublisher(app.redis, () => collectLocalBoard(app.io))
     // The other realtime processes' viewers, so `record:viewers` lists everyone on the record.
     const stopPeers = startBoardReader(app.redis, { peers: true })
+    // Off the board as soon as the drain starts, so nobody trusts this process's viewers.
+    app.addHook('preClose', async () => {
+      await withdrawBoard()
+    })
     app.addHook('onClose', async () => {
       stopBoard()
       stopPeers()
@@ -209,22 +217,24 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
       './db/config-epoch.js'
     )
     const { bustAllCaches } = await import('./services/cache-registry.js')
-    // A configuration change elsewhere: drop caches and rebuild the GraphQL schema the
-    // subscriptions run on (a web process rebuilds its own on the write; this one never writes).
-    let schemaTimer: ReturnType<typeof setTimeout> | null = null
-    const rebuildSchemaSoon = () => {
-      if (schemaTimer) return
-      schemaTimer = setTimeout(() => {
-        schemaTimer = null
-        void rebuildGraphQLSchema().catch((err) =>
-          app.log.warn({ err }, 'GraphQL schema rebuild after a configuration change failed')
-        )
-      }, 2_000)
-      schemaTimer.unref?.()
-    }
-    app.addHook('onClose', async () => {
-      if (schemaTimer) clearTimeout(schemaTimer)
+    // A configuration change elsewhere: drop caches, and rebuild the GraphQL schema the
+    // subscriptions run on only when what it is built from changed (collections, fields,
+    // relations, pipeline bindings) — most moves are layout autosaves, rules, settings. One check
+    // at a time; a move during a check runs one more after it.
+    const { schemaInputsFingerprint } = await import('./services/schema-builder.js')
+    const { createSchemaWatcher } = await import('./services/schema-watch.js')
+    const schemaWatch = createSchemaWatcher({
+      fingerprint: schemaInputsFingerprint,
+      rebuild: rebuildGraphQLSchema,
+      warn: (err) =>
+        app.log.warn({ err }, 'GraphQL schema check after a configuration change failed')
     })
+    const rebuildSchemaSoon = () => schemaWatch.moved()
+    // Baseline once the boot build has run.
+    app.addHook('onReady', async () => {
+      void schemaWatch.baseline()
+    })
+    app.addHook('onClose', async () => schemaWatch.stop())
     onEpoch(CONFIG_EPOCH, () => {
       bustAllCaches()
       rebuildSchemaSoon()
@@ -262,7 +272,8 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
 
   app.addHook('preHandler', resolveWorkspace)
 
-  // 5xx → the issue log, as on web (without the request sketch: no request bodies here).
+  // 5xx → the issue log, as on web (without the request sketch: no request bodies here). The
+  // answer has web's shape: a coded 4xx keeps its machine code.
   app.setErrorHandler((err: Error & { statusCode?: number; code?: string }, req, reply) => {
     const status = err.statusCode ?? 500
     if (status >= 500)
@@ -274,7 +285,13 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
         userId: req.user?.id ?? null
       }).catch(() => {})
     req.log.error(err)
-    return reply.code(status).send({ statusCode: status, error: err.name, message: err.message })
+    const coded = !!err.code && status < 500 && /^[A-Z][A-Z0-9_]+$/.test(err.code)
+    return reply.code(status).send({
+      statusCode: status,
+      error: STATUS_CODES[status] ?? 'Error',
+      message: err.message,
+      ...(coded ? { code: err.code } : {})
+    })
   })
 
   await app.register(realtimeHealthRoutes, { prefix: '/api' })

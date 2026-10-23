@@ -579,12 +579,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   // REDIS_CHANNEL_PREFIX keeps them apart; unset = the historic channel names.
   io.adapter(
     createAdapter(pubClient, subClient, {
-      key: `${process.env.REDIS_CHANNEL_PREFIX ?? ''}socket.io`
+      key: `${process.env.REDIS_CHANNEL_PREFIX ?? ''}socket.io`,
+      // Answers to a fetchSockets go to the asker's own channel, not to every process.
+      publishOnSpecificResponseChannel: true
     })
   )
   // Post-mortem 3.3 — SOCKETS=off: publish only. This process decodes no broadcasts and stays
   // out of the request quorum, so a busy request thread never slows another's fetchSockets.
-  if (!socketsServed()) emitterOnlyAdapter(io.of('/').adapter, subClient)
+  if (!socketsServed())
+    void emitterOnlyAdapter(io.of('/').adapter, subClient, (msg, err) => app.log.warn({ err }, msg))
   // #1730 — byte accounting per room: every broadcast (local or relayed from another replica)
   // writes to its sockets inside adapter.apply, so the room in flight is known there.
   {
