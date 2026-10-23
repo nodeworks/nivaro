@@ -158,7 +158,11 @@ export async function journaledEmit(
         .then(() =>
           _redis?.publish(
             fallbackChannel(),
-            JSON.stringify({ node: FALLBACK_NODE, entry: { seq, room, event, payload } })
+            JSON.stringify({
+              node: FALLBACK_NODE,
+              at: Date.now(),
+              entry: { seq, room, event, payload }
+            })
           )
         )
         .catch(() => {})
@@ -181,7 +185,7 @@ const FALLBACK_NODE = randomUUID()
 
 /** One fallback message for this process's listeners (its own messages are skipped). */
 export function receiveJournalFallback(raw: string): void {
-  let msg: { node?: unknown; entry?: Partial<JournalEntry> } | null = null
+  let msg: { node?: unknown; at?: unknown; entry?: Partial<JournalEntry> } | null = null
   try {
     msg = JSON.parse(raw)
   } catch {
@@ -197,7 +201,8 @@ export function receiveJournalFallback(raw: string): void {
       event: entry.event,
       payload: (entry.payload as Record<string, unknown>) ?? {}
     },
-    'remote'
+    'remote',
+    typeof msg?.at === 'number' ? msg.at : undefined
   )
 }
 

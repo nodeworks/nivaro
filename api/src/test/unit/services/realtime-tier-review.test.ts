@@ -18,6 +18,11 @@ function memRedis() {
   const r = {
     calls,
     kv,
+    z,
+    /** Set to make every registry read fail (Redis away). */
+    down: false,
+    /** Delay before zadd resolves (an in-flight tick). */
+    zaddDelayMs: 0,
     async set(k: string, v: string) {
       calls.push('set')
       kv.set(k, v)
@@ -34,6 +39,7 @@ function memRedis() {
     },
     async zadd(k: string, score: number, m: string) {
       calls.push('zadd')
+      if (r.zaddDelayMs) await new Promise((res) => setTimeout(res, r.zaddDelayMs))
       const s = z.get(k) ?? new Map<string, number>()
       s.set(m, score)
       z.set(k, s)
@@ -45,6 +51,7 @@ function memRedis() {
     },
     async zrangebyscore(k: string, min: number) {
       calls.push('zrangebyscore')
+      if (r.down) throw new Error('ECONNREFUSED')
       return [...(z.get(k) ?? new Map<string, number>())]
         .filter(([, s]) => s >= min)
         .map(([m]) => m)
@@ -54,6 +61,7 @@ function memRedis() {
       return 0
     },
     async pexpire() {
+      calls.push('pexpire')
       return 1
     },
     async scan() {
@@ -68,13 +76,14 @@ const empty = {
   live: { sockets: 1, users: ['u'], viewers: {}, pages: [] },
   stats: { sockets: [], rooms: [] }
 }
+const collector = { live: () => empty.live, stats: () => empty.stats }
 
 describe('realtime board registry (second review)', () => {
   afterEach(() => resetBoard())
 
   it('finds publishers through the registry (no SCAN) and withdraws on a graceful stop', async () => {
     const redis = memRedis()
-    startBoardPublisher(redis as never, () => empty)
+    startBoardPublisher(redis as never, collector)
     await vi.waitFor(() => expect(redis.kv.size).toBe(2))
     startBoardReader(redis as never, { includeOwn: true })
     const { boardLive } = await import('../../../services/realtime-board.js')
@@ -245,7 +254,7 @@ describe('the board with several socket-serving replicas (single role)', () => {
     try {
       const { startBoard, boardMergeOn } = await import('../../../services/realtime-board.js')
       const redis = memRedis()
-      const stop = startBoard(redis as never, { serves: true, collect: () => empty })
+      const stop = startBoard(redis as never, { serves: true, collect: collector })
       await vi.advanceTimersByTimeAsync(10)
       expect(redis.calls).toContain('zadd')
       expect([...redis.kv.keys()]).toEqual([])
@@ -345,5 +354,118 @@ describe('admin /api/stream hears the other processes (journal)', () => {
     await app.register(streamRoutes)
     expect(journalListenerCount()).toBe(before + 1)
     await app.close()
+  })
+})
+
+describe('third review: Redis trouble, stop, registry hygiene, rows', () => {
+  afterEach(() => resetBoard())
+  const other = (at = Date.now()) => ({
+    node: 'web-2',
+    at,
+    sockets: 3,
+    users: ['bob'],
+    viewers: { 'record:projects:5': [{ socket: 's-bob', id: 'bob', name: 'Bob' }] },
+    pages: [
+      {
+        socket: 's-bob',
+        user: { id: 'bob', name: 'Bob' },
+        path: '/p',
+        since: 1,
+        app: null,
+        tenant: ''
+      }
+    ]
+  })
+
+  it('degrades to this process only when the last good read is too old, or an entry is', async () => {
+    const board = await import('../../../services/realtime-board.js')
+    const sock = await import('../../../plugins/socketio.js')
+    board.setBoardsForTests([other()], [], Date.now())
+    expect(sock.usersOnPath('/p')).toHaveLength(1)
+    // Last good read 7 s ago (Redis away): nothing from the board — no ghost viewers.
+    board.setBoardsForTests([other()], [], Date.now() - 7_000)
+    expect(sock.usersOnPath('/p')).toEqual([])
+    expect(sock.isUserViewing('projects', '5', 'bob')).toBe(false)
+    expect(sock.getRecordViewerSnapshot()).toEqual([])
+    expect(sock.getLocalConcurrency().sockets).toBe(0)
+    expect(board.roomListeners(null, 'watch:traffic')).toBe(0)
+    // A fresh read but an entry its publisher wrote 12 s ago (TTL 10 s): ignored too.
+    board.setBoardsForTests([other(Date.now() - 12_000)], [], Date.now())
+    expect(sock.usersOnPath('/p')).toEqual([])
+  })
+
+  it('a peer that loses Redis drops the old read and re-tells the rooms it named', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    try {
+      const board = await import('../../../services/realtime-board.js')
+      const redis = memRedis()
+      redis.kv.set('nvr:rt:board:test:web-2:live', JSON.stringify(other()))
+      await redis.zadd('nvr:rt:board:test:nodes', Date.now(), 'web-2')
+      const told: string[][] = []
+      board.onPeerBoardChange((rooms) => told.push(rooms))
+      board.startBoardReader(redis as never, { peers: true })
+      await vi.advanceTimersByTimeAsync(10)
+      expect(told).toEqual([['record:projects:5']])
+      redis.down = true
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(board.boardLive()).toEqual([])
+      expect(told.at(-1)).toEqual(['record:projects:5'])
+      board.onPeerBoardChange(null)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a stop during an in-flight tick never starts publishing afterwards', async () => {
+    const { startBoard, boardMergeOn } = await import('../../../services/realtime-board.js')
+    const redis = memRedis()
+    await redis.zadd('nvr:rt:board:test:nodes', Date.now(), 'web-2')
+    redis.zaddDelayMs = 30
+    const stop = startBoard(redis as never, { serves: true, collect: collector })
+    await stop()
+    await new Promise((r) => setTimeout(r, 80))
+    expect([...redis.kv.keys()]).toEqual([])
+    expect(boardMergeOn()).toBe(false)
+  })
+
+  it('a lone process trims and expires the registry on its heartbeat', async () => {
+    const { startBoard } = await import('../../../services/realtime-board.js')
+    const redis = memRedis()
+    const stop = startBoard(redis as never, { serves: true, collect: collector })
+    await vi.waitFor(() => expect(redis.calls).toContain('pexpire'))
+    expect(redis.calls).toContain('zremrangebyscore')
+    await stop()
+  })
+
+  it('development throwaways on other ports get their own slot', async () => {
+    const { startBoard } = await import('../../../services/realtime-board.js')
+    const env = { NODE_ENV: process.env.NODE_ENV, PORT: process.env.PORT }
+    process.env.NODE_ENV = 'development'
+    process.env.PORT = '3099'
+    try {
+      const redis = memRedis()
+      const stop = startBoard(redis as never, { serves: true, collect: collector })
+      await vi.waitFor(() =>
+        expect([...redis.z.keys()]).toEqual(['nvr:rt:board:development-3099:nodes'])
+      )
+      await stop()
+    } finally {
+      process.env.NODE_ENV = env.NODE_ENV
+      if (env.PORT === undefined) delete process.env.PORT
+      else process.env.PORT = env.PORT
+    }
+  })
+
+  it('re-tells presence:rows where only list pages watch the row', async () => {
+    const { peerChangeTargets } = await import('../../../plugins/socketio.js')
+    const { rowsRoomName } = await import('../../../services/presence-rows.js')
+    const rows = rowsRoomName('record:projects:5')
+    expect(peerChangeTargets(['record:projects:5'], (r) => r === rows)).toEqual([
+      { kind: 'record', room: 'record:projects:5' }
+    ])
+    expect(peerChangeTargets(['record:projects:5', 'ops:ticket:3'], () => false)).toEqual([])
+    expect(peerChangeTargets(['ops:ticket:3'], (r) => r === 'ops:ticket:3')).toEqual([
+      { kind: 'ops', room: 'ops:ticket:3', topic: 'ticket:3' }
+    ])
   })
 })

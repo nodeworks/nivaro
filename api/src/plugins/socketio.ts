@@ -63,6 +63,7 @@ import {
 } from '../services/presence-topics.js'
 import { emitterOnlyAdapter, socketsServed } from '../services/process-role.js'
 import {
+  type BoardCollector,
   boardConcurrency,
   boardIsViewing,
   boardMergeOn,
@@ -436,7 +437,12 @@ export function getLocalConcurrency(): { sockets: number; users: number } {
  * Post-mortem 3.3 — this process's share of the realtime board (services/realtime-board.ts),
  * published by a realtime process for the SOCKETS=off processes.
  */
-export function collectLocalBoard(io: SocketIOServer | null = _ioRef): LocalBoard {
+export function localBoardCollector(io: SocketIOServer | null = _ioRef): BoardCollector {
+  return { live: () => collectLocalLive(io), stats: () => collectLocalStats(io) }
+}
+
+/** The live part (every second): counts, viewers, page pings, gate rooms, topic viewers. */
+function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
   const users = new Set<string>()
   for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
   const viewers: LocalBoard['live']['viewers'] = {}
@@ -450,20 +456,22 @@ export function collectLocalBoard(io: SocketIOServer | null = _ioRef): LocalBoar
     const at = sock.data?.[PAGE_AT_KEY] as PageAtData | undefined
     if (at) pages.push({ ...at, socket: id })
   }
+  return {
+    sockets: io?.engine?.clientsCount ?? socketMeta.size,
+    users: [...users],
+    viewers,
+    pages,
+    rooms,
+    topics: localTopicViewerEntries()
+  }
+}
+
+/** The socket list and room sizes (every 10 s): the expensive part, built only then. */
+function collectLocalStats(io: SocketIOServer | null): LocalBoard['stats'] {
   const stats = localRealtimeStats(io)
   return {
-    live: {
-      sockets: io?.engine?.clientsCount ?? socketMeta.size,
-      users: [...users],
-      viewers,
-      pages,
-      rooms,
-      topics: localTopicViewerEntries()
-    },
-    stats: {
-      sockets: stats.sockets as unknown as LocalBoard['stats']['sockets'],
-      rooms: stats.rooms
-    }
+    sockets: stats.sockets as unknown as LocalBoard['stats']['sockets'],
+    rooms: stats.rooms
   }
 }
 
@@ -491,6 +499,29 @@ function emitRecordViewers(io: SocketIOServer, room: string, local: boolean): vo
       item: m[2],
       user_ids: distinctViewerIds(viewers)
     })
+}
+
+/**
+ * Exported for tests: which rooms a board change re-tells on this process — a record room with
+ * members here, or with list pages here watching that row (`presence:rows`); an ops topic room
+ * with members here.
+ */
+export function peerChangeTargets(
+  rooms: string[],
+  here: (room: string) => boolean
+): Array<{ kind: 'record'; room: string } | { kind: 'ops'; room: string; topic: string }> {
+  const out: Array<
+    { kind: 'record'; room: string } | { kind: 'ops'; room: string; topic: string }
+  > = []
+  for (const room of rooms) {
+    const name = splitTenantRoom(room).room
+    if (name.startsWith('record:')) {
+      if (here(room) || here(rowsRoomName(room))) out.push({ kind: 'record', room })
+    } else if (name.startsWith('ops:') && here(room)) {
+      out.push({ kind: 'ops', room, topic: name.slice(4) })
+    }
+  }
+  return out
 }
 
 /** Now-editing pulse (#273): per-node record-room viewers snapshot. */
@@ -2001,17 +2032,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   // process's own sockets in those rooms the current list (a join or leave elsewhere, or two
   // joins at the same moment, otherwise never converge). Local emit: every process tells its own.
   onPeerBoardChange((rooms) => {
-    for (const room of rooms) {
-      const name = splitTenantRoom(room).room
-      if (name.startsWith('record:')) {
-        if ((io.sockets.adapter.rooms.get(room)?.size ?? 0) > 0) emitRecordViewers(io, room, true)
-      } else if (name.startsWith('ops:') && (io.sockets.adapter.rooms.get(room)?.size ?? 0) > 0) {
-        io.local.to(room).emit('ops:changed', {
-          topic: name.slice(4),
-          viewers: topicViewers(room),
-          at: Date.now()
-        })
-      }
+    const here = (r: string) => (io.sockets.adapter.rooms.get(r)?.size ?? 0) > 0
+    for (const t of peerChangeTargets(rooms, here)) {
+      if (t.kind === 'record') emitRecordViewers(io, t.room, true)
+      else
+        io.local
+          .to(t.room)
+          .emit('ops:changed', { topic: t.topic, viewers: topicViewers(t.room), at: Date.now() })
     }
   })
 

@@ -262,10 +262,10 @@ export async function buildServer() {
       if (!process.env.CLOUD_META_DB_URL && app.redis) {
         const { socketsServed } = await import('./services/process-role.js')
         const { startBoard } = await import('./services/realtime-board.js')
-        const { collectLocalBoard } = await import('./plugins/socketio.js')
+        const { localBoardCollector } = await import('./plugins/socketio.js')
         const stopBoard = startBoard(app.redis, {
           serves: socketsServed(),
-          collect: () => collectLocalBoard(app.io)
+          collect: localBoardCollector(app.io)
         })
         // Off the board as soon as the drain starts, so nobody trusts this process's viewers.
         app.addHook('preClose', async () => stopBoard())

@@ -45,7 +45,13 @@ const REGISTRY_KEEP_MS = 60_000
 const FRESH_MS = 6_000
 /** Notification suppression trusts a board entry only this young (a deliver beats a wrong skip). */
 export const VIEWING_MAX_AGE_MS = 3_000
-const keyPrefix = () => `nvr:rt:board:${instanceKey()}:`
+/** The deployment slot. In development every API on the laptop is its own deployment (Rob's
+ *  API and a throwaway on another port share Redis and NODE_ENV): the port tells them apart. */
+const boardSlot = () =>
+  process.env.NODE_ENV === 'development'
+    ? `${instanceKey()}-${process.env.PORT ?? ''}`
+    : instanceKey()
+const keyPrefix = () => `nvr:rt:board:${boardSlot()}:`
 const registryKey = () => `${keyPrefix()}nodes`
 const partKey = (node: string, part: 'live' | 'stats') => `${keyPrefix()}${node}:${part}`
 
@@ -102,6 +108,12 @@ export interface LocalBoard {
   stats: Omit<BoardStats, 'node' | 'at'>
 }
 
+/** What a publisher collects: the live part every second, the socket list every 10 s. */
+export interface BoardCollector {
+  live: () => LocalBoard['live']
+  stats: () => LocalBoard['stats']
+}
+
 type BoardRedis = Pick<
   Redis,
   'set' | 'mget' | 'del' | 'zadd' | 'zrem' | 'zrangebyscore' | 'zremrangebyscore' | 'pexpire'
@@ -113,6 +125,9 @@ let reader: ReturnType<typeof setInterval>[] = []
 let liveBoards: BoardLive[] = []
 let statsBoards: BoardStats[] = []
 let liveReadAt = 0
+let statsReadAt = 0
+/** A stats read older than this is not trusted (stats are published every 10 s, 30 s TTL). */
+const STATS_FRESH_MS = 30_000
 let readerOn = false
 let peersOn = false
 let peerChange: ((rooms: string[]) => void) | null = null
@@ -159,14 +174,14 @@ export function changedPeerRooms(
 }
 
 /** Realtime processes: publish this process's share. Idempotent; returns the stop function. */
-export function startBoardPublisher(redis: BoardRedis, collect: () => LocalBoard): () => void {
+export function startBoardPublisher(redis: BoardRedis, collect: BoardCollector): () => void {
   stopBoardPublisher()
   publisherRedis = redis
   const put = async (part: 'live' | 'stats') => {
     try {
-      const b = collect()
+      const share = part === 'live' ? collect.live() : collect.stats()
       const at = Date.now()
-      const body = { node: INSTANCE_ID, at, ...(part === 'live' ? b.live : b.stats) }
+      const body = { node: INSTANCE_ID, at, ...share }
       await redis.set(
         partKey(INSTANCE_ID, part),
         JSON.stringify(body),
@@ -253,23 +268,26 @@ export function startBoardReader(
   readerOn = !opts.peers
   peersOn = !!opts.peers
   const live = async () => {
+    const before = liveBoards
     try {
-      const before = liveBoards
       liveBoards = await readAll<BoardLive>(redis, 'live', opts.includeOwn)
       liveReadAt = Date.now()
-      if (opts.peers && peerChange) {
-        const rooms = changedPeerRooms(before, liveBoards)
-        if (rooms.length) peerChange(rooms)
-      }
     } catch {
-      /* keep the last read; it goes stale and says so */
+      // Redis trouble degrades to this process's own sockets: once the last good read is too
+      // old, drop it (the views already ignore it) and re-tell the rooms it named.
+      if (liveBoards.length && Date.now() - liveReadAt > FRESH_MS) liveBoards = []
+    }
+    if (opts.peers && peerChange && before !== liveBoards) {
+      const rooms = changedPeerRooms(before, liveBoards)
+      if (rooms.length) peerChange(rooms)
     }
   }
   const stats = async () => {
     try {
       statsBoards = await readAll<BoardStats>(redis, 'stats', opts.includeOwn)
+      statsReadAt = Date.now()
     } catch {
-      /* keep the last read */
+      if (statsBoards.length && Date.now() - statsReadAt > STATS_FRESH_MS) statsBoards = []
     }
   }
   void live()
@@ -298,51 +316,66 @@ const IDLE_OFF_MS = 60_000
  */
 export function startBoard(
   redis: BoardRedis,
-  opts: { serves: boolean; collect?: () => LocalBoard }
+  opts: { serves: boolean; collect?: BoardCollector }
 ): () => Promise<void> {
+  let stopped = false
+  /** Register (and keep the registry trimmed and expiring — a crashed process's entry goes). */
+  const register = async (member: string) => {
+    const now = Date.now()
+    await redis.zadd(registryKey(), now, member)
+    await redis.zremrangebyscore(registryKey(), '-inf', now - REGISTRY_KEEP_MS)
+    await redis.pexpire(registryKey(), REGISTRY_KEEP_MS * 2)
+  }
   if (!opts.serves) {
-    const beat = () =>
-      void redis.zadd(registryKey(), Date.now(), `${READER_PREFIX}${INSTANCE_ID}`).catch(() => {})
+    const member = `${READER_PREFIX}${INSTANCE_ID}`
+    const beat = () => {
+      if (!stopped) void register(member).catch(() => {})
+    }
     beat()
     const t = setInterval(beat, DISCOVER_MS)
     t.unref?.()
     startBoardReader(redis)
     return async () => {
+      stopped = true
       clearInterval(t)
       stopBoardReader()
-      await redis.zrem(registryKey(), `${READER_PREFIX}${INSTANCE_ID}`).catch(() => 0)
+      await redis.zrem(registryKey(), member).catch(() => 0)
     }
   }
   let active = false
   let lastOthers = 0
   const tick = async () => {
+    if (stopped) return
+    const now = Date.now()
+    let present: string[] | null = null
     try {
-      const now = Date.now()
-      if (!active) await redis.zadd(registryKey(), now, INSTANCE_ID)
-      const present = (
+      if (!active) await register(INSTANCE_ID)
+      if (stopped) return
+      present = (
         (await redis.zrangebyscore(registryKey(), now - PRESENT_MS, '+inf')) as string[]
       ).filter((n) => n !== INSTANCE_ID)
-      if (present.length > 0) lastOthers = now
-      if (present.length > 0 && !active && opts.collect) {
-        active = true
-        startBoardPublisher(redis, opts.collect)
-        startBoardReader(redis, { peers: true })
-      } else if (active && now - lastOthers > IDLE_OFF_MS) {
-        active = false
-        stopBoardReader()
-        liveBoards = []
-        statsBoards = []
-        await withdrawBoard()
-        await redis.zadd(registryKey(), now, INSTANCE_ID)
-      }
     } catch {
-      /* Redis away — the next tick tries again */
+      /* Redis away: nobody seen this tick (the idle-off below still runs) */
+    }
+    if (stopped) return
+    if (present && present.length > 0) lastOthers = now
+    if (present && present.length > 0 && !active && opts.collect) {
+      active = true
+      startBoardPublisher(redis, opts.collect)
+      startBoardReader(redis, { peers: true })
+    } else if (active && now - lastOthers > IDLE_OFF_MS) {
+      active = false
+      stopBoardReader()
+      liveBoards = []
+      statsBoards = []
+      await withdrawBoard()
     }
   }
   void tick()
   const t = setInterval(() => void tick(), DISCOVER_MS)
   t.unref?.()
   return async () => {
+    stopped = true
     clearInterval(t)
     stopBoardReader()
     await withdrawBoard()
@@ -362,15 +395,31 @@ export function boardReaderOn(): boolean {
 
 /** Read within the last 6 s and at least one realtime process answered. */
 export function boardFresh(now = Date.now()): boolean {
-  return readerOn && now - liveReadAt < FRESH_MS && liveBoards.length > 0
+  return readerOn && liveView(now).length > 0
+}
+
+/**
+ * The other processes' live entries this process may trust now: none once the last good read
+ * is older than 6 s (Redis trouble = this process's own sockets only), and no entry its
+ * publisher wrote more than 10 s ago (the key's own TTL). Every view reads through this.
+ */
+function liveView(now = Date.now()): BoardLive[] {
+  if (now - liveReadAt > FRESH_MS) return []
+  return liveBoards.filter((b) => now - (Number(b.at) || 0) <= LIVE_TTL_S * 1000)
+}
+
+/** The same for the socket lists (30 s). */
+function statsView(now = Date.now()): BoardStats[] {
+  if (now - statsReadAt > STATS_FRESH_MS) return []
+  return statsBoards.filter((b) => now - (Number(b.at) || 0) <= STATS_TTL_S * 1000)
 }
 
 export function boardLive(): readonly BoardLive[] {
-  return liveBoards
+  return liveView()
 }
 
 export function boardStats(): readonly BoardStats[] {
-  return statsBoards
+  return statsView()
 }
 
 /** Tests: load boards as a reader would have. */
@@ -378,6 +427,7 @@ export function setBoardsForTests(live: BoardLive[], stats: BoardStats[] = [], a
   liveBoards = live
   statsBoards = stats
   liveReadAt = at
+  statsReadAt = at
   readerOn = true
 }
 
@@ -386,6 +436,7 @@ export function setPeerBoardsForTests(live: BoardLive[], stats: BoardStats[] = [
   liveBoards = live
   statsBoards = stats
   liveReadAt = Date.now()
+  statsReadAt = Date.now()
   readerOn = false
   peersOn = true
 }
@@ -397,6 +448,7 @@ export function resetBoard(): void {
   liveBoards = []
   statsBoards = []
   liveReadAt = 0
+  statsReadAt = 0
 }
 
 // ── Views over the board (the socket plugin's getters fall back to these) ───────────────────
@@ -408,14 +460,14 @@ export function boardPeerViewers(
   room: string
 ): Array<{ socket: string; id: string; name: string }> {
   const out: Array<{ socket: string; id: string; name: string }> = []
-  for (const b of liveBoards) if (b.node !== INSTANCE_ID) out.push(...(b.viewers?.[room] ?? []))
+  for (const b of liveView()) if (b.node !== INSTANCE_ID) out.push(...(b.viewers?.[room] ?? []))
   return out
 }
 
 /** Viewers of an ops topic room (tenant-scoped) held by OTHER realtime processes. */
 export function boardPeerTopicViewers(room: string): BoardTopicViewer[] {
   const out: BoardTopicViewer[] = []
-  for (const b of liveBoards) if (b.node !== INSTANCE_ID) out.push(...(b.topics?.[room] ?? []))
+  for (const b of liveView()) if (b.node !== INSTANCE_ID) out.push(...(b.topics?.[room] ?? []))
   return out
 }
 
@@ -430,7 +482,7 @@ export function boardIsViewing(
   maxAgeMs = VIEWING_MAX_AGE_MS,
   now = Date.now()
 ): boolean {
-  for (const b of liveBoards) {
+  for (const b of liveView()) {
     if (now - Math.min(Number(b.at) || 0, now) > maxAgeMs) continue
     for (const v of b.viewers?.[room] ?? []) if (v.id === userId) return true
   }
@@ -444,7 +496,7 @@ export function boardRecordViewers(
   tenant: string
 ): Array<{ collection: string; item: string; viewers: Viewer[] }> {
   const byRoom = new Map<string, Map<string, Viewer>>()
-  for (const b of liveBoards)
+  for (const b of liveView())
     for (const [scoped, list] of Object.entries(b.viewers ?? {})) {
       const m = TENANT_ROOM.exec(scoped)
       if ((m ? m[1] : '') !== tenant) continue
@@ -470,7 +522,7 @@ export function boardUsersOnPath(
   tenant: string
 ): Array<{ id: string; name: string; since: number }> {
   const seen = new Map<string, { id: string; name: string; since: number }>()
-  for (const b of liveBoards)
+  for (const b of liveView())
     for (const p of b.pages ?? []) {
       if (p.path !== path || p.tenant !== tenant || !p.user) continue
       const cur = seen.get(p.user.id)
@@ -482,7 +534,7 @@ export function boardUsersOnPath(
 /** Users whose latest page ping sits under any of `prefixes`. */
 export function boardUsersOnPathPrefix(prefixes: string[], tenant: string): string[] {
   const ids = new Set<string>()
-  for (const b of liveBoards)
+  for (const b of liveView())
     for (const p of b.pages ?? []) {
       if (p.tenant !== tenant || !p.user) continue
       const under = prefixes.some(
@@ -500,7 +552,7 @@ export function boardRealtimeStats(): {
 } {
   const sockets: Array<Record<string, unknown> & { id: string }> = []
   const rooms = new Map<string, number>()
-  for (const b of statsBoards) {
+  for (const b of statsView()) {
     for (const s of b.sockets ?? []) sockets.push({ ...s, node: b.node })
     for (const r of b.rooms ?? []) rooms.set(r.room, (rooms.get(r.room) ?? 0) + r.size)
   }
@@ -511,7 +563,7 @@ export function boardRealtimeStats(): {
 
 /** The person a socket on any realtime process signed in as (from the stats board). */
 export function boardSocketUser(socketId: string): Viewer | null {
-  for (const b of statsBoards)
+  for (const b of statsView())
     for (const s of b.sockets ?? []) if (s.id === socketId) return (s.user as Viewer | null) ?? null
   return null
 }
@@ -525,13 +577,13 @@ export function isGateRoom(room: string): boolean {
 /** Members of `room` on the realtime processes (gate rooms only). */
 export function boardRoomSize(room: string): number {
   let n = 0
-  for (const b of liveBoards) n += Number(b.rooms?.[room]) || 0
+  for (const b of liveView()) n += Number(b.rooms?.[room]) || 0
   return n
 }
 
 /** Is `userId` signed in on a realtime process? */
 export function boardHasUser(userId: string): boolean {
-  for (const b of liveBoards) if (b.users?.includes(userId)) return true
+  for (const b of liveView()) if (b.users?.includes(userId)) return true
   return false
 }
 
@@ -554,7 +606,7 @@ export function boardConcurrency(
 ): { sockets: number; users: number } {
   let sockets = own.sockets
   const users = new Set<string>(own.users)
-  for (const b of liveBoards) {
+  for (const b of liveView()) {
     sockets += Number(b.sockets) || 0
     for (const u of b.users ?? []) users.add(u)
   }
