@@ -451,6 +451,32 @@ GET /api/environments/env-presence         → every registered API, compared`
       type: 'p',
       text: 'A custom front end reports its build with `setClientBuild` / `installPageContextFetch({ build })`. A tab that reports nothing groups as "Not reported"; builds named `dev` are never judged old.'
     },
+    {
+      type: 'h2',
+      id: 'deploys-sticky-refresh',
+      text: 'Force refresh reaches tabs that were offline'
+    },
+    {
+      type: 'p',
+      text: 'Force client refresh (on /realtime and a person’s admin tools) reaches the tabs connected at that moment, and is also remembered for 24 hours (`FORCE_REFRESH_REMEMBER_HOURS`, 0 = off; the newest 20 are kept, `FORCE_REFRESH_REMEMBER_MAX`). A tab that was asleep, offline or discarded gets it when its socket connects again — only if its page loaded before the refresh was pushed and it matches the target (everyone, one app, named people, or old versions as judged when it was pushed). A tab reloads at most once for one push: it remembers the pushes it reloaded for (per tab) and says so when it connects, and the server tells each tab at most once per page load. The Force refresh panel lists the remembered pushes with a Stop for each.'
+    },
+    {
+      type: 'p',
+      text: 'Minimum build (next to Force client refresh) is off until an administrator sets one, per app. Any tab of that app on an older build reloads after the countdown you choose (default 30 seconds, at least 5) with your optional message — the tabs open now, and every tab that connects later. Builds that read as versions compare as versions (0.3.9 is older than 0.3.12); any other build (a commit id) counts as older when it differs and the page loaded before the minimum was set. The panel shows how many open tabs a value would reload before you save it, and Turn off removes it. Every set, change and turn-off is in the activity log. A tab still on the old build after reloading twice (a cached bundle) is left alone.'
+    },
+    {
+      type: 'p',
+      text: 'A reload never throws away work. While the tab has unsaved changes — a record form, the layout editor, a payload template, a help-video recording, a `useNivaroForm` form, or saves waiting in the offline outbox — the banner reads "A reload is waiting — save or discard your changes" and reloads the moment they are saved or discarded; Reload now reloads at once. A custom front end reports its own forms with `useUnsavedWork(dirty, label)` or `registerUnsavedWork(label, () => dirty)`.'
+    },
+    {
+      type: 'pre',
+      code: `GET    /api/realtime/force-refresh/remembered        → pushes still delivered on reconnect
+DELETE /api/realtime/force-refresh/remembered/:id    → stop one (:id = all stops every one)
+GET    /api/realtime/min-build                       → rules, open tabs below each, builds seen
+GET    /api/realtime/min-build/preview?app=&build=   → open tabs a value would reload now
+PUT    /api/realtime/min-build/:app {build, seconds?, message?}
+DELETE /api/realtime/min-build/:app                  → turn off`
+    },
     { type: 'h2', id: 'deploys-readiness-cache', text: 'How fresh the readiness scorecard is' },
     {
       type: 'p',
