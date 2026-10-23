@@ -180,12 +180,13 @@ export function useDraftEditor(key: string | null, detail: TemplateDetail | unde
   }
 
   /** A draft write made outside autosave (the lookups) moved the rev to `r`. */
-  const bumpRev = useCallback((r: number) => {
-    const k = keyRef.current
-    if (!k) return
+  const bumpRev = useCallback((k: string, r: number) => {
     revs.current[k] = r
-    setRev(r)
+    if (keyRef.current === k) setRev(r)
   }, [])
+
+  /** The published version template `k` was loaded at (what draft writes are based on). */
+  const getLoadedVersion = useCallback((k: string) => loadedVersions.current[k] ?? null, [])
 
   /** Our own publish moved the live version: later saves are not conflicts with it. */
   const markPublished = useCallback((k: string, version: number) => {
@@ -320,6 +321,7 @@ export function useDraftEditor(key: string | null, detail: TemplateDetail | unde
     raiseConflict,
     markPublished,
     bumpRev,
+    getLoadedVersion,
     rev,
     getRev
   }
@@ -875,6 +877,7 @@ export function PayloadTemplateEditorPage() {
       raiseConflict: editor.raiseConflict,
       markPublished: editor.markPublished,
       bumpRev: editor.bumpRev,
+      getLoadedVersion: editor.getLoadedVersion,
       conflicted: saveState.kind === 'conflict',
       saveError:
         saveState.kind === 'error'
@@ -891,6 +894,7 @@ export function PayloadTemplateEditorPage() {
       editor.raiseConflict,
       editor.markPublished,
       editor.bumpRev,
+      editor.getLoadedVersion,
       editor.rev,
       editor.getRev,
       adoptServerDraft,

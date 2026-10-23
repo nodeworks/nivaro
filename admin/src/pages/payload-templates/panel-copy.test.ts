@@ -71,5 +71,17 @@ describe('lookups on a template', () => {
     expect(sameLookups(null, {})).toBe(true)
     // An older server without draft_lookups: the draft mirrors the published ones.
     expect(draftLookupsOf({ lookups: null } as unknown as TemplateDetail)).toBeNull()
+    expect(
+      draftLookupsOf({ lookups: { wh: { collection: 'w' } } } as unknown as TemplateDetail)
+    ).toEqual({ wh: { collection: 'w' } })
+  })
+
+  it('a null draft over live lookups reads as none, so clearing them is something to publish', () => {
+    const t = {
+      lookups: { wh: { collection: 'warehouses' } },
+      draft_lookups: null
+    } as unknown as TemplateDetail
+    expect(draftLookupsOf(t)).toBeNull()
+    expect(sameLookups(draftLookupsOf(t), liveLookupsOf(t))).toBe(false)
   })
 })

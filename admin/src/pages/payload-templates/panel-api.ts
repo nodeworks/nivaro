@@ -347,7 +347,12 @@ export function useLookupCollections(enabled = true) {
 export function useSaveLookups(key: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (args: { lookups: Record<string, unknown> | null; base_rev: number }) =>
+    mutationFn: (args: {
+      lookups: Record<string, unknown> | null
+      base_rev: number
+      /** The published version the editor loaded at; a publish since then = 409 stale. */
+      base_published_version: number | null
+    }) =>
       api
         .put<{ rev: number; data: { lookups: Record<string, unknown> | null } }>(
           `/payload-templates/${enc(key)}/lookups`,
@@ -397,7 +402,13 @@ const asLookups = (v: unknown): Record<string, unknown> | null => {
 export const liveLookupsOf = (t: TemplateDetail) => asLookups(t.lookups)
 /** The draft's lookups (the route mirrors the published ones until a draft row exists). */
 export const draftLookupsOf = (t: TemplateDetail) =>
-  asLookups((t as TemplateDetail & { draft_lookups?: unknown }).draft_lookups ?? t.lookups)
+  // Only an ABSENT key (an older server) mirrors the live lookups: a null draft means "none",
+  // so clearing every lookup is something to publish.
+  asLookups(
+    'draft_lookups' in t
+      ? (t as TemplateDetail & { draft_lookups?: unknown }).draft_lookups
+      : t.lookups
+  )
 /** The registrar's declared lookups (Reset to file default brings them back). */
 export const defaultLookupsOf = (t: TemplateDetail) =>
   asLookups((t as TemplateDetail & { default_lookups?: unknown }).default_lookups)

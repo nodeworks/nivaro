@@ -398,48 +398,58 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
   })
 
   // ── the template's own lookups (UI-created templates; a registrar's follow its code) ──
-  app.put<{ Params: { key: string }; Body: { lookups?: unknown; base_rev?: number } }>(
-    '/:key/lookups',
-    async (req, reply) => {
-      const row = await loadOr404(req.params.key, reply)
-      if (!row) return reply
-      if (row.owner || registeredDef(row.key)) {
-        return reply.code(409).send({
-          error: 'registered',
-          message: `${row.owner ?? 'An extension'} sets this payload's lookups in code; change them there`
-        })
-      }
-      const b = req.body ?? {}
-      if (!('lookups' in b))
-        return reply.code(400).send({ error: 'invalid', errors: ['lookups is required'] })
-      const baseRev = Number(b.base_rev)
-      if (b.base_rev == null || !Number.isInteger(baseRev) || baseRev < 0) {
-        return reply.code(400).send({ error: 'invalid', errors: ['base_rev is required'] })
-      }
-      const v = validateLookups(b.lookups)
-      if (!v.ok) return reply.code(400).send({ error: 'invalid', errors: v.errors })
-      try {
-        // Saved to the DRAFT under the draft's revision guard; pushes keep the published ones
-        // until this draft is published.
-        const r = await saveDraftLookups(
-          row.key,
-          { lookups: v.value, base_rev: baseRev },
-          req.user?.id ?? null
-        )
-        if (!r.ok) return sendStale(reply, r.current)
-        await logActivity({
-          action: 'payload-template-lookups',
-          user: req.user?.id ?? null,
-          collection: TABLE,
-          item: row.key,
-          comment: `Changed the draft lookups of payload template ${row.label}`
-        })
-        return { rev: r.rev, data: { lookups: v.value } }
-      } catch (e) {
-        return sendError(reply, e)
-      }
+  app.put<{
+    Params: { key: string }
+    Body: {
+      lookups?: unknown
+      base_rev?: number
+      /** The published version the editor last saw; someone publishing since = stale. */
+      base_published_version?: number | null
     }
-  )
+  }>('/:key/lookups', async (req, reply) => {
+    const row = await loadOr404(req.params.key, reply)
+    if (!row) return reply
+    if (row.owner || registeredDef(row.key)) {
+      return reply.code(409).send({
+        error: 'registered',
+        message: `${row.owner ?? 'An extension'} sets this payload's lookups in code; change them there`
+      })
+    }
+    const b = req.body ?? {}
+    if (!('lookups' in b))
+      return reply.code(400).send({ error: 'invalid', errors: ['lookups is required'] })
+    const baseRev = Number(b.base_rev)
+    if (b.base_rev == null || !Number.isInteger(baseRev) || baseRev < 0) {
+      return reply.code(400).send({ error: 'invalid', errors: ['base_rev is required'] })
+    }
+    const v = validateLookups(b.lookups)
+    if (!v.ok) return reply.code(400).send({ error: 'invalid', errors: v.errors })
+    // Same publish check as PUT draft: an edit based on an older live version is stale.
+    if (b.base_published_version !== undefined) {
+      const seen = b.base_published_version == null ? null : Number(b.base_published_version)
+      if (seen !== row.published_version) return sendStale(reply, row)
+    }
+    try {
+      // Saved to the DRAFT under the draft's revision guard; pushes keep the published ones
+      // until this draft is published.
+      const r = await saveDraftLookups(
+        row.key,
+        { lookups: v.value, base_rev: baseRev },
+        req.user?.id ?? null
+      )
+      if (!r.ok) return sendStale(reply, r.current)
+      await logActivity({
+        action: 'payload-template-lookups',
+        user: req.user?.id ?? null,
+        collection: TABLE,
+        item: row.key,
+        comment: `Changed the draft lookups of payload template ${row.label}`
+      })
+      return { rev: r.rev, data: { lookups: v.value } }
+    } catch (e) {
+      return sendError(reply, e)
+    }
+  })
 
   // ── publish ──
   app.post<{ Params: { key: string }; Body: { base_rev?: number; note?: string } }>(

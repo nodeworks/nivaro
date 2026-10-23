@@ -898,7 +898,23 @@ describe('payload template routes', () => {
     expect(stale.body.current.draft_rev).toBe(4)
     expect(row.draft_lookups).toEqual(lookups)
 
-    const published = await call('POST', '/mwf-ir-order/publish', { base_rev: 4, note: 'lines' })
+    // Someone published since the editor loaded (it saw v1; live is v2): stale too.
+    const moved = await call('PUT', '/mwf-ir-order/lookups', {
+      lookups: null,
+      base_rev: 4,
+      base_published_version: 1
+    })
+    expect(moved.status).toBe(409)
+    expect(moved.body.current.published_version).toBe(2)
+    expect(row.draft_lookups).toEqual(lookups)
+    const seen = await call('PUT', '/mwf-ir-order/lookups', {
+      lookups,
+      base_rev: 4,
+      base_published_version: 2
+    })
+    expect(seen.body.rev).toBe(5)
+
+    const published = await call('POST', '/mwf-ir-order/publish', { base_rev: 5, note: 'lines' })
     expect(published.status).toBe(200)
     expect(row.lookups).toEqual(lookups)
     const after = await call('GET', '?external_api=MWF')

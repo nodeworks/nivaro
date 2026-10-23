@@ -378,11 +378,14 @@ function LookupsEditor({ template }: { template: TemplateDetail }) {
       return
     }
     try {
+      const key = template.key
       const saved = await save.mutateAsync({
         lookups: built.value,
-        base_rev: ctxRef.current.getRev() ?? 0
+        base_rev: ctxRef.current.getRev() ?? 0,
+        base_published_version: ctxRef.current.getLoadedVersion(key)
       })
-      ctxRef.current.bumpRev(saved.rev)
+      // Recorded under the template this save was for, even if the editor moved on meanwhile.
+      ctxRef.current.bumpRev(key, saved.rev)
       setRows(rowsFromLookups(saved.lookups))
       toast.success('Lookups saved to the draft', {
         description: 'Previews of the draft read them now. Publish to use them in pushes.'
