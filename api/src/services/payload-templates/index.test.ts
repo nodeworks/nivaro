@@ -628,6 +628,15 @@ describe('installTemplateDraft (blueprint install)', () => {
     await expect(
       svc.installTemplateDraft(bundle(undefined, { key: 'Bad Key' }), USER)
     ).rejects.toThrow(/key must be/)
+    await expect(
+      svc.installTemplateDraft(bundle(undefined, { collection: 'orders; drop' }), USER)
+    ).rejects.toThrow(/collection must be/)
     expect(store.tables[T] ?? []).toHaveLength(0)
+  })
+
+  it('a failed activity log after the create still reports created', async () => {
+    vi.mocked(logActivity).mockRejectedValueOnce(new Error('activity down'))
+    await expect(svc.installTemplateDraft(bundle(), USER)).resolves.toBe('created')
+    expect(store.tables[T]).toHaveLength(1)
   })
 })

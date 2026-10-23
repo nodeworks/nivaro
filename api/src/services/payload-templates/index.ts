@@ -32,6 +32,8 @@ const T = 'nivaro_payload_templates'
 const V = 'nivaro_payload_template_versions'
 const D = 'nivaro_payload_template_drafts'
 const KEY_RE = /^[a-z0-9-]+$/
+/** A record collection name: a plain identifier (the same rule context queries use). */
+const COLLECTION_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const CACHE_MS = 60_000
 const DRAFT_RETRIES = 5
 export const MODE_CHANGE_MESSAGE = 'Mode can only change through Convert to Liquid'
@@ -715,8 +717,8 @@ export async function installTemplateDraft(
     bad('key must be lowercase letters, digits and dashes (at most 120)')
   }
   if (typeof bundle.label !== 'string' || !bundle.label.trim()) bad('label is required')
-  if (typeof bundle.collection !== 'string' || !bundle.collection.trim()) {
-    bad('collection is required')
+  if (typeof bundle.collection !== 'string' || !COLLECTION_RE.test(bundle.collection)) {
+    bad('collection must be a plain collection name')
   }
   checkBody(bundle.mode, bundle.body, `Payload template '${key}' draft`)
   const locked = Array.isArray(bundle.locked_keys)
@@ -730,6 +732,7 @@ export async function installTemplateDraft(
   let row = await getTemplate(key)
   if (!row) {
     const now = new Date()
+    let created = false
     try {
       await db.transaction(async (trx) => {
         await trx(T).insert({
@@ -763,21 +766,21 @@ export async function installTemplateDraft(
           updated_at: now
         })
       })
-      bustTenantCache()
-      await logActivity({
-        action: 'payload-template-install',
-        user: userId,
-        collection: T,
-        item: key,
-        comment: `${note} (new, unpublished)`
-      })
-      return 'created'
+      created = true
     } catch (e) {
       // Another writer created it first (unique key): install over that row as a draft.
       row = await getTemplate(key)
       if (!row) throw e
     }
+    if (created) {
+      bustTenantCache()
+      await logInstall(key, userId, `${note} (new, unpublished)`)
+      return 'created'
+    }
   }
+  // Only reached with a row (found, or the one another writer created); narrows the type.
+  if (!row)
+    throw new PayloadTemplateError('conflict', `Payload template '${key}' could not be installed`)
 
   if (row.draft_mode === bundle.mode && row.draft_body === bundle.body) return 'unchanged'
   const was = currentMode(row)
@@ -787,14 +790,24 @@ export async function installTemplateDraft(
     ])
   }
   await replaceDraft(row, bundle.mode, bundle.body, userId)
-  await logActivity({
-    action: 'payload-template-install',
-    user: userId,
-    collection: T,
-    item: key,
-    comment: note
-  })
+  await logInstall(key, userId, note)
   return 'drafted'
+}
+
+/** The install's activity line. Best-effort: the write already happened, so a failed log never
+ *  turns it into an error (or a created template into "unchanged"). */
+async function logInstall(key: string, userId: string | null, comment: string): Promise<void> {
+  try {
+    await logActivity({
+      action: 'payload-template-install',
+      user: userId,
+      collection: T,
+      item: key,
+      comment
+    })
+  } catch {
+    /* activity is decoration here */
+  }
 }
 
 // ─── published cache (per tenant) ────────────────────────────────────────────

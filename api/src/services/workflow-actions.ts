@@ -492,45 +492,87 @@ async function actingUser(
   }
 }
 
+/** What the action path needs from a referenced template: its lookups and its external API. */
+type TemplateInfo = { lookups: Record<string, unknown> | null; external_api: string | null }
+
+/**
+ * The registrar's in-process def answers first; a template without one (created in the UI,
+ * installed from a blueprint) is read from its row. Null = unknown or unreadable (the render
+ * then reports it).
+ */
+async function templateInfo(key: string): Promise<TemplateInfo | null> {
+  const def = registeredDef(key)
+  if (def) return { lookups: def.lookups ?? null, external_api: def.external_api ?? null }
+  try {
+    const row = await getTemplate(key)
+    return row ? { lookups: row.lookups, external_api: row.external_api } : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * The context query defs an action runs: its own `context`, over the referenced template's
- * `lookups` (same shape) — the action's keys win on a clash. The registrar's in-process def
- * answers first; a template without one (created in the UI, installed from a blueprint) is
- * read from its row. An unreadable template adds nothing — the render then reports it.
+ * `lookups` (same shape) — the action's keys win on a clash.
  */
 async function contextDefsFor(
   action: TransitionActionDef
 ): Promise<TransitionActionDef['context']> {
   const key = templateKeyOf(action)
   if (!key) return action.context
-  let lookups: Record<string, unknown> | null | undefined
-  const def = registeredDef(key)
-  if (def) lookups = def.lookups
-  else {
-    try {
-      lookups = (await getTemplate(key))?.lookups
-    } catch {
-      lookups = null
-    }
-  }
+  const lookups = (await templateInfo(key))?.lookups
   if (!lookups || typeof lookups !== 'object' || Array.isArray(lookups)) return action.context
   return { ...(lookups as Record<string, ContextQueryDef>), ...(action.context ?? {}) }
 }
 
+const apiKey = (name: string): string => name.trim().toLowerCase()
+
+/**
+ * A template is written for one external API; an action that sends it somewhere else is a
+ * configuration mistake, never a push. Compared by name, case-insensitively, after resolving the
+ * action's api id. A template with no API set (or an unknown template) is not checked here.
+ */
+async function assertTemplateApi(
+  key: string,
+  action: TransitionActionDef,
+  apiId: number
+): Promise<void> {
+  const templateApi = (await templateInfo(key))?.external_api
+  if (!templateApi?.trim()) return
+  let actionApi: string | null = null
+  try {
+    const row = (await db('nivaro_external_apis').where({ id: apiId }).first('name')) as
+      | { name?: string | null }
+      | undefined
+    actionApi = row?.name ?? null
+  } catch {
+    actionApi = null
+  }
+  actionApi ??= typeof action.external_api === 'string' ? action.external_api : `#${apiId}`
+  if (apiKey(templateApi) !== apiKey(actionApi)) {
+    throw new PayloadTemplateError(
+      'invalid',
+      `Payload template '${key}' is for ${templateApi.trim()}, but this action sends to ${actionApi.trim()}`
+    )
+  }
+}
+
 /**
  * Render an action's request body. A saved template (payload_template_key) wins over the inline
- * Liquid: its published render already neutralizes record / context data, so only the
- * template's own secret slots hold a real placeholder. Inline: only the template text's own
- * placeholders stay real — whatever record / context / response data renders (JSON-escaped
- * markers included) is neutralized after the parse. The push and the preview both render here,
- * so the preview's payload signature matches the real push. Throws on any failure.
+ * Liquid: it must be for the action's API, and its published render already neutralizes record /
+ * context data, so only the template's own secret slots hold a real placeholder. Inline: only the
+ * template text's own placeholders stay real — whatever record / context / response data renders
+ * (JSON-escaped markers included) is neutralized after the parse. The push and the preview both
+ * render here, so the preview's payload signature matches the real push. Throws on any failure.
  */
 async function renderActionBody(
   action: TransitionActionDef,
-  scope: Record<string, unknown>
+  scope: Record<string, unknown>,
+  apiId: number
 ): Promise<Record<string, unknown>> {
   const key = templateKeyOf(action)
   if (key) {
+    await assertTemplateApi(key, action, apiId)
     const r = await renderPayloadTemplate(key, scope)
     if (!r.body || typeof r.body !== 'object' || Array.isArray(r.body)) {
       throw new PayloadTemplateError(
@@ -956,8 +998,12 @@ export async function runTransitionActions(opts: {
       }
       continue
     }
-    // Never taken (the gate refused a missing api / endpoint); narrows the types.
-    if (!apiId || !action.endpoint_path) continue
+    // The gate refused a missing api / endpoint already; this only narrows the types — and
+    // still records why, rather than leaving silently.
+    if (!apiId || !action.endpoint_path) {
+      skippedReason = skipReason('not_configured', !apiId ? 'external_api' : 'endpoint_path')
+      continue
+    }
 
     // The action applies to this record: from here on every way out is a
     // recorded outcome on the partner's ledger.
@@ -976,7 +1022,7 @@ export async function runTransitionActions(opts: {
     let body: Record<string, unknown>
     try {
       // Sent with bodySecrets: true — see renderActionBody for which placeholders stay real.
-      body = await renderActionBody(action, scope)
+      body = await renderActionBody(action, scope, apiId)
     } catch (err) {
       const submissionId = await recordSubmission(
         collection,
@@ -1828,7 +1874,7 @@ export async function previewErpActions(opts: {
     let body: Record<string, unknown>
     try {
       // The same render as the real push, so the payload signature matches.
-      body = await renderActionBody(action, scope)
+      body = await renderActionBody(action, scope, apiId as number)
     } catch (err) {
       out.push({
         ...base,

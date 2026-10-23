@@ -102,7 +102,6 @@ describe('blueprint payload templates', () => {
 
   it('install upserts templates as drafts before the workflows and reports each', async () => {
     inserts = []
-    vi.mocked(db).mockImplementation(fakeDb({}) as never)
     const order: string[] = []
     vi.mocked(installTemplateDraft).mockImplementation(async (b) => {
       order.push(`template:${b.key}`)

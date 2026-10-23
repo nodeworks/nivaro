@@ -21,9 +21,16 @@ vi.mock('./integration-obligations.js', async (importOriginal) => {
   }
 })
 
+// The record-form preview (integration-preview) reads the record for conditions this way.
+vi.mock('./workflow-conditions.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./workflow-conditions.js')>()),
+  fetchRecordForConditions: vi.fn(async () => ({ ...RECORD }))
+}))
+
 import { db } from '../db/index.js'
 import { callExternalApi } from './external-apis.js'
 import { resolveObligation } from './integration-obligations.js'
+import { outboundPreview } from './integration-preview.js'
 import { bustPayloadTemplateCache } from './payload-templates/index.js'
 import { previewErpActions, runTransitionActions } from './workflow-actions.js'
 
@@ -114,7 +121,10 @@ function fakeDb(tables: Record<string, Array<Record<string, unknown>>>) {
   return fn
 }
 
-function wire(template: TemplateRow | null) {
+function wire(
+  template: TemplateRow | null,
+  extra: Record<string, Array<Record<string, unknown>>> = {}
+) {
   inserts = []
   reads = []
   const fake = fakeDb({
@@ -133,7 +143,8 @@ function wire(template: TemplateRow | null) {
     nivaro_payload_templates: template ? [template] : [],
     orders: [RECORD],
     warehouses: [{ id: 1, code: 'W1' }],
-    regions: [{ id: 2, code: 'R2' }]
+    regions: [{ id: 2, code: 'R2' }],
+    ...extra
   })
   vi.mocked(db).mockImplementation(fake as never)
   ;(db as unknown as { schema: unknown }).schema = (fake as unknown as { schema: unknown }).schema
@@ -370,5 +381,82 @@ describe('erp_submit payload_template_key', () => {
 
     const out = await preview([inline])
     expect(out[0].body).toEqual({ inline: true, title: `x ${NEUTRAL} y` })
+  })
+})
+
+describe('template API and the record-form preview', () => {
+  const STATE = { id: 's1', key: 'submitted', label: 'Submitted', external_label: 'SUBMITTED_EXT' }
+  const EXT_MAP = {
+    v: 1,
+    fields: [
+      field('f1', 'efp_state', { source: 'path', path: 'state.key' }),
+      field('f2', 'ext', { source: 'builtin', name: 'state.external_label' })
+    ]
+  }
+
+  it('the record-form preview renders with the state external label, like the push', async () => {
+    wire(published(EXT_MAP), {
+      nivaro_workflow_instances: [
+        { id: 'i1', template: 'p1', current_state: 's0', completed_at: null }
+      ],
+      nivaro_workflow_states: [STATE],
+      nivaro_workflow_transitions: [
+        {
+          id: 't1',
+          label: 'Submit',
+          from_state: null,
+          to_state: 's1',
+          actions: JSON.stringify([keyAction()]),
+          auto_trigger: false,
+          condition_rules: null,
+          requirements: null,
+          sort: 1
+        }
+      ]
+    })
+    // The push gets the full state row (workflow-transitions.ts passes it as loaded).
+    await runTransitionActions({
+      transition: transition([keyAction()]),
+      instance: { collection: 'orders', item: 'o1' },
+      newStateObj: STATE,
+      userId: null
+    })
+    const pushed = (
+      vi.mocked(callExternalApi).mock.calls[0][1] as { body: Record<string, unknown> }
+    ).body
+    expect(pushed).toEqual({ efp_state: 'submitted', ext: 'SUBMITTED_EXT' })
+
+    const preview = await outboundPreview('orders', 'o1', null)
+    expect(preview.integrations).toHaveLength(1)
+    const shown = Object.fromEntries(
+      preview.integrations[0].changes.map((c) => [c.path, c.to] as const)
+    )
+    expect(shown).toEqual(pushed)
+  })
+
+  it('a template for another API fails the push and the preview says the same', async () => {
+    const msg =
+      "Payload template 'mwf-workflow-status' is for MWF, but this action sends to Partner"
+    wire(published(MAP, { external_api: 'MWF' }))
+    await run([keyAction()])
+    expect(callExternalApi).not.toHaveBeenCalled()
+    const { row } = submission()
+    expect(row.status).toBe('failed')
+    expect(row.last_error).toBe(msg)
+    expect(vi.mocked(resolveObligation).mock.calls.at(-1)?.[1]).toMatchObject({
+      outcome: 'failed',
+      reason: `payload template error: ${msg}`
+    })
+
+    const out = await preview([keyAction()])
+    expect(out[0].status).toBe('template_error')
+    expect(out[0].reason).toBe(`payload template error: ${msg}`)
+    expect(out[0].body).toBeNull()
+  })
+
+  it('the API names compare case-insensitively', async () => {
+    wire(published(MAP, { external_api: ' partner ' }))
+    await run([keyAction()])
+    expect(callExternalApi).toHaveBeenCalledTimes(1)
   })
 })
