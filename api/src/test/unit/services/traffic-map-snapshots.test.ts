@@ -352,7 +352,10 @@ describe('node descriptions (#2245)', () => {
 
 describe('map overhead (#2178)', () => {
   beforeEach(() => resetTrafficMap())
-  afterEach(() => setSampleThreshold(300))
+  afterEach(() => {
+    setSampleThreshold(300)
+    vi.useRealTimers()
+  })
 
   it('samples only above the threshold and never thins past 1 in 50', () => {
     expect(planEvery(100, 300)).toBe(1)
@@ -365,7 +368,12 @@ describe('map overhead (#2178)', () => {
 
   it('thins the ticker above the threshold, keeps errors and exact counts', () => {
     setSampleThreshold(5)
+    // The overhead ring buckets requests by the wall-clock second while the rate is judged at
+    // T: a second boundary crossed mid-loop (a loaded run) split the 100 warm-up requests,
+    // judged ~10 req/s, thinned 1 in 2 and kept exactly 40. Hold the clock inside T.
     const T = Math.floor(Date.now() / 1000)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T * 1000)
     advanceTo(T)
     const call = (status: number) =>
       noteRequest({
