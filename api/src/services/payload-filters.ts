@@ -7,6 +7,7 @@ import {
   useZonedDates,
   zonedDay
 } from './liquid-dates.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 // ─── Payload filters ─────────────────────────────────────────────────────────
 // The payload-template filters as plain functions (the field-map evaluator and
@@ -14,9 +15,12 @@ import {
 // wraps them for Liquid. The day helpers count in the instance zone
 // (liquid-dates.ts); with no database they count Eastern days.
 
-let blackoutCache: { dates: Set<string>; loadedAt: number } | null = null
+/** Per tenant (cloud tenants share this module): each tenant's own nivaro_blackout_dates. */
+const blackoutCache = new Map<string, { dates: Set<string>; loadedAt: number }>()
 async function blackoutDates(): Promise<Set<string>> {
-  if (blackoutCache && Date.now() - blackoutCache.loadedAt < 300_000) return blackoutCache.dates
+  const tenant = currentTenantKey()
+  const hit = blackoutCache.get(tenant)
+  if (hit && Date.now() - hit.loadedAt < 300_000) return hit.dates
   const dates = new Set<string>()
   try {
     const rows = (await db('nivaro_blackout_dates').select('date')) as Array<{ date: unknown }>
@@ -27,7 +31,7 @@ async function blackoutDates(): Promise<Set<string>> {
   } catch {
     /* table missing — no blackouts */
   }
-  blackoutCache = { dates, loadedAt: Date.now() }
+  blackoutCache.set(tenant, { dates, loadedAt: Date.now() })
   return dates
 }
 

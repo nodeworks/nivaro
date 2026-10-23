@@ -293,6 +293,11 @@ export interface ExtensionContext {
     }>
     /** Whether the named external API carries this body secret. */
     hasBodySecret(apiName: string, name: string): Promise<boolean>
+    /** A partner's answer with every body secret of that API (instance-resolved) put back as
+     *  its `⟦nvr-secret:<name>⟧` placeholder — for what an extension STORES from a response
+     *  (a partner may echo the token). Never for the value ack parsing reads. Returns the value
+     *  unchanged when it cannot tell; never throws. Absent on cores before it shipped. */
+    scrubResponse<T>(apiName: string, value: T): Promise<T>
   }
   /** Custom notification delivery channels (SMS, Slack, Teams…). */
   notificationChannels: { register(def: NotificationChannelDef): void }

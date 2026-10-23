@@ -14,7 +14,7 @@ import { authenticate, requireAdmin, requireAuth } from '../middleware/authentic
 import { logActivity } from '../services/activity.js'
 import { registerPortalLinks } from '../services/app-links.js'
 import { registerBriefLine } from '../services/approval-brief-lines.js'
-import { hasBodySecret } from '../services/body-secrets.js'
+import { hasBodySecret, scrubSecretsFor } from '../services/body-secrets.js'
 import { currentChain } from '../services/chain.js'
 import { type ChainTable, chainFields } from '../services/chain-columns.js'
 import { beginChainRoot } from '../services/chain-roots.js'
@@ -131,6 +131,17 @@ async function extensionHasBodySecret(apiName: string, name: string): Promise<bo
     return (await hasBodySecret(String(apiName), String(name))) === true
   } catch {
     return false
+  }
+}
+
+/** A partner answer with every body secret of that API (instance-resolved) put back as its
+ *  placeholder — what an extension STORES from a response. The value unchanged when it cannot
+ *  tell; never throws. */
+async function extensionScrubResponse<T>(apiName: string, value: T): Promise<T> {
+  try {
+    return await scrubSecretsFor(String(apiName), value)
+  } catch {
+    return value
   }
 }
 
@@ -749,7 +760,8 @@ export function registrationMembers(
         const r = await renderPayloadTemplate(key, scope)
         return { body: r.body, problems: r.problems, version: r.version }
       },
-      hasBodySecret: (apiName, name) => extensionHasBodySecret(apiName, name)
+      hasBodySecret: (apiName, name) => extensionHasBodySecret(apiName, name),
+      scrubResponse: (apiName, value) => extensionScrubResponse(apiName, value)
     },
     notificationChannels: {
       register: (def) => {

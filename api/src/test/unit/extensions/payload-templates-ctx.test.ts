@@ -18,6 +18,12 @@ vi.mock('../../../services/body-secrets.js', () => ({
   hasBodySecret: vi.fn(async (api: string, name: string) => {
     if (api === 'Broken') throw new Error('config unreadable')
     return api === 'MWF' && name === 'token'
+  }),
+  scrubSecretsFor: vi.fn(async (api: string, value: unknown) => {
+    if (api === 'Broken') throw new Error('config unreadable')
+    return api === 'MWF'
+      ? JSON.parse(JSON.stringify(value).replaceAll('S3CRET', '⟦nvr-secret:token⟧'))
+      : value
   })
 }))
 
@@ -98,5 +104,15 @@ describe('ctx.payloadTemplates', () => {
     await expect(m.payloadTemplates.hasBodySecret('MWF', 'token')).resolves.toBe(true)
     await expect(m.payloadTemplates.hasBodySecret('MWF', 'other')).resolves.toBe(false)
     await expect(m.payloadTemplates.hasBodySecret('Broken', 'token')).resolves.toBe(false)
+  })
+
+  it('scrubs a response for storage through core, the value unchanged when it cannot tell', async () => {
+    const { m } = members()
+    await expect(m.payloadTemplates.scrubResponse('MWF', { echo: 'x S3CRET' })).resolves.toEqual({
+      echo: 'x ⟦nvr-secret:token⟧'
+    })
+    await expect(m.payloadTemplates.scrubResponse('Broken', { echo: 'S3CRET' })).resolves.toEqual({
+      echo: 'S3CRET'
+    })
   })
 })

@@ -2,7 +2,7 @@ import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import { parseJson, toJsonStr } from '../pipeline-engine.js'
 import { isSystemCollection } from '../system-collections.js'
-import { buildContext, erpActionGate } from '../workflow-actions.js'
+import { actingUser, buildContext, erpActionGate } from '../workflow-actions.js'
 import type { ConditionRule } from '../workflow-conditions.js'
 import {
   bustPayloadTemplateCache,
@@ -162,14 +162,6 @@ export async function transitionUseCount(key: string): Promise<number> {
 
 // ─── Scope for one record ────────────────────────────────────────────────────
 
-export type ActingUser = {
-  id?: string | null
-  email?: string | null
-  first_name?: string | null
-  last_name?: string | null
-  employee_id?: string | null
-}
-
 export type RecordScope = {
   scope: Record<string, unknown>
   /** Why the sender would not send for this record (the action's gates), or null. */
@@ -250,7 +242,8 @@ async function lookupContext(
  *     context, the action wins a key clash) plus that action's gates as `skipped`;
  *  2. else the registrar's `scope(id)`;
  *  3. else `{ record, context: <template lookups>, state: null, responses: [], response: null }`.
- * `acting_user` is the person previewing (a push uses whoever moved the record).
+ * `acting_user` is the person previewing, built exactly as a push builds it (`actingUser`; a push
+ * uses whoever moved the record); the registrar branch carries none, like the code-built push.
  */
 export async function scopeForRecord(
   row: TemplateRow,
@@ -281,15 +274,10 @@ export async function scopeForRecord(
     return p
   }
   assertRecordCollection(row.collection)
-  const u = reader as User & ActingUser
-  const acting = {
-    id: u.id ?? null,
-    email: u.email ?? null,
-    first_name: u.first_name ?? null,
-    last_name: u.last_name ?? null,
-    employee_id: u.employee_id ?? null
-  }
   const userId = reader.id ?? null
+  // The very value a push builds for whoever moved the record (workflow-actions actingUser),
+  // read for the person previewing — never a copy assembled from the session.
+  const acting = () => once(`acting:${userId ?? ''}`, () => actingUser(userId))
   const [ref] = await once(`refs:${row.key}`, () => referencingTransitions(row.key))
   if (ref) {
     const record = await readRecord(row.collection, id)
@@ -303,7 +291,7 @@ export async function scopeForRecord(
         state: await once(`state:${ref.to_state}`, () => stateOf(ref.to_state)),
         responses: [],
         response: null,
-        acting_user: acting
+        acting_user: await acting()
       },
       // The push's own gate (not_configured, skip_when_empty, skip_unless_any, guard).
       skipped: erpActionGate(ref.action as Parameters<typeof erpActionGate>[0], record, context)
@@ -313,7 +301,9 @@ export async function scopeForRecord(
   if (def?.scope) {
     const scope = await def.scope(id)
     if (!isObj(scope)) throw new RecordNotFoundError(row.collection, id)
-    return { scope: { acting_user: acting, ...scope }, skipped: null }
+    // A code-built push sends exactly its registrar's scope — no acting_user — so neither does
+    // the preview (an acting_user here would preview values the push never has).
+    return { scope, skipped: null }
   }
   // Neither a transition nor a registrar: the record plus the template's own lookups, in the
   // same scope shape an erp_submit render gets.
@@ -325,7 +315,7 @@ export async function scopeForRecord(
       state: null,
       responses: [],
       response: null,
-      acting_user: acting
+      acting_user: await acting()
     },
     skipped: null
   }

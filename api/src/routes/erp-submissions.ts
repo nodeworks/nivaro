@@ -12,6 +12,7 @@ import {
 import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { requesterInsertFields } from '../services/erp-requester-columns.js'
+import { hasResendableBody, NO_BODY, NoBodyToResendError } from '../services/erp-resend-guard.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
@@ -155,6 +156,9 @@ export async function sendPayload(
   stored: StoredPayload,
   userId: string | undefined
 ): Promise<SendOutcome> {
+  // Every resend path checks first (409 / skip); this is the last line, so a null body is never
+  // POSTed as `null` to a partner.
+  if (!hasResendableBody(stored)) throw new NoBodyToResendError()
   try {
     const res = await callExternalApi(externalApi, {
       method: 'POST',
@@ -196,6 +200,7 @@ export async function retrySubmissionRow(
 ): Promise<SendOutcome> {
   const stored = parseJson<StoredPayload>(row.payload)
   if (!stored?.endpoint_path) throw new Error('Submission has no stored payload to retry')
+  if (!hasResendableBody(stored)) throw new NoBodyToResendError()
   const outcome = await withChainStep(`submission:${row.id}`, async () => {
     const sent = await sendPayload(row.external_api, stored, userId ?? undefined)
     const { applySendOutcome } = await import('../services/erp-submission-status.js')
@@ -614,6 +619,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       if (!stored?.endpoint_path) {
         return reply.code(400).send({ error: 'Submission has no stored payload to retry' })
       }
+      if (!hasResendableBody(stored)) return reply.code(409).send(NO_BODY)
 
       // A retry's call log and attempt row hang under the submission it
       // retries; one helper for the row update + obligation (#628) so this
@@ -670,6 +676,10 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         const stored = parseJson<StoredPayload>(row.payload)
         if (!stored?.endpoint_path) {
           results.push({ id, status: 'skipped', error: 'no stored payload' })
+          continue
+        }
+        if (!hasResendableBody(stored)) {
+          results.push({ id, status: 'skipped', error: NO_BODY.message })
           continue
         }
         try {
@@ -815,6 +825,15 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
     if (retries >= policy.max_attempts) continue
     const stored = parseJson<StoredPayload>(row.payload)
     if (!stored?.endpoint_path) continue
+    if (!hasResendableBody(stored)) {
+      // Nothing to send, ever: classify it so this sweep (and the remediation ladder) stop
+      // selecting it — a row from before render failures were recorded as 'validation'.
+      await db('nivaro_erp_submissions')
+        .where({ id: row.id })
+        .update({ error_class: 'validation' })
+        .catch(() => {})
+      continue
+    }
     attempted++
     // Each retry's call log + attempt row nest under the submission it retries.
     const outcome = await withChainStep(`submission:${row.id}`, async () => {

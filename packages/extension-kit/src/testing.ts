@@ -755,7 +755,8 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
         registered.payloadTemplates.push(d)
       },
       render: async () => ({ body: {}, problems: [], version: 1 }),
-      hasBodySecret: async () => false
+      hasBodySecret: async () => false,
+      scrubResponse: async (_apiName, value) => value
     },
     notificationChannels: { register: (d) => registered.notificationChannels.push(d) },
     notificationSources: { register: (p) => registered.notificationSources.push(p) },

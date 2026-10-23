@@ -13,6 +13,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { NO_BODY } from '../services/erp-resend-guard.js'
 import { registerIntegrationNoteSources } from '../services/integration-notes.js'
 import {
   allObligationKinds,
@@ -492,6 +493,10 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
         return reply.code(409).send({ error: `already ${row.outcome} — there is nothing to send` })
       }
       const r = await sendNow(id, req.user?.id ?? null)
+      // The submission it would resend has no body (its payload template refused to render).
+      if (r.code === 'no_body') {
+        return reply.code(409).send(NO_BODY)
+      }
       await logActivity({
         action: 'integration-send-now',
         collection: 'nivaro_integration_obligations',

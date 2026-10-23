@@ -209,6 +209,9 @@ function parseIds(raw: unknown): string[] | null | 'invalid' {
   return [...new Set(ids)]
 }
 
+/** A `base_published_version` from a request body: null (unpublished when loaded) or a number. */
+const publishedVersionOf = (v: unknown): number | null => (v == null ? null : Number(v))
+
 export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
@@ -273,19 +276,17 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     const errors = bodyErrors(input)
     if (errors) return reply.code(400).send({ error: 'invalid', errors })
     try {
-      if (input.base_published_version !== undefined) {
-        const row = await loadOr404(req.params.key, reply)
-        if (!row) return reply
-        const seen =
-          input.base_published_version == null ? null : Number(input.base_published_version)
-        if (seen !== row.published_version) return sendStale(reply, row)
-      }
+      // The published-version check runs inside the draft write (one transaction), so a publish
+      // can never land between the check and the save.
       const r = await saveDraft(
         req.params.key,
         {
           mode: input.mode as PayloadMode,
           body: input.body as string,
-          base_rev: Number(input.base_rev)
+          base_rev: Number(input.base_rev),
+          ...(input.base_published_version !== undefined
+            ? { base_published_version: publishedVersionOf(input.base_published_version) }
+            : {})
         },
         req.user?.id ?? null
       )
@@ -430,17 +431,19 @@ export async function payloadTemplateRoutes(app: FastifyInstance): Promise<void>
     }
     const v = validateLookups(b.lookups)
     if (!v.ok) return reply.code(400).send({ error: 'invalid', errors: v.errors })
-    // Same publish check as PUT draft: an edit based on an older live version is stale.
-    if (b.base_published_version !== undefined) {
-      const seen = b.base_published_version == null ? null : Number(b.base_published_version)
-      if (seen !== row.published_version) return sendStale(reply, row)
-    }
     try {
       // Saved to the DRAFT under the draft's revision guard; pushes keep the published ones
-      // until this draft is published.
+      // until this draft is published. Same publish check as PUT draft, inside the same write:
+      // an edit based on an older live version is stale.
       const r = await saveDraftLookups(
         row.key,
-        { lookups: v.value, base_rev: baseRev },
+        {
+          lookups: v.value,
+          base_rev: baseRev,
+          ...(b.base_published_version !== undefined
+            ? { base_published_version: publishedVersionOf(b.base_published_version) }
+            : {})
+        },
         req.user?.id ?? null
       )
       if (!r.ok) return sendStale(reply, r.current)

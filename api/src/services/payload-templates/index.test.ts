@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // A tiny in-memory stand-in for the three payload-template tables: `name as alias`,
 // leftJoin, object where() (null matches IS NULL like knex), orderBy, first/select with
-// `a.*` / `a.col as x` projections, insert (unique keys enforced), update → affected count.
+// `a.*` / `a.col as x` projections, insert (unique keys enforced, identity ids), update →
+// affected count, transactions that roll back on a throw.
 // Hooks let a test race a seed, refuse draft updates, and count reads.
 
 type Row = Record<string, any>
@@ -12,7 +13,9 @@ const store = vi.hoisted(() => ({
   tenant: '',
   beforeInsert: null as null | ((table: string, row: Row) => void),
   refuseDraftUpdates: false,
-  reads: {} as Record<string, number>
+  reads: {} as Record<string, number>,
+  /** Rows "another process" committed mid-transaction: a rollback keeps them. */
+  outside: [] as Array<[string, Row]>
 }))
 
 vi.mock('../tenant-rooms.js', async (importOriginal) => ({
@@ -26,7 +29,6 @@ vi.mock('../../db/index.js', () => {
     nivaro_payload_template_versions: [['template_id', 'version']],
     nivaro_payload_template_drafts: [['template_id']]
   }
-  const NO_ID = new Set(['nivaro_payload_template_drafts'])
   const builder = (spec: string) => {
     const [table, alias] = spec.split(/\s+as\s+/)
     const conds: Array<(r: Row) => boolean> = []
@@ -101,10 +103,6 @@ vi.mock('../../db/index.js', () => {
             throw new Error(`Violation of UNIQUE KEY constraint on ${table}`)
           }
         }
-        if (NO_ID.has(table)) {
-          all().push({ ...row })
-          return [1]
-        }
         const id = store.nextId++
         all().push({ id, ...row })
         return [{ id }]
@@ -119,7 +117,20 @@ vi.mock('../../db/index.js', () => {
     return b
   }
   const db = Object.assign((t: string) => builder(t), {
-    transaction: async (fn: (trx: unknown) => unknown) => fn(db)
+    // A throw rolls every table back, like a real transaction.
+    transaction: async (fn: (trx: unknown) => unknown) => {
+      const before = structuredClone(store.tables)
+      try {
+        return await fn(db)
+      } catch (e) {
+        store.tables = before
+        for (const [t, r] of store.outside) {
+          store.tables[t] ??= []
+          store.tables[t].push(r)
+        }
+        throw e
+      }
+    }
   })
   return { db, resolveDb: () => db }
 })
@@ -187,6 +198,7 @@ beforeEach(() => {
   store.beforeInsert = null
   store.refuseDraftUpdates = false
   store.reads = {}
+  store.outside = []
   bustPayloadTemplateCache()
   vi.mocked(logActivity).mockClear()
 })
@@ -242,8 +254,10 @@ describe('registerPayloadTemplate', () => {
     store.beforeInsert = (table, row) => {
       if (table !== T || row.key !== KEY) return
       store.beforeInsert = null
+      const committed = { ...row, id: 99, published_body: theirs, default_hash: 'x' }
+      store.outside.push([T, committed])
       store.tables[T] ??= []
-      store.tables[T].push({ ...row, id: 99, published_body: theirs, default_hash: 'x' })
+      store.tables[T].push(committed)
     }
     await expect(registerPayloadTemplate('efp-ops', def())).resolves.toBeUndefined()
     expect(store.tables[T]).toHaveLength(1)
@@ -339,6 +353,63 @@ describe('draft and publish', () => {
     expect(pub.current.draft_rev).toBe(2)
     expect(snapshot()).toBe(before)
     expect(logActivity).not.toHaveBeenCalled()
+  })
+
+  it('base_published_version is checked inside the draft write: a publish since rolls it back', async () => {
+    await registerPayloadTemplate('efp-ops', def())
+    await saveDraft(KEY, { mode: 'map', body: spec('record.a'), base_rev: 1 }, USER)
+    // Someone publishes v2 (draft rev 2) while this editor still holds v1.
+    await publishDraft(KEY, { base_rev: 2, note: 'theirs' }, 'other-user')
+    const before = snapshot()
+
+    const stale = await saveDraft(
+      KEY,
+      { mode: 'map', body: spec('record.b'), base_rev: 2, base_published_version: 1 },
+      USER
+    )
+    expect(stale.ok).toBe(false)
+    if (stale.ok) throw new Error('expected stale')
+    expect(stale.current.published_version).toBe(2)
+    // The draft write that ran inside the transaction was rolled back.
+    expect(snapshot()).toBe(before)
+    const lk = await saveDraftLookups(
+      KEY,
+      { lookups: { a: { collection: 'x' } }, base_rev: 2, base_published_version: 1 },
+      USER
+    )
+    expect(lk.ok).toBe(false)
+    expect(snapshot()).toBe(before)
+
+    // The version it saw → saved.
+    expect(
+      await saveDraft(
+        KEY,
+        { mode: 'map', body: spec('record.b'), base_rev: 2, base_published_version: 2 },
+        USER
+      )
+    ).toEqual({ ok: true, rev: 3 })
+  })
+
+  it('a first draft row (base_rev 0) rolls back too when the published version moved', async () => {
+    await registerPayloadTemplate('efp-ops', def())
+    store.tables[D] = []
+    const before = snapshot()
+    const stale = await saveDraft(
+      KEY,
+      { mode: 'map', body: spec('record.x'), base_rev: 0, base_published_version: null },
+      USER
+    )
+    expect(stale.ok).toBe(false)
+    expect(snapshot()).toBe(before)
+    expect(
+      await saveDraft(
+        KEY,
+        { mode: 'map', body: spec('record.x'), base_rev: 0, base_published_version: 1 },
+        USER
+      )
+    ).toEqual({ ok: true, rev: 1 })
+    expect(store.tables[D]).toHaveLength(1)
+    expect(store.tables[D][0].id).toEqual(expect.any(Number))
   })
 
   it('a template with no draft row takes base_rev 0 as its first save', async () => {
@@ -491,18 +562,40 @@ describe('draft lookups', () => {
     expect(row?.draft_lookups).toEqual(LK)
   })
 
-  it('registration resets the published lookups to the declared ones and never the draft row', async () => {
+  it('registration never changes lookups a person published, nor the draft row; the banner says so', async () => {
     await registerPayloadTemplate('efp-ops', { ...def(), lookups: LK })
     await saveDraftLookups(KEY, { lookups: LK2, base_rev: 1 }, USER)
     await publishDraft(KEY, { base_rev: 2, note: 'v2' }, USER)
     await saveDraftLookups(KEY, { lookups: null, base_rev: 2 }, USER)
     const draftBefore = JSON.stringify(store.tables[D])
+    const templatesBefore = JSON.stringify(store.tables[T])
     // Next boot: the registrar still declares LK.
     await registerPayloadTemplate('efp-ops', { ...def(), lookups: LK })
     const row = await getTemplate(KEY)
-    expect(row?.lookups).toEqual(LK)
+    expect(row?.lookups).toEqual(LK2)
     expect(row?.draft_lookups).toBeNull()
     expect(JSON.stringify(store.tables[D])).toBe(draftBefore)
+    expect(JSON.stringify(store.tables[T])).toBe(templatesBefore)
+    // The declared lookups differ from what is live: shown as a newer default.
+    expect(hasNewerDefault(row as NonNullable<typeof row>)).toBe(true)
+    // Reset to default (body + declared lookups) and publish clears it.
+    const { rev } = await resetToDefault(KEY, USER)
+    await publishDraft(KEY, { base_rev: rev, note: 'default' }, USER)
+    const after = await getTemplate(KEY)
+    expect(after?.lookups).toEqual(LK)
+    expect(hasNewerDefault(after as NonNullable<typeof after>)).toBe(false)
+  })
+
+  it('registration follows changed declared lookups while the template still holds its seed', async () => {
+    await registerPayloadTemplate('efp-ops', { ...def(), lookups: LK })
+    // Next boot: the code now declares LK2; nobody ever published from the UI.
+    await registerPayloadTemplate('efp-ops', { ...def(), lookups: LK2 })
+    const row = await getTemplate(KEY)
+    expect(row?.published_version).toBe(1)
+    expect(row?.lookups).toEqual(LK2)
+    // The draft row is never touched by registration.
+    expect(row?.draft_lookups).toEqual(LK)
+    expect(hasNewerDefault(row as NonNullable<typeof row>)).toBe(false)
   })
 })
 

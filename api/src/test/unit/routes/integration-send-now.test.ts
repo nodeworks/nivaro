@@ -163,6 +163,41 @@ describe('POST /integration-obligations/:id/send', () => {
     expect(res.statusCode).toBe(409)
   })
 
+  it('409 no_body — its own submission was recorded without a body (the template would not render)', async () => {
+    const settings = settingsChain(true)
+    const obligations = obligationChain({
+      id: 1,
+      outcome: 'failed',
+      api: 'Partner',
+      kind: 'push',
+      collection: 'workflows',
+      item: '1',
+      submission_id: 50
+    })
+    const submission = obligationChain({
+      external_api: 7,
+      payload: JSON.stringify({ endpoint_path: '/orders', body: null, secret_paths: [] }),
+      external_ref: null,
+      attempts: 1
+    })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return obligations
+      if (table === 'nivaro_erp_submissions') return submission
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+    const app = buildApp()
+
+    const res = await app.inject({ method: 'POST', url: '/integration-obligations/1/send' })
+
+    expect(res.statusCode).toBe(409)
+    expect(JSON.parse(res.body)).toEqual({
+      error: 'no_body',
+      message: 'This submission has no body to resend'
+    })
+    expect(sendPayload).not.toHaveBeenCalled()
+  })
+
   it('200 — an open obligation with nothing of its own to re-send, and no prior request to repeat, is reported honestly', async () => {
     // The kind has to have opted in before "is there a prior request?" is
     // even asked — C1 — so this is the shape that reaches that question.
