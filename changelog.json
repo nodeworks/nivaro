@@ -1,10 +1,301 @@
 {
-  "generated_at": "2026-10-22T23:09:47.511Z",
+  "generated_at": "2026-10-23T13:28:01.621Z",
   "releases": [
+    {
+      "version": "0.3.8",
+      "tag": "v0.3.8",
+      "date": "2026-10-23T09:27:44-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "payloads",
+              "text": "drafts always save; GET /:key lists context keys",
+              "hash": "dd5b5d231"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "field map editor for payload templates",
+              "hash": "a3fda1374"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "publish, history, check and code tab for payload templates",
+              "hash": "bc898b234"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "erp_submit actions can reference a payload template",
+              "hash": "85465e9fc"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "payloads card, body secrets card and editor shell",
+              "hash": "8ea3fbedd"
+            },
+            {
+              "section": "Added",
+              "scope": "payloads",
+              "text": "payload template routes and extension API",
+              "hash": "aa65cacf3"
+            },
+            {
+              "section": "Added",
+              "scope": "payloads",
+              "text": "one-way convert to Liquid with equality check",
+              "hash": "fca57cb18"
+            },
+            {
+              "section": "Added",
+              "scope": "payloads",
+              "text": "template service with draft, publish and versions",
+              "hash": "f4688bc68"
+            },
+            {
+              "section": "Added",
+              "scope": "payloads",
+              "text": "render entry with locked keys and rules",
+              "hash": "77a1aa669"
+            },
+            {
+              "section": "Added",
+              "scope": "payloads",
+              "text": "field-map evaluator",
+              "hash": "7f4f577ff"
+            },
+            {
+              "section": "Added",
+              "scope": "external-apis",
+              "text": "body secrets substituted at send time",
+              "hash": "c48f7f188"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "pick a payload template on erp_submit actions",
+              "hash": "823e060f3"
+            },
+            {
+              "section": "Added",
+              "scope": "payloads",
+              "text": "payload template tables (migration 501)",
+              "hash": "70c2a60a0"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "body-secrets",
+              "text": "no raw-body fallback in scrubbedBodyMessage",
+              "hash": "8f655a17c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "body-secrets",
+              "text": "scrub error text and every call-log write",
+              "hash": "16cc1c643"
+            },
+            {
+              "section": "Fixed",
+              "scope": "body-secrets",
+              "text": "echoed-secret scrub fails closed",
+              "hash": "04e8b5fa2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "design round 2 — newer-default banner, labels, disabled publish",
+              "hash": "f2e2f898e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "design sign-off fixes for the payload template editor",
+              "hash": "9a59a1e30"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "final review wave — resends, drafts id, preview parity",
+              "hash": "1779782ff"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "field map never rewrites away from an unsafe row name",
+              "hash": "e3d034aa7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "null draft lookups mean none; lookups save checks publishes",
+              "hash": "9e3ddf60a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "lookups are drafted and published with the body",
+              "hash": "a89d72301"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "field map locks by row, safe row renames, review fixes",
+              "hash": "fede2904d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "chunked check, editable lookups, publish-anyway step",
+              "hash": "43393b55a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "value popover takes keyboard focus when it opens",
+              "hash": "affe51318"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "template API check, preview state, install edge cases",
+              "hash": "b81dd2dc1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "dotted secret names reported; bad names removable",
+              "hash": "bd4da1efc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "one secret-name rule",
+              "hash": "e70dbb3f8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "preview reads the raw row; stale publish guard; names",
+              "hash": "a60bfd06f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "payload template wire format, conflicts and secret wording",
+              "hash": "3938b060b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "secret tokens are not numbers",
+              "hash": "29c62731b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "template routes on the drafts table, convert, collection guard",
+              "hash": "2302f5d01"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "drafts in their own table, mode lock, default baseline on publish",
+              "hash": "eb338a0b1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "external-apis",
+              "text": "unforgeable template placeholders, secret_paths on resend",
+              "hash": "c852c69ec"
+            },
+            {
+              "section": "Fixed",
+              "scope": "external-apis",
+              "text": "body secrets opt-in, forge-proof, scrubbed at rest",
+              "hash": "0f26a0cb0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "code mode JSON injection checks",
+              "hash": "a7169afe6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "evaluator review round 1",
+              "hash": "15b489e9c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "locked-key semantics, pattern guard, group-rule warning",
+              "hash": "1d3be25a4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "payloads",
+              "text": "version body and mode not null",
+              "hash": "a363d88e2"
+            }
+          ]
+        },
+        {
+          "label": "Changed",
+          "entries": [
+            {
+              "section": "Changed",
+              "scope": "payloads",
+              "text": "one secret-marker module",
+              "hash": "f6e358200"
+            },
+            {
+              "section": "Changed",
+              "scope": "payloads",
+              "text": "move payload Liquid filters into payload-filters.ts",
+              "hash": "d49b654fc"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "payloads",
+              "text": "payload templates docs",
+              "hash": "59a6236ae"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "payloads",
+              "text": "wrap secret-markers comments",
+              "hash": "d4229fd4b"
+            }
+          ]
+        }
+      ],
+      "count": 43
+    },
     {
       "version": "0.3.7",
       "tag": "v0.3.7",
-      "date": "2026-10-22T19:09:29-04:00",
+      "date": "2026-10-22T19:09:47-04:00",
       "sections": [
         {
           "label": "Fixed",
