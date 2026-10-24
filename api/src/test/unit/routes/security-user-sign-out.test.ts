@@ -124,4 +124,21 @@ describe('signing one person out everywhere', () => {
       404
     )
   })
+
+  it('fails closed when the session scan never finishes', async () => {
+    const r = fakeRedis(seed())
+    let calls = 0
+    r.scan = async () => {
+      calls++
+      return ['7', []] // a store whose cursor never returns to '0'
+    }
+    await expect(sessionIdsForUser(r as never, JANE)).rejects.toThrow(/did not finish/)
+    expect(calls).toBe(50_000)
+    const app = Fastify()
+    app.decorate('redis', r as never)
+    await app.register(securityRoutes)
+    const res = await app.inject({ method: 'POST', url: `/users/${JANE}/sign-out` })
+    expect(res.statusCode).toBe(503)
+    expect(state.activity).toEqual([])
+  })
 })

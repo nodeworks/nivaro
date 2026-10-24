@@ -2315,6 +2315,12 @@ function MySecurityCard() {
     onSuccess: (d) => {
       void qc.invalidateQueries({ queryKey: ['my-security'] })
       alertToast(`Signed out ${d?.revoked ?? 0} other session(s)`)
+    },
+    onError: (e) => {
+      const msg =
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        'Could not sign out your other sessions — try again.'
+      void import('sonner').then(({ toast }) => toast.error(msg)).catch(() => {})
     }
   })
   const alertToast = (msg: string) => {

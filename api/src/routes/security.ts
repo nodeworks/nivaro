@@ -110,7 +110,15 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       | undefined
     if (!user) return reply.code(404).send({ error: 'User not found' })
     if (!app.redis) return reply.code(503).send({ error: 'The session store is unavailable' })
-    const revoked = await revokeUserSessions(app.redis, id)
+    let revoked: number
+    try {
+      revoked = await revokeUserSessions(app.redis, id)
+    } catch (e) {
+      req.log.warn({ err: e, user: id }, 'sign-out everywhere did not reach every session')
+      return reply
+        .code(503)
+        .send({ error: 'Could not reach every session — nothing was reported as done. Try again.' })
+    }
     const name = `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim() || user.email || id
     await logActivity({
       action: 'sessions-revoke-user',
@@ -285,8 +293,10 @@ export async function securitySelfRoutes(app: FastifyInstance) {
     let revoked = 0
     try {
       revoked = await revokeUserSessions(app.redis, String(req.user!.id), { except: currentSid })
-    } catch {
-      /* redis down */
+    } catch (e) {
+      // Redis down or a scan that did not finish: say so, never "0 signed out".
+      req.log.warn({ err: e }, 'sign-out-others did not reach every session')
+      return reply.code(503).send({ error: 'Could not reach every session — try again.' })
     }
     await logActivity({
       action: 'sessions-sign-out-others',

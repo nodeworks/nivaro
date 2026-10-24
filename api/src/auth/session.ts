@@ -40,6 +40,9 @@ export async function revokeSessions(
     .catch(() => {})
 }
 
+/** SCAN pages (200 keys each) before sessionIdsForUser gives up: 10M keys. */
+const SCAN_MAX_PAGES = 50_000
+
 /**
  * Every live session id that belongs to `userId` (case-insensitive), by SCAN —
  * sessions are not indexed by person. Revocation markers and unparseable blobs
@@ -73,7 +76,12 @@ export async function sessionIdsForUser(
       })
     }
     guard++
-  } while (cursor !== '0' && guard < 1000)
+    // SCAN always comes back to '0'; the cap only stops a store that never does.
+    // Fail closed: a partial list would let a caller report "signed out" while
+    // some of the person's sessions still work.
+    if (cursor !== '0' && guard >= SCAN_MAX_PAGES)
+      throw new Error('The session scan did not finish — not every session was found')
+  } while (cursor !== '0')
   return out
 }
 
