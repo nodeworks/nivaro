@@ -5,7 +5,10 @@ export const sdkSetup: DocSection = {
   label: 'Setup',
   content: [
     { type: 'h1', id: 'sdk-setup', text: 'SDK — Setup' },
-    { type: 'p', text: 'The `@nivaro/sdk` package is a fully-typed TypeScript client for the Nivaro REST, GraphQL, and realtime APIs. Works in Node.js, browsers, and edge runtimes.' },
+    {
+      type: 'p',
+      text: 'The `@nivaro/sdk` package is a fully-typed TypeScript client for the Nivaro REST, GraphQL, and realtime APIs. Works in Node.js, browsers, and edge runtimes.'
+    },
     { type: 'h3', text: 'Installation' },
     {
       type: 'pre',
@@ -14,7 +17,7 @@ export const sdkSetup: DocSection = {
     { type: 'h3', text: 'MCP server (Claude Code, Claude Desktop, Cursor)' },
     {
       type: 'p',
-      text: 'The companion package `@nivaro/mcp` wraps the SDK as a Model Context Protocol server, so an AI coding assistant can read and write an instance directly: collection schemas, record reads and aggregates, rehearsed creates, updates, deletes with an explicit confirm, pipeline state and transitions, and the instance\'s own ask-your-data assistant. It authenticates with an `nvk_` API key, so role permissions, row-level security and user scopes apply unchanged; a sandbox key is read-only by construction. Install and client config snippets live in the package README (`packages/mcp/README.md`).'
+      text: "The companion package `@nivaro/mcp` wraps the SDK as a Model Context Protocol server, so an AI coding assistant can read and write an instance directly: collection schemas, record reads and aggregates, rehearsed creates, updates, deletes with an explicit confirm, pipeline state and transitions, and the instance's own ask-your-data assistant. It authenticates with an `nvk_` API key, so role permissions, row-level security and user scopes apply unchanged; a sandbox key is read-only by construction. Install and client config snippets live in the package README (`packages/mcp/README.md`)."
     },
     {
       type: 'pre',
@@ -47,11 +50,15 @@ const nivaro = createNivaro('https://nivaro.example.com', {
       head: ['Method', 'Purpose', 'Example'],
       rows: [
         ['request(command)', 'REST operations', 'await nivaro.request(readItems("articles"))'],
-        ['graphql(query, vars?)', 'GraphQL queries + mutations', 'await nivaro.graphql(query, variables)'],
+        [
+          'graphql(query, vars?)',
+          'GraphQL queries + mutations',
+          'await nivaro.graphql(query, variables)'
+        ],
         ['upload(file)', 'File upload', 'await nivaro.upload(file)'],
         ['fileUrl(fileId)', 'Get download URL', 'nivaro.fileUrl("file-uuid")'],
         ['setToken(token)', 'Set/clear auth token', 'nivaro.setToken("nvk_...")'],
-        ['getToken()', 'Read current token', 'const t = nivaro.getToken()'],
+        ['getToken()', 'Read current token', 'const t = nivaro.getToken()']
       ]
     },
     { type: 'h3', text: 'TypeScript setup' },
@@ -129,7 +136,14 @@ const nivaro = createNivaro('https://nivaro.example.com')
 nivaro.setToken(localStorage.getItem('api_token'))`
     },
     { type: 'h3', text: 'Token priority' },
-    { type: 'ul', items: ['If a static token is set, it takes priority (Authorization: Bearer header).', 'Otherwise, the session cookie is sent if available.', 'If neither exists, requests are made as unauthenticated (limits depend on public routes).'] },
+    {
+      type: 'ul',
+      items: [
+        'If a static token is set, it takes priority (Authorization: Bearer header).',
+        'Otherwise, the session cookie is sent if available.',
+        'If neither exists, requests are made as unauthenticated (limits depend on public routes).'
+      ]
+    },
     { type: 'h3', text: 'Generate tokens via the API' },
     {
       type: 'pre',
@@ -385,10 +399,18 @@ try {
       type: 'table',
       head: ['Function', 'Purpose', 'Auth'],
       rows: [
-        ['readWorkflowInstance(collection, itemId)', 'Get current state + available transitions', 'Authenticated'],
+        [
+          'readWorkflowInstance(collection, itemId)',
+          'Get current state + available transitions',
+          'Authenticated'
+        ],
         ['startWorkflow(collection, itemId)', 'Initialize workflow on an item', 'Authenticated'],
-        ['transitionWorkflow(col, itemId, txId, opts?)', 'Execute a state transition', 'Role-gated per transition'],
-        ['readWorkflowInstances(collection)', 'List all workflow instances', 'Authenticated'],
+        [
+          'transitionWorkflow(col, itemId, txId, opts?)',
+          'Execute a state transition',
+          'Role-gated per transition'
+        ],
+        ['readWorkflowInstances(collection)', 'List all workflow instances', 'Authenticated']
       ]
     }
   ]
@@ -475,7 +497,17 @@ const { data: dimensions } = await nivaro.request(readDimensions(templateId))
 // dimensions → Dimension[] — { field, label, is_row_axis, sort }`
     },
     { type: 'h3', text: 'How ownership resolution works' },
-    { type: 'ul', items: ['Owner Groups are evaluated in priority order (lower = higher priority).', 'Each group has filter rules (e.g., "region == North AND status == urgent").', 'First group where ALL filters match assigns its users.', 'If no rules match, the item has no owner.', 'Manual Instance Owner overrides always apply (bypass rules).', 'Delegation via user.delegate_id also applies (temporary out-of-office reassignments).'] },
+    {
+      type: 'ul',
+      items: [
+        'Owner Groups are evaluated in priority order (lower = higher priority).',
+        'Each group has filter rules (e.g., "region == North AND status == urgent").',
+        'First group where ALL filters match assigns its users.',
+        'If no rules match, the item has no owner.',
+        'Manual Instance Owner overrides always apply (bypass rules).',
+        'Delegation via user.delegate_id also applies (temporary out-of-office reassignments).'
+      ]
+    },
     {
       type: 'table',
       head: ['Function', 'Purpose', 'Auth'],
@@ -488,7 +520,7 @@ const { data: dimensions } = await nivaro.request(readDimensions(templateId))
         ['readPipelineTemplates()', 'List pipeline templates', 'Admin'],
         ['readPipelineTemplate(id)', 'Get one template', 'Admin'],
         ['readOwnerGroups(templateId)', 'Owner groups by state', 'Admin'],
-        ['readDimensions(templateId)', 'Matrix dimensions', 'Admin'],
+        ['readDimensions(templateId)', 'Matrix dimensions', 'Admin']
       ]
     }
   ]
@@ -597,7 +629,7 @@ const { data: updated } = await nivaro.request(
         ['validation_rules', 'Rule[]', 'Constraints: min_length, pattern, unique, etc.'],
         ['visibility_rules', 'Rule[]', 'Show/hide based on other field values.'],
         ['lock_condition', 'Rule[]', 'Make read-only based on field values.'],
-        ['computed_formula', 'string | null', 'If set, field is auto-calculated (read-only).'],
+        ['computed_formula', 'string | null', 'If set, field is auto-calculated (read-only).']
       ]
     },
     {
@@ -605,9 +637,15 @@ const { data: updated } = await nivaro.request(
       head: ['Command', 'Purpose'],
       rows: [
         ['fetchFormSchema(collection)', 'Load full schema + layout + relations'],
-        ['evaluateFieldRules(collection, values)', 'Server-evaluate rules against values (no save)'],
-        ['readRelationOptions(collection, field, opts?)', 'Get picker options for a relation field'],
-        ['submitFormItem(collection, { mode, itemId?, values })', 'Create or update via form'],
+        [
+          'evaluateFieldRules(collection, values)',
+          'Server-evaluate rules against values (no save)'
+        ],
+        [
+          'readRelationOptions(collection, field, opts?)',
+          'Get picker options for a relation field'
+        ],
+        ['submitFormItem(collection, { mode, itemId?, values })', 'Create or update via form']
       ]
     },
     {
@@ -810,7 +848,7 @@ function CreateRequestForm() {
         ['isLocked(field)', 'boolean', 'Whether field is read-only.'],
         ['schema', 'FormSchema', 'Full schema (camelCase: fieldType, validationRules).'],
         ['fieldsByGroup', 'Record<string, Field[]>', 'Fields bucketed by group key.'],
-        ['visibleGroups', 'Group[]', 'Groups with at least one visible field.'],
+        ['visibleGroups', 'Group[]', 'Groups with at least one visible field.']
       ]
     },
     { type: 'h3', text: 'Auto-render form' },
@@ -853,15 +891,51 @@ export const sdkReactLayout: DocSection = {
       type: 'table',
       head: ['Export', 'Kind', 'Purpose'],
       rows: [
-        ['LayoutForm', 'Component', 'Full layout-aware auto-renderer (tabs, sections, col_span grid, ungrouped zone).'],
-        ['useOrderedLayout(form)', 'Hook', 'Ordered list of groups + `__ungrouped__` sentinel, reflecting `ungroupedSort`.'],
-        ['useTabState(form)', 'Hook', 'Active tab + setter + tabs list; `hasTabs` false when layout has no tab groups.'],
-        ['useSectionState(form, defaultCollapsed?)', 'Hook', 'Per-section collapse state; `toggle`, `collapseAll`, `expandAll`.'],
-        ['useFieldState(form, field)', 'Hook', 'value, error, visible, locked, required, colSpan, descriptor, onChange for one field.'],
-        ['useWatchFields(form, fields[])', 'Hook', 'Reactive Record<string, unknown> slice — re-renders only when watched values change.'],
-        ['useFormDirty(form, initialValues?)', 'Hook', 'isDirty, dirtyFields[], isFieldDirty(field) — compares against initial or mounted values.'],
-        ['useFormStatus(form)', 'Hook', 'isDirty, isValid, isSubmitting, isLoading, canSubmit — one-stop status object.'],
-        ['useFieldArray(form, field)', 'Hook', 'append, remove, move, update, replace for ordered repeater rows.'],
+        [
+          'LayoutForm',
+          'Component',
+          'Full layout-aware auto-renderer (tabs, sections, col_span grid, ungrouped zone).'
+        ],
+        [
+          'useOrderedLayout(form)',
+          'Hook',
+          'Ordered list of groups + `__ungrouped__` sentinel, reflecting `ungroupedSort`.'
+        ],
+        [
+          'useTabState(form)',
+          'Hook',
+          'Active tab + setter + tabs list; `hasTabs` false when layout has no tab groups.'
+        ],
+        [
+          'useSectionState(form, defaultCollapsed?)',
+          'Hook',
+          'Per-section collapse state; `toggle`, `collapseAll`, `expandAll`.'
+        ],
+        [
+          'useFieldState(form, field)',
+          'Hook',
+          'value, error, visible, locked, required, colSpan, descriptor, onChange for one field.'
+        ],
+        [
+          'useWatchFields(form, fields[])',
+          'Hook',
+          'Reactive Record<string, unknown> slice — re-renders only when watched values change.'
+        ],
+        [
+          'useFormDirty(form, initialValues?)',
+          'Hook',
+          'isDirty, dirtyFields[], isFieldDirty(field) — compares against initial or mounted values.'
+        ],
+        [
+          'useFormStatus(form)',
+          'Hook',
+          'isDirty, isValid, isSubmitting, isLoading, canSubmit — one-stop status object.'
+        ],
+        [
+          'useFieldArray(form, field)',
+          'Hook',
+          'append, remove, move, update, replace for ordered repeater rows.'
+        ]
       ]
     },
     {
@@ -878,7 +952,7 @@ export const sdkReactLive: DocSection = {
     { type: 'h1', id: 'sdk-react-live', text: 'SDK — React Live Data (@nivaro/react)' },
     {
       type: 'p',
-      text: '`useLiveRecord` and `useLiveList` are react-query reads that stay current. When the host mounts a realtime adapter, other people\'s writes are patched into the cached data in place; without one (or while the socket reconnects) the read polls instead. Nothing to wire by hand: no socket events, no invalidation.'
+      text: "`useLiveRecord` and `useLiveList` are react-query reads that stay current. When the host mounts a realtime adapter, other people's writes are patched into the cached data in place; without one (or while the socket reconnects) the read polls instead. Nothing to wire by hand: no socket events, no invalidation."
     },
     { type: 'h2', id: 'sdk-react-live-adapter', text: 'Connect the socket once' },
     {
@@ -932,13 +1006,28 @@ if (deleted) return <p>This order was deleted.</p>`
       type: 'table',
       head: ['Someone else…', 'What the list does'],
       rows: [
-        ['changes a row on the page', 'Re-reads that row as the viewer under the list\'s own filter and search, and patches it in place.'],
-        ['changes a row so it no longer matches', 'The re-read returns nothing, so the row leaves (a paged list refetches to fill the gap).'],
-        ['creates or changes a record so it now matches', 'Refetches the page quietly; where it belongs in the sort order is the server\'s to decide.'],
-        ['changes a sort field of a row on the page', 'Refetches the page (the order may have moved).'],
+        [
+          'changes a row on the page',
+          "Re-reads that row as the viewer under the list's own filter and search, and patches it in place."
+        ],
+        [
+          'changes a row so it no longer matches',
+          'The re-read returns nothing, so the row leaves (a paged list refetches to fill the gap).'
+        ],
+        [
+          'creates or changes a record so it now matches',
+          "Refetches the page quietly; where it belongs in the sort order is the server's to decide."
+        ],
+        [
+          'changes a sort field of a row on the page',
+          'Refetches the page (the order may have moved).'
+        ],
         ['deletes a row on the page', 'Drops it from the cached page.'],
         ['runs a bulk or raw write', 'Refetches the page quietly.'],
-        ['changes a record the filter cannot see', 'Nothing: an update that touches no field the filter reads cannot bring a record in.'],
+        [
+          'changes a record the filter cannot see',
+          'Nothing: an update that touches no field the filter reads cannot bring a record in.'
+        ]
       ]
     },
     {
@@ -949,13 +1038,17 @@ if (deleted) return <p>This order was deleted.</p>`
         ['pollMs', '30000', 'Poll interval while there is no live socket (0 = never).'],
         ['safetyPollMs', 'none', 'A slow poll while the socket is live.'],
         ['debounceMs', '250', 'Events inside this window are handled as one patch.'],
-        ['includeOwn', 'false', 'Also react to this tab\'s own writes (a save never echoes back by default).'],
-        ['fields (useLiveRecord)', 'all', 'Fields to read; enables the partial re-read.'],
+        [
+          'includeOwn',
+          'false',
+          "Also react to this tab's own writes (a save never echoes back by default)."
+        ],
+        ['fields (useLiveRecord)', 'all', 'Fields to read; enables the partial re-read.']
       ]
     },
     {
       type: 'note',
-      text: 'The socket only says THAT a record changed (its id, the action and the changed field names). Values always come from a fresh read through the viewer\'s own permission-checked `/items` route, so row filters, User Scopes and field policies apply exactly as on the first load. A list read always carries `id` (it is added to an explicit `fields` list) so rows can be matched to events. Changes to a related record (a filter on `customer.region`) do not reach a list of orders; pass `safetyPollMs` when that matters.'
+      text: "The socket only says THAT a record changed (its id, the action and the changed field names). Values always come from a fresh read through the viewer's own permission-checked `/items` route, so row filters, User Scopes and field policies apply exactly as on the first load. A list read always carries `id` (it is added to an explicit `fields` list) so rows can be matched to events. Changes to a related record (a filter on `customer.region`) do not reach a list of orders; pass `safetyPollMs` when that matters."
     },
     {
       type: 'p',
@@ -1048,7 +1141,7 @@ export const sdkActivity: DocSection = {
       type: 'pre',
       code: `import { readActivity } from '@nivaro/sdk'
 
-// All activity, newest first (system-wide audit log)
+// All activity, newest first (system-wide audit log; administrators only — 403 otherwise)
 const { data: entries, total } = await nivaro.request(
   readActivity({ limit: 50, offset: 0 })
 )
@@ -1105,7 +1198,10 @@ console.log('Changed fields:', rev.delta)`
         ['first_name / last_name / user_email', 'string', 'Display info from nivaro_users.']
       ]
     },
-    { type: 'note', text: 'Revisions are immutable — they form a complete audit trail. You can compare any two revisions to see exactly what changed. For rollback, use the delta as a PATCH to the current item.' }
+    {
+      type: 'note',
+      text: 'Revisions are immutable — they form a complete audit trail. You can compare any two revisions to see exactly what changed. For rollback, use the delta as a PATCH to the current item.'
+    }
   ]
 }
 
@@ -1205,7 +1301,7 @@ rt.subscribe('articles', { event: 'update' }, (article) => {
       head: ['Method', 'Purpose'],
       rows: [
         ['nivaro.graphql(query, variables?, operationName?)', 'Send a GraphQL query or mutation'],
-        ['nivaro.setToken(token)', 'Set auth token (shared with REST)'],
+        ['nivaro.setToken(token)', 'Set auth token (shared with REST)']
       ]
     },
     {
@@ -1264,7 +1360,7 @@ await nivaro.request(revokeUserToken('user-uuid'))`
         ['Scopes', 'What the token can do (read, write, admin)', '["read:all", "write:articles"]'],
         ['Expires at', 'Expiry datetime (optional)', '2025-12-31T23:59:59Z'],
         ['IP allowlist', 'Restrict to specific IPs (optional)', '["203.0.113.0", "203.0.113.1"]'],
-        ['Rate limit', 'Requests per minute (optional)', '100'],
+        ['Rate limit', 'Requests per minute (optional)', '100']
       ]
     },
     {
@@ -1419,7 +1515,7 @@ rt.subscribe(
         ['update', 'Item field changed', 'Full item snapshot (with updated values)'],
         ['delete', 'Item deleted', 'Item ID and deletion timestamp'],
         ['notification:new', 'Notification created', 'Notification object'],
-        ['presence', 'User joins/leaves/edits', 'Array of currently viewing users'],
+        ['presence', 'User joins/leaves/edits', 'Array of currently viewing users']
       ]
     },
     { type: 'h3', text: 'Unsubscribe and disconnect' },

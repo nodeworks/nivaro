@@ -969,7 +969,7 @@ The activity log records all changes and actions in your CMS. Revisions give you
 ```typescript
 import { readActivity } from '@nivaro/sdk'
 
-// All activity, newest first (system-wide audit log)
+// All activity, newest first (system-wide audit log; administrators only — 403 otherwise)
 const { data: entries, total } = await nivaro.request(
   readActivity({ limit: 50, offset: 0 })
 )

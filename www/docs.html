@@ -5635,7 +5635,7 @@ await nivaro.request(revokeUserToken('user-uuid'))</code></pre>
           <h3 class="doc-h3">Activity log</h3>
           <pre class="doc-pre"><code>import { readActivity } from '@nivaro/sdk'
 
-// All activity, newest first (system-wide audit log)
+// All activity, newest first (system-wide audit log; administrators only — 403 otherwise)
 const { data: entries, total } = await nivaro.request(
   readActivity({ limit: 50, offset: 0 })
 )

@@ -1,54 +1,104 @@
 import type { FastifyInstance } from 'fastify'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
-import { authenticate } from '../middleware/authenticate.js'
+import { rawRows } from '../db/raw-rows.js'
+import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+
+const countOf = (rows: unknown[]) => Number((rows[0] as { count?: string | number })?.count ?? 0)
+
+/**
+ * The unfiltered total. COUNT(*) over nivaro_activity scans every row — 12.7M on EFP staging,
+ * part of the 8–10 s the dashboard's Recent activity took (2026-10-24) — so on SQL Server it
+ * comes from the partition row counts instead (the same figure, without reading the table).
+ */
+async function wholeTableCount(fallback: PromiseLike<unknown[]>): Promise<number> {
+  if (isMssql(db)) {
+    try {
+      const rows = rawRows<{ n: string | number | null }>(
+        await db.raw(
+          `SELECT SUM(row_count) AS n FROM sys.dm_db_partition_stats
+           WHERE object_id = OBJECT_ID('nivaro_activity') AND index_id IN (0, 1)`
+        )
+      )
+      const n = Number(rows[0]?.n)
+      if (Number.isFinite(n)) return n
+    } catch {
+      // No VIEW DATABASE STATE: count the rows instead.
+    }
+  }
+  return countOf(await fallback)
+}
+
+/** The listed rows with their user, in the order of `ids`. */
+async function pageRows(ids: number[]): Promise<unknown[]> {
+  if (ids.length === 0) return []
+  const rows = (await db('nivaro_activity as a')
+    .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+    .select(
+      'a.id',
+      'a.action',
+      'a.user',
+      'a.timestamp',
+      'a.ip',
+      'a.collection',
+      'a.item',
+      'a.comment',
+      'a.origin',
+      'u.first_name',
+      'u.last_name',
+      'u.email as user_email'
+    )
+    .whereIn('a.id', ids)) as Array<{ id: number }>
+  const byId = new Map(rows.map((r) => [Number(r.id), r]))
+  return ids.map((id) => byId.get(Number(id))).filter(Boolean)
+}
 
 export async function activityRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
-  app.get('/', async (req, reply) => {
+  // Reading the audit log is for administrators: every row carries who did it (name, email,
+  // IP) and on which record, across all collections and outside any User Scope. Writes below
+  // (export-log, a manual entry) record the caller's own action and stay open to anyone signed in.
+
+  app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as Record<string, string>
     const limit = Math.min(q.limit ? Number(q.limit) : 25, 200)
     const offset = q.offset ? Number(q.offset) : 0
 
-    const base = () => db('nivaro_activity as a').leftJoin('nivaro_users as u', 'a.user', 'u.id')
-
-    const query = base()
-      .select(
-        'a.id',
-        'a.action',
-        'a.user',
-        'a.timestamp',
-        'a.ip',
-        'a.collection',
-        'a.item',
-        'a.comment',
-        'a.origin',
-        'u.first_name',
-        'u.last_name',
-        'u.email as user_email'
-      )
-      .orderBy('a.timestamp', 'desc')
+    // The page in two steps: the ids by a narrow (timestamp, id) sort, then those rows with
+    // their user. Sorting the whole joined row (comment text and all) over every match took
+    // 8–11 s for the dashboard's ten newest on 11–12M rows (staging/dev, 2026-10-24).
+    const pageIds = db('nivaro_activity as a')
+      .select('a.id')
+      .orderBy([
+        { column: 'a.timestamp', order: 'desc' },
+        { column: 'a.id', order: 'desc' }
+      ])
       .limit(limit)
       .offset(offset)
 
-    const countQuery = base().count('a.id as count')
+    // The count needs no join (a left join on the users key never adds or drops a row).
+    const countQuery = db('nivaro_activity as a').count('* as count')
 
     if (q.collection) {
-      query.where('a.collection', q.collection)
+      pageIds.where('a.collection', q.collection)
       countQuery.where('a.collection', q.collection)
     }
     if (q.action) {
-      query.where('a.action', q.action)
+      pageIds.where('a.action', q.action)
       countQuery.where('a.action', q.action)
     }
     if (q.user) {
-      query.where('a.user', q.user)
+      pageIds.where('a.user', q.user)
       countQuery.where('a.user', q.user)
     }
 
-    const [data, countRows] = await Promise.all([query, countQuery])
-    const total = Number((countRows[0] as { count: string | number }).count)
+    const filtered = !!(q.collection || q.action || q.user)
+    const [data, total] = await Promise.all([
+      pageIds.then((rows) => pageRows((rows as Array<{ id: number }>).map((r) => r.id))),
+      filtered ? countQuery.then(countOf) : wholeTableCount(countQuery)
+    ])
     return reply.send({ data, total, limit, offset })
   })
 
@@ -76,12 +126,12 @@ export async function activityRoutes(app: FastifyInstance) {
     return { data: { logged: true } }
   })
 
-  app.get('/actions', async (_req, reply) => {
+  app.get('/actions', { preHandler: requireAdmin }, async (_req, reply) => {
     const rows = await db('nivaro_activity').distinct('action').orderBy('action')
     return reply.send({ data: rows.map((r: { action: string }) => r.action) })
   })
 
-  app.get('/:id', async (req, reply) => {
+  app.get('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const row = await db('nivaro_activity as a')
       .leftJoin('nivaro_users as u', 'a.user', 'u.id')
