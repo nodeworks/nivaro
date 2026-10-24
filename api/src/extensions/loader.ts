@@ -87,6 +87,7 @@ import {
   forgetLayoutDependencies,
   registerLayoutDependency
 } from '../services/layout-dependencies.js'
+import { clientGoneSignal, gateServerTiming, withReadGate } from '../services/read-gate.js'
 import { runLongSql } from '../services/run-long.js'
 import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
 
@@ -927,6 +928,32 @@ export function registrationMembers(
           own('cache_warmers', id)
         } catch (err) {
           console.warn(`[extensions] ${extId}: cache warmer skipped —`, (err as Error).message)
+        }
+      }
+    },
+    // The heavy-read gate for an extension's own expensive routes (staging
+    // army test 2026-10-23: ~50 concurrent worksheet reads, none gated, took
+    // every pool connection on every web replica for 30 s).
+    reads: {
+      route: (handler, o) => {
+        const label = `${extId}:${o?.label ?? 'route'}`
+        return async (req: any, reply: any) => {
+          const who = req?.user?.id != null ? String(req.user.id) : null
+          const signal = reply?.raw ? clientGoneSignal(reply.raw) : undefined
+          try {
+            return await withReadGate(who, () => handler(req, reply), {
+              signal,
+              label,
+              // Runs once the slot is granted, before the handler answers.
+              onWait: (waitedMs) => {
+                if (reply?.header) gateServerTiming(reply, { waitedMs })
+              }
+            })
+          } catch (err) {
+            if ((err as Error)?.name === 'AbortError' && reply && !reply.sent)
+              return reply.code(499).send({ error: 'Client closed request' })
+            throw err
+          }
         }
       }
     },

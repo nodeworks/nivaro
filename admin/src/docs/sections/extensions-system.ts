@@ -358,6 +358,11 @@ export const extContext: DocSection = {
           'cache',
           '{ registerWarm(name, fn, { budgetMs? }) }',
           'An expensive READ of your own (fill your Redis cache, run the query that warms the database), run by the cache warm after a boot and at 06:30 on weekdays, after the core queries, inside the same time budget. `fn({ signal, budgetMs })` gets its own timeout (default 60 s, never more than the run has left); on timeout the signal aborts and the warm moves on. Errors are logged, never thrown. Must not write. Not run in cloud mode. Id = `<extension>:<name>`.'
+        ],
+        [
+          'reads',
+          '{ route(handler, { label? }) } (optional)',
+          'The heavy-read gate for your own expensive GET routes. `reads.route(handler)` returns a handler whose whole body holds one of the few heavy-read slots per process (the ones custom queries, widget renders and queue items use), so a burst of them never takes every database connection from the cheap reads around them. Reads inside the body that are gated themselves run in the same slot. A client that leaves while queued gets 499 and the handler never runs; a wait shows as `Server-Timing: gate;dur=`. Older APIs do not offer it — call `ctx.reads?.route(h) ?? h`.'
         ]
       ]
     },

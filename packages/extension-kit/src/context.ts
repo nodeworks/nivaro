@@ -370,6 +370,22 @@ export interface ExtensionContext {
       label: string
     }): void
   }
+  /** The heavy-read gate for the extension's own expensive reads. Routes the
+   *  core runs through it (custom queries, widget renders, queue items) wait
+   *  for one of a few slots per process, so a burst of them never takes the
+   *  whole database pool from the cheap reads around them. A heavy extension
+   *  GET that skips it can: twelve people opening one worksheet together once
+   *  stalled every other request for 30 s. Optional: older APIs do not offer
+   *  it — fall back to calling the handler directly. */
+  reads?: {
+    /** Wrap a route handler so its whole body runs holding one slot. Reads
+     *  the body makes that are gated themselves run inside it, never waiting
+     *  for a second slot. The slot is let go when the client leaves first. */
+    route<Req = any, Reply = any, R = unknown>(
+      handler: (req: Req, reply: Reply) => Promise<R>,
+      opts?: { label?: string }
+    ): (req: Req, reply: Reply) => Promise<R>
+  }
   /** Checked-in rows of a configuration collection, applied by a task —
    *  never at boot — with a drift report as its dry run. */
   seeds: { register(def: ConfigSeedDef): void }
