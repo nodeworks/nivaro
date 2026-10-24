@@ -1899,6 +1899,35 @@ export async function compareIntegrityWriters(opts: { perCollection?: number } =
  * hook and the on-load check) AND the latest completed sweep's rows for the
  * record, so the Data Integrity page agrees with the form.
  */
+/** The run's stored rows for one record already say exactly what this check
+ *  found (as a multiset of item + field + rule + message). Exported for tests. */
+export function sameFindings(
+  stored: Array<{ item_id: string; field: string; rule: string; message: string | null }>,
+  found: Array<{ item_id: string; field: string; rule: string; message: string }>
+): boolean {
+  if (stored.length !== found.length) return false
+  const key = (r: { item_id: string; field: string; rule: string; message: string | null }) =>
+    JSON.stringify([String(r.item_id), r.field, r.rule, (r.message ?? '').slice(0, 1000)])
+  const a = stored.map(key).sort()
+  const b = found.map(key).sort()
+  return a.every((k, i) => k === b[i])
+}
+
+/** SQL Server picked this statement as a deadlock victim (error 1205): the
+ *  other side has finished by the time we run it again. One retry. */
+export async function retryOnDeadlock<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch (e) {
+    const err = e as { number?: unknown; message?: unknown }
+    const deadlock =
+      Number(err?.number) === 1205 || /was deadlocked on lock/i.test(String(err?.message ?? ''))
+    if (!deadlock) throw e
+    await new Promise((r) => setTimeout(r, 50 + Math.floor(Math.random() * 150)))
+    return run()
+  }
+}
+
 export async function storeRecordResult(
   collection: string,
   id: string,
@@ -1939,29 +1968,43 @@ export async function storeRecordResult(
     .orderBy('id', 'desc')
     .first('id')) as { id: number } | undefined
   if (!run) return
-  const stale = (await db('nivaro_conformance_findings')
+  const storedRows = (await db('nivaro_conformance_findings')
     .where({ run: run.id, item_id: String(id) })
-    .count({ n: '*' })
-    .first()) as { n: number | string } | undefined
-  const staleN = Number(stale?.n ?? 0)
-  await db('nivaro_conformance_findings')
-    .where({ run: run.id, item_id: String(id) })
-    .del()
-  if (findings.length > 0) {
-    const labels = await getLabels(new Map([[collection, new Set([String(id)])]])).catch(
-      () => ({}) as Record<string, string>
-    )
-    await db('nivaro_conformance_findings').insert(
-      findings.map((f) => ({
-        run: run.id,
-        item_id: f.item_id,
-        item_label: (labels[`${collection}:${f.item_id}`] ?? null)?.slice(0, 500) ?? null,
-        field: f.field,
-        rule: f.rule,
-        message: f.message.slice(0, 1000)
-      }))
-    )
-  }
+    .select('item_id', 'field', 'rule', 'message')) as Array<{
+    item_id: string
+    field: string
+    rule: string
+    message: string | null
+  }>
+  const staleN = storedRows.length
+  // Every record open runs this check, and almost every time the answer is
+  // what the run already holds. Rewriting it anyway (delete + insert) on a
+  // table indexed by run only locked across the whole run, so people opening
+  // different records deadlocked each other (staging army test 2026-10-24).
+  if (sameFindings(storedRows, findings)) return
+  const labels =
+    findings.length > 0
+      ? await getLabels(new Map([[collection, new Set([String(id)])]])).catch(
+          () => ({}) as Record<string, string>
+        )
+      : {}
+  await retryOnDeadlock(async () => {
+    await db('nivaro_conformance_findings')
+      .where({ run: run.id, item_id: String(id) })
+      .del()
+    if (findings.length > 0) {
+      await db('nivaro_conformance_findings').insert(
+        findings.map((f) => ({
+          run: run.id,
+          item_id: f.item_id,
+          item_label: (labels[`${collection}:${f.item_id}`] ?? null)?.slice(0, 500) ?? null,
+          field: f.field,
+          rule: f.rule,
+          message: f.message.slice(0, 1000)
+        }))
+      )
+    }
+  })
   const delta = findings.length - staleN
   if (delta !== 0) {
     await db('nivaro_conformance_runs')
