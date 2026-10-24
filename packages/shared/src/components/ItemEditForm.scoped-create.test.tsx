@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ItemEditAuthContext, NivaroProvider } from '../context'
-import { ItemEditForm } from './ItemEditForm'
+import { ItemEditForm, UNAVAILABLE_OPTION_ERROR } from './ItemEditForm'
 import type { CMSField, CMSRelation } from './item-edit/types'
 
 // 2026-10-23, staging: a Zone-scoped user (Zones 1–3) created workflows from
@@ -213,7 +213,12 @@ const NOTES: Shape = {
 
 // ── Stand-in server ────────────────────────────────────────────────────────
 
-type Cmd = { _method?: string; _path: string; _body?: Record<string, unknown> }
+type Cmd = {
+  _method?: string
+  _path: string
+  _body?: Record<string, unknown>
+  _params?: Record<string, unknown>
+}
 
 interface ServerOpts {
   shape: Shape
@@ -221,6 +226,9 @@ interface ServerOpts {
   /** An API from before the fix: a hidden create answers data null, no meta. */
   oldServer?: boolean
   existing?: Record<string, unknown>
+  /** Collections whose availability probes say the picked value is no longer
+   *  an option (a location outside the Region picked after it). */
+  unavailable?: string[]
 }
 
 function makeServer(o: ServerOpts) {
@@ -304,6 +312,19 @@ function makeServer(o: ServerOpts) {
       if (p === `/items/${o.shape.collection}/${String(o.existing?.id)}`)
         return { data: o.existing ?? null }
       if (method !== 'GET') return { data: null }
+      // A picker's availability probe (its value AND its filter, limit 1): the
+      // picked value is still an option. Answering [] here would flag every
+      // pick "not an available option", which now blocks the save.
+      const params = cmd._params
+      if (
+        params?.picker === '1' &&
+        params.limit === 1 &&
+        typeof params.filter === 'string' &&
+        !o.unavailable?.some((x) => p === `/items/${x}`)
+      ) {
+        const hit = /"id":\{"_eq":"?([^"}]+)"?\}/.exec(params.filter)
+        if (hit) return { data: [{ id: hit[1] }] }
+      }
       return { data: [] }
     })
   }
@@ -452,6 +473,23 @@ describe('new workflow — the 8170 case (3 Zones on the project, one picked)', 
     await settle(() => false, 15)
     expect(m.created).toHaveLength(0)
     expect(toasts.error).toHaveBeenCalledWith('Zone is required')
+  })
+
+  it('a pick its own picker flags "not an available option" blocks the save', async () => {
+    const m = await mount({
+      shape: WORKFLOWS,
+      scoped: false,
+      unavailable: ['projects'],
+      initialValues: { project: 8170 },
+      initialLinks: { divisions: ['2'], regions: ['14'], project_sub_types: ['S1'] },
+      initialRows: { 'workflow_lines.workflow': [{ qty: 3, description: 'Fiber' }] }
+    })
+    await settle(() => m.calls.some((c) => c._path === '/items/project_funding_years_junction'))
+    await settle(() => false, 10)
+    await m.save()
+    await settle(() => false, 15)
+    expect(m.created).toHaveLength(0)
+    expect(toasts.error).toHaveBeenCalledWith(UNAVAILABLE_OPTION_ERROR)
   })
 })
 

@@ -1249,6 +1249,64 @@ export function QueueWorklist({
     })
 
   if (data && !firstFetchedRef.current) firstFetchedRef.current = true
+
+  // An empty view narrowed by the viewer's DEFAULT scope filters (still as
+  // seeded; restrictions excluded — the server applies those regardless)
+  // says how many items the defaults hide: the dashboard read "10 yours" over
+  // a worklist of 0 with no reason given.
+  const softDefaultKeys = Object.entries(seededFiltersRef.current)
+    .filter(
+      ([k, v]) =>
+        !allowedValuesByPath[k.slice('extra.'.length)]?.length &&
+        JSON.stringify(apiFilters[k] ?? null) === JSON.stringify(v)
+    )
+    .map(([k]) => k)
+  // When the defaults are the ONLY filters, the scope total (stats are never
+  // column-filtered) less this view's total is exactly what they hide — no
+  // extra read, so the hint can show on a narrowed list too, not only an
+  // empty one. With other filters on, an empty view asks once (below).
+  const onlyDefaultsFilter =
+    softDefaultKeys.length > 0 && Object.keys(apiFilters).every((k) => softDefaultKeys.includes(k))
+  const filtersWithoutDefaults = Object.fromEntries(
+    Object.entries(apiFilters).filter(([k]) => !softDefaultKeys.includes(k))
+  )
+  const { data: hiddenByDefault } = useQuery({
+    queryKey: ['queue-default-hidden', queueId, scope, filtersWithoutDefaults],
+    enabled:
+      !!queueId &&
+      !!data &&
+      !isFetching &&
+      data.total === 0 &&
+      data.empty?.reason === 'filters' &&
+      softDefaultKeys.length > 0 &&
+      !onlyDefaultsFilter,
+    staleTime: 30_000,
+    retry: false,
+    queryFn: () =>
+      client
+        .request<{ total?: number }>(
+          get(`/queues/${queueId}/items`, {
+            scope,
+            filters: JSON.stringify(filtersWithoutDefaults),
+            page: 1,
+            limit: 1
+          })
+        )
+        .then((r) => Number(r.total ?? 0))
+  })
+  const defaultsHiding = onlyDefaultsFilter
+    ? Math.max(0, (data?.stats?.total ?? 0) - (data?.total ?? 0))
+    : (hiddenByDefault ?? 0)
+  const defaultsLabel = (labelOf: (k: string) => string) =>
+    softDefaultKeys.map(labelOf).join(' and ')
+  const showWithoutDefaults = () => {
+    setFilterValues((prev) => {
+      const next = { ...prev }
+      for (const k of softDefaultKeys) delete next[k]
+      return next
+    })
+    setPage(1)
+  }
   // Lifecycle trace (#477) — every items fetch this worklist makes, with the
   // gate state and filters it went out with, on window.__nvrQueueTrace. A
   // refetch within 2s of the first is logged as a duplicate first fetch.
@@ -3152,6 +3210,11 @@ export function QueueWorklist({
   const filterDefs = allFilterDefs.filter(
     (def) => effectiveVisible.has(def.key) || def.key === 'label' || def.key === 'owners'
   )
+  // A filter's name in a sentence ("Project Type"), whatever its control's placeholder.
+  const labelOfFilter = (k: string) =>
+    (allFilterDefs.find((d) => d.key === k)?.placeholder ?? k)
+      .replace(/^Search\s+/, '')
+      .replace(/…$/, '')
 
   // Quick filters — the facets people narrow a queue by, in the collection
   // browser's bar: scope-seeded facets first (Zone, Funding Year), then the
@@ -3986,6 +4049,24 @@ export function QueueWorklist({
           className='flex shrink-0 flex-wrap items-center gap-1.5 border-b border-slate-100 bg-white px-4 py-1.5 dark:border-slate-800 dark:bg-slate-900'
           data-queue-saved-views
         >
+          {/* A narrowed (not empty) view says what the viewer's defaults hide —
+              the empty state carries its own copy of this. */}
+          {(data?.total ?? 0) > 0 && defaultsHiding > 0 && (
+            <span
+              data-queue-default-hiding={defaultsHiding}
+              className='inline-flex h-6 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.06] px-2.5 text-[12px] text-slate-700 dark:text-slate-200'
+            >
+              Your default {defaultsLabel(labelOfFilter)} filter is hiding{' '}
+              {defaultsHiding.toLocaleString('en-US')} item{defaultsHiding === 1 ? '' : 's'} ·
+              <button
+                type='button'
+                onClick={showWithoutDefaults}
+                className='font-medium text-[#0284a8] underline-offset-2 hover:underline dark:text-nvr-cyan'
+              >
+                Show all
+              </button>
+            </span>
+          )}
           {/* An owner filter has no quick-filter pill of its own (it usually
               arrives from a profile's "Open in queue"), so say it here. */}
           {Array.isArray(filterValues.owners) && filterValues.owners.length > 0 && (
@@ -4285,16 +4366,28 @@ export function QueueWorklist({
                               : 'Nothing in this queue'
                       }
                       detail={
-                        data?.empty?.reason === 'filters'
-                          ? scope !== 'all'
-                            ? 'Your filters and the current tab leave nothing to show. Widen a filter or look across all items.'
-                            : 'Widen or clear a filter to see more of the queue.'
-                          : (data?.empty?.message ??
-                            'Records land here when they match the queue sources — a state change or new record can appear at any moment.')
+                        data?.empty?.reason === 'filters' && defaultsHiding > 0
+                          ? `Your default ${defaultsLabel(labelOfFilter)} filter is hiding ${defaultsHiding.toLocaleString('en-US')} item${defaultsHiding === 1 ? '' : 's'} here.`
+                          : data?.empty?.reason === 'filters'
+                            ? scope !== 'all'
+                              ? 'Your filters and the current tab leave nothing to show. Widen a filter or look across all items.'
+                              : 'Widen or clear a filter to see more of the queue.'
+                            : (data?.empty?.message ??
+                              'Records land here when they match the queue sources — a state change or new record can appear at any moment.')
                       }
                       action={
                         data?.empty?.reason === 'filters' ? (
                           <div className='flex items-center justify-center gap-2'>
+                            {defaultsHiding > 0 && (
+                              <button
+                                type='button'
+                                onClick={showWithoutDefaults}
+                                className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[12px] font-semibold text-white hover:brightness-105'
+                                data-queue-empty-defaults
+                              >
+                                Show all {defaultsHiding.toLocaleString('en-US')}
+                              </button>
+                            )}
                             <button
                               type='button'
                               onClick={() => {

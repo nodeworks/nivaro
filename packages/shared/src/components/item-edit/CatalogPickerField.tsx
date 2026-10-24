@@ -19,12 +19,14 @@ import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
 import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
+import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
+import { checkNumberEntry, isIntegerFieldType, mergePendingQtyRow } from './line-qty'
 import { resolveM2MRelatedCollection } from './M2MCombobox'
 import { useO2MStaging } from './O2MStagingContext'
 import { RelationCombobox } from './RelationCombobox'
-import type { CMSRelation } from './types'
+import type { CMSField, CMSRelation } from './types'
 
 /** A to-many `section_by`, resolved: the junction between catalog items and
  *  the section collection, and the label path on the section row. */
@@ -321,6 +323,14 @@ export function CatalogPickerField({
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState<Record<string, string>>({})
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set())
+  // A quantity that could not be taken (shown beside its box) or a 0 that
+  // would remove the line (asks first). Keyed by catalog id.
+  const [qtyIssue, setQtyIssue] = useState<
+    Record<
+      string,
+      { kind: 'error'; message: string } | { kind: 'remove'; row: Record<string, unknown> }
+    >
+  >({})
 
   // Child collection relations → resolve the catalog collection. Own query key:
   // other shared components cache DIFFERENT shapes under
@@ -344,6 +354,18 @@ export function CatalogPickerField({
       )?.one_collection ?? null,
     [childRelations, relatedCollection, config.item_field]
   )
+  // The qty column's type decides what a quantity may be (whole numbers on an
+  // integer column, never past what the column stores). Same key + shape as the
+  // grids' field-config reads.
+  const { data: childFields = [] } = useQuery<CMSField[]>({
+    queryKey: ['field-config', relatedCollection, null],
+    queryFn: () =>
+      client
+        .request<{ data: CMSField[] }>(get(`/field-config/${relatedCollection}`))
+        .then((r) => r.data ?? []),
+    staleTime: 60_000
+  })
+  const qtyFieldType = childFields.find((f) => f.field === qtyField)?.type ?? null
 
   const { data: catalogMeta } = useQuery<{
     display_template?: string
@@ -1307,11 +1329,26 @@ export function CatalogPickerField({
     return payload
   }
 
-  async function commitQty(catalogId: string, raw: string, catalogRow: Record<string, unknown>) {
-    const qty = raw.trim() === '' ? 0 : Number(raw)
-    if (Number.isNaN(qty) || qty < 0) return
+  async function commitQty(
+    catalogId: string,
+    raw: string,
+    catalogRow: Record<string, unknown>,
+    opts: { confirmedRemove?: boolean } = {}
+  ) {
+    const checked = checkNumberEntry(raw, { type: qtyFieldType, min: 0, label: 'Quantity' })
+    if (!checked.ok) {
+      setQtyIssue((p) => ({ ...p, [catalogId]: { kind: 'error', message: checked.message } }))
+      return
+    }
+    const qty = checked.value ?? 0
     const prev = currentQty(catalogId)
     if ((prev ?? 0) === qty) return
+    // Typing 0 (or clearing the box) removes the line — ask first; the ✕
+    // button is the explicit remove and passes confirmedRemove.
+    if (qty === 0 && !opts.confirmedRemove) {
+      setQtyIssue((p) => ({ ...p, [catalogId]: { kind: 'remove', row: catalogRow } }))
+      return
+    }
     const rel = qty > 0 ? await relatedCopies(catalogId) : {}
 
     if (stagedSaved && staging) {
@@ -1351,10 +1388,19 @@ export function CatalogPickerField({
       if (qty === 0) {
         if (idx !== undefined) staging?.removeRow(relatedCollection, manyField, idx)
       } else if (idx !== undefined) {
-        staging?.updateRow(relatedCollection, manyField, idx, {
-          ...pendingRows[idx],
-          ...buildRowPayload(catalogId, qty, catalogRow, rel)
-        })
+        // A staged line keeps hand-edited columns (a typed price) across qty
+        // commits, like the saved-row paths above.
+        staging?.updateRow(
+          relatedCollection,
+          manyField,
+          idx,
+          mergePendingQtyRow(
+            pendingRows[idx],
+            buildRowPayload(catalogId, qty, catalogRow, rel),
+            editableFields,
+            config.compute_fields
+          )
+        )
       } else {
         staging?.queueRow(
           relatedCollection,
@@ -1488,13 +1534,24 @@ export function CatalogPickerField({
       )
     const editVal = editing[catalogId]
     const shown = editVal !== undefined ? editVal : qty && qty > 0 ? String(qty) : ''
-    return (
+    const issue = qtyIssue[catalogId]
+    const clearIssue = () =>
+      setQtyIssue((p) => {
+        if (!(catalogId in p)) return p
+        const n = { ...p }
+        delete n[catalogId]
+        return n
+      })
+    const input = (
       <input
         type='number'
         min={0}
+        step={isIntegerFieldType(qtyFieldType) ? 1 : 'any'}
         disabled={readOnly}
         value={shown}
         placeholder='0'
+        aria-invalid={issue?.kind === 'error' || undefined}
+        onFocus={clearIssue}
         onChange={(e) => setEditing((p) => ({ ...p, [catalogId]: e.target.value }))}
         onBlur={(e) => {
           const v = e.target.value
@@ -1508,8 +1565,62 @@ export function CatalogPickerField({
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur()
         }}
-        className='h-7 w-20 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan disabled:opacity-50 dark:border-border dark:bg-background'
+        className={cn(
+          'h-7 w-20 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan disabled:opacity-50 dark:border-border dark:bg-background',
+          issue?.kind === 'error' && 'border-red-400 dark:border-red-600'
+        )}
       />
+    )
+    return (
+      <Popover open={!!issue} onOpenChange={(open) => !open && clearIssue()}>
+        <PopoverAnchor asChild>{input}</PopoverAnchor>
+        <PopoverContent
+          align='end'
+          side='bottom'
+          className='w-auto max-w-[260px] p-2.5 text-[12px]'
+          // The message must not pull focus out of the form.
+          onOpenAutoFocus={(e) => {
+            if (issue?.kind === 'error') e.preventDefault()
+          }}
+        >
+          {issue?.kind === 'error' && (
+            <p
+              role='alert'
+              className='flex items-start gap-1.5 text-red-600 dark:text-red-400'
+              data-catalog-qty-error
+            >
+              <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0' />
+              {issue.message}
+              {qty && qty > 0 ? ` — still ${qty}` : ''}
+            </p>
+          )}
+          {issue?.kind === 'remove' && (
+            <div data-catalog-qty-remove>
+              <p className='text-slate-700 dark:text-slate-200'>Remove this line?</p>
+              <div className='mt-2 flex justify-end gap-1.5'>
+                <button
+                  type='button'
+                  onClick={clearIssue}
+                  className='h-6 rounded border border-slate-200 px-2 text-[11px] text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+                >
+                  Keep
+                </button>
+                <button
+                  type='button'
+                  onClick={() => {
+                    const row = issue.row
+                    clearIssue()
+                    void commitQty(catalogId, '0', row, { confirmedRemove: true })
+                  }}
+                  className='h-6 rounded bg-red-600 px-2 text-[11px] font-medium text-white hover:bg-red-700'
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          )}
+        </PopoverContent>
+      </Popover>
     )
   }
 
@@ -2003,6 +2114,18 @@ export function CatalogPickerField({
                           // Stored compute value when present; otherwise derive it
                           // live from the row (rows created outside the picker —
                           // imports, API — never ran the client compute on create).
+                          // A line staged for removal counts for nothing (the
+                          // footer total already leaves it out).
+                          if (isStagedDelete)
+                            return (
+                              <span
+                                key={c}
+                                data-tip='Not counted — this line is removed when you save'
+                                className='w-20 shrink-0 text-right tabular-nums text-slate-400 dark:text-slate-500'
+                              >
+                                —
+                              </span>
+                            )
                           const stored = e.row[c]
                           const v =
                             stored != null && stored !== ''
@@ -2040,7 +2163,7 @@ export function CatalogPickerField({
                                 staging.queueDelete(relatedCollection, manyField, rowDbId)
                                 return
                               }
-                              void commitQty(e.key, '0', {})
+                              void commitQty(e.key, '0', {}, { confirmedRemove: true })
                             }}
                             className='w-6 shrink-0 rounded p-0.5 text-slate-300 transition-colors hover:text-red-500'
                           >

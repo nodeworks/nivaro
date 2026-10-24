@@ -35,7 +35,27 @@ export const lowCodePageBuilder: DocSection = {
     { type: 'h3', text: 'Drill sheets' },
     {
       type: 'p',
-      text: "A query widget's `row_click.sheet` (and each `row_actions[].sheet`) takes `title`, `width`, `tabs` (each a nested query view or a matrix), an optional `header` — `{ query_slug, params, stats }`, a query of its own rendered as stat tiles above the tabs with the same `$row.` / `$param.` / `$filters.` tokens as a tab — and `initial_tab`, the zero-based tab to open first."
+      text: 'A query widget\'s `row_click.sheet` (and each `row_actions[].sheet`) takes `title`, `width`, `tabs` (each a nested query view or a matrix), an optional `header` — `{ query_slug, params, stats }`, a query of its own rendered as stat tiles above the tabs with the same `$row.` / `$param.` / `$filters.` tokens as a tab — and `initial_tab`, the zero-based tab to open first. The header and each tab may carry a `note`: one quiet line saying what the figures cover ("Project lifetime — every funding year" over the tiles, "Spend dated in {{funding_years}}" over a filtered tab), where `{{param}}` reads that view\'s resolved params and an unset one reads `all`.'
+    },
+    { type: 'h3', text: 'Query widget filters' },
+    {
+      type: 'p',
+      text: 'Each `filters` entry is a picker over a collection (`param`, `label`, `collection`, `value_field`, `label_field`, `sort`, `limit`). Options are one per value: two rows sharing a value (two regions with the same short name) list once.'
+    },
+    {
+      type: 'table',
+      head: ['Key', 'Meaning'],
+      rows: [
+        ['default_values', 'Pre-selected values on load; `$current_year` is this calendar year'],
+        [
+          'url_param',
+          'Query-string key that pre-selects the filter (`?fy=2026`, a comma list for several). A change made on the page is written back to the address, so a reload or a shared link keeps it; an emptied filter writes `?fy=` and means All on purpose — no default or default scope refills it'
+        ],
+        [
+          'single',
+          'One value at a time: picking another replaces it. Use it for a per-year query that would otherwise sum two years without saying so'
+        ]
+      ]
     },
     {
       type: 'pre',
@@ -66,6 +86,10 @@ export const lowCodePageBuilder: DocSection = {
         [
           'coverage',
           "Plural noun for a table row, for example `projects`. When only some rows report the figure, a quiet 'N of M projects' line appears under the value; when none do, the tile shows `empty_label`"
+        ],
+        [
+          'requires_field / requires_label',
+          "A context tile that only means something when the rows carry `requires_field` (an 'as of' date over Fusion columns): when no row has a value, the tile shows `requires_label` instead of its own value"
         ],
         ['accent / accent_negative', 'Colour roles for the tile value and for a negative delta']
       ]

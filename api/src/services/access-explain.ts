@@ -61,12 +61,16 @@ export async function explainAccess(
     return { access: false, reasons }
   }
 
-  // 2. Existence (raw, gate-free).
+  // 2. Existence (raw, gate-free). An id the key column cannot hold ("abc"
+  //    on an int key) is a record that does not exist, not a missing table.
   let exists = false
-  try {
-    exists = !!(await db(collection).where({ id }).first('id'))
-  } catch {
-    throw new UnknownCollectionError()
+  const { idFitsCollection } = await import('./items.js')
+  if (await idFitsCollection(collection, id)) {
+    try {
+      exists = !!(await db(collection).where({ id }).first('id'))
+    } catch {
+      throw new UnknownCollectionError()
+    }
   }
   if (!exists) {
     // Smart 404 (#219): the trash knows WHO deleted it and WHEN — say so,

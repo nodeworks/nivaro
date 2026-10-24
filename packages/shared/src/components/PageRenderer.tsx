@@ -11,7 +11,12 @@ import {
   useOverlayState
 } from '../context'
 import { get, post } from '../lib/commands'
-import { initialFilterSelection } from '../lib/query-filter-seed'
+import {
+  explicitAllUrlParams,
+  filterSelectionToSearch,
+  initialFilterSelection
+} from '../lib/query-filter-seed'
+import { uniqueByValue } from '../lib/unique-options'
 import { userErrorMessage } from '../lib/safe-error'
 import { resolveSheetDef, type SheetDefInput, type SheetHeaderAsOf } from '../lib/sheet-def'
 import {
@@ -446,8 +451,13 @@ type QueryWidgetFilter = {
   /** Query-string key that pre-selects this filter when the page URL carries
    *  it (`?fy=2026`, a comma list for several values, compared on
    *  value_field). Beats default_values and the user-scope seeding; when the
-   *  URL lacks it, those apply as before. */
+   *  URL lacks it, those apply as before. A change made on the page is
+   *  written back to the address (an emptied filter as `?fy=`, "All"), so a
+   *  reload or a shared link keeps it. */
   url_param?: string
+  /** One value at a time: picking another replaces it (a per-year query that
+   *  would silently sum two years). */
+  single?: boolean
 }
 
 function defaultFilterSelection(
@@ -489,6 +499,8 @@ export interface QuerySheetDef {
     stats: QueryWidgetStat[]
     /** "As of" line under the tiles: label + the latest value of field. */
     as_of?: SheetHeaderAsOf
+    /** What the tiles cover, under them ("Project lifetime"); `{{param}}` tokens. */
+    note?: string
   }
   /** Zero-based tab to open first (clamped into range). */
   initial_tab?: number
@@ -497,6 +509,8 @@ export interface QuerySheetDef {
    *  fields render as fixed context, not pickers. */
   tabs?: Array<{
     label: string
+    /** What the tab's view covers, above it ("Spend dated in {{funding_years}}"). */
+    note?: string
     config?: QueryWidgetConfig
     matrix?: { config: MatrixEditorConfig; scope: Record<string, string> }
   }>
@@ -504,6 +518,7 @@ export interface QuerySheetDef {
 
 type ResolvedSheetTab = {
   label: string
+  note?: string
   config?: QueryWidgetConfig
   matrix?: { config: MatrixEditorConfig; initialScope: Record<string, unknown> }
 }
@@ -580,11 +595,13 @@ function resolveSheetConfig(
 function SheetHeader({
   config,
   stats,
-  asOf
+  asOf,
+  note
 }: {
   config: QueryWidgetConfig
   stats: QueryWidgetStat[]
   asOf?: SheetHeaderAsOf
+  note?: string
 }) {
   const client = useNivaroClient()
   const params = (config.params ?? {}) as Record<string, unknown>
@@ -609,6 +626,7 @@ function SheetHeader({
         loading={isPending && !isError}
         error={isError}
         asOf={asOf}
+        note={note}
       />
     </div>
   )
@@ -616,7 +634,12 @@ function SheetHeader({
 
 type SheetRuntimeDef = Omit<QuerySheetDef, 'header'> & {
   resolvedTabs: ResolvedSheetTab[]
-  header?: { config: QueryWidgetConfig; stats: QueryWidgetStat[]; asOf?: SheetHeaderAsOf } | null
+  header?: {
+    config: QueryWidgetConfig
+    stats: QueryWidgetStat[]
+    asOf?: SheetHeaderAsOf
+    note?: string
+  } | null
   initialTab?: number
 }
 
@@ -676,7 +699,12 @@ function QuerySheet({
           </button>
         </div>
         {def.header && (
-          <SheetHeader config={def.header.config} stats={def.header.stats} asOf={def.header.asOf} />
+          <SheetHeader
+            config={def.header.config}
+            stats={def.header.stats}
+            asOf={def.header.asOf}
+            note={def.header.note}
+          />
         )}
         <div className='min-h-0 flex-1 overflow-auto'>
           {active?.matrix ? (
@@ -687,7 +715,17 @@ function QuerySheet({
               lockScope
             />
           ) : active?.config ? (
-            <QueryWidgetView key={tab} config={active.config} />
+            <>
+              {active.note && (
+                <p
+                  className='border-b border-slate-200 bg-white px-4 py-1.5 text-[11.5px] text-slate-500 dark:border-border dark:bg-card dark:text-slate-400'
+                  data-sheet-tab-note
+                >
+                  {active.note}
+                </p>
+              )}
+              <QueryWidgetView key={tab} config={active.config} />
+            </>
           ) : (
             <p className='p-4 text-[12px] text-slate-400'>Sheet not configured</p>
           )}
@@ -785,10 +823,14 @@ function QueryFilterSelect({
     return () => window.removeEventListener('mousedown', onDown)
   }, [open])
   const label = filter.label ?? titleCase(filter.param)
-  // Restricted scope narrows the option list before the search filter.
-  const scoped = allowedIds?.length
-    ? options.filter((o) => allowedIds.some((id) => String(id) === String(o.id)))
-    : options
+  // Restricted scope narrows the option list before the search filter; then
+  // one option per value sent (uniqueByValue says why that never drops records).
+  const scoped = uniqueByValue(
+    allowedIds?.length
+      ? options.filter((o) => allowedIds.some((id) => String(id) === String(o.id)))
+      : options,
+    (o) => String(o[valueField] ?? '')
+  )
   const visible = scoped.filter((o) =>
     search
       ? String(o[labelField] ?? '')
@@ -804,7 +846,7 @@ function QueryFilterSelect({
       }
     : scopeDefault && selected.length > 0
       ? {
-          label: 'default',
+          label: 'your default',
           cls: 'bg-nvr-cyan/[0.12] text-[#0284a8] dark:text-nvr-cyan',
           title: `Pre-selected from your default ${label} scope — adjust freely`
         }
@@ -863,13 +905,18 @@ function QueryFilterSelect({
                 <button
                   key={v}
                   type='button'
-                  onClick={() =>
+                  onClick={() => {
+                    if (filter.single) {
+                      onChange(on ? [] : [o])
+                      setOpen(false)
+                      return
+                    }
                     onChange(
                       on
                         ? selected.filter((s) => String(s[valueField] ?? '') !== v)
                         : [...selected, o]
                     )
-                  }
+                  }}
                   className='flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
                 >
                   <span className={`w-3.5 shrink-0 text-nvr-cyan ${on ? '' : 'invisible'}`}>✓</span>
@@ -1035,6 +1082,25 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   const [filterSel, setFilterSel] = useState<Record<string, Array<Record<string, unknown>>>>(() =>
     defaultFilterSelection(cfg.filters)
   )
+  // Filters the address set to "All" on purpose (`?fy=`) — scope seeding
+  // leaves them alone, as default_values already did.
+  const [urlAll] = useState(() =>
+    explicitAllUrlParams(cfg.filters, typeof window === 'undefined' ? '' : window.location.search)
+  )
+  // A person's filter change goes into the address for url_param filters —
+  // replaceState keeps the router's own history entry (its state) intact.
+  const changeFilter = (param: string, rows: Array<Record<string, unknown>>) => {
+    const next = { ...filterSel, [param]: rows }
+    setFilterSel(next)
+    if (typeof window === 'undefined' || !(cfg.filters ?? []).some((f) => f.url_param)) return
+    const search = filterSelectionToSearch(cfg.filters, next, window.location.search)
+    if (search !== window.location.search)
+      window.history.replaceState(
+        window.history.state,
+        '',
+        `${window.location.pathname}${search}${window.location.hash}`
+      )
+  }
   const [actionStatus, setActionStatus] = useState<string | null>(null)
   const [actionRun, setActionRun] = useState<ActionRunState | null>(null)
   const actionBusy = actionRun?.phase === 'running'
@@ -1065,7 +1131,9 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     if (scopeSeededRef.current) return
     if (!scopesReady) return
     scopeSeededRef.current = true
-    const specs = (cfg.filters ?? []).filter((f) => !(filterSel[f.param] ?? []).length)
+    const specs = (cfg.filters ?? []).filter(
+      (f) => !(filterSel[f.param] ?? []).length && !urlAll.has(f.param)
+    )
     if (!scopes || !specs.length) {
       setScopeGateOpen(true)
       return
@@ -1086,7 +1154,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
             vf
           )
           if (values.length) {
-            patch[f.param] = values.map((v, i) => ({ [vf]: v, id: ids[i] }))
+            const rows = values.map((v, i) => ({ [vf]: v, id: ids[i] }))
+            patch[f.param] = f.single ? rows.slice(0, 1) : rows
           }
         }
         if (Object.keys(patch).length) {
@@ -1103,7 +1172,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
         setScopeGateOpen(true)
       }
     })()
-  }, [scopesReady, scopes, cfg.filters, filterSel, client])
+  }, [scopesReady, scopes, cfg.filters, filterSel, client, urlAll])
   const effectiveParams = useMemo(() => {
     const p: Record<string, unknown> = { ...(cfg.params ?? {}) }
     for (const f of cfg.filters ?? []) {
@@ -1230,7 +1299,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
               selected={filterSel[f.param] ?? []}
               allowedIds={restrictedIds.length > 0 ? restrictedIds : undefined}
               scopeDefault={scopeSeededParams.has(f.param)}
-              onChange={(rows) => setFilterSel((p) => ({ ...p, [f.param]: rows }))}
+              onChange={(rows) => changeFilter(f.param, rows)}
             />
           )
         })}
@@ -1295,7 +1364,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
           matrix: { config: t.matrix.config as unknown as MatrixEditorConfig, initialScope }
         }
       }
-      return { label: t.label, config: t.config as QueryWidgetConfig }
+      return { label: t.label, note: t.note, config: t.config as QueryWidgetConfig }
     })
     setSheetState({
       def: {
@@ -1305,7 +1374,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
           ? {
               config: r.header.config as QueryWidgetConfig,
               stats: r.header.stats as QueryWidgetStat[],
-              asOf: r.header.asOf
+              asOf: r.header.asOf,
+              note: r.header.note
             }
           : null,
         initialTab: r.initialTab

@@ -139,7 +139,7 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordReader } from '../../lib/record-loader'
 import type { RuleProvenance } from '../../lib/rule-provenance'
 import { userErrorMessage } from '../../lib/safe-error'
-import { cn, formatRelative, titleCase } from '../../lib/utils'
+import { cn, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
 import { formulaInputsChanged } from '../../lib/write-formula'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
@@ -168,6 +168,7 @@ import {
   SENTINEL_FIELDS,
   SYSTEM_FIELDS
 } from './helpers'
+import { changedRowFields, checkNumberEntry, NUMBER_FIELD_TYPES } from './line-qty'
 import { NestedRelationEditor } from './NestedRelationEditor'
 import {
   type LiveRowsCtx,
@@ -5368,6 +5369,29 @@ export function InlineTableField({
       setEditState((s) => (s ? { ...s, missing: missingRequired.map((c) => c.field) } : s))
       return false
     }
+    // Numbers the column cannot hold (1.5 in an integer column, 1e308 in a
+    // bigint) are refused here, not by the driver after the record's Save.
+    // Only values this edit typed — a stored figure is never re-judged.
+    const savedForCheck = savedRowFor(editState.rowId)
+    const badNumbers = displayCols.flatMap((c) => {
+      if (isPanelReadOnly(c) || editState.locks?.includes(c.field)) return []
+      if (!NUMBER_FIELD_TYPES.has(c.type ?? '')) return []
+      if (
+        savedForCheck &&
+        String(savedForCheck[c.field] ?? '') === String(editState.draft[c.field] ?? '')
+      )
+        return []
+      const check = checkNumberEntry(editState.draft[c.field], {
+        type: c.type,
+        label: c.label || titleCase(c.field)
+      })
+      return check.ok ? [] : [{ field: c.field, message: check.message }]
+    })
+    if (badNumbers.length > 0) {
+      setUniqueError(badNumbers.map((b) => b.message).join(' · '))
+      setEditState((s) => (s ? { ...s, missing: badNumbers.map((b) => b.field) } : s))
+      return false
+    }
     // Sum cap (options.sum_cap): the grid's total for `field` — with this
     // row's draft in place of its stored values — must stay within the cap.
     // rowsForRollup already folds the draft in for saved/pending rows; a row
@@ -5588,28 +5612,22 @@ export function InlineTableField({
           // the server stores it on the activity row, never in a column.
           '_change_reason'
         ])
-        const rowPayload = Object.fromEntries(
-          Object.entries(editState.draft).filter(([k]) => writableKeys.has(k))
-        )
+        // Only values that actually CHANGED vs the saved row — the full draft
+        // would make every column look edited (change-reason preflight would
+        // name all of them, the flush PATCH would re-write untouched columns)
+        // and would have the server judge validation rules on stored values
+        // nobody touched (a legacy negative qty blocking a price edit).
+        const baseRow = rows.find((r) => String(r.id) === editState.rowId) as
+          | Record<string, unknown>
+          | undefined
+        const rowPayload = changedRowFields(editState.draft, baseRow, writableKeys)
         if (isPendingMode && staging) {
           // __nested_ops_* keys ride along here (exempt from the writableKeys filter) so the
           // batch flush can apply them — the immediate PATCH branch below still strips them.
           const nestedOpsEntries = Object.entries(editState.draft).filter(([k]) =>
             k.startsWith('__nested_ops_')
           )
-          // Queue only values that actually CHANGED vs the saved row — the full
-          // draft would make every column look edited (change-reason preflight
-          // would then name all of them, and the flush PATCH would re-write
-          // untouched columns).
-          const baseRow = rows.find((r) => String(r.id) === editState.rowId)
-          const queuedPayload = baseRow
-            ? Object.fromEntries(
-                Object.entries(rowPayload).filter(
-                  ([k, v]) =>
-                    String(v ?? '') !== String((baseRow as Record<string, unknown>)[k] ?? '')
-                )
-              )
-            : rowPayload
+          const queuedPayload = rowPayload
           // Opening a row and clicking away is not an edit. An EMPTY queued
           // payload still registered the row as pending ("Edited" badge, a
           // flush PATCH with no fields) — close without queueing instead.
@@ -5621,6 +5639,10 @@ export function InlineTableField({
             ...queuedPayload,
             ...Object.fromEntries(nestedOpsEntries)
           })
+          clearIfStillEditing()
+          return true
+        }
+        if (Object.keys(rowPayload).length === 0) {
           clearIfStillEditing()
           return true
         }
@@ -6114,7 +6136,7 @@ export function InlineTableField({
       )
     if (col.type === 'datetime' || col.type === 'date') {
       try {
-        return <span className='block truncate'>{new Date(String(val)).toLocaleDateString()}</span>
+        return <span className='block truncate'>{toLocalDateString(val)}</span>
       } catch {
         /* fall */
       }

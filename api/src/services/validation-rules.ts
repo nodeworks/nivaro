@@ -31,7 +31,8 @@ export interface ValidationRule {
   type: string
   value?: unknown
   message?: string
-  // required_if only: sibling field + condition making this field required
+  // required_if: sibling field + condition making this field required;
+  // gte_field / lte_field: the field this one is compared with
   field?: string
   op?: string
 }
@@ -78,6 +79,55 @@ function conditionMatches(other: unknown, op: string, cmp: unknown): boolean {
   }
 }
 
+// gte_field / lte_field: compare this field with another field of the same
+// record. Numbers compare numerically; dates as CALENDAR days (the first ten
+// characters of an ISO string; a Date by its UTC day, which is how a date
+// column reads back). Anything else cannot be judged and passes. Twin of the
+// same helper in the other evaluator — keep them identical.
+function crossFieldOrder(a: unknown, b: unknown): number | null {
+  const num = (v: unknown) =>
+    typeof v === 'number'
+      ? v
+      : typeof v === 'string' && /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(v)
+        ? Number(v)
+        : null
+  const na = num(a)
+  const nb = num(b)
+  if (na !== null && nb !== null && Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+  const day = (v: unknown): string | null => {
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10)
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10)
+    return null
+  }
+  const dayA = day(a)
+  const dayB = day(b)
+  if (dayA === null || dayB === null) return null
+  return dayA < dayB ? -1 : dayA > dayB ? 1 : 0
+}
+
+function crossFieldError(
+  type: string,
+  value: unknown,
+  other: string | undefined,
+  record: Record<string, unknown> | undefined,
+  label: string,
+  message: string | undefined
+): string | null {
+  if (!other || !record) return null
+  const otherValue = record[other]
+  if (isEmptyVal(value) || isEmptyVal(otherValue)) return null
+  const order = crossFieldOrder(value, otherValue)
+  if (order === null) return null
+  const otherName = other.replace(/_/g, ' ')
+  if (type === 'gte_field' && order < 0) {
+    return message ?? `${label} must be on or after ${otherName}`
+  }
+  if (type === 'lte_field' && order > 0) {
+    return message ?? `${label} must be on or before ${otherName}`
+  }
+  return null
+}
+
 export function applyValidationRule(
   rule: ValidationRule,
   value: unknown,
@@ -93,6 +143,16 @@ export function applyValidationRule(
     return isEmptyVal(value)
       ? (rule.message ?? `${label} is required when ${rule.field} matches this condition`)
       : null
+  }
+  if (rule.type === 'gte_field' || rule.type === 'lte_field') {
+    return crossFieldError(
+      rule.type,
+      value,
+      (rule as { field?: string }).field,
+      record,
+      label,
+      rule.message
+    )
   }
   if (isEmptyVal(value) && rule.type !== 'required') return null
   switch (rule.type) {
@@ -205,7 +265,11 @@ function parseRules(raw: unknown): ValidationRule[] {
 export async function enforceValidationRules(
   collection: string,
   payload: Record<string, unknown>,
-  callerFields: Set<string>
+  callerFields: Set<string>,
+  /** The stored row on an update: rules read the record as it will be
+   *  (payload over stored), so a cross-field rule compares an update that
+   *  changes only one of its two fields against the stored other. */
+  stored?: Record<string, unknown> | null
 ): Promise<void> {
   if (collection.startsWith('nivaro_')) return
 
@@ -216,14 +280,19 @@ export async function enforceValidationRules(
     return // unreadable metadata must never block a write
   }
 
+  const record = stored ? { ...stored, ...payload } : payload
   for (const f of fields) {
-    if (!callerFields.has(f.field)) continue
     const rules = parseRules(f.validation_rules)
     if (rules.length === 0) continue
     const label = f.field
-    const value = payload[f.field]
+    const value = record[f.field]
     for (const rule of rules) {
-      const error = applyValidationRule(rule, value, label, payload)
+      // A field the caller did not send is judged only by a cross-field rule
+      // whose OTHER field they did send (moving the start past a stored end).
+      const crossField = rule.type === 'gte_field' || rule.type === 'lte_field'
+      if (!callerFields.has(f.field) && !(crossField && rule.field && callerFields.has(rule.field)))
+        continue
+      const error = applyValidationRule(rule, value, label, record)
       if (error) throw new FieldValidationError(error, f.field, rule.type)
     }
   }

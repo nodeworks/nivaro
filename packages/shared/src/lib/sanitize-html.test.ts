@@ -1,6 +1,29 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
-import { sanitizeHtml } from './sanitize-html'
+import { describe, expect, it, vi } from 'vitest'
+import { htmlToText, sanitizeHtml } from './sanitize-html'
+
+describe('htmlToText', () => {
+  it('returns the words without running anything in the markup', () => {
+    const w = window as unknown as { __xssProbe?: number }
+    w.__xssProbe = 0
+    const created: string[] = []
+    const real = document.createElement.bind(document)
+    const spy = vi.spyOn(document, 'createElement').mockImplementation((tag: string, o?: any) => {
+      created.push(tag)
+      return real(tag, o)
+    })
+    const out = htmlToText(
+      '<p>Vendor <b>Acme</b></p><img src=x onerror="window.__xssProbe=1"><script>window.__xssProbe=2</script>'
+    )
+    spy.mockRestore()
+    expect(out.trim()).toBe('Vendor Acme')
+    expect(created).toEqual([])
+    expect(w.__xssProbe).toBe(0)
+  })
+  it('collapses whitespace', () => {
+    expect(htmlToText('<p>a</p>\n\n<p>b&nbsp; c</p>')).toBe('a b c')
+  })
+})
 
 describe('sanitizeHtml', () => {
   it('keeps formatting, drops executables', () => {

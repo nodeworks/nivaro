@@ -11,7 +11,7 @@ import { db } from './db/index.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
-import { describeDbRefusal, errorText } from './lib/db-refusal.js'
+import { describeDbRefusal, errorText, messageWithoutSql } from './lib/db-refusal.js'
 import { applyEarlyHints, loadEarlyHints } from './lib/early-hints.js'
 import { adminAssetCacheControl } from './lib/static-cache.js'
 import { scopeRefusalBody } from './middleware/authenticate.js'
@@ -599,7 +599,9 @@ export async function buildServer() {
       reply.code(status).send({
         statusCode: status,
         error: STATUS_CODES[status] ?? 'Error',
-        message: err.message,
+        // A server fault's driver message carries the statement (tables,
+        // columns); the body gets the reason only — the log keeps the rest.
+        message: status >= 500 ? messageWithoutSql(err) : err.message,
         // A refusal's machine code rides every 4xx; driver codes on a 5xx stay in the log.
         ...(coded ? { code: err.code } : {}),
         ...(err.code && err.violations ? { code: err.code, violations: err.violations } : {}),

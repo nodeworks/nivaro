@@ -3,7 +3,7 @@ import { Loader2, Pencil, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
-import { cn, formatNumber, titleCase } from '../../lib/utils'
+import { cn, formatNumber, titleCase, toLocalDateString } from '../../lib/utils'
 import { FieldRenderer } from './FieldRenderer'
 import { applyDisplayTemplate, EMPTY_NESTED_OPS, SENTINEL_FIELDS } from './helpers'
 import type { CMSField, CMSRelation, NestedOps } from './types'
@@ -425,7 +425,7 @@ export function NestedRelationEditor({
       )
     if (c.type === 'datetime' || c.type === 'date') {
       try {
-        return <span className='block truncate'>{new Date(String(val)).toLocaleDateString()}</span>
+        return <span className='block truncate'>{toLocalDateString(val)}</span>
       } catch {
         /* fall through */
       }

@@ -4,8 +4,9 @@ import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { getTenantId } from '../db/tenant-context.js'
 import { hooks } from '../hooks/registry.js'
-import { describeDbRefusal } from '../lib/db-refusal.js'
+import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
 import {
   decodeCursor,
   encodeCursor,
@@ -13,6 +14,12 @@ import {
   keysetBranches,
   keysetSorts
 } from '../lib/keyset.js'
+import {
+  type ColumnShape,
+  fitFilterOps,
+  numberProblem,
+  valueFitsSqlType
+} from '../lib/sql-value-fit.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
 import { shouldRecomputeWriteField } from '../lib/write-formula.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
@@ -27,7 +34,7 @@ import {
   recomputeAutoIdPrefix,
   resolveAutoIdPattern
 } from './auto-ids.js'
-import { getCollection, getFields, getRelations } from './collections.js'
+import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
@@ -50,6 +57,7 @@ import {
   peopleReadable
 } from './m2a-expand.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter, isAdminRole } from './permissions.js'
+import { liveRelations, tableIsMissing } from './physical-tables.js'
 import { enforcePickerRules } from './picker-rules.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import {
@@ -100,7 +108,7 @@ import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
 import { applyDirectoryListingRules } from './user-directory-cols.js'
 import { applyUserScopesToQuery } from './user-scopes.js'
-import { enforceValidationRules } from './validation-rules.js'
+import { enforceValidationRules, FieldValidationError } from './validation-rules.js'
 import {
   ADDENDUMS_FIELD,
   AT_RISK_FIELD,
@@ -202,6 +210,18 @@ export class CollectionNotFoundError extends Error {
   constructor(collection: string) {
     super(`Collection "${collection}" not found in registry`)
     this.name = 'CollectionNotFoundError'
+  }
+}
+
+/** A registered collection with no table behind it: still a not-found to the
+ *  caller (404, never a 500 "Invalid object name"), with its own code. */
+export class CollectionTableMissingError extends CollectionNotFoundError {
+  statusCode = 404
+  code = 'COLLECTION_TABLE_MISSING'
+  constructor(collection: string) {
+    super(collection)
+    this.message = `Collection "${collection}" has no table in the database`
+    this.name = 'CollectionTableMissingError'
   }
 }
 
@@ -311,6 +331,127 @@ async function tableColumns(collection: string): Promise<Set<string>> {
   const cols = new Set(Object.keys(info ?? {}).map((c) => c.toLowerCase()))
   tableColumnsCache.set(collection, { at: Date.now(), cols })
   return cols
+}
+
+const columnShapesCache = new Map<string, { at: number; shapes: Map<string, ColumnShape> }>()
+
+/** A table's column types (+ decimal precision/scale) by lower-cased name,
+ *  cached a minute per tenant + table. Empty for what is not a table. */
+export async function columnShapes(collection: string): Promise<Map<string, ColumnShape>> {
+  const key = `${getTenantId() ?? ''}:${collection}`
+  const hit = columnShapesCache.get(key)
+  if (hit && Date.now() - hit.at < 60_000) return hit.shapes
+  const shapes = new Map<string, ColumnShape>()
+  try {
+    if (isMssql()) {
+      // The table this connection resolves the name to: `schema.table` as
+      // given, else the bare name's schema (below) — a same-named table in
+      // another schema never mixes its column types in.
+      const dot = collection.indexOf('.')
+      const [schema, table] =
+        dot > 0 ? [collection.slice(0, dot), collection.slice(dot + 1)] : [null, collection]
+      // A bare name resolves like SQL Server does: the login's default schema
+      // first, then dbo — only the winning schema's columns are read.
+      const rows = rawRows<{ c: string; t: string; p: number | null; s: number | null }>(
+        await db.raw(
+          `SELECT COLUMN_NAME AS c, DATA_TYPE AS t, NUMERIC_PRECISION AS p, NUMERIC_SCALE AS s
+           FROM INFORMATION_SCHEMA.COLUMNS
+           WHERE TABLE_NAME = ? AND TABLE_SCHEMA = COALESCE(?, (
+             SELECT TOP 1 TABLE_SCHEMA FROM INFORMATION_SCHEMA.TABLES
+              WHERE TABLE_NAME = ? AND TABLE_SCHEMA IN (SCHEMA_NAME(), 'dbo')
+              ORDER BY CASE WHEN TABLE_SCHEMA = SCHEMA_NAME() THEN 0 ELSE 1 END
+           ))`,
+          [
+            table.replace(/[[\]]/g, ''),
+            schema ? schema.replace(/[[\]]/g, '') : null,
+            table.replace(/[[\]]/g, '')
+          ]
+        )
+      )
+      for (const r of rows) {
+        shapes.set(String(r.c).toLowerCase(), { type: String(r.t), precision: r.p, scale: r.s })
+      }
+    } else {
+      const info = (await db(collection).columnInfo()) as Record<string, { type?: string }>
+      for (const [c, v] of Object.entries(info ?? {})) {
+        shapes.set(c.toLowerCase(), { type: String(v?.type ?? '') })
+      }
+    }
+  } catch {
+    // nothing this can describe: nothing is judged
+  }
+  columnShapesCache.set(key, { at: Date.now(), shapes })
+  return shapes
+}
+
+/**
+ * Whether `id` can be the collection's primary key at all — `abc` against an
+ * int key or `999999` against a uniqueidentifier is a conversion error in SQL
+ * Server, not a miss. Callers answer such an id as not found.
+ */
+export async function idFitsCollection(collection: string, id: unknown): Promise<boolean> {
+  return valueFitsSqlType(id, (await columnShapes(collection)).get('id')?.type)
+}
+
+/**
+ * Refuse a number its column cannot hold before the write reaches the driver
+ * (lib/sql-value-fit.ts numberProblem): a 400 naming the field, where 1e308
+ * used to come back as "Bigint must be safe integer…" with a 500.
+ */
+async function assertNumbersFit(
+  collection: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  const shapes = await columnShapes(collection)
+  if (shapes.size === 0) return
+  for (const [field, value] of Object.entries(payload)) {
+    const problem = numberProblem(value, shapes.get(field.toLowerCase()))
+    if (problem) {
+      const label = field.replace(/_/g, ' ')
+      throw new FieldValidationError(
+        `${label.charAt(0).toUpperCase()}${label.slice(1)} ${problem}`,
+        field,
+        'number_range'
+      )
+    }
+  }
+}
+
+/** A filter's plain objects and arrays copied (values by reference) — the
+ *  compiler fits values to column types in place, and the caller's filter
+ *  (the Traffic Map read shape, a cached config filter) must stay as sent. */
+function cloneFilterTree<T>(v: T): T {
+  if (Array.isArray(v)) return v.map((x) => cloneFilterTree(x)) as T
+  if (v && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype) {
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, cloneFilterTree(x)])
+    ) as T
+  }
+  return v
+}
+
+/**
+ * Fit a field's filter operators to its column type before they compile
+ * (lib/sql-value-fit.ts): a value the column cannot hold matches nothing
+ * rather than reaching SQL as a conversion error; a range operator with such
+ * a value is refused in plain words.
+ */
+async function fitFilterValues(
+  ops: Record<string, unknown>,
+  collection: string,
+  column: string,
+  path: string[]
+): Promise<void> {
+  if (peekVirtualSql(collection)?.has(column)) return
+  const type = (await columnShapes(collection)).get(column.toLowerCase())?.type
+  const refused = fitFilterOps(ops, type)
+  if (refused) {
+    throw filterRefusal(
+      'FILTER_VALUE_INVALID',
+      `"${refused}" on "${[...path, column].join('.')}" needs ${type === 'uniqueidentifier' ? 'an id' : 'a number'}`,
+      { path: [...path, column], operator: refused }
+    )
+  }
 }
 
 /**
@@ -1277,6 +1418,45 @@ async function applyInheritedFields(
 const readLogThrottle = new Map<string, number>()
 const relCache = new Map<string, CMSRelation[]>()
 
+/** A collection's relations, minus any whose table (a junction, a related
+ *  collection) does not exist — nivaro_relations is a claim, not truth. A
+ *  deep field or M2M expansion through a missing junction is left out instead
+ *  of failing the whole read with "Invalid object name". */
+async function getRelations(collection: string): Promise<CMSRelation[]> {
+  const registered = await getRegisteredRelations(collection)
+  const live = await liveRelations(registered)
+  const key = `${getTenantId() ?? ''}:${collection}`
+  if (live.length === registered.length) unbuiltAliases.delete(key)
+  else {
+    const kept = new Set(live)
+    const gone = registered
+      .filter((r) => !kept.has(r) && r.one_collection === collection && r.one_field)
+      .map((r) => String(r.one_field))
+    if (unbuiltAliases.size >= 2000) unbuiltAliases.clear()
+    unbuiltAliases.set(key, new Set(gone))
+  }
+  return live
+}
+
+/** `<tenant>:<collection>` → to-many alias fields whose relation runs through
+ *  a table that does not exist (getRelations dropped it). */
+const unbuiltAliases = new Map<string, Set<string>>()
+
+/** A requested field list minus aliases whose relation has no table: such a
+ *  field reads as absent rather than refusing the read as an unknown field. */
+async function withoutUnbuiltAliases(
+  collection: string,
+  split: { direct: string[]; nested: Record<string, string[]> }
+): Promise<{ direct: string[]; nested: Record<string, string[]> }> {
+  await getRelsForCollection(collection)
+  const gone = unbuiltAliases.get(`${getTenantId() ?? ''}:${collection}`)
+  if (!gone || gone.size === 0) return split
+  return {
+    direct: split.direct.filter((f) => !gone.has(f)),
+    nested: Object.fromEntries(Object.entries(split.nested).filter(([k]) => !gone.has(k)))
+  }
+}
+
 async function getRelsForCollection(collection: string): Promise<CMSRelation[]> {
   const cached = relCache.get(collection)
   if (cached) return cached
@@ -1382,7 +1562,10 @@ async function expandRelations(
     }
     if (fkSet.size === 0) continue
 
-    const { direct: subDirect0, nested: subNested } = parseFieldExpansion(subFields)
+    const { direct: subDirect0, nested: subNested } = await withoutUnbuiltAliases(
+      relCollection,
+      parseFieldExpansion(subFields)
+    )
 
     // `related.$state` — a projection, not a column. Out before selectCols is
     // built; 'id' is always selected below, which is all the attach needs.
@@ -1909,6 +2092,7 @@ async function assertFilterCompiles(
       const nested = value as Record<string, unknown>
       if (isOperatorOnly(nested)) {
         assertOps(nested, collection, key, path)
+        await fitFilterValues(nested, collection, m2o.fkField, path)
       } else {
         const target = m2o.rel.one_collection as string
         await primeVirtualSql(target)
@@ -1968,6 +2152,9 @@ async function assertFilterCompiles(
       )
     }
     if (isObject) assertOps(value as Record<string, unknown>, collection, key, path)
+    if (isObject && IDENT_RE.test(key)) {
+      await fitFilterValues(value as Record<string, unknown>, collection, key, path)
+    }
     if (IDENT_RE.test(key)) {
       const cols = await getActualColumns(collection)
       if (cols.size > 0) {
@@ -2041,8 +2228,9 @@ export async function applyFilterToQuery(
   await primeRelCacheForFilter(filter, collection, rels)
   await primeVirtualSql(collection)
   await primeVirtualFilters(filter)
-  await assertFilterCompiles(filter, collection, rels)
-  applyFilters(q, filter, collection, rels)
+  const fitted = cloneFilterTree(filter)
+  await assertFilterCompiles(fitted, collection, rels)
+  applyFilters(q, fitted, collection, rels)
 }
 
 function applyFilters(
@@ -3377,20 +3565,24 @@ export async function readItems(
   // the SQL Server sits ~37ms away — run serially they were half the floor cost
   // of every list read. clearRelCache() must precede getRelsForCollection.
   clearRelCache()
-  const [col, allowed, allowedFields, rels, rowFilter] = await span('permissions+metadata', () =>
-    Promise.all([
-      getCollection(collection),
-      can(user, 'read', collection),
-      getAllowedFields(user, 'read', collection),
-      getRelsForCollection(collection),
-      getRowFilter(user, 'read', collection)
-    ])
+  const [col, allowed, allowedFields, rels, rowFilter, noTable] = await span(
+    'permissions+metadata',
+    () =>
+      Promise.all([
+        getCollection(collection),
+        can(user, 'read', collection),
+        getAllowedFields(user, 'read', collection),
+        getRelsForCollection(collection),
+        getRowFilter(user, 'read', collection),
+        tableIsMissing(collection)
+      ])
   )
 
   // Errors surface in the original order — a caller must not learn that a
   // collection exists from a Forbidden instead of a NotFound.
   if (!col) throw new CollectionNotFoundError(collection)
   if (!allowed) throw new ForbiddenError()
+  if (noTable) throw new CollectionTableMissingError(collection)
 
   const rawConditions = (req?.query as Record<string, string>)?.conditions
   let conditions: Array<FilterCondition | OrCondition> | undefined
@@ -3426,7 +3618,10 @@ export async function readItems(
   noteReadShape(collection, filter, sort, conditions, fields)
 
   // Split dotted fields (e.g. 'category.name') into direct FK columns + expansion map
-  const { direct: directFields0, nested: nestedFieldMap } = parseFieldExpansion(fields)
+  const { direct: directFields0, nested: nestedFieldMap } = await withoutUnbuiltAliases(
+    collection,
+    parseFieldExpansion(fields)
+  )
 
   // `$state` is a projection over the pipeline tables, not a column: take it out
   // before the column machinery (narrowing, alias strip, SELECT) ever sees it.
@@ -3521,7 +3716,9 @@ export async function readItems(
   await primeVirtualSql(collection)
   await primeVirtualFilters(filter)
   await assertFilterableFields(collection, filter, sort, conditions)
-  await assertFilterCompiles(filter, collection, rels)
+  // Compiled from a copy: fitting values to column types rewrites operators.
+  const fittedFilter = cloneFilterTree(filter)
+  await assertFilterCompiles(fittedFilter, collection, rels)
 
   // limit=-1 is Directus convention for "all records". Passing -1 to Knex MSSQL
   // generates SELECT TOP(-1) which is invalid SQL — treat as 1000-row cap instead.
@@ -3546,7 +3743,7 @@ export async function readItems(
     })
   }
 
-  if (Object.keys(filter).length && !labelIds) applyFilters(q, filter, collection, rels)
+  if (Object.keys(fittedFilter).length && !labelIds) applyFilters(q, fittedFilter, collection, rels)
 
   if (sort.length) {
     await applySorts(q, sort, collection, rels)
@@ -3562,7 +3759,8 @@ export async function readItems(
     whereNotHelpVideoFile(q, `${collection}.id`)
     whereNotHelpVideoFile(countQ, `${collection}.id`)
   }
-  if (Object.keys(filter).length && !labelIds) applyFilters(countQ, filter, collection, rels)
+  if (Object.keys(fittedFilter).length && !labelIds)
+    applyFilters(countQ, fittedFilter, collection, rels)
 
   // Row-level workspace isolation (no-op when no workspaceId passed or no column)
   await applyWorkspaceScope(q, collection, workspaceId)
@@ -4091,6 +4289,7 @@ export async function readOne(
   ])
 
   if (!allowed) throw new ForbiddenError()
+  if (await tableIsMissing(collection)) throw new CollectionTableMissingError(collection)
   // Tree permissions only further RESTRICT (never grant beyond policies) —
   // act only on an explicit deny. Enforced on single reads only; list reads
   // skip this check to avoid one ancestor walk per row (known limitation).
@@ -4123,8 +4322,9 @@ export async function readOne(
   }
 
   const baseFields = allowedFields ?? ['*']
-  const { direct: directFields0, nested: nestedFieldMap } = parseFieldExpansion(
-    fields ?? baseFields
+  const { direct: directFields0, nested: nestedFieldMap } = await withoutUnbuiltAliases(
+    collection,
+    parseFieldExpansion(fields ?? baseFields)
   )
 
   // `$state` — see readItems: split before the column machinery runs.
@@ -4201,6 +4401,9 @@ export async function readOne(
     if (aliasId === null) return null
     key = aliasId
   }
+  // Digits past the key's range, or a uuid-looking segment on an int key, are
+  // the same not-found.
+  if (!(await idFitsCollection(collection, key))) return null
 
   const q = db(collection)
     .where({ id: key })
@@ -5025,7 +5228,7 @@ export function describeWriteRefusal(err: unknown): {
   violations?: unknown
   [detail: string]: unknown
 } {
-  const refusal = describeDbRefusal(err)
+  const refusal = describeDbRefusal(err) ?? describeValueRefusal(err)
   if (refusal) return { status: refusal.status, error: refusal.message, code: refusal.code }
   const e = err as {
     statusCode?: number
@@ -5410,6 +5613,7 @@ export async function createOne(
   const securedPayload = await encryptItemFields(collection, ctx.payload)
 
   const actualCols = await getActualColumns(collection)
+  await assertNumbersFit(collection, securedPayload)
   if (dry) {
     const writable = filterToActualColumns(securedPayload, actualCols)
     const notes: string[] = []
@@ -5647,6 +5851,7 @@ export async function updateOne(
 ) {
   await assertServable(user, collection, 'update')
   assertRecordId(id)
+  if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
   await enforceContracts(collection, user?.id, data, 'update')
   let nestedWrites = await extractAliasO2MWrites(collection, data)
   data = await coerceRelationObjects(collection, data)
@@ -5846,8 +6051,9 @@ export async function updateOne(
     applyWriteComputedFields(collection, ctx.payload, writeCtx, { previous: previousData ?? null })
   )
 
-  // Field validation rules on the caller's fields (see createOne)
-  await enforceValidationRules(collection, ctx.payload, callerFields)
+  // Field validation rules on the caller's fields (see createOne), judged on
+  // the row as it will be stored — a cross-field rule reads the stored other.
+  await enforceValidationRules(collection, ctx.payload, callerFields, previousData ?? null)
 
   // Limits of the relation this row belongs to, judged on the row as it
   // would be stored and only when the write touches what the limit reads.
@@ -5889,6 +6095,7 @@ export async function updateOne(
   const securedPayload = await encryptItemFields(collection, ctx.payload)
 
   const actualCols = await getActualColumns(collection)
+  await assertNumbersFit(collection, securedPayload)
   const columnPayload = filterToActualColumns(securedPayload, actualCols)
   // A payload of only alias/virtual fields (e.g. an M2A alias like
   // internal_contact) leaves nothing to write — knex throws on an empty
@@ -5963,6 +6170,7 @@ export async function deleteOne(
 ) {
   await assertServable(user, collection, 'delete')
   assertRecordId(id)
+  if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 

@@ -16,9 +16,10 @@
  * own marker for "not a person".
  */
 import { db } from '../db/index.js'
-import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import type { RelatedNoteEntry } from '../extensions/related-notes.js'
+import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { getObligationKind } from './integration-obligations.js'
+import { plainObligationReason } from './obligation-reason-text.js'
 
 const THREAD_CAP = 40
 
@@ -41,7 +42,7 @@ export function obligationNoteText(row: {
   reason: string | null
   trigger: string
 }): string {
-  const tail = row.reason ? ` — ${row.reason}` : ''
+  const tail = row.reason ? ` — ${plainObligationReason(row.reason)}` : ''
   switch (row.outcome) {
     case 'sent':
       return `${row.api} told (${row.kind})${tail}`

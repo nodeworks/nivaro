@@ -3,6 +3,7 @@ import { ChevronDown } from 'lucide-react'
 import { Fragment, useMemo, useState } from 'react'
 import { get } from '../../lib/commands'
 import { numericIntlOptions } from '../../lib/format-value'
+import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatDate, formatDateTime, titleCase } from '../../lib/utils'
 import { applyDisplayTemplate, SYSTEM_FIELDS } from '../item-edit/helpers'
 import type { CMSField, CMSRelation } from '../item-edit/types'
@@ -274,11 +275,7 @@ export function AddendumLinesDiff({
     )
       return { text: Number(v).toLocaleString('en-US', numericIntlOptions(opts)), mono: true }
     const s = String(v)
-    if (/<[a-z][\s\S]*>/i.test(s) && typeof document !== 'undefined') {
-      const div = document.createElement('div')
-      div.innerHTML = s
-      return { text: (div.textContent || '').trim() || '—' }
-    }
+    if (/<[a-z][\s\S]*>/i.test(s)) return { text: htmlToText(s).trim() || '—' }
     return { text: s.length > 80 ? `${s.slice(0, 80)}…` : s }
   }
   const deltaPill = (field: string, before: unknown, after: unknown) => {

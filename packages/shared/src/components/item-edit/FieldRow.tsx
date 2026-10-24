@@ -1091,6 +1091,7 @@ export function FieldRow({
                     <TooltipTrigger asChild>
                       <button
                         type='button'
+                        aria-label='Show the fields that narrow this list'
                         onClick={flashParentFields}
                         className={cn(
                           'inline-flex items-center transition-colors',

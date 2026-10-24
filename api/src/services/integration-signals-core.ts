@@ -313,7 +313,23 @@ export function registerCoreIntegrationSignals(): void {
           }
         })
       )
-      return { count: out.length, rows: out }
+      // Below the cap every row is here and uniqueByKey's count is exact; at
+      // the cap the count is the whole held set by the same key (record +
+      // transition), not the 2,000 rows shown.
+      let count = out.length
+      if (rows.length >= 2000) {
+        const [agg] = (await db
+          .from(
+            db(`${AUTO_FAILURE_TABLE} as f`)
+              .join('nivaro_workflow_instances as i', 'i.id', 'f.instance_id')
+              .whereNull('i.completed_at')
+              .distinct('f.collection', 'f.item', 'f.transition_id')
+              .as('k')
+          )
+          .count('* as total')) as Array<{ total: number | string }>
+        count = Math.max(out.length, Number(agg?.total ?? out.length))
+      }
+      return { count, rows: out }
     }
   })
 
@@ -337,7 +353,10 @@ export function registerCoreIntegrationSignals(): void {
         // sweeps. Window to the newest row per key so the signal's row key
         // is unique BY CONSTRUCTION.
         const rows = (await db.raw(
-          `SELECT id, api, kind, collection, item, reason, due_at, created_at FROM (
+          // total: every deduped key (rn = 1), not the 2,000 rows shown — the
+          // window runs before OFFSET/FETCH ("Never sent — 2000 open" was the cap).
+          `SELECT id, api, kind, collection, item, reason, due_at, created_at,
+                  COUNT(*) OVER () AS total FROM (
              SELECT id, api, kind, collection, item, reason, due_at, created_at,
                     ROW_NUMBER() OVER (PARTITION BY collection, item, kind ORDER BY id DESC) AS rn
                FROM nivaro_integration_obligations
@@ -348,6 +367,7 @@ export function registerCoreIntegrationSignals(): void {
           OFFSET 0 ROWS FETCH NEXT 2000 ROWS ONLY`,
           [outcome]
         )) as Array<{
+          total: number
           id: number
           api: string
           kind: string
@@ -371,7 +391,8 @@ export function registerCoreIntegrationSignals(): void {
             actions: [open(r.collection, r.item)]
           }))
         )
-        return { count: out.length, rows: out }
+        // rn = 1 already made keys unique, so uniqueByKey drops nothing.
+        return { count: rows.length ? Number(rows[0].total) : 0, rows: out }
       }
     })
   }

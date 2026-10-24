@@ -1964,9 +1964,9 @@ function QuickFilterSelect({
       }
     : scopeDefault && selected.length > 0
       ? {
-          label: 'default',
+          label: 'your default',
           cls: 'bg-nvr-cyan/[0.12] text-[#0284a8] dark:text-nvr-cyan',
-          title: `Pre-selected from your default ${def.label} scope — adjust freely`
+          title: `Pre-selected from your default ${def.label} filter (Profile → Default filters) — adjust freely`
         }
       : null
   return (
@@ -4769,6 +4769,71 @@ export function CollectionBrowserView({
   const aggregates = itemsRes?.aggregates
   const totalPages = Math.max(1, Math.ceil(total / effPageSize))
 
+  // A list narrowed by the person's DEFAULT scope filter (never a restriction
+  // — the server applies those anyway) that comes back empty says so, and how
+  // many records the default hides: the dashboard said "10 yours" while the
+  // list, and a search for one's own record, came back empty with no reason.
+  const softDefaultQuick = effQuickFilters.filter(
+    (qf) =>
+      scopeSeededKeys.has(qf.key) &&
+      (appliedQuick[qf.key]?.length ?? 0) > 0 &&
+      !restrictedIdsFor(qf)
+  )
+  const softDefaultSig = softDefaultQuick.map((qf) => qf.key).join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: softDefaultSig is the content signature of softDefaultQuick
+  const conditionsWithoutDefaults = useMemo(() => {
+    if (!softDefaultSig || !conditionsParam) return conditionsParam
+    const drop = new Set(
+      softDefaultQuick.map((qf) => {
+        const vals = appliedQuick[qf.key] ?? []
+        return JSON.stringify(
+          qf.or_paths?.length
+            ? { or: qf.or_paths.map((p) => ({ path: p, op: '_in', value: vals })) }
+            : { path: qf.path, op: '_in', value: vals }
+        )
+      })
+    )
+    const kept = (JSON.parse(conditionsParam) as unknown[]).filter(
+      (c) => !drop.has(JSON.stringify(c))
+    )
+    return kept.length > 0 ? JSON.stringify(kept) : undefined
+  }, [softDefaultSig, conditionsParam, appliedQuick])
+  const { data: hiddenByDefault } = useQuery({
+    queryKey: ['cbv-default-hidden', collection, appliedSearch, conditionsWithoutDefaults],
+    enabled:
+      !!collection &&
+      !aiResult &&
+      !!itemsRes &&
+      !isFetching &&
+      total === 0 &&
+      softDefaultQuick.length > 0,
+    staleTime: 30_000,
+    retry: false,
+    queryFn: () =>
+      client
+        .request<{ total?: number }>(
+          get(`/items/${collection}`, {
+            limit: 1,
+            fields: 'id',
+            count: 'approx',
+            ...(appliedSearch ? { search: appliedSearch } : {}),
+            ...(conditionsWithoutDefaults ? { conditions: conditionsWithoutDefaults } : {})
+          })
+        )
+        .then((r) => Number(r.total ?? 0))
+  })
+  const showWithoutDefaults = () => {
+    const keys = softDefaultQuick.map((qf) => qf.key)
+    const strip = (sel: Record<string, Array<string | number>>) => {
+      const next = { ...sel }
+      for (const k of keys) next[k] = []
+      return next
+    }
+    setQuickSel(strip)
+    setAppliedQuick(strip)
+    setPage(1)
+  }
+
   // #1581 — log what was searched (text, count, time; never the rows) and, in
   // openRow, which row was opened from it.
   const searchStartRef = useRef(Date.now())
@@ -7560,7 +7625,14 @@ export function CollectionBrowserView({
               allowedIds={restrictedIdsFor(qf)}
               scopeDefault={scopeSeededKeys.has(qf.key)}
               selected={quickSel[qf.key] ?? []}
-              onChange={(vals) => setQuickSel((sel) => ({ ...sel, [qf.key]: vals }))}
+              onChange={(vals) => {
+                setQuickSel((sel) => ({ ...sel, [qf.key]: vals }))
+                // Emptying a facet (its ✕) applies at once; picking still waits for Apply.
+                if (vals.length === 0 && (appliedQuick[qf.key]?.length ?? 0) > 0) {
+                  setAppliedQuick((a) => ({ ...a, [qf.key]: [] }))
+                  setPage(1)
+                }
+              }}
             />
           ))}
           <button
@@ -8265,9 +8337,28 @@ export function CollectionBrowserView({
                               <p className='text-[13.5px] font-medium text-slate-600 dark:text-slate-300'>
                                 No records match
                               </p>
-                              <p className='text-[12px] text-slate-400'>
-                                Try adjusting your search or filters.
-                              </p>
+                              {total === 0 && (hiddenByDefault ?? 0) > 0 ? (
+                                <p
+                                  className='max-w-[52ch] text-[12px] text-slate-600 dark:text-slate-300'
+                                  data-cbv-default-hiding={hiddenByDefault}
+                                >
+                                  Your default{' '}
+                                  {softDefaultQuick.map((qf) => qf.label).join(' and ')} filter is
+                                  hiding {fmtNum(hiddenByDefault ?? 0)} record
+                                  {hiddenByDefault === 1 ? '' : 's'} ·{' '}
+                                  <button
+                                    type='button'
+                                    onClick={showWithoutDefaults}
+                                    className='font-medium text-[#0284a8] underline-offset-2 hover:underline dark:text-nvr-cyan'
+                                  >
+                                    Show all
+                                  </button>
+                                </p>
+                              ) : (
+                                <p className='text-[12px] text-slate-400'>
+                                  Try adjusting your search or filters.
+                                </p>
+                              )}
                               {(filters.length > 0 ||
                                 Object.keys(colFilters).length > 0 ||
                                 Object.values(appliedQuick).some((v) => v.length > 0) ||

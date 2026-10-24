@@ -343,10 +343,15 @@ export const collabItemLocking: DocSection = {
     "locked_by_name": "Sarah Chen",
     "locked_at": "2026-06-15T10:00:00Z",
     "expires_at": "2026-06-15T10:05:00Z",
-    "is_mine": false
+    "is_mine": false,
+    "may_take_over": false  // true when the caller may break this lock
   },
   "disabled": false
-}`
+}
+
+// Every per-item lock route answers 404 when the caller cannot read the
+// record (or the id cannot exist) — a lock never reveals who is editing a
+// record you can't see. Releasing your own lock is always allowed.`
     },
     {
       type: 'pre',
@@ -367,7 +372,8 @@ export const collabItemLocking: DocSection = {
   "error": "Item is locked",
   "data": {
     "locked_by_name": "Sarah Chen",
-    "expires_at": "2026-06-15T10:05:00Z"
+    "expires_at": "2026-06-15T10:05:00Z",
+    "may_take_over": false
   }
 }`
     },
@@ -378,7 +384,11 @@ export const collabItemLocking: DocSection = {
 
 DELETE /api/item-locks/:collection/:item/lock
   # Release lock (called on close/navigate away)
-  # Admin can use ?force=true to break any lock`
+  # Admin can use ?force=true to break any lock
+
+POST /api/item-locks/:collection/:item/lock/release
+  # Release your own lock — the same as DELETE, but safe for
+  # navigator.sendBeacon when a tab is closing`
     },
     {
       type: 'h3',

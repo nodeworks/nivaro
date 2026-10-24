@@ -344,6 +344,7 @@ export function M2MCombobox({
                         ))}
                       <button
                         type='button'
+                        aria-label='Remove'
                         onClick={() => staging?.stageUnlink(stagingKey, ji.id)}
                         className='rounded-full p-0.5 text-slate-400 hover:text-red-500'
                       >
@@ -368,6 +369,7 @@ export function M2MCombobox({
                     )}
                     <button
                       type='button'
+                      aria-label='Remove'
                       onClick={() => staging?.unstageLink(stagingKey, relId)}
                       className='rounded-full p-0.5 text-slate-400 hover:text-red-500'
                     >

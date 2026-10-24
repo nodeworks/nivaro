@@ -1,6 +1,7 @@
 import { type RefObject, useEffect, useRef, useState } from 'react'
 import { useNivaroClient, useParentDraft } from '../../context'
 import { get } from '../../lib/commands'
+import { htmlToText } from '../../lib/sanitize-html'
 import type { NestedOps } from './types'
 
 // ─── Display template ──────────────────────────────────────────────────────────
@@ -9,10 +10,23 @@ export function applyDisplayTemplate(
   template: string | null | undefined,
   item: Record<string, unknown>
 ): string {
-  if (!template)
+  if (!template) {
+    // A person row (users) has no name column — their full name, not their id.
+    const person = [item.first_name, item.last_name]
+      .filter((v) => v != null && String(v).trim() !== '')
+      .join(' ')
     return String(
-      item.name ?? item.title ?? item.label ?? item.type ?? item.description ?? item.id ?? ''
+      item.name ??
+        item.title ??
+        item.label ??
+        item.type ??
+        item.description ??
+        (person || null) ??
+        item.email ??
+        item.id ??
+        ''
     )
+  }
   return template.replace(/\{\{([^}]+)\}\}/g, (_, k: string) => {
     const parts = k.trim().split('.')
     let val: unknown = item
@@ -495,14 +509,4 @@ export function richTextToPlain(val: unknown): string | null {
   return null
 }
 
-function stripTags(html: string): string {
-  if (typeof document !== 'undefined') {
-    const div = document.createElement('div')
-    div.innerHTML = html
-    return (div.textContent || '').replace(/\s+/g, ' ')
-  }
-  return html
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\s+/g, ' ')
-}
+const stripTags = htmlToText

@@ -77,6 +77,25 @@ const safeUrl = (raw: string): boolean => {
   return !/^[a-z][a-z0-9+.-]*:/.test(v)
 }
 
+/**
+ * The words of an HTML string, whitespace collapsed. Parsed into an INERT
+ * DOMParser document: never `innerHTML` on a `document.createElement` node —
+ * a detached element in the live document still loads `<img>` and fires its
+ * `onerror`, so any stored `<img src=x onerror=…>` would run for every viewer.
+ */
+export function htmlToText(html: string): string {
+  if (typeof DOMParser !== 'undefined') {
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    for (const el of doc.body.querySelectorAll('script,style,template,noscript')) el.remove()
+    return (doc.body.textContent || '').replace(/\s+/g, ' ')
+  }
+  return html
+    .replace(/<(script|style|template|noscript)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+}
+
 export function sanitizeHtml(html: string): string {
   if (typeof DOMParser === 'undefined') return ''
   const doc = new DOMParser().parseFromString(html, 'text/html')

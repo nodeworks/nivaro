@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { tempTableGuards } from './custom-query-dependents.js'
 import { trackStatement } from './traffic-inflight.js'
 
 /**
@@ -94,11 +95,26 @@ export async function execCustomQuerySql(
   const Driver = knexClient._driver() as {
     Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown
   }
-  const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
+  const conn = (await knexClient.acquireConnection()) as {
+    execSqlBatch(r: unknown): void
+    __knex__disposed?: string
+  }
+  // A raw batch's top-level #temp tables live as long as the SESSION, and the
+  // pool never resets a connection: a wrapper that failed, timed out or simply
+  // never dropped its #w leaves it behind, and the next wrapper on that
+  // connection dies "There is already an object named '#w'". Drop every
+  // #temp this SQL builds before the run AND after it, on this connection.
+  const temps = tempTableGuards(sqlText).map((g) => g.table)
+  const dropTemps = temps
+    .map((t) => `IF OBJECT_ID('tempdb..${t}') IS NOT NULL DROP TABLE ${t};`)
+    .join('\n')
   // Traffic Map in-flight list (#1147): the batch this request is running.
   const tracked = trackStatement(resolvedSql)
   let rowCount = 0
   try {
+    if (dropTemps && !(await runQuietBatch(Driver, conn, dropTemps))) {
+      throw new Error('Could not prepare the database connection for this query — try again')
+    }
     return await new Promise<Array<Record<string, unknown>>>((resolve, reject) => {
       let settled = false
       const done = (fn: () => void) => {
@@ -143,39 +159,44 @@ export async function execCustomQuerySql(
     // A wrapper's procedure that opened a transaction without SET XACT_ABORT
     // ON and then failed leaves it OPEN on this connection (#779) — hand the
     // pool a clean connection, or the next caller inherits the transaction.
-    await rollbackOpenTransaction(Driver, conn)
+    await runQuietBatch(Driver, conn, 'IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION')
     throw err
   } finally {
     tracked(rowCount)
+    // A connection whose #temps could not be dropped must not go back to the
+    // pool: marked disposed, the pool's validate destroys it on next acquire.
+    if (dropTemps && !(await runQuietBatch(Driver, conn, dropTemps))) {
+      conn.__knex__disposed = 'custom query #temp cleanup failed'
+    }
     await knexClient.releaseConnection(conn)
   }
 }
 
-/** `IF @@TRANCOUNT > 0 ROLLBACK` on THIS connection; never throws. */
-async function rollbackOpenTransaction(
+/** One housekeeping batch on THIS connection; never throws — false when it failed. */
+async function runQuietBatch(
   Driver: { Request: new (sql: string, cb: (err: Error | null) => void) => unknown },
-  conn: { execSqlBatch(r: unknown): void }
-): Promise<void> {
-  await new Promise<void>((resolve) => {
+  conn: { execSqlBatch(r: unknown): void },
+  sql: string
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
     let settled = false
-    const done = () => {
+    const done = (ok: boolean) => {
       if (!settled) {
         settled = true
-        resolve()
+        resolve(ok)
       }
     }
     try {
-      const req = new Driver.Request('IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION', () => done()) as {
+      const req = new Driver.Request(sql, (err) => done(!err)) as {
         once(ev: 'requestCompleted', h: () => void): unknown
         on(ev: 'error', h: (e: Error) => void): unknown
         setTimeout?: (ms: number) => void
       }
       req.setTimeout?.(30_000)
-      req.once('requestCompleted', done)
-      req.on('error', done)
+      req.on('error', () => done(false))
       conn.execSqlBatch(req)
     } catch {
-      done()
+      done(false)
     }
   })
 }

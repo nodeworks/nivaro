@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { toLocalDatetime } from './helpers'
+import { applyDisplayTemplate, toLocalDatetime } from './helpers'
 
 // toLocalDatetime feeds <input type="datetime-local"> in FieldRenderer, and the
 // write path inverts it with `new Date(e.target.value).toISOString()`.
@@ -70,5 +70,15 @@ describe('toLocalDatetime', () => {
     const onUtc = new Date(original).getTimezoneOffset() === 0
 
     expect(roundTripped === original).toBe(onUtc)
+  })
+})
+
+describe('applyDisplayTemplate without a template', () => {
+  it('names a person row by full name, not id', () => {
+    expect(applyDisplayTemplate(null, { id: 'u-1', first_name: 'Ada', last_name: 'Byron' })).toBe(
+      'Ada Byron'
+    )
+    expect(applyDisplayTemplate(undefined, { id: 'u-2', email: 'a@b.c' })).toBe('a@b.c')
+    expect(applyDisplayTemplate(null, { id: 9, name: 'Zone 3', first_name: 'x' })).toBe('Zone 3')
   })
 })

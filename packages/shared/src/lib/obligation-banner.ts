@@ -1,4 +1,5 @@
 import { toneForOutcome } from './obligation-filters'
+import { plainObligationReason } from './obligation-reason-text'
 import { formatDate, getDisplayTimezone } from './utils'
 
 export interface BannerLine {
@@ -106,7 +107,7 @@ export function bannerLines(rows: Row[], now: Date = new Date()): BannerLine[] {
     // "5m ago (2:09 PM)": the relative wording people scan for, the clock
     // for the record — never a bare 24-hour stamp.
     const when = `${relativeFrom(source, now)} (${clock(source)})`
-    const why = r.reason ? ` — ${r.reason}` : ''
+    const why = r.reason ? ` — ${plainObligationReason(r.reason)}` : ''
     const what = r.label?.trim() || (r.trigger === 'transition' ? humanizeKind(r.kind) : '')
     const ctx = what ? ` · ${what}` : ''
     let text: string

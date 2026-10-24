@@ -12966,7 +12966,9 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>email</td><td>{}</td><td>Value must be a valid email address.</td></tr>
               <tr><td>url</td><td>{}</td><td>Value must be a valid URL.</td></tr>
               <tr><td>date_after</td><td>{ date: ISO }</td><td>Date must be after the given ISO date.</td></tr>
-              <tr><td>date_before</td><td>{ date: ISO }</td><td>Date must be before the given ISO date.</td></tr></tr></tbody>
+              <tr><td>date_before</td><td>{ date: ISO }</td><td>Date must be before the given ISO date.</td></tr>
+              <tr><td>gte_field</td><td>{ field: string } (on the rule itself)</td><td>Value must be on or after (dates, by calendar day) or at least (numbers) another field of the same record, e.g. <code class="doc-code">{ "type": "gte_field", "field": "service_start_date" }</code> on service_end_date. Passes when either value is empty. On an update the stored value of the other field is used, so changing only one of the two is still checked.</td></tr>
+              <tr><td>lte_field</td><td>{ field: string } (on the rule itself)</td><td>The mirror of gte_field: on or before / at most the other field.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Configuring via API</h3>
           <pre class="doc-pre"><code>PATCH /api/field-config/:collection/:field
@@ -16389,10 +16391,15 @@ GET /api/approvals/decisions?instance=X
     "locked_by_name": "Sarah Chen",
     "locked_at": "2026-06-15T10:00:00Z",
     "expires_at": "2026-06-15T10:05:00Z",
-    "is_mine": false
+    "is_mine": false,
+    "may_take_over": false  // true when the caller may break this lock
   },
   "disabled": false
-}</code></pre>
+}
+
+// Every per-item lock route answers 404 when the caller cannot read the
+// record (or the id cannot exist) — a lock never reveals who is editing a
+// record you can't see. Releasing your own lock is always allowed.</code></pre>
           <pre class="doc-pre"><code>POST /api/item-locks/:collection/:item/lock
   # Acquire lock (or refresh if already held)
 
@@ -16410,7 +16417,8 @@ GET /api/approvals/decisions?instance=X
   "error": "Item is locked",
   "data": {
     "locked_by_name": "Sarah Chen",
-    "expires_at": "2026-06-15T10:05:00Z"
+    "expires_at": "2026-06-15T10:05:00Z",
+    "may_take_over": false
   }
 }</code></pre>
           <pre class="doc-pre"><code>POST /api/item-locks/:collection/:item/heartbeat
@@ -16418,7 +16426,11 @@ GET /api/approvals/decisions?instance=X
 
 DELETE /api/item-locks/:collection/:item/lock
   # Release lock (called on close/navigate away)
-  # Admin can use ?force=true to break any lock</code></pre>
+  # Admin can use ?force=true to break any lock
+
+POST /api/item-locks/:collection/:item/lock/release
+  # Release your own lock — the same as DELETE, but safe for
+  # navigator.sendBeacon when a tab is closing</code></pre>
           <h3 class="doc-h3" id="item-locking-configuration">Per-Collection Configuration</h3>
           <p class="doc-p">Locking can be enabled/disabled per collection in Data Model → (collection) → Settings → "Item locking". Default is ON.</p>
           <pre class="doc-pre"><code>GET /api/item-locks/config/:collection
@@ -17387,7 +17399,15 @@ POST /api/search/semantic/reindex
           <h3 class="doc-h3">Value formats on record widgets</h3>
           <p class="doc-p">A value pill on a record widget may carry <code class="doc-code">format</code>: <code class="doc-code">currency</code> (two decimals), <code class="doc-code">integer</code>, <code class="doc-code">percent</code> (a 0–100 figure, shown with one decimal and a % sign) or none (up to two decimals). A null value renders as —.</p>
           <h3 class="doc-h3">Drill sheets</h3>
-          <p class="doc-p">A query widget's <code class="doc-code">row_click.sheet</code> (and each <code class="doc-code">row_actions[].sheet</code>) takes <code class="doc-code">title</code>, <code class="doc-code">width</code>, <code class="doc-code">tabs</code> (each a nested query view or a matrix), an optional <code class="doc-code">header</code> — <code class="doc-code">{ query_slug, params, stats }</code>, a query of its own rendered as stat tiles above the tabs with the same <code class="doc-code">$row.</code> / <code class="doc-code">$param.</code> / <code class="doc-code">$filters.</code> tokens as a tab — and <code class="doc-code">initial_tab</code>, the zero-based tab to open first.</p>
+          <p class="doc-p">A query widget's <code class="doc-code">row_click.sheet</code> (and each <code class="doc-code">row_actions[].sheet</code>) takes <code class="doc-code">title</code>, <code class="doc-code">width</code>, <code class="doc-code">tabs</code> (each a nested query view or a matrix), an optional <code class="doc-code">header</code> — <code class="doc-code">{ query_slug, params, stats }</code>, a query of its own rendered as stat tiles above the tabs with the same <code class="doc-code">$row.</code> / <code class="doc-code">$param.</code> / <code class="doc-code">$filters.</code> tokens as a tab — and <code class="doc-code">initial_tab</code>, the zero-based tab to open first. The header and each tab may carry a <code class="doc-code">note</code>: one quiet line saying what the figures cover ("Project lifetime — every funding year" over the tiles, "Spend dated in {{funding_years}}" over a filtered tab), where <code class="doc-code">{{param}}</code> reads that view's resolved params and an unset one reads <code class="doc-code">all</code>.</p>
+          <h3 class="doc-h3">Query widget filters</h3>
+          <p class="doc-p">Each <code class="doc-code">filters</code> entry is a picker over a collection (<code class="doc-code">param</code>, <code class="doc-code">label</code>, <code class="doc-code">collection</code>, <code class="doc-code">value_field</code>, <code class="doc-code">label_field</code>, <code class="doc-code">sort</code>, <code class="doc-code">limit</code>). Options are one per value: two rows sharing a value (two regions with the same short name) list once.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>default_values</td><td>Pre-selected values on load; <code class="doc-code">$current_year</code> is this calendar year</td></tr>
+              <tr><td>url_param</td><td>Query-string key that pre-selects the filter (<code class="doc-code">?fy=2026</code>, a comma list for several). A change made on the page is written back to the address, so a reload or a shared link keeps it; an emptied filter writes <code class="doc-code">?fy=</code> and means All on purpose — no default or default scope refills it</td></tr>
+              <tr><td>single</td><td>One value at a time: picking another replaces it. Use it for a per-year query that would otherwise sum two years without saying so</td></tr></tr></tbody>
+          </table></div>
           <pre class="doc-pre"><code>row_actions: [{ label: 'View budget', sheet: { title: '{{project_id}}', header: { query_slug: 'project-health', params: { projects: '$row.project_id' }, stats: [{ label: 'Remaining', field: 'remaining', format: 'currency' }] }, initial_tab: 1, tabs: [ … ] } }]</code></pre>
           <h3 class="doc-h3">Query widget stats</h3>
           <p class="doc-p">A query widget can show a strip of stat tiles above its table. Each <code class="doc-code">stats</code> entry is computed over the query's rows (or its own query) and takes the keys below. Every formula counts only rows that hold all of its operands: a ratio over partially reported rows reads the reporting rows alone, and a sum formula likewise skips a row missing any operand.</p>
@@ -17401,6 +17421,7 @@ POST /api/search/semantic/reindex
               <tr><td>format</td><td>currency, number, percent (0-100 scale, up to 1 decimal), date or text. Date and text render quieter and take the first row value only for a tile with a <code class="doc-code">query</code>; a row-field tile with these formats shows the empty label</td></tr>
               <tr><td>empty_label</td><td>Shown when the value is null</td></tr>
               <tr><td>coverage</td><td>Plural noun for a table row, for example <code class="doc-code">projects</code>. When only some rows report the figure, a quiet 'N of M projects' line appears under the value; when none do, the tile shows <code class="doc-code">empty_label</code></td></tr>
+              <tr><td>requires_field / requires_label</td><td>A context tile that only means something when the rows carry <code class="doc-code">requires_field</code> (an 'as of' date over Fusion columns): when no row has a value, the tile shows <code class="doc-code">requires_label</code> instead of its own value</td></tr>
               <tr><td>accent / accent_negative</td><td>Colour roles for the tile value and for a negative delta</td></tr></tr></tbody>
           </table></div>
           <pre class="doc-pre"><code>{ label: '% Remaining', formula: '{{remaining}} / {{budget}} * 100', format: 'percent', empty_label: 'no data yet', coverage: 'projects' }</code></pre>

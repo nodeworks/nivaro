@@ -567,7 +567,17 @@ export const contentOpsValidationRules: DocSection = {
         ['email', '{}', 'Value must be a valid email address.'],
         ['url', '{}', 'Value must be a valid URL.'],
         ['date_after', '{ date: ISO }', 'Date must be after the given ISO date.'],
-        ['date_before', '{ date: ISO }', 'Date must be before the given ISO date.']
+        ['date_before', '{ date: ISO }', 'Date must be before the given ISO date.'],
+        [
+          'gte_field',
+          '{ field: string } (on the rule itself)',
+          'Value must be on or after (dates, by calendar day) or at least (numbers) another field of the same record, e.g. `{ "type": "gte_field", "field": "service_start_date" }` on service_end_date. Passes when either value is empty. On an update the stored value of the other field is used, so changing only one of the two is still checked.'
+        ],
+        [
+          'lte_field',
+          '{ field: string } (on the rule itself)',
+          'The mirror of gte_field: on or before / at most the other field.'
+        ]
       ]
     },
     { type: 'h3', text: 'Configuring via API' },

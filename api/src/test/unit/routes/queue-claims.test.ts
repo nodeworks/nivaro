@@ -68,7 +68,7 @@ function buildApp() {
 }
 
 const sharedQueue = {
-  id: 'q-1',
+  id: '00000000-0000-4000-8000-000000000001',
   name: 'Pending approvals',
   owner: 'user-owner',
   is_shared: true,
@@ -188,7 +188,9 @@ describe('canReadQueue', () => {
 describe('POST /queues/:id/claim', () => {
   it('400s without source_collection or item_id', async () => {
     installDb()
-    const res = await post('/queues/q-1/claim', { item_id: 'wf-1' })
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', {
+      item_id: 'wf-1'
+    })
 
     expect(res.statusCode).toBe(400)
     expect(JSON.parse(res.body)).toEqual({
@@ -196,9 +198,15 @@ describe('POST /queues/:id/claim', () => {
     })
   })
 
+  it('404s a queue id that is not a uuid without asking the database', async () => {
+    installDb()
+    const res = await post('/queues/999999/claim', claimBody)
+    expect(res.statusCode).toBe(404)
+  })
+
   it('404s an unknown queue', async () => {
     installDb({ queue: undefined })
-    const res = await post('/queues/q-1/claim', claimBody)
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
     expect(res.statusCode).toBe(404)
   })
 
@@ -207,7 +215,7 @@ describe('POST /queues/:id/claim', () => {
     const claimInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ queue: { ...sharedQueue, role_id: APPROVER_ROLE }, claimInsert })
 
-    const res = await post('/queues/q-1/claim', claimBody)
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
 
     expect(res.statusCode).toBe(403)
     expect(JSON.parse(res.body)).toEqual({ error: 'Forbidden' })
@@ -218,7 +226,7 @@ describe('POST /queues/:id/claim', () => {
     const claimInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ queue: { ...sharedQueue, claims_enabled: false }, claimInsert })
 
-    const res = await post('/queues/q-1/claim', claimBody)
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
 
     expect(res.statusCode).toBe(403)
     expect(JSON.parse(res.body)).toEqual({ error: 'Claiming is disabled for this queue' })
@@ -232,7 +240,7 @@ describe('POST /queues/:id/claim', () => {
     const claimInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ claimInsert })
 
-    const res = await post('/queues/q-1/claim', claimBody)
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
 
     expect(res.statusCode).toBe(404)
     expect(JSON.parse(res.body)).toEqual({ error: 'Item not found in this queue' })
@@ -243,12 +251,12 @@ describe('POST /queues/:id/claim', () => {
     const claimInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ claimInsert })
 
-    const res = await post('/queues/q-1/claim', claimBody)
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
 
     expect(res.statusCode).toBe(201)
     expect(JSON.parse(res.body)).toEqual({ data: { claimed: true } })
     expect(claimInsert.mock.calls[0][0]).toMatchObject({
-      queue_id: 'q-1',
+      queue_id: '00000000-0000-4000-8000-000000000001',
       source_collection: 'workflows',
       item_id: 'wf-1',
       claimed_by: 'user-approver'
@@ -259,7 +267,7 @@ describe('POST /queues/:id/claim', () => {
     const claimInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ claim: { id: 1, claimed_by: 'user-approver' }, claimInsert })
 
-    const res = await post('/queues/q-1/claim', claimBody)
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
 
     expect(res.statusCode).toBe(201)
     expect(claimInsert).not.toHaveBeenCalled()
@@ -269,7 +277,7 @@ describe('POST /queues/:id/claim', () => {
     const ownerInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ ownerInsert })
 
-    await post('/queues/q-1/claim', claimBody)
+    await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
 
     expect(ownerInsert).toHaveBeenCalledTimes(1)
     expect(ownerInsert.mock.calls[0][0]).toMatchObject({
@@ -284,7 +292,7 @@ describe('POST /queues/:id/claim', () => {
     const ownerInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ owner: { id: 9 }, ownerInsert })
 
-    await post('/queues/q-1/claim', claimBody)
+    await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
 
     expect(ownerInsert).not.toHaveBeenCalled()
   })
@@ -293,7 +301,7 @@ describe('POST /queues/:id/claim', () => {
     const ownerInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ instance: undefined, ownerInsert })
 
-    const res = await post('/queues/q-1/claim', claimBody)
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
 
     expect(res.statusCode).toBe(201)
     expect(ownerInsert).not.toHaveBeenCalled()
@@ -309,7 +317,7 @@ describe('POST /queues/:id/claim', () => {
     const ownerInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ ownerInsert })
 
-    const res = await post('/queues/q-1/claim', {
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', {
       source_collection: 'tasks',
       item_id: 't-1'
     })
@@ -324,7 +332,7 @@ describe('POST /queues/:id/claim', () => {
 describe('POST /queues/:id/release', () => {
   it('400s without source_collection or item_id', async () => {
     installDb()
-    const res = await post('/queues/q-1/release', {})
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/release', {})
     expect(res.statusCode).toBe(400)
   })
 
@@ -332,7 +340,7 @@ describe('POST /queues/:id/release', () => {
     login('user-outsider', OTHER_ROLE)
     installDb({ queue: { ...sharedQueue, role_id: APPROVER_ROLE } })
 
-    const res = await post('/queues/q-1/release', claimBody)
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/release', claimBody)
     expect(res.statusCode).toBe(403)
   })
 
@@ -341,7 +349,7 @@ describe('POST /queues/:id/release', () => {
     const claimDelete = vi.fn(() => Promise.resolve(1))
     installDb({ queue: { ...sharedQueue, claims_enabled: false }, claimDelete })
 
-    const res = await post('/queues/q-1/release', claimBody)
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/release', claimBody)
 
     expect(res.statusCode).toBe(204)
     expect(claimDelete).toHaveBeenCalled()
@@ -364,10 +372,10 @@ describe('POST /queues/:id/release', () => {
       throw new Error(`unexpected table: ${table}`)
     }) as unknown as typeof db)
 
-    await post('/queues/q-1/release', claimBody)
+    await post('/queues/00000000-0000-4000-8000-000000000001/release', claimBody)
 
     expect(claimWhere).toHaveBeenCalledWith({
-      queue_id: 'q-1',
+      queue_id: '00000000-0000-4000-8000-000000000001',
       source_collection: 'workflows',
       item_id: 'wf-1',
       claimed_by: 'user-approver'
@@ -380,7 +388,7 @@ describe('POST /queues/:id/release', () => {
     const ownerDelete = vi.fn(() => Promise.resolve(1))
     installDb({ ownerWhereSpy, ownerDelete })
 
-    await post('/queues/q-1/release', claimBody)
+    await post('/queues/00000000-0000-4000-8000-000000000001/release', claimBody)
 
     expect(ownerWhereSpy).toHaveBeenCalledWith({
       instance: 'inst-1',
@@ -400,7 +408,7 @@ describe('POST /queues/:id/release', () => {
     const ownerDelete = vi.fn(() => Promise.resolve(1))
     installDb({ ownerDelete })
 
-    const res = await post('/queues/q-1/release', {
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/release', {
       source_collection: 'tasks',
       item_id: 't-1'
     })

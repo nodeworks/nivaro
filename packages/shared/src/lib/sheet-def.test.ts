@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { latestAsOf, resolveSheetDef, type SheetDefInput } from './sheet-def'
+import { fillSheetNote, latestAsOf, resolveSheetDef, type SheetDefInput } from './sheet-def'
 
 const resolveConfig = (cfg: Record<string, unknown>) => ({ ...cfg, resolved: true })
 
@@ -87,5 +87,36 @@ describe('sheet header as-of line', () => {
       )
     ).toBe('2026-10-02T08:00:00Z')
     expect(latestAsOf([{ synced_at: null }, { synced_at: 'not a date' }], 'synced_at')).toBeNull()
+  })
+})
+
+describe('sheet notes', () => {
+  it('fills {{param}} tokens from the resolved params of the header and each tab', () => {
+    const resolve = (cfg: Record<string, unknown>) => ({
+      ...cfg,
+      params: { funding_years: '2025,2026', projects: '134365' }
+    })
+    const out = resolveSheetDef(
+      {
+        header: { query_slug: 'health', stats: [], note: 'Project lifetime' },
+        tabs: [
+          {
+            label: 'Spend',
+            note: 'Spend dated in {{funding_years}}',
+            config: { query_slug: 'spend' }
+          }
+        ]
+      },
+      resolve
+    )
+    expect(out.header?.note).toBe('Project lifetime')
+    expect(out.resolvedTabs[0]).toMatchObject({ note: 'Spend dated in 2025, 2026' })
+  })
+
+  it('reads an unresolved token as "all" — the query ran unfiltered on it', () => {
+    expect(fillSheetNote('Spend dated in {{funding_years}}', {})).toBe('Spend dated in all')
+    expect(fillSheetNote('Years: {{funding_years}}', { funding_years: '' }, 'every year')).toBe(
+      'Years: every year'
+    )
   })
 })

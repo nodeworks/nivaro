@@ -3,14 +3,17 @@ import {
   appendUniqueM2MId,
   applyLayoutDefaults,
   computeM2MEffectiveIds,
+  dropSatisfiedRequired,
   dropUnsettledAliasResults,
   type FieldRule,
   idsNeedingStaging,
   type M2MFieldState,
   mergeRuleResults,
+  ownEditFields,
   partitionRuleResults,
   resolveM2MAlias,
   resolveM2MFieldState,
+  ruleJudgedOnSave,
   rulesForTriggerField
 } from './ItemEditForm'
 import type { CMSRelation } from './item-edit/types'
@@ -58,10 +61,34 @@ describe('applyLayoutDefaults', () => {
 
 describe('rulesForTriggerField', () => {
   const rules: FieldRule[] = [
-    { id: 1, collection: 'workflows', trigger_field: 'divisions', target_field: 'regions', is_active: true },
-    { id: 2, collection: 'workflows', trigger_field: 'divisions', target_field: 'categories', is_active: false },
-    { id: 3, collection: 'workflows', trigger_field: 'car_project_type', target_field: 'categories', is_active: 1 },
-    { id: 4, collection: 'workflows', trigger_field: 'car_project_type', target_field: 'project_sub_types', is_active: 0 }
+    {
+      id: 1,
+      collection: 'workflows',
+      trigger_field: 'divisions',
+      target_field: 'regions',
+      is_active: true
+    },
+    {
+      id: 2,
+      collection: 'workflows',
+      trigger_field: 'divisions',
+      target_field: 'categories',
+      is_active: false
+    },
+    {
+      id: 3,
+      collection: 'workflows',
+      trigger_field: 'car_project_type',
+      target_field: 'categories',
+      is_active: 1
+    },
+    {
+      id: 4,
+      collection: 'workflows',
+      trigger_field: 'car_project_type',
+      target_field: 'project_sub_types',
+      is_active: 0
+    }
   ]
 
   it('returns active rules whose trigger_field matches', () => {
@@ -260,7 +287,7 @@ describe('resolveM2MFieldState', () => {
     expect(result).toEqual({ known: true, ids: [] })
   })
 
-  it('is unknown while an existing record\'s committed query is still in flight', () => {
+  it("is unknown while an existing record's committed query is still in flight", () => {
     const result = resolveM2MFieldState(true, false, undefined, 'division_id', ['d2'], new Set())
     expect(result).toEqual({ known: false, ids: [] })
   })
@@ -358,5 +385,62 @@ describe('idsNeedingStaging', () => {
     const returnedByResponseB = ['r1', 'r2', 'r3', 'r4']
     const liveAfterResponseA = ['r1', 'r2', 'r3']
     expect(idsNeedingStaging(returnedByResponseB, liveAfterResponseA)).toEqual(['r4'])
+  })
+})
+
+describe('dropSatisfiedRequired', () => {
+  it('drops a required error once a rule-filled value is in the draft', () => {
+    const errors = { shipping_location: 'This field is required', zone: 'This field is required' }
+    expect(dropSatisfiedRequired(errors, { shipping_location: 42, zone: null })).toEqual({
+      zone: 'This field is required'
+    })
+  })
+
+  it('keeps other errors and returns the same object when nothing is satisfied', () => {
+    const errors = { email: 'Not a valid email', zone: 'This field is required' }
+    expect(dropSatisfiedRequired(errors, { email: 'x', zone: '' })).toBe(errors)
+  })
+})
+
+describe('ownEditFields', () => {
+  it('a touched field equal to its old baseline follows the server', () => {
+    // Tab A typed into both fields, then took theirs on one and saved the
+    // other; tab B saves both — only a real, still-different edit survives.
+    const own = ownEditFields(
+      ['considerations', 'overview', 'notes'],
+      new Set(['considerations', 'overview']),
+      { considerations: '<p>old</p>', overview: '<p>mine</p>', notes: 'n' },
+      { considerations: '<p>old</p>', overview: '<p>base</p>', notes: 'n' }
+    )
+    expect([...own]).toEqual(['overview'])
+  })
+})
+
+describe('ruleJudgedOnSave', () => {
+  const changed = (set: string[]) => (f: string) => set.includes(f)
+  const window30y = { type: 'max_days_from_today', value: 10950 }
+  const afterStart = { type: 'gte_field', field: 'start_date' }
+
+  it('a new record is judged on every rule', () => {
+    expect(ruleJudgedOnSave(window30y, 'end_date', true, changed([]))).toBe(true)
+  })
+
+  it('an existing record skips rules on fields nobody changed', () => {
+    expect(ruleJudgedOnSave(window30y, 'end_date', false, changed(['notes']))).toBe(false)
+    expect(ruleJudgedOnSave(window30y, 'end_date', false, changed(['end_date']))).toBe(true)
+  })
+
+  it('a cross-field rule is judged when its partner changed', () => {
+    expect(ruleJudgedOnSave(afterStart, 'end_date', false, changed(['start_date']))).toBe(true)
+    expect(ruleJudgedOnSave(afterStart, 'end_date', false, changed(['notes']))).toBe(false)
+    // A plain rule never borrows a partner.
+    expect(
+      ruleJudgedOnSave(
+        { type: 'regex', field: 'start_date' },
+        'end_date',
+        false,
+        changed(['start_date'])
+      )
+    ).toBe(false)
   })
 })

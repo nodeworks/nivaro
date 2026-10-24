@@ -61,6 +61,12 @@ export interface QueryWidgetStat {
    *  the table the number covers; when NO row does, the tile shows its
    *  empty_label instead of a summed zero. */
   coverage?: string
+  /** A context tile that only means something when the main rows carry this
+   *  field — e.g. "Fusion figures as of" over rows whose fusion_synced_at is
+   *  null: when no row has a value, the tile shows `requires_label` instead
+   *  of its own value (an import date over all-empty Fusion columns misleads). */
+  requires_field?: string
+  requires_label?: string
 }
 
 /** Colour roles that are neutral ink, not a hue: they colour the value but
@@ -139,7 +145,10 @@ function StatBox({
   const coverage = stat.coverage && !busy ? statCoverage(stat, rows) : null
   // With coverage on, a tile no row reports for has no figure — not $0.
   const noneReporting = !!coverage && coverage.reporting === 0
-  const value = busy || noneReporting ? null : statValue(stat, rows, qRows ?? null)
+  const reqField = stat.requires_field
+  const unsupported =
+    !!reqField && !loading && !rows.some((r) => r[reqField] != null && r[reqField] !== '')
+  const value = busy || noneReporting || unsupported ? null : statValue(stat, rows, qRows ?? null)
   const empty = !busy && (value === null || value === undefined || value === '')
   // Date / text tiles are context (when, which), not a measure: they sit
   // quieter than the money beside them and never take an accent.
@@ -168,7 +177,11 @@ function StatBox({
   const stripe = accentPair && !NEUTRAL_ACCENTS.has(String(accentName).trim().toLowerCase())
 
   const sign = typeof value === 'number' && stat.field_subtract && value > 0 ? '+' : ''
-  const fullText = `${sign}${fmtStat(value, stat.format, stat.empty_label)}`
+  const fullText = `${sign}${fmtStat(
+    value,
+    stat.format,
+    unsupported ? (stat.requires_label ?? stat.empty_label) : stat.empty_label
+  )}`
   const canShorten =
     typeof value === 'number' &&
     (stat.format === undefined || stat.format === 'currency' || stat.format === 'number')

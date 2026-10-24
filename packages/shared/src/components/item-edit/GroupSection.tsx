@@ -13,7 +13,7 @@ import { get, post } from '../../lib/commands'
 import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
 import { reportSectionUse } from '../../lib/form-usage-beacon'
 import { useRecordReader } from '../../lib/record-loader'
-import { choiceLabel, cn, titleCase } from '../../lib/utils'
+import { choiceLabel, cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { DesignDropZone, designWrap } from '../layout-editor/DesignNode'
 import { type DesignTarget, revealGroupKey, useLayoutDesign } from '../layout-editor/design-context'
 import { GridGuides } from '../layout-editor/grid-guides'
@@ -104,7 +104,7 @@ export function InlineDisplay({
       const fmt = e.format ?? 'text'
       if (fmt === 'date' || fmt === 'datetime') {
         try {
-          return new Date(String(val)).toLocaleDateString()
+          return toLocalDateString(val)
         } catch {
           return String(val)
         }
@@ -167,7 +167,7 @@ export function InlineDisplay({
       let display: string
       if (fmt === 'date' || fmt === 'datetime') {
         try {
-          display = new Date(String(val)).toLocaleDateString()
+          display = toLocalDateString(val)
         } catch {
           display = String(val)
         }
@@ -799,11 +799,7 @@ export function StripFieldValue({
     }
     if (displayFormat === 'date') {
       try {
-        return (
-          <span className={`font-semibold ${base}`}>
-            {new Date(String(val)).toLocaleDateString()}
-          </span>
-        )
+        return <span className={`font-semibold ${base}`}>{toLocalDateString(val)}</span>
       } catch {
         /* fall through */
       }

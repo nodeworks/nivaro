@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
+import { describeDbRefusal, describeValueRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { outOfViewReason } from '../services/access-explain.js'
@@ -35,6 +35,7 @@ import {
   createOneReported,
   deleteOne,
   ForbiddenError,
+  idFitsCollection,
   readItems,
   readOne,
   rehearseCreate,
@@ -78,8 +79,18 @@ async function outOfViewMeta(
 }
 
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
+  // A value the caller sent (an id, a filter value, a field) that the column
+  // cannot hold: their mistake, not a server fault (never in the global handler).
+  const valueRefusal =
+    (err as { statusCode?: unknown })?.statusCode == null ? describeValueRefusal(err) : null
+  if (valueRefusal) {
+    return reply
+      .code(valueRefusal.status)
+      .send({ error: valueRefusal.message, code: valueRefusal.code })
+  }
   if (err instanceof CollectionNotFoundError) {
-    return reply.code(404).send({ error: err.message })
+    const code = (err as { code?: string }).code
+    return reply.code(404).send({ error: err.message, ...(code ? { code } : {}) })
   } else if (err instanceof ForbiddenError) {
     return reply.code(403).send({ error: 'Forbidden' })
   }
@@ -718,7 +729,8 @@ export async function itemsRoutes(app: FastifyInstance) {
       seqToken.name === 'seq6' ? 6 : seqToken.name === 'seq4' ? 4 : 0
     )
     let seqValue = '#'.repeat(width)
-    if (body.record_id != null) {
+    // An id the key column cannot hold (a mistyped URL) previews as a new record.
+    if (body.record_id != null && (await idFitsCollection(collection, body.record_id))) {
       const row = (await db(collection).where({ id: body.record_id }).first(body.field)) as
         | Record<string, unknown>
         | undefined
@@ -1224,7 +1236,7 @@ export async function itemsRoutes(app: FastifyInstance) {
         ? reasonWithoutSql(String(e?.message ?? 'failed'))
         : String(e?.message ?? 'failed')
     // Constraint refusals are the caller's data, not a server fault.
-    const refusal = describeDbRefusal(err)
+    const refusal = describeDbRefusal(err) ?? describeValueRefusal(err)
     if (refusal) return { status: refusal.status, error: refusal.message, code: refusal.code }
     return {
       status,

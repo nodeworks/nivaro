@@ -40,6 +40,7 @@ import { formatDisplayValue } from './GroupSection'
 import { parseJson, toLocalDatetime } from './helpers'
 import { InlineGridField } from './InlineGridField'
 import { InlineTableField, type RowLint } from './InlineTableField'
+import { checkNumberEntry } from './line-qty'
 import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
 import { type MembershipSetConfig, MembershipSetField } from './MembershipSetField'
 import { PlanGridField, type RowSplitConfig } from './PlanGrid'
@@ -600,23 +601,35 @@ export function FieldRenderer({
     // not start accepting fractions.
     const digits = isInt ? 0 : precisionOf(field.options, -1)
     const step = isInt ? '1' : digits >= 0 ? String(10 ** -digits) : 'any'
+    // What the column can hold (1e308, 2.5 in an integer, past int range):
+    // said under the input as it is typed; the form's save check blocks it.
+    const entry = checkNumberEntry(value, { type: field.type, label: field.label || 'Value' })
+    const entryError = entry.ok ? null : entry.message
     return (
-      <Input
-        type='number'
-        step={step}
-        value={strVal}
-        onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
-        // Round on blur, not per keystroke — rounding while typing fights the
-        // person entering "0.0625" one character at a time.
-        onBlur={(e) => {
-          if (digits < 0 || e.target.value === '') return
-          const n = Number(e.target.value)
-          if (!Number.isFinite(n)) return
-          const rounded = Number(n.toFixed(digits))
-          if (rounded !== n) onChange(rounded)
-        }}
-        placeholder={field.placeholder ?? undefined}
-      />
+      <div>
+        <Input
+          type='number'
+          aria-invalid={entryError ? true : undefined}
+          step={step}
+          value={strVal}
+          onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+          // Round on blur, not per keystroke — rounding while typing fights the
+          // person entering "0.0625" one character at a time.
+          onBlur={(e) => {
+            if (digits < 0 || e.target.value === '') return
+            const n = Number(e.target.value)
+            if (!Number.isFinite(n)) return
+            const rounded = Number(n.toFixed(digits))
+            if (rounded !== n) onChange(rounded)
+          }}
+          placeholder={field.placeholder ?? undefined}
+        />
+        {entryError && (
+          <p className='mt-1 text-[11.5px] text-red-600 dark:text-red-400' data-number-entry-error>
+            {entryError}
+          </p>
+        )}
+      </div>
     )
   }
 

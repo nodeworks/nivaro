@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronRight, Copy, Loader2 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { createContext, useContext, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useRecordReader } from '../../lib/record-loader'
-import { cn, titleCase } from '../../lib/utils'
+import { cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { useChangePulse } from './GroupSection'
 import {
   applyDisplayTemplate,
@@ -16,6 +16,24 @@ import {
 import type { M2MStagingCtx } from './M2MStagingContext'
 import { RelatedItemLabel } from './RelationCombobox'
 import type { CMSField, CMSRelation, FieldGroup, StepDef } from './types'
+
+/** Child rows staged on the form but not saved yet (key = `${many_collection}.
+ *  ${many_field}`, the form's O2M staging key) — a new request's picked lines
+ *  read "None yet" without them. */
+interface StagedO2MRows {
+  rows?: Map<string, Record<string, unknown>[]>
+  deletes?: Map<string, Set<string>>
+}
+const StagedO2MRowsContext = createContext<StagedO2MRows>({})
+
+/** Does a staged row pass a grid's row_filter? Flat values compare as _eq;
+ *  operator objects can't be judged here, so they never hide a row. */
+function stagedRowMatches(row: Record<string, unknown>, rowFilter?: Record<string, unknown>) {
+  if (!rowFilter) return true
+  return Object.entries(rowFilter).every(
+    ([k, v]) => (v !== null && typeof v === 'object') || String(row[k] ?? '') === String(v ?? '')
+  )
+}
 
 // ─── M2MSummaryCount ──────────────────────────────────────────────────────────
 
@@ -43,13 +61,36 @@ function M2MSummaryCount({
       return other?.many_field ?? ''
     })()
   const stagingKey = relation.one_field ?? `${relation.many_collection}.${junctionField}`
-  const relatedCollection =
+  const localRelated =
     allRelations.find(
       (r) =>
         r.many_collection === relation.many_collection &&
         r.many_field === junctionField &&
         r.id !== relation.id
     )?.one_collection ?? null
+  // The junction's far leg (junction → users) is often not among the form's
+  // own relations; without it a picked person read "1 item" instead of a name.
+  const { data: junctionRelations } = useQuery<CMSRelation[]>({
+    queryKey: ['summary-junction-relations', relation.many_collection],
+    queryFn: () =>
+      client
+        .request<{ data: CMSRelation[] }>(
+          get(`/data-model/relations/for/${relation.many_collection}`)
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    enabled: !localRelated && !!relation.many_collection && !!junctionField,
+    staleTime: 10 * 60_000
+  })
+  const relatedCollection =
+    localRelated ??
+    junctionRelations?.find(
+      (r) =>
+        r.many_collection === relation.many_collection &&
+        r.many_field === junctionField &&
+        !!r.one_collection
+    )?.one_collection ??
+    null
 
   const { data: junctionItems = [] } = useQuery<Record<string, unknown>[]>({
     queryKey: ['m2m-items', relation.many_collection, manyField, parentId],
@@ -195,6 +236,7 @@ function O2MSummary({
   expanded?: boolean
 }) {
   const client = useNivaroClient()
+  const staged = useContext(StagedO2MRowsContext)
   // Same row_filter semantics as InlineTableField: flat values → _eq, object
   // values pass through — so a filtered grid's summary matches its rows.
   const filterClause =
@@ -212,7 +254,7 @@ function O2MSummary({
         }
       : { [manyField]: { _eq: parentId } }
 
-  const { data: rows, isLoading } = useQuery<Record<string, unknown>[]>({
+  const { data: savedRows, isLoading } = useQuery<Record<string, unknown>[]>({
     queryKey: [
       'o2m-rows',
       relatedCollection,
@@ -238,12 +280,23 @@ function O2MSummary({
   // every other consumer the wrong data.
   const template = useDisplayTemplate(relatedCollection)
 
-  if (isLoading)
+  // Saved rows minus staged deletes, plus staged rows — what a save would leave.
+  const stagingKey = `${relatedCollection}.${manyField}`
+  const stagedDeletes = staged.deletes?.get(stagingKey)
+  const stagedRows = (staged.rows?.get(stagingKey) ?? []).filter((r) =>
+    stagedRowMatches(r, rowFilter)
+  )
+  const rows = [
+    ...(savedRows ?? []).filter((r) => !stagedDeletes?.has(String(r.id))),
+    ...stagedRows
+  ]
+
+  if (isLoading && stagedRows.length === 0)
     return <Loader2 className='h-3 w-3 animate-spin text-slate-400 dark:text-slate-500' />
-  if (!rows || rows.length === 0)
+  if (rows.length === 0)
     return <span className='italic text-[11px] text-slate-400 dark:text-slate-500'>None yet</span>
 
-  const capped = rows.length >= O2M_FETCH_LIMIT
+  const capped = (savedRows?.length ?? 0) >= O2M_FETCH_LIMIT
   const amountField = O2M_AMOUNT_FIELDS.find((f) =>
     rows.some(
       (r) =>
@@ -441,11 +494,7 @@ function SummaryFieldValueInner({
 
   if (field.type === 'datetime' || field.type === 'date') {
     try {
-      return (
-        <span className='text-slate-700 dark:text-slate-200'>
-          {new Date(String(val)).toLocaleDateString()}
-        </span>
-      )
+      return <span className='text-slate-700 dark:text-slate-200'>{toLocalDateString(val)}</span>
     } catch {
       /* fall through */
     }
@@ -599,8 +648,14 @@ export function SummaryPanel({
   layoutFields,
   changedFields,
   onRevertChange,
-  onFieldClick
+  onFieldClick,
+  stagedO2MRows,
+  stagedO2MDeletes
 }: {
+  /** The form's staged child rows / deletes (O2M staging maps), so a grid's
+   *  summary counts lines picked but not saved yet. */
+  stagedO2MRows?: Map<string, Record<string, unknown>[]>
+  stagedO2MDeletes?: Map<string, Set<string>>
   allSteps: StepDef[]
   groupedMap: Record<string, CMSField[]>
   ungroupedFields: CMSField[]
@@ -669,230 +724,236 @@ export function SummaryPanel({
   if (stepSections.length === 0 && extraO2MRels.length === 0) return null
 
   return (
-    <div className='overflow-hidden bg-white dark:bg-card'>
-      <div className='bg-slate-200 border-b border-slate-300 px-4 py-2.5 dark:bg-white/[0.1] dark:border-border'>
-        <span className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
-          Summary
-        </span>
-      </div>
+    <StagedO2MRowsContext.Provider value={{ rows: stagedO2MRows, deletes: stagedO2MDeletes }}>
+      <div className='overflow-hidden bg-white dark:bg-card'>
+        <div className='bg-slate-200 border-b border-slate-300 px-4 py-2.5 dark:bg-white/[0.1] dark:border-border'>
+          <span className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+            Summary
+          </span>
+        </div>
 
-      {stepSections.map(({ step, fields }, si) => (
-        <div key={step.key}>
-          <div
-            className={cn(
-              'bg-slate-100 px-4 py-2 border-b border-slate-200 dark:bg-white/[0.06] dark:border-border/80',
-              si > 0 && 'border-t border-slate-200 dark:border-border/80'
-            )}
-          >
-            <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
-              {step.label}
-            </span>
-          </div>
+        {stepSections.map(({ step, fields }, si) => (
+          <div key={step.key}>
+            <div
+              className={cn(
+                'bg-slate-100 px-4 py-2 border-b border-slate-200 dark:bg-white/[0.06] dark:border-border/80',
+                si > 0 && 'border-t border-slate-200 dark:border-border/80'
+              )}
+            >
+              <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                {step.label}
+              </span>
+            </div>
 
-          {fields.map((f, fi) => {
-            const val = draft[f.field]
-            const label = f.label ?? titleCase(f.field)
-            const hasError = !!errors?.[f.field]
-            // Required but empty: the summary is where someone checks whether a
-            // record is finished, so the fields standing between them and a save
-            // have to be visible without opening every tab. Distinct from an
-            // error — nothing is wrong yet, it is simply not done.
-            const aliasEmpty = aliasEmptiness?.[f.field]
-            const isEmpty =
-              aliasEmpty !== undefined
-                ? aliasEmpty === true
-                : val === null ||
-                  val === undefined ||
-                  (typeof val === 'string' && val.trim() === '') ||
-                  (Array.isArray(val) && val.length === 0)
-            // While an alias is still resolving, claim nothing.
-            const undecided = aliasEmpty === null
-            const needsValue = !!f.required && isEmpty && !hasError && !undecided
-            const isStale = staleFields?.has(f.field) ?? false
-            return (
-              <div
-                key={f.field}
-                className={cn(
-                  'group/row flex items-stretch',
-                  fi < fields.length - 1 && 'border-b border-slate-100 dark:border-border/60',
-                  hasError
-                    ? 'bg-red-50 dark:bg-red-900/10'
-                    : needsValue || isStale
-                      ? 'bg-amber-50/70 dark:bg-amber-900/10'
-                      : ''
-                )}
-              >
-                <button
-                  type='button'
-                  onClick={() => onFieldClick(step.key, f.field)}
+            {fields.map((f, fi) => {
+              const val = draft[f.field]
+              const label = f.label ?? titleCase(f.field)
+              const hasError = !!errors?.[f.field]
+              // Required but empty: the summary is where someone checks whether a
+              // record is finished, so the fields standing between them and a save
+              // have to be visible without opening every tab. Distinct from an
+              // error — nothing is wrong yet, it is simply not done.
+              const aliasEmpty = aliasEmptiness?.[f.field]
+              const isEmpty =
+                aliasEmpty !== undefined
+                  ? aliasEmpty === true
+                  : val === null ||
+                    val === undefined ||
+                    (typeof val === 'string' && val.trim() === '') ||
+                    (Array.isArray(val) && val.length === 0)
+              // While an alias is still resolving, claim nothing.
+              const undecided = aliasEmpty === null
+              const needsValue = !!f.required && isEmpty && !hasError && !undecided
+              const isStale = staleFields?.has(f.field) ?? false
+              return (
+                <div
+                  key={f.field}
                   className={cn(
-                    'flex flex-1 flex-col px-4 py-2 text-left transition-colors duration-150 min-w-0',
+                    'group/row flex items-stretch',
+                    fi < fields.length - 1 && 'border-b border-slate-100 dark:border-border/60',
                     hasError
-                      ? 'hover:bg-red-50 dark:hover:bg-red-900/15'
-                      : 'hover:bg-slate-50 dark:hover:bg-white/[0.03]'
+                      ? 'bg-red-50 dark:bg-red-900/10'
+                      : needsValue || isStale
+                        ? 'bg-amber-50/70 dark:bg-amber-900/10'
+                        : ''
                   )}
                 >
-                  <span
+                  <button
+                    type='button'
+                    onClick={() => onFieldClick(step.key, f.field)}
                     className={cn(
-                      'flex items-center gap-1 text-[10px] font-medium truncate',
+                      'flex flex-1 flex-col px-4 py-2 text-left transition-colors duration-150 min-w-0',
                       hasError
-                        ? 'text-red-500 dark:text-red-400'
-                        : needsValue || isStale
-                          ? 'text-amber-700 dark:text-amber-400'
-                          : 'text-slate-400 dark:text-slate-500'
+                        ? 'hover:bg-red-50 dark:hover:bg-red-900/15'
+                        : 'hover:bg-slate-50 dark:hover:bg-white/[0.03]'
                     )}
                   >
-                    <span className='truncate'>{label}</span>
-                    {changedFields?.[f.field] && (
-                      <ChangedDot
+                    <span
+                      className={cn(
+                        'flex items-center gap-1 text-[10px] font-medium truncate',
+                        hasError
+                          ? 'text-red-500 dark:text-red-400'
+                          : needsValue || isStale
+                            ? 'text-amber-700 dark:text-amber-400'
+                            : 'text-slate-400 dark:text-slate-500'
+                      )}
+                    >
+                      <span className='truncate'>{label}</span>
+                      {changedFields?.[f.field] && (
+                        <ChangedDot
+                          field={f}
+                          from={changedFields[f.field].from}
+                          detail={changedFields[f.field].detail}
+                          to={val}
+                          relations={relations}
+                          collection={collection}
+                          onRevert={onRevertChange ? () => onRevertChange(f.field) : undefined}
+                        />
+                      )}
+                      {needsValue && (
+                        <span className='shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>
+                          required
+                        </span>
+                      )}
+                      {isStale && (
+                        <span
+                          title='This value is no longer one of the available options'
+                          className='shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                        >
+                          unavailable
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      ref={(el) => {
+                        valueRefs.current.set(f.field, el)
+                      }}
+                      className='mt-0.5 w-full text-[12px] min-w-0 overflow-hidden'
+                    >
+                      <SummaryFieldValue
                         field={f}
-                        from={changedFields[f.field].from}
-                        detail={changedFields[f.field].detail}
-                        to={val}
+                        val={val}
                         relations={relations}
                         collection={collection}
-                        onRevert={onRevertChange ? () => onRevertChange(f.field) : undefined}
+                        itemId={itemId}
+                        staging={staging}
                       />
-                    )}
-                    {needsValue && (
-                      <span className='shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>
-                        required
-                      </span>
-                    )}
-                    {isStale && (
-                      <span
-                        title='This value is no longer one of the available options'
-                        className='shrink-0 rounded bg-amber-100 px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                      >
-                        unavailable
-                      </span>
-                    )}
-                  </span>
-                  <span
-                    ref={(el) => {
-                      valueRefs.current.set(f.field, el)
+                    </span>
+                  </button>
+                  <button
+                    type='button'
+                    title='Copy value'
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const text =
+                        valueRefs.current.get(f.field)?.textContent?.trim() ?? getDisplayText(val)
+                      navigator.clipboard.writeText(text).catch(() => {})
+                      setCopiedField(f.field)
+                      setTimeout(
+                        () => setCopiedField((prev) => (prev === f.field ? null : prev)),
+                        1500
+                      )
                     }}
-                    className='mt-0.5 w-full text-[12px] min-w-0 overflow-hidden'
+                    className={cn(
+                      'flex items-center px-2 opacity-0 group-hover/row:opacity-100 transition-all duration-150',
+                      copiedField === f.field
+                        ? 'text-emerald-500'
+                        : 'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
+                    )}
                   >
-                    <SummaryFieldValue
-                      field={f}
-                      val={val}
-                      relations={relations}
-                      collection={collection}
-                      itemId={itemId}
-                      staging={staging}
-                    />
-                  </span>
-                </button>
-                <button
-                  type='button'
-                  title='Copy value'
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    const text =
-                      valueRefs.current.get(f.field)?.textContent?.trim() ?? getDisplayText(val)
-                    navigator.clipboard.writeText(text).catch(() => {})
-                    setCopiedField(f.field)
-                    setTimeout(
-                      () => setCopiedField((prev) => (prev === f.field ? null : prev)),
-                      1500
-                    )
-                  }}
-                  className={cn(
-                    'flex items-center px-2 opacity-0 group-hover/row:opacity-100 transition-all duration-150',
-                    copiedField === f.field
-                      ? 'text-emerald-500'
-                      : 'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'
-                  )}
-                >
-                  {copiedField === f.field ? (
-                    <Check className='h-3 w-3' />
-                  ) : (
-                    <Copy className='h-3 w-3' />
-                  )}
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      ))}
-
-      {extraO2MRels.length > 0 && (
-        <div>
-          <div className='bg-slate-100 px-4 py-2 border-y border-slate-200 dark:bg-white/[0.06] dark:border-border/80'>
-            <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
-              Related
-            </span>
+                    {copiedField === f.field ? (
+                      <Check className='h-3 w-3' />
+                    ) : (
+                      <Copy className='h-3 w-3' />
+                    )}
+                  </button>
+                </div>
+              )
+            })}
           </div>
-          {extraO2MRels.map((r, ri) => {
-            // These relations belong to no step, so there is no tab to open —
-            // the empty step key tells the host to skip tab switching and just
-            // go to the grid where it is.
-            const fieldKey = r.one_field ?? r.many_collection ?? ''
-            const isOpen = expandedRelated === fieldKey
-            return (
-              <div
-                key={r.id ?? `${r.many_collection}.${r.many_field}`}
-                className={cn(
-                  'flex items-stretch',
-                  ri < extraO2MRels.length - 1 && 'border-b border-slate-100 dark:border-border/60'
-                )}
-              >
-                <button
-                  type='button'
-                  // Prefer the real thing: a grid for this child collection, or
-                  // the Notes panel for note-shaped ones. Both may be collapsed,
-                  // so open them. Only when the record's form shows this
-                  // collection nowhere does the row expand in place instead.
-                  onClick={() => {
-                    const child = r.many_collection ?? ''
-                    const isNoteish = /(^|_)(notes?|comments?)$/i.test(child)
-                    const target = (document.querySelector(`[data-o2m-collection="${child}"]`) ??
-                      (isNoteish
-                        ? document.querySelector('[data-panel="notes"]')
-                        : null)) as HTMLElement | null
-                    if (!target) {
-                      setExpandedRelated((cur) => (cur === fieldKey ? null : fieldKey))
-                      return
-                    }
-                    if (target.getAttribute('data-panel-expanded') === 'false') {
-                      target.querySelector<HTMLElement>('[data-panel-toggle]')?.click()
-                    }
-                    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                    target.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
-                    setTimeout(
-                      () =>
-                        target.classList.remove(
-                          'ring-2',
-                          'ring-nvr-cyan',
-                          'ring-offset-2',
-                          'rounded-md'
-                        ),
-                      1500
-                    )
-                  }}
-                  className='flex flex-1 flex-col px-4 py-2 min-w-0 text-left transition-colors hover:bg-nvr-cyan/5'
+        ))}
+
+        {extraO2MRels.length > 0 && (
+          <div>
+            <div className='bg-slate-100 px-4 py-2 border-y border-slate-200 dark:bg-white/[0.06] dark:border-border/80'>
+              <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                Related
+              </span>
+            </div>
+            {extraO2MRels.map((r, ri) => {
+              // These relations belong to no step, so there is no tab to open —
+              // the empty step key tells the host to skip tab switching and just
+              // go to the grid where it is.
+              const fieldKey = r.one_field ?? r.many_collection ?? ''
+              const isOpen = expandedRelated === fieldKey
+              return (
+                <div
+                  key={r.id ?? `${r.many_collection}.${r.many_field}`}
+                  className={cn(
+                    'flex items-stretch',
+                    ri < extraO2MRels.length - 1 &&
+                      'border-b border-slate-100 dark:border-border/60'
+                  )}
                 >
-                  <span className='flex items-center gap-1 text-[10px] font-medium truncate text-slate-400 dark:text-slate-500'>
-                    <ChevronRight
-                      className={cn('h-3 w-3 shrink-0 transition-transform', isOpen && 'rotate-90')}
-                    />
-                    {titleCase(r.one_field ?? r.many_collection ?? '')}
-                  </span>
-                  <span className='mt-0.5 text-[12px]'>
-                    <O2MSummary
-                      relatedCollection={r.many_collection ?? ''}
-                      manyField={r.many_field!}
-                      parentId={itemId}
-                      expanded={isOpen}
-                    />
-                  </span>
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
+                  <button
+                    type='button'
+                    // Prefer the real thing: a grid for this child collection, or
+                    // the Notes panel for note-shaped ones. Both may be collapsed,
+                    // so open them. Only when the record's form shows this
+                    // collection nowhere does the row expand in place instead.
+                    onClick={() => {
+                      const child = r.many_collection ?? ''
+                      const isNoteish = /(^|_)(notes?|comments?)$/i.test(child)
+                      const target = (document.querySelector(`[data-o2m-collection="${child}"]`) ??
+                        (isNoteish
+                          ? document.querySelector('[data-panel="notes"]')
+                          : null)) as HTMLElement | null
+                      if (!target) {
+                        setExpandedRelated((cur) => (cur === fieldKey ? null : fieldKey))
+                        return
+                      }
+                      if (target.getAttribute('data-panel-expanded') === 'false') {
+                        target.querySelector<HTMLElement>('[data-panel-toggle]')?.click()
+                      }
+                      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                      target.classList.add('ring-2', 'ring-nvr-cyan', 'ring-offset-2', 'rounded-md')
+                      setTimeout(
+                        () =>
+                          target.classList.remove(
+                            'ring-2',
+                            'ring-nvr-cyan',
+                            'ring-offset-2',
+                            'rounded-md'
+                          ),
+                        1500
+                      )
+                    }}
+                    className='flex flex-1 flex-col px-4 py-2 min-w-0 text-left transition-colors hover:bg-nvr-cyan/5'
+                  >
+                    <span className='flex items-center gap-1 text-[10px] font-medium truncate text-slate-400 dark:text-slate-500'>
+                      <ChevronRight
+                        className={cn(
+                          'h-3 w-3 shrink-0 transition-transform',
+                          isOpen && 'rotate-90'
+                        )}
+                      />
+                      {titleCase(r.one_field ?? r.many_collection ?? '')}
+                    </span>
+                    <span className='mt-0.5 text-[12px]'>
+                      <O2MSummary
+                        relatedCollection={r.many_collection ?? ''}
+                        manyField={r.many_field!}
+                        parentId={itemId}
+                        expanded={isOpen}
+                      />
+                    </span>
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </StagedO2MRowsContext.Provider>
   )
 }

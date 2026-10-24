@@ -781,6 +781,9 @@ export function CommentPanel({
   }, [draft, sendNoteSignal])
   useEffect(() => () => sendNoteSignal('stop'), [sendNoteSignal])
   const [editingId, setEditingId] = useState<string | null>(null)
+  // Delete asks first (in place, second click deletes): one stray click on
+  // the trash icon used to remove a comment with no way back.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
 
   const isNew = !item || item === 'new'
@@ -1168,36 +1171,71 @@ export function CommentPanel({
                               <span className='text-[10px] text-slate-300'>(edited)</span>
                             )}
                             {!isEditing && (
-                              <div className='ml-auto flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100'>
+                              <div
+                                className={`ml-auto flex items-center gap-1 transition-opacity group-hover:opacity-100 focus-within:opacity-100 ${
+                                  confirmDeleteId === c.id ? 'opacity-100' : 'opacity-0'
+                                }`}
+                              >
                                 <button
                                   type='button'
                                   title='Make a task from this comment'
+                                  aria-label='Make a task from this comment'
                                   className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
                                   onClick={() => makeTask.mutate(c)}
                                 >
                                   <ClipboardPlus className='h-3 w-3' />
                                 </button>
-                                {isOwn && (
-                                  <>
-                                    <button
-                                      type='button'
-                                      className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700'
-                                      onClick={() => {
-                                        setEditingId(c.id)
-                                        setEditText(c.text)
-                                      }}
-                                    >
-                                      <Pencil className='h-3 w-3' />
-                                    </button>
-                                    <button
-                                      type='button'
-                                      className='rounded p-1 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500'
-                                      onClick={() => remove.mutate(c.id)}
-                                    >
-                                      <Trash2 className='h-3 w-3' />
-                                    </button>
-                                  </>
-                                )}
+                                {isOwn &&
+                                  (confirmDeleteId === c.id ? (
+                                    <>
+                                      <button
+                                        type='button'
+                                        // biome-ignore lint/a11y/noAutofocus: the trash button it replaces just unmounted — keep keyboard focus on the confirm
+                                        autoFocus
+                                        disabled={remove.isPending}
+                                        data-comment-delete-confirm={c.id}
+                                        className='rounded bg-red-600 px-1.5 py-px text-[10.5px] font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60'
+                                        onClick={() =>
+                                          remove.mutate(c.id, {
+                                            onSettled: () => setConfirmDeleteId(null)
+                                          })
+                                        }
+                                      >
+                                        {remove.isPending ? 'Deleting…' : 'Delete comment?'}
+                                      </button>
+                                      <button
+                                        type='button'
+                                        className='rounded px-1.5 py-px text-[10.5px] font-medium text-slate-500 transition-colors hover:bg-slate-100 dark:hover:bg-muted'
+                                        onClick={() => setConfirmDeleteId(null)}
+                                      >
+                                        Keep
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <button
+                                        type='button'
+                                        title='Edit comment'
+                                        aria-label='Edit comment'
+                                        className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700'
+                                        onClick={() => {
+                                          setEditingId(c.id)
+                                          setEditText(c.text)
+                                        }}
+                                      >
+                                        <Pencil className='h-3 w-3' />
+                                      </button>
+                                      <button
+                                        type='button'
+                                        title='Delete comment'
+                                        aria-label='Delete comment'
+                                        className='rounded p-1 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500'
+                                        onClick={() => setConfirmDeleteId(c.id)}
+                                      >
+                                        <Trash2 className='h-3 w-3' />
+                                      </button>
+                                    </>
+                                  ))}
                               </div>
                             )}
                           </div>

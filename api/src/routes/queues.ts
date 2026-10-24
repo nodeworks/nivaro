@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { enqueueQueueMaterializationBackfill } from '../functions/queue-materialization-jobs.js'
+import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { builtinAllowed } from '../services/bulk-actions.js'
@@ -81,6 +82,15 @@ const MAX_SOURCES_PER_QUEUE = 10
 
 export async function queuesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
+  // Queue ids are uuids and view ids integers: anything else (a mistyped
+  // /queues/999999) is a queue that does not exist — never a uuid
+  // conversion error from SQL Server answered as a 500.
+  app.addHook('preHandler', async (req, reply) => {
+    const { id, viewId } = (req.params ?? {}) as { id?: string; viewId?: string }
+    if ((id != null && !UUID_RE.test(id)) || (viewId != null && !/^\d{1,9}$/.test(viewId))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+  })
 
   // GET / — own queues + shared queues (optionally role-matched)
   app.get('/', async (req, reply) => {

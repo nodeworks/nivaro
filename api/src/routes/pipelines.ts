@@ -23,7 +23,7 @@ import { selectInChunks } from '../services/db-batch.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
-import { can } from '../services/permissions.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
 import {
   bustOwnerGroupCache,
@@ -3940,6 +3940,46 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         }
       }
       return reply.send({ data: result })
+    }
+  )
+
+  // Who created the record (its user-created column) — the Owners panel names
+  // them when the record sits in its first step with nobody resolved ("Back
+  // with Mark Lee" after a send-back). Display only: it grants nothing.
+  app.get(
+    '/instance/:collection/:item/creator',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, item } = req.params as { collection: string; item: string }
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return
+      const { creatorColumns } = await import('../services/dashboard-feed.js')
+      const col = (await creatorColumns([collection])).get(collection)
+      if (!col) return reply.send({ data: null })
+      // The creator is a field like any other: a read policy whose field list
+      // leaves it out answers nothing (admins and unrestricted roles: null list).
+      if (!req.isAdmin) {
+        const allowed = await getAllowedFields(req.user!, 'read', collection)
+        if (
+          allowed !== null &&
+          !allowed.some((f) => f === '*' || f.toLowerCase() === col.toLowerCase())
+        )
+          return reply.send({ data: null })
+      }
+      const row = (await db(collection)
+        .where({ id: item })
+        .first(col)
+        .catch(() => undefined)) as Record<string, unknown> | undefined
+      const userId = row?.[col]
+      if (userId == null || userId === '') return reply.send({ data: null })
+      const user = (await db('nivaro_users')
+        .where({ id: String(userId) })
+        .first('id', 'first_name', 'last_name', 'email')
+        .catch(() => undefined)) as
+        | { id: string; first_name: string | null; last_name: string | null; email: string | null }
+        | undefined
+      if (!user) return reply.send({ data: null })
+      const name = [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || null
+      return reply.send({ data: { id: user.id, name } })
     }
   )
 

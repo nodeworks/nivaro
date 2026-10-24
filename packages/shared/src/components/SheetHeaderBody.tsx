@@ -10,7 +10,8 @@ export function SheetHeaderBody({
   params,
   loading,
   error,
-  asOf
+  asOf,
+  note
 }: {
   stats: QueryWidgetStat[]
   rows: Array<Record<string, unknown>>
@@ -18,6 +19,8 @@ export function SheetHeaderBody({
   loading: boolean
   error: boolean
   asOf?: SheetHeaderAsOf
+  /** What the tiles cover ("Project lifetime — every funding year"). */
+  note?: string
 }) {
   if (error) {
     return (
@@ -36,6 +39,11 @@ export function SheetHeaderBody({
           data-sheet-header-as-of
         >
           {asOf.label} {formatDate(latest)}
+        </p>
+      )}
+      {note && (
+        <p className='mt-1 text-[11px] text-slate-500 dark:text-slate-400' data-sheet-header-note>
+          {note}
         </p>
       )}
     </>

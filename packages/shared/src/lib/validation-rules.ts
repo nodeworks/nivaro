@@ -78,6 +78,55 @@ function conditionMatches(other: unknown, op: string, cmp: unknown): boolean {
   }
 }
 
+// gte_field / lte_field: compare this field with another field of the same
+// record. Numbers compare numerically; dates as CALENDAR days (the first ten
+// characters of an ISO string; a Date by its UTC day, which is how a date
+// column reads back). Anything else cannot be judged and passes. Twin of the
+// same helper in the other evaluator — keep them identical.
+function crossFieldOrder(a: unknown, b: unknown): number | null {
+  const num = (v: unknown) =>
+    typeof v === 'number'
+      ? v
+      : typeof v === 'string' && /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(v)
+        ? Number(v)
+        : null
+  const na = num(a)
+  const nb = num(b)
+  if (na !== null && nb !== null && Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+  const day = (v: unknown): string | null => {
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10)
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10)
+    return null
+  }
+  const dayA = day(a)
+  const dayB = day(b)
+  if (dayA === null || dayB === null) return null
+  return dayA < dayB ? -1 : dayA > dayB ? 1 : 0
+}
+
+function crossFieldError(
+  type: string,
+  value: unknown,
+  other: string | undefined,
+  record: Record<string, unknown> | undefined,
+  label: string,
+  message: string | undefined
+): string | null {
+  if (!other || !record) return null
+  const otherValue = record[other]
+  if (isEmptyVal(value) || isEmptyVal(otherValue)) return null
+  const order = crossFieldOrder(value, otherValue)
+  if (order === null) return null
+  const otherName = other.replace(/_/g, ' ')
+  if (type === 'gte_field' && order < 0) {
+    return message ?? `${label} must be on or after ${otherName}`
+  }
+  if (type === 'lte_field' && order > 0) {
+    return message ?? `${label} must be on or before ${otherName}`
+  }
+  return null
+}
+
 export function applyValidationRule(
   rule: FormValidationRule,
   value: unknown,
@@ -95,6 +144,16 @@ export function applyValidationRule(
     return isEmptyVal(value)
       ? (rule.message ?? `${label} is required when ${dep} matches this condition`)
       : null
+  }
+  if (rule.type === 'gte_field' || rule.type === 'lte_field') {
+    return crossFieldError(
+      rule.type,
+      value,
+      (rule as { field?: string }).field,
+      record,
+      label,
+      rule.message
+    )
   }
   if (isEmptyVal(value) && rule.type !== 'required') return null
   switch (rule.type) {

@@ -35,7 +35,23 @@ export function displayTimezoneDiffers(): boolean {
   }
 }
 
+/** The "no date" zeros legacy imports store — the OLE/Excel zero
+ *  (1899-12-30) and SQL Server's datetime zero (1900-01-01). Shown as empty,
+ *  never as a real day ("Created 12/29/1899"). */
+const NULL_DATE_DAYS = new Set(['1899-12-30', '1900-01-01'])
+export function isNullDate(value: unknown): boolean {
+  if (value == null || value === '') return false
+  const s =
+    value instanceof Date
+      ? Number.isNaN(value.getTime())
+        ? ''
+        : value.toISOString()
+      : String(value)
+  return NULL_DATE_DAYS.has(s.slice(0, 10))
+}
+
 export function formatDate(date: string | Date, opts?: Intl.DateTimeFormatOptions) {
+  if (isNullDate(date)) return ''
   // Date-only strings (bare yyyy-mm-dd or ISO at UTC midnight) anchor to
   // their stored calendar day — converting UTC midnight to local time shifts
   // them a day back for any viewer west of UTC.
@@ -53,6 +69,25 @@ export function formatDate(date: string | Date, opts?: Intl.DateTimeFormatOption
     ...(dm || !displayTimezone ? {} : { timeZone: displayTimezone }),
     ...opts
   }).format(d)
+}
+
+/**
+ * `new Date(v).toLocaleDateString()` that keeps a calendar date on its day:
+ * `'2026-11-15'` (and UTC midnight) parses as UTC, so for any viewer west of
+ * UTC the plain call shows the 14th. Real timestamps render as before.
+ */
+export function toLocalDateString(value: unknown): string {
+  if (isNullDate(value)) return ''
+  const s = value instanceof Date ? null : String(value)
+  const dm = s?.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ]00:00:00(?:\.0+)?(?:Z|[+-]00:?00)?)?$/)
+  const d = dm
+    ? new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]))
+    : value instanceof Date
+      ? value
+      : new Date(String(value))
+  if (Number.isNaN(d.getTime())) return String(value)
+  if (dm) d.setFullYear(Number(dm[1]))
+  return d.toLocaleDateString()
 }
 
 export function formatDateTime(date: string | Date) {

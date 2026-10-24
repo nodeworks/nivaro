@@ -140,6 +140,7 @@ import {
   translateScopeValues,
   useMyScopes
 } from '../lib/use-my-scopes'
+import { uniqueByValue } from '../lib/unique-options'
 import { cn } from '../lib/utils'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { RechartsGate } from './charts/RechartsGate'
@@ -285,10 +286,14 @@ function FilterChip({
             limit: 200
           })
         )) as { data: Array<Record<string, unknown>> }
-        return (res.data ?? []).map((r) => ({
-          value: String(r[vf] ?? r.id),
-          label: String(r[lf] ?? r[vf] ?? r.id)
-        }))
+        // One option per value sent (uniqueByValue says why that never drops records).
+        return uniqueByValue(
+          (res.data ?? []).map((r) => ({
+            value: String(r[vf] ?? r.id),
+            label: String(r[lf] ?? r[vf] ?? r.id)
+          })),
+          (o) => o.value
+        )
       }
       return client
         .request(readReportFilterOptions(reportId, field))
@@ -1029,41 +1034,44 @@ export function QueryWidgetBody({
     return (
       <div className='flex min-h-0 flex-1 items-stretch gap-3'>
         <div className='relative min-h-[110px] min-w-0 flex-1'>
-          <RechartsGate
- fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Cell, Pie, PieChart, ResponsiveContainer, Tooltip }) => <ResponsiveContainer width='100%' height='100%'>
-            <PieChart>
-              <Pie
-                data={donutData}
-                dataKey='value'
-                nameKey='dim'
-                innerRadius='58%'
-                outerRadius='88%'
-                paddingAngle={2}
-                strokeWidth={0}
-                className={onDrill ? 'cursor-pointer' : undefined}
-                onClick={(entry: { payload?: { dim?: string } }) => {
-                  const d = entry?.payload?.dim
-                  if (d) openSegment(String(d))
-                }}
-              >
-                {donutData.map((s, i) => (
-                  <Cell key={s.dim} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{
-                  fontSize: 12,
-                  backgroundColor: '#0f172a',
-                  border: '1px solid #334155',
-                  borderRadius: 8,
-                  color: '#f1f5f9'
-                }}
-                labelStyle={{ color: '#f1f5f9' }}
-                itemStyle={{ color: '#e2e8f0' }}
-                formatter={(v) => tipFmt(v as number)}
-              />
-            </PieChart>
-          </ResponsiveContainer>}</RechartsGate>
+          <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+            {({ Cell, Pie, PieChart, ResponsiveContainer, Tooltip }) => (
+              <ResponsiveContainer width='100%' height='100%'>
+                <PieChart>
+                  <Pie
+                    data={donutData}
+                    dataKey='value'
+                    nameKey='dim'
+                    innerRadius='58%'
+                    outerRadius='88%'
+                    paddingAngle={2}
+                    strokeWidth={0}
+                    className={onDrill ? 'cursor-pointer' : undefined}
+                    onClick={(entry: { payload?: { dim?: string } }) => {
+                      const d = entry?.payload?.dim
+                      if (d) openSegment(String(d))
+                    }}
+                  >
+                    {donutData.map((s, i) => (
+                      <Cell key={s.dim} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      fontSize: 12,
+                      backgroundColor: '#0f172a',
+                      border: '1px solid #334155',
+                      borderRadius: 8,
+                      color: '#f1f5f9'
+                    }}
+                    labelStyle={{ color: '#f1f5f9' }}
+                    itemStyle={{ color: '#e2e8f0' }}
+                    formatter={(v) => tipFmt(v as number)}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </RechartsGate>
           <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
             <span className='text-[17px] font-semibold leading-none text-slate-900 dark:text-foreground'>
               {fmtCell(total, cfg.value_format ?? 'integer')}
@@ -1091,44 +1099,47 @@ export function QueryWidgetBody({
   if (cfg.display === 'line' || cfg.display === 'area') {
     return (
       <div className='min-h-[110px] min-w-0 flex-1'>
-        <RechartsGate
- fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Area, AreaChart, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
-          <AreaChart data={chartRows} margin={{ top: 6, right: 8, left: -6, bottom: 0 }}>
-            <XAxis
-              dataKey={xField}
-              tick={{ fontSize: 10 }}
-              stroke='#94a3b8'
-              {...catAxisProps(chartRows.length)}
-            />
-            <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} width={48} />
-            <Tooltip
-              contentStyle={{
-                fontSize: 12,
-                backgroundColor: '#0f172a',
-                border: '1px solid #334155',
-                borderRadius: 8,
-                color: '#f1f5f9'
-              }}
-              labelStyle={{ color: '#f1f5f9' }}
-              itemStyle={{ color: '#e2e8f0' }}
-              formatter={(v) => tipFmt(v as number)}
-            />
-            {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
-            {series.map((s, i) => (
-              <Area
-                key={s.field}
-                type='monotone'
-                dataKey={s.field}
-                name={s.label ?? s.field}
-                stroke={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
-                strokeWidth={2}
-                strokeDasharray={s.dash ? '4 3' : undefined}
-                fill={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
-                fillOpacity={cfg.display === 'area' && !s.dash ? 0.12 : 0}
-              />
-            ))}
-          </AreaChart>
-        </ResponsiveContainer>}</RechartsGate>
+        <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+          {({ Area, AreaChart, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis }) => (
+            <ResponsiveContainer width='100%' height='100%'>
+              <AreaChart data={chartRows} margin={{ top: 6, right: 8, left: -6, bottom: 0 }}>
+                <XAxis
+                  dataKey={xField}
+                  tick={{ fontSize: 10 }}
+                  stroke='#94a3b8'
+                  {...catAxisProps(chartRows.length)}
+                />
+                <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} width={48} />
+                <Tooltip
+                  contentStyle={{
+                    fontSize: 12,
+                    backgroundColor: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: 8,
+                    color: '#f1f5f9'
+                  }}
+                  labelStyle={{ color: '#f1f5f9' }}
+                  itemStyle={{ color: '#e2e8f0' }}
+                  formatter={(v) => tipFmt(v as number)}
+                />
+                {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
+                {series.map((s, i) => (
+                  <Area
+                    key={s.field}
+                    type='monotone'
+                    dataKey={s.field}
+                    name={s.label ?? s.field}
+                    stroke={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
+                    strokeWidth={2}
+                    strokeDasharray={s.dash ? '4 3' : undefined}
+                    fill={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
+                    fillOpacity={cfg.display === 'area' && !s.dash ? 0.12 : 0}
+                  />
+                ))}
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+        </RechartsGate>
         {segModal}
       </div>
     )
@@ -1138,71 +1149,79 @@ export function QueryWidgetBody({
   const stacked = cfg.display === 'stacked_bar'
   return (
     <div className='min-h-[110px] min-w-0 flex-1'>
-      <RechartsGate
- fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Bar, BarChart, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
-        <BarChart
-          data={chartRows}
-          layout={horizontal ? 'vertical' : 'horizontal'}
-          margin={{ top: 6, right: 8, left: horizontal ? 30 : -6, bottom: 0 }}
-        >
-          {horizontal ? (
-            <>
-              <XAxis type='number' tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} />
-              <YAxis
-                type='category'
-                dataKey={xField}
-                tick={{ fontSize: 10 }}
-                stroke='#94a3b8'
-                width={120}
-              />
-            </>
-          ) : (
-            <>
-              <XAxis
-                dataKey={xField}
-                tick={{ fontSize: 10 }}
-                stroke='#94a3b8'
-                {...catAxisProps(chartRows.length)}
-              />
-              <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} width={48} />
-            </>
-          )}
-          <Tooltip
-            contentStyle={{
-              fontSize: 12,
-              backgroundColor: '#0f172a',
-              border: '1px solid #334155',
-              borderRadius: 8,
-              color: '#f1f5f9'
-            }}
-            labelStyle={{ color: '#f1f5f9' }}
-            itemStyle={{ color: '#e2e8f0' }}
-            formatter={(v) => tipFmt(v as number)}
-          />
-          {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
-          {series.map((s, i) => (
-            <Bar
-              className={onDrill ? 'cursor-pointer' : undefined}
-              onClick={(entry: { payload?: Record<string, unknown> } | undefined) => {
-                const d = entry?.payload?.[xField]
-                if (d != null) openSegment(String(d))
-              }}
-              key={s.field}
-              dataKey={s.field}
-              name={s.label ?? s.field}
-              stackId={stacked ? 'stack' : undefined}
-              fill={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
-              radius={stacked ? 0 : horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]}
+      <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+        {({ Bar, BarChart, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis }) => (
+          <ResponsiveContainer width='100%' height='100%'>
+            <BarChart
+              data={chartRows}
+              layout={horizontal ? 'vertical' : 'horizontal'}
+              margin={{ top: 6, right: 8, left: horizontal ? 30 : -6, bottom: 0 }}
             >
-              {series.length === 1 &&
-                !s.color &&
-                chartRows.map((_, ci) => (
-                  <Cell key={ci} fill={CHART_COLORS[ci % CHART_COLORS.length]} />
-                ))}
-            </Bar>
-          ))}
-        </BarChart>
-      </ResponsiveContainer>}</RechartsGate>
+              {horizontal ? (
+                <>
+                  <XAxis
+                    type='number'
+                    tick={{ fontSize: 10 }}
+                    stroke='#94a3b8'
+                    tickFormatter={vFmt}
+                  />
+                  <YAxis
+                    type='category'
+                    dataKey={xField}
+                    tick={{ fontSize: 10 }}
+                    stroke='#94a3b8'
+                    width={120}
+                  />
+                </>
+              ) : (
+                <>
+                  <XAxis
+                    dataKey={xField}
+                    tick={{ fontSize: 10 }}
+                    stroke='#94a3b8'
+                    {...catAxisProps(chartRows.length)}
+                  />
+                  <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} width={48} />
+                </>
+              )}
+              <Tooltip
+                contentStyle={{
+                  fontSize: 12,
+                  backgroundColor: '#0f172a',
+                  border: '1px solid #334155',
+                  borderRadius: 8,
+                  color: '#f1f5f9'
+                }}
+                labelStyle={{ color: '#f1f5f9' }}
+                itemStyle={{ color: '#e2e8f0' }}
+                formatter={(v) => tipFmt(v as number)}
+              />
+              {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
+              {series.map((s, i) => (
+                <Bar
+                  className={onDrill ? 'cursor-pointer' : undefined}
+                  onClick={(entry: { payload?: Record<string, unknown> } | undefined) => {
+                    const d = entry?.payload?.[xField]
+                    if (d != null) openSegment(String(d))
+                  }}
+                  key={s.field}
+                  dataKey={s.field}
+                  name={s.label ?? s.field}
+                  stackId={stacked ? 'stack' : undefined}
+                  fill={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
+                  radius={stacked ? 0 : horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]}
+                >
+                  {series.length === 1 &&
+                    !s.color &&
+                    chartRows.map((_, ci) => (
+                      <Cell key={ci} fill={CHART_COLORS[ci % CHART_COLORS.length]} />
+                    ))}
+                </Bar>
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </RechartsGate>
       {segModal}
     </div>
   )
@@ -2580,37 +2599,48 @@ const WidgetCard = memo(function WidgetCard({
             ]
             return (
               <div className='min-h-0 flex-1'>
-                <RechartsGate
- fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ ComposedChart, Line, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
-                  <ComposedChart data={pts} margin={{ top: 6, right: 8, left: -6, bottom: 0 }}>
-                    <XAxis
-                      dataKey='x'
-                      type='number'
-                      tick={{ fontSize: 10 }}
-                      tickFormatter={compactTick}
-                      domain={['dataMin', 'dataMax']}
-                    />
-                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactTick} />
-                    <Tooltip
-                      contentStyle={{
-                        fontSize: 12,
-                        backgroundColor: '#0f172a',
-                        border: '1px solid #334155',
-                        borderRadius: 8,
-                        color: '#f1f5f9'
-                      }}
-                    />
-                    <Scatter data={pts} dataKey='y' fill='#00a5cc' opacity={0.7} />
-                    <Line
-                      data={trend}
-                      dataKey='y'
-                      stroke='#f59e0b'
-                      strokeWidth={2}
-                      dot={false}
-                      isAnimationActive={false}
-                    />
-                  </ComposedChart>
-                </ResponsiveContainer>}</RechartsGate>
+                <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+                  {({
+                    ComposedChart,
+                    Line,
+                    ResponsiveContainer,
+                    Scatter,
+                    Tooltip,
+                    XAxis,
+                    YAxis
+                  }) => (
+                    <ResponsiveContainer width='100%' height='100%'>
+                      <ComposedChart data={pts} margin={{ top: 6, right: 8, left: -6, bottom: 0 }}>
+                        <XAxis
+                          dataKey='x'
+                          type='number'
+                          tick={{ fontSize: 10 }}
+                          tickFormatter={compactTick}
+                          domain={['dataMin', 'dataMax']}
+                        />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={compactTick} />
+                        <Tooltip
+                          contentStyle={{
+                            fontSize: 12,
+                            backgroundColor: '#0f172a',
+                            border: '1px solid #334155',
+                            borderRadius: 8,
+                            color: '#f1f5f9'
+                          }}
+                        />
+                        <Scatter data={pts} dataKey='y' fill='#00a5cc' opacity={0.7} />
+                        <Line
+                          data={trend}
+                          dataKey='y'
+                          stroke='#f59e0b'
+                          strokeWidth={2}
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  )}
+                </RechartsGate>
               </div>
             )
           })()
@@ -2623,51 +2653,54 @@ const WidgetCard = memo(function WidgetCard({
           <p className='px-1 text-[12px] text-slate-400'>No data.</p>
         ) : (
           <div className='min-h-0 flex-1'>
-            <RechartsGate
- fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
-              <ComposedChart data={series} margin={{ top: 6, right: 4, left: -10, bottom: 0 }}>
-                <XAxis
-                  dataKey='dim'
-                  tick={{ fontSize: 10 }}
-                  interval={0}
-                  angle={-20}
-                  textAnchor='end'
-                  height={42}
-                />
-                <YAxis yAxisId='v' tick={{ fontSize: 10 }} tickFormatter={compactTick} />
-                <YAxis
-                  yAxisId='pct'
-                  orientation='right'
-                  domain={[0, 100]}
-                  tick={{ fontSize: 10 }}
-                  tickFormatter={(v: number) => `${v}%`}
-                />
-                <Tooltip
-                  contentStyle={{
-                    fontSize: 12,
-                    backgroundColor: '#0f172a',
-                    border: '1px solid #334155',
-                    borderRadius: 8,
-                    color: '#f1f5f9'
-                  }}
-                />
-                <Bar
-                  yAxisId='v'
-                  dataKey='value'
-                  fill='#00a5cc'
-                  radius={[3, 3, 0, 0]}
-                  isAnimationActive={false}
-                />
-                <Line
-                  yAxisId='pct'
-                  dataKey='cum_pct'
-                  stroke='#f59e0b'
-                  strokeWidth={2}
-                  dot={{ r: 2 }}
-                  isAnimationActive={false}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>}</RechartsGate>
+            <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+              {({ Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis }) => (
+                <ResponsiveContainer width='100%' height='100%'>
+                  <ComposedChart data={series} margin={{ top: 6, right: 4, left: -10, bottom: 0 }}>
+                    <XAxis
+                      dataKey='dim'
+                      tick={{ fontSize: 10 }}
+                      interval={0}
+                      angle={-20}
+                      textAnchor='end'
+                      height={42}
+                    />
+                    <YAxis yAxisId='v' tick={{ fontSize: 10 }} tickFormatter={compactTick} />
+                    <YAxis
+                      yAxisId='pct'
+                      orientation='right'
+                      domain={[0, 100]}
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={(v: number) => `${v}%`}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        fontSize: 12,
+                        backgroundColor: '#0f172a',
+                        border: '1px solid #334155',
+                        borderRadius: 8,
+                        color: '#f1f5f9'
+                      }}
+                    />
+                    <Bar
+                      yAxisId='v'
+                      dataKey='value'
+                      fill='#00a5cc'
+                      radius={[3, 3, 0, 0]}
+                      isAnimationActive={false}
+                    />
+                    <Line
+                      yAxisId='pct'
+                      dataKey='cum_pct'
+                      stroke='#f59e0b'
+                      strokeWidth={2}
+                      dot={{ r: 2 }}
+                      isAnimationActive={false}
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              )}
+            </RechartsGate>
           </div>
         )
     } else if (widget.type === 'metric') {
@@ -2952,75 +2985,80 @@ const WidgetCard = memo(function WidgetCard({
         body = (
           <div className='flex min-h-0 flex-1 items-stretch gap-3'>
             <div className='relative min-h-[110px] min-w-0 flex-1'>
-              <RechartsGate
- fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Cell, Pie, PieChart, ResponsiveContainer, Tooltip }) => <ResponsiveContainer width='100%' height='100%'>
-                <PieChart>
-                  <Pie
-                    data={series}
-                    dataKey='value'
-                    nameKey='dim'
-                    innerRadius='58%'
-                    outerRadius='88%'
-                    paddingAngle={2}
-                    strokeWidth={0}
-                    className={widget.collection ? 'cursor-pointer' : undefined}
-                    onClick={(entry: {
-                      payload?: { dim?: string; raw?: unknown; other?: boolean }
-                    }) => {
-                      if (!widget.collection) return
-                      const seg = entry?.payload
-                      if (seg?.other) return
-                      // Drill hierarchy (#418): a configured next level descends
-                      // instead of opening the records modal.
-                      if (drillLevels.length > drillPath.length) {
-                        const curField =
-                          drillPath.length === 0
-                            ? (widget.config?.dimension as { field?: string } | undefined)?.field
-                            : drillLevels[drillPath.length - 1]
-                        if (curField) {
-                          setDrillPath((prev) => [
-                            ...prev,
-                            { field: curField, value: String(seg?.raw ?? seg?.dim ?? '') }
-                          ])
-                          return
-                        }
-                      }
-                      const dimField = (widget.config?.dimension as { field?: string } | undefined)
-                        ?.field
-                      setRecordsFor({
-                        conditions: widgetDrillConditions(
-                          widget,
-                          entityFilters,
-                          dateRange,
-                          seg?.raw ?? seg?.dim
-                        ),
-                        title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
-                        dimField,
-                        dimRaw: seg?.raw ?? seg?.dim,
-                        dimLabel: seg?.dim
-                      })
-                    }}
-                  >
-                    {series.map((s, i) => (
-                      <Cell
-                        key={s.dim}
-                        fill={s.other ? '#94a3b8' : CHART_COLORS[i % CHART_COLORS.length]}
+              <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+                {({ Cell, Pie, PieChart, ResponsiveContainer, Tooltip }) => (
+                  <ResponsiveContainer width='100%' height='100%'>
+                    <PieChart>
+                      <Pie
+                        data={series}
+                        dataKey='value'
+                        nameKey='dim'
+                        innerRadius='58%'
+                        outerRadius='88%'
+                        paddingAngle={2}
+                        strokeWidth={0}
+                        className={widget.collection ? 'cursor-pointer' : undefined}
+                        onClick={(entry: {
+                          payload?: { dim?: string; raw?: unknown; other?: boolean }
+                        }) => {
+                          if (!widget.collection) return
+                          const seg = entry?.payload
+                          if (seg?.other) return
+                          // Drill hierarchy (#418): a configured next level descends
+                          // instead of opening the records modal.
+                          if (drillLevels.length > drillPath.length) {
+                            const curField =
+                              drillPath.length === 0
+                                ? (widget.config?.dimension as { field?: string } | undefined)
+                                    ?.field
+                                : drillLevels[drillPath.length - 1]
+                            if (curField) {
+                              setDrillPath((prev) => [
+                                ...prev,
+                                { field: curField, value: String(seg?.raw ?? seg?.dim ?? '') }
+                              ])
+                              return
+                            }
+                          }
+                          const dimField = (
+                            widget.config?.dimension as { field?: string } | undefined
+                          )?.field
+                          setRecordsFor({
+                            conditions: widgetDrillConditions(
+                              widget,
+                              entityFilters,
+                              dateRange,
+                              seg?.raw ?? seg?.dim
+                            ),
+                            title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
+                            dimField,
+                            dimRaw: seg?.raw ?? seg?.dim,
+                            dimLabel: seg?.dim
+                          })
+                        }}
+                      >
+                        {series.map((s, i) => (
+                          <Cell
+                            key={s.dim}
+                            fill={s.other ? '#94a3b8' : CHART_COLORS[i % CHART_COLORS.length]}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        contentStyle={{
+                          fontSize: 12,
+                          backgroundColor: '#0f172a',
+                          border: '1px solid #334155',
+                          borderRadius: 8,
+                          color: '#f1f5f9'
+                        }}
+                        labelStyle={{ color: '#f1f5f9' }}
+                        itemStyle={{ color: '#e2e8f0' }}
                       />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      fontSize: 12,
-                      backgroundColor: '#0f172a',
-                      border: '1px solid #334155',
-                      borderRadius: 8,
-                      color: '#f1f5f9'
-                    }}
-                    labelStyle={{ color: '#f1f5f9' }}
-                    itemStyle={{ color: '#e2e8f0' }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>}</RechartsGate>
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
+              </RechartsGate>
               <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
                 <span className='text-[17px] font-semibold leading-none text-slate-900 dark:text-foreground'>
                   {total.toLocaleString()}
@@ -3047,148 +3085,22 @@ const WidgetCard = memo(function WidgetCard({
       } else if (widget.type === 'line') {
         body = (
           <div className='min-h-[110px] flex-1'>
-            <RechartsGate
- fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Area, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
-              <ComposedChart
-                data={series}
-                margin={{ top: 6, right: hasValue2 ? 4 : 8, left: -10, bottom: 0 }}
-              >
-                <XAxis
-                  dataKey='dim'
-                  tick={{ fontSize: 10 }}
-                  stroke='#94a3b8'
-                  {...catAxisProps(series.length)}
-                />
-                <YAxis
-                  tick={{ fontSize: 10 }}
-                  stroke='#94a3b8'
-                  tickFormatter={compactTick}
-                  width={44}
-                />
-                {hasValue2 && (
-                  <YAxis
-                    yAxisId='right'
-                    orientation='right'
-                    tick={{ fontSize: 10 }}
-                    stroke='#94a3b8'
-                    tickFormatter={compactTick}
-                    width={44}
-                  />
-                )}
-                {anchorNotes.map((a) => (
-                  <ReferenceLine
-                    key={a.id}
-                    x={a.anchor_date as string}
-                    stroke='#f59e0b'
-                    strokeDasharray='4 3'
-                    label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
-                  />
-                ))}
-                <Tooltip
-                  contentStyle={{
-                    fontSize: 12,
-                    backgroundColor: '#0f172a',
-                    border: '1px solid #334155',
-                    borderRadius: 8,
-                    color: '#f1f5f9'
-                  }}
-                  labelStyle={{ color: '#f1f5f9' }}
-                  itemStyle={{ color: '#e2e8f0' }}
-                />
-                {hasBand && (
-                  <Area
-                    type='monotone'
-                    dataKey='band'
-                    stroke='none'
-                    fill='#94a3b8'
-                    fillOpacity={0.15}
-                    name='typical range'
-                    activeDot={false}
-                  />
-                )}
-                {widget.config?.compare && (
-                  <Line
-                    type='monotone'
-                    dataKey='prev'
-                    stroke='#94a3b8'
-                    strokeWidth={1.5}
-                    strokeDasharray='4 3'
-                    dot={false}
-                    name='previous'
-                  />
-                )}
-                <Line
-                  type='monotone'
-                  dataKey='value'
-                  stroke={BRAND}
-                  strokeWidth={2}
-                  dot={(props: { cx?: number; cy?: number; payload?: { dim?: string } }) =>
-                    anomalySet.has(props.payload?.dim ?? '') ? (
-                      <circle
-                        key={props.payload?.dim}
-                        cx={props.cx}
-                        cy={props.cy}
-                        r={3.5}
-                        fill='#ef4444'
-                        stroke='#fff'
-                        strokeWidth={1}
-                      />
-                    ) : (
-                      <g key={props.payload?.dim} />
-                    )
-                  }
-                />
-                {hasValue2 && (
-                  <Line
-                    yAxisId='right'
-                    type='monotone'
-                    dataKey='value2'
-                    stroke='#8b5cf6'
-                    strokeWidth={1.5}
-                    dot={false}
-                    name={metric2Label}
-                  />
-                )}
-                {rollingK >= 2 && (
-                  <Line
-                    type='monotone'
-                    dataKey='ma'
-                    stroke='#f59e0b'
-                    strokeWidth={1.5}
-                    strokeDasharray='5 3'
-                    dot={false}
-                    name={`${rollingK}-bucket avg`}
-                    isAnimationActive={false}
-                  />
-                )}
-              </ComposedChart>
-            </ResponsiveContainer>}</RechartsGate>
-          </div>
-        )
-      } else {
-        const horizontal = widget.config?.orientation === 'horizontal'
-        body = (
-          <div className='min-h-[110px] flex-1'>
-            <RechartsGate
- fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Bar, Cell, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
-              <ComposedChart
-                data={series}
-                layout={horizontal ? 'vertical' : 'horizontal'}
-                margin={{ top: 6, right: 8, left: horizontal ? 30 : -10, bottom: 0 }}
-              >
-                {horizontal ? (
-                  <>
-                    <XAxis type='number' tick={{ fontSize: 10 }} stroke='#94a3b8' />
-                    <YAxis
-                      type='category'
-                      dataKey='dim'
-                      tick={{ fontSize: 10 }}
-                      stroke='#94a3b8'
-                      width={90}
-                    />
-                  </>
-                ) : (
-                  <>
+            <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+              {({
+                Area,
+                ComposedChart,
+                Line,
+                ReferenceLine,
+                ResponsiveContainer,
+                Tooltip,
+                XAxis,
+                YAxis
+              }) => (
+                <ResponsiveContainer width='100%' height='100%'>
+                  <ComposedChart
+                    data={series}
+                    margin={{ top: 6, right: hasValue2 ? 4 : 8, left: -10, bottom: 0 }}
+                  >
                     <XAxis
                       dataKey='dim'
                       tick={{ fontSize: 10 }}
@@ -3211,79 +3123,230 @@ const WidgetCard = memo(function WidgetCard({
                         width={44}
                       />
                     )}
-                  </>
-                )}
-                {!horizontal &&
-                  anchorNotes.map((a) => (
-                    <ReferenceLine
-                      key={a.id}
-                      x={a.anchor_date as string}
-                      stroke='#f59e0b'
-                      strokeDasharray='4 3'
-                      label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
+                    {anchorNotes.map((a) => (
+                      <ReferenceLine
+                        key={a.id}
+                        x={a.anchor_date as string}
+                        stroke='#f59e0b'
+                        strokeDasharray='4 3'
+                        label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
+                      />
+                    ))}
+                    <Tooltip
+                      contentStyle={{
+                        fontSize: 12,
+                        backgroundColor: '#0f172a',
+                        border: '1px solid #334155',
+                        borderRadius: 8,
+                        color: '#f1f5f9'
+                      }}
+                      labelStyle={{ color: '#f1f5f9' }}
+                      itemStyle={{ color: '#e2e8f0' }}
                     />
-                  ))}
-                <Tooltip
-                  contentStyle={{
-                    fontSize: 12,
-                    backgroundColor: '#0f172a',
-                    border: '1px solid #334155',
-                    borderRadius: 8,
-                    color: '#f1f5f9'
-                  }}
-                  labelStyle={{ color: '#f1f5f9' }}
-                  itemStyle={{ color: '#e2e8f0' }}
-                />
-                {widget.config?.compare && (
-                  <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />
-                )}
-                <Bar
-                  dataKey='value'
-                  fill={BRAND}
-                  radius={[3, 3, 0, 0]}
-                  className={widget.collection ? 'cursor-pointer' : undefined}
-                  onClick={(
-                    entry:
-                      | { payload?: { dim?: string; raw?: unknown; other?: boolean } }
-                      | undefined
-                  ) => {
-                    if (!widget.collection) return
-                    const seg = entry?.payload
-                    if (seg?.other) return
-                    const dimField = widget.config?.dimension as
-                      | { field?: string; bucket?: string }
-                      | undefined
-                    setRecordsFor({
-                      conditions: widgetDrillConditions(
-                        widget,
-                        entityFilters,
-                        dateRange,
-                        seg?.raw ?? seg?.dim
-                      ),
-                      title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
-                      dimField: dimField?.bucket ? undefined : dimField?.field,
-                      dimRaw: seg?.raw ?? seg?.dim,
-                      dimLabel: seg?.dim
-                    })
-                  }}
-                >
-                  {series.map((sv) => (
-                    <Cell key={sv.dim} fill={sv.other ? '#94a3b8' : BRAND} />
-                  ))}
-                </Bar>
-                {hasValue2 && (
-                  <Line
-                    yAxisId={horizontal ? undefined : 'right'}
-                    type='monotone'
-                    dataKey='value2'
-                    stroke='#8b5cf6'
-                    strokeWidth={1.5}
-                    dot={false}
-                    name={metric2Label}
-                  />
-                )}
-              </ComposedChart>
-            </ResponsiveContainer>}</RechartsGate>
+                    {hasBand && (
+                      <Area
+                        type='monotone'
+                        dataKey='band'
+                        stroke='none'
+                        fill='#94a3b8'
+                        fillOpacity={0.15}
+                        name='typical range'
+                        activeDot={false}
+                      />
+                    )}
+                    {widget.config?.compare && (
+                      <Line
+                        type='monotone'
+                        dataKey='prev'
+                        stroke='#94a3b8'
+                        strokeWidth={1.5}
+                        strokeDasharray='4 3'
+                        dot={false}
+                        name='previous'
+                      />
+                    )}
+                    <Line
+                      type='monotone'
+                      dataKey='value'
+                      stroke={BRAND}
+                      strokeWidth={2}
+                      dot={(props: { cx?: number; cy?: number; payload?: { dim?: string } }) =>
+                        anomalySet.has(props.payload?.dim ?? '') ? (
+                          <circle
+                            key={props.payload?.dim}
+                            cx={props.cx}
+                            cy={props.cy}
+                            r={3.5}
+                            fill='#ef4444'
+                            stroke='#fff'
+                            strokeWidth={1}
+                          />
+                        ) : (
+                          <g key={props.payload?.dim} />
+                        )
+                      }
+                    />
+                    {hasValue2 && (
+                      <Line
+                        yAxisId='right'
+                        type='monotone'
+                        dataKey='value2'
+                        stroke='#8b5cf6'
+                        strokeWidth={1.5}
+                        dot={false}
+                        name={metric2Label}
+                      />
+                    )}
+                    {rollingK >= 2 && (
+                      <Line
+                        type='monotone'
+                        dataKey='ma'
+                        stroke='#f59e0b'
+                        strokeWidth={1.5}
+                        strokeDasharray='5 3'
+                        dot={false}
+                        name={`${rollingK}-bucket avg`}
+                        isAnimationActive={false}
+                      />
+                    )}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              )}
+            </RechartsGate>
+          </div>
+        )
+      } else {
+        const horizontal = widget.config?.orientation === 'horizontal'
+        body = (
+          <div className='min-h-[110px] flex-1'>
+            <RechartsGate fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>
+              {({
+                Bar,
+                Cell,
+                ComposedChart,
+                Line,
+                ReferenceLine,
+                ResponsiveContainer,
+                Tooltip,
+                XAxis,
+                YAxis
+              }) => (
+                <ResponsiveContainer width='100%' height='100%'>
+                  <ComposedChart
+                    data={series}
+                    layout={horizontal ? 'vertical' : 'horizontal'}
+                    margin={{ top: 6, right: 8, left: horizontal ? 30 : -10, bottom: 0 }}
+                  >
+                    {horizontal ? (
+                      <>
+                        <XAxis type='number' tick={{ fontSize: 10 }} stroke='#94a3b8' />
+                        <YAxis
+                          type='category'
+                          dataKey='dim'
+                          tick={{ fontSize: 10 }}
+                          stroke='#94a3b8'
+                          width={90}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <XAxis
+                          dataKey='dim'
+                          tick={{ fontSize: 10 }}
+                          stroke='#94a3b8'
+                          {...catAxisProps(series.length)}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 10 }}
+                          stroke='#94a3b8'
+                          tickFormatter={compactTick}
+                          width={44}
+                        />
+                        {hasValue2 && (
+                          <YAxis
+                            yAxisId='right'
+                            orientation='right'
+                            tick={{ fontSize: 10 }}
+                            stroke='#94a3b8'
+                            tickFormatter={compactTick}
+                            width={44}
+                          />
+                        )}
+                      </>
+                    )}
+                    {!horizontal &&
+                      anchorNotes.map((a) => (
+                        <ReferenceLine
+                          key={a.id}
+                          x={a.anchor_date as string}
+                          stroke='#f59e0b'
+                          strokeDasharray='4 3'
+                          label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
+                        />
+                      ))}
+                    <Tooltip
+                      contentStyle={{
+                        fontSize: 12,
+                        backgroundColor: '#0f172a',
+                        border: '1px solid #334155',
+                        borderRadius: 8,
+                        color: '#f1f5f9'
+                      }}
+                      labelStyle={{ color: '#f1f5f9' }}
+                      itemStyle={{ color: '#e2e8f0' }}
+                    />
+                    {widget.config?.compare && (
+                      <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />
+                    )}
+                    <Bar
+                      dataKey='value'
+                      fill={BRAND}
+                      radius={[3, 3, 0, 0]}
+                      className={widget.collection ? 'cursor-pointer' : undefined}
+                      onClick={(
+                        entry:
+                          | { payload?: { dim?: string; raw?: unknown; other?: boolean } }
+                          | undefined
+                      ) => {
+                        if (!widget.collection) return
+                        const seg = entry?.payload
+                        if (seg?.other) return
+                        const dimField = widget.config?.dimension as
+                          | { field?: string; bucket?: string }
+                          | undefined
+                        setRecordsFor({
+                          conditions: widgetDrillConditions(
+                            widget,
+                            entityFilters,
+                            dateRange,
+                            seg?.raw ?? seg?.dim
+                          ),
+                          title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
+                          dimField: dimField?.bucket ? undefined : dimField?.field,
+                          dimRaw: seg?.raw ?? seg?.dim,
+                          dimLabel: seg?.dim
+                        })
+                      }}
+                    >
+                      {series.map((sv) => (
+                        <Cell key={sv.dim} fill={sv.other ? '#94a3b8' : BRAND} />
+                      ))}
+                    </Bar>
+                    {hasValue2 && (
+                      <Line
+                        yAxisId={horizontal ? undefined : 'right'}
+                        type='monotone'
+                        dataKey='value2'
+                        stroke='#8b5cf6'
+                        strokeWidth={1.5}
+                        dot={false}
+                        name={metric2Label}
+                      />
+                    )}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              )}
+            </RechartsGate>
           </div>
         )
       }

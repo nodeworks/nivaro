@@ -168,7 +168,7 @@ async function boundCollections(): Promise<string[]> {
 }
 
 /** collection → its creator column (collections without one are left out). */
-async function creatorColumns(collections: string[]): Promise<Map<string, string>> {
+export async function creatorColumns(collections: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   if (collections.length === 0) return out
   const [fieldRows, colRows] = await Promise.all([

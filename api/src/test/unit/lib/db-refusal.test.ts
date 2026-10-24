@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { describeDbRefusal, reasonWithoutSql } from '../../../lib/db-refusal.js'
+import {
+  describeDbRefusal,
+  describeValueRefusal,
+  messageWithoutSql,
+  reasonWithoutSql
+} from '../../../lib/db-refusal.js'
 
 describe('database refusals', () => {
   it('reads a foreign key refusal on write as a missing link', () => {
@@ -80,6 +85,93 @@ describe('database refusals', () => {
       "Invalid column name 'a'."
     )
     expect(reasonWithoutSql('Budget - over the cap')).toBe('Budget - over the cap')
+  })
+
+  it("never reads a conversion or overflow error as the caller's fault on its own", () => {
+    // The global handler keeps these 5xx (a SUM overflow is a server bug).
+    expect(
+      describeDbRefusal(
+        new Error('Arithmetic overflow error converting expression to data type int.')
+      )
+    ).toBeNull()
+    expect(
+      describeDbRefusal(
+        new Error("Conversion failed when converting the nvarchar value 'abc' to data type int.")
+      )
+    ).toBeNull()
+  })
+})
+
+describe('describeValueRefusal (caller-sourced paths only)', () => {
+  it('reads a conversion error as a value of the wrong type, without the statement', () => {
+    expect(
+      describeValueRefusal(
+        new Error(
+          "select top (@p0) [name] from [workflows] where [id] = @p1 - Conversion failed when converting the nvarchar value 'abc' to data type int."
+        )
+      )
+    ).toEqual({
+      status: 400,
+      code: 'VALUE_TYPE_MISMATCH',
+      message: "A value does not match its field's type"
+    })
+    expect(
+      describeValueRefusal(
+        new Error('Conversion failed when converting from a character string to uniqueidentifier.')
+      )?.code
+    ).toBe('VALUE_TYPE_MISMATCH')
+  })
+
+  it('reads an overflowing number as out of range', () => {
+    expect(
+      describeValueRefusal(
+        new Error(
+          'workflow_lines[0]: Bigint must be safe integer or must be passed as string, saw 1e+308'
+        )
+      )?.code
+    ).toBe('VALUE_OUT_OF_RANGE')
+    expect(
+      describeValueRefusal(
+        new Error('Arithmetic overflow error converting expression to data type int.')
+      )?.status
+    ).toBe(400)
+    expect(describeValueRefusal(new Error('Deadlock victim'))).toBeNull()
+  })
+})
+
+describe('messageWithoutSql', () => {
+  it('keeps the reason and drops the statement, also behind a nested-write label', () => {
+    expect(
+      messageWithoutSql(new Error("select * from [t] where [a] = @p0 - Invalid column name 'a'."))
+    ).toBe("Invalid column name 'a'.")
+    expect(
+      messageWithoutSql(
+        new Error('workflow_lines[0]: insert into [workflow_lines] ([qty]) values (@p0) - Boom')
+      )
+    ).toBe('workflow_lines[0]: Boom')
+  })
+
+  it('strips unbracketed statements and labels with spaces too', () => {
+    expect(messageWithoutSql(new Error('select name from workflows where id = 5 - Boom'))).toBe(
+      'Boom'
+    )
+    expect(
+      messageWithoutSql(new Error('Line 3 of 4: update t set qty = 1 where id = 2 - Overflow'))
+    ).toBe('Line 3 of 4: Overflow')
+  })
+
+  it('prefers the reasons of an aggregate error', () => {
+    const err = Object.assign(new Error('select [x] from [t] - '), {
+      errors: [new Error('Deadlock victim'), new Error('Deadlock victim')]
+    })
+    expect(messageWithoutSql(err)).toBe('Deadlock victim')
+  })
+
+  it('leaves prose alone', () => {
+    expect(messageWithoutSql(new Error('Update failed - try again'))).toBe(
+      'Update failed - try again'
+    )
+    expect(messageWithoutSql(new Error('Something broke'))).toBe('Something broke')
   })
 })
 

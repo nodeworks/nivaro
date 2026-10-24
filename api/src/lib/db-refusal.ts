@@ -11,17 +11,27 @@
  */
 export interface DbRefusal {
   status: number
-  code: 'LINKED_RECORD_MISSING' | 'RECORD_IN_USE' | 'DUPLICATE_RECORD' | 'VALUE_TOO_LONG'
+  code:
+    | 'LINKED_RECORD_MISSING'
+    | 'RECORD_IN_USE'
+    | 'DUPLICATE_RECORD'
+    | 'VALUE_TOO_LONG'
+    | 'VALUE_TYPE_MISMATCH'
+    | 'VALUE_OUT_OF_RANGE'
   message: string
 }
 
-export function describeDbRefusal(err: unknown): DbRefusal | null {
-  const e = err as { message?: unknown; number?: unknown; errors?: Array<{ message?: unknown }> }
-  // knex/mssql wraps the driver's messages in an AggregateError whose own
-  // message is only the statement.
-  const text = [e?.message, ...(Array.isArray(e?.errors) ? e.errors.map((x) => x?.message) : [])]
+/** The driver's messages as one string: knex/mssql wraps them in an
+ *  AggregateError whose own message is only the statement. */
+function refusalText(err: unknown): string {
+  const e = err as { message?: unknown; errors?: Array<{ message?: unknown }> }
+  return [e?.message, ...(Array.isArray(e?.errors) ? e.errors.map((x) => x?.message) : [])]
     .filter((m): m is string => typeof m === 'string')
     .join(' · ')
+}
+
+export function describeDbRefusal(err: unknown): DbRefusal | null {
+  const text = refusalText(err)
   if (!text) return null
   const fk =
     /(INSERT|UPDATE|MERGE|DELETE) statement conflicted with the (FOREIGN KEY|REFERENCE)[A-Z ]* constraint "([^"]+)"/i.exec(
@@ -61,6 +71,74 @@ export function describeDbRefusal(err: unknown): DbRefusal | null {
   }
   return null
 }
+
+/**
+ * A conversion or overflow error from SQL Server ("Conversion failed when
+ * converting the nvarchar value 'abc' to data type int", "Arithmetic
+ * overflow", the driver's "must be safe integer") as a 400 — but ONLY where
+ * the offending value came from the caller (the items routes, batch writes).
+ * Elsewhere the same error is a server bug (a SUM that overflows, a proc
+ * converting its own data) and must stay a tracked 5xx, so the global error
+ * handler never uses this.
+ */
+export function describeValueRefusal(err: unknown): DbRefusal | null {
+  const text = refusalText(err)
+  if (!text) return null
+  if (
+    /Conversion failed when converting|Error converting data type|Operand type clash/i.test(text)
+  ) {
+    return {
+      status: 400,
+      code: 'VALUE_TYPE_MISMATCH',
+      message: "A value does not match its field's type"
+    }
+  }
+  if (
+    /Arithmetic overflow error|must be safe integer|Value must be between -?\d+ and -?\d+/i.test(
+      text
+    )
+  ) {
+    return {
+      status: 400,
+      code: 'VALUE_OUT_OF_RANGE',
+      message: 'A number is too large or too small for its field'
+    }
+  }
+  return null
+}
+
+/**
+ * The message a 5xx body may carry: the driver's reason without the statement
+ * that raised it (knex prefixes the SQL — after a `field[0]: ` label on a
+ * nested write; an AggregateError keeps the reasons in `.errors`). Table
+ * names, columns and bound values stay in the log.
+ */
+export function messageWithoutSql(err: unknown): string {
+  const e = err as { message?: unknown; errors?: unknown }
+  const message = typeof e?.message === 'string' ? e.message : String(err)
+  const head = SQL_HEAD.exec(message)
+  if (!head) return message
+  const inner = Array.isArray(e?.errors)
+    ? e.errors
+        .map((x) => (x instanceof Error ? x.message : typeof x === 'string' ? x : ''))
+        .map((m) => m.trim())
+        .filter(Boolean)
+    : []
+  const cut = message.lastIndexOf(' - ')
+  const statement = cut > 0 ? message.slice(0, cut) : message
+  // knex brackets identifiers and numbers its bindings; a hand-written or
+  // driver statement still reads as SQL (from / into / set / where …). Plain
+  // prose that happens to start with "Update …" is left alone.
+  const looksLikeSql =
+    /\[[^\]]+\]|@p\d/.test(statement) ||
+    (cut > 0 && /\b(from|into|set|where|values|join|exec|execute|table)\b/i.test(statement))
+  if (!looksLikeSql) return message
+  if (inner.length > 0) return `${head[1]}${[...new Set(inner)].slice(0, 3).join(' · ')}`
+  return `${head[1]}${cut > 0 ? message.slice(cut + 3) : 'The database refused the statement'}`
+}
+
+const SQL_HEAD =
+  /^((?:[^:\n]{1,80}: )?)(?:insert|update|delete|select|merge|exec|execute|with|declare)\s/i
 
 /** The reason of a driver error, without the statement that raised it. */
 export function reasonWithoutSql(message: string): string {

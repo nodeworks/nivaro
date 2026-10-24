@@ -3,6 +3,7 @@ import { ChevronDown, RotateCcw } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { get } from '../../lib/commands'
 import { numericIntlOptions } from '../../lib/format-value'
+import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatDate, formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { applyDisplayTemplate, SYSTEM_FIELDS } from './helpers'
@@ -620,13 +621,7 @@ export function RowHistorySheet({
       return { text: Number(v).toLocaleString('en-US', numericIntlOptions(opts)), mono: true }
     const s = String(v)
     // Rich text arrives as HTML; show the words.
-    if (/<[a-z][\s\S]*>/i.test(s)) {
-      const div = typeof document !== 'undefined' ? document.createElement('div') : null
-      if (div) {
-        div.innerHTML = s
-        return { text: (div.textContent || '').trim() || '—' }
-      }
-    }
+    if (/<[a-z][\s\S]*>/i.test(s)) return { text: htmlToText(s).trim() || '—' }
     return { text: s }
   }
 

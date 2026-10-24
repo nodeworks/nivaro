@@ -8,6 +8,7 @@ import { Skeleton } from '../ui/skeleton'
 import { resolveOptionFilterTokens } from './FieldRenderer'
 import { applyDisplayTemplate, buildCascadeFilter, getCascadeFilters, parseJson } from './helpers'
 import { resolveM2MRelatedCollection } from './M2MCombobox'
+import { collidingIds, disambiguators } from './option-disambiguate'
 import type { CMSField, CMSRelation } from './types'
 
 /**
@@ -308,6 +309,42 @@ export function QuickPicker({
     const dir = optionSort === '-label' ? -1 : 1
     return list.sort((a, b) => dir * labelOf(a).localeCompare(labelOf(b)))
   }, [options, tmpl, serverSort, optionSort])
+  // Same-label options ("CEG 1" twice) get the column that tells them apart,
+  // read only for those rows — the form picker's rule (option-disambiguate).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: labelOf is a closure over tmpl, which IS listed
+  const dupIds = useMemo(() => collidingIds(options ?? [], labelOf), [options, tmpl])
+  const { data: dupRows } = useQuery<Item[]>({
+    queryKey: ['quick-picker-dups', active?.target ?? '', dupIds.join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Item[] }>(
+          get(`/items/${active!.target}`, {
+            limit: dupIds.length,
+            picker: '1',
+            filter: JSON.stringify({ id: { _in: dupIds } }),
+            fields: '*'
+          })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!active?.target && dupIds.length > 0,
+    staleTime: 60_000
+  })
+  // biome-ignore lint/correctness/useExhaustiveDependencies: labelOf is a closure over tmpl, which IS listed
+  const dupDetail = useMemo(() => {
+    if (!dupRows?.length) return new Map<string, string>()
+    const labelById = new Map(
+      (options ?? []).map((it) => [String(it.id), labelOf(it).trim().toLowerCase()])
+    )
+    const groups = new Map<string, Item[]>()
+    for (const r of dupRows) {
+      const key = labelById.get(String(r.id))
+      if (key !== undefined) groups.set(key, [...(groups.get(key) ?? []), r])
+    }
+    return disambiguators(
+      [...groups.values()],
+      (fields?.split(',') ?? []).map((f) => f.split('.')[0])
+    )
+  }, [dupRows, options, tmpl, fields])
   const listMode = !debounced && (options?.length ?? 0) > CHIP_LIMIT ? true : !!debounced
   const [autoPicked, setAutoPicked] = useState<Set<string>>(() => new Set())
   const [userCleared, setUserCleared] = useState<Set<string>>(() => new Set())
@@ -570,6 +607,14 @@ export function QuickPicker({
                             )}
                           </span>
                           <span className='truncate'>{labelOf(it)}</span>
+                          {dupDetail.has(String(it.id)) && (
+                            <span
+                              className='ml-auto max-w-[45%] shrink-0 truncate pl-2 text-[11.5px] text-muted-foreground'
+                              data-option-detail
+                            >
+                              {dupDetail.get(String(it.id))}
+                            </span>
+                          )}
                         </button>
                       )
                     })}
@@ -595,6 +640,14 @@ export function QuickPicker({
                           )}
                         >
                           {labelOf(it)}
+                          {dupDetail.has(String(it.id)) && (
+                            <span
+                              className='ml-1.5 text-[11.5px] font-normal text-muted-foreground'
+                              data-option-detail
+                            >
+                              · {dupDetail.get(String(it.id))}
+                            </span>
+                          )}
                         </button>
                       )
                     })}

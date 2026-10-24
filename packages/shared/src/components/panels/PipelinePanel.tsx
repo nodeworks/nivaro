@@ -903,12 +903,15 @@ function OwnersSection({
   collection,
   item,
   states,
-  currentStateId
+  currentStateId,
+  returned = false
 }: {
   collection: string
   item: string
   states: PipelineState[]
   currentStateId?: string | null
+  /** The record came back to its current step (a send-back). */
+  returned?: boolean
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
@@ -951,6 +954,25 @@ function OwnersSection({
   const groupOwners = currentStateId
     ? (allOwners?.[currentStateId]?.owners ?? []).filter((o) => !manualUserIds.has(o.id))
     : []
+
+  // A record in its first step with nobody resolved is with the person who
+  // created it — "Back with Mark Lee" after a send-back — not "No owners".
+  // Display only: who may move the record is the server's answer.
+  const resolvedCount = groupOwners.length + (owners?.length ?? 0)
+  const atInitial = !!states.find((s) => s.id === currentStateId)?.is_initial
+  const ownersSettled = !ownersLoading && !groupOwnersLoading
+  const { data: creator } = useQuery<{ id: string; name: string | null } | null>({
+    queryKey: ['pipeline-record-creator', collection, item],
+    queryFn: () =>
+      client
+        .request<{ data: { id: string; name: string | null } | null }>(
+          get(`/pipelines/instance/${collection}/${item}/creator`)
+        )
+        .then((r) => r.data ?? null),
+    enabled: atInitial && ownersSettled && resolvedCount === 0,
+    staleTime: 60_000
+  })
+  const withCreator = atInitial && resolvedCount === 0 && creator?.name ? creator : null
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ownersKey })
@@ -1002,8 +1024,8 @@ function OwnersSection({
           Owners
           {ownersLoading || groupOwnersLoading ? (
             <span className='inline-block h-3 w-4 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
-          ) : (
-            <span className='text-slate-300'>({groupOwners.length + (owners?.length ?? 0)})</span>
+          ) : withCreator ? null : (
+            <span className='text-slate-300'>({resolvedCount})</span>
           )}
         </span>
         <span className='flex items-center gap-3'>
@@ -1025,7 +1047,14 @@ function OwnersSection({
           <Loader2 className='h-3.5 w-3.5 animate-spin' />
           Resolving owners…
         </div>
-      ) : groupOwners.length === 0 && (!owners || owners.length === 0) ? (
+      ) : withCreator ? (
+        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+          {returned ? 'Back with' : 'With'}{' '}
+          <span className='font-medium text-slate-700 dark:text-foreground'>
+            {withCreator.name}
+          </span>
+        </p>
+      ) : resolvedCount === 0 ? (
         <p className='text-[12px] text-slate-400'>No owners assigned.</p>
       ) : (
         <div className='space-y-px'>
@@ -2167,6 +2196,9 @@ function PipelinePanelInner({
                     item={item}
                     states={states ?? []}
                     currentStateId={data?.instance?.current_state ?? null}
+                    returned={(data?.history ?? []).some(
+                      (h) => !!h.from_state && h.to_state === data?.instance?.current_state
+                    )}
                   />
                 </div>
                 {hasTransitions && !hideActionsExpanded && (

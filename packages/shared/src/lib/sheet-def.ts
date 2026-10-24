@@ -17,10 +17,17 @@ export interface SheetHeaderInput {
   params?: Record<string, unknown>
   stats: unknown[]
   as_of?: SheetHeaderAsOf
+  /** One quiet line under the tiles saying what they cover ("Project
+   *  lifetime — every funding year"); `{{param}}` tokens read the header's
+   *  resolved params. */
+  note?: string
 }
 
 export interface SheetTabInput {
   label: string
+  /** One quiet line above the tab's view; `{{param}}` tokens read the tab's
+   *  resolved params ("Spend dated in {{funding_years}}"). */
+  note?: string
   config?: Record<string, unknown>
   matrix?: { config: Record<string, unknown>; scope: Record<string, string> }
 }
@@ -36,11 +43,26 @@ export interface ResolvedSheetHeader {
   config: Record<string, unknown>
   stats: unknown[]
   asOf?: SheetHeaderAsOf
+  note?: string
 }
 
 export type ResolvedSheetTabInput =
-  | { label: string; config: Record<string, unknown> }
+  | { label: string; config: Record<string, unknown>; note?: string }
   | { label: string; matrix: { config: Record<string, unknown>; scope: Record<string, string> } }
+
+/** `{{param}}` tokens from resolved params; a param that resolved to nothing
+ *  reads as `fallback` (the query ran unfiltered on it). */
+export function fillSheetNote(
+  note: string,
+  params: Record<string, unknown> | undefined,
+  fallback = 'all'
+): string {
+  return note.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k: string) => {
+    const v = params?.[k]
+    if (v === null || v === undefined || v === '') return fallback
+    return String(v).split(',').filter(Boolean).join(', ')
+  })
+}
 
 export function resolveSheetDef(
   def: SheetDefInput,
@@ -51,21 +73,26 @@ export function resolveSheetDef(
   initialTab: number
 } {
   const rawTabs = def.tabs ?? (def.config ? [{ label: 'View', config: def.config }] : [])
-  const resolvedTabs: ResolvedSheetTabInput[] = rawTabs.map((t) =>
-    t.matrix
-      ? { label: t.label, matrix: t.matrix }
-      : { label: t.label, config: resolveConfig(t.config ?? {}) }
-  )
-  const header = def.header
-    ? {
-        config: resolveConfig({
-          query_slug: def.header.query_slug,
-          params: def.header.params ?? {}
-        }),
-        stats: def.header.stats,
-        ...(def.header.as_of ? { asOf: def.header.as_of } : {})
-      }
-    : null
+  const resolvedTabs: ResolvedSheetTabInput[] = rawTabs.map((t) => {
+    if (t.matrix) return { label: t.label, matrix: t.matrix }
+    const config = resolveConfig(t.config ?? {})
+    const params = config.params as Record<string, unknown> | undefined
+    return { label: t.label, config, ...(t.note ? { note: fillSheetNote(t.note, params) } : {}) }
+  })
+  let header: ResolvedSheetHeader | null = null
+  if (def.header) {
+    const config = resolveConfig({
+      query_slug: def.header.query_slug,
+      params: def.header.params ?? {}
+    })
+    const params = config.params as Record<string, unknown> | undefined
+    header = {
+      config,
+      stats: def.header.stats,
+      ...(def.header.as_of ? { asOf: def.header.as_of } : {}),
+      ...(def.header.note ? { note: fillSheetNote(def.header.note, params) } : {})
+    }
+  }
   const wanted = Number.isInteger(def.initial_tab) ? (def.initial_tab as number) : 0
   const initialTab = wanted >= 0 && wanted < resolvedTabs.length ? wanted : 0
   return { resolvedTabs, header, initialTab }

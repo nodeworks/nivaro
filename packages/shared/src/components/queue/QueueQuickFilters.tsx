@@ -6,7 +6,7 @@ import type { FilterDef } from '../DataTable'
 // The queue's quick filters — the collection browser's facet bar, same
 // control (MultiPick), same draft-then-Apply rhythm: picking values stages a
 // draft, Apply commits it to the queue's filters, Clear resets to the
-// scope-seeded baseline. Every column filter stays in the table's header
+// scope-seeded baseline. Emptying a facet applies at once. Every column filter stays in the table's header
 // row; this bar holds the handful of facets people narrow a queue by.
 
 type Values = Record<string, string | string[]>
@@ -105,12 +105,18 @@ export function QueueQuickFilters({
             }
           : seededKeys.has(def.key) && selected.length > 0
             ? {
-                label: 'default',
+                label: 'your default',
                 cls: 'bg-nvr-cyan/[0.12] text-[#0284a8] dark:text-nvr-cyan',
                 title: `Pre-selected from your default ${def.placeholder} scope — adjust freely`
               }
             : null
-        const set = (vals: string[]) => setDraft((d) => ({ ...d, [def.key]: vals }))
+        const set = (vals: string[]) => {
+          setDraft((d) => ({ ...d, [def.key]: vals }))
+          // Removing a facet's last value (its ✕) applies at once — a cleared
+          // chip that still filters until Apply read as a broken list.
+          if (vals.length === 0 && asList(values[def.key]).length > 0)
+            onApply({ [def.key]: def.multi || def.type === 'combobox' ? [] : '' })
+        }
         return def.loadOptions ? (
           <AsyncFacet key={def.key} def={def} selected={selected} onChange={set} badge={badge} />
         ) : (

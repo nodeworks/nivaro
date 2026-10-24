@@ -3,7 +3,7 @@ import { ChevronRight, Loader2, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
-import { cn, titleCase } from '../../lib/utils'
+import { cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { useO2MStaging } from './O2MStagingContext'
 import type { ActiveLayoutData, CMSField, FieldGroup } from './types'
@@ -174,7 +174,7 @@ export function InlineGridField({
       )
     if (col.type === 'datetime' || col.type === 'date') {
       try {
-        return <span>{new Date(String(val)).toLocaleDateString()}</span>
+        return <span>{toLocalDateString(val)}</span>
       } catch {
         /* fall */
       }

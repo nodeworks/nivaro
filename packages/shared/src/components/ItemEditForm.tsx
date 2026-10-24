@@ -107,6 +107,7 @@ import { isRecordPopout, openRecordPopout } from '../lib/record-popout'
 import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
+import { htmlToText } from '../lib/sanitize-html'
 import {
   normalizeSummaryModeRules,
   resolveSummaryMode,
@@ -116,7 +117,7 @@ import {
   summaryRulesNeedState
 } from '../lib/summary-mode'
 import { useUnsavedWork } from '../lib/unsaved-work'
-import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
+import { choiceLabel, cn, formatRelative, titleCase, toLocalDateString } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { matchesVisibleWhen } from '../lib/visible-when'
 import { CopyAsButton } from './CopyAsButton'
@@ -170,6 +171,7 @@ import { HighlightedCode } from './item-edit/HighlightedCode'
 import {
   applyDisplayTemplate,
   type CascadeRule,
+  getCascadeFilters,
   isSentinelKey,
   parseJson,
   resolveColSpan,
@@ -180,6 +182,7 @@ import {
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { deferredSections } from './item-edit/lazy-sections'
+import { checkNumberEntry, NUMBER_FIELD_TYPES } from './item-edit/line-qty'
 import {
   computeLiveRollup,
   isDerivedForRecord,
@@ -623,6 +626,9 @@ export interface ItemEditFormProps {
   /** false = skip the document.title side effect — a workspace-tab host keeps
    *  several forms mounted and only the ACTIVE one may own the browser tab. */
   documentTitle?: boolean
+  /** false = mounted but not on screen (a background workspace tab): the form
+   *  lets its edit lock go after a while and takes it back when shown. */
+  active?: boolean
   /** Hands the host a stable save trigger (workspace "Save all"); called with
    *  null on unmount. The trigger runs the same handleSave the button does —
    *  validation and dialogs included. */
@@ -715,7 +721,7 @@ function formatHeaderFieldValue(value: unknown, format: string): string {
         )
   if (format === 'date') {
     try {
-      return new Date(String(value)).toLocaleDateString()
+      return toLocalDateString(value)
     } catch {
       return String(value)
     }
@@ -987,6 +993,61 @@ export function rulesForTriggerField(
     (r) => r.trigger_field === field && (r.is_active === true || r.is_active === 1)
   )
 }
+
+/** Required-field errors the draft now satisfies drop out — a value can land
+ *  without passing handleFieldChange (field rules, cross-record defaults, a
+ *  restored draft). The same object comes back when nothing changed. */
+export function dropSatisfiedRequired(
+  errors: Record<string, string>,
+  draft: Record<string, unknown>
+): Record<string, string> {
+  let next: Record<string, string> | null = null
+  for (const [f, msg] of Object.entries(errors)) {
+    if (msg !== 'This field is required') continue
+    const v = draft[f]
+    if (v === null || v === undefined || v === '') continue
+    next ??= { ...errors }
+    delete next[f]
+  }
+  return next ?? errors
+}
+
+/** Of the fields someone else's write changed, the ones that are still the
+ *  person's own edit: touched AND different from the baseline the edit was
+ *  made on. A touched field equal to that baseline (saved since, reverted,
+ *  "Take theirs") holds no edit and follows the server. */
+export function ownEditFields(
+  changed: string[],
+  touched: Set<string>,
+  draft: Record<string, unknown>,
+  baseline: Record<string, unknown>
+): Set<string> {
+  return new Set(changed.filter((k) => touched.has(k) && !valuesEqual(draft[k], baseline[k])))
+}
+
+/** Whether a field's validation rule is judged on this save — the server's
+ *  rule: an EXISTING record is judged only on fields changed this session,
+ *  plus a cross-field rule (gte_field / lte_field / required_if) whose
+ *  partner field changed. A legacy value that breaks a rule added later, in a
+ *  field nobody touched, must not make the record unsaveable. New records are
+ *  judged on everything. */
+export function ruleJudgedOnSave(
+  rule: { type: string; field?: unknown },
+  field: string,
+  isNew: boolean,
+  changed: (field: string) => boolean
+): boolean {
+  if (isNew || changed(field)) return true
+  const partner = typeof rule.field === 'string' ? rule.field : ''
+  return (
+    !!partner &&
+    (rule.type === 'gte_field' || rule.type === 'lte_field' || rule.type === 'required_if') &&
+    changed(partner)
+  )
+}
+
+/** The save-blocking error for a value its own picker no longer offers. */
+export const UNAVAILABLE_OPTION_ERROR = 'Not an available option — pick another or clear it'
 
 // Merges /field-rules/evaluate results into a draft. Returned values overwrite
 // (the only-when-empty decision already happened server-side against the
@@ -1342,6 +1403,7 @@ function ItemEditFormView({
   moreMenuItems,
   onDirtyChange,
   documentTitle = true,
+  active = true,
   registerSaveHandler,
   onDuplicate,
   showRevisions = true,
@@ -1869,8 +1931,13 @@ function ItemEditFormView({
   // one-shot cyan glow (FieldRow keys its wrapper on the tick, so a repeat
   // write on the same field glows again). Purely presentational.
   const [autoFillTicks, setAutoFillTicks] = useState<Record<string, number>>({})
+  // The same fields, kept for the recovery draft: on a NEW form a value a
+  // rule derived from the person's pick is part of their work (a Billing
+  // Location's Shipping Location + Org Code), not a layout default.
+  const autoFilledFieldsRef = useRef<Set<string>>(new Set())
   const markAutoFilled = useCallback((fields: string[]) => {
     if (fields.length === 0) return
+    for (const f of fields) autoFilledFieldsRef.current.add(f)
     setAutoFillTicks((prev) => {
       const next = { ...prev }
       for (const f of fields) next[f] = (next[f] ?? 0) + 1
@@ -1919,6 +1986,12 @@ function ItemEditFormView({
   // ── Save progress dialog ───────────────────────────────────────────────────
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveSteps, setSaveSteps] = useState<SaveStepItem[]>([])
+  // The merge dialog replaces the progress dialog: a Radix modal left open
+  // under it keeps body at pointer-events:none, so the chooser rendered on
+  // top but no click reached it (only Escape got a mouse user out).
+  useEffect(() => {
+    if (collision) setSaveDialogOpen(false)
+  }, [collision])
   function updateStep(
     id: string,
     upd: Partial<SaveStepItem> | ((prev: SaveStepItem) => Partial<SaveStepItem>)
@@ -2828,6 +2901,13 @@ function ItemEditFormView({
       const changed = Object.keys(itemData).filter(
         (k) => !k.startsWith('__') && !valuesEqual(prev[k], itemData[k])
       )
+      // A touched field holds an edit only while its draft differs from the
+      // baseline it was made on. Touched-then-saved, reverted or "Take
+      // theirs" fields equal that baseline and follow the server — keeping
+      // them made an idle tab show someone else's save as its own phantom
+      // "2 changes" and resend the old values against an old revision.
+      const ownEdits = ownEditFields(changed, userTouchedRef.current, draftRef.current, prev)
+      const isOwnEdit = (k: string) => ownEdits.has(k)
       if (changed.length > 0) {
         const lt = lastTouchRef.current
         const by = lt?.user_id && lt.user_id !== authUserId ? lt.user_name : null
@@ -2837,15 +2917,20 @@ function ItemEditFormView({
           for (const k of changed) {
             // A field the user ALSO edited is a conflict: their draft stays,
             // the remote value waits behind "Take theirs / Keep mine" (#6).
-            const conflict =
-              userTouchedRef.current.has(k) && !valuesEqual(draftRef.current[k], itemData[k])
+            const conflict = isOwnEdit(k) && !valuesEqual(draftRef.current[k], itemData[k])
             next[k] = conflict
               ? { was: prev[k], by, at, theirs: itemData[k], conflict: true }
               : { was: prev[k], by, at }
           }
           return next
         })
-        if (userTouchedRef.current.size > 0) {
+        for (const k of changed) if (!isOwnEdit(k)) userTouchedRef.current.delete(k)
+        // The collision baseline moves with the adopted values.
+        void qc.invalidateQueries({ queryKey: ['collision-base', collection, itemId] })
+        const editsLeft = [...userTouchedRef.current].some(
+          (k) => !valuesEqual(draftRef.current[k], itemData[k])
+        )
+        if (editsLeft) {
           initialDataRef.current = itemData
           const merged = { ...draftRef.current }
           for (const k of changed) if (!userTouchedRef.current.has(k)) merged[k] = itemData[k]
@@ -2997,8 +3082,9 @@ function ItemEditFormView({
       for (const [k, v] of Object.entries(draftRef.current)) {
         if (k.startsWith('__') || valuesEqual(v, base[k])) continue
         // A new form's layout defaults / prefill are not the person's work —
-        // only fields they touched count (an existing record diffs vs base).
-        if (isNew && !userTouchedRef.current.has(k)) continue
+        // only fields they touched, or that a rule filled from one of their
+        // picks, count (an existing record diffs vs base).
+        if (isNew && !userTouchedRef.current.has(k) && !autoFilledFieldsRef.current.has(k)) continue
         fields[k] = v
         baseVals[k] = base[k]
       }
@@ -3065,6 +3151,8 @@ function ItemEditFormView({
     authUserId
   ])
 
+  // Set once the rule / cross-default runners exist (they are declared below).
+  const rederiveRef = useRef<(field: string, value: unknown) => void>(() => {})
   const restoreDraft = useCallback(() => {
     const r = recoveryRef.current
     if (r.state !== 'offer') return
@@ -3091,6 +3179,15 @@ function ItemEditFormView({
       setM2mUnlinks(new Map(Object.entries(d.m2m_unlinks).map(([k, x]) => [k, new Set(x)])))
     setIsDirty(true)
     setRecovery({ state: 'none' })
+    // Re-derive what the restored picks fill (field rules, cross-record
+    // defaults) — a draft stored without those values (saved before they
+    // landed, or by an older build) came back with Shipping Location / Org
+    // Code empty and flagged Required. Fill-only-when-empty: every restored
+    // value wins over a re-derived one.
+    for (const [k, v] of Object.entries(d.fields)) {
+      if (v === null || v === undefined || v === '') continue
+      rederiveRef.current(k, v)
+    }
   }, [])
   const discardDraft = useCallback(() => {
     void deleteDraft(recoveryKey)
@@ -3646,7 +3743,7 @@ function ItemEditFormView({
   upstreamCascadesRef.current = runUpstreamCascades
 
   const runCrossDefaults = useCallback(
-    (field: string, value: unknown, depth = 0) => {
+    (field: string, value: unknown, depth = 0, fillEmptyOnly = false) => {
       if (value === null || value === undefined || value === '') return
       if (depth > 2) return
       for (const fc of fieldConfig ?? []) {
@@ -3665,7 +3762,7 @@ function ItemEditFormView({
         }
         const fkField = cfg?.source_fk_field || fc.field
         if (fkField !== field || !cfg?.source_collection || !cfg.field_map) continue
-        if (depth === 0) undoDerivedFills(field)
+        if (depth === 0 && !fillEmptyOnly) undoDerivedFills(field)
         const map = cfg.field_map
         // Alias-mapped source fields must stay OUT of the readOne fields= —
         // readOne 500s on explicit alias selections (documented gotcha);
@@ -3798,6 +3895,14 @@ function ItemEditFormView({
               }
               patch[target] = v ?? null
             }
+            // A re-derive (restored draft) never replaces a value already there.
+            if (fillEmptyOnly)
+              for (const [k, v] of Object.entries(patch)) {
+                const cur = draftRef.current[k]
+                const curEmpty = cur === null || cur === undefined || cur === ''
+                if (!curEmpty || v === null || v === undefined || v === '') delete patch[k]
+              }
+            if (Object.keys(patch).length === 0) return
             draftRef.current = { ...draftRef.current, ...patch }
             setDraft((prev) => ({ ...prev, ...patch }))
             markAutoFilled(Object.keys(patch))
@@ -3808,7 +3913,7 @@ function ItemEditFormView({
             // Depth-capped to break config cycles.
             for (const [target, v] of Object.entries(patch)) {
               if (target !== field && v != null && v !== '') {
-                runCrossDefaults(target, v, depth + 1)
+                runCrossDefaults(target, v, depth + 1, fillEmptyOnly)
                 upstreamCascadesRef.current?.(target, v, depth + 1)
               }
             }
@@ -3907,7 +4012,7 @@ function ItemEditFormView({
   // effective id set; scalar callers omit it and the live draft value is read
   // fresh at fire time.
   const evaluateFieldRulesForChange = useCallback(
-    (field: string, explicitValue?: unknown) => {
+    (field: string, explicitValue?: unknown, opts?: { fillEmptyOnly?: boolean }) => {
       if (designOn) return
       const rules = rulesForTriggerField(fieldRules, field)
       if (rules.length === 0) return
@@ -3932,12 +4037,36 @@ function ItemEditFormView({
               draft: targetDraft
             })
           )
-          .then((res) => applyFieldRuleResults(res.data, sentSeq))
+          .then((res) => {
+            let results = res.data
+            // Re-derive after a draft restore: only targets still empty.
+            if (opts?.fillEmptyOnly && results) {
+              results = { ...results }
+              for (const k of Object.keys(results)) {
+                if (m2mAliasFieldsForRules.has(k)) continue
+                const cur = draftRef.current[k]
+                if (cur !== null && cur !== undefined && cur !== '') delete results[k]
+              }
+            }
+            applyFieldRuleResults(results, sentSeq)
+          })
           .catch(() => {})
       }, 300)
     },
-    [designOn, fieldRules, collection, client, getM2MEffectiveIds, applyFieldRuleResults]
+    [
+      designOn,
+      fieldRules,
+      collection,
+      client,
+      getM2MEffectiveIds,
+      applyFieldRuleResults,
+      m2mAliasFieldsForRules
+    ]
   )
+  rederiveRef.current = (field, value) => {
+    evaluateFieldRulesForChange(field, undefined, { fillEmptyOnly: true })
+    runCrossDefaults(field, value, 0, true)
+  }
 
   // M2M alias triggers never flow through handleFieldChange (they commit via
   // M2MStagingContext, not draft onChange), so watch the staging maps
@@ -4137,6 +4266,16 @@ function ItemEditFormView({
     })
   }, [o2mEffectiveCounts, o2mAliasFields])
 
+  // Values written OUTSIDE handleFieldChange (field rules, cross-record
+  // defaults, cascades, imports, a restored draft) clear the required error
+  // they satisfy — the 'Can't save yet' list follows the current values. A
+  // rule-filled Shipping Location stayed listed as "Required" while the field
+  // showed it (and Create then saved fine). Alias fields have no draft value
+  // and are judged by the count effects above.
+  useEffect(() => {
+    setValidationErrors((prev) => dropSatisfiedRequired(prev, draft))
+  }, [draft])
+
   const handleM2MCountChange = useCallback(
     (field: string, count: number) => {
       setFieldCounts((prev) => (prev[field] === count ? prev : { ...prev, [field]: count }))
@@ -4162,7 +4301,10 @@ function ItemEditFormView({
   // ── Item lock ──────────────────────────────────────────────────────────────
   // Summary mode neither takes nor honours the edit lock: the lock is
   // only acquired once the opening mode has settled on Edit, released when
-  // the person flips to Summary, re-acquired on the way back.
+  // the person flips to Summary, re-acquired on the way back. Opening a
+  // record only learns who holds it; the lock itself is taken on the first
+  // real edit (an approver re-opening what they sent back used to lock the
+  // creator out of fixing it), and let go while the form is off screen.
   const lockEnabled =
     !designOn &&
     showLockBanner &&
@@ -4188,10 +4330,20 @@ function ItemEditFormView({
     release: releaseLock,
     releasing: releasingLock,
     released: lockReleased,
-    relock: relockLock
-  } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled)
+    relock: relockLock,
+    claim: claimLock
+  } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled, { lazy: true, active })
   const isReadOnly = lockReadOnly || !!recordGone
-  relockOnEditRef.current = lockReleased && !lockHolder ? () => void relockLock() : null
+  relockOnEditRef.current =
+    lockEnabled && !lockAcquired && !lockHolder
+      ? () => void (lockReleased ? relockLock() : claimLock())
+      : null
+  // Grid rows, staged links and restored drafts never pass handleFieldChange:
+  // unsaved work of any kind is edit intent too.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: lockEnabled re-fires the intent once the lock turns on
+  useEffect(() => {
+    if (hasUnsaved) relockOnEditRef.current?.()
+  }, [hasUnsaved, lockEnabled])
 
   // ── Layout / groups ────────────────────────────────────────────────────────
   const assignments: SlotAssignment[] = activeLayoutData?.assignments ?? []
@@ -4588,7 +4740,32 @@ function ItemEditFormView({
       else next.delete(field)
       return next
     })
+    // The picker found the value valid again (re-picked, parent changed back):
+    // the save-blocking error it caused goes with it.
+    if (!stale)
+      setValidationErrors((prev) => {
+        if (prev[field] !== UNAVAILABLE_OPTION_ERROR) return prev
+        const next = { ...prev }
+        delete next[field]
+        return next
+      })
   }, [])
+  // Whether a flagged value blocks the save: always on a new record; on an
+  // existing one only when this session changed the value or one of its
+  // cascade parents (a Region switched under the picked locations). A value
+  // stored long ago that nobody touched keeps saving — an old record must
+  // never get stuck on a field the person is not working on.
+  const staleBlocksSave = (field: string): boolean => {
+    if (isNew) return true
+    if (!valuesEqual(draftRef.current[field], initialDataRef.current[field])) return true
+    const fc = (fieldConfig ?? []).find((f) => f.field === field)
+    return getCascadeFilters(fc?.dependency_config ?? null).some(
+      (r) =>
+        !!r.parent_field &&
+        userTouchedRef.current.has(r.parent_field) &&
+        !valuesEqual(draftRef.current[r.parent_field], initialDataRef.current[r.parent_field])
+    )
+  }
 
   const liveRollupValues = useMemo(() => {
     const out = new Map<string, number>()
@@ -5328,7 +5505,7 @@ function ItemEditFormView({
       // Dates read as dates; everything else as trimmed plain text.
       const str = String(v)
       if (/^\d{4}-\d{2}-\d{2}/.test(str) && !Number.isNaN(new Date(str).getTime())) {
-        lines.push(`${label}: ${new Date(str).toLocaleDateString()}`)
+        lines.push(`${label}: ${toLocalDateString(str)}`)
         continue
       }
       lines.push(
@@ -5627,6 +5804,27 @@ function ItemEditFormView({
   // Expand all (#2627): every step and tab laid out one under another.
   const designStackAll = designOn && !!designCtx?.fold?.open
 
+  // Layout order: step by step (tabs first in their order, General's
+  // sections where they sit), then the field's position inside its group;
+  // anything the layout doesn't place falls back to registry order. The
+  // 'Can't save yet' list and the jump after a failed save share it, so the
+  // step that opens is the one holding issue 1.
+  const fieldLayoutOrder = useMemo(() => {
+    const order = new Map<string, number>()
+    let pos = 0
+    const stepKeys = hasTabs ? allSteps.map((st) => st.key) : []
+    const groupKeys = [
+      ...stepKeys.filter((k) => k !== '__general__'),
+      ...Object.keys(groupedMap).filter((k) => !stepKeys.includes(k))
+    ]
+    for (const gk of groupKeys)
+      for (const f of groupedMap[gk] ?? []) if (!order.has(f.field)) order.set(f.field, pos++)
+    for (const f of allFields) if (!order.has(f.field)) order.set(f.field, pos++)
+    return order
+  }, [allFields, groupedMap, hasTabs, allSteps])
+  const byLayoutOrder = (a: string, b: string) =>
+    (fieldLayoutOrder.get(a) ?? 1e9) - (fieldLayoutOrder.get(b) ?? 1e9)
+
   // Rows for the 'Can't save yet' summary — form order, labelled, with the
   // step/tab/section the field lives on (steps layouts hide most fields).
   const validationSummaryItems = useMemo<ValidationSummaryItem[]>(() => {
@@ -5643,21 +5841,8 @@ function ItemEditFormView({
       if (hasTabs && allSteps.some((st) => st.key === '__general__')) return 'General'
       return group.label ?? null
     }
-    // Layout order: step by step (tabs first in their order, General's
-    // sections where they sit), then the field's position inside its group;
-    // anything the layout doesn't place falls back to registry order.
-    const order = new Map<string, number>()
-    let pos = 0
-    const stepKeys = hasTabs ? allSteps.map((st) => st.key) : []
-    const groupKeys = [
-      ...stepKeys.filter((k) => k !== '__general__'),
-      ...Object.keys(groupedMap).filter((k) => !stepKeys.includes(k))
-    ]
-    for (const gk of groupKeys)
-      for (const f of groupedMap[gk] ?? []) if (!order.has(f.field)) order.set(f.field, pos++)
-    for (const f of allFields) if (!order.has(f.field)) order.set(f.field, pos++)
     return keys
-      .sort((a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9))
+      .sort((a, b) => (fieldLayoutOrder.get(a) ?? 1e9) - (fieldLayoutOrder.get(b) ?? 1e9))
       .map((field) => {
         const meta = allFields.find((f) => f.field === field)
         const message = validationErrors[field]
@@ -5668,7 +5853,7 @@ function ItemEditFormView({
           location: locationFor(field)
         }
       })
-  }, [validationErrors, allFields, groupedMap, groups, hasTabs, allSteps])
+  }, [validationErrors, allFields, groupedMap, groups, hasTabs, allSteps, fieldLayoutOrder])
 
   // Consume ?step= once on mount (#129) — beats the persisted tab.
   const stepParamConsumedRef = useRef(false)
@@ -6482,6 +6667,7 @@ function ItemEditFormView({
   // ── Client-side validation ─────────────────────────────────────────────────
   function validateAll(): boolean {
     const errs: Record<string, string> = {}
+    const changedThisSession = (k: string) => !valuesEqual(draft[k], initialDataRef.current[k])
     for (const f of allFields) {
       if (f.hidden || f.readonly || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field)) continue
       // A field the RESOLVED layout doesn't render can never be filled from
@@ -6526,10 +6712,17 @@ function ItemEditFormView({
                 }
               })()
             : f.validation_rules
-        ) as Array<{ type: string; value?: unknown; message?: string; soft?: boolean }>
+        ) as Array<{
+          type: string
+          value?: unknown
+          field?: string
+          message?: string
+          soft?: boolean
+        }>
         if (Array.isArray(rules)) {
           for (const rule of rules) {
             if (!rule || rule.soft) continue
+            if (!ruleJudgedOnSave(rule, f.field, isNew, changedThisSession)) continue
             const err = applyValidationRule(
               rule,
               draft[f.field],
@@ -6548,13 +6741,38 @@ function ItemEditFormView({
         const over = fieldCounterError(f, draft[f.field], f.label ?? titleCase(f.field))
         if (over) errs[f.field] = over
       }
+      // A number the column cannot hold (1e308, a fraction in an integer
+      // column, past the type's range) — FieldRenderer says so under the
+      // input; this keeps it from being sent. A stored value nobody changed
+      // never blocks.
+      if (
+        !errs[f.field] &&
+        NUMBER_FIELD_TYPES.has(f.type) &&
+        (isNew || !valuesEqual(draft[f.field], initialDataRef.current[f.field]))
+      ) {
+        const entry = checkNumberEntry(draft[f.field], {
+          type: f.type,
+          label: f.label || titleCase(f.field)
+        })
+        if (!entry.ok) errs[f.field] = entry.message
+      }
+      // A value its own picker flags "not an available option" (install /
+      // shipping locations outside the Region picked after them) blocks like
+      // a missing one — it used to save and come back as data-integrity
+      // badges. The picker's verdict is the one the form already shows.
+      if (!errs[f.field] && staleFields.has(f.field)) {
+        const v = draft[f.field]
+        if (v !== null && v !== undefined && v !== '' && staleBlocksSave(f.field))
+          errs[f.field] = UNAVAILABLE_OPTION_ERROR
+      }
     }
     if (Object.keys(errs).length > 0) {
       setValidationErrors(errs)
       setShowValidationSummary(true)
       // One problem: say exactly what it is. Several: the count — the summary
-      // at the top of the form lists them and jumps to each.
-      const keys = Object.keys(errs)
+      // at the top of the form lists them and jumps to each. Layout order, so
+      // the jump below lands on issue 1 of the summary, not a later step.
+      const keys = Object.keys(errs).sort(byLayoutOrder)
       const n = keys.length
       if (n === 1) {
         const f = allFields.find((x) => x.field === keys[0])
@@ -10200,6 +10418,7 @@ function ItemEditFormView({
                                           ) : (
                                             <button
                                               type='button'
+                                              aria-label='Copy title'
                                               className='cursor-pointer opacity-0 transition-opacity group-hover/title:opacity-100'
                                               onClick={() => {
                                                 navigator.clipboard
@@ -10360,6 +10579,7 @@ function ItemEditFormView({
                                           ) : (
                                             <button
                                               type='button'
+                                              aria-label='Copy subtitle'
                                               className='cursor-pointer opacity-0 transition-opacity group-hover/subtitle:opacity-100'
                                               onClick={() => {
                                                 navigator.clipboard
@@ -11647,6 +11867,7 @@ function ItemEditFormView({
                                                         ) : (
                                                           <button
                                                             type='button'
+                                                            aria-label='Copy value'
                                                             className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
                                                             onClick={(e) =>
                                                               copyCell(
@@ -11693,6 +11914,7 @@ function ItemEditFormView({
                                                       ) : (
                                                         <button
                                                           type='button'
+                                                          aria-label='Copy owners'
                                                           className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
                                                           onClick={(e) =>
                                                             copyCell(
@@ -11967,6 +12189,7 @@ function ItemEditFormView({
                                                     ) : (
                                                       <button
                                                         type='button'
+                                                        aria-label='Copy value'
                                                         className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
                                                         onClick={(e) => {
                                                           const cell =
@@ -12413,6 +12636,8 @@ function ItemEditFormView({
                                             collection={collection}
                                             itemId={itemId}
                                             staging={m2mStagingCtx}
+                                            stagedO2MRows={pendingO2MRows}
+                                            stagedO2MDeletes={pendingO2MDeletes}
                                             errors={validationErrors}
                                             staleFields={staleFields}
                                             changedFields={changedFieldMap}
@@ -12558,17 +12783,46 @@ function MidairCollisionDialog({
   const [takeTheirs, setTakeTheirs] = useState<Set<string>>(
     () => new Set(collision.conflicts.map((c) => c.field))
   )
-  const fmt = (v: unknown) =>
-    v == null || v === ''
-      ? '—'
-      : typeof v === 'object'
-        ? JSON.stringify(v).slice(0, 120)
-        : String(v).slice(0, 200)
+  // Portal into the hosting dialog (a record drill sheet) when there is one —
+  // a modal sheet's lock makes everything outside it unclickable.
+  const [host, setHost] = useState<HTMLElement | null>(null)
+  // Rich text reads as text here, never as raw <p> markup.
+  const fmt = (v: unknown) => {
+    if (v == null || v === '') return '—'
+    if (typeof v === 'object') return JSON.stringify(v).slice(0, 120)
+    const str = String(v)
+    const text = /<[a-z][^>]*>/i.test(str) ? htmlToText(str) : str
+    return text.trim() ? text.slice(0, 200) : '—'
+  }
+  const anchor = (
+    <span
+      hidden
+      ref={(el) => {
+        if (el && !host)
+          setHost((el.closest('[role="dialog"]') as HTMLElement | null) ?? document.body)
+      }}
+    />
+  )
+  if (!host) return anchor
   return createPortal(
-    <div className='fixed inset-0 z-[130] flex items-center justify-center'>
+    <div
+      role='dialog'
+      aria-modal='true'
+      aria-labelledby='nvr-midair-title'
+      className='pointer-events-auto fixed inset-0 z-[130] flex items-center justify-center'
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation()
+          onCancel()
+        }
+      }}
+    >
       <div className='absolute inset-0 bg-black/40' onClick={onCancel} />
       <div className='relative w-[560px] max-w-[94vw] rounded-lg border border-slate-200 bg-white p-5 shadow-xl dark:border-border dark:bg-card'>
-        <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+        <p
+          id='nvr-midair-title'
+          className='text-[14px] font-semibold text-slate-900 dark:text-foreground'
+        >
           Someone else changed this record
         </p>
         <p className='mt-1 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
@@ -12648,6 +12902,6 @@ function MidairCollisionDialog({
         </div>
       </div>
     </div>,
-    document.body
+    host
   )
 }

@@ -138,12 +138,22 @@ export function RichTextEditor({
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
-      StarterKit.configure({ bulletList: { keepMarks: true }, orderedList: { keepMarks: true } }),
+      // StarterKit 3 bundles its own Link (autolink on) and Underline; they are
+      // registered below with this editor's options, so the kit's copies stay out.
+      StarterKit.configure({
+        bulletList: { keepMarks: true },
+        orderedList: { keepMarks: true },
+        link: false,
+        underline: false
+      }),
       Underline,
       Placeholder.configure({ placeholder: placeholder ?? 'Start writing…' }),
       // 'record' protocol (#666): record://<collection>/<id> links survive the
       // Link extension's allowed-URI validation and render as record chips.
-      Link.configure({ openOnClick: false, autolink: true, protocols: ['record'] })
+      // No autolink while typing: EFP site codes read like domains (byron.il,
+      // oswego.il) and every one became a bogus http:// link in notes that go
+      // to suppliers. Links are explicit — the toolbar, or pasting a URL.
+      Link.configure({ openOnClick: false, autolink: false, protocols: ['record'] })
     ],
     content: initialHtml,
     editable: !disabled,

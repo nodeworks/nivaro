@@ -10,6 +10,9 @@ import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
 const HEARTBEAT_MS = 60_000
+/** A lock held by a form that is off screen (hidden browser tab, background
+ *  workspace tab) is let go after this long; it comes back on return. */
+const OFF_SCREEN_RELEASE_MS = 2 * 60_000
 
 export interface LockHolder {
   locked_by: string
@@ -18,6 +21,9 @@ export interface LockHolder {
   note?: string | null
   /** Minutes since the holder last did anything (presence), when known. */
   idle_minutes?: number | null
+  /** Whether THIS viewer may force-take the lock (server verdict; absent =
+   *  unknown, the button shows and the server's 403 explains). */
+  may_take_over?: boolean
 }
 
 export interface LockQueueEntry {
@@ -26,11 +32,33 @@ export interface LockQueueEntry {
   requested_at: string
 }
 
+function useDocumentVisible(): boolean {
+  const [visible, setVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  )
+  useEffect(() => {
+    const on = () => setVisible(document.visibilityState !== 'hidden')
+    document.addEventListener('visibilitychange', on)
+    return () => document.removeEventListener('visibilitychange', on)
+  }, [])
+  return visible
+}
+
 export function useItemLock(
   collection: string | undefined,
   item: string | undefined,
-  enabled: boolean
+  enabled: boolean,
+  opts: {
+    /** Take the lock on the first real edit (`claim`), not on open — opening
+     *  a record only learns whether someone else holds it. A reader who never
+     *  edits (an approver re-opening what they sent back) never blocks the
+     *  person who has to fix it. */
+    lazy?: boolean
+    /** False = mounted but not on screen (a background workspace tab). */
+    active?: boolean
+  } = {}
 ) {
+  const { lazy = false, active = true } = opts
   const client = useNivaroClient()
   const { isAdmin, userId } = useItemEditAuth()
   const [lockHolder, setLockHolder] = useState<LockHolder | null>(null)
@@ -50,6 +78,15 @@ export function useItemLock(
   const [releasing, setReleasing] = useState(false)
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const acquiredRef = useRef(false)
+  // Let go because the form went off screen (or the page was hidden) — taken
+  // back the moment it is shown again.
+  const offScreenReleasedRef = useRef(false)
+  const claimingRef = useRef(false)
+  // The lock routes answer 404 for a record this person cannot read: there is
+  // nothing to lock, so stop asking (no heartbeat, no retries, no banner).
+  const notVisibleRef = useRef(false)
+  // Why the last acquire failed — only a 409 means "someone else is editing".
+  const lastRefusalRef = useRef<number | null>(null)
 
   const stopHeartbeat = useCallback(() => {
     if (heartbeatRef.current) {
@@ -59,7 +96,8 @@ export function useItemLock(
   }, [])
 
   const acquire = useCallback(async () => {
-    if (!collection || !item) return false
+    if (!collection || !item || notVisibleRef.current) return false
+    lastRefusalRef.current = null
     try {
       await client.request(post(`/item-locks/${collection}/${item}/lock`, {}))
       acquiredRef.current = true
@@ -139,12 +177,21 @@ export function useItemLock(
       }
       const status = e.status ?? e.response?.status
       const body = (e.response?.data ?? e.response) as LockHolder | undefined
+      lastRefusalRef.current = status ?? null
+      if (status === 404) {
+        notVisibleRef.current = true
+        stopHeartbeat()
+        acquiredRef.current = false
+        setAcquired(false)
+        return false
+      }
       if (status === 409 && body?.locked_by) {
         acquiredRef.current = false
         setAcquired(false)
         setLockHolder({
           locked_by: body.locked_by,
-          locked_by_name: body.locked_by_name ?? null
+          locked_by_name: body.locked_by_name ?? null,
+          ...(typeof body.may_take_over === 'boolean' ? { may_take_over: body.may_take_over } : {})
         })
       }
       return false
@@ -160,6 +207,8 @@ export function useItemLock(
           locked_by_name?: string | null
           note?: string | null
           locked_by_idle_minutes?: number | null
+          is_mine?: boolean
+          may_take_over?: boolean
           queue?: LockQueueEntry[]
           my_position?: number | null
         } | null
@@ -170,6 +219,8 @@ export function useItemLock(
             locked_by_name?: string | null
             note?: string | null
             locked_by_idle_minutes?: number | null
+            is_mine?: boolean
+            may_take_over?: boolean
             queue?: LockQueueEntry[]
             my_position?: number | null
           }
@@ -177,24 +228,34 @@ export function useItemLock(
         | undefined
       setQueue(Array.isArray(d?.queue) ? d.queue : [])
       setMyPosition(typeof d?.my_position === 'number' ? d.my_position : null)
-      if (d?.locked_by && !acquiredRef.current)
+      // This person's own lock (another of their windows) is not "someone
+      // else is editing" — the next acquire simply takes it over.
+      const mine =
+        d?.is_mine === true ||
+        (!!userId && String(d?.locked_by ?? '').toLowerCase() === userId.toLowerCase())
+      const canTakeOver =
+        typeof d?.may_take_over === 'boolean' ? { may_take_over: d.may_take_over } : {}
+      if (d?.locked_by && !acquiredRef.current && !mine)
         setLockHolder((cur) =>
           cur
             ? {
                 ...cur,
                 note: d.note ?? cur.note ?? null,
-                idle_minutes: d.locked_by_idle_minutes ?? cur.idle_minutes ?? null
+                idle_minutes: d.locked_by_idle_minutes ?? cur.idle_minutes ?? null,
+                ...canTakeOver
               }
             : {
                 locked_by: String(d.locked_by),
                 locked_by_name: d.locked_by_name ?? null,
-                note: d.note ?? null
+                note: d.note ?? null,
+                ...canTakeOver
               }
         )
-    } catch {
-      /* the banner works without the extras */
+    } catch (err) {
+      if ((err as { status?: number })?.status === 404) notVisibleRef.current = true
+      /* otherwise the banner works without the extras */
     }
-  }, [client, collection, item])
+  }, [client, collection, item, userId])
   // Keyed on the holder's ID, not the object: refreshLockInfo rewrites the
   // holder object (note/queue) and an object-keyed effect would loop.
   const lockedById = lockHolder?.locked_by ?? null
@@ -204,9 +265,13 @@ export function useItemLock(
 
   useEffect(() => {
     if (!enabled || !collection || !item) return
-    acquire()
+    offScreenReleasedRef.current = false
+    notVisibleRef.current = false
+    if (lazy) void refreshLockInfo()
+    else acquire()
     return () => {
       stopHeartbeat()
+      offScreenReleasedRef.current = false
       if (acquiredRef.current) {
         acquiredRef.current = false
         client
@@ -215,7 +280,90 @@ export function useItemLock(
           .catch(() => {})
       }
     }
-  }, [enabled, collection, item, acquire, client, stopHeartbeat, userId])
+  }, [enabled, collection, item, acquire, client, stopHeartbeat, userId, lazy, refreshLockInfo])
+
+  /** Real edit intent (lazy mode): take the lock now, once. A 409 lands in
+   *  lockHolder like any acquire — the form turns read-only and says who. */
+  const claim = useCallback(async () => {
+    if (!enabled || acquiredRef.current || claimingRef.current) return
+    claimingRef.current = true
+    try {
+      const ok = await acquire()
+      if (!ok && lastRefusalRef.current === 409)
+        toast.warning('Someone else is editing this record — your change can’t be saved yet')
+    } finally {
+      claimingRef.current = false
+    }
+  }, [enabled, acquire])
+
+  // Off screen (hidden browser tab, background workspace tab): stop holding
+  // the record for others after a while; take it back on return.
+  const visible = useDocumentVisible()
+  const onScreen = active && visible
+  useEffect(() => {
+    if (!enabled || !collection || !item) return
+    if (onScreen) {
+      if (offScreenReleasedRef.current) {
+        offScreenReleasedRef.current = false
+        void acquire()
+      }
+      return
+    }
+    const t = setTimeout(() => {
+      if (!acquiredRef.current) return
+      stopHeartbeat()
+      acquiredRef.current = false
+      setAcquired(false)
+      offScreenReleasedRef.current = true
+      client
+        .request(del(`/item-locks/${collection}/${item}/lock`))
+        .then(() => announceRecordTabs(userId, 'lock-released', collection, item))
+        .catch(() => {})
+    }, OFF_SCREEN_RELEASE_MS)
+    return () => clearTimeout(t)
+  }, [enabled, onScreen, collection, item, acquire, client, stopHeartbeat, userId])
+
+  // Leaving the page (close, reload, cross-document navigation): an unmount
+  // cleanup's request rarely makes it out, so the lock sat until its TTL ran
+  // out. A keepalive DELETE survives the page going away.
+  useEffect(() => {
+    if (!enabled || !collection || !item) return
+    const onPageHide = () => {
+      if (!acquiredRef.current) return
+      stopHeartbeat()
+      acquiredRef.current = false
+      offScreenReleasedRef.current = true // a back/forward-cache restore retakes it
+      try {
+        const token = client.getToken?.()
+        const base = (client as { url?: string }).url ?? ''
+        // lock/release lets go of the caller's OWN lock only — safe to fire
+        // blind from a page that is going away.
+        void fetch(
+          `${base}/api/item-locks/${encodeURIComponent(collection)}/${encodeURIComponent(item)}/lock/release`,
+          {
+            method: 'POST',
+            keepalive: true,
+            credentials: token ? 'omit' : 'include',
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+          }
+        ).catch(() => {})
+      } catch {
+        /* best effort — the TTL still frees it */
+      }
+    }
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted && offScreenReleasedRef.current) {
+        offScreenReleasedRef.current = false
+        void acquire()
+      }
+    }
+    window.addEventListener('pagehide', onPageHide)
+    window.addEventListener('pageshow', onPageShow)
+    return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('pageshow', onPageShow)
+    }
+  }, [enabled, collection, item, client, stopHeartbeat, acquire])
 
   // #2131: the same person's other window (a popped-out record, another tab)
   // just released the lock while this one still edits — take it straight back.
@@ -401,6 +549,9 @@ export function useItemLock(
         (err as { response?: { error?: string }; message?: string })?.response?.error ??
         'Failed to take over the lock'
       toast.error(msg)
+      // Refused for this role: stop offering a button that can only fail.
+      if ((err as { status?: number })?.status === 403)
+        setLockHolder((cur) => (cur ? { ...cur, may_take_over: false } : cur))
     } finally {
       setTakingOver(false)
     }
@@ -425,7 +576,8 @@ export function useItemLock(
     release,
     releasing,
     released,
-    relock
+    relock,
+    claim
   }
 }
 
@@ -660,21 +812,24 @@ export function ItemLockBanner({
         </Button>
       )}
       {
-        // Admins always; other roles attempt — the server's takeover-role
-        // allowlist (#256) is the gate, and its 403 names the reason.
-        <Button
-          size='sm'
-          variant='outline'
-          className={
-            isAdmin
-              ? 'h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-500/15'
-              : 'h-7 shrink-0 border-amber-200 bg-white/60 text-[12px] text-amber-700/80 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-transparent dark:text-amber-200/80 dark:hover:bg-amber-500/15'
-          }
-          onClick={onTakeOver}
-          disabled={takingOver}
-        >
-          {takingOver ? 'Taking over…' : 'Take over'}
-        </Button>
+        // Admins always; other roles only when the server says they may (the
+        // takeover-role allowlist, #256) — unknown = offered, and a 403 then
+        // hides it. A Take over that can only fail was a dead end.
+        (isAdmin || lockHolder.may_take_over !== false) && (
+          <Button
+            size='sm'
+            variant='outline'
+            className={
+              isAdmin
+                ? 'h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-500/15'
+                : 'h-7 shrink-0 border-amber-200 bg-white/60 text-[12px] text-amber-700/80 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-transparent dark:text-amber-200/80 dark:hover:bg-amber-500/15'
+            }
+            onClick={onTakeOver}
+            disabled={takingOver}
+          >
+            {takingOver ? 'Taking over…' : 'Take over'}
+          </Button>
+        )
       }
     </div>
   )

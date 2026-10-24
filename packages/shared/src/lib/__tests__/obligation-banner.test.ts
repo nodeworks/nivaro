@@ -51,9 +51,17 @@ describe('bannerLines', () => {
       now
     )
     expect(out[0].text).toBe(
-      'should have been told 58m ago (2:02 PM) — guard unmet: is_on_hold = true'
+      'should have been told 58m ago (2:02 PM) — its send condition was not met (is_on_hold = true)'
     )
     expect(out[0].tone).toBe('warning')
+  })
+
+  it('words a stored skip reason for people, never the ledger code', () => {
+    const out = bannerLines(
+      [row({ outcome: 'skipped', reason: 'skip_when_empty: nuvolo_id empty' })],
+      now
+    )
+    expect(out[0].text).toContain('— this record has no Nuvolo ID yet')
   })
 
   it('ages a pending send so the wait is visible', () => {

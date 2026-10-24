@@ -26,6 +26,7 @@ function labelInitials(label: string): string {
 
 import { cn, userOptionFilter } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
+import { collidingIds, disambiguators } from './option-disambiguate'
 import { type PickerMissPlacement, usePickerMissReport } from './picker-miss'
 
 /**
@@ -410,6 +411,49 @@ export function RelationCombobox({
 
   const tmpl = effectiveTemplate
   const selectedLabel = value && selected ? applyDisplayTemplate(tmpl, selected) : null
+
+  // Options that render the same label ("CEG 1" twice) get a muted secondary
+  // detail: the column that tells them apart, read only for those rows.
+  const dupIds = useMemo(
+    () => collidingIds(data ?? [], (item) => applyDisplayTemplate(tmpl, item) || `#${item.id}`),
+    [data, tmpl]
+  )
+  const { data: dupRows } = useQuery<Item[]>({
+    queryKey: ['relation-opts-dups', collection, dupIds.join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Item[] }>(
+          get(`/items/${collection}`, {
+            limit: dupIds.length,
+            picker: '1',
+            filter: JSON.stringify({ id: { _in: dupIds } }),
+            fields: '*'
+          })
+        )
+        .then((r) => (r.data ?? []) as Item[]),
+    enabled: open && dupIds.length > 0 && !isUserCollection,
+    staleTime: 60_000
+  })
+  const dupDetail = useMemo(() => {
+    if (!dupRows?.length) return new Map<string, string>()
+    // Group by the label the list shows (a `*` read does not expand the
+    // template's relation paths, so the label comes from the option row).
+    const labelById = new Map(
+      (data ?? []).map((item) => [
+        String(item.id),
+        (applyDisplayTemplate(tmpl, item) || `#${item.id}`).trim().toLowerCase()
+      ])
+    )
+    const groups = new Map<string, Item[]>()
+    for (const r of dupRows) {
+      const key = labelById.get(String(r.id))
+      if (key !== undefined) groups.set(key, [...(groups.get(key) ?? []), r])
+    }
+    return disambiguators(
+      [...groups.values()],
+      (tmplFields?.split(',') ?? []).map((f) => f.split('.')[0])
+    )
+  }, [dupRows, data, tmpl, tmplFields])
   const showLoader = !!value && isLoadingSelected && !selected
   const staleTip = useStaleTip(isStale)
 
@@ -639,6 +683,14 @@ export function RelationCombobox({
                           />
                         )}
                         {label}
+                        {dupDetail.has(String(item.id)) && (
+                          <span
+                            className='ml-auto max-w-[45%] shrink-0 truncate pl-2 text-[11.5px] text-muted-foreground'
+                            data-option-detail
+                          >
+                            {dupDetail.get(String(item.id))}
+                          </span>
+                        )}
                       </button>
                     )
                   })

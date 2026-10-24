@@ -1,10 +1,15 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { isAuthor, isUuid } from '../services/help-videos.js'
-import { readItems } from '../services/items.js'
+import {
+  CollectionNotFoundError,
+  ForbiddenError,
+  idFitsCollection,
+  readItems
+} from '../services/items.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 
@@ -259,6 +264,69 @@ function noteLockAnnounced(collection: string, item: string, locked: boolean) {
   announceRecordAspect(collection, item, '$lock')
 }
 
+/**
+ * May this person read the record a lock route names? A lock on a record the
+ * caller cannot see answers 404 like the record itself — otherwise the 409
+ * names who is editing a record hidden from them. Same gate as /active (the
+ * caller's own list read, so row filters and User Scopes apply); admins read
+ * everything. A yes is remembered a minute per person + record: heartbeats
+ * ask every few seconds.
+ */
+const readableCache = new Map<string, number>()
+const READABLE_TTL_MS = 60_000
+
+async function callerCanReadRecord(
+  user: NonNullable<FastifyRequest['user']>,
+  isAdmin: boolean,
+  collection: string,
+  item: string
+): Promise<boolean> {
+  if (isAdmin) return true
+  const key = `${currentTenantKey()}:${user.id}:${collection}:${item}`
+  const until = readableCache.get(key)
+  if (until && until > Date.now()) return true
+  if (!(await idFitsCollection(collection, item))) return false
+  let readable = false
+  try {
+    const res = (await readItems(user, collection, { fields: ['id'], limit: 1 }, {
+      query: { conditions: JSON.stringify([{ path: ['id'], op: '_eq', value: item }]) }
+    } as never)) as { data?: Array<Record<string, unknown>> }
+    readable = (res.data ?? []).some((r) => String(r.id) === String(item))
+  } catch (err) {
+    // Only a real "you may not read this" is a no. A pool or gate failure is
+    // a server error — answered as one, never as a 404 that makes the client
+    // drop a lock it holds.
+    if (!(err instanceof ForbiddenError) && !(err instanceof CollectionNotFoundError)) throw err
+    readable = false
+  }
+  if (readable) {
+    if (readableCache.size >= 5000) readableCache.clear()
+    readableCache.set(key, Date.now() + READABLE_TTL_MS)
+  }
+  return readable
+}
+
+/** Takeover permission (#256): admins, and roles in settings.lock_takeover_roles. */
+async function mayTakeOver(
+  user: { role?: string | null } | undefined,
+  isAdmin: boolean
+): Promise<boolean> {
+  if (isAdmin) return true
+  let allowed: string[] = []
+  try {
+    const settings = (await db('nivaro_settings').first('lock_takeover_roles')) as
+      | { lock_takeover_roles?: string | null }
+      | undefined
+    allowed = settings?.lock_takeover_roles
+      ? (JSON.parse(settings.lock_takeover_roles) as string[])
+      : []
+  } catch {
+    allowed = []
+  }
+  const mine = String(user?.role ?? '').toUpperCase()
+  return allowed.some((r) => String(r).toUpperCase() === mine)
+}
+
 export async function itemLocksRoutes(app: FastifyInstance) {
   _app = app
   app.addHook('preHandler', authenticate)
@@ -269,6 +337,18 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     if (!p.collection || !req.user) return
     const refused = await lockRefusal(req.user, !!req.isAdmin, p.collection, p.item)
     if (refused) return reply.code(refused.status).send({ error: refused.error })
+    // A record the caller cannot read has no lock as far as they can tell.
+    // Letting go (release, leave the queue) stays open: it only ever removes
+    // the caller's own rows.
+    const lettingGo = req.method === 'DELETE' || /\/lock\/release$/.test(req.url.split('?')[0])
+    if (
+      p.item !== undefined &&
+      p.collection !== HELP_VIDEO_LOCK_COLLECTION &&
+      !lettingGo &&
+      !(await callerCanReadRecord(req.user, !!req.isAdmin, p.collection, p.item))
+    ) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
   })
 
   // ── Config: GET/PATCH locking enabled flag per collection (admin) ─────────
@@ -387,9 +467,10 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     // still rides along so a waiting client can show its position.
     if (!lock) return reply.send({ data: null, queue, my_position })
 
-    const [locked_by_name, locked_by_idle_minutes] = await Promise.all([
+    const [locked_by_name, locked_by_idle_minutes, may_take_over] = await Promise.all([
       lockHolderName(lock.user),
-      holderIdleMinutes(lock.user)
+      holderIdleMinutes(lock.user),
+      lock.user === req.user!.id ? false : mayTakeOver(req.user, !!req.isAdmin)
     ])
     return reply.send({
       data: {
@@ -409,6 +490,9 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         locked_at: lock.locked_at,
         expires_at: lock.expires_at,
         is_mine: lock.user === req.user!.id,
+        // Whether POST …/lock/force would take it — the client shows "Take
+        // over" only then, never as a button that answers 403.
+        may_take_over,
         queue,
         my_position
       }
@@ -462,7 +546,8 @@ export async function itemLocksRoutes(app: FastifyInstance) {
           locked_by: existing.user,
           locked_by_name: await lockHolderName(existing.user),
           note: existing.note ?? null,
-          expires_at: existing.expires_at
+          expires_at: existing.expires_at,
+          may_take_over: await mayTakeOver(req.user, !!req.isAdmin)
         })
       }
 
@@ -491,7 +576,8 @@ export async function itemLocksRoutes(app: FastifyInstance) {
               locked_by: winner.user,
               locked_by_name: await lockHolderName(winner.user),
               note: winner.note ?? null,
-              expires_at: winner.expires_at
+              expires_at: winner.expires_at,
+              may_take_over: await mayTakeOver(req.user, !!req.isAdmin)
             })
           }
         }
@@ -627,22 +713,8 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (!(await isLockingEnabled(collection))) {
         return reply.send({ data: null, locking_disabled: true })
       }
-      if (!req.isAdmin) {
-        let allowed: string[] = []
-        try {
-          const settings = (await db('nivaro_settings').first('lock_takeover_roles')) as
-            | { lock_takeover_roles?: string | null }
-            | undefined
-          allowed = settings?.lock_takeover_roles
-            ? (JSON.parse(settings.lock_takeover_roles) as string[])
-            : []
-        } catch {
-          allowed = []
-        }
-        const mine = String(req.user?.role ?? '').toUpperCase()
-        if (!allowed.some((r) => String(r).toUpperCase() === mine)) {
-          return reply.code(403).send({ error: 'Your role may not take over locks' })
-        }
+      if (!(await mayTakeOver(req.user, !!req.isAdmin))) {
+        return reply.code(403).send({ error: 'Your role may not take over locks' })
       }
       const existing = await getCurrentLock(collection, item)
       if (existing && existing.user !== req.user!.id) {
@@ -731,35 +803,64 @@ export async function itemLocksRoutes(app: FastifyInstance) {
   )
 
   // DELETE /:collection/:item/lock — release own lock (admin: ?force=1 releases any)
+  const release = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    collection: string,
+    item: string,
+    force: boolean
+  ) => {
+    const me = req.user!.id
+    const existing = await getCurrentLock(collection, item)
+    if (!existing) return reply.code(204).send()
+
+    if (existing.user !== me && !force) {
+      // Someone who cannot read the record learns nothing about who edits
+      // it: their release of a lock that is not theirs is a quiet no-op.
+      // Help videos are locked by authors through the help-video gate, not
+      // the items API (no read check reaches them): their 403 stays.
+      if (
+        collection !== HELP_VIDEO_LOCK_COLLECTION &&
+        !(await callerCanReadRecord(req.user!, !!req.isAdmin, collection, item))
+      ) {
+        return reply.code(204).send()
+      }
+      return reply.code(403).send({ error: 'Lock is held by another user' })
+    }
+
+    await db('nivaro_item_locks').where({ id: existing.id }).delete()
+    emitLockEvent(app, collection, item, existing.user, false)
+    await handOffToQueue(app, collection, item)
+
+    await logActivity({
+      action: 'lock-release',
+      user: me,
+      collection,
+      item: String(item),
+      req
+    })
+
+    return reply.code(204).send()
+  }
   app.delete<{ Params: { collection: string; item: string }; Querystring: { force?: string } }>(
     '/:collection/:item/lock',
     { preHandler: [requireAuth] },
-    async (req, reply) => {
-      const { collection, item } = req.params
-      const me = req.user!.id
-      const force = req.query.force === '1' && req.isAdmin
-
-      const existing = await getCurrentLock(collection, item)
-      if (!existing) return reply.code(204).send()
-
-      if (existing.user !== me && !force) {
-        return reply.code(403).send({ error: 'Lock is held by another user' })
-      }
-
-      await db('nivaro_item_locks').where({ id: existing.id }).delete()
-      emitLockEvent(app, collection, item, existing.user, false)
-      await handOffToQueue(app, collection, item)
-
-      await logActivity({
-        action: 'lock-release',
-        user: me,
-        collection,
-        item: String(item),
-        req
-      })
-
-      return reply.code(204).send()
-    }
+    async (req, reply) =>
+      release(
+        req,
+        reply,
+        req.params.collection,
+        req.params.item,
+        req.query.force === '1' && !!req.isAdmin
+      )
+  )
+  // POST /:collection/:item/lock/release — the same release of the caller's
+  // OWN lock, for a tab that is leaving the record: navigator.sendBeacon (and
+  // keepalive fetches) can only POST. Never releases someone else's lock.
+  app.post<{ Params: { collection: string; item: string } }>(
+    '/:collection/:item/lock/release',
+    { preHandler: [requireAuth] },
+    async (req, reply) => release(req, reply, req.params.collection, req.params.item, false)
   )
 
   // ── Lock handoff (#286) ───────────────────────────────────────────────────

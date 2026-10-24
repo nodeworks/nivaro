@@ -146,7 +146,12 @@ function FileBrowserPanel({
     <div className='flex flex-col' style={{ width: 480, maxHeight: 420 }}>
       <div className='flex items-center justify-between border-b border-slate-100 px-3 py-2 shrink-0'>
         <p className='text-[12px] font-medium text-slate-700'>Select file{multi ? 's' : ''}</p>
-        <button type='button' onClick={onClose} className='text-slate-400 hover:text-slate-600'>
+        <button
+          type='button'
+          aria-label='Close'
+          onClick={onClose}
+          className='text-slate-400 hover:text-slate-600'
+        >
           <X className='h-3.5 w-3.5' />
         </button>
       </div>
@@ -476,6 +481,7 @@ export function FilePickerField({
               )}
               <button
                 type='button'
+                aria-label='Remove file'
                 onClick={handleRemove}
                 className='text-slate-300 hover:text-red-400 p-0.5'
               >
@@ -859,6 +865,7 @@ export function FileM2MField({
                 {!disabled && (
                   <button
                     type='button'
+                    aria-label='Remove file'
                     onClick={() => removeFile(id)}
                     className='text-slate-300 hover:text-red-400 p-0.5 shrink-0'
                   >
@@ -897,6 +904,7 @@ export function FileM2MField({
               {!disabled && (
                 <button
                   type='button'
+                  aria-label='Remove file'
                   onClick={() => removePending(pf.url)}
                   className='text-slate-300 hover:text-red-400 p-0.5 shrink-0'
                 >

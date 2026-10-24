@@ -59,7 +59,8 @@ export interface ReviewListConfig {
     empty_color?: string | null
     stamp_user_field?: string | null
     stamp_date_field?: string | null
-    /** POST this endpoint with {ids, status, note, workflow_id} instead of
+    /** POST this endpoint with {ids, status, note, workflow_id, expected}
+     *  (`expected` = each row's status as the list showed it) instead of
      *  per-row PATCHes — lets a deployment route decisions through an
      *  endpoint that owns stamping, authorization, notes and notifications
      *  (e.g. an extension's /decide route). */
@@ -353,6 +354,12 @@ export function ReviewListWidget({
           post(config.status.action_endpoint, {
             ids: group.rows.map((r) => r.id),
             status: option.value,
+            // The status each row showed: the endpoint may refuse (409) rows
+            // someone changed since this list loaded instead of overwriting
+            // them. The refetch below shows what they are now.
+            expected: Object.fromEntries(
+              group.rows.map((r) => [String(r.id), r.status == null ? null : String(r.status)])
+            ),
             ...(note ? { note } : {}),
             ...(hostRecordId != null && hostRecordId !== ''
               ? { workflow_id: Number(hostRecordId) }

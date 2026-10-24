@@ -1,6 +1,6 @@
 import { db } from '../db/index.js'
 import { auditLevelOf } from '../hooks/activity.js'
-import { describeDbRefusal } from '../lib/db-refusal.js'
+import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
 import type { User } from '../types.js'
 import { autoIdFieldsFor } from './auto-ids.js'
 import { chainFields } from './chain-columns.js'
@@ -206,7 +206,7 @@ function tooLong(values: Record<string, unknown>, types: Map<string, ColumnType>
 }
 
 function messageOf(err: unknown): string {
-  const known = describeDbRefusal(err)
+  const known = describeDbRefusal(err) ?? describeValueRefusal(err)
   if (known) return known.message
   const e = err as { errors?: Array<{ message?: string }>; message?: string }
   const inner = e?.errors?.map((x) => x?.message).filter(Boolean)
@@ -476,7 +476,7 @@ export async function batchUpdate(
       }
       try {
         const caller = new Set(Object.keys(patch))
-        await enforceValidationRules(collection, { ...was, ...patch }, caller)
+        await enforceValidationRules(collection, patch, caller, was)
         await applyWriteComputedFields(collection, patch, { ...was, ...patch }, { previous: was })
       } catch (err) {
         fail(index, label, messageOf(err))

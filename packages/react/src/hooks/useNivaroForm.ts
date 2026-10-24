@@ -361,7 +361,7 @@ export function useNivaroForm(
 
       for (const rule of f.validationRules ?? []) {
         if (rule.soft) continue // soft rules are warnings, not blockers
-        const err = applyValidationRule(rule, value, f.label)
+        const err = applyValidationRule(rule, value, f.label, values)
         if (err) {
           if (next[f.field] == null) next[f.field] = []
           const arr = next[f.field]
