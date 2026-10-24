@@ -13,7 +13,9 @@ const state = vi.hoisted(() => ({
   listedScopes: [] as Array<{ user: string; dimension: string; values: string }>,
   adminIds: [] as string[],
   /** listed person → manager */
-  managers: {} as Record<string, string>
+  managers: {} as Record<string, string>,
+  /** account names, for rows with no presence name yet */
+  accounts: {} as Record<string, { first_name?: string; last_name?: string; email?: string }>
 }))
 
 vi.mock('../../../db/index.js', () => {
@@ -63,7 +65,8 @@ vi.mock('../../../db/index.js', () => {
         return state.presenceRows.map((r) => ({
           id: r.user_id,
           preferences: null,
-          manager_id: state.managers[String(r.user_id)] ?? null
+          manager_id: state.managers[String(r.user_id)] ?? null,
+          ...state.accounts[String(r.user_id)]
         }))
       return []
     }
@@ -124,6 +127,7 @@ beforeEach(() => {
   state.deadlockOnce = false
   state.adminIds = []
   state.managers = {}
+  state.accounts = {}
   stuck.minutes = new Map()
   labelCalls.viewers = []
   presenceOnlineCounters.signatures = 0
@@ -178,6 +182,18 @@ describe('GET /presence/online cache', () => {
     expect(state.presenceReads).toBe(1)
     expect(presenceOnlineCounters.signatures).toBe(1)
     expect(presenceOnlineCounters.persons).toBe(2)
+  })
+
+  it('names a row the socket created before the first beat from the account', async () => {
+    const seen = new Date()
+    state.presenceRows.push(
+      { user_id: 'C', display_name: null, last_seen: seen, is_online: true },
+      { user_id: 'D', display_name: '  ', last_seen: seen, is_online: true }
+    )
+    state.accounts = { C: { first_name: 'Eddy', last_name: 'Rodriguez' }, D: { email: 'd@x.test' } }
+    const a = await presenceOnlineFor(app, user('U1'), false)
+    const names = Object.fromEntries(a.data.map((r) => [r.user_id, r.display_name]))
+    expect(names).toEqual({ A: 'Ann', B: 'Bob', C: 'Eddy Rodriguez', D: 'd@x.test' })
   })
 
   it('retries the presence read once when it loses a deadlock', async () => {

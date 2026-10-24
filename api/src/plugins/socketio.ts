@@ -1283,11 +1283,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      * `changedWhen` narrows the first update to rows whose visible state this write changes;
      * when it matches nothing the row already said so (a second tab, a reconnect inside the
      * online window) — the write still lands (last_seen) but nobody is told.
+     * `onInsert` is written only when this write creates the row (the client's beats own those
+     * columns afterwards).
      */
     const writePresence = async (
       userId: string,
       patch: Record<string, unknown>,
-      changedWhen?: (qb: Knex.QueryBuilder) => void
+      changedWhen?: (qb: Knex.QueryBuilder) => void,
+      onInsert?: Record<string, unknown>
     ) => {
       try {
         let changed = true
@@ -1307,7 +1310,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (updated === 0) {
           changed = true
           await db('user_presence')
-            .insert({ user_id: userId, ...patch })
+            .insert({ user_id: userId, ...onInsert, ...patch })
             .catch(() => {
               // UNIQUE(user_id): another tab won the insert, so update instead.
               return db('user_presence').where({ user_id: userId }).update(patch)
@@ -1346,7 +1349,20 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           void qb
             .where('is_online', false)
             .orWhereNull('last_seen')
-            .orWhere('last_seen', '<', onlineSince)
+            .orWhere('last_seen', '<', onlineSince),
+        // A first connection creates the row before the browser's first beat names it: every
+        // viewer was told, refetched, and showed "Unknown user" until that beat landed (or
+        // for good when it failed). Staging starts every day with an empty table.
+        authenticatedUser
+          ? {
+              display_name:
+                [authenticatedUser.first_name, authenticatedUser.last_name]
+                  .filter(Boolean)
+                  .join(' ') ||
+                authenticatedUser.email ||
+                null
+            }
+          : undefined
       )
     }
 

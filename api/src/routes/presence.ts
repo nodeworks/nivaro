@@ -869,6 +869,35 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
     }
   }
 
+  // A row with no name yet (created by a socket connect, or by a client whose beat failed) is
+  // named from the account, so the list never shows "Unknown user" (staging 2026-10-24).
+  const nameless = [
+    ...new Set(
+      rows
+        .filter((r) => !String(r.display_name ?? '').trim())
+        .map((r) => String(r.user_id ?? ''))
+        .filter(Boolean)
+    )
+  ]
+  if (nameless.length) {
+    try {
+      const people = (await db('nivaro_users')
+        .whereIn('id', nameless)
+        .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
+      const names = new Map(
+        people.map((p) => [
+          upper(p.id),
+          [p.first_name, p.last_name].filter(Boolean).join(' ') || String(p.email ?? '')
+        ])
+      )
+      for (const r of rows)
+        if (!String(r.display_name ?? '').trim())
+          r.display_name = names.get(upper(r.user_id)) || null
+    } catch {
+      /* decoration only */
+    }
+  }
+
   // #1394 — stuck: at the keyboard, same route, nothing saved for ten minutes. Worked out for
   // everyone listed; shown only to admins and the person's own manager (person step).
   const stuckMinutesByUser = new Map<string, number>()
