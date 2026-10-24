@@ -197,6 +197,11 @@ export interface ExtensionContext {
    *  batch is sent as text, so only interpolate values you built yourself. */
   sql: {
     runLong<T = Record<string, unknown>>(sql: string, opts?: { timeoutMs?: number }): Promise<T[]>
+    /** True when this core's id-returning writes (`.returning()`) work on tables
+     *  that carry triggers — SQL Server refuses a plain OUTPUT there (error 334).
+     *  Absent on older cores: an extension must not put triggers on a table the
+     *  core writes when it is missing. */
+    triggerSafeReturning?: boolean
     /** Tell open pages that a raw write (a procedure, a set-based UPDATE) changed
      *  records: ids + field NAMES, never values. No ids = "records in this
      *  collection changed"; more than 100 ids collapse into one such event.

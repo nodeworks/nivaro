@@ -107,6 +107,7 @@ import {
 import { writeTrashRow } from './trash.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
+import { withTriggerSafeReturning } from './trigger-safe.js'
 import { applyDirectoryListingRules } from './user-directory-cols.js'
 import { applyUserScopesToQuery } from './user-scopes.js'
 import { enforceValidationRules, FieldValidationError } from './validation-rules.js'
@@ -5628,7 +5629,9 @@ export async function createOne(
       // The database's own word on the row: tried, read back, rolled back.
       const trx = await db.transaction()
       try {
-        const back = (await trx(collection).insert(writable).returning('*')) as unknown[]
+        const back = (await withTriggerSafeReturning(collection, (opts) =>
+          trx(collection).insert(writable).returning('*', opts)
+        )) as unknown[]
         storedRow = (back[0] ?? null) as Record<string, unknown> | null
       } finally {
         await trx.rollback().catch(() => {})
@@ -5707,9 +5710,10 @@ export async function createOne(
   // create has landed, and are dropped when a child is refused and the parent
   // undone.
   return withUnitOfWork(`create:${collection}`, async () => {
-    const rows = (await db(collection)
-      .insert(filterToActualColumns(securedPayload, actualCols))
-      .returning('id')) as unknown[]
+    // A table with a trigger refuses the plain OUTPUT knex compiles `.returning` to.
+    const rows = (await withTriggerSafeReturning(collection, (opts) =>
+      db(collection).insert(filterToActualColumns(securedPayload, actualCols)).returning('id', opts)
+    )) as unknown[]
     const id = rows[0] as { id: string | number } | string | number
     const returnedId =
       typeof id === 'object' && id !== null ? (id as { id: string | number }).id : id

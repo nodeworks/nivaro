@@ -714,6 +714,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
         calls.longSql.push({ sql, opts: o })
         return []
       },
+      triggerSafeReturning: true,
       announceWrites: async () => {}
     },
     logActivity: async (entry) => {

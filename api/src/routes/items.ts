@@ -58,6 +58,7 @@ import {
 } from '../services/system-collections.js'
 import { registerTempCacheHooks } from '../services/traffic-actions/temp-cache.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
+import { withTriggerSafeReturning } from '../services/trigger-safe.js'
 import { runUnit } from '../services/unit-of-work.js'
 import type { ItemsQuery, User } from '../types.js'
 import { registerBulkFieldsRoute } from './bulk-fields.js'
@@ -1821,7 +1822,9 @@ export async function itemsRoutes(app: FastifyInstance) {
         clone._status = 'draft'
       }
 
-      const [row] = await db(collection).insert(clone).returning('id')
+      const [row] = (await withTriggerSafeReturning(collection, (opts) =>
+        db(collection).insert(clone).returning('id', opts)
+      )) as unknown[]
       const newId = typeof row === 'object' ? (row as { id: unknown }).id : row
 
       // Clone sub-rows for requested fields

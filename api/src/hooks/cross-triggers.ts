@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { logActivity } from '../services/activity.js'
 import { computeDelta, writeRevision } from '../services/revisions.js'
+import { withTriggerSafeReturning } from '../services/trigger-safe.js'
 import { auditLevelOf } from './activity.js'
 import { noteRawWrite } from './record-integrity.js'
 import type { HookContext } from './registry.js'
@@ -773,7 +774,9 @@ async function processCrossTriggers(ctx: HookContext) {
               await runM2MSync(ctx, rule.id, act, collection, ctx.keys?.[0] ?? data.id, targetIds)
             }
           } else {
-            const inserted = (await db(target).insert(record).returning('id')) as unknown[]
+            const inserted = (await withTriggerSafeReturning(target, (opts) =>
+              db(target).insert(record).returning('id', opts)
+            )) as unknown[]
             const raw = inserted[0]
             const newId =
               raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : (raw as unknown)

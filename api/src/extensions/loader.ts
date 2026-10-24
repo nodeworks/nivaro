@@ -685,6 +685,8 @@ export function registrationMembers(
     sql: {
       runLong: (sql, o) =>
         runLongSql(sql, runLongOnTenant ? { ...o, knex: ctx.database as never } : o),
+      // services/trigger-safe.ts: every core write that reads ids back works on a triggered table.
+      triggerSafeReturning: true,
       // #1875 — raw writes announce themselves so open pages refresh.
       announceWrites: (collection, ids, o) =>
         import('../services/raw-write-announcer.js')

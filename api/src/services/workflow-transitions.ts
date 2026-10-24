@@ -30,6 +30,7 @@ import {
 import { syncMaterializedQueueItem } from './queue-materialization.js'
 import { getLabels } from './queues.js'
 import { announceAddendumChange, announceRecordAspect } from './record-events.js'
+import { TRIGGER_SAFE } from './trigger-safe.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 
@@ -1203,7 +1204,9 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
       )),
       ...(await chainFields('nivaro_workflow_history'))
     })
-    .returning('id')) as Array<number | { id: number }>
+    // History can carry a trigger (efp-ops' current-state snapshot): OUTPUT
+    // without INTO is refused there (services/trigger-safe.ts).
+    .returning('id', TRIGGER_SAFE)) as Array<number | { id: number }>
   const firstHistory = historyRet[0]
   // tedious hands an OBJECT back from .returning on this stack.
   const rawHistoryId =
