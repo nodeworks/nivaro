@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-10-24T21:00:42.302Z",
+  "generated_at": "2026-10-24T22:33:40.689Z",
   "releases": [
+    {
+      "version": "0.3.20",
+      "tag": "v0.3.20",
+      "date": "2026-10-24T18:33:25-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "record",
+              "text": "RecordSurfaceContext — a background record never says \"this\"",
+              "hash": "d602878dd"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "only the tab on screen says where a person is",
+              "hash": "d6d5d014b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrity",
+              "text": "the on-open record check no longer rewrites unchanged findings",
+              "hash": "5d7277618"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db-health",
+              "text": "probe the database on its own connection, not the request pool",
+              "hash": "f0dc39aaf"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.3.19",
       "tag": "v0.3.19",
-      "date": "2026-10-24T17:00:25-04:00",
+      "date": "2026-10-24T17:00:42-04:00",
       "sections": [
         {
           "label": "Added",
