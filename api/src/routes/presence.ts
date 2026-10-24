@@ -797,7 +797,13 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
     try {
       const { resolveScopeLabelsForUsers } = await import('../services/user-scopes.js')
       const resolved = await resolveScopeLabelsForUsers(userIds, dimensions)
-      for (const [uid, perDim] of resolved) scopesByUser.set(uid.toUpperCase(), perDim)
+      // Natural order ("Zone 1, Zone 2, Zone 3"), not the order the scope rows were written.
+      const byName = (a: string, b: string) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+      for (const [uid, perDim] of resolved) {
+        for (const [dim, labels] of perDim) perDim.set(dim, [...labels].sort(byName))
+        scopesByUser.set(uid.toUpperCase(), perDim)
+      }
     } catch {
       // Scope labels are decoration — never fail the online list over them.
     }

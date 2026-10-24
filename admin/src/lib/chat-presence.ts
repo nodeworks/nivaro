@@ -68,15 +68,43 @@ async function findPresenceRow(userId: string): Promise<number | null> {
   return res.data.data?.[0]?.id ?? null
 }
 
-let beatInFlight = false
+/** Whether this tab may say where its person is: every tab of one person
+ *  writes the ONE presence row, so a background tab must not overwrite the page
+ *  the person is looking at (the Online list flipped between tabs and
+ *  contradicted a record's "also viewing" bar). */
+export function tabIsVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden'
+}
 
-async function beat(userId: string, name: string, path: string, roleName: string | null) {
-  if (beatInFlight) return
+type BeatArgs = [userId: string, name: string, path: string, roleName: string | null]
+// One beat at a time; one asked for while another runs is kept and runs right
+// after with the newest arguments, so a new path is never dropped.
+let beatInFlight = false
+let beatQueued: BeatArgs | null = null
+
+async function beat(...args: BeatArgs) {
+  if (beatInFlight) {
+    beatQueued = args
+    return
+  }
   beatInFlight = true
+  try {
+    await writeBeat(...args)
+  } finally {
+    beatInFlight = false
+    const next = beatQueued
+    beatQueued = null
+    if (next) void beat(...next)
+  }
+}
+
+async function writeBeat(userId: string, name: string, path: string, roleName: string | null) {
+  const visible = tabIsVisible()
   const payload = {
     user_id: userId,
     display_name: name,
-    current_path: path,
+    // Only a visible tab says where the person is (tabIsVisible).
+    ...(visible ? { current_path: path } : {}),
     // Written on every heartbeat so a stale value self-heals (legacy rows can
     // hold a role UUID here, which rendered as the user's subtitle).
     role_name: roleName,
@@ -96,7 +124,11 @@ async function beat(userId: string, name: string, path: string, roleName: string
       await api.patch(`/items/user_presence/${presenceRowId}`, payload)
     } else {
       try {
-        const created = await api.post<{ data: { id: number } }>('/items/user_presence', payload)
+        // A brand-new row needs a place even from a background tab.
+        const created = await api.post<{ data: { id: number } }>('/items/user_presence', {
+          current_path: path,
+          ...payload
+        })
         presenceRowId = created.data.data?.id ?? null
       } catch {
         // user_presence has UNIQUE(user_id) — a concurrent beat (StrictMode
@@ -107,8 +139,6 @@ async function beat(userId: string, name: string, path: string, roleName: string
     }
   } catch {
     // Presence must never break the app.
-  } finally {
-    beatInFlight = false
   }
 }
 
@@ -162,6 +192,11 @@ export function usePresenceHeartbeat() {
     window.addEventListener('pagehide', goOffline)
     const name =
       [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || 'Unknown'
+    // A tab coming to the front says where the person is now.
+    const onVisible = () => {
+      if (tabIsVisible()) void beat(user.id, name, window.location.pathname, roleName)
+    }
+    document.addEventListener('visibilitychange', onVisible)
     void beat(user.id, name, pathname, roleName)
     const t = setInterval(
       () => void beat(user.id, name, window.location.pathname, roleName),
@@ -170,6 +205,7 @@ export function usePresenceHeartbeat() {
     return () => {
       clearInterval(t)
       window.removeEventListener('pagehide', goOffline)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [user, pathname, roleName])
 }
