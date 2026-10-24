@@ -40,6 +40,55 @@ export async function revokeSessions(
     .catch(() => {})
 }
 
+/**
+ * Every live session id that belongs to `userId` (case-insensitive), by SCAN —
+ * sessions are not indexed by person. Revocation markers and unparseable blobs
+ * are skipped. `except` = a session id to leave out (the caller's own).
+ */
+export async function sessionIdsForUser(
+  redis: Redis,
+  userId: string,
+  opts: { except?: string | null } = {}
+): Promise<string[]> {
+  const want = String(userId).toUpperCase()
+  const out: string[] = []
+  let cursor = '0'
+  let guard = 0
+  do {
+    const [next, keys] = await redis.scan(cursor, 'MATCH', 'sess:*', 'COUNT', 200)
+    cursor = next
+    const live = keys.filter((k) => !k.startsWith(REVOKED_PREFIX))
+    if (live.length > 0) {
+      const values = await redis.mget(...live)
+      live.forEach((key, i) => {
+        const raw = values[i]
+        if (!raw) return
+        try {
+          const uid = (JSON.parse(raw) as { userId?: string }).userId
+          const sid = key.slice('sess:'.length)
+          if (uid && String(uid).toUpperCase() === want && sid !== opts.except) out.push(sid)
+        } catch {
+          /* unparseable session blob — not attributable to anyone */
+        }
+      })
+    }
+    guard++
+  } while (cursor !== '0' && guard < 1000)
+  return out
+}
+
+/** Sign one person out of every session (but `except`), on every app and tab:
+ *  revoked, never a bare DEL, and their sockets close (`revokeSessions`). */
+export async function revokeUserSessions(
+  redis: Redis,
+  userId: string,
+  opts: { except?: string | null } = {}
+): Promise<number> {
+  const sids = await sessionIdsForUser(redis, userId, opts)
+  await revokeSessions(redis, sids)
+  return sids.length
+}
+
 export function buildRedisStore(redis: Redis) {
   return {
     get(sid: string, callback: (err: unknown, session: FastifySessionObject | null) => void) {

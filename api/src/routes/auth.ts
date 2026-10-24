@@ -12,7 +12,7 @@ import {
   oidcConfigured
 } from '../auth/oidc.js'
 import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
-import { revokeSessions } from '../auth/session.js'
+import { revokeUserSessions } from '../auth/session.js'
 import { config } from '../config.js'
 import { configEpochState } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
@@ -750,31 +750,10 @@ export async function authRoutes(app: FastifyInstance) {
     const userId = req.user?.id
     await logActivity({ action: 'logout', user: userId, req })
 
-    // Scan Redis for all sess:* keys belonging to this user and delete them
-    const redis = app.redis
-    const toDelete: string[] = []
-    const stream = redis.scanStream({ match: 'sess:*', count: 100 })
-    for await (const keys of stream as AsyncIterable<string[]>) {
-      if (!keys.length) continue
-      const values = await redis.mget(...keys)
-      for (let i = 0; i < keys.length; i++) {
-        const raw = values[i]
-        if (!raw) continue
-        try {
-          const sess = JSON.parse(raw) as { userId?: string }
-          if (sess.userId === userId) toDelete.push(keys[i])
-        } catch {}
-      }
-    }
     // Revoke, don't just delete: a rolling save from another tab's in-flight
     // request would otherwise write any of these back (see auth/session.ts).
-    if (toDelete.length)
-      await revokeSessions(
-        redis,
-        toDelete.map((k) => k.slice('sess:'.length))
-      )
-
-    return reply.send({ ok: true, destroyed: toDelete.length })
+    const destroyed = userId ? await revokeUserSessions(app.redis, String(userId)) : 0
+    return reply.send({ ok: true, destroyed })
   })
 
   // Current user

@@ -124,6 +124,23 @@ describe('ChatPanel Online tab person row', () => {
   })
 })
 
+describe('ChatPanel Online tab — the photo opens the user card', () => {
+  it('is its own button beside the DM button, never inside it', () => {
+    const html = render({ fields: ['role'], rows: [ZONED], users: [ZONED_USER] })
+    const row = html.slice(html.indexOf('data-chat-online-row'))
+    expect(row).toContain('data-chat-online-avatar')
+    expect(row).toContain('aria-label="Ada Approver — profile"')
+    // the avatar button closes before the DM button opens
+    expect(row.indexOf('data-chat-online-avatar')).toBeLessThan(
+      row.indexOf('title="Send a direct message"')
+    )
+    const avatarButton = row.slice(row.indexOf('data-chat-online-avatar'))
+    expect(avatarButton.indexOf('</button>')).toBeLessThan(
+      avatarButton.indexOf('Send a direct message')
+    )
+  })
+})
+
 describe('ChatPanel Online tab — old build badge (#1048)', () => {
   const STALE = {
     ...ZONED,

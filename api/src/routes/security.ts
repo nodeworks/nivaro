@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { revokeSessions } from '../auth/session.js'
+import { revokeSessions, revokeUserSessions } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -89,6 +89,38 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     await revokeSessions(app.redis, [matches[0].slice('sess:'.length)])
     await logActivity({ action: 'session-revoke', user: req.user?.id, comment: prefix, req })
     return { data: { revoked: true } }
+  })
+
+  // Sign someone else out of every session (the user card / people page, admin):
+  // every app, every tab, their sockets closed on every replica. They can sign
+  // in again — suspending the account is what keeps them out. Never the
+  // caller: that is /my/sessions/sign-out-others.
+  app.post<{ Params: { id: string } }>('/users/:id/sign-out', async (req, reply) => {
+    const id = String(req.params.id)
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+      return reply.code(400).send({ error: 'Not a user id' })
+    if (id.toUpperCase() === String(req.user?.id ?? '').toUpperCase())
+      return reply
+        .code(400)
+        .send({ error: 'That is you — use Sign out everywhere else on your own profile' })
+    const user = (await db('nivaro_users')
+      .where({ id })
+      .first('id', 'first_name', 'last_name', 'email')) as
+      | { id: string; first_name?: string | null; last_name?: string | null; email?: string | null }
+      | undefined
+    if (!user) return reply.code(404).send({ error: 'User not found' })
+    if (!app.redis) return reply.code(503).send({ error: 'The session store is unavailable' })
+    const revoked = await revokeUserSessions(app.redis, id)
+    const name = `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim() || user.email || id
+    await logActivity({
+      action: 'sessions-revoke-user',
+      user: req.user?.id,
+      collection: 'nivaro_users',
+      item: id,
+      comment: `${name}: ${revoked} session${revoked === 1 ? '' : 's'} signed out`,
+      req
+    })
+    return { data: { revoked } }
   })
 
   // Masquerade history (#233): who impersonated whom, when — mined from the
@@ -249,29 +281,10 @@ export async function securitySelfRoutes(app: FastifyInstance) {
 
   // Sign out everywhere else (#103): revoke every OTHER session of MINE.
   app.post('/my/sessions/sign-out-others', { preHandler: authenticate }, async (req, reply) => {
-    const me = String(req.user!.id).toUpperCase()
     const currentSid = (req.session as unknown as { sessionId?: string })?.sessionId ?? null
     let revoked = 0
     try {
-      let cursor = '0'
-      let guard = 0
-      do {
-        const [next, keys] = await app.redis.scan(cursor, 'MATCH', 'sess:*', 'COUNT', 200)
-        cursor = next
-        for (const key of keys) {
-          const raw = await app.redis.get(key)
-          try {
-            const uid = raw ? ((JSON.parse(raw) as { userId?: string }).userId ?? null) : null
-            if (uid && String(uid).toUpperCase() === me && key.slice(5) !== currentSid) {
-              await revokeSessions(app.redis, [key.slice('sess:'.length)])
-              revoked++
-            }
-          } catch {
-            /* skip */
-          }
-        }
-        guard++
-      } while (cursor !== '0' && guard < 100)
+      revoked = await revokeUserSessions(app.redis, String(req.user!.id), { except: currentSid })
     } catch {
       /* redis down */
     }

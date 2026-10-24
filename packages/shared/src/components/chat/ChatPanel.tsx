@@ -4542,281 +4542,302 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                     const isIdle = px?.is_idle ?? u.is_idle
                     const idleSrc = px ?? u
                     return (
-                      <button
+                      <div
                         key={u.user_id}
-                        type='button'
-                        onClick={() => openDm(u)}
-                        title='Send a direct message'
-                        className='flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
+                        className='flex w-full items-center rounded-lg pl-2.5 transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
+                        data-chat-online-row
                       >
-                        <Avatar id={u.user_id} name={u.display_name} />
-                        <span className='min-w-0 flex-1'>
-                          <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
-                            {u.display_name ?? 'Unknown user'}
-                            {isIdle && (
-                              <span className='ml-1.5 rounded-full bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400'>
-                                {px?.away ? 'Away' : idleLabel(idleSrc)}
-                              </span>
-                            )}
-                            {!isIdle &&
-                              px?.stuck &&
-                              (() => {
-                                const stuck = px.stuck
-                                // The page line under the name already says where; the chip
-                                // repeating it as a second, differently-worded place read as
-                                // two places. It names the place only when no page line shows.
-                                const pageLine = presenceExtras.fields.includes('page')
-                                const href = presencePlaceHref(
-                                  px.current_path,
-                                  px.app,
-                                  presenceExtras.adminUrl,
-                                  cfg.recordUrl,
-                                  typeof window === 'undefined' ? null : window.location.origin
-                                )
-                                const tip = `${stuckText(stuck)} — at the keyboard, on the same page, nothing saved for ten minutes${href ? `\n${fullHref(href)}` : ''}`
-                                const text = stuckText(pageLine ? { ...stuck, label: null } : stuck)
-                                const cls =
-                                  'ml-1.5 rounded-full bg-orange-500/10 px-1.5 py-px text-[10px] font-medium text-orange-700 dark:text-orange-400'
-                                return href ? (
-                                  // biome-ignore lint/a11y/useSemanticElements: inside the row's DM button, where a nested <a> is invalid
-                                  <span
-                                    role='link'
-                                    tabIndex={0}
-                                    className={cn(cls, 'cursor-pointer hover:underline')}
-                                    data-chat-stuck={stuck.minutes}
-                                    data-tip={tip}
-                                    aria-label={`${text}: open the page`}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      openSession(href)
-                                    }}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter' || e.key === ' ') {
-                                        e.preventDefault()
+                        {/* The photo opens the person's card (administrators can sign them
+                            out or reload their tabs there); the rest of the row opens the DM. */}
+                        <UserChip userId={u.user_id}>
+                          <button
+                            type='button'
+                            className='shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                            aria-label={`${u.display_name ?? 'Unknown user'} — profile`}
+                            data-chat-online-avatar
+                          >
+                            <Avatar id={u.user_id} name={u.display_name} />
+                          </button>
+                        </UserChip>
+                        <button
+                          type='button'
+                          onClick={() => openDm(u)}
+                          title='Send a direct message'
+                          className='flex min-w-0 flex-1 items-center gap-3 py-2 pl-3 pr-2.5 text-left'
+                        >
+                          <span className='min-w-0 flex-1'>
+                            <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                              {u.display_name ?? 'Unknown user'}
+                              {isIdle && (
+                                <span className='ml-1.5 rounded-full bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400'>
+                                  {px?.away ? 'Away' : idleLabel(idleSrc)}
+                                </span>
+                              )}
+                              {!isIdle &&
+                                px?.stuck &&
+                                (() => {
+                                  const stuck = px.stuck
+                                  // The page line under the name already says where; the chip
+                                  // repeating it as a second, differently-worded place read as
+                                  // two places. It names the place only when no page line shows.
+                                  const pageLine = presenceExtras.fields.includes('page')
+                                  const href = presencePlaceHref(
+                                    px.current_path,
+                                    px.app,
+                                    presenceExtras.adminUrl,
+                                    cfg.recordUrl,
+                                    typeof window === 'undefined' ? null : window.location.origin
+                                  )
+                                  const tip = `${stuckText(stuck)} — at the keyboard, on the same page, nothing saved for ten minutes${href ? `\n${fullHref(href)}` : ''}`
+                                  const text = stuckText(
+                                    pageLine ? { ...stuck, label: null } : stuck
+                                  )
+                                  const cls =
+                                    'ml-1.5 rounded-full bg-orange-500/10 px-1.5 py-px text-[10px] font-medium text-orange-700 dark:text-orange-400'
+                                  return href ? (
+                                    // biome-ignore lint/a11y/useSemanticElements: inside the row's DM button, where a nested <a> is invalid
+                                    <span
+                                      role='link'
+                                      tabIndex={0}
+                                      className={cn(cls, 'cursor-pointer hover:underline')}
+                                      data-chat-stuck={stuck.minutes}
+                                      data-tip={tip}
+                                      aria-label={`${text}: open the page`}
+                                      onClick={(e) => {
                                         e.stopPropagation()
                                         openSession(href)
-                                      }
-                                    }}
-                                  >
-                                    {text}
-                                  </span>
-                                ) : (
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          openSession(href)
+                                        }
+                                      }}
+                                    >
+                                      {text}
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className={cls}
+                                      data-chat-stuck={stuck.minutes}
+                                      data-tip={tip}
+                                    >
+                                      {text}
+                                    </span>
+                                  )
+                                })()}
+                              {(() => {
+                                const mq = presenceExtras.byUser.get(
+                                  String(u.user_id).toUpperCase()
+                                )?.masquerade
+                                if (!mq) return null
+                                return (
                                   <span
-                                    className={cls}
-                                    data-chat-stuck={stuck.minutes}
-                                    data-tip={tip}
+                                    className='ml-1.5 rounded-full bg-violet-500/10 px-1.5 py-px text-[10px] font-medium text-violet-700 dark:bg-violet-400/15 dark:text-violet-300'
+                                    title={`${mq.admin_name} is signed in as this person right now`}
+                                    data-chat-masquerade={mq.admin_id ?? ''}
                                   >
-                                    {text}
+                                    {mq.admin_name} masquerading
                                   </span>
                                 )
                               })()}
+                              {/* #1048 — administrators only (the API sends it to them only). */}
+                              {isAdmin && <StaleBuildChip builds={px?.stale_build} />}
+                            </span>
                             {(() => {
-                              const mq = presenceExtras.byUser.get(
-                                String(u.user_id).toUpperCase()
-                              )?.masquerade
-                              if (!mq) return null
+                              const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                              const cs = x?.custom_status
+                              if (!cs && !x?.in_huddle) return null
                               return (
                                 <span
-                                  className='ml-1.5 rounded-full bg-violet-500/10 px-1.5 py-px text-[10px] font-medium text-violet-700 dark:bg-violet-400/15 dark:text-violet-300'
-                                  title={`${mq.admin_name} is signed in as this person right now`}
-                                  data-chat-masquerade={mq.admin_id ?? ''}
+                                  className='flex items-center gap-1 truncate text-[11px] text-slate-500 dark:text-slate-400'
+                                  data-chat-status
                                 >
-                                  {mq.admin_name} masquerading
+                                  {x?.in_huddle && (
+                                    <span
+                                      className='inline-flex shrink-0 items-center gap-0.5 text-nvr-navy dark:text-nvr-cyan'
+                                      data-chat-in-huddle
+                                      data-tip='In a huddle right now'
+                                    >
+                                      <Headphones className='h-3 w-3' strokeWidth={2} />
+                                      {!cs && 'In a huddle'}
+                                    </span>
+                                  )}
+                                  {cs && (
+                                    <span className='truncate italic'>
+                                      {cs.emoji ? `${cs.emoji} ` : ''}
+                                      {cs.text}
+                                    </span>
+                                  )}
                                 </span>
                               )
                             })()}
-                            {/* #1048 — administrators only (the API sends it to them only). */}
-                            {isAdmin && <StaleBuildChip builds={px?.stale_build} />}
+                            {(() => {
+                              const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                              // Instance config decides which parts appear and in
+                              // what order; the live page comes from the presence
+                              // heartbeat, so it tracks people as they navigate.
+                              // The page gets its own line so a long zone list can
+                              // never push it into the ellipsis.
+                              const meta: string[] = []
+                              let pageText: string | null = null
+                              for (const f of presenceExtras.fields) {
+                                if (f === 'role') {
+                                  const r = humanLabel(x?.role_name ?? u.role_name)
+                                  if (r) meta.push(r)
+                                } else if (f === 'scopes') {
+                                  const sc = (x?.scopes ?? []).join(', ')
+                                  if (sc) meta.push(sc)
+                                } else if (f === 'page') {
+                                  // The server renders a record's display template
+                                  // ("Orders › AB26-12345"); prettyPath can only
+                                  // reach the raw id, so it is the fallback.
+                                  const page =
+                                    (x as { page?: string | null })?.page ??
+                                    (u as { page?: string | null }).page ??
+                                    prettyPath(x?.current_path ?? u.current_path)
+                                  const app =
+                                    (x as { app?: string | null })?.app ??
+                                    (u as { app?: string | null }).app
+                                  // Only unusual places are worth naming; the
+                                  // ordinary frontend sends no app at all.
+                                  pageText =
+                                    (app
+                                      ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim()
+                                      : page) || null
+                                }
+                              }
+                              const metaText = meta.join(' · ')
+                              if (!metaText && !pageText) {
+                                return (
+                                  <span className='block truncate text-[11px] text-slate-400'>
+                                    Online
+                                  </span>
+                                )
+                              }
+                              return (
+                                <>
+                                  {metaText && (
+                                    <span
+                                      className='block truncate text-[11px] text-slate-400'
+                                      data-chat-online-meta
+                                      title={metaText}
+                                    >
+                                      {metaText}
+                                    </span>
+                                  )}
+                                  {pageText &&
+                                    (() => {
+                                      const href = presencePlaceHref(
+                                        x?.current_path,
+                                        x?.app,
+                                        presenceExtras.adminUrl,
+                                        cfg.recordUrl,
+                                        typeof window === 'undefined'
+                                          ? null
+                                          : window.location.origin
+                                      )
+                                      const body = (
+                                        <>
+                                          <MapPin className='mt-[2px] h-3 w-3 shrink-0 text-slate-400' />
+                                          <span className='line-clamp-2 min-w-0 break-words'>
+                                            {pageText}
+                                          </span>
+                                        </>
+                                      )
+                                      // Inside the row's DM button, so a span with the link role
+                                      // (a nested <a> would be invalid), like the replay action.
+                                      return href ? (
+                                        // biome-ignore lint/a11y/useSemanticElements: inside the row's DM button, where a nested <a> is invalid
+                                        <span
+                                          role='link'
+                                          tabIndex={0}
+                                          className='-mx-1 flex w-fit max-w-full cursor-pointer items-start gap-1 rounded px-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-nvr-cyan hover:underline dark:text-slate-300 dark:hover:bg-muted'
+                                          data-chat-online-page
+                                          data-chat-online-page-href={href}
+                                          data-tip={fullHref(href)}
+                                          aria-label={`${pageText}: open the page`}
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            openSession(href)
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                              e.preventDefault()
+                                              e.stopPropagation()
+                                              openSession(href)
+                                            }
+                                          }}
+                                        >
+                                          {body}
+                                        </span>
+                                      ) : (
+                                        <span
+                                          className='flex items-start gap-1 text-[11px] text-slate-500 dark:text-slate-300'
+                                          data-chat-online-page
+                                          data-tip={x?.current_path ?? pageText}
+                                        >
+                                          {body}
+                                        </span>
+                                      )
+                                    })()}
+                                </>
+                              )
+                            })()}
                           </span>
                           {(() => {
+                            // Admin-only: jump straight into this person's live session
+                            // replay. Hidden unless a recording exists AND the host has
+                            // a replay route.
                             const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
-                            const cs = x?.custom_status
-                            if (!cs && !x?.in_huddle) return null
+                            if (!isAdmin || !x?.recording_id) return null
+                            const base = presenceExtras.adminUrl?.replace(/\/$/, '') ?? ''
+                            // The app that OWNS /session-replays supplies its own
+                            // sessionUrl, so the default below is only ever used by a
+                            // headless host. There, a base that is empty or resolves to
+                            // this very origin cannot reach the replay page — it lands
+                            // the viewer back in their own router (a dashboard, not an
+                            // error), which reads as the feature being broken. Hide the
+                            // action instead of opening a tab that goes nowhere.
+                            const reachable =
+                              !!base &&
+                              (typeof window === 'undefined' ||
+                                new URL(base, window.location.origin).origin !==
+                                  window.location.origin)
+                            const href = cfg.sessionUrl
+                              ? cfg.sessionUrl(x.recording_id, String(u.user_id))
+                              : reachable
+                                ? `${base}/session-replays?recording=${x.recording_id}`
+                                : null
+                            if (!href) return null
                             return (
                               <span
-                                className='flex items-center gap-1 truncate text-[11px] text-slate-500 dark:text-slate-400'
-                                data-chat-status
+                                role='link'
+                                tabIndex={0}
+                                title='Watch this session'
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  openSession(href)
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.stopPropagation()
+                                    openSession(href)
+                                  }
+                                }}
+                                className='shrink-0 rounded p-1 text-slate-300 transition-colors hover:bg-slate-100 hover:text-nvr-cyan dark:hover:bg-muted'
                               >
-                                {x?.in_huddle && (
-                                  <span
-                                    className='inline-flex shrink-0 items-center gap-0.5 text-nvr-navy dark:text-nvr-cyan'
-                                    data-chat-in-huddle
-                                    data-tip='In a huddle right now'
-                                  >
-                                    <Headphones className='h-3 w-3' strokeWidth={2} />
-                                    {!cs && 'In a huddle'}
-                                  </span>
-                                )}
-                                {cs && (
-                                  <span className='truncate italic'>
-                                    {cs.emoji ? `${cs.emoji} ` : ''}
-                                    {cs.text}
-                                  </span>
-                                )}
+                                <PlayCircle className='h-4 w-4' strokeWidth={1.8} />
                               </span>
                             )
                           })()}
-                          {(() => {
-                            const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
-                            // Instance config decides which parts appear and in
-                            // what order; the live page comes from the presence
-                            // heartbeat, so it tracks people as they navigate.
-                            // The page gets its own line so a long zone list can
-                            // never push it into the ellipsis.
-                            const meta: string[] = []
-                            let pageText: string | null = null
-                            for (const f of presenceExtras.fields) {
-                              if (f === 'role') {
-                                const r = humanLabel(x?.role_name ?? u.role_name)
-                                if (r) meta.push(r)
-                              } else if (f === 'scopes') {
-                                const sc = (x?.scopes ?? []).join(', ')
-                                if (sc) meta.push(sc)
-                              } else if (f === 'page') {
-                                // The server renders a record's display template
-                                // ("Orders › AB26-12345"); prettyPath can only
-                                // reach the raw id, so it is the fallback.
-                                const page =
-                                  (x as { page?: string | null })?.page ??
-                                  (u as { page?: string | null }).page ??
-                                  prettyPath(x?.current_path ?? u.current_path)
-                                const app =
-                                  (x as { app?: string | null })?.app ??
-                                  (u as { app?: string | null }).app
-                                // Only unusual places are worth naming; the
-                                // ordinary frontend sends no app at all.
-                                pageText =
-                                  (app ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim() : page) ||
-                                  null
-                              }
-                            }
-                            const metaText = meta.join(' · ')
-                            if (!metaText && !pageText) {
-                              return (
-                                <span className='block truncate text-[11px] text-slate-400'>
-                                  Online
-                                </span>
-                              )
-                            }
-                            return (
-                              <>
-                                {metaText && (
-                                  <span
-                                    className='block truncate text-[11px] text-slate-400'
-                                    data-chat-online-meta
-                                    title={metaText}
-                                  >
-                                    {metaText}
-                                  </span>
-                                )}
-                                {pageText &&
-                                  (() => {
-                                    const href = presencePlaceHref(
-                                      x?.current_path,
-                                      x?.app,
-                                      presenceExtras.adminUrl,
-                                      cfg.recordUrl,
-                                      typeof window === 'undefined' ? null : window.location.origin
-                                    )
-                                    const body = (
-                                      <>
-                                        <MapPin className='mt-[2px] h-3 w-3 shrink-0 text-slate-400' />
-                                        <span className='line-clamp-2 min-w-0 break-words'>
-                                          {pageText}
-                                        </span>
-                                      </>
-                                    )
-                                    // Inside the row's DM button, so a span with the link role
-                                    // (a nested <a> would be invalid), like the replay action.
-                                    return href ? (
-                                      // biome-ignore lint/a11y/useSemanticElements: inside the row's DM button, where a nested <a> is invalid
-                                      <span
-                                        role='link'
-                                        tabIndex={0}
-                                        className='-mx-1 flex w-fit max-w-full cursor-pointer items-start gap-1 rounded px-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-nvr-cyan hover:underline dark:text-slate-300 dark:hover:bg-muted'
-                                        data-chat-online-page
-                                        data-chat-online-page-href={href}
-                                        data-tip={fullHref(href)}
-                                        aria-label={`${pageText}: open the page`}
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          openSession(href)
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter' || e.key === ' ') {
-                                            e.preventDefault()
-                                            e.stopPropagation()
-                                            openSession(href)
-                                          }
-                                        }}
-                                      >
-                                        {body}
-                                      </span>
-                                    ) : (
-                                      <span
-                                        className='flex items-start gap-1 text-[11px] text-slate-500 dark:text-slate-300'
-                                        data-chat-online-page
-                                        data-tip={x?.current_path ?? pageText}
-                                      >
-                                        {body}
-                                      </span>
-                                    )
-                                  })()}
-                              </>
-                            )
-                          })()}
-                        </span>
-                        {(() => {
-                          // Admin-only: jump straight into this person's live session
-                          // replay. Hidden unless a recording exists AND the host has
-                          // a replay route.
-                          const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
-                          if (!isAdmin || !x?.recording_id) return null
-                          const base = presenceExtras.adminUrl?.replace(/\/$/, '') ?? ''
-                          // The app that OWNS /session-replays supplies its own
-                          // sessionUrl, so the default below is only ever used by a
-                          // headless host. There, a base that is empty or resolves to
-                          // this very origin cannot reach the replay page — it lands
-                          // the viewer back in their own router (a dashboard, not an
-                          // error), which reads as the feature being broken. Hide the
-                          // action instead of opening a tab that goes nowhere.
-                          const reachable =
-                            !!base &&
-                            (typeof window === 'undefined' ||
-                              new URL(base, window.location.origin).origin !==
-                                window.location.origin)
-                          const href = cfg.sessionUrl
-                            ? cfg.sessionUrl(x.recording_id, String(u.user_id))
-                            : reachable
-                              ? `${base}/session-replays?recording=${x.recording_id}`
-                              : null
-                          if (!href) return null
-                          return (
-                            <span
-                              role='link'
-                              tabIndex={0}
-                              title='Watch this session'
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                openSession(href)
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.stopPropagation()
-                                  openSession(href)
-                                }
-                              }}
-                              className='shrink-0 rounded p-1 text-slate-300 transition-colors hover:bg-slate-100 hover:text-nvr-cyan dark:hover:bg-muted'
-                            >
-                              <PlayCircle className='h-4 w-4' strokeWidth={1.8} />
-                            </span>
-                          )
-                        })()}
-                        <MessageCircle
-                          className='h-4 w-4 shrink-0 text-slate-300'
-                          strokeWidth={1.8}
-                        />
-                      </button>
+                          <MessageCircle
+                            className='h-4 w-4 shrink-0 text-slate-300'
+                            strokeWidth={1.8}
+                          />
+                        </button>
+                      </div>
                     )
                   })}
                 </div>

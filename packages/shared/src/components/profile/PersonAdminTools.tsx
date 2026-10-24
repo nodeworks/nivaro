@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { GitMerge, RefreshCw, UserMinus } from 'lucide-react'
-import { useState } from 'react'
+import { GitMerge, LogOut, RefreshCw, UserMinus } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { EmptyLine, SectionCard } from './primitives'
+import { useReloadTheirTabs, useSignOutEverywhere } from './session-actions'
 import { errorText, type PersonProfile, useInvalidatePerson } from './types'
 
 /**
@@ -18,50 +19,9 @@ import { errorText, type PersonProfile, useInvalidatePerson } from './types'
 // ─── Force a reload ──────────────────────────────────────────────────────────
 
 export function ForceReloadCard({ profile: p }: { profile: PersonProfile }) {
-  const client = useNivaroClient()
   const [seconds, setSeconds] = useState('15')
   const [message, setMessage] = useState('')
-  const push = useMutation({
-    mutationFn: () =>
-      client
-        .request<{
-          data: {
-            sockets: number
-            users: number
-            nodes?: number
-            partial?: boolean
-            /** Sticky refresh: kept for tabs that connect later, this many hours. */
-            remembered?: boolean
-            remember_hours?: number
-          }
-        }>(
-          post('/realtime/force-refresh', {
-            user_ids: [p.id],
-            seconds: Number(seconds) || 15,
-            message
-          })
-        )
-        .then((r) => r.data),
-    // The reload rides the person's room on every server; only the tab count can fall short.
-    // A server without `nodes` counts only the tabs on the server that took this request.
-    onSuccess: ({ sockets, nodes, partial, remembered, remember_hours }) => {
-      // Sticky refresh: a tab that is asleep or offline gets it when it connects again.
-      const later = remembered
-        ? ` Tabs that connect in the next ${remember_hours ?? 24} h reload too.`
-        : ''
-      toast.success(
-        (sockets > 0
-          ? `Reload pushed to ${sockets} open tab${sockets === 1 ? '' : 's'}${partial ? ' (another server did not answer — there may be more)' : ''}.`
-          : partial
-            ? 'Reload sent — another server did not answer, so their open tabs could not be counted.'
-            : nodes != null
-              ? 'Reload sent — they have no tab open right now.'
-              : 'Reload sent to every tab they have open (tabs on other servers are not counted).') +
-          later
-      )
-    },
-    onError: (e) => toast.error(errorText(e, 'Failed to push the reload'))
-  })
+  const push = useReloadTheirTabs(p.id)
   return (
     <SectionCard
       icon={<RefreshCw className='h-4 w-4' />}
@@ -90,7 +50,7 @@ export function ForceReloadCard({ profile: p }: { profile: PersonProfile }) {
         <button
           type='button'
           disabled={push.isPending}
-          onClick={() => push.mutate()}
+          onClick={() => push.mutate({ seconds: Number(seconds) || 15, message })}
           className='inline-flex h-7 items-center gap-1.5 rounded-md border border-amber-300 px-2.5 text-[11.5px] font-medium text-amber-800 transition-colors hover:bg-amber-50 disabled:opacity-50 dark:border-amber-500/40 dark:text-amber-300 dark:hover:bg-amber-500/10'
         >
           <RefreshCw className={cn('h-3 w-3', push.isPending && 'animate-spin')} />
@@ -100,6 +60,50 @@ export function ForceReloadCard({ profile: p }: { profile: PersonProfile }) {
       <p className='mt-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
         Unsaved form drafts survive — the record form mirrors them within seconds of typing and
         offers a restore on the next open.
+      </p>
+    </SectionCard>
+  )
+}
+
+// ─── Sign out everywhere ─────────────────────────────────────────────────────
+
+export function SignOutEverywhereCard({ profile: p }: { profile: PersonProfile }) {
+  const name = [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || 'They'
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const t = setTimeout(() => setArmed(false), 4000)
+    return () => clearTimeout(t)
+  }, [armed])
+  const signOut = useSignOutEverywhere(p.id, name, { onDone: () => setArmed(false) })
+  return (
+    <SectionCard
+      icon={<LogOut className='h-4 w-4' />}
+      title='Sign out everywhere'
+      hint='Ends every session they have, on every app — each open tab goes back to sign-in'
+      tone='danger'
+      testId='sign-out-everywhere'
+    >
+      <div className='flex flex-wrap items-center gap-2' data-user-sign-out>
+        <button
+          type='button'
+          disabled={signOut.isPending}
+          onClick={() => (armed ? signOut.mutate() : setArmed(true))}
+          onBlur={() => setArmed(false)}
+          className={cn(
+            'inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11.5px] font-medium transition-colors disabled:opacity-50',
+            armed
+              ? 'border-red-600 bg-red-600 text-white hover:bg-red-700'
+              : 'border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-500/40 dark:text-amber-300 dark:hover:bg-amber-500/10'
+          )}
+        >
+          <LogOut className='h-3 w-3' />
+          {signOut.isPending ? 'Signing out…' : armed ? 'Confirm sign out' : 'Sign them out'}
+        </button>
+      </div>
+      <p className='mt-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
+        They can sign in again straight away — suspend the account to keep them out. API keys and
+        static tokens keep working.
       </p>
     </SectionCard>
   )

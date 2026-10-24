@@ -3,9 +3,11 @@ import {
   Building2,
   Clock,
   ExternalLink,
+  LogOut,
   Mail,
   MessageCircle,
   Phone,
+  RefreshCw,
   User,
   UserCheck
 } from 'lucide-react'
@@ -19,6 +21,7 @@ import { canOpenDm, openDmWith } from '../chat/chat-core'
 import { HuddlePresenceLine } from '../chat/huddle/HuddleLiveBadge'
 import { useHuddleLive } from '../chat/huddle/huddle-live'
 import { MailSuppressedPill } from '../profile/MailSuppressedPill'
+import { useReloadTheirTabs, useSignOutEverywhere } from '../profile/session-actions'
 import { useCardPresence } from '../profile/usePersonPresence'
 import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -370,7 +373,8 @@ function UserCardPopover({
   /** Whether the card is showing — lazy reads (the bounce mark) wait for it. */
   open?: boolean
 }) {
-  const { isAdmin } = useItemEditAuth()
+  const { isAdmin, userId: viewerId } = useItemEditAuth()
+  const isSelf = !!viewerId && viewerId.toUpperCase() === userId.toUpperCase()
   // #1982 — active, idle or away and the page they are on, under the Online list's rules.
   const live = useCardPresence(userId, open)
   // #2851 — only when the viewer can see that room (the server filters the list).
@@ -551,7 +555,7 @@ function UserCardPopover({
               onAction?.()
               navigate(profileUrl)
             }}
-            className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
+            className='flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
           >
             <User className='h-3.5 w-3.5' /> View profile
           </button>
@@ -568,7 +572,7 @@ function UserCardPopover({
                   : undefined
               )
             }}
-            className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
+            className='flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
           >
             <MessageCircle className='h-3.5 w-3.5' /> Message
           </button>
@@ -580,13 +584,91 @@ function UserCardPopover({
               onAction?.()
               window.location.href = `mailto:${user.email}`
             }}
-            className='flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
+            className='flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-accent transition-colors'
           >
             <ExternalLink className='h-3.5 w-3.5' /> Email
           </button>
         )}
       </div>
+      {isAdmin && !isSelf && (
+        <UserCardAdminRow
+          userId={userId}
+          name={
+            user
+              ? [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
+              : userId
+          }
+          onDone={onAction}
+        />
+      )}
     </PopoverContent>
+  )
+}
+
+/**
+ * Administrators only, never on your own card: reload every tab this person
+ * has open, or sign them out of every session on every app (second click
+ * confirms). Same calls as the people page's Admin tools (profile/session-actions).
+ */
+export function UserCardAdminRow({
+  userId,
+  name,
+  onDone
+}: {
+  userId: string
+  name: string
+  onDone?: () => void
+}) {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const t = setTimeout(() => setArmed(false), 4000)
+    return () => clearTimeout(t)
+  }, [armed])
+  const reload = useReloadTheirTabs(userId, { onDone })
+  const signOut = useSignOutEverywhere(userId, name, { onDone })
+  const cls =
+    'flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-50'
+  return (
+    <div
+      className='flex items-center gap-1 border-t border-slate-100 p-2 dark:border-border'
+      data-user-card-admin
+    >
+      <button
+        type='button'
+        disabled={reload.isPending}
+        onClick={() => reload.mutate({})}
+        data-tip='Every tab they have open shows a 15-second countdown, then reloads'
+        className={cn(
+          cls,
+          'text-amber-800 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-500/10'
+        )}
+        data-user-card-reload
+      >
+        <RefreshCw className={cn('h-3.5 w-3.5', reload.isPending && 'animate-spin')} />
+        {reload.isPending ? 'Sending…' : 'Reload tabs'}
+      </button>
+      <button
+        type='button'
+        disabled={signOut.isPending}
+        onClick={() => (armed ? signOut.mutate() : setArmed(true))}
+        data-tip={
+          armed
+            ? 'Click again to sign them out of every session'
+            : 'Ends every session they have, on every app — they can sign in again'
+        }
+        className={cn(
+          cls,
+          armed
+            ? 'bg-red-600 text-white hover:bg-red-700'
+            : 'text-amber-800 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-500/10'
+        )}
+        data-user-card-sign-out={armed ? 'armed' : ''}
+      >
+        <LogOut className='h-3.5 w-3.5' />
+        {signOut.isPending ? 'Signing out…' : armed ? 'Confirm sign out' : 'Sign out'}
+      </button>
+    </div>
   )
 }
 

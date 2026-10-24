@@ -14,7 +14,12 @@ import {
 } from './PersonAccess'
 import { AccessSummaryCard } from './PersonAccessSummary'
 import { ActivityFeedCard, JourneyCard, SignInsCard, StatsCard } from './PersonActivity'
-import { ForceReloadCard, MergeCard, OffboardingCard } from './PersonAdminTools'
+import {
+  ForceReloadCard,
+  MergeCard,
+  OffboardingCard,
+  SignOutEverywhereCard
+} from './PersonAdminTools'
 import { PersonAiMemoryCard } from './PersonAiMemory'
 import { CompareAccessCard } from './PersonCompare'
 import { TeamLoadCard, WhyCard, WorkingOnCard } from './PersonExtras'
@@ -216,6 +221,7 @@ export function PersonProfile({
             <div className='grid gap-4 lg:grid-cols-2'>
               <div className='space-y-4'>
                 <ForceReloadCard profile={profile} />
+                <SignOutEverywhereCard profile={profile} />
                 <MergeCard profile={profile} />
               </div>
               <div className='space-y-4'>
