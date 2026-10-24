@@ -1,10 +1,63 @@
 {
-  "generated_at": "2026-10-24T17:22:12.326Z",
+  "generated_at": "2026-10-24T18:20:17.575Z",
   "releases": [
+    {
+      "version": "0.3.15",
+      "tag": "v0.3.15",
+      "date": "2026-10-24T14:19:56-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "ctx.reads.route puts an extension's heavy GETs behind the read gate",
+              "hash": "45beea42a"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "infra",
+              "text": "reboot check skips temporary containers",
+              "hash": "2dda06d8f"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "relations",
+              "text": "one table-catalog read per tenant at a time",
+              "hash": "37fde3989"
+            },
+            {
+              "section": "Performance",
+              "scope": "search",
+              "text": "global search runs as row-balanced parallel batches",
+              "hash": "f8b82a0cd"
+            },
+            {
+              "section": "Performance",
+              "scope": "items",
+              "text": "a collection can name the columns its list search reads",
+              "hash": "71a200336"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.14",
       "tag": "v0.3.14",
-      "date": "2026-10-24T13:21:59-04:00",
+      "date": "2026-10-24T13:22:12-04:00",
       "sections": [
         {
           "label": "Added",
