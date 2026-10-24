@@ -1,10 +1,63 @@
 {
-  "generated_at": "2026-10-24T20:36:37.792Z",
+  "generated_at": "2026-10-24T21:00:42.302Z",
   "releases": [
+    {
+      "version": "0.3.19",
+      "tag": "v0.3.19",
+      "date": "2026-10-24T17:00:25-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "security",
+              "text": "admins sign a person out everywhere or reload their tabs from the user card",
+              "hash": "a8a7c9ead"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "id-returning writes work on tables with triggers",
+              "hash": "b592bc34c"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "replay",
+              "text": "full snapshots follow activity, not a fixed minute",
+              "hash": "5f654b644"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "sign-out everywhere fails closed when the session scan does not finish",
+              "hash": "76e2724d4"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "ctx.sql.triggerSafeReturning, signing one person out or reloading their tabs",
+              "hash": "1bf425311"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.18",
       "tag": "v0.3.18",
-      "date": "2026-10-24T16:35:48-04:00",
+      "date": "2026-10-24T16:36:38-04:00",
       "sections": [
         {
           "label": "Fixed",
