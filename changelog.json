@@ -1,10 +1,248 @@
 {
-  "generated_at": "2026-10-23T22:27:35.161Z",
+  "generated_at": "2026-10-24T17:22:12.326Z",
   "releases": [
+    {
+      "version": "0.3.14",
+      "tag": "v0.3.14",
+      "date": "2026-10-24T13:21:59-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "release",
+              "text": "terminal release chain runs the full post-deploy gate",
+              "hash": "a57cb86ab"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "board for every multi-process deployment; admin stream cluster-wide",
+              "hash": "da3e24332"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "cluster-wide viewing/page presence; refuse extension socket handlers",
+              "hash": "49cdfb4a6"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "NIVARO_ROLE=realtime tier and SOCKETS=off for web",
+              "hash": "548a6b56e"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "tester-army findings across forms, lines, locks, queries and validation",
+              "hash": "b655c2d6e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "board review — stale reads, stop race, registry, rows, stream scopes",
+              "hash": "3a80a791e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "viewer lists converge across realtime processes",
+              "hash": "fd2c3ce8a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "final review — 1 s board, SQL schema fingerprint, key scopes",
+              "hash": "ef471c3f9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "second review — board registry, schema watch, fallback channel",
+              "hash": "2e1803bf2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "ops topic viewers across realtime processes; main's realtime pieces on the tier",
+              "hash": "64717e591"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "record:viewers lists viewers on every realtime process",
+              "hash": "96428a6a5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "review fixes — board, quorum, mutations, catch-up, readiness",
+              "hash": "f406fd6e8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "concurrency sample counts the cluster with SOCKETS=off",
+              "hash": "bed1a1d2e"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "realtime tier section on the docs site (sync)",
+              "hash": "165499991"
+            },
+            {
+              "section": "Documentation",
+              "scope": "realtime",
+              "text": "memory limit from the realtime CI measurement",
+              "hash": "108fa69af"
+            },
+            {
+              "section": "Documentation",
+              "scope": "realtime",
+              "text": "compose example, sticky-session rules, sizing",
+              "hash": "fcc097935"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "layout-editor",
+              "text": "staged-edit collab tests wait on the clock",
+              "hash": "9b8ae3fa2"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "role-change case waits for the socket's own re-gate (rooms_left), reports re-gate latency",
+              "hash": "4f107f6d6"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "survivor check counts every remaining socket process",
+              "hash": "4c102c4f6"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "sticky force refresh and minimum-build cases; hello overrides on the harness socket",
+              "hash": "d0b2a45cd"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "staleness on last_active, optional third web process (--web3)",
+              "hash": "89d8f28f7"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "force refresh and min-build preview reach realtime tabs",
+              "hash": "49da3637e"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "load script models the shipped presence refresh rule (--refetch-rule gap10) and measures list staleness",
+              "hash": "3e219aa86"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "room gap detection (#2462) in the harness socket, load table report, write-pattern fix",
+              "hash": "0f75cb8f6"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "SQL Server data on tmpfs, ws-token retry in the harness socket",
+              "hash": "ce47b4e0e"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "fixed-client flags for the load script (--row-refetch, --heartbeat-mode), staggered + same-moment viewer cases",
+              "hash": "12bf64924"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "--key=value args, load suite tolerates a stopped realtime task, machine load",
+              "hash": "c434fd23b"
+            },
+            {
+              "section": "Other",
+              "scope": "help-videos",
+              "text": "wait for the upload job, not just its status",
+              "hash": "03db57c7d"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "mssql as root (SQL Edge first start), presence test waits for offline, server lag verdict",
+              "hash": "af85f0b34"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "process memory/lag from /api/metrics, compression knob, load-args passthrough",
+              "hash": "2c187fec6"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "load probe times delivery from the write response; matrix report",
+              "hash": "7fde44de5"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "cloud tenant-isolation suite, async compose actions, direct slow-consumer socket",
+              "hash": "2c5c3a845"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "auth, failover and load suites; legacy tables + default workspace in the bootstrap",
+              "hash": "2149aecf9"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "isolated realtime CI stack and harness (WIP)",
+              "hash": "f361e5f6c"
+            },
+            {
+              "section": "Other",
+              "scope": "realtime",
+              "text": "route allowlist, SOCKETS=off emits through the adapter",
+              "hash": "2d794154c"
+            }
+          ]
+        }
+      ],
+      "count": 35
+    },
     {
       "version": "0.3.13",
       "tag": "v0.3.13",
-      "date": "2026-10-23T18:27:16-04:00",
+      "date": "2026-10-23T18:27:35-04:00",
       "sections": [
         {
           "label": "Added",
