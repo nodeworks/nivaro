@@ -53,6 +53,14 @@ describe('physical tables', () => {
     resetPhysicalTablesCache()
   })
 
+  it('concurrent callers on a cold cache share one catalog read', async () => {
+    const answers = await Promise.all(
+      ['forecasts', 'regions', 'Forecasts', 'regions'].map(tableIsMissing)
+    )
+    expect(answers).toEqual([false, false, false, false])
+    expect(state.reads).toBe(1)
+  })
+
   it('knows a registered name with no table, case-insensitively', async () => {
     expect(await tableIsMissing('forecasts_regions')).toBe(true)
     expect(await tableIsMissing('Forecasts')).toBe(false)

@@ -51,11 +51,20 @@ async function loadNames(): Promise<Set<string> | null> {
   }
 }
 
+/** One catalog read per tenant at a time: a cold or expired cache under load
+ *  otherwise sent one read per concurrent request (4 at once on one export). */
+const inflight = new Map<string, Promise<Set<string> | null>>()
+
 async function names(): Promise<Set<string> | null> {
   const key = getTenantId() ?? ''
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < TTL_MS) return hit.names
-  const loaded = await loadNames()
+  let pending = inflight.get(key)
+  if (!pending) {
+    pending = loadNames().finally(() => inflight.delete(key))
+    inflight.set(key, pending)
+  }
+  const loaded = await pending
   if (loaded) cache.set(key, { at: Date.now(), names: loaded })
   return loaded ?? hit?.names ?? null
 }
@@ -102,4 +111,5 @@ export async function liveRelations(rels: CMSRelation[]): Promise<CMSRelation[]>
 export function resetPhysicalTablesCache(): void {
   cache.clear()
   confirmedMissing.clear()
+  inflight.clear()
 }
