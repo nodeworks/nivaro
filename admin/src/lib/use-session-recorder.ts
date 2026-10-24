@@ -1,7 +1,9 @@
 import {
   clipEndOffset,
+  createReplayCheckoutState,
   emitReplayTap,
   instrumentSocket,
+  noteReplayEvent,
   type ReplayClipKind,
   registerReplayCapture,
   setReplayRecorderMode
@@ -571,6 +573,10 @@ export function useSessionRecorder() {
             }
           }
         }
+        // Checkouts: a minute while someone is using the tab, 15 min otherwise
+        // (packages/shared replay-checkout.ts) — rrweb's own 60 s checkout filled the 15 MB
+        // per-recording cap from a tab left on a self-updating page.
+        const checkout = createReplayCheckoutState()
         state.stop =
           record({
             emit(event) {
@@ -578,9 +584,17 @@ export function useSessionRecorder() {
               if (state.buffer.length === 0) state.bufferRoute = state.route
               state.buffer.push(event)
               if (state.buffer.length >= FLUSH_COUNT) scheduleFlush()
+              if (noteReplayEvent(checkout, event))
+                // Outside rrweb's emit: the snapshot emits through this same callback.
+                setTimeout(() => {
+                  try {
+                    record.takeFullSnapshot(true)
+                  } catch {
+                    checkout.pending = false
+                  }
+                }, 0)
             },
-            ...buildReplayMaskingOptions(() => maskingRef.current),
-            checkoutEveryNms: 60_000
+            ...buildReplayMaskingOptions(() => maskingRef.current)
           }) ?? null
         {
           const { record: rec } = await import('rrweb')

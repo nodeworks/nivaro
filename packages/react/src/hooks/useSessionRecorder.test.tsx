@@ -12,15 +12,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const rr = vi.hoisted(() => ({
   emit: null as ((event: unknown) => void) | null,
-  stop: vi.fn()
+  opts: null as Record<string, unknown> | null,
+  stop: vi.fn(),
+  takeFullSnapshot: vi.fn()
 }))
 vi.mock('rrweb', () => {
   const record = Object.assign(
     (opts: { emit: (event: unknown) => void }) => {
       rr.emit = opts.emit
+      rr.opts = opts
       return rr.stop
     },
-    { addCustomEvent: vi.fn(), takeFullSnapshot: vi.fn() }
+    {
+      addCustomEvent: vi.fn(),
+      takeFullSnapshot: (c?: boolean) => rr.takeFullSnapshot(c)
+    }
   )
   return { record }
 })
@@ -63,7 +69,9 @@ let host: HTMLDivElement | null = null
 
 beforeEach(() => {
   rr.emit = null
+  rr.opts = null
   rr.stop.mockClear()
+  rr.takeFullSnapshot.mockClear()
   sessionStorage.clear()
   host = document.createElement('div')
   document.body.appendChild(host)
@@ -168,5 +176,45 @@ describe('useSessionRecorder: a refused recording stops', () => {
     // Each batch tried once, never looped; the recorder is still running.
     expect(calls.filter((c) => c.endsWith('/events')).length).toBe(2)
     expect(rr.stop).not.toHaveBeenCalled()
+  })
+})
+
+describe('useSessionRecorder: checkouts follow activity (2026-10-24 size cap)', () => {
+  it('no rrweb 60 s checkout; a self-updating idle page snapshots every 15 min, a click after 1 min', async () => {
+    const { client } = fakeClient(Object.assign(new Error('no'), { status: 500 }))
+    await mount(client)
+    expect(rr.opts).not.toBeNull()
+    expect(rr.opts?.checkoutEveryNms).toBeUndefined()
+
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout'] })
+    try {
+      const t0 = Date.now()
+      rr.emit?.({ type: 2, timestamp: t0 })
+      // A live page changing itself every 30 s, nobody there, for 14 minutes: no snapshot.
+      for (let m = 1; m <= 28; m++) {
+        vi.setSystemTime(t0 + m * 30_000)
+        rr.emit?.({ type: 3, data: { source: 0 } })
+      }
+      vi.runOnlyPendingTimers()
+      expect(rr.takeFullSnapshot).not.toHaveBeenCalled()
+      // Past 15 minutes: one.
+      vi.setSystemTime(t0 + 15 * 60_000 + 1)
+      rr.emit?.({ type: 3, data: { source: 0 } })
+      vi.runOnlyPendingTimers()
+      expect(rr.takeFullSnapshot).toHaveBeenCalledTimes(1)
+      expect(rr.takeFullSnapshot).toHaveBeenCalledWith(true)
+
+      // The snapshot arrives; someone clicks; a minute later the next one is due.
+      const t1 = Date.now()
+      rr.emit?.({ type: 2, timestamp: t1 })
+      vi.setSystemTime(t1 + 5_000)
+      rr.emit?.({ type: 3, data: { source: 2 } })
+      vi.setSystemTime(t1 + 60_000)
+      rr.emit?.({ type: 3, data: { source: 0 } })
+      vi.runOnlyPendingTimers()
+      expect(rr.takeFullSnapshot).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

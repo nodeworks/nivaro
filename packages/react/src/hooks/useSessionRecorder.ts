@@ -9,6 +9,7 @@ import {
   attributeChunkRoutes,
   buildReplayMaskingOptions,
   clipEndOffset,
+  createReplayCheckoutState,
   currentReplayRoute,
   emitReplayTap,
   instrumentConsole,
@@ -17,6 +18,7 @@ import {
   isReplayRouteSampled,
   normalizeReplayMasking,
   normalizeReplaySampling,
+  noteReplayEvent,
   type ReplayClipKind,
   type ReplayMaskingRules,
   type ReplaySampling,
@@ -534,6 +536,10 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
           }
         }
       }
+      // Checkouts: a minute while someone is using the tab, 15 min otherwise
+      // (packages/shared replay-checkout.ts) — rrweb's own 60 s checkout filled the 15 MB
+      // per-recording cap from a tab left on a self-updating page.
+      const checkout = createReplayCheckoutState()
       state.stop =
         record({
           emit(event: unknown) {
@@ -541,9 +547,20 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
             if (state.buffer.length === 0) state.bufferRoute = state.route
             state.buffer.push(event)
             if (state.buffer.length >= FLUSH_COUNT) scheduleFlush()
+            if (noteReplayEvent(checkout, event))
+              // Outside rrweb's emit: the snapshot emits through this same callback.
+              setTimeout(() => {
+                try {
+                  ;(
+                    record as unknown as { takeFullSnapshot?: (c?: boolean) => void }
+                  ).takeFullSnapshot?.(true)
+                } catch {
+                  /* the next one is due again */
+                  checkout.pending = false
+                }
+              }, 0)
           },
-          ...buildReplayMaskingOptions(() => masking),
-          checkoutEveryNms: 60_000
+          ...buildReplayMaskingOptions(() => masking)
         }) ?? null
       state.uninstrument = instrumentReplayContext(
         (tag, payload) =>

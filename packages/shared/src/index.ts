@@ -784,6 +784,13 @@ export {
   withClipKind
 } from './lib/replay-capture'
 export {
+  createReplayCheckoutState,
+  noteReplayEvent,
+  REPLAY_CHECKOUT_ACTIVE_MS,
+  REPLAY_CHECKOUT_IDLE_MS,
+  type ReplayCheckoutState
+} from './lib/replay-checkout'
+export {
   consoleLine,
   instrumentConsole,
   instrumentRequests,
