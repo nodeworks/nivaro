@@ -1,4 +1,4 @@
-import { db } from '../db/index.js'
+import { db, probeDb } from '../db/index.js'
 
 /**
  * DB outage posture (#329): a 5s probe loop maintains one process-wide
@@ -14,13 +14,13 @@ let timer: ReturnType<typeof setInterval> | null = null
 let failStreak = 0
 
 /**
- * One slow probe is NOT an outage. On this stack the probe shares the
- * connection pool with real work, so a busy pool or a latency spike on the
- * shared SQL server can blow a single 2.5s race while the database is
- * perfectly fine — and flipping unhealthy on one miss turned every such
- * blip into a burst of DB_UNAVAILABLE 503s (measured: hundreds/day, zero
- * actual outages). Trip only after sustained failure; recover on the first
- * success so a real outage still clears fast.
+ * One slow probe is NOT an outage. The probe runs on its own connection
+ * (`probeDb()`), never the request pool: a pool full of slow work is not a
+ * missing database, and probing through it made busy replicas declare an
+ * outage, refuse every request and get restarted (staging 2026-10-24). A
+ * latency spike on the shared SQL server can still blow a single race, so
+ * trip only after sustained failure; recover on the first success so a real
+ * outage still clears fast. Cloud mode (no own connection) probes via `db`.
  */
 const FAIL_THRESHOLD = 3
 const PROBE_TIMEOUT_MS = 4000
@@ -40,7 +40,7 @@ export function dbHealthState(): {
 async function probe(): Promise<void> {
   try {
     await Promise.race([
-      db.raw('SELECT 1'),
+      (probeDb() ?? db).raw('SELECT 1'),
       new Promise((_, rej) => setTimeout(() => rej(new Error('probe timeout')), PROBE_TIMEOUT_MS))
     ])
     if (!healthy) console.log('[db-health] database recovered')

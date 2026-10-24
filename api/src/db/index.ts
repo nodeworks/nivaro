@@ -142,6 +142,29 @@ export const _backgroundDb: ReturnType<typeof knex> | null =
       })
     : null
 
+/**
+ * The database health probe's own connection (services/db-health.ts). The probe
+ * used to borrow from the request pool, so a pool full of slow report queries made
+ * three `SELECT 1`s time out waiting for a connection — the process then declared
+ * the database unreachable, refused every request with 503 and was restarted by
+ * its orchestrator while the database was fine (staging army test 2026-10-24: two
+ * of three web replicas). One connection of its own answers "is the database
+ * there", not "is the pool free". Same server and credentials; not in cloud mode.
+ */
+let probeKnex: ReturnType<typeof knex> | null = null
+export function probeDb(): ReturnType<typeof knex> | null {
+  if (cloudMode) return null
+  probeKnex ??= knex({
+    client: config.DB_CLIENT,
+    connection: buildConnection(config.DB_HOST, writePort),
+    pool: { min: 0, max: 1, acquireTimeoutMillis: 10_000 }
+  })
+  return probeKnex
+}
+// Built on first use. The chaos seam patches the driver prototype, so database
+// drills reach the probe too (a failing database still trips the outage
+// posture); a pool drill does not, by design.
+
 /** The self-hosted knex the current async context runs on: the background
  *  pool inside bound background work (when it exists), else the main pool. */
 function activeStaticDb(): typeof _staticDb {
@@ -263,6 +286,7 @@ export const dbRead: Database = config.DB_READ_HOST
 export async function closeDb(): Promise<void> {
   await _staticDb.destroy()
   if (_backgroundDb) await _backgroundDb.destroy()
+  if (probeKnex) await probeKnex.destroy()
   if (config.DB_READ_HOST) {
     await (dbRead as any).destroy()
   }
