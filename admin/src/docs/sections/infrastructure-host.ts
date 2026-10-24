@@ -58,6 +58,10 @@ export const infrastructureHostGuide: DocSection = {
       type: 'p',
       text: 'Each host also lists remote mounts without nofail in /etc/fstab: if their server is down while the host boots, the host can stop in emergency mode. The readiness check reboot-survivability warns when any container would stay down.'
     },
+    {
+      type: 'p',
+      text: 'Temporary containers are not judged and are listed under the table instead: a container started with docker run --rm, and a GitLab CI job container (labels com.gitlab.gitlab-runner.*). Neither is meant to come back, and a CI build running on the host while a deploy gate looked used to turn the check to warn.'
+    },
     { type: 'h2', id: 'infrastructure-logs-tab', text: 'Logs tab' },
     {
       type: 'p',

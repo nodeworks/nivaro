@@ -7,7 +7,8 @@ import {
   judgeReboot,
   logsReport,
   rebootReport,
-  summarizeReboot
+  summarizeReboot,
+  temporaryReason
 } from './infra-host-checks.js'
 import { setStoreFetchForTests } from './telemetry-store.js'
 
@@ -101,11 +102,59 @@ describe('summarizeReboot', () => {
     expect(s.host_notes[0]).toMatch(/\/mnt\/data .* no nofail/)
   })
 
+  it('names temporary containers in the summary without counting them', () => {
+    const tmp = [{ name: 'runner-1', image: 'node', why: 'GitLab CI job container' }]
+    const s = summarizeReboot(
+      [
+        judgeReboot({
+          name: 'a',
+          restartPolicy: 'always',
+          serviceCondition: undefined,
+          mounts: [],
+          hostMounts: []
+        })
+      ],
+      0,
+      null,
+      tmp
+    )
+    expect(s.counts).toEqual({ comes_back: 1, stays_down: 0, may_break: 0 })
+    expect(s.temporary).toEqual(tmp)
+    expect(s.summary).toBe(
+      'All 1 running container come back after a reboot; 1 temporary container not judged.'
+    )
+    expect(summarizeReboot([], 0, null, tmp).summary).toBe(
+      'No long-running containers; 1 temporary container not judged.'
+    )
+  })
+
   it('says when host facts are missing', () => {
     const s = summarizeReboot([], 0, null)
     expect(s.facts_collected).toBe(false)
     expect(s.summary).toBe('No running containers.')
     expect(s.host_notes[0]).toMatch(/not collected/)
+  })
+})
+
+describe('temporaryReason', () => {
+  it('skips GitLab runner job containers and --rm runs, never swarm tasks', () => {
+    expect(temporaryReason({ 'com.gitlab.gitlab-runner.job.id': '7' }, false)).toMatch(/CI job/)
+    expect(temporaryReason({}, true)).toMatch(/--rm/)
+    expect(temporaryReason(undefined, undefined)).toBeNull()
+    expect(temporaryReason({ 'com.docker.compose.project': 'gitlab' }, false)).toBeNull()
+    // The runner itself is a compose container with a restart policy, not a job.
+    expect(
+      temporaryReason(
+        { 'com.docker.compose.project': 'docker', 'com.docker.compose.service': 'gitlab-runner' },
+        false
+      )
+    ).toBeNull()
+    expect(
+      temporaryReason(
+        { 'com.docker.swarm.service.name': 'app_api', 'com.gitlab.gitlab-runner.job.id': '7' },
+        true
+      )
+    ).toBeNull()
   })
 })
 
@@ -151,7 +200,16 @@ const CONTAINERS = [
     Mounts: []
   },
   { Id: 'c3', Names: ['/job'], Image: 'job', State: 'running', Labels: {}, Mounts: [] },
-  { Id: 'c4', Names: ['/old'], Image: 'old', State: 'exited', Labels: {}, Mounts: [] }
+  { Id: 'c4', Names: ['/old'], Image: 'old', State: 'exited', Labels: {}, Mounts: [] },
+  {
+    Id: 'c5',
+    Names: ['/runner-x-project-3-concurrent-0'],
+    Image: 'node:22-alpine',
+    State: 'running',
+    Labels: { 'com.gitlab.gitlab-runner.job.id': '42' },
+    Mounts: []
+  },
+  { Id: 'c6', Names: ['/build-once'], Image: 'node', State: 'running', Labels: {}, Mounts: [] }
 ]
 
 const INSPECT: Record<string, unknown> = {
@@ -167,7 +225,12 @@ const INSPECT: Record<string, unknown> = {
     }
   },
   c3: { Id: 'c3', HostConfig: { RestartPolicy: { Name: 'no' }, LogConfig: { Type: 'local' } } },
-  c4: { Id: 'c4', HostConfig: { RestartPolicy: { Name: 'no' }, LogConfig: { Type: 'json-file' } } }
+  c4: { Id: 'c4', HostConfig: { RestartPolicy: { Name: 'no' }, LogConfig: { Type: 'json-file' } } },
+  c5: { Id: 'c5', HostConfig: { RestartPolicy: { Name: 'no' }, LogConfig: { Type: 'local' } } },
+  c6: {
+    Id: 'c6',
+    HostConfig: { AutoRemove: true, RestartPolicy: { Name: 'no' }, LogConfig: { Type: 'local' } }
+  }
 }
 
 function fakeDocker() {
@@ -269,8 +332,12 @@ describe('reports', () => {
     expect(h?.stopped).toBe(1)
     const v = Object.fromEntries((h?.containers ?? []).map((c) => [c.name, c.verdict]))
     expect(v).toEqual({ web: 'may_break', 'app_api.1.xyz': 'comes_back', job: 'stays_down' })
+    expect(h?.temporary.map((c) => c.name)).toEqual([
+      'build-once',
+      'runner-x-project-3-concurrent-0'
+    ])
     expect(h?.summary).toBe(
-      '1 of 3 running containers come back after a reboot; 1 stays down, 1 may come back broken.'
+      '1 of 3 running containers come back after a reboot; 1 stays down, 1 may come back broken; 2 temporary containers not judged.'
     )
   })
 

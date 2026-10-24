@@ -520,6 +520,10 @@ async function rebootTool(input: Record<string, unknown>) {
           summary: d.summary,
           counts: d.counts,
           stopped_containers: d.stopped,
+          temporary_not_judged: d.temporary.slice(0, n).map((c) => ({
+            name: c.name,
+            why: txt(c.why, 120)
+          })),
           facts_collected: d.facts_collected,
           host_notes: d.host_notes.slice(0, 5).map((x) => txt(x, 240)),
           at_risk: d.containers

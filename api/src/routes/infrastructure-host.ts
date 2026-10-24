@@ -41,7 +41,7 @@ export const rebootSurvivabilityCheck: ReadinessCheck = {
   label: 'Containers come back after a host reboot',
   group: 'Infrastructure',
   description:
-    'Every running container on each Docker host, judged on its restart policy (or its swarm service) and on remote mounts Docker does not wait for at boot.',
+    'Every running container on each Docker host, judged on its restart policy (or its swarm service) and on remote mounts Docker does not wait for at boot. Temporary containers (docker run --rm, GitLab CI jobs) are not judged.',
   ttlMs: 15 * 60_000,
   run: async () => {
     if (dockerHosts().length === 0)
@@ -51,6 +51,7 @@ export const rebootSurvivabilityCheck: ReadinessCheck = {
     let down = 0
     let broken = 0
     let total = 0
+    let temporary = 0
     const failed: string[] = []
     for (const h of hosts) {
       if (!h.data) {
@@ -58,6 +59,7 @@ export const rebootSurvivabilityCheck: ReadinessCheck = {
         continue
       }
       total += h.data.containers.length
+      temporary += h.data.temporary.length
       broken += h.data.counts.may_break
       for (const c of h.data.containers)
         if (c.verdict === 'stays_down') {
@@ -65,17 +67,18 @@ export const rebootSurvivabilityCheck: ReadinessCheck = {
           blockers.push(`${h.host} / ${c.name}: ${c.reason}`)
         }
     }
+    const skipped = temporary ? `; ${temporary} temporary container(s) not judged` : ''
     if (down > 0)
       return {
         status: 'warn',
-        detail: `${down} of ${total} running container(s) would stay down after a reboot${broken ? `; ${broken} may come back broken` : ''}.`,
+        detail: `${down} of ${total} running container(s) would stay down after a reboot${broken ? `; ${broken} may come back broken` : ''}${skipped}.`,
         blockers: blockers.slice(0, 30)
       }
     if (failed.length && total === 0)
       return { status: 'skip', detail: `No Docker host answered: ${failed.join('; ')}` }
     return {
       status: 'pass',
-      detail: `All ${total} running container(s) come back after a reboot${broken ? `; ${broken} depend on a remote mount Docker does not wait for` : ''}.`
+      detail: `All ${total} running container(s) come back after a reboot${broken ? `; ${broken} depend on a remote mount Docker does not wait for` : ''}${skipped}.`
     }
   }
 }

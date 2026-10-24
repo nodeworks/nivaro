@@ -484,6 +484,7 @@ describe('disk, logs, reboot, hosts', () => {
             summary: '1 stays down',
             counts: { comes_back: 1, stays_down: 1, may_break: 0 },
             stopped: 0,
+            temporary: [{ name: 'runner-1', image: 'node', why: 'GitLab CI job container' }],
             facts_collected: true,
             host_notes: [],
             containers: [
@@ -509,6 +510,9 @@ describe('disk, logs, reboot, hosts', () => {
     })
     const out: any = await executeInfraTool('infra_reboot', {})
     expect(out.hosts[0].at_risk.map((c: any) => c.name)).toEqual(['b'])
+    expect(out.hosts[0].temporary_not_judged).toEqual([
+      { name: 'runner-1', why: 'GitLab CI job container' }
+    ])
   })
   it('hosts summarises patch and IO verdicts from host facts', async () => {
     m.readHostFacts.mockResolvedValue({

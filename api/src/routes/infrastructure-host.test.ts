@@ -98,6 +98,36 @@ describe('readiness checks', () => {
     expect(r.blockers?.[0]).toMatch(/^staging \/ cron: No restart policy/)
   })
 
+  it('reboot-survivability does not judge CI job and --rm containers (a deploy-time build)', async () => {
+    process.env.DOCKER_HOSTS = 'staging=http://proxy:2375'
+    docker(
+      [
+        { Id: 'b', Names: ['/web'], State: 'running', Labels: {}, Mounts: [] },
+        {
+          Id: 'r',
+          Names: ['/runner-abc-project-12-concurrent-0-build'],
+          State: 'running',
+          Labels: {
+            'com.gitlab.gitlab-runner.job.id': '991',
+            'com.gitlab.gitlab-runner.type': 'build'
+          },
+          Mounts: []
+        },
+        { Id: 'n', Names: ['/build-efp-ops'], State: 'running', Labels: {}, Mounts: [] }
+      ],
+      {
+        b: { Id: 'b', HostConfig: { RestartPolicy: { Name: 'always' } } },
+        r: { Id: 'r', HostConfig: { RestartPolicy: { Name: 'no' } } },
+        n: { Id: 'n', HostConfig: { AutoRemove: true, RestartPolicy: { Name: 'no' } } }
+      }
+    )
+    expect(await rebootSurvivabilityCheck.run()).toEqual({
+      status: 'pass',
+      detail:
+        'All 1 running container(s) come back after a reboot; 2 temporary container(s) not judged.'
+    })
+  })
+
   it('reboot-survivability passes when everything comes back', async () => {
     process.env.DOCKER_HOSTS = 'staging=http://proxy:2375'
     docker([{ Id: 'b', Names: ['/web'], State: 'running', Labels: {}, Mounts: [] }], {

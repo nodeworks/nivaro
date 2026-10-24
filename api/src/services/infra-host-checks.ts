@@ -20,6 +20,7 @@ interface ContainerInspect {
   Id: string
   Name?: string
   HostConfig?: {
+    AutoRemove?: boolean
     RestartPolicy?: { Name?: string; MaximumRetryCount?: number }
     LogConfig?: { Type?: string; Config?: Record<string, string> }
   }
@@ -84,9 +85,18 @@ export interface RebootContainer {
   }>
 }
 
+/** A running container that is not meant to outlive its job, so it is not judged. */
+export interface TemporaryContainer {
+  name: string
+  image: string | null
+  why: string
+}
+
 export interface RebootHost {
   facts_collected: boolean
   containers: RebootContainer[]
+  /** Not judged: `--rm` runs and CI job containers (a build on the host during a deploy). */
+  temporary: TemporaryContainer[]
   stopped: number
   counts: Record<RebootVerdict, number>
   /** Host-level problems: remote mounts without nofail can stop the boot itself. */
@@ -100,6 +110,23 @@ export function remoteMountFor(mounts: HostMount[], path: string): HostMount | n
     mounts.filter((m) => m.mountpoint !== '/'),
     path
   )
+}
+
+/**
+ * Why a running container is temporary, or null (pure). A `docker run --rm` (AutoRemove) is gone
+ * once it exits, and a GitLab runner job container belongs to one CI job, so neither is meant to
+ * come back after a reboot. Judging them made the readiness check warn whenever a release's own CI
+ * build ran on the host while the deploy gate looked (2026-10-24). A swarm task is never temporary.
+ */
+export function temporaryReason(
+  labels: Record<string, string> | undefined,
+  autoRemove: boolean | undefined
+): string | null {
+  if (ownerOf(labels).service) return null
+  if (Object.keys(labels ?? {}).some((k) => k.startsWith('com.gitlab.gitlab-runner.')))
+    return 'GitLab CI job container: it lives only as long as its job.'
+  if (autoRemove) return 'Started with --rm: Docker removes it when it exits.'
+  return null
 }
 
 /** Judges one running container (pure). `serviceCondition` = its swarm service's restart condition. */
@@ -179,7 +206,8 @@ const ORDER: Record<RebootVerdict, number> = { stays_down: 0, may_break: 1, come
 export function summarizeReboot(
   list: RebootContainer[],
   stopped: number,
-  facts: HostFacts | null
+  facts: HostFacts | null,
+  temporary: TemporaryContainer[] = []
 ): RebootHost {
   const counts: Record<RebootVerdict, number> = { comes_back: 0, stays_down: 0, may_break: 0 }
   for (const c of list) counts[c.verdict]++
@@ -196,17 +224,25 @@ export function summarizeReboot(
   if (counts.stays_down)
     parts.push(`${counts.stays_down} stay${counts.stays_down === 1 ? 's' : ''} down`)
   if (counts.may_break) parts.push(`${counts.may_break} may come back broken`)
-  const summary =
+  const judged =
     total === 0
       ? 'No running containers.'
       : parts.length === 0
         ? `All ${total} running container${total === 1 ? '' : 's'} come back after a reboot.`
         : `${counts.comes_back} of ${total} running containers come back after a reboot; ${parts.join(', ')}.`
+  const t = temporary.length
+  const summary =
+    t === 0
+      ? judged
+      : total === 0
+        ? `No long-running containers; ${t} temporary container${t === 1 ? '' : 's'} not judged.`
+        : `${judged.slice(0, -1)}; ${t} temporary container${t === 1 ? '' : 's'} not judged.`
   return {
     facts_collected: collected,
     containers: [...list].sort(
       (a, b) => ORDER[a.verdict] - ORDER[b.verdict] || a.name.localeCompare(b.name)
     ),
+    temporary: [...temporary].sort((a, b) => a.name.localeCompare(b.name)),
     stopped,
     counts,
     host_notes: notes,
@@ -237,7 +273,13 @@ export async function rebootReport(): Promise<{
     for (const s of services ?? [])
       if (s.Spec?.Name)
         cond.set(s.Spec.Name, s.Spec.TaskTemplate?.RestartPolicy?.Condition ?? 'any')
-    const judged = running.map((c) => {
+    const temporary: TemporaryContainer[] = []
+    const lasting = running.filter((c) => {
+      const why = temporaryReason(c.Labels, inspected.get(c.Id)?.HostConfig?.AutoRemove)
+      if (why) temporary.push({ name: nameOf(c), image: c.Image ?? null, why })
+      return !why
+    })
+    const judged = lasting.map((c) => {
       const svc = ownerOf(c.Labels).service
       return judgeReboot({
         name: nameOf(c),
@@ -249,7 +291,7 @@ export async function rebootReport(): Promise<{
         hostMounts: facts?.mounts ?? []
       })
     })
-    return summarizeReboot(judged, list.length - running.length, facts)
+    return summarizeReboot(judged, list.length - running.length, facts, temporary)
   })
   return { hosts }
 }

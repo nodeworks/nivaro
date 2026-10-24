@@ -19419,6 +19419,7 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
               <tr><td>May come back broken</td><td>It uses a remote mount (NFS, CIFS…) that docker.service does not wait for at boot, so it can start against the empty mount point.</td></tr></tr></tbody>
           </table></div>
           <p class="doc-p">Each host also lists remote mounts without nofail in /etc/fstab: if their server is down while the host boots, the host can stop in emergency mode. The readiness check reboot-survivability warns when any container would stay down.</p>
+          <p class="doc-p">Temporary containers are not judged and are listed under the table instead: a container started with docker run --rm, and a GitLab CI job container (labels com.gitlab.gitlab-runner.*). Neither is meant to come back, and a CI build running on the host while a deploy gate looked used to turn the check to warn.</p>
           <h2 class="doc-h2" id="infrastructure-logs-tab">Logs tab</h2>
           <p class="doc-p">For each container: its log driver, its rotation (max-size and max-file), the size of its log file and how much it grew in the last day. A json-file log without max-size is flagged, because it grows until the disk is full. Each host shows the total, the daily growth and, from the free space on the filesystem that holds the Docker root, about how many days until it fills.</p>
           <!-- /SYNC:infrastructure-host -->

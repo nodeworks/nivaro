@@ -32,6 +32,8 @@ interface RebootData {
     data: {
       facts_collected: boolean
       stopped: number
+      /** Not judged: `--rm` runs and CI job containers. */
+      temporary: Array<{ name: string; image: string | null; why: string }>
       counts: Record<Verdict, number>
       host_notes: string[]
       summary: string
@@ -208,6 +210,21 @@ function RebootHost({
             </tbody>
           </table>
         </div>
+      )}
+      {d.temporary.length > 0 && (
+        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+          {d.temporary.length} temporary container{d.temporary.length === 1 ? ' is' : 's are'} not
+          judged — they are not meant to come back:{' '}
+          {d.temporary.map((c, i) => (
+            <span key={c.name}>
+              {i > 0 && ', '}
+              <span className='font-mono' data-tip={c.why}>
+                {c.name}
+              </span>
+            </span>
+          ))}
+          .
+        </p>
       )}
       {d.stopped > 0 && (
         <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
