@@ -2,7 +2,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Bot, Copy, EyeOff, FileUp, Trash2, UploadCloud } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useItemEditAuth, useNivaroClient } from '../../context'
+import {
+  type RecordSurfaceValue,
+  useItemEditAuth,
+  useNivaroClient,
+  useRecordSurface
+} from '../../context'
 import { get, post } from '../../lib/commands'
 import {
   batchTouches,
@@ -43,6 +48,25 @@ interface InstanceHead {
     user_email?: string | null
     timestamp?: string
   }>
+}
+
+/**
+ * What a move by someone else says. The record on screen is "this"; a record
+ * kept open in a background tab is named, with a way to bring it to the front
+ * (exported for tests).
+ */
+export function moveNotice(
+  who: string | null,
+  where: string,
+  surface: RecordSurfaceValue
+): { text: string; open?: () => void } {
+  if (surface.active)
+    return { text: who ? `${who} moved this to ${where}` : `This record moved to ${where}` }
+  const name = surface.label?.trim() || 'A record in your tabs'
+  return {
+    text: who ? `${who} moved ${name} to ${where}` : `${name} moved to ${where}`,
+    open: surface.open
+  }
 }
 
 /** The import notice lapses this long after the last import write to the record. */
@@ -169,6 +193,10 @@ export function RecordLiveSync({
   const onGoneRef = useRef(onGoneChange)
   onGoneRef.current = onGoneChange
   const goneRef = useRef<RecordGone | null>(null)
+  // Read at toast time: a background record tab must not say "this".
+  const surface = useRecordSurface()
+  const surfaceRef = useRef(surface)
+  surfaceRef.current = surface
 
   const setGone = (next: RecordGone | null) => {
     goneRef.current = next
@@ -233,10 +261,17 @@ export function RecordLiveSync({
       // Only a move made while this page was open — never an old row.
       if (last.timestamp && new Date(last.timestamp).getTime() < openedAt.current - 5_000) return
       lastMoveToast.current = last.id
+      // A browser tab nobody is looking at stays quiet — the page has already
+      // refreshed, and a toast there would surface out of context later.
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       const who =
         [last.first_name, last.last_name].filter(Boolean).join(' ') || last.user_email || null
       const where = last.to_state_label ?? 'a new state'
-      toast.info(who ? `${who} moved this to ${where}` : `This record moved to ${where}`)
+      const notice = moveNotice(who, where, surfaceRef.current)
+      toast.info(
+        notice.text,
+        notice.open ? { action: { label: 'Open', onClick: notice.open } } : {}
+      )
     } catch {
       /* the panels still refresh through their own queries */
     }

@@ -493,6 +493,8 @@ export {
   RecordReadView,
   RecordRecapStrip,
   RecordSubscribeButton,
+  RecordSurfaceContext,
+  type RecordSurfaceValue,
   RelatedRecordsPanel,
   RelationCombobox,
   RenderSettingsButton,

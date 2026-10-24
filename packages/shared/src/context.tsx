@@ -265,6 +265,27 @@ export const NavigationContext = createContext<NavigationContextValue>({
   }
 })
 
+/**
+ * Where one record form is mounted. A host that keeps several records mounted
+ * at once (efp-new's record tabs keep background tabs alive) says which one the
+ * person is looking at, so record-level notices ("Tim moved this to …") never
+ * speak for a record that is not on screen. No provider = the only record, active.
+ */
+export interface RecordSurfaceValue {
+  /** This record is the one on screen. */
+  active: boolean
+  /** How the record is named to the person (its tab label), for notices from a background tab. */
+  label?: string | null
+  /** Bring this record to the front. */
+  open?: () => void
+}
+
+export const RecordSurfaceContext = createContext<RecordSurfaceValue>({ active: true })
+
+export function useRecordSurface(): RecordSurfaceValue {
+  return useContext(RecordSurfaceContext)
+}
+
 export function useNavigation(): NavigationContextValue {
   return useContext(NavigationContext)
 }
