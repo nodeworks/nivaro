@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-24T18:36:58.456Z",
+  "generated_at": "2026-10-24T19:36:17.163Z",
   "releases": [
+    {
+      "version": "0.3.17",
+      "tag": "v0.3.17",
+      "date": "2026-10-24T15:36:04-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "chat online list reads /presence/online, not the raw table",
+              "hash": "da3232c79"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.16",
       "tag": "v0.3.16",
-      "date": "2026-10-24T14:36:43-04:00",
+      "date": "2026-10-24T14:36:58-04:00",
       "sections": [
         {
           "label": "Fixed",
