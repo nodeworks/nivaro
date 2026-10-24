@@ -93,6 +93,8 @@ interface PlanEntry {
   display_name: string | null
   columns: string[]
   template: string | null
+  /** Partition-stat row count — what a contains-LIKE over it costs. */
+  rows: number
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -178,11 +180,26 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
       collection: col.collection,
       display_name: col.display_name,
       columns,
-      template: col.display_template
+      template: col.display_template,
+      rows: rowsByTable.get(col.collection) ?? 0
     })
   }
   planCache = { at: Date.now(), plan }
   return plan
+}
+
+const SEARCH_BATCHES = 4
+
+/** Split the plan into `n` batches of about equal total rows (largest first,
+ *  each into the lightest batch so far). Empty batches are dropped. */
+export function balanceByRows<T extends { rows: number }>(plan: T[], n: number): T[][] {
+  const bins = Array.from({ length: Math.max(1, n) }, () => ({ rows: 0, items: [] as T[] }))
+  for (const p of [...plan].sort((a, b) => b.rows - a.rows)) {
+    const bin = bins.reduce((lo, b) => (b.rows < lo.rows ? b : lo))
+    bin.items.push(p)
+    bin.rows += p.rows
+  }
+  return bins.map((b) => b.items).filter((items) => items.length > 0)
 }
 
 function escapeLike(v: string): string {
@@ -204,33 +221,44 @@ async function searchRecords(
   // count does not multiply by columns × collections.
   const phrases = await searchPhrases(q).catch(() => [q])
   const likes = phrases.map((p) => `%${escapeLike(p)}%`)
-  const parts: string[] = []
-  const bindings: string[] = []
-  for (const p of plan) {
-    const casts = p.columns.map((c) => `CAST([${c}] AS nvarchar(200))`)
-    // T-SQL COALESCE demands ≥2 arguments — a single column goes bare.
-    const labelExpr = casts.length > 1 ? `COALESCE(${casts.join(', ')})` : casts[0]
-    const wheres =
+  const statement = (batch: PlanEntry[]) => {
+    const parts: string[] = []
+    const bindings: string[] = []
+    for (const p of batch) {
+      const casts = p.columns.map((c) => `CAST([${c}] AS nvarchar(200))`)
+      // T-SQL COALESCE demands ≥2 arguments — a single column goes bare.
+      const labelExpr = casts.length > 1 ? `COALESCE(${casts.join(', ')})` : casts[0]
+      const wheres =
+        likes.length > 1
+          ? `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${p.columns.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
+          : p.columns.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')
+      parts.push(
+        `SELECT TOP ${PER_COLLECTION} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id, ${labelExpr} AS label FROM [${p.collection}] WHERE ${wheres}`
+      )
+      if (likes.length === 1) bindings.push(...p.columns.map(() => likes[0]))
+    }
+    const cte =
       likes.length > 1
-        ? `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${p.columns.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
-        : p.columns.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')
-    parts.push(
-      `SELECT TOP ${PER_COLLECTION} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id, ${labelExpr} AS label FROM [${p.collection}] WHERE ${wheres}`
-    )
-    if (likes.length === 1) bindings.push(...p.columns.map(() => likes[0]))
+        ? `WITH nvr_syn(p) AS (${likes.map(() => 'SELECT CAST(? AS nvarchar(410))').join(' UNION ALL ')}) `
+        : ''
+    if (cte) bindings.unshift(...likes)
+    return { sql: cte + parts.join(' UNION ALL '), bindings }
   }
-  const cte =
-    likes.length > 1
-      ? `WITH nvr_syn(p) AS (${likes.map(() => 'SELECT CAST(? AS nvarchar(410))').join(' UNION ALL ')}) `
-      : ''
-  if (cte) bindings.unshift(...likes)
 
-  let candidates: Array<{ c: string; id: string; label: string | null }>
-  try {
-    candidates = (await db.raw(cte + parts.join(' UNION ALL '), bindings)) as typeof candidates
-  } catch {
-    planCache = null // stale plan (dropped table/column) — rebuild next request
-    return []
+  // The arms of one UNION run one after another (~2.5 s on EFP: workflows,
+  // units and the two line tables are 0.4–0.6 s each), so they go out as a few
+  // row-balanced statements side by side instead — the answer waits for the
+  // slowest batch, and a search holds at most SEARCH_BATCHES connections.
+  let candidates: Array<{ c: string; id: string; label: string | null }> = []
+  const settled = await Promise.allSettled(
+    balanceByRows(plan, SEARCH_BATCHES).map((batch) => {
+      const { sql, bindings } = statement(batch)
+      return db.raw(sql, bindings) as Promise<typeof candidates>
+    })
+  )
+  for (const r of settled) {
+    if (r.status === 'fulfilled') candidates = candidates.concat(r.value)
+    else planCache = null // stale plan (dropped table/column) — rebuild next request
   }
 
   const byCollection = new Map<string, string[]>()
