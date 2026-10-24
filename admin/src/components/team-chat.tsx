@@ -1,4 +1,3 @@
-import { createNivaro } from '@nivaro/sdk'
 import {
   ChatPanel,
   ChatProvider,
@@ -20,10 +19,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import {
+  chatClient as client,
   setTypingRoom,
   useOnlineUsers,
-  usePresenceHeartbeat,
-  usePresenceLive
+  usePresenceHeartbeat
 } from '@/lib/chat-presence'
 import { onCollectionUpdate, subscribeChatRooms } from '@/lib/socket'
 
@@ -35,10 +34,6 @@ import { onCollectionUpdate, subscribeChatRooms } from '@/lib/socket'
  * always-mounted sidebar entry point: the rail button with the unread badge,
  * the slide-over ChatPanel, the presence heartbeat and the unread chirp.
  */
-
-const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
-  timeoutMs: 90_000
-})
 
 export interface ChatRoomType {
   id: number
@@ -137,7 +132,6 @@ export function AdminChatProvider({ children }: { children: React.ReactNode }) {
 
 function DockInner() {
   usePresenceHeartbeat()
-  usePresenceLive()
   const [open, setOpen] = useState(isChatPanelPinned)
   const [requestedDm, setRequestedDm] = useState<{
     userId: string

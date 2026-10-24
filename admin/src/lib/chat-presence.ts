@@ -1,26 +1,37 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { createNivaro, readOnlinePresence } from '@nivaro/sdk'
+import {
+  idleState,
+  onIdleChange,
+  PRESENCE_ONLINE_KEY,
+  trackActivity,
+  usePresenceOnlinePoll
+} from '@nivaro/shared'
+import { useQuery } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { useLocation } from 'react-router'
-import { idleState, onIdleChange, trackActivity, useLiveRefetchInterval } from '@nivaro/shared'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { getSocket, onCollectionUpdate } from '@/lib/socket'
+import { getSocket } from '@/lib/socket'
 
 /**
- * Chat presence rides the `user_presence` collection (upserted heartbeat every
- * 30 s), read back with a 5-minute online window — the same model headless
- * frontends use, pure /items so RBAC + live collection:update apply. Distinct from the
- * socket-based page presence (`use-page-presence.ts`, the admin journey feed):
- * this one is what the chat Online tab and typing indicators read.
+ * Chat presence: this tab writes its own `user_presence` row (heartbeat every 25 s) and reads
+ * who is online from GET /presence/online — the server's shared, cached answer, never the raw
+ * table. Distinct from the socket-based page presence (`use-page-presence.ts`, the admin
+ * journey feed): this one is what the chat Online tab and typing indicators read.
  */
 
-const HEARTBEAT_MS = 25_000
-// Must exceed one heartbeat + jitter and nothing more — a 5-minute window
-// kept people 'online' for five minutes after closing the tab.
-const ONLINE_WINDOW_MS = 70_000
+/** The SDK client the admin chat surfaces share (team-chat's NivaroProvider uses it too). */
+export const chatClient = createNivaro(
+  typeof window !== 'undefined' ? window.location.origin : '',
+  {
+    timeoutMs: 90_000
+  }
+)
 
+const HEARTBEAT_MS = 25_000
+
+/** A /presence/online row, as the chat surfaces read it. */
 export interface OnlineUser {
-  id: number
   user_id: string
   display_name: string | null
   role_name: string | null
@@ -32,7 +43,6 @@ export interface OnlineUser {
 }
 
 let presenceRowId: number | null = null
-
 
 // Idle tracking lives in @nivaro/shared so every host that writes presence
 // reports it the same way — admin having its own copy is why a row marked idle
@@ -114,19 +124,6 @@ export async function setTypingRoom(userId: string, typingRoom: string | null) {
   }
 }
 
-/** Refresh the online list the moment the server says presence moved. */
-export function usePresenceLive() {
-  const qc = useQueryClient()
-  useEffect(() => {
-    const s = getSocket()
-    const onChanged = () => void qc.invalidateQueries({ queryKey: ['admin-online-users'] })
-    s.on('presence:changed', onChanged)
-    return () => {
-      s.off('presence:changed', onChanged)
-    }
-  }, [qc])
-}
-
 export function usePresenceHeartbeat() {
   const { user } = useAuth()
   const { pathname } = useLocation()
@@ -179,41 +176,21 @@ export function usePresenceHeartbeat() {
 
 export function useOnlineUsers(): { users: OnlineUser[]; loading: boolean } {
   const { user } = useAuth()
-  const qc = useQueryClient()
-  // #2450 — presence:changed (connects, disconnects, idle flips) and the user_presence feed below
-  // keep the list current; while the socket is live the poll is a 5-minute safety net.
-  usePresenceLive()
-  const backstop = useLiveRefetchInterval(HEARTBEAT_MS)
+  // One presence:changed listener per tab (packages/shared presence-live.ts): your own change
+  // refreshes at once, anyone else's at most every 10–12 s per tab; the poll is a backstop.
+  // The list used to read /items/user_presence and refetch on every user_presence row update,
+  // so every heartbeat made every open admin tab scan the table — those reads deadlocked with
+  // the heartbeat writes under load (staging load test 2026-10-24: 500s, one web pool 20/20).
+  const poll = usePresenceOnlinePoll(HEARTBEAT_MS)
+  // ['presence-online'] holds the raw { data, config } body, shared with ChatPanel's reader.
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-online-users'],
-    queryFn: async () => {
-      const since = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString()
-      const filter = encodeURIComponent(
-        JSON.stringify({
-          _and: [
-            { last_seen: { _gte: since } },
-            { _or: [{ is_online: { _eq: true } }, { is_online: { _null: true } }] }
-          ]
-        })
-      )
-      const res = await api.get<{ data: OnlineUser[] }>(
-        `/items/user_presence?limit=200&sort=-last_seen&filter=${filter}`
-      )
-      return res.data.data ?? []
-    },
-    // The server broadcasts presence:changed on every connect, disconnect and
-    // idle flip, so this poll is only a backstop for a dropped socket rather
-    // than how the list keeps up.
-    refetchInterval: backstop,
+    queryKey: [...PRESENCE_ONLINE_KEY],
+    queryFn: () => chatClient.request(readOnlinePresence()),
+    refetchInterval: poll,
     staleTime: 2_000
   })
-  useEffect(
-    () =>
-      onCollectionUpdate('user_presence', () =>
-        qc.invalidateQueries({ queryKey: ['admin-online-users'] })
-      ),
-    [qc]
+  const users = ((data?.data ?? []) as unknown as OnlineUser[]).filter(
+    (u) => u.user_id?.toLowerCase() !== user?.id?.toLowerCase()
   )
-  const users = (data ?? []).filter((u) => u.user_id?.toLowerCase() !== user?.id?.toLowerCase())
   return { users, loading: isLoading }
 }
