@@ -44,6 +44,7 @@ import { pruneAiCalls } from './services/ai-log.js'
 import { bootPhase } from './services/boot-phases.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { registerMissedCronProbe } from './services/cron-misses.js'
+import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
 import { markMcpInnerRequest } from './services/mcp-config.js'
@@ -594,7 +595,7 @@ export async function buildServer() {
           requestContext
         }).catch(() => {})
       }
-      req.log.error(err)
+      logRouteError(req.log, err, status, req.url)
       const coded = !!err.code && status < 500 && /^[A-Z][A-Z0-9_]+$/.test(err.code)
       reply.code(status).send({
         statusCode: status,

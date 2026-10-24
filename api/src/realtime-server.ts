@@ -14,6 +14,7 @@ import { localBoardCollector, socketioPlugin } from './plugins/socketio.js'
 import { eventsStreamRoutes } from './routes/events-stream.js'
 import { viewStreamRoutes } from './routes/view-stream.js'
 import { bootState } from './services/boot-phases.js'
+import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
 import { instanceKey } from './services/instance-key.js'
 import { INSTANCE_ID } from './services/instance-roster.js'
@@ -279,7 +280,7 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
         stack: err.stack,
         userId: req.user?.id ?? null
       }).catch(() => {})
-    req.log.error(err)
+    logRouteError(req.log, err, status, req.url)
     const coded = !!err.code && status < 500 && /^[A-Z][A-Z0-9_]+$/.test(err.code)
     return reply.code(status).send({
       statusCode: status,
