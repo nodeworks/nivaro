@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-24T18:20:17.575Z",
+  "generated_at": "2026-10-24T18:36:58.456Z",
   "releases": [
+    {
+      "version": "0.3.16",
+      "tag": "v0.3.16",
+      "date": "2026-10-24T14:36:43-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "never list an online person as \"Unknown user\"",
+              "hash": "fc21ba09b"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.15",
       "tag": "v0.3.15",
-      "date": "2026-10-24T14:19:56-04:00",
+      "date": "2026-10-24T14:20:17-04:00",
       "sections": [
         {
           "label": "Added",
