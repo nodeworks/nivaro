@@ -466,11 +466,17 @@ GET /api/environments/env-presence         → every registered API, compared`
     },
     {
       type: 'p',
+      text: 'One person at a time: an administrator opens anyone else\'s user card (their photo in chat, the Online list, a record or a list) or People → the person → Admin tools. Reload tabs pushes the same countdown banner to every tab they have open; Sign out (a second click confirms) ends every session they have on every app — the tabs go back to sign-in and their live connections close on every server. They can sign in again at once: suspend the account to keep them out. API keys and static tokens are not sessions and keep working. Each sign-out is in the activity log as `sessions-revoke-user` on that person.'
+    },
+    {
+      type: 'p',
       text: 'A reload never throws away work. While the tab has unsaved changes — a record form, the layout editor, a payload template, a help-video recording, a `useNivaroForm` form, or saves waiting in the offline outbox — the banner reads "A reload is waiting — save or discard your changes" and reloads the moment they are saved or discarded; Reload now reloads at once. A custom front end reports its own forms with `useUnsavedWork(dirty, label)` or `registerUnsavedWork(label, () => dirty)`.'
     },
     {
       type: 'pre',
-      code: `GET    /api/realtime/force-refresh/remembered        → pushes still delivered on reconnect
+      code: `POST   /api/realtime/force-refresh {user_ids, seconds?, message?}   → reload one person's tabs
+POST   /api/security/users/:id/sign-out              → end every session of that person (admin; not yourself)
+GET    /api/realtime/force-refresh/remembered        → pushes still delivered on reconnect
 DELETE /api/realtime/force-refresh/remembered/:id    → stop one (:id = all stops every one)
 GET    /api/realtime/min-build                       → rules, open tabs below each, builds seen
 GET    /api/realtime/min-build/preview?app=&build=   → open tabs a value would reload now
