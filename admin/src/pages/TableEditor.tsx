@@ -35,6 +35,7 @@ import { PagePresence } from '@/components/page-presence'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Command,
   CommandEmpty,
@@ -7213,6 +7214,8 @@ interface BrowserConfig {
   bulk_actions?: string[] | null
   /** #2490 — live record events: on (default), batched id lists, or off (lists poll). */
   live_events?: 'on' | 'batched' | 'off'
+  /** List search (`?search=`) only over these columns; absent = every string/text field. */
+  search_fields?: string[]
   /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
   [key: string]: unknown
 }
@@ -7347,6 +7350,73 @@ const LIVE_EVENT_CHOICES: Array<{ value: 'on' | 'batched' | 'off'; label: string
   ]
 
 /** #2490 — the collection's live record events: every change, batched id lists, or none. */
+// browser_config.search_fields — which columns a list search reads. Every
+// string/text field by default; long narrative columns make each search read
+// every LOB page (EFP workflows: 2.4 s → 1.2 s with the key columns only).
+function SearchFieldsSetting({
+  fields,
+  value,
+  onChange
+}: {
+  fields: Array<{ field: string; type: string }>
+  value: string[] | undefined
+  onChange: (next: string[] | undefined) => void
+}) {
+  const id = useId()
+  const textFields = fields.filter((f) => f.type === 'string' || f.type === 'text')
+  const explicit = Array.isArray(value) && value.length > 0
+  if (textFields.length === 0) return null
+  return (
+    <div className='space-y-1.5'>
+      <div>
+        <p className='text-[12.5px] font-medium text-slate-700'>Search columns</p>
+        <p className='text-[11.5px] text-slate-500'>
+          What the list search box matches. Leave long notes and descriptions out on big tables —
+          each one makes every search slower
+        </p>
+      </div>
+      <label
+        htmlFor={`sf-all-${id}`}
+        className='flex items-center gap-2 text-[12px] text-slate-600'
+      >
+        <Switch
+          id={`sf-all-${id}`}
+          checked={!explicit}
+          onCheckedChange={(all) =>
+            onChange(
+              all ? undefined : textFields.filter((f) => f.type === 'string').map((f) => f.field)
+            )
+          }
+        />
+        Search every text field
+      </label>
+      {explicit && (
+        <div className='flex flex-wrap gap-x-4 gap-y-1 pl-1'>
+          {textFields.map((f) => (
+            <label
+              key={f.field}
+              htmlFor={`sf-pick-${id}-${f.field}`}
+              className='flex cursor-pointer items-center gap-1.5 text-[12.5px] text-slate-700'
+            >
+              <Checkbox
+                id={`sf-pick-${id}-${f.field}`}
+                checked={value!.includes(f.field)}
+                onCheckedChange={(on) => {
+                  const next = on ? [...value!, f.field] : value!.filter((k) => k !== f.field)
+                  // Unticking the last one means "every field", never "none".
+                  onChange(next.length ? next : undefined)
+                }}
+              />
+              <span className='font-mono text-[12px]'>{f.field}</span>
+              {f.type === 'text' && <span className='text-[10.5px] text-slate-400'>long text</span>}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function LiveEventsSetting({
   value,
   onChange
@@ -7392,9 +7462,13 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta', tableName],
     queryFn: () =>
       api
-        .get<{ data: { browser_config: BrowserConfig | null; color?: string | null } }>(
-          `/collections/${tableName}`
-        )
+        .get<{
+          data: {
+            browser_config: BrowserConfig | null
+            color?: string | null
+            fields?: Array<{ field: string; type: string }>
+          }
+        }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName,
     staleTime: 10 * 60 * 1000
@@ -7430,7 +7504,8 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       'default_sort',
       'record_tabs',
       'bulk_actions',
-      'live_events'
+      'live_events',
+      'search_fields'
     ])
     const clean: BrowserConfig = {}
     for (const [k, v] of Object.entries(next)) if (!OWN.has(k) && v !== undefined) clean[k] = v
@@ -7445,6 +7520,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (Array.isArray(next.bulk_actions)) clean.bulk_actions = next.bulk_actions
     if (next.live_events === 'batched' || next.live_events === 'off')
       clean.live_events = next.live_events
+    if (next.search_fields?.length) clean.search_fields = next.search_fields
     await api.patch(`/collections/${tableName}`, {
       browser_config: Object.keys(clean).length > 0 ? clean : null
     })
@@ -7517,6 +7593,11 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
         <LiveEventsSetting
           value={cfg.live_events ?? 'on'}
           onChange={(v) => void patch({ live_events: v })}
+        />
+        <SearchFieldsSetting
+          fields={col?.fields ?? []}
+          value={cfg.search_fields}
+          onChange={(v) => void patch({ search_fields: v })}
         />
         <div className='flex items-center justify-between gap-4'>
           <div>

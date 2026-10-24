@@ -285,7 +285,11 @@ export const apiItems: DocSection = {
           '0',
           'When 1 on an `id _in` lookup (a list resolving the labels of linked records), rows read in the last 30 seconds by the same query may answer without a database read. A write to the collection through the API clears them at once; a write by a stored procedure or script shows when they expire. Ignored for any other filter, and when the caller’s access rules look at another table.'
         ],
-        ['search', 'none', 'Fulltext search across string/text fields.'],
+        [
+          'search',
+          'none',
+          'Every word must appear in one of the string/text fields (contains match). A collection can name the columns searched in Table Editor → Settings → Collection Browser → Search columns (`browser_config.search_fields`); leaving long notes out keeps search fast on big tables.'
+        ],
         ['picker', '0', 'When 1, applies picker filters and exclusions; used by relation pickers.'],
         ['translate', '0', 'When 1, includes `_translations` map for each translatable field.']
       ]

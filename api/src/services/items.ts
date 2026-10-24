@@ -95,6 +95,7 @@ import {
   applyRowRulesOnCreate,
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
+import { narrowSearchColumns, parseSearchFields } from './search-fields.js'
 import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
 import {
@@ -3785,7 +3786,7 @@ export async function readItems(
   if (keyset) applyKeyset(q, collection, keyset)
 
   if (search) {
-    const [fieldMeta, actualCols] = await Promise.all([
+    const [fieldMeta, actualCols, collectionMeta] = await Promise.all([
       getFields(collection),
       db
         .raw(
@@ -3794,12 +3795,17 @@ export async function readItems(
         )
         .then((res) => rawRows<{ COLUMN_NAME: string }>(res).map((r) => r.COLUMN_NAME)) as Promise<
         string[]
-      >
+      >,
+      getCollection(collection) as Promise<{ browser_config?: unknown } | null>
     ])
     const actualColSet = new Set(actualCols)
-    let searchCols = fieldMeta
-      .filter((f) => ['string', 'text'].includes(f.type) && actualColSet.has(f.field))
-      .map((f) => f.field)
+    // browser_config.search_fields narrows the columns (services/search-fields.ts).
+    let searchCols = narrowSearchColumns(
+      fieldMeta
+        .filter((f) => ['string', 'text'].includes(f.type) && actualColSet.has(f.field))
+        .map((f) => f.field),
+      parseSearchFields(collectionMeta?.browser_config)
+    )
 
     // A collection with NO registered field metadata (nivaro_users is served
     // from virtual meta, so it has none) produced an empty searchable list and
