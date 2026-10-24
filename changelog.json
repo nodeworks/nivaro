@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-10-24T19:36:17.163Z",
+  "generated_at": "2026-10-24T20:36:37.792Z",
   "releases": [
+    {
+      "version": "0.3.18",
+      "tag": "v0.3.18",
+      "date": "2026-10-24T16:35:48-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "log 4xx refusals at info, not as errors with a stack",
+              "hash": "33486c99a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "audit log reads are admin-only; the page no longer sorts 12M wide rows",
+              "hash": "91ae1419f"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "activity",
+              "text": "index nivaro_activity (timestamp DESC, id DESC) (migration 502)",
+              "hash": "d091e6a09"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.17",
       "tag": "v0.3.17",
-      "date": "2026-10-24T15:36:04-04:00",
+      "date": "2026-10-24T15:36:17-04:00",
       "sections": [
         {
           "label": "Fixed",
