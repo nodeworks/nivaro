@@ -109,6 +109,29 @@ export function statementHash(sql: string, bindings: readonly unknown[]): string
     .digest('base64url')
 }
 
+/**
+ * How one `count=approx` list total may use the cache. A self-contained gate shares its
+ * total with every caller whose count is the same statement. A gate that reads another
+ * table still counts on every first page, but its answer is kept under the caller's own key
+ * and read back only by that caller's cursor pages (`after=`): the count is of the whole
+ * set, so a cursor page asks for the very total the first page handed them seconds ago.
+ * Without it the idle next-page fetch of a scoped, searched list ran the scan twice.
+ */
+export function listTotalPlan(
+  count: { sql: string; bindings?: readonly unknown[] },
+  callerId: string | null | undefined,
+  cursorPage: boolean
+): { statement: string; store: boolean; reuse: boolean; selfContained: boolean } {
+  const selfContained = gateIsSelfContained(count.sql)
+  const own = !selfContained && callerId ? `|caller:${callerId}` : ''
+  return {
+    statement: statementHash(count.sql + own, count.bindings ?? []),
+    store: selfContained || own !== '',
+    reuse: selfContained || (own !== '' && cursorPage),
+    selfContained
+  }
+}
+
 function evictOldest<T>(map: Map<string, T>, max: number): void {
   while (map.size > max) {
     const first = map.keys().next().value

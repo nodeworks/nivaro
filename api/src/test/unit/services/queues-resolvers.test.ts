@@ -180,6 +180,39 @@ describe('resolveCollectionSource — state_values filters the full match set, n
   })
 })
 
+describe('resolveCollectionSource — pushed-down state filter', () => {
+  it('tests wi.current_state against the listed keys resolved to state ids, with no join', async () => {
+    const articlesChain = makeDbChain([])
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
+      if (table === 'articles') return articlesChain
+      if (table === 'nivaro_workflow_bindings') return makeDbChain({ id: 1, template: 'wf1' })
+      if (table === 'nivaro_workflow_states') return makeDbChain([{ id: 's-approved' }])
+      if (table === 'nivaro_fields') return makeDbChain([{ field: 'id' }])
+      return makeDbChain([])
+    })
+
+    await resolveCollectionSource(
+      source({ state_values: JSON.stringify(['approved', '__none__']), state_mode: 'exclude' }),
+      makeAdminUser()
+    )
+
+    // Every state carrying a listed key, whatever its template.
+    expect(chainFor('nivaro_workflow_states').whereIn).toHaveBeenCalledWith('key', ['approved'])
+    expect(articlesChain.whereNotExists).toHaveBeenCalledTimes(1)
+    expect(articlesChain.whereExists).toHaveBeenCalledTimes(1)
+    const sub = makeDbChain([]) as ReturnType<typeof makeDbChain> & {
+      from: ReturnType<typeof vi.fn>
+    }
+    sub.from = vi.fn().mockReturnThis()
+    ;(db as unknown as { raw: unknown }).raw = vi.fn()
+    const inListed = articlesChain.whereNotExists.mock.calls[0][0] as (this: unknown) => void
+    inListed.call(sub)
+    expect(sub.whereIn).toHaveBeenCalledWith('wi.current_state', ['s-approved'])
+    expect(sub.leftJoin).not.toHaveBeenCalled()
+    expect(sub.join).not.toHaveBeenCalled()
+  })
+})
+
 describe('resolveTasksSource', () => {
   it('returns matchedCount equal to items.length when under the sanity ceiling', async () => {
     vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {

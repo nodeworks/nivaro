@@ -319,7 +319,7 @@ export const apiItems: DocSection = {
         [
           'count',
           '1',
-          'When 0, the count query is skipped and `total` answers null. When `approx`, a total counted in the last 30 seconds by the same query may answer instead, and `total_approx: true` says so. The rows are always read fresh. An unfiltered list reads the row count SQL Server keeps for the table. When the caller’s access rules look at another table (teams, owners, scopes), the total is always counted live.'
+          'When 0, the count query is skipped and `total` answers null. When `approx`, a total counted in the last 30 seconds by the same query may answer instead, and `total_approx: true` says so. The rows are always read fresh. An unfiltered list reads the row count SQL Server keeps for the table. When the caller’s access rules look at another table (teams, owners, scopes), the first page always counts live, and only that caller’s own cursor pages (`after=`) may reuse its total.'
         ],
         [
           'labels',

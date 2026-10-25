@@ -4767,12 +4767,16 @@ export function CollectionBrowserView({
   })
   // #2448 — idle next page: once this page is in and another exists, fetch it while the
   // browser is idle so paging forward paints at once (the normal refetch replaces it).
+  // Not while a search is applied: a searched page is a scan of every searched column, so
+  // fetching ahead ran each search twice (EFP workflows, 2026-10-24 load test) for a page
+  // a search rarely gets to.
   useIdleNextPage({
     qc,
     enabled:
       !!collection &&
       scopeGateOpen &&
       !groupBy &&
+      !appliedSearch &&
       !isFetching &&
       !!itemsRes &&
       page * effPageSize < (itemsRes.total ?? 0),

@@ -73,6 +73,7 @@ import {
   getCachedRows,
   getCachedTotal,
   labelLookupIds,
+  listTotalPlan,
   putCachedRows,
   putCachedTotal,
   readEpoch,
@@ -4103,12 +4104,12 @@ export async function readItems(
     sumRows = null
   } else {
     // #2443 — `count=approx`: a total up to a few seconds old may stand in for the COUNT(*).
-    // A gate that reads another table is counted every time (its writes bust nothing here).
+    // A gate that reads another table counts on every first page; only that caller's own
+    // cursor pages reuse it (listTotalPlan in read-caches.ts).
     const countSql = query.count === 'approx' && !skipCount ? countQ.toSQL() : null
-    const approx = countSql != null && gateIsSelfContained(countSql.sql)
-    const statement = countSql ? statementHash(countSql.sql, countSql.bindings ?? []) : ''
-    const epoch = approx ? readEpoch(collection) : ''
-    const cachedTotal = approx ? getCachedTotal(collection, statement) : null
+    const plan = countSql ? listTotalPlan(countSql, user?.id, keyset?.values != null) : null
+    const epoch = plan?.store ? readEpoch(collection) : ''
+    const cachedTotal = plan?.reuse ? getCachedTotal(collection, plan.statement) : null
     const countPromise: Promise<number | null> = skipCount
       ? Promise.resolve(null)
       : cachedTotal != null
@@ -4116,12 +4117,12 @@ export async function readItems(
         : (async () => {
             // An unfiltered list of a big table: the row count SQL Server keeps per partition.
             const estimate =
-              approx && countSql && isUngatedCount(collection, countSql)
+              plan?.selfContained && countSql && isUngatedCount(collection, countSql)
                 ? await partitionRowCount(collection)
                 : null
-            if (estimate != null) {
+            if (estimate != null && plan) {
               totalApprox = true
-              putCachedTotal(collection, statement, estimate, epoch)
+              putCachedTotal(collection, plan.statement, estimate, epoch)
               return estimate
             }
             let counted: Array<{ count: string | number }>
@@ -4134,7 +4135,7 @@ export async function readItems(
               return null
             }
             const n = Number(counted[0]?.count)
-            if (approx) putCachedTotal(collection, statement, n, epoch)
+            if (plan?.store) putCachedTotal(collection, plan.statement, n, epoch)
             return n
           })()
     if (cachedTotal != null) totalApprox = true

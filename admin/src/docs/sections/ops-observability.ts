@@ -572,7 +572,7 @@ DELETE /api/realtime/min-build/:app                  → turn off`
     { type: 'h2', id: 'page-speed-prefetch', text: 'Prefetch on hover and intent' },
     {
       type: 'p',
-      text: 'Resting the pointer on a list row or a record link fetches that record and the form layout it opens with, so the record page paints at once. Resting on a menu link (or tabbing to it) loads that screen’s code. While the browser is idle, a list also fetches its next page. A prefetched copy is at most a few seconds old and the page’s normal refresh replaces it. A tab makes at most 30 prefetch requests a minute, so sweeping the mouse down a long table never floods the API, and nothing is prefetched when the browser asks to save data.'
+      text: 'Resting the pointer on a list row or a record link fetches that record and the form layout it opens with, so the record page paints at once. Resting on a menu link (or tabbing to it) loads that screen’s code. While the browser is idle, a list also fetches its next page (not while a search is applied: a searched page reads every searched column, and a search is rarely paged). A prefetched copy is at most a few seconds old and the page’s normal refresh replaces it. A tab makes at most 30 prefetch requests a minute, so sweeping the mouse down a long table never floods the API, and nothing is prefetched when the browser asks to save data.'
     }
   ]
 }

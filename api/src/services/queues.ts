@@ -2093,10 +2093,20 @@ export async function resolveCollectionSource(
   // is worth the lost concurrency many times over: without it a state-scoped
   // queue over an 85k-row collection fetched every id, then every instance row,
   // to keep a few hundred — 13 of a 22-second response.
-  const binding = await bindingPromise
-  const stateMode: 'include' | 'exclude' = source.state_mode === 'exclude' ? 'exclude' : 'include'
   const listedStates = (stateValues ?? []).filter((v) => v !== NO_STATE_SENTINEL)
   const listsStateless = (stateValues ?? []).includes(NO_STATE_SENTINEL)
+  // The listed keys as state ids, so the pushed-down subquery tests
+  // wi.current_state with no join. Every state with the key, whatever its
+  // template — exactly what the join on s.key matched. Measured on the
+  // Workflows exclude queue: the joined form planned parallel (DOP 4, 250–450
+  // ms CPU on dev, 6–8 s on a CPU-starved staging), this one serial at ~110.
+  const stateIdsPromise: Promise<Array<{ id: string }>> =
+    listedStates.length > 0
+      ? Promise.resolve(db('nivaro_workflow_states').whereIn('key', listedStates).select('id'))
+      : Promise.resolve([])
+  stateIdsPromise.catch(() => {})
+  const binding = await bindingPromise
+  const stateMode: 'include' | 'exclude' = source.state_mode === 'exclude' ? 'exclude' : 'include'
   // Every shape below was checked against stateFilterKeep over the real data and
   // returns an identical id set — EXCEPT include-with-"(No state)", whose
   // `EXISTS(...) OR NOT EXISTS(...)` plan scans instead of seeking and blew the
@@ -2122,13 +2132,15 @@ export async function resolveCollectionSource(
       // is exactly what stateFilterKeep() decides in JS — kept identical here so
       // the two paths cannot drift.
       const collection = source.collection
+      // No state carries a listed key: whereIn([]) compiles to 1 = 0, the same
+      // nothing the join matched.
+      const listedStateIds = (await stateIdsPromise).map((r) => String(r.id))
       const inListedState = function (this: Knex.QueryBuilder) {
         void this.select(db.raw('1'))
           .from('nivaro_workflow_instances as wi')
-          .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
           .where('wi.collection', collection)
           .whereRaw('wi.item = CAST(??.id AS NVARCHAR(255))', [collection])
-          .whereIn('s.key', listedStates)
+          .whereIn('wi.current_state', listedStateIds)
       }
       const hasAnyInstance = function (this: Knex.QueryBuilder) {
         void this.select(db.raw('1'))

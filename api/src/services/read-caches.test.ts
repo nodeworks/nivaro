@@ -9,6 +9,7 @@ import {
   getCachedTotal,
   LABEL_LOOKUP_MAX_IDS,
   labelLookupIds,
+  listTotalPlan,
   noteCollectionWrite,
   putCachedRows,
   putCachedTotal,
@@ -172,5 +173,47 @@ describe('gateIsSelfContained — gates that read another table are never cached
     expect(gateIsSelfContained('select [select], [join] from [from] where [exists] = @p0')).toBe(
       true
     )
+  })
+})
+
+describe('list total plan (count=approx)', () => {
+  const own = {
+    sql: 'select count(*) as [count] from [workflows] where [state] = @p0',
+    bindings: [1]
+  }
+  const gated = {
+    sql: 'select count(*) as [count] from [workflows] where exists (select 1 from [workflows_divisions] as [j0] where [j0].[workflows_id] = [workflows].[id] and [j0].[divisions_id] in (@p0))',
+    bindings: [2]
+  }
+
+  it('a self-contained count is shared and reused on any page', () => {
+    const a = listTotalPlan(own, 'u1', false)
+    const b = listTotalPlan(own, 'u2', true)
+    expect(a).toMatchObject({ store: true, reuse: true, selfContained: true })
+    expect(b.statement).toBe(a.statement)
+  })
+
+  it('a gated count is stored per caller and read back only by their cursor pages', () => {
+    const first = listTotalPlan(gated, 'u1', false)
+    const next = listTotalPlan(gated, 'u1', true)
+    expect(first).toMatchObject({ store: true, reuse: false, selfContained: false })
+    expect(next).toMatchObject({ store: true, reuse: true })
+    expect(next.statement).toBe(first.statement)
+    putCachedTotal('workflows', first.statement, 42, readEpoch('workflows'))
+    expect(getCachedTotal('workflows', next.statement)).toBe(42)
+    // Another caller with the very same statement never sees it, nor a plain statement hash.
+    expect(listTotalPlan(gated, 'u2', true).statement).not.toBe(first.statement)
+    expect(getCachedTotal('workflows', stmt(gated.sql, gated.bindings))).toBeNull()
+  })
+
+  it('a gated count with no caller is never stored', () => {
+    expect(listTotalPlan(gated, null, true)).toMatchObject({ store: false, reuse: false })
+  })
+
+  it('a write to the collection still drops the caller-keyed total', () => {
+    const p = listTotalPlan(gated, 'u1', true)
+    putCachedTotal('workflows', p.statement, 7, readEpoch('workflows'))
+    noteCollectionWrite('workflows')
+    expect(getCachedTotal('workflows', p.statement)).toBeNull()
   })
 })
