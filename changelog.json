@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-25T19:36:11.012Z",
+  "generated_at": "2026-10-25T23:27:12.202Z",
   "releases": [
+    {
+      "version": "0.3.26",
+      "tag": "v0.3.26",
+      "date": "2026-10-25T19:26:54-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "judge each record as the caller (staging army v3)",
+              "hash": "53d5c2ee4"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "gitignore update",
+              "hash": "ffbfca505"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.25",
       "tag": "v0.3.25",
-      "date": "2026-10-25T15:35:57-04:00",
+      "date": "2026-10-25T15:36:11-04:00",
       "sections": [
         {
           "label": "Fixed",
