@@ -214,7 +214,7 @@ export function DelegationCard({
       {/* Delegation preview (#414) */}
       {delegate && delegatePreview && (
         <div className='mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'>
-          Your delegate would inherit roughly{' '}
+          Your delegate would inherit{' '}
           <b className='tabular-nums'>{delegatePreview.approx_open_approvals}</b> open approval
           {delegatePreview.approx_open_approvals === 1 ? '' : 's'} while you're out.
         </div>

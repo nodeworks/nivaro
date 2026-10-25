@@ -216,3 +216,19 @@ describe('GET /users/:id/avatar caching', () => {
     expect(r.headers.etag).toBeTruthy()
   })
 })
+
+describe('/users/:id with an id that is not a user id', () => {
+  it('answers 404, never a SQL conversion error', async () => {
+    const a = await app()
+    for (const url of ['/api/users/abc/profile', '/api/users/abc/card', '/api/users/abc']) {
+      const r = await a.inject({ method: 'GET', url })
+      expect(r.statusCode).toBe(404)
+      expect(r.body).not.toMatch(/uniqueidentifier|Conversion failed/)
+    }
+  })
+
+  it('still serves a well-formed id', async () => {
+    const r = await (await app()).inject({ method: 'GET', url: `/api/users/${A}/card` })
+    expect(r.statusCode).toBe(200)
+  })
+})

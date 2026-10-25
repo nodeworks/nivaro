@@ -8,6 +8,13 @@ import { getTenantId } from '../db/tenant-context.js'
 import { hooks } from '../hooks/registry.js'
 import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
 import {
+  likeContains,
+  likeEndsWith,
+  likeEscape,
+  likeStartsWith,
+  varcharSafePattern
+} from '../lib/filter-like.js'
+import {
   decodeCursor,
   encodeCursor,
   type KeysetSort,
@@ -36,6 +43,7 @@ import {
 } from './auto-ids.js'
 import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
+import { assertNotEditLocked } from './edit-lock.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
@@ -80,7 +88,7 @@ import {
   splitStateField
 } from './record-state.js'
 import { enforceRelationLimits } from './relation-limits.js'
-import { noteReadShape, span, timeAccessSync } from './request-trace.js'
+import { isStatementTimeout, noteReadShape, span, timeAccessSync } from './request-trace.js'
 import {
   computeRollupTotal,
   computeRollupTotalBatch,
@@ -419,6 +427,22 @@ async function assertNumbersFit(
   }
 }
 
+/**
+ * People pickers (`nivaro_users?picker=1`) offer people who can act — never a
+ * suspended, redacted, anonymised or legacy-import placeholder account (the
+ * rows /api/users hides: services/users.ts applyHiddenAccountFilter +
+ * applySuspendedFilter; inactive-user-links.ts INACTIVE_SQL). A stored value
+ * still displays: single reads never come through here.
+ */
+export function applyPeoplePickerFilter(qb: QB): void {
+  qb.where((w) => w.where('is_redacted', false).orWhereNull('is_redacted'))
+    .whereRaw(`email not like 'legacy-%'`)
+    .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
+    .whereRaw(`email not like '%@invalid.local'`)
+    .where((w) => w.whereNull('account_kind').orWhereNot('account_kind', 'placeholder'))
+    .where((w) => w.where('status', '!=', 'suspended').orWhereNull('status'))
+}
+
 /** A filter's plain objects and arrays copied (values by reference) — the
  *  compiler fits values to column types in place, and the caller's filter
  *  (the Traffic Map read shape, a cached config filter) must stay as sent. */
@@ -714,6 +738,21 @@ export class DeleteGuardError extends Error {
   code = 'DELETE_GUARDED'
 }
 
+/** A list read the database gave up on (statement timeout): 503, try again or narrow it. */
+export class ListTimeoutError extends Error {
+  statusCode = 503
+  code = 'LIST_TIMEOUT'
+
+  constructor(search: boolean) {
+    super(
+      search
+        ? 'This search took too long to finish. Try again, or search for something more specific.'
+        : 'This list took too long to load. Try again, or narrow the filters.'
+    )
+    this.name = 'ListTimeoutError'
+  }
+}
+
 export class ItemNotFoundError extends Error {
   /** Picked up by Fastify's default error handler so re-thrown errors return 404. */
   statusCode = 404
@@ -725,6 +764,8 @@ export class ItemNotFoundError extends Error {
 }
 
 type QB = Knex.QueryBuilder
+/** Most rows one list read returns; a larger (or -1) limit is cut to it and the answer says so. */
+export const LIST_READ_MAX = 1000
 /** LIKE patterns × searched columns one search may bind (SQL Server caps a statement near 2100). */
 const SEARCH_PATTERN_BUDGET = 1200
 
@@ -745,6 +786,27 @@ export async function getActualColumns(table: string): Promise<Set<string>> {
   const set = new Set(rows.map((r) => r.COLUMN_NAME))
   columnCache.set(table, set)
   return set
+}
+
+const NON_UNICODE_TYPES = new Set(['varchar', 'char', 'text'])
+const COLUMN_TYPE_TTL_MS = 60_000
+const columnTypeCache = new Map<string, { at: number; types: Map<string, string> }>()
+
+/** Column name → lower-case DATA_TYPE, per tenant; a minute old at most, so a
+ *  field added in the schema editor becomes searchable without a restart. */
+async function getColumnTypes(table: string): Promise<Map<string, string>> {
+  const key = `${getTenantId() ?? ''}:${table}`
+  const hit = columnTypeCache.get(key)
+  if (hit && Date.now() - hit.at < COLUMN_TYPE_TTL_MS) return hit.types
+  const rows = rawRows<{ COLUMN_NAME: string; DATA_TYPE: string }>(
+    await db.raw(
+      `SELECT COLUMN_NAME AS "COLUMN_NAME", DATA_TYPE AS "DATA_TYPE" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+      [table]
+    )
+  )
+  const map = new Map(rows.map((r) => [r.COLUMN_NAME, String(r.DATA_TYPE ?? '').toLowerCase()]))
+  if (map.size > 0) columnTypeCache.set(key, { at: Date.now(), types: map })
+  return map
 }
 
 /**
@@ -1926,26 +1988,27 @@ function applyOneFilterOp(
     case '_nnull':
       q.whereNotNull(ref as unknown as string)
       break
+    // The value is text to find, never a pattern (lib/filter-like.ts).
     case '_contains':
-      q.where(ref, 'like', `%${val}%`)
+      q.where(ref, 'like', likeContains(val))
       break
     case '_ncontains':
-      q.where(ref, 'not like', `%${val}%`)
+      q.where(ref, 'not like', likeContains(val))
       break
     case '_starts_with':
-      q.where(ref, 'like', `${val}%`)
+      q.where(ref, 'like', likeStartsWith(val))
       break
     case '_ends_with':
-      q.where(ref, 'like', `%${val}`)
+      q.where(ref, 'like', likeEndsWith(val))
       break
     case '_icontains':
-      q.where(ref, 'like', `%${val}%`)
+      q.where(ref, 'like', likeContains(val))
       break
     case '_nstarts_with':
-      q.where(ref, 'not like', `${val}%`)
+      q.where(ref, 'not like', likeStartsWith(val))
       break
     case '_nends_with':
-      q.where(ref, 'not like', `%${val}`)
+      q.where(ref, 'not like', likeEndsWith(val))
       break
     case '_empty':
       q.where((w) => w.whereNull(ref as unknown as string).orWhere(ref, '=', ''))
@@ -2608,13 +2671,13 @@ function applyOneFilter(
     case '_lte':
       return q.where(ref, '<=', value as Knex.Value)
     case '_contains':
-      return q.where(ref, 'like', `%${value}%`)
+      return q.where(ref, 'like', likeContains(value))
     case '_ncontains':
-      return q.where(ref, 'not like', `%${value}%`)
+      return q.where(ref, 'not like', likeContains(value))
     case '_starts_with':
-      return q.where(ref, 'like', `${value}%`)
+      return q.where(ref, 'like', likeStartsWith(value))
     case '_ends_with':
-      return q.where(ref, 'like', `%${value}`)
+      return q.where(ref, 'like', likeEndsWith(value))
     case '_in':
       return q.whereIn(ref as unknown as string, value as Knex.Value[])
     case '_nin':
@@ -2744,7 +2807,8 @@ async function assertFilterableFields(
   collection: string,
   filter: Record<string, unknown>,
   sort: string[],
-  conditions: Array<FilterCondition | OrCondition> | undefined
+  conditions: Array<FilterCondition | OrCondition> | undefined,
+  rels: CMSRelation[]
 ): Promise<void> {
   const named = new Set<string>()
   const walk = (f: unknown) => {
@@ -2761,9 +2825,14 @@ async function assertFilterableFields(
   }
   for (const c of conditions ?? []) {
     const list = 'or' in c ? c.or : [c]
-    for (const one of list) if (one?.path?.length === 1) named.add(String(one.path[0]))
+    for (const one of list) {
+      // `$state`, `$aging`, `$at_risk`… are virtual paths with their own compilers.
+      if (one?.path?.length === 1 && !String(one.path[0]).startsWith('$'))
+        named.add(String(one.path[0]))
+    }
   }
   if (named.size === 0) return
+  await assertNamedFieldsExist(collection, named, rels)
   const computed = (await getComputedFields(collection)).filter(
     (f) =>
       named.has(f.field) &&
@@ -2783,6 +2852,58 @@ async function assertFilterableFields(
       `${names} ${blocked.length === 1 ? 'is' : 'are'} calculated when the record is read and cannot be filtered or sorted`
     ),
     { statusCode: 400, code: 'FIELD_NOT_FILTERABLE', fields: blocked.map((f) => f.field) }
+  )
+}
+
+/**
+ * A filter, sort or condition naming a field the collection does not have
+ * (a saved link that outlived a rename: `ctx=[{"path":["nope"]…}]`) reached
+ * the database and came back as a 500 "Invalid column name 'nope'", which a
+ * list showed as an empty result. It is a 400 naming the field instead.
+ * Anything the compilers resolve without a column — a relation alias, a
+ * registered field, a calculated field, a `collection.column` name — passes.
+ */
+async function assertNamedFieldsExist(
+  collection: string,
+  named: Set<string>,
+  rels: CMSRelation[]
+): Promise<void> {
+  const lookup = async () =>
+    new Set([...(await getActualColumns(collection))].map((c) => c.toLowerCase()))
+  let cols = await lookup()
+  // No columns at all: not a table this check can judge (a view-backed collection).
+  if (cols.size === 0) return
+  const candidates = [...named]
+    .map((n) => (n.startsWith(`${collection}.`) ? n.slice(collection.length + 1) : n))
+    .filter(
+      (n) =>
+        !n.includes('.') &&
+        !n.startsWith('$') &&
+        !findM2ORelation(n, collection, rels) &&
+        !findO2MRelation(n, collection, rels) &&
+        !findM2MRelation(n, collection, rels)
+    )
+  const missing = () => candidates.filter((n) => !cols.has(n.toLowerCase()))
+  if (missing().length === 0) return
+  const [fields, virtual] = await Promise.all([
+    getFields(collection).catch(() => [] as CMSField[]),
+    primeVirtualSql(collection)
+  ])
+  const registered = new Set(fields.map((f) => f.field.toLowerCase()))
+  const unresolved = () =>
+    missing().filter((n) => !registered.has(n.toLowerCase()) && !virtual.has(n))
+  if (unresolved().length === 0) return
+  // Looked up once more before refusing: a column added since the cache filled.
+  columnCache.delete(collection)
+  cols = await lookup()
+  const unknown = unresolved()
+  if (unknown.length === 0) return
+  const names = unknown.map((f) => `"${f}"`).join(', ')
+  throw Object.assign(
+    new Error(
+      `This list's filter or sort names ${unknown.length === 1 ? 'a field' : 'fields'} ${collection} does not have: ${names}`
+    ),
+    { statusCode: 400, code: 'UNKNOWN_FIELD', fields: unknown }
   )
 }
 
@@ -3717,14 +3838,18 @@ export async function readItems(
   await primeRelCacheForFilter(filter, collection, rels)
   await primeVirtualSql(collection)
   await primeVirtualFilters(filter)
-  await assertFilterableFields(collection, filter, sort, conditions)
+  await assertFilterableFields(collection, filter, sort, conditions, rels)
   // Compiled from a copy: fitting values to column types rewrites operators.
   const fittedFilter = cloneFilterTree(filter)
   await assertFilterCompiles(fittedFilter, collection, rels)
 
   // limit=-1 is Directus convention for "all records". Passing -1 to Knex MSSQL
   // generates SELECT TOP(-1) which is invalid SQL — treat as 1000-row cap instead.
-  const effectiveLimit = limit > 0 ? Math.min(limit, 1000) : 1000
+  const effectiveLimit = limit > 0 ? Math.min(limit, LIST_READ_MAX) : LIST_READ_MAX
+  // Asked for more than one read returns: the answer says so (`limit_capped`,
+  // `applied_limit`), so a client pages on with offset instead of stopping at
+  // a "short" first page (Exports cut every file at 1,000 rows).
+  const limitCapped = !(limit > 0 && limit <= LIST_READ_MAX)
   // #474 — list reads route to the read replica when DB_READ_HOST is set
   // (dbRead aliases db otherwise, so this is a no-op on single-DB deploys).
   // Writes and read-back-after-write stay on the primary.
@@ -3787,19 +3912,12 @@ export async function readItems(
   if (keyset) applyKeyset(q, collection, keyset)
 
   if (search) {
-    const [fieldMeta, actualCols, collectionMeta] = await Promise.all([
+    const [fieldMeta, columnTypes, collectionMeta] = await Promise.all([
       getFields(collection),
-      db
-        .raw(
-          `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
-          [collection]
-        )
-        .then((res) => rawRows<{ COLUMN_NAME: string }>(res).map((r) => r.COLUMN_NAME)) as Promise<
-        string[]
-      >,
+      getColumnTypes(collection),
       getCollection(collection) as Promise<{ browser_config?: unknown } | null>
     ])
-    const actualColSet = new Set(actualCols)
+    const actualColSet = new Set(columnTypes.keys())
     // browser_config.search_fields narrows the columns (services/search-fields.ts).
     let searchCols = narrowSearchColumns(
       fieldMeta
@@ -3841,9 +3959,10 @@ export async function readItems(
       // reading where it is one slot ("purchase order" | "po"). Only the LIKE
       // patterns widen — the columns and every access rule stay as they are.
       // No synonyms = one reading of one-word slots, the search as before.
-      // Escape MSSQL LIKE special characters to prevent wildcard injection.
-      // Bracket is the MSSQL escape character for [ itself.
-      const likeEscape = (v: string) => v.replace(/[%_[]/g, (c) => `[${c}]`)
+      // LIKE special characters are escaped (lib/filter-like.ts). A varchar
+      // column is matched with a varchar pattern when the text allows it, so
+      // the column is not converted to nvarchar row by row.
+      const mssql = isMssql()
       const expanded = await searchVariants(search, collection).catch(() => [])
       const variants = fitExpansion(
         expanded.length ? expanded : [[[search]]],
@@ -3852,7 +3971,13 @@ export async function readItems(
       )
       const slotWhere = (w: Knex.QueryBuilder, slot: string[]) => {
         for (const alt of slot) {
-          for (const f of searchCols) w.orWhere(db.raw('??', [f]), 'like', `%${likeEscape(alt)}%`)
+          const pattern = `%${likeEscape(alt)}%`
+          const narrow = mssql && varcharSafePattern(pattern)
+          for (const f of searchCols) {
+            if (narrow && NON_UNICODE_TYPES.has(columnTypes.get(f) ?? ''))
+              w.orWhereRaw('?? LIKE CAST(? AS varchar(4000))', [f, pattern])
+            else w.orWhere(db.raw('??', [f]), 'like', pattern)
+          }
         }
       }
       const applySearch = (qb: QB) => {
@@ -3874,6 +3999,10 @@ export async function readItems(
     const excludeSub = db('nivaro_picker_exclusions').where({ collection }).select('item_id')
     q.whereNotIn('id', excludeSub)
     countQ.whereNotIn('id', excludeSub)
+    if (collection === 'nivaro_users') {
+      applyPeoplePickerFilter(q)
+      applyPeoplePickerFilter(countQ)
+    }
   }
 
   await span('hooks:before-read', () =>
@@ -3942,6 +4071,7 @@ export async function readItems(
   let rawData: unknown[]
   let total: number | null
   let totalApprox = false
+  let totalTimedOut = false
   let sumRows: unknown[] | null
   if (labelIds) {
     // #2444 — countQ carries every gate of this read and no id list: with the projection it
@@ -3994,14 +4124,32 @@ export async function readItems(
               putCachedTotal(collection, statement, estimate, epoch)
               return estimate
             }
-            const n = Number(((await countQ) as Array<{ count: string | number }>)[0]?.count)
+            let counted: Array<{ count: string | number }>
+            try {
+              counted = (await countQ) as Array<{ count: string | number }>
+            } catch (err) {
+              // A count that outlived the statement timeout costs the total, not the page.
+              if (!isStatementTimeout(err)) throw err
+              totalTimedOut = true
+              return null
+            }
+            const n = Number(counted[0]?.count)
             if (approx) putCachedTotal(collection, statement, n, epoch)
             return n
           })()
     if (cachedTotal != null) totalApprox = true
-    const [rows, n, sums] = await span('query+count', () =>
-      Promise.all([q, countPromise, sumQ ?? Promise.resolve(null)])
-    )
+    let settled: [unknown, number | null, unknown]
+    try {
+      settled = await span('query+count', () =>
+        Promise.all([q, countPromise, sumQ ?? Promise.resolve(null)])
+      )
+    } catch (err) {
+      // A list read the database gave up on used to come back as a 500 with the
+      // driver's text, which a list showed as "0 items". It is a clear 503 instead.
+      if (isStatementTimeout(err)) throw new ListTimeoutError(Boolean(search))
+      throw err
+    }
+    const [rows, n, sums] = settled
     rawData = rows as unknown[]
     total = n
     sumRows = sums as unknown[] | null
@@ -4101,6 +4249,9 @@ export async function readItems(
     ...(aggregates ? { aggregates } : {}),
     // #2443 — the total came from the list-total cache or the partition row count.
     ...(totalApprox ? { total_approx: true } : {}),
+    // The count ran out of time: `total` is null, the page is complete.
+    ...(totalTimedOut ? { total_timed_out: true } : {}),
+    ...(limitCapped ? { limit_capped: true, applied_limit: effectiveLimit } : {}),
     ...(keyset ? { next_cursor: nextCursor } : {}),
     // Aliases whose lists were cut at the per-record limit.
     ...(truncatedRelations.length ? { truncated_relations: truncatedRelations } : {})
@@ -5431,6 +5582,8 @@ export async function createOne(
 
   const allowed = await can(user, 'create', collection)
   if (!allowed) throw new ForbiddenError()
+  // A new child row of a record waiting on someone else (edit-lock.ts).
+  if (!dry) await assertNotEditLocked(user, collection, { payload: data }, req)
 
   // Natural-key upsert: when the collection declares upsert_keys and a row
   // already matches every key in this payload, the create becomes an update
@@ -5946,6 +6099,9 @@ export async function updateOne(
   // nearest matching ancestor blocks the update; null/true changes nothing.
   const treeAllow = await getTreePermission(user, 'update', collection, id)
   if (treeAllow === false) throw new ForbiddenError()
+  // While the record (or its parent) waits on someone, only its creator, the
+  // step's owners and admins may change it (edit-lock.ts).
+  await assertNotEditLocked(user, collection, { ids: [id], payload: data }, req)
 
   const ctx = {
     collection,
@@ -6191,6 +6347,7 @@ export async function deleteOne(
   // nearest matching ancestor blocks the delete; null/true changes nothing.
   const treeAllow = await getTreePermission(user, 'delete', collection, id)
   if (treeAllow === false) throw new ForbiddenError()
+  await assertNotEditLocked(user, collection, { ids: [id] }, req)
 
   // Row-level security — filter applies to both the previousData fetch and the mutation
   const rowFilter = await getRowFilter(user, 'delete', collection)

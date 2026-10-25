@@ -50,6 +50,8 @@ interface Comment {
     seen_at?: string | null
   }>
   reactions?: Array<{ emoji: string; count: number; mine: boolean }>
+  /** Soft-deleted (the server keeps a tombstone for history). */
+  deleted?: boolean
 }
 
 const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
@@ -798,7 +800,10 @@ export function CommentPanel({
     enabled: !isNew
   })
 
-  const comments: Comment[] = data ?? []
+  // A deleted comment comes back as a tombstone (empty text, `deleted`): it is
+  // gone from the thread and its counts — an empty entry with live Edit /
+  // Delete / React buttons read as a comment that lost its words.
+  const comments: Comment[] = useMemo(() => (data ?? []).filter((c) => !c.deleted), [data])
 
   // Everything else anyone wrote about this record — transition comments,
   // change reasons (including ones left on child rows, like a forecast's

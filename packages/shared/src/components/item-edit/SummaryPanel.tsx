@@ -396,7 +396,9 @@ function SummaryFieldValueInner({
 }) {
   const iface = field.interface ?? ''
 
-  const M2M_IFACES = new Set(['select-multiple-m2m', 'files-m2m', 'relation-grouped'])
+  // 'files' = the legacy (Directus) attachments interface — a junction too;
+  // without it a record's Files read "—" beside the files it lists.
+  const M2M_IFACES = new Set(['select-multiple-m2m', 'files-m2m', 'files', 'relation-grouped'])
 
   // O2M — try relation lookup for any non-M2M field; relation criteria is precise enough
   if (!M2M_IFACES.has(iface) && itemId) {
@@ -433,8 +435,13 @@ function SummaryFieldValueInner({
 
   // M2M — interface is the authoritative signal
   if (M2M_IFACES.has(iface) && itemId) {
+    // Same match as the field's own picker (FieldRenderer): the alias, or a
+    // field named after its junction collection.
     const r = relations.find(
-      (rel) => rel.one_collection === collection && rel.one_field === field.field
+      (rel) =>
+        rel.one_collection === collection &&
+        (rel.one_field === field.field ||
+          (rel.junction_field != null && rel.many_collection === field.field))
     )
     const m2mRel = r
       ? r.junction_field

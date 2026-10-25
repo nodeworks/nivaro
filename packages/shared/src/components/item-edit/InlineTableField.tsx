@@ -168,7 +168,7 @@ import {
   SENTINEL_FIELDS,
   SYSTEM_FIELDS
 } from './helpers'
-import { changedRowFields, checkNumberEntry, NUMBER_FIELD_TYPES } from './line-qty'
+import { changedRowFields, checkNumberEntry, lineRuleErrors, NUMBER_FIELD_TYPES } from './line-qty'
 import { NestedRelationEditor } from './NestedRelationEditor'
 import {
   type LiveRowsCtx,
@@ -5390,6 +5390,28 @@ export function InlineTableField({
     if (badNumbers.length > 0) {
       setUniqueError(badNumbers.map((b) => b.message).join(' · '))
       setEditState((s) => (s ? { ...s, missing: badNumbers.map((b) => b.field) } : s))
+      return false
+    }
+    // The line collection's validation_rules (min 0 on a quantity, …), judged
+    // here the way the server judges the write: a saved row only on the cells
+    // this edit changes (a legacy value nobody touched never blocks), a new
+    // row on everything it carries.
+    const ruleSent = savedForCheck
+      ? changedRowFields(editState.draft, savedForCheck, new Set(Object.keys(editState.draft)))
+      : editState.draft
+    const ruleErrs = lineRuleErrors(
+      cols.map((c) => ({
+        field: c.field,
+        label: c.label || titleCase(c.field),
+        type: c.type,
+        validation_rules: c.validation_rules
+      })),
+      ruleSent,
+      savedForCheck ? { ...savedForCheck, ...editState.draft } : editState.draft
+    )
+    if (ruleErrs.length > 0) {
+      setUniqueError(ruleErrs.map((b) => b.message).join(' · '))
+      setEditState((s) => (s ? { ...s, missing: ruleErrs.map((b) => b.field) } : s))
       return false
     }
     // Sum cap (options.sum_cap): the grid's total for `field` — with this

@@ -1,5 +1,5 @@
 import { MoreHorizontal } from 'lucide-react'
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../../lib/utils'
 
@@ -16,6 +16,17 @@ import { cn } from '../../lib/utils'
  * waits for that width plus a margin, so resizing across the threshold
  * doesn't flap.
  */
+/** An Escape pressed inside something a tool opened (its dialog, a Quick pick
+ *  popover) belongs to that layer — only an Escape from the header itself, or
+ *  the dialog hosting the form, folds the panel. */
+function escapeIsOurs(e: KeyboardEvent, anchor: HTMLElement | null): boolean {
+  const t = e.target as HTMLElement | null
+  if (!t?.closest) return true
+  if (t.closest('[data-radix-popper-content-wrapper]')) return false
+  const dlg = t.closest('[role="dialog"]')
+  return !dlg || !!(anchor && dlg.contains(anchor))
+}
+
 export function HeaderTools({ children }: { children: ReactNode }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -45,8 +56,26 @@ export function HeaderTools({ children }: { children: ReactNode }) {
     check()
     const ro = new ResizeObserver(check)
     ro.observe(header)
+    // The row's content grows without the row resizing (transition buttons
+    // land after their query) — watch the actions strip this sits in too.
+    const strip = wrapRef.current?.parentElement
+    if (strip && strip !== header) ro.observe(strip)
     return () => ro.disconnect()
   })
+
+  useEffect(() => {
+    if (!open) return
+    // Escape folds the panel only. Window capture runs before the hosting
+    // sheet's own (document-level) Escape handler, which would otherwise close
+    // the whole record sheet along with the panel.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !escapeIsOurs(e, wrapRef.current)) return
+      e.stopPropagation()
+      setOpen(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -89,7 +118,7 @@ export function HeaderTools({ children }: { children: ReactNode }) {
     // display: contents — the tools sit directly in the header flex row, the
     // wrapper contributes no box of its own.
     return (
-      <div ref={wrapRef} className='contents'>
+      <div ref={wrapRef} className='contents' data-nvr-header-tools='inline'>
         {children}
       </div>
     )
@@ -100,9 +129,14 @@ export function HeaderTools({ children }: { children: ReactNode }) {
   // pointer-events: none — portal into the dialog content instead.
   const container =
     (btnRef.current?.closest('[role="dialog"]') as HTMLElement | null) ?? document.body
+  // The panel grows leftwards from the button: never wider than the room
+  // between the button and its host's left edge (a phone sheet clipped it).
+  const roomLeft = rect
+    ? rect.right - (container === document.body ? 0 : container.getBoundingClientRect().left) - 16
+    : 440
 
   return (
-    <div ref={wrapRef} className='flex shrink-0 items-center'>
+    <div ref={wrapRef} className='flex shrink-0 items-center' data-nvr-header-tools='folded'>
       <button
         ref={btnRef}
         type='button'
@@ -131,16 +165,18 @@ export function HeaderTools({ children }: { children: ReactNode }) {
                     position: 'fixed',
                     top: rect.bottom + 6,
                     right: Math.max(8, window.innerWidth - rect.right),
+                    maxWidth: Math.min(440, roomLeft),
                     zIndex: 110
                   }
                 : {
                     position: 'absolute',
                     top: rect.bottom - container.getBoundingClientRect().top + 6,
                     right: Math.max(8, container.getBoundingClientRect().right - rect.right),
+                    maxWidth: Math.min(440, roomLeft),
                     zIndex: 110
                   }
             }
-            className='flex max-w-[440px] flex-wrap items-center justify-end gap-1.5 rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card'
+            className='flex flex-wrap items-center justify-end gap-1.5 rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card'
           >
             {children}
           </div>,
@@ -148,6 +184,52 @@ export function HeaderTools({ children }: { children: ReactNode }) {
         )}
     </div>
   )
+}
+
+/**
+ * Second fold stage for a control in the record header row (the pipeline
+ * transition buttons): true once the row still overflows with the tool strip
+ * already folded into ⋯, so the control can fold into a single menu. Unfolds
+ * when the row has the room it needed plus a margin — before the tool strip
+ * unfolds (its threshold was measured with this control inline, so it is
+ * wider), so the two never flap against each other.
+ */
+export function useHeaderFold(ref: RefObject<HTMLElement | null>, enabled: boolean): boolean {
+  const [folded, setFolded] = useState(false)
+  const foldedRef = useRef(false)
+  foldedRef.current = folded
+  const neededRef = useRef(0)
+  // No deps on purpose, as in HeaderTools: re-checked on every render.
+  useEffect(() => {
+    const el = ref.current
+    const header = el?.closest('[data-nvr-header-row]') as HTMLElement | null
+    if (!enabled || !el || !header) {
+      if (!enabled && foldedRef.current) setFolded(false)
+      return
+    }
+    const check = () => {
+      if (!foldedRef.current) {
+        if (header.scrollWidth <= header.clientWidth + 2) return
+        // The tool strip folds first; wait while it still has tools inline.
+        const tools = header.querySelector('[data-nvr-header-tools]')
+        if (
+          tools?.getAttribute('data-nvr-header-tools') === 'inline' &&
+          tools.childElementCount > 0
+        )
+          return
+        neededRef.current = header.scrollWidth
+        setFolded(true)
+      } else if (neededRef.current > 0 && header.clientWidth > neededRef.current + 32) {
+        setFolded(false)
+      }
+    }
+    check()
+    const ro = new ResizeObserver(check)
+    ro.observe(header)
+    if (el.parentElement && el.parentElement !== header) ro.observe(el.parentElement)
+    return () => ro.disconnect()
+  })
+  return folded
 }
 
 /**
@@ -185,14 +267,18 @@ export function HeaderMenu({
         return
       setOpen(false)
     }
+    // Capture + stop, as in HeaderTools: Escape closes this menu, not the
+    // record sheet hosting it.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape' || !escapeIsOurs(e, btnRef.current)) return
+      e.stopPropagation()
+      setOpen(false)
     }
     window.addEventListener('mousedown', onDown, true)
-    window.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
     return () => {
       window.removeEventListener('mousedown', onDown, true)
-      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keydown', onKey, true)
     }
   }, [open])
 

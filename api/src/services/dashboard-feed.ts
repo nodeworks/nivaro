@@ -1534,11 +1534,17 @@ export interface ThroughputRow {
   at: Date | string
   send_back: boolean
   completion: boolean
+  /** Moved the record to Canceled — a decision, but not an approval. */
+  cancel?: boolean
   tta_hours: number | null
 }
 
 interface Counts {
   transitions: number
+  /** Forward decisions: every move that is neither a send-back nor a cancel.
+   *  "transitions − send_backs" counted a Cancel as an approval (army
+   *  2026-10-24: 2 approvals + 1 cancel read "3 approvals this week"). */
+  approvals: number
   send_backs: number
   completions: number
 }
@@ -1593,7 +1599,7 @@ export function weekBuckets(
   tz = 'UTC'
 ): ThroughputSummary {
   const thisMonday = mondayOf(now, tz)
-  const zero = (): Counts => ({ transitions: 0, send_backs: 0, completions: 0 })
+  const zero = (): Counts => ({ transitions: 0, approvals: 0, send_backs: 0, completions: 0 })
   const buckets: Counts[] = Array.from({ length: weeks + 1 }, zero)
   const ttaThis: number[] = []
   const ttaPrior: number[] = []
@@ -1605,6 +1611,7 @@ export function weekBuckets(
     const b = buckets[idx]
     b.transitions++
     if (r.send_back) b.send_backs++
+    else if (!r.cancel) b.approvals++
     if (r.completion) b.completions++
     if (r.tta_hours != null && Number.isFinite(r.tta_hours)) {
       ;(idx === 0 ? ttaThis : ttaPrior).push(r.tta_hours)
@@ -1618,6 +1625,7 @@ export function weekBuckets(
     this_week: buckets[0],
     median: {
       transitions: med('transitions'),
+      approvals: med('approvals'),
       send_backs: med('send_backs'),
       completions: med('completions')
     },
@@ -1627,6 +1635,11 @@ export function weekBuckets(
     },
     send_back_ratio: total > 0 ? sendBacks / total : null
   }
+}
+
+const isCancelKey = (key: unknown): boolean => {
+  const k = String(key ?? '').toLowerCase()
+  return k === 'canceled' || k === 'cancelled'
 }
 
 /** The viewer's own pipeline moves over the last `weeks` weeks plus this one. */
@@ -1693,7 +1706,8 @@ export async function myThroughput(opts: {
         r.from_key as string | null
       ),
       // A cancel lands on a terminal state but finishes nothing.
-      completion: truthy(r.to_terminal) && String(r.to_key ?? '').toLowerCase() !== 'canceled',
+      completion: truthy(r.to_terminal) && !isCancelKey(r.to_key),
+      cancel: isCancelKey(r.to_key),
       tta_hours: hours != null && hours >= 0 ? hours : null
     }
   })

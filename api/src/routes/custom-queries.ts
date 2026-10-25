@@ -222,7 +222,29 @@ async function shapeReport(): Promise<
 
 let shapeCheckRegistered = false
 
+/** What a route's :id names: a numeric id as is, a slug resolved to its id,
+ *  anything else (or an unknown slug) nobody. Exported for the unit tests. */
+export async function resolveQueryIdParam(raw: string): Promise<string | null> {
+  if (/^\d{1,9}$/.test(raw)) return raw
+  if (!/^[A-Za-z0-9_.-]{1,200}$/.test(raw)) return null
+  const row = (await db('nivaro_custom_queries').where({ slug: raw }).first('id')) as
+    | { id: number }
+    | undefined
+  return row ? String(row.id) : null
+}
+
 export async function customQueriesRoutes(app: FastifyInstance) {
+  // Every /:id route takes the numeric id or the slug (execute already takes
+  // the slug, so people paste it): a slug used to reach SQL as an int
+  // parameter — a 500 "Validation failed for parameter 'p1'. Invalid number."
+  app.addHook('preValidation', async (req, reply) => {
+    const params = req.params as { id?: unknown } | undefined
+    if (typeof params?.id !== 'string') return
+    const id = await resolveQueryIdParam(params.id)
+    if (!id) return reply.code(404).send({ error: 'Not found' })
+    params.id = id
+  })
+
   if (!shapeCheckRegistered) {
     shapeCheckRegistered = true
     registerReadinessCheck({

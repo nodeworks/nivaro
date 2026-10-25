@@ -103,6 +103,7 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { OwnerAvatars } from './OwnerAvatars'
+import { ListLoadError } from '../ListLoadError'
 import { QueueBulkBar } from './QueueBulkBar'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
@@ -1188,65 +1189,71 @@ export function QueueWorklist({
     /** #502: why a view came back empty — nothing yours / filtered / unreadable. */
     empty?: { reason: string; message: string; unreadable: string[]; queue_total: number | null }
   }
-  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt } =
-    useQuery<QueueItemsPage>({
-      queryKey: [
-        'queue-items',
-        queueId,
-        scope,
-        sort,
-        debouncedFilterValues,
-        view === 'table' && !groupBy ? page : 'all',
-        groupBy
-      ],
-      queryFn: async () => {
-        // #2447 — table pages walk forward by cursor when the server can (a materialized
-        // queue on a plain-column sort); the page number always rides along as the fallback.
-        const paged = !serverGrouped && view === 'table'
-        const bookKey = JSON.stringify([queueId, scope, sort, apiFilters, limit])
-        const after = paged
-          ? pageRequest(cursorBookRef.current, bookKey, page, '').after
-          : undefined
-        const res = await client.request<QueueItemsPage>(
-          get(`/queues/${queueId}/items`, {
-            scope,
-            // Last State Change is Aging read the other way round: the newest
-            // move is the least aged.
-            sort:
-              sort === 'state_entered'
-                ? '-aging_hours'
-                : sort === '-state_entered'
-                  ? 'aging_hours'
-                  : sort,
-            filters: JSON.stringify(apiFilters),
-            // Table + group: headers only (rows load per group on expand, #741).
-            // Kanban renders the full matching set, grouped client-side.
-            ...(serverGrouped
-              ? {
-                  group_by: groupBy,
-                  ...(groupSumPaths.length ? { group_sums: groupSumPaths.join(',') } : {})
-                }
-              : view === 'table'
-                ? { page, limit, ...(after ? { after } : {}) }
-                : {})
-          })
-        )
-        if (after) noteNextCursor(cursorBookRef.current, bookKey, page, res.next_cursor)
-        return res
-      },
-      // Wait for display_config AND scope seeding so the first fetch uses the
-      // configured defaults and already carries the viewer's restricted filters.
-      // #477: the key reads the DEBOUNCED filters (350ms) while seeding writes
-      // the live ones — the gate opened before the debounce caught up, so the
-      // first fetch went out WITHOUT the seeded scope and refired ~350ms later
-      // with it (3.3s + 8.7s of work for one page). The first fetch now also
-      // waits for the debounced copy to settle; later typing still debounces.
-      enabled:
-        !!queueId && displayReady && scopeGateOpen && (firstFetchedRef.current || filtersSettled),
-      // Keep the previous page rendered while a sort/filter/page change refetches —
-      // swapping to skeletons collapsed the table height and jittered the page.
-      placeholderData: (prev) => prev
-    })
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isPlaceholderData,
+    dataUpdatedAt,
+    isError: itemsFailed,
+    error: itemsError,
+    refetch: refetchItems
+  } = useQuery<QueueItemsPage>({
+    queryKey: [
+      'queue-items',
+      queueId,
+      scope,
+      sort,
+      debouncedFilterValues,
+      view === 'table' && !groupBy ? page : 'all',
+      groupBy
+    ],
+    queryFn: async () => {
+      // #2447 — table pages walk forward by cursor when the server can (a materialized
+      // queue on a plain-column sort); the page number always rides along as the fallback.
+      const paged = !serverGrouped && view === 'table'
+      const bookKey = JSON.stringify([queueId, scope, sort, apiFilters, limit])
+      const after = paged ? pageRequest(cursorBookRef.current, bookKey, page, '').after : undefined
+      const res = await client.request<QueueItemsPage>(
+        get(`/queues/${queueId}/items`, {
+          scope,
+          // Last State Change is Aging read the other way round: the newest
+          // move is the least aged.
+          sort:
+            sort === 'state_entered'
+              ? '-aging_hours'
+              : sort === '-state_entered'
+                ? 'aging_hours'
+                : sort,
+          filters: JSON.stringify(apiFilters),
+          // Table + group: headers only (rows load per group on expand, #741).
+          // Kanban renders the full matching set, grouped client-side.
+          ...(serverGrouped
+            ? {
+                group_by: groupBy,
+                ...(groupSumPaths.length ? { group_sums: groupSumPaths.join(',') } : {})
+              }
+            : view === 'table'
+              ? { page, limit, ...(after ? { after } : {}) }
+              : {})
+        })
+      )
+      if (after) noteNextCursor(cursorBookRef.current, bookKey, page, res.next_cursor)
+      return res
+    },
+    // Wait for display_config AND scope seeding so the first fetch uses the
+    // configured defaults and already carries the viewer's restricted filters.
+    // #477: the key reads the DEBOUNCED filters (350ms) while seeding writes
+    // the live ones — the gate opened before the debounce caught up, so the
+    // first fetch went out WITHOUT the seeded scope and refired ~350ms later
+    // with it (3.3s + 8.7s of work for one page). The first fetch now also
+    // waits for the debounced copy to settle; later typing still debounces.
+    enabled:
+      !!queueId && displayReady && scopeGateOpen && (firstFetchedRef.current || filtersSettled),
+    // Keep the previous page rendered while a sort/filter/page change refetches —
+    // swapping to skeletons collapsed the table height and jittered the page.
+    placeholderData: (prev) => prev
+  })
 
   if (data && !firstFetchedRef.current) firstFetchedRef.current = true
 
@@ -4298,6 +4305,11 @@ export function QueueWorklist({
       </div>
 
       <div ref={scrollRef} className='flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4 pt-3'>
+        {/* A failed read (list timeout, busy server) says so with Retry above
+            the table — never "Nothing in this queue" for a list that did not load. */}
+        {itemsFailed && (
+          <ListLoadError error={itemsError} onRetry={() => void refetchItems()} className='mb-3' />
+        )}
         {view === 'table' ? (
           <>
             {/* Stretch row: the table card fills the remaining height and
@@ -4354,75 +4366,79 @@ export function QueueWorklist({
                         : undefined
                   }
                   emptyMessage={
-                    <EmptyState
-                      icon={Inbox}
-                      title={
-                        data?.empty?.reason === 'not_permitted'
-                          ? 'You cannot read this queue’s records'
-                          : data?.empty?.reason === 'scope_mine'
-                            ? 'Nothing waiting on you'
+                    itemsFailed ? (
+                      <span className='sr-only'>The list did not load.</span>
+                    ) : (
+                      <EmptyState
+                        icon={Inbox}
+                        title={
+                          data?.empty?.reason === 'not_permitted'
+                            ? 'You cannot read this queue’s records'
+                            : data?.empty?.reason === 'scope_mine'
+                              ? 'Nothing waiting on you'
+                              : data?.empty?.reason === 'filters'
+                                ? 'No records match these filters'
+                                : 'Nothing in this queue'
+                        }
+                        detail={
+                          data?.empty?.reason === 'filters' && defaultsHiding > 0
+                            ? `Your default ${defaultsLabel(labelOfFilter)} filter is hiding ${defaultsHiding.toLocaleString('en-US')} item${defaultsHiding === 1 ? '' : 's'} here.`
                             : data?.empty?.reason === 'filters'
-                              ? 'No records match these filters'
-                              : 'Nothing in this queue'
-                      }
-                      detail={
-                        data?.empty?.reason === 'filters' && defaultsHiding > 0
-                          ? `Your default ${defaultsLabel(labelOfFilter)} filter is hiding ${defaultsHiding.toLocaleString('en-US')} item${defaultsHiding === 1 ? '' : 's'} here.`
-                          : data?.empty?.reason === 'filters'
-                            ? scope !== 'all'
-                              ? 'Your filters and the current tab leave nothing to show. Widen a filter or look across all items.'
-                              : 'Widen or clear a filter to see more of the queue.'
-                            : (data?.empty?.message ??
-                              'Records land here when they match the queue sources — a state change or new record can appear at any moment.')
-                      }
-                      action={
-                        data?.empty?.reason === 'filters' ? (
-                          <div className='flex items-center justify-center gap-2'>
-                            {defaultsHiding > 0 && (
-                              <button
-                                type='button'
-                                onClick={showWithoutDefaults}
-                                className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[12px] font-semibold text-white hover:brightness-105'
-                                data-queue-empty-defaults
-                              >
-                                Show all {defaultsHiding.toLocaleString('en-US')}
-                              </button>
-                            )}
-                            <button
-                              type='button'
-                              onClick={() => {
-                                // Restricted scopes stay: the server applies
-                                // them anyway, and the chip says so.
-                                const keep: Record<string, string | string[]> = {}
-                                for (const [k, v] of Object.entries(seededFiltersRef.current)) {
-                                  if (allowedValuesByPath[k.slice('extra.'.length)]?.length)
-                                    keep[k] = v
-                                }
-                                setFilterValues(keep)
-                                setPage(1)
-                              }}
-                              className='h-7 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
-                              data-queue-empty-clear
-                            >
-                              Clear filters
-                            </button>
-                            {scope !== 'all' && (
+                              ? scope !== 'all'
+                                ? 'Your filters and the current tab leave nothing to show. Widen a filter or look across all items.'
+                                : 'Widen or clear a filter to see more of the queue.'
+                              : (data?.empty?.message ??
+                                'Records land here when they match the queue sources — a state change or new record can appear at any moment.')
+                        }
+                        action={
+                          data?.empty?.reason === 'filters' ? (
+                            <div className='flex items-center justify-center gap-2'>
+                              {defaultsHiding > 0 && (
+                                <button
+                                  type='button'
+                                  onClick={showWithoutDefaults}
+                                  className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[12px] font-semibold text-white hover:brightness-105'
+                                  data-queue-empty-defaults
+                                >
+                                  Show all {defaultsHiding.toLocaleString('en-US')}
+                                </button>
+                              )}
                               <button
                                 type='button'
                                 onClick={() => {
-                                  setScope('all')
+                                  // Restricted scopes stay: the server applies
+                                  // them anyway, and the chip says so.
+                                  const keep: Record<string, string | string[]> = {}
+                                  for (const [k, v] of Object.entries(seededFiltersRef.current)) {
+                                    if (allowedValuesByPath[k.slice('extra.'.length)]?.length)
+                                      keep[k] = v
+                                  }
+                                  setFilterValues(keep)
                                   setPage(1)
                                 }}
                                 className='h-7 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
-                                data-queue-empty-all
+                                data-queue-empty-clear
                               >
-                                Show all items
+                                Clear filters
                               </button>
-                            )}
-                          </div>
-                        ) : undefined
-                      }
-                    />
+                              {scope !== 'all' && (
+                                <button
+                                  type='button'
+                                  onClick={() => {
+                                    setScope('all')
+                                    setPage(1)
+                                  }}
+                                  className='h-7 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
+                                  data-queue-empty-all
+                                >
+                                  Show all items
+                                </button>
+                              )}
+                            </div>
+                          ) : undefined
+                        }
+                      />
+                    )
                   }
                   sort={sort}
                   onSortChange={(next) => {

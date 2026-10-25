@@ -78,6 +78,8 @@ export interface WorkflowTransition {
   notify_text?: string | null
   /** Only the current step's owner (or an admin) may run it (migration 397). */
   require_owner?: boolean | number | null
+  /** With require_owner: the record's creator may run it too (migration 504). */
+  allow_creator?: boolean | number | null
 }
 
 export interface WorkflowInstance {

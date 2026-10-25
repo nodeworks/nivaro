@@ -137,6 +137,29 @@ describe('filterAndOrderNarrowRows', () => {
     ]
     expect(filterAndOrderNarrowRows(rows, {}, 'extra.name').map((r) => r.id)).toEqual([2, 1, 3])
   })
+
+  it('sorts a money extra.* column by its number twin, not as text', () => {
+    const rows = [
+      narrow({ id: 1, sort_val: '16461', sort_num: 16461 }),
+      narrow({ id: 2, sort_val: '1986', sort_num: 1986 }),
+      narrow({ id: 3, sort_val: '8192', sort_num: 8192 }),
+      narrow({ id: 4, sort_val: '943230.28', sort_num: 943230.28 }),
+      narrow({ id: 5, sort_val: null })
+    ]
+    const asc = filterAndOrderNarrowRows(rows, {}, 'extra.requisition_amount').map((r) => r.id)
+    expect(asc).toEqual([2, 3, 1, 4, 5])
+    const desc = filterAndOrderNarrowRows(rows, {}, '-extra.requisition_amount').map((r) => r.id)
+    expect(desc).toEqual([4, 1, 3, 2, 5])
+  })
+
+  it('sorts a date extra.* column by its day twin', () => {
+    const rows = [
+      narrow({ id: 1, sort_val: '10/24/2026', sort_day: '2026-10-24' }),
+      narrow({ id: 2, sort_val: '9/1/2026', sort_day: '2026-09-01' }),
+      narrow({ id: 3, sort_val: '1/5/2027', sort_day: '2027-01-05' })
+    ]
+    expect(filterAndOrderNarrowRows(rows, {}, 'extra.due').map((r) => r.id)).toEqual([2, 1, 3])
+  })
 })
 
 describe('statsFromNarrowRows', () => {

@@ -46,6 +46,7 @@ import {
   X
 } from 'lucide-react'
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 
 // Copy chart as image (#203): recharts renders SVG — serialize it, paint onto
 // a canvas over a white ground, and hand the PNG to the clipboard. Fails to a
@@ -134,13 +135,13 @@ import { del, get, post, put } from '../lib/commands'
 import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
 import { loadErrorText, serverErrorText } from '../lib/load-error'
 import { buildReportTree, type ReportTreeNode } from '../lib/report-tree'
+import { uniqueByValue } from '../lib/unique-options'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
   translateScopeValues,
   useMyScopes
 } from '../lib/use-my-scopes'
-import { uniqueByValue } from '../lib/unique-options'
 import { cn } from '../lib/utils'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { RechartsGate } from './charts/RechartsGate'
@@ -150,8 +151,8 @@ import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from './ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
-import { Skeleton } from './ui/skeleton'
 import { SimpleSelect } from './ui/SimpleSelect'
+import { Skeleton } from './ui/skeleton'
 
 // The layout editor loads when someone first edits a report, not with every
 // screen that shows one.
@@ -613,10 +614,11 @@ function TreeWidget({
           <div className='ml-[18px] mt-0.5 flex flex-wrap gap-x-3 text-[10px] tabular-nums text-slate-400'>
             {seriesDefs.map((sd) => (
               <span key={sd.field}>
-                {(sd.label ?? sd.field).slice(0, 14)}{' '}
+                {/* The whole label: the row wraps ("Total Remainin" was a hard cut). */}
+                {sd.label ?? sd.field}{' '}
                 <span className='font-medium text-slate-500 dark:text-slate-300'>
                   {n.sums[sd.field] == null
-                    ? '—'
+                    ? ((sd as { empty_label?: string }).empty_label ?? '—')
                     : cfg.value_format === 'currency'
                       ? compactMoney(n.sums[sd.field] as number)
                       : (n.sums[sd.field] as number).toLocaleString()}
@@ -658,6 +660,55 @@ function useAutoDrill(onDrill?: (t: { collection: string; itemId: string }) => v
   }
 }
 
+/** A query widget's rows as it shows them: grouped, sorted, limited by its config. */
+export function shapeQueryRows(
+  cfg: ReportQueryWidgetConfig,
+  raw: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> {
+  let rows = raw
+  if (cfg.group_rows && cfg.x_field) {
+    const acc = new Map<string, Record<string, unknown>>()
+    const numFields = new Set(
+      (cfg.series ?? []).map((s) => s.field).length > 0
+        ? (cfg.series ?? []).map((s) => s.field)
+        : Object.keys(rows[0] ?? {}).filter((k) => typeof rows[0]?.[k] === 'number')
+    )
+    for (const r of rows) {
+      const key = String(r[cfg.x_field] ?? 'Unknown')
+      const cur = acc.get(key) ?? { [cfg.x_field]: key }
+      for (const f of numFields) cur[f] = (Number(cur[f]) || 0) + (Number(r[f]) || 0)
+      acc.set(key, cur)
+    }
+    rows = [...acc.values()]
+  }
+  if (cfg.sort) {
+    const desc = cfg.sort.startsWith('-')
+    const f = desc ? cfg.sort.slice(1) : cfg.sort
+    rows = [...rows].sort((a, b) => {
+      const av = a[f]
+      const bv = b[f]
+      const cmp =
+        typeof av === 'number' && typeof bv === 'number'
+          ? av - bv
+          : String(av ?? '').localeCompare(String(bv ?? ''))
+      return desc ? -cmp : cmp
+    })
+  }
+  if (cfg.limit && cfg.limit > 0) rows = rows.slice(0, cfg.limit)
+  return rows
+}
+
+/** The custom-query read a query widget runs — one key, so its CSV reuses the cache. */
+function queryWidgetRows(
+  client: ReturnType<typeof useNivaroClient>,
+  slug: string,
+  params: Record<string, unknown>
+) {
+  return client
+    .request(executeCustomQuery(slug, params))
+    .then((r) => ((r as { data: unknown[] }).data ?? []) as Array<Record<string, unknown>>)
+}
+
 export function QueryWidgetBody({
   cfg,
   dateRange,
@@ -684,10 +735,7 @@ export function QueryWidgetBody({
   const params = resolveQueryParams(cfg, dateRange, entityFilters)
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['nivaro-report-query', cfg.slug, params],
-    queryFn: () =>
-      client
-        .request(executeCustomQuery(cfg.slug, params))
-        .then((r) => ((r as { data: unknown[] }).data ?? []) as Array<Record<string, unknown>>),
+    queryFn: () => queryWidgetRows(client, cfg.slug, params),
     staleTime: 60_000,
     refetchInterval,
     retry: false
@@ -725,36 +773,7 @@ export function QueryWidgetBody({
     )
   }
 
-  let rows = data ?? []
-  if (cfg.group_rows && cfg.x_field) {
-    const acc = new Map<string, Record<string, unknown>>()
-    const numFields = new Set(
-      (cfg.series ?? []).map((s) => s.field).length > 0
-        ? (cfg.series ?? []).map((s) => s.field)
-        : Object.keys(rows[0] ?? {}).filter((k) => typeof rows[0]?.[k] === 'number')
-    )
-    for (const r of rows) {
-      const key = String(r[cfg.x_field] ?? 'Unknown')
-      const cur = acc.get(key) ?? { [cfg.x_field]: key }
-      for (const f of numFields) cur[f] = (Number(cur[f]) || 0) + (Number(r[f]) || 0)
-      acc.set(key, cur)
-    }
-    rows = [...acc.values()]
-  }
-  if (cfg.sort) {
-    const desc = cfg.sort.startsWith('-')
-    const f = desc ? cfg.sort.slice(1) : cfg.sort
-    rows = [...rows].sort((a, b) => {
-      const av = a[f]
-      const bv = b[f]
-      const cmp =
-        typeof av === 'number' && typeof bv === 'number'
-          ? av - bv
-          : String(av ?? '').localeCompare(String(bv ?? ''))
-      return desc ? -cmp : cmp
-    })
-  }
-  if (cfg.limit && cfg.limit > 0) rows = rows.slice(0, cfg.limit)
+  const rows = shapeQueryRows(cfg, data ?? [])
   if (rows.length === 0) return <p className='px-1 text-[12px] text-slate-400'>No data.</p>
 
   const columns: ReportQueryColumn[] =
@@ -1754,7 +1773,12 @@ function downloadWidgetCsv(
     for (const t of data.tiles) rows.push({ label: t.label, value: t.value })
   }
   if (rows.length === 0 && data?.value != null) rows.push({ value: data.value })
-  if (rows.length === 0) return
+  if (rows.length === 0) {
+    toast.info('Nothing to download yet', {
+      description: 'This widget has no rows for these filters.'
+    })
+    return
+  }
   const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))]
   const escCsv = (v: unknown) => {
     const t = String(v ?? '')
@@ -1768,7 +1792,9 @@ function downloadWidgetCsv(
   a.href = URL.createObjectURL(blob)
   a.download = `${(widget.title || 'widget').replace(/[^\w-]+/g, '_')}.csv`
   a.click()
-  URL.revokeObjectURL(a.href)
+  // Revoked after the browser has taken the download, not under it.
+  const href = a.href
+  setTimeout(() => URL.revokeObjectURL(href), 10_000)
 }
 
 interface WidgetAnnotation {
@@ -3572,7 +3598,24 @@ const WidgetCard = memo(function WidgetCard({
             type='button'
             title='Download as CSV'
             className='rounded p-0.5 text-slate-300 hover:text-slate-500'
-            onClick={() => downloadWidgetCsv(widget, data)}
+            onClick={() => {
+              // Query widgets resolve their rows inside QueryWidgetBody (`data`
+              // is empty here): read the same cached query and shape it the same way.
+              if (!queryCfg?.slug) {
+                downloadWidgetCsv(widget, data)
+                return
+              }
+              const cfg = queryCfg
+              const params = resolveQueryParams(cfg, dateRange, entityFilters)
+              queryCache
+                .fetchQuery({
+                  queryKey: ['nivaro-report-query', cfg.slug, params],
+                  queryFn: () => queryWidgetRows(client, cfg.slug, params),
+                  staleTime: 60_000
+                })
+                .then((raw) => downloadWidgetCsv(widget, undefined, shapeQueryRows(cfg, raw)))
+                .catch((err) => toast.error(loadErrorText(err, 'this widget')))
+            }}
           >
             <Download className='h-3 w-3' />
           </button>

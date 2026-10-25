@@ -756,14 +756,13 @@ export async function loadRecordNotes(
       _legacy: false
     })),
     // A transition writes its own activity row ("A → B via Approve"); the
-    // transition entry above already says that, better.
+    // transition entry above already says that, better. An edit-lock hand-off
+    // (`lock-*`) is housekeeping, not a reason anyone gave for a change.
     ...ownReasons
-      .filter(
-        (a) =>
-          !String(a.action ?? '')
-            .toLowerCase()
-            .includes('transition')
-      )
+      .filter((a) => {
+        const action = String(a.action ?? '').toLowerCase()
+        return !action.includes('transition') && !action.startsWith('lock-')
+      })
       .map((a) => ({
         id: `reason:${a.id}`,
         source: 'change_reason' as const,

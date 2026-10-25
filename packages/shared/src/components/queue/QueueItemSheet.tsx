@@ -70,6 +70,8 @@ interface CommentRow {
   first_name: string | null
   last_name: string | null
   email: string | null
+  /** Soft-deleted: the server keeps a tombstone, the sheet does not show it. */
+  deleted?: boolean
 }
 
 function formatAging(hours: number | null): string {
@@ -152,6 +154,7 @@ export function QueueItemSheet({
     queryFn: () =>
       client
         .request<{ data: CommentRow[] }>(get('/comments', { collection, item: itemId }))
+        .then((r) => ({ data: (r.data ?? []).filter((c) => !c.deleted) }))
         .catch(() => ({ data: [] })),
     enabled: !!collection && !!itemId
   })

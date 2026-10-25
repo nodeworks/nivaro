@@ -328,6 +328,9 @@ export async function canActOn(
     /** Judge ownership on THIS pipeline instance (the one a transition runs
      *  on) — completed or not — instead of the record's open instance. */
     instanceId?: string
+    /** Owners as ASSIGNED (groups, instance owners, delegation) — without the
+     *  binding's owner_fallback_field user. Owner-only transitions judge so. */
+    assignedOwnersOnly?: boolean
   } = {}
 ): Promise<ActVerdict> {
   const gates = await compileAccessGates(user, collection, opts)
@@ -357,9 +360,11 @@ export async function canActOn(
   if (inst) {
     state = inst.label
     const { resolveStateOwnersBatch } = await import('./pipeline-engine.js')
-    const owners = await resolveStateOwnersBatch([
-      { key: 'x', stateId: inst.state_id, instanceId: inst.id, collection, itemId: String(id) }
-    ])
+    const owners = await resolveStateOwnersBatch(
+      [{ key: 'x', stateId: inst.state_id, instanceId: inst.id, collection, itemId: String(id) }],
+      db,
+      { skipFallback: !!opts.assignedOwnersOnly }
+    )
     isOwner = ownsStep(owners.get('x') ?? [], String(user.id))
   }
   const canAct = seen && !!canUpdate && !unavailable
@@ -395,12 +400,52 @@ export const TRANSITION_OWNER_REQUIRED = 'TRANSITION_OWNER_REQUIRED'
 
 /** Does an owner-only transition let this caller through? Admins always;
  *  anyone else only when canActOn found them among the current step's
- *  resolved owners (delegation applied). A record with no step to own
- *  (`is_owner` null) has nobody to be the owner — refused. */
-export function ownerOnlyAllows(isAdmin: boolean, verdict: Pick<ActVerdict, 'is_owner'>): boolean {
+ *  ASSIGNED owners (delegation applied; the binding's owner_fallback_field
+ *  user is no owner here — it keeps the record in a queue, it does not
+ *  approve). A record with no step to own (`is_owner` null) has nobody to be
+ *  the owner — refused. With `allow_creator` on the transition the record's
+ *  creator passes too. */
+export function ownerOnlyAllows(
+  isAdmin: boolean,
+  verdict: Pick<ActVerdict, 'is_owner'> & { is_creator?: boolean | null },
+  allowCreator = false
+): boolean {
   if (isAdmin) return true
-  return verdict.is_owner === true
+  if (verdict.is_owner === true) return true
+  return allowCreator && verdict.is_creator === true
 }
+
+/** The record's creator column per collection — the same reading the
+ *  dashboard feed uses (a `user-created` special, else user_created /
+ *  creator / created_by). */
+async function creatorColumnOf(collection: string): Promise<string | null> {
+  const { creatorColumns } = await import('./dashboard-feed.js')
+  return (await creatorColumns([collection])).get(collection) ?? null
+}
+
+/** item id (as given) → creator user id, for the ids that have one. */
+export async function recordCreators(
+  collection: string,
+  ids: string[]
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (ids.length === 0) return out
+  const col = await creatorColumnOf(collection)
+  if (!col) return out
+  const { selectInChunks } = await import('./db-batch.js')
+  const rows = (await selectInChunks([...new Set(ids)], 2000, (chunk) =>
+    db(collection).whereIn('id', chunk).select('id', `${col} as creator`)
+  )) as Array<{ id: unknown; creator: unknown }>
+  const byId = new Map(rows.map((r) => [String(r.id).toLowerCase(), r.creator]))
+  for (const id of ids) {
+    const c = byId.get(String(id).toLowerCase())
+    if (typeof c === 'string' && c.trim() !== '') out.set(id, c)
+  }
+  return out
+}
+
+export const sameUser = (a: unknown, b: unknown) =>
+  a != null && b != null && String(a).toUpperCase() === String(b).toUpperCase()
 
 /** The gate both manual transition paths run for a `require_owner` transition. */
 export async function checkTransitionOwner(opts: {
@@ -409,24 +454,57 @@ export async function checkTransitionOwner(opts: {
   collection: string
   item: string
   instanceId: string
-}): Promise<{ allowed: boolean; message: string }> {
-  if (opts.isAdmin) return { allowed: true, message: '' }
+  /** The transition's allow_creator: the record's creator passes too. */
+  allowCreator?: boolean
+}): Promise<{ allowed: boolean; message: string; is_owner: boolean; is_creator: boolean }> {
+  if (opts.isAdmin) return { allowed: true, message: '', is_owner: false, is_creator: false }
   let verdict: ActVerdict
   try {
     verdict = await canActOn(opts.user as User & AvailabilityRow, opts.collection, opts.item, {
-      instanceId: opts.instanceId
+      instanceId: opts.instanceId,
+      assignedOwnersOnly: true
     })
   } catch {
     // An owner question that cannot be answered is a refusal, never a pass.
-    return { allowed: false, message: 'Could not confirm you own the current step.' }
+    return {
+      allowed: false,
+      message: 'Could not confirm you own the current step.',
+      is_owner: false,
+      is_creator: false
+    }
   }
-  const allowed = ownerOnlyAllows(false, verdict)
+  let isCreator = false
+  if (verdict.is_owner !== true) {
+    // Asked only when it could change the answer: the instance read asks once
+    // for every gated move on offer, some of which may allow the creator.
+    const creator = await recordCreators(opts.collection, [String(opts.item)])
+      .then((m) => m.get(String(opts.item)))
+      .catch(() => undefined)
+    isCreator = sameUser(creator, opts.user.id)
+  }
+  const allowed = ownerOnlyAllows(false, { ...verdict, is_creator: isCreator }, !!opts.allowCreator)
+  const step = verdict.state ?? 'the current step'
   return {
     allowed,
     message: allowed
       ? ''
-      : verdict.state
-        ? `Only the owner of ${verdict.state} can make this move.`
-        : 'Only the owner of the current step can make this move.'
+      : opts.allowCreator
+        ? `Only the owner of ${step} or the person who created this record can make this move.`
+        : verdict.state
+          ? `Only the owner of ${verdict.state} can make this move.`
+          : 'Only the owner of the current step can make this move.',
+    is_owner: verdict.is_owner === true,
+    is_creator: isCreator
   }
+}
+
+/** Keep the transitions an owner-only verdict lets this caller run. */
+export function offeredToActor<T extends { require_owner?: unknown; allow_creator?: unknown }>(
+  transitions: T[],
+  actor: { is_owner: boolean; is_creator: boolean }
+): T[] {
+  const on = (v: unknown) => v === true || v === 1 || v === '1'
+  return transitions.filter(
+    (t) => !on(t.require_owner) || ownerOnlyAllows(false, actor, on(t.allow_creator))
+  )
 }

@@ -12,7 +12,7 @@ import {
   Sparkles
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient, useParentDraft } from '../../context'
 import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
@@ -568,6 +568,17 @@ function FieldWatchButton({
   )
 }
 
+/** The control a field label names: its first input (a rich-text body, not
+ *  the toolbar above it), else a picker's trigger button. */
+function primaryControl(root: HTMLElement | null): HTMLElement | null {
+  if (!root) return null
+  return (
+    root.querySelector<HTMLElement>(
+      'input:not([type=hidden]), textarea, [role="combobox"], [contenteditable="true"]'
+    ) ?? root.querySelector<HTMLElement>('button')
+  )
+}
+
 export function FieldRow({
   field,
   draft,
@@ -616,6 +627,21 @@ export function FieldRow({
   // render FieldRow outside ItemEditForm.
   const affordances = useFieldAffordances()
   const wrapperRef = useRef<HTMLDivElement>(null)
+  // The visible label names the field's control for screen readers: every
+  // picker announced itself as just "Select…". The control is whatever the
+  // interface renders, so it is named after paint (each render, a few reads).
+  const labelId = useId()
+  const controlRef = useRef<HTMLDivElement>(null)
+  const hasLabelRef = useRef(false)
+  useEffect(() => {
+    const el = hasLabelRef.current ? primaryControl(controlRef.current) : null
+    if (!el || el.hasAttribute('aria-label')) return
+    if (!el.id) el.id = `${labelId}-control`
+    // A text box is the field itself; a picker button keeps its own text
+    // after the label ("Zone, Select…" / "Zone, Zone 1").
+    const want = el.tagName === 'BUTTON' ? `${labelId} ${el.id}` : labelId
+    if (el.getAttribute('aria-labelledby') !== want) el.setAttribute('aria-labelledby', want)
+  })
   const {
     onContextMenu: onFieldContextMenu,
     onKeyDown: onFieldMenuKeyDown,
@@ -747,6 +773,7 @@ export function FieldRow({
   const value = draft[field.field] ?? null
   const shownText = placementFieldText(field, textCtx)
   const label = shownText.label ?? titleCase(field.field)
+  hasLabelRef.current = label !== ''
   // #2712: a display formula has no column — no history, watch, AI or input.
   const isCalc = isDisplayFormulaRow(field)
   const counter = isCalc ? null : fieldCounterConfig(field)
@@ -937,7 +964,7 @@ export function FieldRow({
       {(label !== '' || addendumHints.length > 0) && (
         <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
           {label !== '' && (
-            <Label data-field-label className='text-sm font-medium'>
+            <Label id={labelId} data-field-label className='text-sm font-medium'>
               <GlossaryLabel text={label} collection={collection} />
               {field.required && <span className='ml-0.5 text-destructive'>*</span>}
               {fieldIsRecommended(field) && <RecommendedMarker />}
@@ -1091,7 +1118,7 @@ export function FieldRow({
                     <TooltipTrigger asChild>
                       <button
                         type='button'
-                        aria-label='Show the fields that narrow this list'
+                        aria-label={`Show the fields that narrow ${label || 'this list'}`}
                         onClick={flashParentFields}
                         className={cn(
                           'inline-flex items-center transition-colors',
@@ -1124,6 +1151,7 @@ export function FieldRow({
       )}
       {swapContent ?? (
         <div
+          ref={controlRef}
           className={cn(locked && !isFileField && 'cursor-not-allowed')}
           data-tip={(locked || field.readonly) && lockReason ? lockReason : undefined}
           onPointerEnter={

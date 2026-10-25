@@ -1,4 +1,5 @@
 import type { NivaroClient } from '@nivaro/sdk'
+import { userErrorMessage } from '@nivaro/shared'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { del, get, post } from '../../../lib/commands'
 import { initials } from './HistoryTimeline'
@@ -36,6 +37,10 @@ export function OwnersSection({
   const [userId, setUserId] = useState('')
   const [stateScope, setStateScope] = useState('')
   const [saving, setSaving] = useState(false)
+  // The server's own add rule (admins + the current step's owners): Add is
+  // offered only when it would land — approvers got a 403 every time.
+  const [canAdd, setCanAdd] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -48,10 +53,13 @@ export function OwnersSection({
   const fetchOwners = useCallback(async () => {
     if (!client) return
     try {
-      const res = await client.request<{ data: POwner[] }>(
+      const res = await client.request<{ data: POwner[]; meta?: { can_add?: boolean } }>(
         get(`/pipelines/instance/${collection}/${itemId}/owners`)
       )
-      if (mountedRef.current) setOwners(res.data ?? [])
+      if (mountedRef.current) {
+        setOwners(res.data ?? [])
+        setCanAdd(res.meta?.can_add === true)
+      }
     } catch {
       if (mountedRef.current) setOwners([])
     } finally {
@@ -84,6 +92,7 @@ export function OwnersSection({
   async function addOwner() {
     if (!client || !userId || saving) return
     setSaving(true)
+    setAddError(null)
     try {
       await client.request(
         post(`/pipelines/instance/${collection}/${itemId}/owners`, {
@@ -95,8 +104,9 @@ export function OwnersSection({
       setUserId('')
       setStateScope('')
       await fetchOwners()
-    } catch {
-      /* no-op */
+    } catch (err) {
+      // The server's reason (a 403 says why) — a silent failure was a dead end.
+      if (mountedRef.current) setAddError(userErrorMessage(err, 'Failed to add owner'))
     } finally {
       if (mountedRef.current) setSaving(false)
     }
@@ -139,7 +149,7 @@ export function OwnersSection({
             <span data-nf-owners-count>({owners.length})</span>
           )}
         </span>
-        {!adding && (
+        {!adding && canAdd && (
           <button type='button' data-nf-owners-add-btn onClick={() => setAdding(true)}>
             <svg
               aria-hidden='true'
@@ -240,6 +250,11 @@ export function OwnersSection({
               </option>
             ))}
           </select>
+          {addError ? (
+            <span role='alert' data-nf-owners-error>
+              {addError}
+            </span>
+          ) : null}
           <div data-nf-confirm-actions>
             <button
               type='button'
@@ -248,6 +263,7 @@ export function OwnersSection({
                 setAdding(false)
                 setUserId('')
                 setStateScope('')
+                setAddError(null)
               }}
             >
               Cancel

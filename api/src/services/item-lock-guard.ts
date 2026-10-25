@@ -1,0 +1,78 @@
+import type { FastifyRequest } from 'fastify'
+import { db } from '../db/index.js'
+
+/** Returns true when item_locking_enabled is 1/true for the collection. */
+export async function isLockingEnabled(collection: string): Promise<boolean> {
+  try {
+    const row = (await db('nivaro_collections')
+      .where({ collection })
+      .select('item_locking_enabled')
+      .first()) as { item_locking_enabled: number | boolean } | undefined
+    if (!row) return true
+    return row.item_locking_enabled === 1 || row.item_locking_enabled === true
+  } catch {
+    return true // column missing (migration pending) — default enabled
+  }
+}
+
+export async function lockHolderName(userId: string): Promise<string | null> {
+  const user = (await db('nivaro_users')
+    .where({ id: userId })
+    .select('first_name', 'last_name', 'email')
+    .first()) as { first_name: string | null; last_name: string | null; email: string } | undefined
+  if (!user) return null
+  const name = [user.first_name, user.last_name].filter(Boolean).join(' ')
+  return name || user.email
+}
+
+// People at a screen hold edit locks; integrations (API keys, their
+// simulations) and connected apps never take one, so a lock is not theirs
+// to honour — a partner push must not fail because someone has the form open.
+const LOCK_BOUND_AUTH = new Set(['session', 'masquerade', 'token'])
+
+export interface EditLockRefusal {
+  status: 409
+  body: {
+    error: string
+    code: 'RECORD_LOCKED'
+    locked_by: string
+    locked_by_name: string | null
+  }
+}
+
+/**
+ * Edit locks are enforced, not advisory: a person's write to a record another
+ * person holds a live lock on is refused (409 RECORD_LOCKED, naming the
+ * holder). Without it, someone who released the lock (or never took it) could
+ * still Save over the new holder's work. No lock, an expired one, the
+ * writer's own (any of their tabs) or locking turned off = no refusal.
+ * Admins are no exception: Take over (POST …/lock/force) makes the lock
+ * theirs first. Called by the single-record PATCH route.
+ */
+export async function editLockRefusal(
+  req: Pick<FastifyRequest, 'user' | 'authMethod'>,
+  collection: string,
+  item: string | number
+): Promise<EditLockRefusal | null> {
+  const me = req.user?.id
+  if (!me || !LOCK_BOUND_AUTH.has(req.authMethod ?? 'session')) return null
+  if (/^(nivaro_|directus_)/i.test(collection)) return null
+  const lock = (await db('nivaro_item_locks')
+    .where({ collection, item: String(item) })
+    .where('expires_at', '>', new Date())
+    .first('user')
+    .catch(() => null)) as { user?: string } | null | undefined
+  if (!lock?.user) return null
+  if (String(lock.user).toUpperCase() === String(me).toUpperCase()) return null
+  if (!(await isLockingEnabled(collection))) return null
+  const name = await lockHolderName(lock.user).catch(() => null)
+  return {
+    status: 409,
+    body: {
+      error: `${name ?? 'Someone else'} is editing this record — your changes were not saved. Ask them to release it, then save again.`,
+      code: 'RECORD_LOCKED',
+      locked_by: lock.user,
+      locked_by_name: name
+    }
+  }
+}

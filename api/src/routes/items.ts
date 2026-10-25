@@ -24,9 +24,11 @@ import {
 import { findRecordInstance } from '../services/branch-instances.js'
 import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { chainFields } from '../services/chain-columns.js'
+import { assertNotEditLocked } from '../services/edit-lock.js'
 import { isFilesCollection } from '../services/help-video-files.js'
 import { idempotencyPreHandler } from '../services/idempotency.js'
 import { instanceAccessAllowed } from '../services/instance-guard.js'
+import { editLockRefusal } from '../services/item-lock-guard.js'
 import {
   aggregateItems,
   CollectionNotFoundError,
@@ -35,7 +37,10 @@ import {
   createOneReported,
   deleteOne,
   ForbiddenError,
+  getActualColumns,
   idFitsCollection,
+  LIST_READ_MAX,
+  ListTimeoutError,
   readItems,
   readOne,
   rehearseCreate,
@@ -51,6 +56,7 @@ import {
   resolveTransitionTarget,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
+import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from '../services/record-access.js'
 import {
   isSecretColumn,
   isSystemCollection,
@@ -94,9 +100,22 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
     return reply.code(404).send({ error: err.message, ...(code ? { code } : {}) })
   } else if (err instanceof ForbiddenError) {
     return reply.code(403).send({ error: 'Forbidden' })
+  } else if (err instanceof ListTimeoutError) {
+    // Sent here, not by the global handler, which drops `code` from 5xx bodies:
+    // clients key their "took too long — Retry" state on LIST_TIMEOUT.
+    reply.request.log.warn({ url: reply.request.url }, 'list read timed out')
+    return reply.code(503).send({
+      statusCode: 503,
+      error: 'Service Unavailable',
+      message: err.message,
+      code: err.code
+    })
   }
   throw err
 }
+
+/** Most rows one GET /items/:collection/export file holds. */
+const EXPORT_MAX_ROWS = 10_000
 
 // ─── CSV helpers (no external dependency) ─────────────────────────────────────
 
@@ -331,23 +350,48 @@ export async function itemsRoutes(app: FastifyInstance) {
       }
     }
 
+    // One read returns at most LIST_READ_MAX rows, so the export pages with
+    // offset (it used to ask for 10,000 and silently get 1,000). Ordered by id
+    // as a tie-break so pages neither repeat nor skip rows.
+    const sort = q.sort?.split(',').filter(Boolean) ?? []
+    const hasId = [...(await getActualColumns(collection))].some((c) => c.toLowerCase() === 'id')
+    if (hasId && !sort.some((s) => s.replace(/^-/, '').toLowerCase() === 'id')) sort.push('id')
     const query: ItemsQuery = {
       fields: q.fields?.split(','),
-      sort: q.sort?.split(','),
-      limit: 10000,
-      offset: 0,
-      filter: parsedFilter
+      sort,
+      limit: LIST_READ_MAX,
+      filter: parsedFilter,
+      count: false
     }
 
     try {
-      const result = await readItems(
-        req.user!,
-        collection,
-        query,
-        req,
-        req.workspaceId ?? undefined
-      )
-      const rows = result.data as Record<string, unknown>[]
+      const rows: Record<string, unknown>[] = []
+      let truncated = false
+      for (let offset = 0; ; offset += LIST_READ_MAX) {
+        if (rows.length >= EXPORT_MAX_ROWS) {
+          const more = await readItems(
+            req.user!,
+            collection,
+            { ...query, fields: ['id'], limit: 1, offset: EXPORT_MAX_ROWS },
+            req,
+            req.workspaceId ?? undefined
+          )
+          truncated = more.data.length > 0
+          break
+        }
+        const page = await readItems(
+          req.user!,
+          collection,
+          { ...query, offset },
+          req,
+          req.workspaceId ?? undefined
+        )
+        const data = page.data as Record<string, unknown>[]
+        rows.push(...data)
+        if (data.length < LIST_READ_MAX) break
+      }
+      // More rows matched than one export holds: say so rather than cut silently.
+      if (truncated) reply.header('x-nivaro-export-truncated', String(EXPORT_MAX_ROWS))
 
       // Determine field set: explicit query fields, else union of keys from the rows
       let fields: string[]
@@ -621,6 +665,23 @@ export async function itemsRoutes(app: FastifyInstance) {
         if (!fromOk) {
           failed++
           continue
+        }
+
+        // Owner-only (#794): the single-item route's gate, per record.
+        if (coerceBool(transition.require_owner) && !(req.isAdmin ?? false)) {
+          const owner = await checkTransitionOwner({
+            user: req.user!,
+            isAdmin: false,
+            collection,
+            item: String(item),
+            instanceId: String(instance.id),
+            allowCreator: coerceBool(transition.allow_creator)
+          })
+          if (!owner.allowed) {
+            failed++
+            errors.push({ item: String(item), error: TRANSITION_OWNER_REQUIRED })
+            continue
+          }
         }
 
         // Transition requirements gate — mirrors the single-item transition
@@ -1253,6 +1314,10 @@ export async function itemsRoutes(app: FastifyInstance) {
     opts: {
       atomic: boolean
       req?: import('fastify').FastifyRequest
+      /** A background run has no request: the caller's admin flag, kept from
+       *  it, so the approval-state edit lock still holds (edit-lock.ts reads
+       *  only the request's presence and isAdmin). */
+      guard?: Pick<import('fastify').FastifyRequest, 'isAdmin'>
       workspaceId?: string
       slim: boolean
       onProgress?: (done: number, failed: number) => void
@@ -1281,6 +1346,16 @@ export async function itemsRoutes(app: FastifyInstance) {
         try {
           if (row == null || typeof row !== 'object' || Array.isArray(row)) {
             throw Object.assign(new Error('Each row must be an object'), { statusCode: 400 })
+          }
+          // With a request the items service runs this gate itself.
+          if (!opts.req && opts.guard) {
+            const { id, ...patch } = row
+            await assertNotEditLocked(
+              user,
+              collection,
+              isUpdate ? { ids: [id as string | number], payload: patch } : { payload: row },
+              opts.guard as import('fastify').FastifyRequest
+            )
           }
           if (isUpdate) {
             const { id, ...patch } = row
@@ -1437,6 +1512,7 @@ export async function itemsRoutes(app: FastifyInstance) {
         try {
           const out = await runBulk(user, collection, rows, {
             atomic,
+            guard: { isAdmin: req.isAdmin ?? false },
             workspaceId,
             slim,
             onProgress: (done, failed) => run.progress({ done, failed, total: rows.length }),
@@ -1633,6 +1709,9 @@ export async function itemsRoutes(app: FastifyInstance) {
       const sim = await simulateSandboxWrite(req, collection, 'update', id)
       return reply.code(sim.code).send(sim.body)
     }
+    // Edit locks are enforced: a person may not save over a record someone else holds the lock on.
+    const lockRefused = await editLockRefusal(req, collection, id)
+    if (lockRefused) return reply.code(lockRefused.status).send(lockRefused.body)
     try {
       const outcome: CreateOutcome = {}
       const item = await updateOne(

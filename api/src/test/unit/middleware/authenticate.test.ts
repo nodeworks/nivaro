@@ -146,4 +146,35 @@ describe('authenticate middleware', () => {
     })
     expect(res.statusCode).toBe(200)
   })
+
+  it('refuses a person whose role has sign-in turned off', async () => {
+    const user = makeRegularUser({ static_token: 'vendor-token-abc', account_kind: null })
+    mockDbSequence([user, { id: user.role, admin_access: false, app_access: false }])
+
+    const app = buildApp()
+    await app.ready()
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/protected',
+      headers: { Authorization: 'Bearer vendor-token-abc' }
+    })
+    expect(res.statusCode).toBe(401)
+    expect(JSON.parse(res.body).code).toBe('SIGN_IN_DISABLED')
+  })
+
+  it('still admits a machine account on a role with sign-in turned off', async () => {
+    const user = makeRegularUser({ static_token: 'iip-token-abc', account_kind: 'integration' })
+    mockDbSequence([user, { id: user.role, admin_access: false, app_access: false }])
+
+    const app = buildApp()
+    await app.ready()
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/protected',
+      headers: { Authorization: 'Bearer iip-token-abc' }
+    })
+    expect(res.statusCode).toBe(200)
+  })
 })

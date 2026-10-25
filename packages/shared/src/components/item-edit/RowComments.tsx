@@ -22,6 +22,8 @@ interface RowComment {
   created_at: string
   user: { id: string; first_name: string | null; last_name: string | null; email: string } | null
   reactions?: Array<{ emoji: string; count: number; mine: boolean }>
+  /** Soft-deleted: the server keeps a tombstone, the thread does not show it. */
+  deleted?: boolean
 }
 
 const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
@@ -72,9 +74,9 @@ export function RowCommentButton({
         .request<{ data: RowComment[] }>(get('/comments', { collection, item: rowId }))
         // Newest first, same as the record's notes thread.
         .then((r) =>
-          (r.data ?? []).sort(
-            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-          )
+          (r.data ?? [])
+            .filter((c) => !c.deleted)
+            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
         ),
     enabled: open
   })

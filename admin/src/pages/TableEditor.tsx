@@ -4571,7 +4571,12 @@ function SummaryConditionsEditor({
     </div>
   )
 }
-type SummaryModeRulesDraft = { default: 'summary' | 'edit'; rules: SummaryModeRuleDraft[] }
+type SummaryModeRulesDraft = {
+  default: 'summary' | 'edit'
+  rules: SummaryModeRuleDraft[]
+  /** Server-enforced edit lock (api services/edit-lock.ts) — carried through, not edited here. */
+  edit_lock?: unknown
+}
 const NO_STATE_KEY = '__none__'
 
 function FormUxSection({
@@ -4639,7 +4644,8 @@ function FormUxSection({
               Array.isArray(r.conditions) && r.conditions.length > 0 ? r.conditions : null,
             mode: r.mode === 'summary' ? 'summary' : 'edit'
           }))
-        : []
+        : [],
+      ...(raw?.edit_lock ? { edit_lock: raw.edit_lock } : {})
     }
   }, [meta])
   const save = (next: SummaryModeRulesDraft) => saveMut.mutate({ summary_mode_rules: next })

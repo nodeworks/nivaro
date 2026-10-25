@@ -142,6 +142,11 @@ async function labelJunctionRows(
       if (gone.has(id)) continue
       try {
         const row = JSON.parse(snap.data) as Record<string, unknown>
+        // Legacy-import snapshots hold a link expanded ({id, …}): its key is
+        // what names it, never "[object Object]".
+        for (const l of legs) row[l.fk] = linkKey(row[l.fk])
+        for (const l of legs)
+          if (l.discriminator) row[l.discriminator] = linkKey(row[l.discriminator])
         rows.push({ ...row, id })
         gone.add(id)
       } catch {
@@ -204,6 +209,14 @@ async function labelJunctionRows(
     if (s.summary === 'created') s.summary = 'linked'
     else if (s.summary === 'deleted') s.summary = 'unlinked'
   }
+}
+
+/** A snapshot's link value as its key: an expanded `{id}` object unwrapped,
+ *  any other object (nothing to name) as null. */
+function linkKey(v: unknown): unknown {
+  if (v === null || typeof v !== 'object') return v
+  const id = (v as { id?: unknown }).id
+  return id !== null && (typeof id === 'string' || typeof id === 'number') ? id : null
 }
 
 function other(legs: Leg[], leg: Leg): Leg {

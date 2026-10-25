@@ -24,6 +24,7 @@ import {
   staleBuildsByUser,
   type VersionGroup
 } from '../services/client-versions-cluster.js'
+import { fieldFocusTracker } from '../services/field-focus.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
@@ -247,6 +248,8 @@ export async function emitForceRefresh(
   payload: RefreshPayload
 ): Promise<{
   sockets: number
+  /** Distinct browser tabs among those sockets (one tab can hold two connections). */
+  tabs: number
   users: number
   nodes: number
   partial: boolean
@@ -257,7 +260,16 @@ export async function emitForceRefresh(
 }> {
   const io = _ioRef
   if (!io)
-    return { sockets: 0, users: 0, nodes: 0, partial: false, settling: {}, builds: {}, api: null }
+    return {
+      sockets: 0,
+      tabs: 0,
+      users: 0,
+      nodes: 0,
+      partial: false,
+      settling: {},
+      builds: {},
+      api: null
+    }
   const userIds = (target.userIds ?? []).map((u) => String(u).toUpperCase())
   const app = target.app ? String(target.app).slice(0, 50) : null
   const older = target.older === true
@@ -271,6 +283,8 @@ export async function emitForceRefresh(
   const olderIds = older ? olderClientIds(cluster.clients, judge) : null
   const filtered = !!app || older || !!target.match
   let sockets = 0
+  // A tab's id rides its hello (client-version.ts); a socket without one counts as its own tab.
+  const tabs = new Set<string>()
   const users = new Set<string>()
   for (const c of cluster.clients) {
     const uid = String(c.user!.id).toUpperCase()
@@ -279,6 +293,7 @@ export async function emitForceRefresh(
     if (olderIds && !olderIds.has(c.id)) continue
     if (target.match && !target.match(c)) continue
     sockets++
+    tabs.add(c.version?.tab ? `${uid}\u0000${c.version.tab}` : `socket\u0000${c.id}`)
     users.add(uid)
     // Filtered sends go to each matching socket (local or remote); the others use rooms
     // below, so skip the direct emit to avoid double delivery.
@@ -292,6 +307,7 @@ export async function emitForceRefresh(
   }
   return {
     sockets,
+    tabs: tabs.size,
     users: users.size,
     nodes: cluster.nodes,
     partial: cluster.partial,
@@ -552,6 +568,10 @@ export function getRecordViewerSnapshot(): Array<{
   }
   return out
 }
+
+/** A field mark ("X is editing this field") lapses after this long with no focus or keystroke. */
+const FIELD_FOCUS_TTL_MS = 5 * 60_000
+const FIELD_FOCUS_MAX = 64
 
 // Watch rooms admins may join via admin:join (traffic feed, job progress,
 // monitor flips). Allowlisted — a socket can't invent a privileged room name.
@@ -1732,7 +1752,17 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const m = room ? /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room) : null
       return { collection: m?.[1] ?? null, item: m?.[2] ?? null }
     }
+    // "X is editing this field" marks this socket holds (services/field-focus.ts): cleared
+    // for co-viewers on leave and disconnect (via leaveOneRoom) and when they lapse.
+    const announceBlur = (room: string, field: string) =>
+      socket.to(room).emit('field:editing', { ...recordOf(room), field, user: null })
+    const focusMarks = fieldFocusTracker({
+      ttlMs: FIELD_FOCUS_TTL_MS,
+      max: FIELD_FOCUS_MAX,
+      onLapse: announceBlur
+    })
     const leaveOneRoom = (room: string) => {
+      for (const field of focusMarks.releaseRoom(room)) announceBlur(room, field)
       joinedRecordRooms.delete(room)
       if (joinedRecordRoom === room) joinedRecordRoom = [...joinedRecordRooms].pop() ?? null
       socket.leave(room)
@@ -1951,6 +1981,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const user = authenticatedUser
       const room = roomFor(payload)
       if (!user || !room || typeof payload?.field !== 'string') return
+      focusMarks.hold(room, payload.field)
       socket.to(room).emit('field:editing', {
         ...recordOf(room),
         field: payload.field,
@@ -1968,6 +1999,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (!user || !room || typeof payload?.field !== 'string') return
         const value =
           typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+        // Typing keeps the "editing this field" mark alive.
+        focusMarks.touch(room, payload.field)
         socket.to(room).emit('field:changed', {
           ...recordOf(room),
           field: payload.field,
@@ -1981,7 +2014,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const user = authenticatedUser
       const room = roomFor(payload)
       if (!user || !room || typeof payload?.field !== 'string') return
-      socket.to(room).emit('field:editing', { ...recordOf(room), field: payload.field, user: null })
+      focusMarks.release(room, payload.field)
+      announceBlur(room, payload.field)
     })
 
     // Upload presence (#282): "Beth is uploading quote.pdf" chips for

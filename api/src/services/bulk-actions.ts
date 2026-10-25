@@ -15,6 +15,7 @@ import {
   type WorkflowInstance,
   type WorkflowTransition
 } from './pipeline-engine.js'
+import { checkTransitionOwner } from './record-access.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
@@ -635,6 +636,23 @@ export async function runDefinition(
             fail(item, 'You do not have permission for this transition')
             continue
           }
+        }
+      }
+      // Owner-only (#794): the single-item route's gate, per record.
+      if (!req.isAdmin && coerceBool(transition.require_owner)) {
+        const owner = req.user
+          ? await checkTransitionOwner({
+              user: req.user,
+              isAdmin: false,
+              collection,
+              item,
+              instanceId: String(instance.id),
+              allowCreator: coerceBool(transition.allow_creator)
+            })
+          : { allowed: false, message: 'Only the owner of the current step can make this move.' }
+        if (!owner.allowed) {
+          fail(item, owner.message)
+          continue
         }
       }
       if (transition.requirements) {

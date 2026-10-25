@@ -3,6 +3,7 @@ import type Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hooks/ai-validation.js'
+import { likeContains } from '../lib/filter-like.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { MAX_ROUNDS, runChatLoop } from '../services/ai-chat-loop.js'
@@ -543,7 +544,7 @@ export async function aiRoutes(app: FastifyInstance) {
           q.where(col, '<=', v)
           break
         case 'contains':
-          q.where(col, 'like', `%${String(v)}%`)
+          q.where(col, 'like', likeContains(v))
           break
         case 'in':
           q.whereIn(col, (Array.isArray(value) ? value : [value]) as Array<string | number>)

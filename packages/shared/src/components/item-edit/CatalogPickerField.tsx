@@ -22,7 +22,12 @@ import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
-import { checkNumberEntry, isIntegerFieldType, mergePendingQtyRow } from './line-qty'
+import {
+  checkNumberEntry,
+  isIntegerFieldType,
+  lineRuleErrors,
+  mergePendingQtyRow
+} from './line-qty'
 import { resolveM2MRelatedCollection } from './M2MCombobox'
 import { useO2MStaging } from './O2MStagingContext'
 import { RelationCombobox } from './RelationCombobox'
@@ -331,6 +336,9 @@ export function CatalogPickerField({
       { kind: 'error'; message: string } | { kind: 'remove'; row: Record<string, unknown> }
     >
   >({})
+  // A Summary-row cell (price…) whose typed value was refused — keyed
+  // `${catalogId}:${field}`, shown beside that input.
+  const [cellIssue, setCellIssue] = useState<Record<string, string>>({})
 
   // Child collection relations → resolve the catalog collection. Own query key:
   // other shared components cache DIFFERENT shapes under
@@ -366,6 +374,25 @@ export function CatalogPickerField({
     staleTime: 60_000
   })
   const qtyFieldType = childFields.find((f) => f.field === qtyField)?.type ?? null
+  /** The line collection's validation_rules for one cell this edit changes
+   *  (judged like the server: only what the write carries). */
+  const childRuleError = (
+    field: string,
+    value: unknown,
+    row: Record<string, unknown>
+  ): string | null =>
+    lineRuleErrors(
+      childFields
+        .filter((f) => f.field === field)
+        .map((f) => ({
+          field: f.field,
+          label: f.label || titleCase(f.field),
+          type: f.type,
+          validation_rules: f.validation_rules
+        })),
+      { [field]: value },
+      { ...row, [field]: value }
+    )[0]?.message ?? null
 
   const { data: catalogMeta } = useQuery<{
     display_template?: string
@@ -1349,6 +1376,18 @@ export function CatalogPickerField({
       setQtyIssue((p) => ({ ...p, [catalogId]: { kind: 'remove', row: catalogRow } }))
       return
     }
+    if (qty > 0) {
+      const idx = pendingIdxByCatalogId.get(catalogId)
+      const line =
+        (isNew ? undefined : savedByCatalogId.get(catalogId)) ??
+        (idx !== undefined ? pendingRows[idx] : undefined) ??
+        {}
+      const ruleErr = childRuleError(qtyField, qty, line)
+      if (ruleErr) {
+        setQtyIssue((p) => ({ ...p, [catalogId]: { kind: 'error', message: ruleErr } }))
+        return
+      }
+    }
     const rel = qty > 0 ? await relatedCopies(catalogId) : {}
 
     if (stagedSaved && staging) {
@@ -1619,6 +1658,77 @@ export function CatalogPickerField({
               </div>
             </div>
           )}
+        </PopoverContent>
+      </Popover>
+    )
+  }
+
+  /** An editable Summary-row cell (price…): a refused value (not a number,
+   *  past what the column holds, a validation rule) snaps back with the reason
+   *  beside the box instead of failing at the record's Save. */
+  const cellInput = (catalogId: string, field: string, row: Record<string, unknown>) => {
+    const key = `${catalogId}:${field}`
+    const issue = cellIssue[key]
+    const clearIssue = () =>
+      setCellIssue((p) => {
+        if (!(key in p)) return p
+        const n = { ...p }
+        delete n[key]
+        return n
+      })
+    const stored = row[field] == null ? '' : String(row[field])
+    return (
+      <Popover key={key} open={!!issue} onOpenChange={(open) => !open && clearIssue()}>
+        <PopoverAnchor asChild>
+          <input
+            key={`${key}:${stored}`}
+            type='number'
+            min={0}
+            step='any'
+            defaultValue={stored}
+            aria-invalid={!!issue || undefined}
+            onFocus={clearIssue}
+            onBlur={(ev) => {
+              const raw = ev.target.value
+              if (raw !== stored) {
+                const t = childFields.find((f) => f.field === field)
+                const check = checkNumberEntry(raw, {
+                  type: t?.type,
+                  label: t?.label || titleCase(field)
+                })
+                const err = check.ok ? childRuleError(field, check.value, row) : check.message
+                if (err) {
+                  ev.target.value = stored
+                  setCellIssue((p) => ({ ...p, [key]: err }))
+                  return
+                }
+              }
+              void commitField(catalogId, field, raw)
+            }}
+            onKeyDown={(ev) => {
+              if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur()
+            }}
+            className={cn(
+              'h-7 w-20 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background',
+              issue && 'border-red-400 dark:border-red-600'
+            )}
+          />
+        </PopoverAnchor>
+        <PopoverContent
+          align='end'
+          side='bottom'
+          className='w-auto max-w-[260px] p-2.5 text-[12px]'
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <p
+            role='alert'
+            className='flex items-start gap-1.5 text-red-600 dark:text-red-400'
+            data-catalog-cell-error
+          >
+            <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0' />
+            {issue}
+            {stored !== '' ? ` — still ${stored}` : ''}
+          </p>
         </PopoverContent>
       </Popover>
     )
@@ -2082,19 +2192,7 @@ export function CatalogPickerField({
                         })}
                         {copyCols.map((c) =>
                           editableFields.includes(c) && !readOnly ? (
-                            <input
-                              key={`${e.key}:${c}:${String(e.row[c] ?? '')}`}
-                              type='number'
-                              min={0}
-                              step='any'
-                              defaultValue={e.row[c] == null ? '' : String(e.row[c])}
-                              onBlur={(ev) => void commitField(e.key, c, ev.target.value)}
-                              onKeyDown={(ev) => {
-                                if (ev.key === 'Enter')
-                                  (ev.currentTarget as HTMLInputElement).blur()
-                              }}
-                              className='h-7 w-20 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
-                            />
+                            cellInput(e.key, c, e.row)
                           ) : (
                             <span
                               key={c}

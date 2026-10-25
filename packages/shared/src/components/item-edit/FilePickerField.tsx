@@ -20,6 +20,7 @@ import { del, get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
+import { useFileDownload } from './file-download'
 import { useM2MStaging } from './M2MStagingContext'
 import type { CMSRelation } from './types'
 
@@ -261,6 +262,7 @@ export function FilePickerField({
 
   const fileId = !pendingFile && value ? String(value) : null
   const getUrl = (id: string) => client.fileUrl(id)
+  const downloadClick = useFileDownload()
 
   // #1288 — what carried this file on the record (addendum / push / email /
   // generated). Read once the chip is on screen; never on a new record.
@@ -444,6 +446,7 @@ export function FilePickerField({
           {!hasPending && fileId && (
             <a
               href={`${getUrl(fileId)}?download=1`}
+              onClick={downloadClick(`${getUrl(fileId)}?download=1`, file?.filename_download)}
               title='Download'
               className='shrink-0 text-slate-400 hover:text-nvr-cyan p-0.5'
             >
@@ -580,6 +583,7 @@ export function FileM2MField({
   const stagingKey = relation.one_field ?? `${relation.many_collection}.${junctionField}`
   const isNew = parentId === 'new'
   const getUrl = (id: string) => client.fileUrl(id)
+  const downloadClick = useFileDownload()
 
   // cleanup pending object URLs on unmount
   useEffect(() => {
@@ -857,6 +861,7 @@ export function FileM2MField({
                 )}
                 <a
                   href={`${getUrl(id)}?download=1`}
+                  onClick={downloadClick(`${getUrl(id)}?download=1`, f?.filename_download)}
                   title='Download'
                   className='shrink-0 text-slate-400 hover:text-nvr-cyan p-0.5'
                 >

@@ -6,11 +6,18 @@ function isEmptyVal(v: unknown): boolean {
 
 function calendarDaysFromToday(raw: unknown): number | null {
   if (raw === null || raw === undefined || raw === '') return null
+  const today = new Date()
+  const b = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
+  // A calendar date (bare, or stored at UTC midnight) is its own day — read
+  // as local time it was a day early west of UTC, so a date the server (which
+  // counts calendar dates as written) accepts could be refused here.
+  const dm = String(raw).match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ]00:00:00(?:\.0+)?(?:Z|[+-]00:?00)?)?$/
+  )
+  if (dm) return Math.round((Date.UTC(+dm[1], +dm[2] - 1, +dm[3]) - b) / 86_400_000)
   const d = new Date(String(raw))
   if (Number.isNaN(d.getTime())) return null
-  const today = new Date()
   const a = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
-  const b = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
   return Math.round((a - b) / 86_400_000)
 }
 

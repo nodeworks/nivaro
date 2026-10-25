@@ -51,7 +51,43 @@ export function normalizeDashboardDensity(v: unknown): 'comfortable' | 'compact'
   return v === 'comfortable' || v === 'compact' ? v : null
 }
 
+/**
+ * The window GET /users serves, the items-service way: no limit = 25, a limit
+ * of 0 or below (Directus' -1 = "all") = the cap, larger asks capped; `page`
+ * (1-based) wins over `offset`. A negative TOP/OFFSET used to reach SQL
+ * Server and answer 500 with the driver's text. Exported for the unit tests.
+ */
+export function listWindow(
+  q: { limit?: string; offset?: string; page?: string },
+  cap: number
+): { limit: number; offset: number } {
+  const asked = q.limit === undefined || q.limit === '' ? Number.NaN : Number(q.limit)
+  const limit = Number.isNaN(asked)
+    ? Math.min(25, cap)
+    : asked > 0
+      ? Math.min(Math.floor(asked), cap)
+      : cap
+  const page = Number(q.page)
+  if (Number.isFinite(page) && page >= 1) return { limit, offset: (Math.floor(page) - 1) * limit }
+  const offset = Number(q.offset ?? 0)
+  return { limit, offset: Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0 }
+}
+
+/** A nivaro_users id (uniqueidentifier) — or 'me' where a route takes it. */
+export function isUserIdParam(id: unknown): boolean {
+  return typeof id === 'string' && (id === 'me' || USER_ID_RE.test(id))
+}
+const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function usersRoutes(app: FastifyInstance) {
+  // Every /:id below names a nivaro_users row (uniqueidentifier). A mistyped
+  // or truncated id (/profile/abc) used to reach SQL Server as a conversion
+  // error — a 500 carrying the driver's text. No such person = 404.
+  app.addHook('preValidation', async (req, reply) => {
+    const id = (req.params as { id?: unknown } | undefined)?.id
+    if (id !== undefined && !isUserIdParam(id)) return reply.code(404).send({ error: 'Not found' })
+  })
+
   // Authenticated, not admin-only: the assignee and mention pickers on every
   // record form read this list, so requireAdmin here 403'd record pages for
   // every non-admin. Non-admins get the reduced directory projection instead
@@ -68,6 +104,7 @@ export async function usersRoutes(app: FastifyInstance) {
       hidden?: string
       fields?: string
       people?: string
+      page?: string
     }
     let filter: Record<string, unknown> = {}
     if (q.filter) {
@@ -77,10 +114,10 @@ export async function usersRoutes(app: FastifyInstance) {
         // ignore malformed filter
       }
     }
+    const { limit, offset } = listWindow(q, req.isAdmin ? 1000 : 500)
     const result = await listUsers({
-      // A picker asking for everyone shouldn't be able to pull the whole table.
-      limit: Math.min(Number(q.limit ?? 25) || 25, req.isAdmin ? 1000 : 500),
-      offset: Number(q.offset ?? 0),
+      limit,
+      offset,
       search: q.search,
       sort: q.sort,
       filter,
@@ -96,7 +133,8 @@ export async function usersRoutes(app: FastifyInstance) {
             .filter((f) => /^[a-z_]+$/.test(f))
         : undefined
     })
-    return reply.send(result)
+    // The window actually served — a capped limit is visible, not silent.
+    return reply.send({ ...result, meta: { limit, offset, total: result.total } })
   })
 
   // #512 — why an account is suspended, from whatever wrote it (directory
@@ -368,7 +406,7 @@ export async function usersRoutes(app: FastifyInstance) {
     '/:id/stats',
     { preHandler: authenticate },
     async (req, reply) => {
-      const { id } = req.params
+      const id = req.params.id === 'me' ? req.user!.id : req.params.id
       const self = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
       if (!self && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
       return reply.send({ data: await computeUserStats(id) })
@@ -559,7 +597,7 @@ export async function usersRoutes(app: FastifyInstance) {
     '/:id/ooo-exposure',
     { preHandler: authenticate },
     async (req, reply) => {
-      const { id } = req.params
+      const id = req.params.id === 'me' ? req.user!.id : req.params.id
       const self = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
       if (!self && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
       return reply.send({ data: await computeOooExposure(id) })

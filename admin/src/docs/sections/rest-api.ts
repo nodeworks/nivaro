@@ -98,6 +98,11 @@ export const apiOverview: DocSection = {
         ],
         ['RATE_LIMITED', '429', 'The caller went past the instance limit, when one is set.'],
         ['MASQUERADE_EXPIRED', '401', 'A view-as session ran out.'],
+        [
+          'SIGN_IN_DISABLED',
+          '401',
+          'The account belongs to a role with sign-in turned off (the role\'s app access). Every session and token of that account is refused.'
+        ],
         ['ADMIN_ONLY', '403', 'The route is for administrators.']
       ]
     },
@@ -145,8 +150,44 @@ export const apiOverview: DocSection = {
           'PICKER_RULE_VIOLATED',
           '400',
           "The value is one the field's picker would not offer for this record (a field set to enforce its picker rules on every write). `rule` says which rule, `field` which field, `parents` the parent fields a cascade read."
+        ],
+        [
+          'RECORD_LOCKED',
+          '409',
+          'Another person holds the record\'s edit lock. The message names them.'
+        ],
+        [
+          'EDIT_LOCKED',
+          '403',
+          'The record is in a step that only its creator, the step\'s owners and administrators may edit (the collection\'s summary-mode `edit_lock` rule). Child rows the rule lists are refused the same way.'
         ]
       ]
+    },
+    { type: 'h3', text: 'Codes for reads and busy servers' },
+    {
+      type: 'table',
+      head: ['Code', 'Status', 'Meaning'],
+      rows: [
+        [
+          'UNKNOWN_FIELD',
+          '400',
+          'A filter, sort or field list names a field the collection does not have. `fields` lists them.'
+        ],
+        [
+          'LIST_TIMEOUT',
+          '503',
+          'A list or search took too long and was stopped. Narrow it or try again. When only the count timed out, the rows still come back with `meta.total_timed_out: true` and no total.'
+        ],
+        [
+          'SERVER_BUSY',
+          '503',
+          'No database connection came free in time (`DB_ACQUIRE_TIMEOUT_MS`, default 10 s). `Retry-After` says when to try again.'
+        ]
+      ]
+    },
+    {
+      type: 'note',
+      text: 'One list read returns at most 1000 rows, whatever `limit` asks for. The answer says so in `meta.limit_capped` and `meta.applied_limit`; page with `offset` (sort by a unique field such as `id`) to read more. `GET /items/:collection/export` pages for you up to 10,000 rows and sets `x-nivaro-export-truncated` when there were more.'
     },
     {
       type: 'note',

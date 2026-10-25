@@ -149,7 +149,8 @@ export function TrafficMiniMap({
 }: {
   window?: 60 | 300 | 900
   tone?: 'auto' | 'dark'
-  /** Where "Open" goes. An absolute URL (another app's admin) opens in a new tab; default /traffic-map. */
+  /** Where "Open" goes. An absolute URL (another app's admin) opens in a new tab; default
+   *  /traffic-map; '' = no link (the host does not know where the map lives). */
   href?: string
   refreshMs?: number
   className?: string
@@ -182,20 +183,22 @@ export function TrafficMiniMap({
         <h3 className='text-[12.5px] font-semibold'>
           Traffic <span className={`font-normal ${t.muted}`}>· {span}</span>
         </h3>
-        <a
-          href={target}
-          target={external ? '_blank' : undefined}
-          rel={external ? 'noreferrer' : undefined}
-          className={`rounded text-[12px] font-medium ${t.link}`}
-          onClick={(e) => {
-            if (external || e.metaKey || e.ctrlKey) return
-            e.preventDefault()
-            navigate(target)
-          }}
-          data-traffic-mini-open=''
-        >
-          Open map
-        </a>
+        {target ? (
+          <a
+            href={target}
+            target={external ? '_blank' : undefined}
+            rel={external ? 'noreferrer' : undefined}
+            className={`rounded text-[12px] font-medium ${t.link}`}
+            onClick={(e) => {
+              if (external || e.metaKey || e.ctrlKey) return
+              e.preventDefault()
+              navigate(target)
+            }}
+            data-traffic-mini-open=''
+          >
+            Open map
+          </a>
+        ) : null}
       </div>
       <div className='grid grid-cols-3 gap-2 px-3 pt-2.5 text-[12px] tabular-nums'>
         <div>

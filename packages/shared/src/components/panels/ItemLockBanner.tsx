@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { idleState } from '../../lib/idle'
-import { useOptionalRealtime } from '../../lib/realtime'
+import { updateTouches, useOptionalRealtime } from '../../lib/realtime'
 import { announceRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -13,6 +13,8 @@ const HEARTBEAT_MS = 60_000
 /** A lock held by a form that is off screen (hidden browser tab, background
  *  workspace tab) is let go after this long; it comes back on return. */
 const OFF_SCREEN_RELEASE_MS = 2 * 60_000
+/** How often a viewer locked out re-reads the lock when no live notice came. */
+const HOLDER_RECHECK_MS = 30_000
 
 export interface LockHolder {
   locked_by: string
@@ -235,22 +237,32 @@ export function useItemLock(
         (!!userId && String(d?.locked_by ?? '').toLowerCase() === userId.toLowerCase())
       const canTakeOver =
         typeof d?.may_take_over === 'boolean' ? { may_take_over: d.may_take_over } : {}
-      if (d?.locked_by && !acquiredRef.current && !mine)
-        setLockHolder((cur) =>
-          cur
-            ? {
-                ...cur,
-                note: d.note ?? cur.note ?? null,
-                idle_minutes: d.locked_by_idle_minutes ?? cur.idle_minutes ?? null,
-                ...canTakeOver
-              }
-            : {
-                locked_by: String(d.locked_by),
-                locked_by_name: d.locked_by_name ?? null,
-                note: d.note ?? null,
-                ...canTakeOver
-              }
-        )
+      if (acquiredRef.current) return
+      // Free now (released, lapsed, locking turned off) or held by this person's
+      // own window: nobody else is editing — the banner and the read-only
+      // overlay go, and the next real edit claims the lock.
+      if (!d?.locked_by || mine) {
+        setLockHolder(null)
+        return
+      }
+      setLockHolder((cur) =>
+        cur && cur.locked_by === String(d.locked_by)
+          ? {
+              ...cur,
+              note: d.note ?? cur.note ?? null,
+              idle_minutes: d.locked_by_idle_minutes ?? cur.idle_minutes ?? null,
+              ...canTakeOver
+            }
+          : {
+              locked_by: String(d.locked_by),
+              locked_by_name: d.locked_by_name ?? null,
+              note: d.note ?? null,
+              idle_minutes: d.locked_by_idle_minutes ?? null,
+              ...canTakeOver
+            }
+      )
+      // Someone else has it now: the "you released it" pill is over.
+      setReleased(false)
     } catch (err) {
       if ((err as { status?: number })?.status === 404) notVisibleRef.current = true
       /* otherwise the banner works without the extras */
@@ -261,6 +273,15 @@ export function useItemLock(
   const lockedById = lockHolder?.locked_by ?? null
   useEffect(() => {
     if (lockedById) void refreshLockInfo()
+  }, [lockedById, refreshLockInfo])
+  // While someone else holds it, keep checking: the release goes out as a
+  // `$lock` notice on the collection feed (below) and this slow poll covers a
+  // host without realtime. Without it the banner outlived the lock until a
+  // reload, and the overlay swallowed the clicks that would have re-tried.
+  useEffect(() => {
+    if (!lockedById) return
+    const t = setInterval(() => void refreshLockInfo(), HOLDER_RECHECK_MS)
+    return () => clearInterval(t)
   }, [lockedById, refreshLockInfo])
 
   useEffect(() => {
@@ -371,6 +392,20 @@ export function useItemLock(
     if (enabled && acquiredRef.current) void acquire()
   })
 
+  // A lock taken or released anywhere is a payload-free `$lock` notice on the
+  // collection feed. Not holding it ourselves, re-read who does: the banner
+  // clears when it frees up, and a released-then-retaken record (the person
+  // who let go still has the form open) turns read-only for them again.
+  const realtimeFeed = useOptionalRealtime()
+  useEffect(() => {
+    if (!enabled || !realtimeFeed || !collection || !item) return
+    return realtimeFeed.subscribeCollections([collection], (ev) => {
+      if (acquiredRef.current || notVisibleRef.current) return
+      if (!ev.changed_fields?.includes('$lock') || !updateTouches(ev, item)) return
+      void refreshLockInfo()
+    })
+  }, [enabled, realtimeFeed, collection, item, refreshLockInfo])
+
   // ── Lock handoff (#286) ─────────────────────────────────────────────────
   // Holder side: a live 'lock:requested' for THIS record shows a toast with
   // Release / Decline. Requester side: 'lock:response' release → auto-acquire.
@@ -467,10 +502,18 @@ export function useItemLock(
     if (!collection || !item) return
     setJoining(true)
     try {
-      const r = await client.request<{ data: { position?: number } }>(
+      const r = await client.request<{ data: { position?: number | null; free?: boolean } }>(
         post(`/item-locks/${collection}/${item}/lock/queue`, {})
       )
-      const pos = (r as { data?: { position?: number } })?.data?.position
+      const d = (r as { data?: { position?: number | null; free?: boolean } })?.data
+      // Released before the ask arrived: there is no line to stand in.
+      if (d?.free) {
+        setMyPosition(null)
+        setLockHolder(null)
+        toast.success('Nobody is editing this record now — go ahead')
+        return
+      }
+      const pos = d?.position
       setMyPosition(typeof pos === 'number' ? pos : 1)
       toast.success('You are in line — the lock comes to you automatically when it frees up')
       void refreshLockInfo()

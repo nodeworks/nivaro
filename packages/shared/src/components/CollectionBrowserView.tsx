@@ -79,6 +79,7 @@ import {
   viewerMatches,
   writerOf
 } from '../lib/live-list'
+import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
 import { prefetchRecord, useIdleNextPage } from '../lib/prefetch'
@@ -94,6 +95,7 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
+import { loadUserCard } from '../lib/user-cards'
 import { cn, humanHours } from '../lib/utils'
 import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
@@ -110,8 +112,22 @@ import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushAct
 import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
+import {
+  type ListPage,
+  localYmd,
+  type M2OLabelSpec,
+  m2oLabel,
+  m2oLabelPaths,
+  type ResolvedRows,
+  readExportRows,
+  resolveAllPaths,
+  stableSort,
+  userLabel
+} from './cbv/export-rows'
 import { FormulaColumnAdder } from './cbv/FormulaColumnAdder'
 import { HierarchyScopePicker, useHierarchyScope } from './cbv/HierarchyScope'
+import { riskFilterEntry, splitRiskFilter } from './cbv/saved-view-risk'
+import { dropUnknownField, unknownFieldsOf } from './cbv/unknown-fields'
 import { ViewDefaultMenu } from './cbv/ViewDefaultMenu'
 import { canOpenChatRoom, discussRecord, useRecordRoomTypes } from './chat/chat-core'
 import { FilterControl } from './DataTable'
@@ -4688,6 +4704,7 @@ export function CollectionBrowserView({
       data: Array<Record<string, unknown>>
       total: number
       total_approx?: boolean
+      total_timed_out?: boolean
       next_cursor?: string | null
       aggregates?: Record<string, number>
     }
@@ -4764,10 +4781,15 @@ export function CollectionBrowserView({
   })
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
+  // The rows are complete but the count gave up (200 + total_timed_out): no total to state.
+  const totalUnknown =
+    !aiResult && !!itemsRes && (itemsRes.total_timed_out === true || itemsRes.total == null)
   // #2443 — the total came from the short-lived count cache (or the table's row count).
   const totalApprox = !aiResult && itemsRes?.total_approx === true
   const aggregates = itemsRes?.aggregates
-  const totalPages = Math.max(1, Math.ceil(total / effPageSize))
+  const totalPages = totalUnknown
+    ? page + (rows.length >= effPageSize ? 1 : 0)
+    : Math.max(1, Math.ceil(total / effPageSize))
 
   // A list narrowed by the person's DEFAULT scope filter (never a restriction
   // — the server applies those anyway) that comes back empty says so, and how
@@ -5705,7 +5727,9 @@ export function CollectionBrowserView({
   const [columnAdminOnly, setColumnAdminOnly] = useState<Set<string>>(() => new Set())
   const applyView = (v: SavedView) => {
     setActiveViewId(v.id)
-    setFilters(v.filters ?? [])
+    const split = splitRiskFilter(v.filters ?? [])
+    setFilters(split.filters)
+    setRiskFilter(split.riskIds)
     setSort(v.sort ?? '')
     if (v.columns?.length) {
       const adminOnly = new Set(
@@ -5761,6 +5785,7 @@ export function CollectionBrowserView({
     }
     setActiveViewId(null)
     setFilters([])
+    setRiskFilter([])
     setSort(initialSort ?? '')
     setDisplayColumns(initialColumns ?? null)
     setColumnLabels({})
@@ -5771,7 +5796,8 @@ export function CollectionBrowserView({
     setPage(1)
   }
   const viewState = () => ({
-    filters,
+    // The pressed highlight pills ride along as one `$at_risk` filter entry.
+    filters: [...filters, ...[riskFilterEntry(riskFilter, riskRules)].filter((f) => f !== null)],
     sort,
     columns: [
       ...effectiveColumns.map((k, i) => {
@@ -5975,41 +6001,84 @@ export function CollectionBrowserView({
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cbv-view-subs'] })
   })
 
-  // ── CSV export (current filter, up to 2000 rows) ──────────────────────────
+  // ── CSV export (current filter, every row up to EXPORT_MAX_ROWS) ───────────
   const exportCsv = async () => {
     if (exporting) return
     setExporting(true)
     try {
-      const all = await client
-        .request<{ data: Array<Record<string, unknown>> }>(
+      // Paged to the end: one list read serves 1,000 rows, whatever it asks.
+      const { rows: all, truncated } = await readExportRows((offset, limit) =>
+        client.request<ListPage>(
           get(`/items/${collection}`, {
-            limit: 2000,
+            limit,
+            offset,
             ...(appliedSearch ? { search: appliedSearch } : {}),
-            ...(sort ? { sort } : {}),
+            sort: stableSort(sort),
             ...(conditionsParam ? { conditions: conditionsParam } : {})
           })
         )
-        .then((r) => r.data ?? [])
+      )
       const cols = effectiveColumns
-      // Resolve related-value columns for the export set (500-id server cap).
-      let exportResolved: Record<string, Record<string, { value: string }>> = {}
-      if (resolveList.length > 0) {
-        try {
-          exportResolved = await client
-            .request<{ data: { rows: Record<string, Record<string, { value: string }>> } }>(
+      // Plain M2O columns export what the table shows (the target's display
+      // template, a person's name), never the raw key.
+      const m2oSpecs: M2OLabelSpec[] = []
+      const userCols: string[] = []
+      for (const c of cols) {
+        if (c.includes('.') || c.startsWith('__') || c in aliasPathByField) continue
+        const target = isM2OField(relations, collection, c)?.one_collection
+        if (!target) continue
+        if (USER_SYSTEM_COLS.has(target)) {
+          userCols.push(c)
+          continue
+        }
+        if (isSystemCol(target)) continue
+        const tm = await qc
+          .fetchQuery({
+            queryKey: ['cbv-collection-meta', target],
+            queryFn: () =>
+              client
+                .request<{ data: CollectionMeta }>(get(`/collections/${target}`))
+                .then((r) => r.data),
+            staleTime: 10 * 60_000
+          })
+          .catch(() => undefined)
+        m2oSpecs.push({
+          column: c,
+          template: tm?.display_template ?? null,
+          labelField: labelFieldFor(tm)
+        })
+      }
+      // Related-value columns for EVERY exported row, chunked to the
+      // resolve-paths caps (500 ids, 20 paths a call).
+      const paths = [...new Set([...resolveList, ...m2oSpecs.flatMap(m2oLabelPaths)])]
+      const exportResolved = await resolveAllPaths(
+        all.map((r) => String(r.id)),
+        paths,
+        (ids, chunkPaths) =>
+          client
+            .request<{ data: { rows: ResolvedRows } }>(
               get(`/items/${collection}/resolve-paths`, {
-                ids: all
-                  .slice(0, 500)
-                  .map((r) => String(r.id))
-                  .join(','),
-                paths: resolveList.join(',')
+                ids: ids.join(','),
+                paths: chunkPaths.join(',')
               })
             )
             .then((r) => r.data?.rows ?? {})
-        } catch {
-          exportResolved = {}
-        }
-      }
+      )
+      const userIds = [
+        ...new Set(
+          userCols.flatMap((c) => all.map((r) => r[c]).filter((v) => v != null && v !== ''))
+        )
+      ].map(String)
+      const userNames = new Map<string, string>()
+      await Promise.all(
+        userIds.map((id) =>
+          loadUserCard(client, id)
+            .then((card) => userNames.set(id.toUpperCase(), userLabel(card, id)))
+            .catch(() => userNames.set(id.toUpperCase(), id))
+        )
+      )
+      const m2oByCol = new Map(m2oSpecs.map((m) => [m.column, m]))
+      const userColSet = new Set(userCols)
       const esc = (v: unknown) => {
         const s = v == null ? '' : String(typeof v === 'object' ? JSON.stringify(v) : v)
         return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
@@ -6038,12 +6107,25 @@ export function CollectionBrowserView({
           return cfg && v ? formatMultiValue(v, cfg) : v
         }
         const v = r[c]
+        const m2o = m2oByCol.get(c)
+        if (m2o && v != null && v !== '') return m2oLabel(m2o, exportResolved[String(r.id)]) || v
+        if (userColSet.has(c) && v != null && v !== '')
+          return userNames.get(String(v).toUpperCase()) ?? v
         return cfg && v != null ? formatValue(String(v), cfg) : v
       }
       const lines = [
         ['id', ...cols.map((c) => columnLabel(c))].map(esc).join(','),
         ...all.map((r) => [r.id, ...cols.map((c) => cellFor(r, c))].map(esc).join(','))
       ]
+      // Past the stated ceiling the file itself says it is not everything.
+      if (truncated) {
+        lines.push('')
+        lines.push(
+          esc(
+            `First ${all.length.toLocaleString()} of ${total.toLocaleString()} rows — narrow the filter to export the rest`
+          )
+        )
+      }
       // Opt-in watermark (collection setting): the file itself says who
       // exported it and when — the audit row alone can't travel with the CSV.
       if ((meta as { export_watermark?: boolean } | undefined)?.export_watermark) {
@@ -6075,11 +6157,18 @@ export function CollectionBrowserView({
         ? `${tmpl
             .replace(/\{\{\s*collection\s*\}\}/g, collection)
             .replace(/\{\{\s*view\s*\}\}/g, viewName)
-            .replace(/\{\{\s*date\s*\}\}/g, new Date().toISOString().slice(0, 10))
+            .replace(/\{\{\s*date\s*\}\}/g, localYmd())
             .replace(/[^A-Za-z0-9 ._-]/g, '')}.csv`
         : `${collection}.csv`
       a.click()
-      URL.revokeObjectURL(url)
+      // Revoked after the browser has taken the download, not under it.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      if (truncated)
+        toast.warning(`Exported the first ${all.length.toLocaleString()} rows`, {
+          description: `${total.toLocaleString()} match — narrow the filter to export the rest.`
+        })
+    } catch (err) {
+      toast.error(userErrorMessage(err, 'Export failed'))
     } finally {
       setExporting(false)
     }
@@ -6184,8 +6273,10 @@ export function CollectionBrowserView({
     }
   }
 
-  const start = total === 0 ? 0 : (page - 1) * effPageSize + 1
-  const end = Math.min(page * effPageSize, total)
+  const start = total === 0 && !totalUnknown ? 0 : (page - 1) * effPageSize + 1
+  const end = totalUnknown
+    ? (page - 1) * effPageSize + rows.length
+    : Math.min(page * effPageSize, total)
   const hasPipeline = !!pipelineData?.instances
   const extraCols = (enableCheckboxes ? 1 : 0) + (hasPipeline ? 2 : 0) + (enableActions ? 1 : 0)
 
@@ -7658,8 +7749,14 @@ export function CollectionBrowserView({
             Clear
           </button>
           <span className='ml-auto text-[11px] text-slate-400'>
-            {totalApprox ? 'about ' : ''}
-            {fmtNum(total)} item{total === 1 ? '' : 's'}
+            {totalUnknown ? (
+              'count unavailable'
+            ) : (
+              <>
+                {totalApprox ? 'about ' : ''}
+                {fmtNum(total)} item{total === 1 ? '' : 's'}
+              </>
+            )}
           </span>
         </div>
       )}
@@ -7852,7 +7949,9 @@ export function CollectionBrowserView({
       {error != null && (
         <div className='mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700 dark:border-red-900/40 dark:bg-red-900/10 dark:text-red-400'>
           <span className='min-w-0 flex-1'>
-            {userErrorMessage(error, 'Failed to load records')}
+            {loadErrorStatus(error) === 503
+              ? listLoadErrorText(error)
+              : userErrorMessage(error, 'Failed to load records')}
           </span>
           {(error as { status?: number })?.status === 403 && (
             <button
@@ -7870,6 +7969,36 @@ export function CollectionBrowserView({
               {accessRequested ? 'Requested — an admin was notified' : 'Request access'}
             </button>
           )}
+          {unknownFieldsOf(error).map((field) => (
+            <button
+              key={field}
+              type='button'
+              onClick={() => {
+                const next = dropUnknownField(field, { filters, sort, colFilters })
+                setFilters(next.filters)
+                setSort(next.sort)
+                setColFilters(next.colFilters)
+                setPage(1)
+              }}
+              title={`Remove the filter or sort on "${field}" — the list no longer has that field`}
+              className='inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-red-300 bg-white px-2 text-[12px] font-medium line-through decoration-red-400 hover:bg-red-100 dark:border-red-500/40 dark:bg-transparent dark:hover:bg-red-900/20'
+              data-cbv-broken-filter={field}
+            >
+              {field}
+              <X aria-hidden className='h-3 w-3 no-underline' />
+            </button>
+          ))}
+          {(error as { status?: number })?.status !== 403 &&
+            unknownFieldsOf(error).length === 0 && (
+              <button
+                type='button'
+                onClick={() => void refetch()}
+                className='h-7 shrink-0 rounded-md border border-red-300 px-2.5 text-[12px] font-medium hover:bg-red-100 dark:border-red-500/40 dark:hover:bg-red-900/20'
+                data-cbv-retry
+              >
+                Retry
+              </button>
+            )}
         </div>
       )}
 
@@ -8326,6 +8455,8 @@ export function CollectionBrowserView({
                               </div>
                             )
                           }
+                          // A failed read has no rows to be "no match" for: the banner above says why.
+                          if (error != null) return null
                           return (
                             <div className='flex flex-col items-center gap-2 text-center'>
                               <span className='flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800'>
@@ -8916,69 +9047,77 @@ export function CollectionBrowserView({
             </p>
           )}
           {/* Pagination */}
-          {!groupBy && !aiResult && total > effPageSize && (
-            <div className='flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900'>
-              <p className='text-[12px] tabular-nums text-slate-500 dark:text-slate-400'>
-                <span className='font-semibold text-slate-700 dark:text-slate-200'>
-                  {fmtNum(start)}–{fmtNum(end)}
-                </span>{' '}
-                of{' '}
-                {totalApprox && (
-                  <>
-                    <span
-                      className='cursor-help underline decoration-dotted underline-offset-2'
-                      data-tip='Counted a few seconds ago. The rows on screen are current.'
-                    >
-                      about
-                    </span>{' '}
-                  </>
-                )}
-                <span key={total} className='nvr-value-pulse-bg rounded-sm'>
-                  {fmtNum(total)}
-                </span>{' '}
-                records
-              </p>
-              <span className='flex items-center gap-0.5'>
-                <button
-                  type='button'
-                  disabled={page <= 1}
-                  onClick={() => setPage(1)}
-                  aria-label='First page'
-                  className='h-7 rounded px-2 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
-                >
-                  «
-                </button>
-                <button
-                  type='button'
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className='h-7 rounded px-2.5 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
-                >
-                  ← Prev
-                </button>
-                <span className='min-w-[64px] text-center text-[12px] tabular-nums text-slate-500'>
-                  {fmtNum(page)} / {fmtNum(totalPages)}
+          {!groupBy &&
+            !aiResult &&
+            (totalUnknown ? page > 1 || rows.length >= effPageSize : total > effPageSize) && (
+              <div className='flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900'>
+                <p className='text-[12px] tabular-nums text-slate-500 dark:text-slate-400'>
+                  <span className='font-semibold text-slate-700 dark:text-slate-200'>
+                    {fmtNum(start)}–{fmtNum(end)}
+                  </span>{' '}
+                  of{' '}
+                  {totalApprox && (
+                    <>
+                      <span
+                        className='cursor-help underline decoration-dotted underline-offset-2'
+                        data-tip='Counted a few seconds ago. The rows on screen are current.'
+                      >
+                        about
+                      </span>{' '}
+                    </>
+                  )}
+                  {totalUnknown ? (
+                    <span data-tip='The count took too long. The rows on screen are complete.'>
+                      many
+                    </span>
+                  ) : (
+                    <span key={total} className='nvr-value-pulse-bg rounded-sm'>
+                      {fmtNum(total)}
+                    </span>
+                  )}{' '}
+                  records
+                </p>
+                <span className='flex items-center gap-0.5'>
+                  <button
+                    type='button'
+                    disabled={page <= 1}
+                    onClick={() => setPage(1)}
+                    aria-label='First page'
+                    className='h-7 rounded px-2 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
+                  >
+                    «
+                  </button>
+                  <button
+                    type='button'
+                    disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    className='h-7 rounded px-2.5 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
+                  >
+                    ← Prev
+                  </button>
+                  <span className='min-w-[64px] text-center text-[12px] tabular-nums text-slate-500'>
+                    {fmtNum(page)} / {fmtNum(totalPages)}
+                  </span>
+                  <button
+                    type='button'
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((p) => p + 1)}
+                    className='h-7 rounded px-2.5 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
+                  >
+                    Next →
+                  </button>
+                  <button
+                    type='button'
+                    disabled={page >= totalPages}
+                    onClick={() => setPage(totalPages)}
+                    aria-label='Last page'
+                    className='h-7 rounded px-2 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
+                  >
+                    »
+                  </button>
                 </span>
-                <button
-                  type='button'
-                  disabled={page >= totalPages}
-                  onClick={() => setPage((p) => p + 1)}
-                  className='h-7 rounded px-2.5 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
-                >
-                  Next →
-                </button>
-                <button
-                  type='button'
-                  disabled={page >= totalPages}
-                  onClick={() => setPage(totalPages)}
-                  aria-label='Last page'
-                  className='h-7 rounded px-2 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
-                >
-                  »
-                </button>
-              </span>
-            </div>
-          )}
+              </div>
+            )}
         </div>
       </div>
 

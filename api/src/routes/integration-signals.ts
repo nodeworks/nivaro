@@ -33,6 +33,8 @@ import { resolveFriendlyIds } from '../services/workflow-transitions.js'
 
 const STALE_MS = 15 * 60_000
 const LABEL_CACHE_MS = 60_000
+/** How long an action's answer waits for its signal's re-evaluation. */
+const ACTION_REFRESH_WAIT_MS = 5_000
 
 /**
  * Every open/snoozed row across the whole snapshot may carry a `record` with
@@ -207,6 +209,28 @@ async function openRows(signal: string): Promise<Array<SignalRow & { first_seen:
     ...(JSON.parse(r.payload) as SignalRow),
     first_seen: new Date(r.first_seen).toISOString()
   }))
+}
+
+/**
+ * The page reads the cron's snapshot, so a retried row kept "1 attempt" until
+ * someone pressed Check now (army 2026-10-24). After an action, re-evaluate
+ * that one signal before answering — the client refetches on success — but
+ * never hold the answer longer than `waitMs` for it; a failed evaluation
+ * leaves the snapshot as it was.
+ */
+export async function refreshSignalAfterAction(
+  signal: string,
+  run: (opts: { only: string[] }) => Promise<unknown> = runSignalsCycle,
+  waitMs = ACTION_REFRESH_WAIT_MS
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined
+  await Promise.race([
+    run({ only: [signal] }).catch(() => undefined),
+    new Promise((r) => {
+      timer = setTimeout(r, waitMs)
+    })
+  ])
+  clearTimeout(timer)
 }
 
 export async function integrationSignalsRoutes(app: FastifyInstance) {
@@ -644,6 +668,7 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
       req,
       comment: `${b.action.kind}${b.action.id ? `:${b.action.id}` : ''} on ${targets.length} row(s) · ${results.filter((r) => r.ok).length} ok`
     })
+    if (targets.length > 0) await refreshSignalAfterAction(b.signal)
     return { data: results }
   })
 }

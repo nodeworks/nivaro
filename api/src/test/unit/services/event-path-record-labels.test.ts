@@ -96,6 +96,26 @@ describe('labelPathRecords', () => {
     expect(steps[0].summary).toBe('linked')
   })
 
+  it('unwraps a link a legacy snapshot holds expanded', async () => {
+    rowsFor.nivaro_relations = [
+      { many_field: 'workflows_id', one_collection: 'workflows' },
+      { many_field: 'project_sub_types_id', one_collection: 'project_sub_types' }
+    ]
+    rowsFor.workflows_project_sub_types = []
+    rowsFor.nivaro_revisions = [
+      {
+        item: '474752',
+        data: '{"id":474752,"workflows_id":{"id":371490},"project_sub_types_id":{"id":28,"name":"x"}}'
+      }
+    ]
+    const steps = [step('a:1', 'workflows_project_sub_types', '474752', 'deleted')]
+    await labelPathRecords(steps)
+    expect(steps[0].record?.label).toBe(
+      'Project Sub Type: Fiber Split · on TP26-80366 (since removed)'
+    )
+    expect(steps[0].record?.label).not.toMatch(/object Object/)
+  })
+
   it('names an M2A junction row through the row discriminator (users included)', async () => {
     rowsFor.nivaro_relations = [
       { many_field: 'inventory_request_id', one_collection: 'inventory_request' },

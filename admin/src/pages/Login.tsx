@@ -609,11 +609,13 @@ export function LoginPage() {
                 <div className='mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700'>
                   {error === 'suspended'
                     ? 'Your account is suspended — usually because the directory no longer lists it, a retention rule ran, or an administrator set it. Ask an administrator: the reason is shown on your account page, and they can restore access.'
-                    : error === 'session_expired'
-                      ? 'Your session ended — it reached the time limit or sat idle longer than this instance allows. Sign in again to carry on.'
-                      : error === 'provider_unavailable'
-                        ? 'The sign-in provider is not answering right now. Anyone already signed in keeps working — try again in a few minutes.'
-                        : 'Authentication failed. Please try again or contact IT support.'}
+                    : error === 'sign_in_disabled'
+                      ? "Sign-in is turned off for your account's role, so you can't sign in to this app. Ask an administrator if this is wrong: they can change the role, or give you one that may sign in."
+                      : error === 'session_expired'
+                        ? 'Your session ended — it reached the time limit or sat idle longer than this instance allows. Sign in again to carry on.'
+                        : error === 'provider_unavailable'
+                          ? 'The sign-in provider is not answering right now. Anyone already signed in keeps working — try again in a few minutes.'
+                          : 'Authentication failed. Please try again or contact IT support.'}
                 </div>
               )}
 

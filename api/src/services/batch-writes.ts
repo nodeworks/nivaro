@@ -4,6 +4,7 @@ import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
 import type { User } from '../types.js'
 import { autoIdFieldsFor } from './auto-ids.js'
 import { chainFields } from './chain-columns.js'
+import { editLockTouches } from './edit-lock.js'
 import { getEncryptedFields } from './encryption.js'
 import { applyWriteComputedFields } from './items.js'
 import { originFields, originForWrite } from './note-authorship.js'
@@ -177,6 +178,9 @@ export async function batchRefusal(
   }
   const encrypted = await getEncryptedFields(collection)
   if (encrypted.some((f) => fields.includes(f))) return 'the collection stores encrypted fields'
+  // A record waiting on someone may be locked to its participants — the
+  // items service judges that row by row.
+  if (await editLockTouches(collection)) return 'records of the collection can be edit-locked'
   if (action === 'create') {
     const generated = await autoIdFieldsFor(db, collection)
     if (generated.length > 0) return 'new records of the collection get a generated id'

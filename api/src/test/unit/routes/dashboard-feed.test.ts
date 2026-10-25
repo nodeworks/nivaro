@@ -385,7 +385,12 @@ describe('GET /dashboard/my-throughput', () => {
     fixtures = { nivaro_users: [{ preferences: null }] }
     const res = await inject('GET', '/dashboard/my-throughput?weeks=4')
     expect(res.statusCode).toBe(200)
-    expect(res.json().data.this_week).toEqual({ transitions: 0, send_backs: 0, completions: 0 })
+    expect(res.json().data.this_week).toEqual({
+      transitions: 0,
+      send_backs: 0,
+      completions: 0,
+      approvals: 0
+    })
     expect(res.json().data.send_back_ratio).toBeNull()
   })
 

@@ -714,6 +714,7 @@ type RouteEntry = {
   to_previous: boolean
   in_row_menu: boolean
   require_owner: boolean
+  allow_creator: boolean
   notify_text: string | null
   comment_mode: string
   actions: TransitionAction[] | null
@@ -789,6 +790,7 @@ function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
         to_previous: !!(tx as { to_previous?: boolean }).to_previous,
         in_row_menu: (tx as { in_row_menu?: boolean }).in_row_menu !== false,
         require_owner: (tx as { require_owner?: boolean }).require_owner === true,
+        allow_creator: (tx as { allow_creator?: boolean }).allow_creator === true,
         notify_text: (tx as { notify_text?: string | null }).notify_text ?? null,
         comment_mode: tx.comment_mode ?? 'none',
         actions: (tx.actions as TransitionAction[] | null) ?? null,
@@ -1508,6 +1510,8 @@ interface TransitionFormData {
   in_row_menu: boolean
   /** Only the resolved owner of the current step (or an admin) may run it. */
   require_owner: boolean
+  /** With require_owner: the record's creator may run it too. */
+  allow_creator: boolean
   /** A plain sentence for emails / notifications; null = the label. */
   notify_text: string | null
   comment_mode: string
@@ -1910,6 +1914,7 @@ function TransitionForm({
     to_previous: initial.to_previous ?? false,
     in_row_menu: initial.in_row_menu ?? true,
     require_owner: initial.require_owner ?? false,
+    allow_creator: initial.allow_creator ?? false,
     notify_text: initial.notify_text ?? null,
     comment_mode: initial.comment_mode ?? 'none',
     actions: initial.actions ?? null
@@ -2099,6 +2104,25 @@ function TransitionForm({
           data-transition-require-owner
         />
       </label>
+
+      {form.require_owner && (
+        <label className='flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2'>
+          <div>
+            <span className='text-[12px] font-medium text-slate-700'>
+              …or the person who created the record
+            </span>
+            <p className='text-[11px] text-slate-400'>
+              The record's creator can run this move as well, even when they don't own the step —
+              for moves like Cancel that belong to the requester. Leave it off for approvals.
+            </p>
+          </div>
+          <Switch
+            checked={form.allow_creator}
+            onCheckedChange={(v) => set('allow_creator', v)}
+            data-transition-allow-creator
+          />
+        </label>
+      )}
 
       <div className='rounded-lg border border-slate-200 bg-white px-3 py-2'>
         <label
@@ -3041,6 +3065,7 @@ export function PipelineEditorView({
         to_previous: data.to_previous,
         in_row_menu: data.in_row_menu,
         require_owner: data.require_owner,
+        allow_creator: data.require_owner && data.allow_creator,
         notify_text: data.notify_text,
         comment_mode: data.comment_mode,
         group_label: null,
@@ -3080,6 +3105,7 @@ export function PipelineEditorView({
             to_previous: data.to_previous,
             in_row_menu: data.in_row_menu,
             require_owner: data.require_owner,
+            allow_creator: data.require_owner && data.allow_creator,
             notify_text: data.notify_text,
             group_label: null,
             actions: data.actions,
@@ -3118,6 +3144,7 @@ export function PipelineEditorView({
         to_previous: data.to_previous,
         in_row_menu: data.in_row_menu,
         require_owner: data.require_owner,
+        allow_creator: data.require_owner && data.allow_creator,
         notify_text: data.notify_text,
         comment_mode: data.comment_mode,
         actions: data.actions
@@ -3861,6 +3888,7 @@ export function PipelineEditorView({
                                               to_previous: route.to_previous,
                                               in_row_menu: route.in_row_menu,
                                               require_owner: route.require_owner,
+                                              allow_creator: route.allow_creator,
                                               notify_text: route.notify_text,
                                               // Without this the form always opened
                                               // on 'No note', whatever was stored —
@@ -3927,7 +3955,9 @@ export function PipelineEditorView({
                                                 title="Only the current step's owner (or a delegate covering for them) and admins can run this move"
                                                 data-transition-owner-only
                                               >
-                                                Owner only
+                                                {route.allow_creator
+                                                  ? 'Owner or creator'
+                                                  : 'Owner only'}
                                               </span>
                                             )}
                                             {route.to_previous && (

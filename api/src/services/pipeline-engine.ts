@@ -36,6 +36,10 @@ export interface WorkflowTransition {
   actions: string | null
   sort: number
   requirements?: string | null
+  /** Only the current step's owner (or an admin) may run it (migration 397). */
+  require_owner?: boolean | number | null
+  /** With require_owner: the record's creator may run it too (migration 504). */
+  allow_creator?: boolean | number | null
 }
 
 export interface WorkflowInstance {
@@ -738,6 +742,10 @@ export interface OwnerResolutionOptions {
   /** Return the RAW owner set — no out-of-office → delegate substitution.
    *  The approval-chain availability read uses it to name "Beth → Kim". */
   skipDelegation?: boolean
+  /** Leave out the binding's owner_fallback_field user — the ASSIGNED owners
+   *  only. The fallback keeps a record in someone's queue; it is not a claim
+   *  to approve it (owner-only transitions judge without it). */
+  skipFallback?: boolean
 }
 
 export async function resolveStateOwnersBatch(
@@ -1179,6 +1187,7 @@ export async function resolveStateOwnersBatch(
     for (const row of rows) fallbackOwnerById.set(String(row.id).toUpperCase(), row)
   }
   const fallbackOwnersFor = (req: OwnerResolutionRequest): ResolvedOwner[] => {
+    if (opts.skipFallback) return []
     const id = fallbackIdByKey.get(req.key)
     if (!id) return []
     const owner = fallbackOwnerById.get(id.toUpperCase())

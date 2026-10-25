@@ -105,6 +105,57 @@ export async function listDrafts(userId: string | null | undefined): Promise<Sto
   return (all ?? []).filter((d) => d && d.user_id === uid)
 }
 
+// ─── Drafts already created ─────────────────────────────────────────────────
+// A new-record draft whose Create succeeded is spent. Deleting it can still
+// miss (the page left mid-save, the server copy's DELETE never sent, a stale
+// PUT landing after it), and restoring it then builds the same record twice.
+// The create leaves a marker per draft key; a draft captured at or before that
+// moment is the one that was created. Per browser, localStorage, a week.
+
+const CREATED_PREFIX = 'nvr:draft-created:'
+const CREATED_TTL_MS = 7 * 86_400_000
+
+export interface DraftCreatedMarker {
+  id: string
+  at: string
+}
+
+export function markDraftCreated(key: string, id: string, now: Date = new Date()): void {
+  try {
+    localStorage.setItem(
+      CREATED_PREFIX + key,
+      JSON.stringify({ id, at: now.toISOString() } satisfies DraftCreatedMarker)
+    )
+  } catch {
+    /* storage blocked — the delete is still the main path */
+  }
+}
+
+/** The record a stored draft was already created as, or null: the key's
+ *  marker is younger than a week and the draft was captured no later than it. */
+export function draftCreatedAs(
+  key: string,
+  draftSavedAt: string | null | undefined,
+  now: Date = new Date()
+): DraftCreatedMarker | null {
+  try {
+    const raw = localStorage.getItem(CREATED_PREFIX + key)
+    if (!raw) return null
+    const m = JSON.parse(raw) as Partial<DraftCreatedMarker>
+    if (!m || typeof m.id !== 'string' || typeof m.at !== 'string') return null
+    const at = Date.parse(m.at)
+    if (!Number.isFinite(at) || now.getTime() - at > CREATED_TTL_MS) {
+      localStorage.removeItem(CREATED_PREFIX + key)
+      return null
+    }
+    const saved = draftSavedAt ? Date.parse(draftSavedAt) : Number.NaN
+    if (!Number.isFinite(saved) || saved > at) return null
+    return { id: m.id, at: m.at }
+  } catch {
+    return null
+  }
+}
+
 /** Does the draft still carry anything (a persisted draft whose fields all
  *  now equal the loaded record is stale, not a recovery). */
 export function draftHasContent(d: StoredDraft): boolean {

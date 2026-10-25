@@ -3,6 +3,7 @@ import { monitorEventLoopDelay } from 'node:perf_hooks'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import fp from 'fastify-plugin'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { isDbHealthy } from '../services/db-health.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { poolNow, poolPressure } from '../services/pool-attribution.js'
 import { accessLineStats } from '../services/telemetry-store.js'
@@ -100,6 +101,15 @@ export function renderMetrics(extras: MetricsExtras = {}): string {
   out.push(
     `nivaro_info{version="${label(NIVARO_VERSION)}",instance="${label(INSTANCE_ID)}",role="${label(process.env.NIVARO_ROLE || '')}"} 1`
   )
+
+  // The outage posture (services/db-health.ts): 0 while this process serves fast
+  // DB_UNAVAILABLE 503s. Alerted on — the 2026-10-24 trips were silent.
+  metric(
+    'nivaro_db_healthy',
+    'gauge',
+    'Whether this process believes the database is reachable (1) or serves 503s (0).'
+  )
+  out.push(`nivaro_db_healthy ${isDbHealthy() ? 1 : 0}`)
 
   const mem = process.memoryUsage()
   const cpu = process.cpuUsage()

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { roleAllowsSignIn } from '../auth/role-sign-in.js'
 import { db } from '../db/index.js'
 import { ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
@@ -163,18 +164,28 @@ function roleIsAdmin(role: Pick<Role, 'admin_access'> | null | undefined): boole
   return role?.admin_access ?? false
 }
 
-async function hydrateRole(req: FastifyRequest, user: User, opts?: { touch?: boolean }) {
+async function hydrateRole(
+  req: FastifyRequest,
+  user: User,
+  opts?: { touch?: boolean; session?: boolean }
+) {
+  const role = user.role ? await db<Role>('nivaro_roles').where({ id: user.role }).first() : null
+  // A role with sign-in turned off (app_access false) admits no person by any
+  // credential — the one place every sign-in path passes (services/users.ts
+  // roleAllowsSignIn). A session ends here, so the next page asks for sign-in.
+  if (!roleAllowsSignIn(role, user)) {
+    if (opts?.session) await req.session.destroy()
+    throw httpError(
+      401,
+      'Sign-in is turned off for your role. Ask an administrator if you need access.',
+      'SIGN_IN_DISABLED'
+    )
+  }
   req.user = user
   setTraceUser(String(user.id))
   if (opts?.touch !== false) touchLastAccess(String(user.id))
-  if (user.role) {
-    const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
-    req.userRole = role ?? null
-    req.isAdmin = roleIsAdmin(role)
-  } else {
-    req.userRole = null
-    req.isAdmin = false
-  }
+  req.userRole = role ?? null
+  req.isAdmin = roleIsAdmin(role)
 }
 
 // ─── IPv4 CIDR matching ───────────────────────────────────────────────────────
@@ -550,8 +561,8 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
   if (!req.session.loginAt) req.session.loginAt = stamp
   req.session.lastSeenAt = stamp
 
-  await hydrateRole(req, user)
   req.authMethod = 'session'
+  await hydrateRole(req, user, { session: true })
 }
 
 export async function requireAuth(req: FastifyRequest, reply: FastifyReply) {

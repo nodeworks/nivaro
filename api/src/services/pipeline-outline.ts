@@ -33,6 +33,7 @@ export interface OutlineTransitionRow {
   required_roles: string | null
   auto_trigger: boolean | number | null
   require_owner?: boolean | number | null
+  allow_creator?: boolean | number | null
 }
 
 const bool = (v: unknown): boolean => v === true || v === 1 || v === '1'
@@ -84,7 +85,8 @@ export function pipelineOutline(
         color: t.color ?? null,
         sort: t.sort ?? null,
         group_label: t.group_label ?? null,
-        require_owner: bool(t.require_owner)
+        require_owner: bool(t.require_owner),
+        allow_creator: bool(t.allow_creator)
       }))
   }
 }

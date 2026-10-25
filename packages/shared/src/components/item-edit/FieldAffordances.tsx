@@ -12,6 +12,7 @@ import {
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import type { TextContext } from '../../lib/placement-behaviour'
+import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatRelative } from '../../lib/utils'
 import type { CMSField, CMSRelation } from './types'
 
@@ -67,7 +68,7 @@ export interface FieldAffordances {
 export const FieldAffordancesContext = createContext<FieldAffordances | null>(null)
 export const useFieldAffordances = () => useContext(FieldAffordancesContext)
 
-const fmt = (v: unknown): string => {
+export const ghostText = (v: unknown): string => {
   if (v === null || v === undefined || v === '') return 'empty'
   if (typeof v === 'boolean') return v ? 'Yes' : 'No'
   if (typeof v === 'object') {
@@ -78,7 +79,9 @@ const fmt = (v: unknown): string => {
       return String(v)
     }
   }
-  const s = String(v).replace(/<[^>]+>/g, '')
+  // Rich text: markup out and entities decoded (`&lt;b&gt;` showed literally).
+  const raw = String(v)
+  const s = /[<&]/.test(raw) ? htmlToText(raw).trim() : raw
   return s.length > 80 ? `${s.slice(0, 80)}…` : s
 }
 
@@ -103,7 +106,7 @@ export function RemoteChangeGhost({
         <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500' />
         <span className='min-w-0 flex-1'>
           {change.by ?? 'Someone'} changed this to{' '}
-          <span className='font-medium'>{fmt(change.theirs)}</span> while you were editing
+          <span className='font-medium'>{ghostText(change.theirs)}</span> while you were editing
           <span className='text-amber-700/80 dark:text-amber-200/70'>
             {' '}
             · {formatRelative(change.at)}
@@ -135,7 +138,9 @@ export function RemoteChangeGhost({
       <span className='mt-0.5 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-sky-500' />
       <span className='min-w-0 flex-1'>
         was{' '}
-        <span className='font-medium line-through decoration-sky-400/70'>{fmt(change.was)}</span>
+        <span className='font-medium line-through decoration-sky-400/70'>
+          {ghostText(change.was)}
+        </span>
         <span className='text-sky-700/80 dark:text-sky-300/80'>
           {' '}
           · {change.by ?? 'someone'}, {formatRelative(change.at)}

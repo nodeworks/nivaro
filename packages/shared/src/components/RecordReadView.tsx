@@ -114,6 +114,10 @@ const parseOverrides = (o: LayoutAssignment['overrides']): Record<string, unknow
 }
 
 const fmtDate = (v: unknown) => {
+  // A calendar date (bare, or stored at UTC midnight) stays on its day — the
+  // local conversion showed 07/20 for a stored 07/21 west of UTC.
+  const dm = String(v).match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ]00:00:00(?:\.0+)?(?:Z|[+-]00:?00)?)?$/)
+  if (dm) return `${dm[2]}/${dm[3]}/${dm[1]}`
   const d = new Date(String(v))
   if (Number.isNaN(d.getTime())) return String(v)
   return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`
@@ -1457,10 +1461,14 @@ function RecordReadViewBody({
     if (isRich(a) && typeof v === 'string') {
       // Legacy EditorJS docs render as their plain words; HTML renders as HTML.
       if (/^\s*\{/.test(v))
-        return <div className='whitespace-pre-wrap font-normal'>{richTextToPlain(v)}</div>
+        return (
+          <div className='min-w-0 whitespace-pre-wrap font-normal [overflow-wrap:anywhere]'>
+            {richTextToPlain(v)}
+          </div>
+        )
       return (
         <div
-          className='rrv-prose font-normal leading-relaxed [&_a]:underline [&_h1]:text-[15px] [&_h1]:font-semibold [&_h2]:text-[14px] [&_h2]:font-semibold [&_h3]:font-semibold [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_ul]:list-disc'
+          className='rrv-prose min-w-0 font-normal leading-relaxed [overflow-wrap:anywhere] [&_a]:underline [&_h1]:text-[15px] [&_h1]:font-semibold [&_h2]:text-[14px] [&_h2]:font-semibold [&_h3]:font-semibold [&_li]:ml-4 [&_ol]:list-decimal [&_p]:my-1 [&_ul]:list-disc'
           // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized above
           dangerouslySetInnerHTML={{ __html: sanitizeHtml(v) }}
         />

@@ -64,9 +64,16 @@ api.interceptors.response.use(
       localStorage.removeItem('control_token')
       localStorage.removeItem('control_email')
       const redirect = window.location.pathname + window.location.search
-      // A session the policy ended (#665) says why on the login page.
-      const expired = err.response?.data?.code === 'SESSION_EXPIRED' ? '&error=session_expired' : ''
-      window.location.href = `/login?redirect=${encodeURIComponent(redirect)}${expired}`
+      // A session the policy ended (#665), or a role with sign-in turned off,
+      // says why on the login page.
+      const code = err.response?.data?.code
+      const why =
+        code === 'SESSION_EXPIRED'
+          ? '&error=session_expired'
+          : code === 'SIGN_IN_DISABLED'
+            ? '&error=sign_in_disabled'
+            : ''
+      window.location.href = `/login?redirect=${encodeURIComponent(redirect)}${why}`
     }
 
     // User extension interceptors — one returning true stops further user processing

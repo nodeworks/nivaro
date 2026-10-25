@@ -45,6 +45,11 @@ const schema = z.object({
   // DB_POOL_MAX + DB_POOL_BACKGROUND_MAX connections in all. 0 = no separate
   // pool: background work shares the main one (the behaviour before #1321).
   DB_POOL_BACKGROUND_MAX: z.coerce.number().int().min(0).max(200).default(10),
+  // How long a request waits for a free connection of the request pool before
+  // it is answered 503 SERVER_BUSY (knex's own default is 60 s — the length of
+  // the proxy timeout, so a full pool used to look like a hung server that
+  // ended in a 504). The background pool keeps knex's 60 s for long jobs.
+  DB_ACQUIRE_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(10_000),
   DB_DATABASE: requiredStr(),
   DB_USER: requiredStr(),
   DB_PASSWORD: requiredStr(),

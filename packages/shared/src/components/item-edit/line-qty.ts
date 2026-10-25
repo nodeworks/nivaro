@@ -2,6 +2,8 @@
 // cells). No React, no heavy imports — unit-tested directly.
 
 import { evaluateNumeric } from '../../lib/expression'
+import { applyValidationRule } from '../../lib/validation-rules'
+import type { FormValidationRule } from '../../types'
 
 /** Column types that only hold whole numbers, with the largest value each can
  *  store. bigint is capped at the largest integer a JS number holds exactly
@@ -99,4 +101,65 @@ export function changedRowFields(
     out[k] = v
   }
   return out
+}
+
+function parseRules(raw: unknown): FormValidationRule[] {
+  let v = raw
+  if (typeof v === 'string') {
+    try {
+      v = JSON.parse(v)
+    } catch {
+      return []
+    }
+  }
+  return Array.isArray(v)
+    ? (v.filter((r) => r && typeof r.type === 'string') as FormValidationRule[])
+    : []
+}
+
+/** A line's validation_rules, judged the way the server judges the write
+ *  (api services/validation-rules.ts enforceValidationRules): only fields the
+ *  write carries (`sent`), plus a cross-field rule whose OTHER field it
+ *  carries; values read from `record` (stored row with the edit over it).
+ *  Number columns (`type`) judge a typed string as the number it will be
+ *  saved as (ruleValueFor). `soft` rules are skipped, as the record form
+ *  skips them. One message per
+ *  failing field, first failing rule wins. */
+export function lineRuleErrors(
+  fields: Array<{
+    field: string
+    label?: string | null
+    type?: string | null
+    validation_rules?: unknown
+  }>,
+  sent: Record<string, unknown>,
+  record: Record<string, unknown>
+): Array<{ field: string; message: string }> {
+  const out: Array<{ field: string; message: string }> = []
+  for (const f of fields) {
+    for (const rule of parseRules(f.validation_rules)) {
+      if (rule.soft) continue
+      const cross = rule.type === 'gte_field' || rule.type === 'lte_field'
+      if (!(f.field in sent) && !(cross && rule.field && rule.field in sent)) continue
+      // A typed "-5" in a number column is judged as -5, not a string.
+      const value = ruleValueFor(f.type, record[f.field])
+      const err = applyValidationRule(rule, value, f.label || f.field, record)
+      if (err) {
+        out.push({ field: f.field, message: err })
+        break
+      }
+    }
+  }
+  return out
+}
+
+/** A number column's value as a validation rule should see it: a typed
+ *  numeric string judged as the number it will be saved as (a `min: 0` rule
+ *  read "-5" as a 2-character string and let it through). */
+export function ruleValueFor(type: string | null | undefined, raw: unknown): unknown {
+  if (typeof raw !== 'string' || !NUMBER_FIELD_TYPES.has(type ?? '')) return raw
+  const t = raw.trim()
+  if (t === '') return raw
+  const n = Number(t)
+  return Number.isNaN(n) ? raw : n
 }

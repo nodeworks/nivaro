@@ -20,6 +20,7 @@ import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
 import { getCumulativeFlow, parseCfdParams } from '../services/cumulative-flow.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { editLockVerdictFor } from '../services/edit-lock.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
@@ -37,6 +38,7 @@ import { registerReadinessCheck } from '../services/readiness.js'
 import {
   checkTransitionOwner,
   compileAccessGates,
+  offeredToActor,
   TRANSITION_OWNER_REQUIRED,
   visibleIds
 } from '../services/record-access.js'
@@ -117,6 +119,7 @@ interface WorkflowTransition {
   in_row_menu?: boolean | number | null
   /** Only the current step's owner (or an admin) may run it (migration 397). */
   require_owner?: boolean | number | null
+  allow_creator?: boolean | number | null
   /** How the move is described to people in mail / notifications (migration 352). */
   notify_text?: string | null
   sort: number
@@ -315,6 +318,7 @@ function formatTransition(t: WorkflowTransition) {
     to_previous: coerceBool(t.to_previous),
     in_row_menu: t.in_row_menu == null ? true : coerceBool(t.in_row_menu),
     require_owner: coerceBool(t.require_owner),
+    allow_creator: coerceBool(t.allow_creator),
     condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null,
     requirements: parseJson(t.requirements) as ParsedRequirement[] | null
   }
@@ -501,6 +505,33 @@ async function loadBranchLanes(
 interface BranchOwner {
   id: string
   name: string
+}
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Who may add an owner to a record's pipeline: admins, and the people who own
+ * its current step (checkTransitionOwner — groups, manual owners, delegates).
+ * Null = allowed; otherwise the refusal. A finished pipeline takes none.
+ */
+async function ownerAddRefusal(
+  req: FastifyRequest,
+  instance: Pick<WorkflowInstance, 'id' | 'collection' | 'item' | 'current_state'> & {
+    completed_at?: Date | null
+  }
+): Promise<string | null> {
+  if (req.isAdmin) return null
+  if (!req.user) return 'Unauthorized'
+  if (!instance.current_state || instance.completed_at)
+    return 'This record has no current step to hand off'
+  const owner = await checkTransitionOwner({
+    user: req.user,
+    isAdmin: false,
+    collection: instance.collection,
+    item: String(instance.item),
+    instanceId: String(instance.id)
+  })
+  return owner.allowed ? null : 'Only the owners of the current step can add an owner'
 }
 
 /**
@@ -1571,6 +1602,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'to_previous'
       | 'in_row_menu'
       | 'require_owner'
+      | 'allow_creator'
       | 'notify_text'
       | 'sort'
       | 'group_label'
@@ -1599,6 +1631,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       // Probed: a tenant behind migration 397 keeps creating transitions.
       ...((await hasColumn('nivaro_workflow_transitions', 'require_owner'))
         ? { require_owner: body.require_owner ? 1 : 0 }
+        : {}),
+      ...((await hasColumn('nivaro_workflow_transitions', 'allow_creator'))
+        ? { allow_creator: body.allow_creator ? 1 : 0 }
         : {}),
       notify_text: body.notify_text?.trim() || null,
       sort: body.sort ?? 0,
@@ -1702,6 +1737,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         ...(body.require_owner !== undefined &&
         (await hasColumn('nivaro_workflow_transitions', 'require_owner'))
           ? { require_owner: body.require_owner ? 1 : 0 }
+          : {}),
+        ...(body.allow_creator !== undefined &&
+        (await hasColumn('nivaro_workflow_transitions', 'allow_creator'))
+          ? { allow_creator: body.allow_creator ? 1 : 0 }
           : {}),
         notify_text:
           body.notify_text !== undefined ? body.notify_text?.trim() || null : tx.notify_text,
@@ -1927,7 +1966,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           'group_label',
           'required_roles',
           'auto_trigger',
-          'require_owner'
+          'require_owner',
+          ...((await hasColumn('nivaro_workflow_transitions', 'allow_creator'))
+            ? ['allow_creator']
+            : [])
         )
     ])
     const outline = pipelineOutline(states, transitions, {
@@ -2410,16 +2452,17 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // current step (delegation applied) and admins — the same answer the
     // execute paths give. Asked once, and only when one is on offer. A
     // view-as-role preview has no person to judge, so it shows them.
+    // `allow_creator` moves are offered to the record's creator as well.
     let offeredTransitions = availableTransitions
     if (!isAdmin && !asRole && req.user && availableTransitions.some((t) => t.require_owner)) {
-      const owner = await checkTransitionOwner({
+      const actor = await checkTransitionOwner({
         user: req.user,
         isAdmin: false,
         collection,
         item,
         instanceId: String(instance.id)
       })
-      if (!owner.allowed) offeredTransitions = availableTransitions.filter((t) => !t.require_owner)
+      offeredTransitions = offeredToActor(availableTransitions, actor)
     }
 
     // Get history with joined state labels. #645: a delegate's move names the
@@ -2482,6 +2525,16 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
     const currentStateObj = states.find((s) => s.id === currentState)
     const branches = await loadBranchLanes(instance, history, states).catch(() => null)
+    // Whether THIS caller may change the record right now (edit-lock.ts) — the
+    // form shows read-only from it; the write itself is judged again.
+    const editLock =
+      isAdmin || !req.user
+        ? null
+        : await editLockVerdictFor(req.user, collection, item).catch(() => ({
+            locked: true,
+            allowed: false,
+            message: 'Could not confirm you may change this record while it waits.'
+          }))
 
     return reply.send({
       data: {
@@ -2502,7 +2555,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         binding: effectiveBinding,
         // #1217: auto transitions the engine stopped re-firing because their
         // blocking push failed and nothing it would send has changed.
-        auto_held: await heldForInstance(String(instance.id))
+        auto_held: await heldForInstance(String(instance.id)),
+        edit_lock: editLock?.locked ? editLock : null
       }
     })
   })
@@ -2683,7 +2737,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           isAdmin,
           collection,
           item,
-          instanceId: String(instance.id)
+          instanceId: String(instance.id),
+          allowCreator: coerceBool(transition.allow_creator)
         })
         if (!owner.allowed) {
           return reply.code(403).send({ error: owner.message, code: TRANSITION_OWNER_REQUIRED })
@@ -3651,7 +3706,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     if (!(await recordReadGate(req, reply, collection, String(item)))) return
 
     const instance = await findRecordInstance<WorkflowInstance>(collection, item)
-    if (!instance) return reply.send({ data: [] })
+    if (!instance) return reply.send({ data: [], meta: { can_add: false } })
 
     // Return the raw manually-assigned instance owners so the UI has io.id for deletion.
     const owners = await db('nivaro_pipeline_instance_owners as io')
@@ -3668,7 +3723,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         'u.last_name',
         'u.email'
       )
-    return reply.send({ data: owners })
+    // Whether "Add owner" may be offered: the POST's own rule, asked once.
+    const canAdd = (await ownerAddRefusal(req, instance)) === null
+    return reply.send({ data: owners, meta: { can_add: canAdd } })
   })
 
   app.post(
@@ -3677,23 +3734,31 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
       if (!(await recordReadGate(req, reply, collection, String(item)))) return
-      const body = req.body as { user: string; state?: string | null }
+      const body = (req.body ?? {}) as { user?: string; state?: string | null }
       if (!body.user) return reply.code(400).send({ error: 'user is required' })
+      if (!UUID_SHAPE.test(String(body.user)))
+        return reply.code(400).send({ error: 'User not found' })
 
       const instance = await findRecordInstance<WorkflowInstance>(collection, item)
       if (!instance) return reply.code(404).send({ error: 'No pipeline instance for this item' })
 
-      // Authorization: caller must be admin or have update permission on this collection.
-      // Non-admins may only add themselves or must already be an owner of the instance.
+      // Adding an owner hands someone the step's approval rights, so only an
+      // admin or the people who own the CURRENT step (owner groups, manual
+      // owners and delegates — the require_owner answer) may, and a
+      // non-admin hands off the current step only. Adding yourself is no
+      // exception: it would let anyone who can read a record approve it.
+      const refusal = await ownerAddRefusal(req, instance)
+      if (refusal) return reply.code(403).send({ error: refusal })
       if (!req.isAdmin) {
-        const callerIsOwner = await db('nivaro_pipeline_instance_owners')
-          .where({ instance: instance.id, user: req.user!.id })
-          .first()
-        const callerIsCurrentUser = body.user === req.user!.id
-        if (!callerIsOwner && !callerIsCurrentUser) {
-          return reply.code(403).send({ error: 'Forbidden' })
-        }
+        if (
+          body.state &&
+          String(body.state).toUpperCase() !== String(instance.current_state ?? '').toUpperCase()
+        )
+          return reply.code(403).send({ error: 'You can hand off only the current step' })
+        body.state = instance.current_state
       }
+      if (body.state && !UUID_SHAPE.test(String(body.state)))
+        return reply.code(400).send({ error: 'State does not belong to this pipeline' })
 
       // Validate target user exists.
       const targetUser = await db('nivaro_users').where({ id: body.user }).first()
@@ -3711,7 +3776,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const newOwner: Omit<InstanceOwner, 'id'> = {
         instance: instance.id,
         state: body.state ?? null,
-        user: body.user,
+        user: String(body.user),
         added_by: req.user?.id ?? null,
         added_at: new Date()
       }
@@ -3749,6 +3814,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   app.delete('/instance-owners/:ownerId', { preHandler: requireAuth }, async (req, reply) => {
     const { ownerId } = req.params as { ownerId: string }
+    if (!/^\d{1,12}$/.test(String(ownerId))) return reply.code(404).send({ error: 'Not found' })
 
     try {
       // Load the row and join to its instance so we can authorize the caller.
@@ -3788,9 +3854,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       })
       return reply.send({ success: true })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
       req.log.error({ err }, 'delete instance-owner failed')
-      return reply.code(500).send({ error: msg })
+      return reply.code(500).send({ error: 'Could not remove the owner' })
     }
   })
 

@@ -11,10 +11,12 @@ import {
   mergeRuleResults,
   ownEditFields,
   partitionRuleResults,
+  remoteChangeAuthor,
   resolveM2MAlias,
   resolveM2MFieldState,
   ruleJudgedOnSave,
-  rulesForTriggerField
+  rulesForTriggerField,
+  serverErrorCode
 } from './ItemEditForm'
 import type { CMSRelation } from './item-edit/types'
 
@@ -442,5 +444,32 @@ describe('ruleJudgedOnSave', () => {
         changed(['start_date'])
       )
     ).toBe(false)
+  })
+})
+
+describe('remoteChangeAuthor', () => {
+  it("credits this person's own other tab, case-insensitively", () => {
+    expect(remoteChangeAuthor({ user_id: 'ABC-1', user_name: 'Rob Lee' }, 'abc-1')).toBe(
+      'You, in another tab'
+    )
+  })
+
+  it('names someone else, and nobody when the writer is unknown', () => {
+    expect(remoteChangeAuthor({ user_id: 'u2', user_name: 'Kim Park' }, 'u1')).toBe('Kim Park')
+    expect(remoteChangeAuthor({ user_id: 'u2', user_name: null }, 'u1')).toBeNull()
+    expect(remoteChangeAuthor({ user_id: null, user_name: 'x' }, 'u1')).toBeNull()
+    expect(remoteChangeAuthor(null, 'u1')).toBeNull()
+    expect(remoteChangeAuthor({ user_id: 'u2', user_name: 'Kim Park' }, null)).toBe('Kim Park')
+  })
+})
+
+describe('serverErrorCode', () => {
+  it('reads the code from either client error shape', () => {
+    expect(serverErrorCode({ status: 403, response: { code: 'EDIT_LOCKED' } })).toBe('EDIT_LOCKED')
+    expect(serverErrorCode({ response: { status: 403, data: { code: 'EDIT_LOCKED' } } })).toBe(
+      'EDIT_LOCKED'
+    )
+    expect(serverErrorCode(new Error('x'))).toBeNull()
+    expect(serverErrorCode(null)).toBeNull()
   })
 })

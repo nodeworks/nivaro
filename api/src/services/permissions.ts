@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { likeContains } from '../lib/filter-like.js'
 import type { Policy, Role, User } from '../types.js'
 import { type AccessCompute, cachedAccess } from './permission-cache.js'
 import { isSystemCollection, systemReadableColumns } from './system-collections.js'
@@ -138,7 +139,7 @@ export function applyRowFilter(
         query.where(field, '<=', val as Knex.Value)
         break
       case 'contains':
-        query.where(field, 'like', `%${val}%`)
+        query.where(field, 'like', likeContains(val))
         break
       case 'in': {
         const list = Array.isArray(val)

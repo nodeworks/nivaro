@@ -153,6 +153,9 @@ function MyAlertsSection({
   const stale = list.filter((s) => s.signal !== CRITICAL && !knownIds.has(s.signal))
   const criticalRealtime = list.some((s) => s.signal === CRITICAL && s.mode === 'realtime')
   const criticalDigest = list.some((s) => s.signal === CRITICAL && s.mode === 'digest')
+  // Kinds of problem (signal types), not open occurrences: Firefight's header
+  // counts occurrences ("31441 critical"), and "4 right now" beside it read as
+  // the same figure (army 2026-10-24).
   const criticalCount = entries.filter(
     (e) => e.settings.enabled && e.settings.severity === 'critical'
   ).length
@@ -209,8 +212,9 @@ function MyAlertsSection({
                 <td className='py-3 pl-4 pr-3'>
                   <p className='text-[13px] font-medium text-foreground'>All critical problems</p>
                   <p className='mt-0.5 max-w-[70ch] text-[12px] text-muted-foreground'>
-                    Every problem marked Critical — {criticalCount} right now — including any raised
-                    to Critical later.
+                    Every kind of problem marked Critical — {criticalCount}{' '}
+                    {criticalCount === 1 ? 'kind' : 'kinds'} today, however many of each are open —
+                    including any raised to Critical later.
                   </p>
                 </td>
                 <td className='px-3 py-3'>

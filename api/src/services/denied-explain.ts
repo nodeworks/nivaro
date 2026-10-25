@@ -185,6 +185,7 @@ export async function explainDenied(
           from_state: string | null
           required_roles: string | null
           require_owner?: boolean | number | null
+          allow_creator?: boolean | number | null
           auto_trigger?: boolean | number | null
         }
       | null
@@ -237,7 +238,8 @@ export async function explainDenied(
         isAdmin,
         collection,
         item: String(id),
-        instanceId: String(instance.id)
+        instanceId: String(instance.id),
+        allowCreator: tx.allow_creator === true || tx.allow_creator === 1
       })
       if (!verdict.allowed) {
         const { explainRecordOwners } = await import('./owner-explain.js')

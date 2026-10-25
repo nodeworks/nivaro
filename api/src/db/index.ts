@@ -104,6 +104,9 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
       client: config.DB_CLIENT,
       connection: buildConnection(config.DB_HOST, writePort),
       pool: { min: 2, max: config.DB_POOL_MAX },
+      // A request that cannot get a connection in this long is answered 503
+      // SERVER_BUSY (server.ts) instead of hanging into the proxy's 504.
+      acquireConnectionTimeout: config.DB_ACQUIRE_TIMEOUT_MS,
       // disableMigrationsListValidation: the ledger can name migration files a
       // DIFFERENT deployment created (local dev + staging share one DB, and dev
       // auto-runs new migrations the moment tsx watch restarts). Without the

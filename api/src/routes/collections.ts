@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
 import * as svc from '../services/collections.js'
+import { forgetEditLockPlan } from '../services/edit-lock.js'
 import { parseSummaryModeRules, validateSummaryModeRules } from '../services/summary-mode.js'
 import type { CMSCollection, CMSField } from '../types.js'
 
@@ -341,6 +342,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       patch.summary_mode_rules = v.value ? JSON.stringify(v.value) : null
       // Same read-back-through-cache trap as read_mode_toggle.
       svc.clearMetadataCache()
+      forgetEditLockPlan()
     }
     // #776: friendly_id_field — the column that names a record to people.
     // A real physical column, never id; blank clears it.

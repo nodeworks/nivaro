@@ -35,6 +35,13 @@ describe('session action wording', () => {
     expect(reloadPushedText({ sockets: 1, partial: true })).toMatch(/another server did not answer/)
   })
 
+  it('counts tabs, not connections (one tab can hold two sockets)', () => {
+    expect(reloadPushedText({ sockets: 2, tabs: 1, nodes: 2 })).toBe('Reload pushed to 1 open tab.')
+    expect(reloadPushedText({ sockets: 3, tabs: 2, nodes: 1 })).toBe(
+      'Reload pushed to 2 open tabs.'
+    )
+  })
+
   it('says how many sessions ended', () => {
     expect(signedOutText('Jane Roe', 3)).toBe(
       'Jane Roe is signed out of 3 sessions — every open tab goes back to sign-in.'

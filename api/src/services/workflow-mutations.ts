@@ -248,7 +248,8 @@ export async function executeWorkflowTransition(opts: {
       isAdmin,
       collection,
       item,
-      instanceId: String(instance.id)
+      instanceId: String(instance.id),
+      allowCreator: coerceBool((transition as { allow_creator?: unknown }).allow_creator)
     })
     if (!owner.allowed) {
       throw new WorkflowMutationError(403, owner.message, { code: TRANSITION_OWNER_REQUIRED })

@@ -11,6 +11,7 @@ import {
   handleDynamicCallback,
   oidcConfigured
 } from '../auth/oidc.js'
+import { signInAllowedByRole } from '../auth/role-sign-in.js'
 import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
 import { revokeUserSessions } from '../auth/session.js'
 import { config } from '../config.js'
@@ -76,7 +77,8 @@ async function refuseSuspended(
   req: FastifyRequest,
   reply: FastifyReply,
   userId: string,
-  method: string
+  method: string,
+  why: 'suspended' | 'sign_in_disabled' = 'suspended'
 ) {
   const returnTo = req.session.returnTo
   req.session.userId = undefined
@@ -85,10 +87,19 @@ async function refuseSuspended(
   await logActivity({
     action: 'login-refused',
     user: userId,
-    comment: `Account is not active (${method})`,
+    comment:
+      why === 'sign_in_disabled'
+        ? `Sign-in is turned off for this account's role (${method})`
+        : `Account is not active (${method})`,
     req
   })
-  return reply.redirect(loginUrlFor(returnTo, '?error=suspended'))
+  return reply.redirect(loginUrlFor(returnTo, `?error=${why}`))
+}
+
+/** The refusal a non-redirect sign-in route answers for a role with sign-in off. */
+const SIGN_IN_DISABLED = {
+  error: 'Sign-in is turned off for your role. Ask an administrator if you need access.',
+  code: 'SIGN_IN_DISABLED'
 }
 
 async function hashPassword(password: string): Promise<string> {
@@ -483,6 +494,8 @@ export async function authRoutes(app: FastifyInstance) {
       req.session.oidcProviderId = undefined
 
       if (!canSignIn(user)) return refuseSuspended(req, reply, user.id, 'oidc')
+      if (!(await signInAllowedByRole(user)))
+        return refuseSuspended(req, reply, user.id, 'oidc', 'sign_in_disabled')
 
       // Second factor required — defer the full session until TOTP passes
       if (user.totp_enabled) {
@@ -539,6 +552,10 @@ export async function authRoutes(app: FastifyInstance) {
     if (!user?.totp_secret || !user.totp_enabled) {
       req.session.pendingTotpUserId = undefined
       return reply.code(400).send({ error: 'No pending two-factor login' })
+    }
+    if (!(await signInAllowedByRole(user))) {
+      req.session.pendingTotpUserId = undefined
+      return reply.code(403).send(SIGN_IN_DISABLED)
     }
 
     let valid = false
@@ -598,6 +615,8 @@ export async function authRoutes(app: FastifyInstance) {
       const user = (await findOrCreateFromOIDC(identity)) as UserWithTotp
 
       if (!canSignIn(user)) return refuseSuspended(req, reply, user.id, 'saml')
+      if (!(await signInAllowedByRole(user)))
+        return refuseSuspended(req, reply, user.id, 'saml', 'sign_in_disabled')
 
       // Honor TOTP pending flow, same as OIDC
       if (user.totp_enabled) {
@@ -643,6 +662,7 @@ export async function authRoutes(app: FastifyInstance) {
       .first()) as (User & { password_hash?: string | null }) | undefined
 
     if (!user) return reply.code(401).send({ error: 'Invalid or expired setup token' })
+    if (!(await signInAllowedByRole(user))) return reply.code(403).send(SIGN_IN_DISABLED)
     if (user.password_hash)
       return reply.code(409).send({ error: 'Password already set. Use /api/auth/login.' })
 
@@ -677,6 +697,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const valid = await verifyPassword(password, user.password_hash)
     if (!valid) return reply.code(401).send({ error: 'Invalid email or password' })
+    if (!(await signInAllowedByRole(user))) return reply.code(403).send(SIGN_IN_DISABLED)
 
     if (user.totp_enabled) {
       req.session.userId = undefined
@@ -709,6 +730,7 @@ export async function authRoutes(app: FastifyInstance) {
       await new Promise((r) => setTimeout(r, 200))
       return reply.code(401).send({ error: 'Invalid token' })
     }
+    if (!(await signInAllowedByRole(user))) return reply.code(403).send(SIGN_IN_DISABLED)
     req.session.userId = user.id
     req.session.authAt = Date.now()
     void recordLogin(app, user.id, 'static_token', req)
@@ -826,6 +848,12 @@ export async function authRoutes(app: FastifyInstance) {
     }
     const target = await db<User>('nivaro_users').where({ id: user_id, status: 'active' }).first()
     if (!target) return reply.code(404).send({ error: 'User not found or inactive' })
+    // Nobody can sign in as them, so there is nothing to view as them.
+    if (!(await signInAllowedByRole(target)))
+      return reply.code(409).send({
+        error: "This person's role has sign-in turned off — there is nothing to view as them.",
+        code: 'SIGN_IN_DISABLED'
+      })
 
     const token = `nvm_${randomUUID()}`
     await app.redis.setex(

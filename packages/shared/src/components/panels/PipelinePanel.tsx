@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useNivaroClient } from '../../context'
+import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import {
   signalSentence,
@@ -23,9 +23,12 @@ import {
   useRecordSignalWhile
 } from '../../lib/presence-signals'
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
+import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
+import { userCardQuery } from '../../lib/user-cards'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
+import { useHeaderFold } from '../item-edit/HeaderTools'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
 import { UserAvatar } from '../UserAvatar'
@@ -33,7 +36,10 @@ import { Button } from '../ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -260,6 +266,14 @@ interface RequirementsDialogState {
 // Shared by both executeTransition mutations below: pulls the 422 requirements
 // payload out of a failed transition request, or null when the failure is
 // something else (409 conflict, permission error, etc).
+/** 409 TRANSITION_DUPLICATE — the server refused a second copy of a decision
+ *  it is already applying. Either client error shape (SDK / axios). */
+export function isDuplicateTransition(err: unknown): boolean {
+  const resp = (err as { response?: { code?: unknown; data?: { code?: unknown } } } | null)
+    ?.response
+  return (resp?.code ?? resp?.data?.code) === 'TRANSITION_DUPLICATE'
+}
+
 export function transitionRequirementsFromError(
   err: unknown
 ): TransitionRequirementsPayload | null {
@@ -407,6 +421,20 @@ function StateTrack({
   /** State id → why the engine will skip it. null while loading. */
   skippedStates?: Map<string, string[]> | null
 }) {
+  // A narrow host (a phone-width sheet) scrolls the track sideways instead of
+  // crushing each step to one letter per line; the current step is brought
+  // into view so the track still opens on where the record is.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-centres when the record moves to another step
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || el.scrollWidth <= el.clientWidth) return
+    const cur = el.querySelector<HTMLElement>('[data-track-current]')
+    if (!cur) return
+    const box = el.getBoundingClientRect()
+    const node = cur.getBoundingClientRect()
+    el.scrollLeft += node.left + node.width / 2 - (box.left + box.width / 2)
+  }, [currentStateId])
   const visitedIds = new Set(history.map((h) => h.to_state))
   // The initial state is never any transition's destination, so history alone
   // never marks it — leaving "Started" hollow on a record that plainly
@@ -546,178 +574,188 @@ function StateTrack({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className='flex w-full items-start'>
-        {relevant.map((s, i) => {
-          const isCurrent = s.id === currentStateId
-          const isVisited = visitedIds.has(s.id)
-          const isDone = isVisited && !isCurrent
-          const crossed = !isVisited && !isCurrent ? crossedBy.get(s.id) : undefined
-          const predicted = !isVisited && !isCurrent ? skippedStates?.get(s.id) : undefined
-          const skipReasons =
-            crossed || predicted
-              ? [...(crossed ? [crossedReason(crossed)] : []), ...(predicted ?? [])]
-              : undefined
-          const isSkipped = skipReasons !== undefined
-          const nodeColor = s.color ?? '#94a3b8'
-          const isLast = i === relevant.length - 1
-          const nextState = !isLast ? relevant[i + 1] : null
-          const edge = nextState ? edgeEntries(s.id, nextState.id) : []
-          return (
-            <div key={s.id} className='flex min-w-[48px] flex-1 items-start'>
-              <div className='flex min-w-0 flex-1 flex-col items-center gap-1.5 px-1'>
-                <div
-                  key={isCurrent ? 'cur' : isDone ? 'done' : isSkipped ? 'skip' : 'todo'}
-                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
-                    isCurrent || isDone ? 'nvr-fill-sweep' : ''
-                  }`}
-                  // Per-state help text (#81) — instant tip via TipLayer.
-                  data-tip={s.description || undefined}
-                  style={{
-                    backgroundColor:
-                      isCurrent || isDone ? nodeColor : isSkipped ? 'transparent' : '#f1f5f9',
-                    border:
-                      isCurrent || isDone
-                        ? 'none'
-                        : isSkipped
-                          ? '1.5px dashed #cbd5e1'
-                          : '1.5px solid #e2e8f0',
-                    boxShadow: isCurrent ? `0 0 0 3px white, 0 0 0 5px ${nodeColor}` : undefined
-                  }}
-                >
-                  {isDone ? (
-                    <Check className='h-3.5 w-3.5 text-white' strokeWidth={2.5} />
-                  ) : isCurrent ? (
-                    <div className='h-2.5 w-2.5 rounded-full bg-white/80' />
-                  ) : isSkipped ? (
-                    <Minus className='h-3 w-3 text-slate-400' strokeWidth={2.5} />
-                  ) : (
-                    <div className='h-2 w-2 rounded-full bg-slate-300' />
-                  )}
-                </div>
-                {isSkipped ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span
-                        className='w-full cursor-help break-words text-center leading-snug'
-                        style={{
-                          fontSize: '11px',
-                          color: '#94a3b8',
-                          fontWeight: 400,
-                          wordBreak: 'break-word',
-                          textDecoration: 'line-through',
-                          textDecorationColor: '#cbd5e1'
-                        }}
-                      >
-                        {s.label}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent className='max-w-[260px]'>
-                      <p className='text-[11px] font-medium'>Skipped for this record</p>
-                      {skipReasons.length > 0 ? (
-                        <ul className='mt-1 space-y-0.5 text-[11px] opacity-90'>
-                          {skipReasons.map((r) => (
-                            <li key={r}>{r}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className='mt-1 text-[11px] opacity-90'>Its skip conditions are met.</p>
-                      )}
-                    </TooltipContent>
-                  </Tooltip>
-                ) : (
-                  <span
-                    className='w-full break-words text-center leading-snug'
+      {/* pt/pb: the scroll box clips vertically too — room for the current
+        step's ring. */}
+      <div ref={scrollRef} className='overflow-x-auto pt-1.5 pb-1' data-state-track>
+        <div className='flex w-full items-start'>
+          {relevant.map((s, i) => {
+            const isCurrent = s.id === currentStateId
+            const isVisited = visitedIds.has(s.id)
+            const isDone = isVisited && !isCurrent
+            const crossed = !isVisited && !isCurrent ? crossedBy.get(s.id) : undefined
+            const predicted = !isVisited && !isCurrent ? skippedStates?.get(s.id) : undefined
+            const skipReasons =
+              crossed || predicted
+                ? [...(crossed ? [crossedReason(crossed)] : []), ...(predicted ?? [])]
+                : undefined
+            const isSkipped = skipReasons !== undefined
+            const nodeColor = s.color ?? '#94a3b8'
+            const isLast = i === relevant.length - 1
+            const nextState = !isLast ? relevant[i + 1] : null
+            const edge = nextState ? edgeEntries(s.id, nextState.id) : []
+            return (
+              <div key={s.id} className='flex flex-1 items-start'>
+                {/* The label column keeps a readable floor of its own: the old
+                floor sat on the step AND its 40px connector together, leaving
+                the label a few pixels on a narrow track. */}
+                <div className='flex min-w-[76px] flex-1 flex-col items-center gap-1.5 px-1'>
+                  <div
+                    key={isCurrent ? 'cur' : isDone ? 'done' : isSkipped ? 'skip' : 'todo'}
+                    data-track-current={isCurrent || undefined}
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                      isCurrent || isDone ? 'nvr-fill-sweep' : ''
+                    }`}
+                    // Per-state help text (#81) — instant tip via TipLayer.
+                    data-tip={s.description || undefined}
                     style={{
-                      fontSize: '11px',
-                      color: isCurrent ? nodeColor : isDone ? '#475569' : '#94a3b8',
-                      fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
-                      wordBreak: 'break-word'
+                      backgroundColor:
+                        isCurrent || isDone ? nodeColor : isSkipped ? 'transparent' : '#f1f5f9',
+                      border:
+                        isCurrent || isDone
+                          ? 'none'
+                          : isSkipped
+                            ? '1.5px dashed #cbd5e1'
+                            : '1.5px solid #e2e8f0',
+                      boxShadow: isCurrent ? `0 0 0 3px white, 0 0 0 5px ${nodeColor}` : undefined
                     }}
                   >
-                    {s.label}
-                  </span>
+                    {isDone ? (
+                      <Check className='h-3.5 w-3.5 text-white' strokeWidth={2.5} />
+                    ) : isCurrent ? (
+                      <div className='h-2.5 w-2.5 rounded-full bg-white/80' />
+                    ) : isSkipped ? (
+                      <Minus className='h-3 w-3 text-slate-400' strokeWidth={2.5} />
+                    ) : (
+                      <div className='h-2 w-2 rounded-full bg-slate-300' />
+                    )}
+                  </div>
+                  {isSkipped ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          className='w-full cursor-help break-words text-center leading-snug'
+                          style={{
+                            fontSize: '11px',
+                            color: '#94a3b8',
+                            fontWeight: 400,
+                            wordBreak: 'break-word',
+                            textDecoration: 'line-through',
+                            textDecorationColor: '#cbd5e1'
+                          }}
+                        >
+                          {s.label}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent className='max-w-[260px]'>
+                        <p className='text-[11px] font-medium'>Skipped for this record</p>
+                        {skipReasons.length > 0 ? (
+                          <ul className='mt-1 space-y-0.5 text-[11px] opacity-90'>
+                            {skipReasons.map((r) => (
+                              <li key={r}>{r}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className='mt-1 text-[11px] opacity-90'>
+                            Its skip conditions are met.
+                          </p>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <span
+                      className='w-full break-words text-center leading-snug'
+                      style={{
+                        fontSize: '11px',
+                        color: isCurrent ? nodeColor : isDone ? '#475569' : '#94a3b8',
+                        fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
+                        wordBreak: 'break-word'
+                      }}
+                    >
+                      {s.label}
+                    </span>
+                  )}
+                </div>
+                {!isLast && (
+                  <div className='mt-[13px] flex w-10 shrink-0 flex-col items-center gap-1.5'>
+                    {(() => {
+                      const lineColor = isDone ? `${nodeColor}55` : '#e8ecf0'
+                      return (
+                        <div className='flex w-full shrink-0 items-center'>
+                          <div
+                            className='h-0.5 flex-1 rounded-l-sm'
+                            style={{ backgroundColor: lineColor }}
+                          />
+                          <div
+                            style={{
+                              width: 0,
+                              height: 0,
+                              borderTop: '3px solid transparent',
+                              borderBottom: '3px solid transparent',
+                              borderLeft: `5px solid ${lineColor}`
+                            }}
+                          />
+                        </div>
+                      )
+                    })()}
+                    {edge.map((h) => {
+                      const isSendback = h.from_state !== s.id
+                      const hopSpan =
+                        Math.abs(
+                          (trackIndex.get(h.to_state) ?? 0) -
+                            (trackIndex.get(h.from_state ?? '') ?? 0)
+                        ) > 1
+                          ? (labelOf.get(h.to_state) ?? '')
+                          : null
+                      return (
+                        <Tooltip key={h.id}>
+                          <TooltipTrigger asChild>
+                            <div className='flex w-full cursor-default flex-col items-center gap-0.5'>
+                              <span
+                                className='text-center font-mono text-[9px] font-semibold leading-none'
+                                style={{ color: isSendback ? '#d97706' : '#475569' }}
+                              >
+                                {isSendback && '↩ '}
+                                {entryInitials(h)}
+                              </span>
+                              <span className='text-[8.5px] leading-none text-slate-400'>
+                                {formatRelative(h.timestamp)}
+                              </span>
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side='top' className='space-y-0.5 text-[12px]'>
+                            {isMachineEntry(h) ? (
+                              <>
+                                <p className='font-medium'>
+                                  {isSendback ? '↩ Sent back · ' : ''}
+                                  {machineHeadline(h)}
+                                </p>
+                                {machineDetail(h) && (
+                                  <p className='max-w-[280px] text-muted-foreground'>
+                                    {machineDetail(h)}
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <p className='font-medium'>
+                                {isSendback ? '↩ Sent back by' : 'Approved by'} {entryName(h)}
+                              </p>
+                            )}
+                            {hopSpan && (
+                              <p className='text-muted-foreground'>→ straight to {hopSpan}</p>
+                            )}
+                            <p className='text-muted-foreground'>
+                              {new Date(h.timestamp).toLocaleString()}
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )
+                    })}
+                  </div>
                 )}
               </div>
-              {!isLast && (
-                <div className='mt-[13px] flex w-10 shrink-0 flex-col items-center gap-1.5'>
-                  {(() => {
-                    const lineColor = isDone ? `${nodeColor}55` : '#e8ecf0'
-                    return (
-                      <div className='flex w-full shrink-0 items-center'>
-                        <div
-                          className='h-0.5 flex-1 rounded-l-sm'
-                          style={{ backgroundColor: lineColor }}
-                        />
-                        <div
-                          style={{
-                            width: 0,
-                            height: 0,
-                            borderTop: '3px solid transparent',
-                            borderBottom: '3px solid transparent',
-                            borderLeft: `5px solid ${lineColor}`
-                          }}
-                        />
-                      </div>
-                    )
-                  })()}
-                  {edge.map((h) => {
-                    const isSendback = h.from_state !== s.id
-                    const hopSpan =
-                      Math.abs(
-                        (trackIndex.get(h.to_state) ?? 0) -
-                          (trackIndex.get(h.from_state ?? '') ?? 0)
-                      ) > 1
-                        ? (labelOf.get(h.to_state) ?? '')
-                        : null
-                    return (
-                      <Tooltip key={h.id}>
-                        <TooltipTrigger asChild>
-                          <div className='flex w-full cursor-default flex-col items-center gap-0.5'>
-                            <span
-                              className='text-center font-mono text-[9px] font-semibold leading-none'
-                              style={{ color: isSendback ? '#d97706' : '#475569' }}
-                            >
-                              {isSendback && '↩ '}
-                              {entryInitials(h)}
-                            </span>
-                            <span className='text-[8.5px] leading-none text-slate-400'>
-                              {formatRelative(h.timestamp)}
-                            </span>
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent side='top' className='space-y-0.5 text-[12px]'>
-                          {isMachineEntry(h) ? (
-                            <>
-                              <p className='font-medium'>
-                                {isSendback ? '↩ Sent back · ' : ''}
-                                {machineHeadline(h)}
-                              </p>
-                              {machineDetail(h) && (
-                                <p className='max-w-[280px] text-muted-foreground'>
-                                  {machineDetail(h)}
-                                </p>
-                              )}
-                            </>
-                          ) : (
-                            <p className='font-medium'>
-                              {isSendback ? '↩ Sent back by' : 'Approved by'} {entryName(h)}
-                            </p>
-                          )}
-                          {hopSpan && (
-                            <p className='text-muted-foreground'>→ straight to {hopSpan}</p>
-                          )}
-                          <p className='text-muted-foreground'>
-                            {new Date(h.timestamp).toLocaleString()}
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
     </TooltipProvider>
   )
@@ -807,17 +845,21 @@ function AsyncUserPicker({ value, onChange }: { value: string; onChange: (v: str
     enabled: open,
     staleTime: 30_000
   })
+  // The directory card (any signed-in person), never GET /users/:id — that
+  // is admin-only and left a non-admin looking at the picked person's raw id.
   const { data: selectedUser } = useQuery<User | null>({
-    queryKey: ['users', 'single', value],
-    queryFn: () => client.request<{ data: User }>(get(`/users/${value}`)).then((r) => r.data),
+    ...userCardQuery<User>(client, value),
     enabled: !!value,
     staleTime: 5 * 60_000
   })
-  const selectedLabel = selectedUser
-    ? [selectedUser.first_name, selectedUser.last_name].filter(Boolean).join(' ').trim() ||
-      selectedUser.email
-    : value || null
   const users = data ?? []
+  // The search row it was picked from answers at once; the card after.
+  const picked = selectedUser ?? users.find((u) => u.id === value) ?? null
+  const selectedLabel = picked
+    ? [picked.first_name, picked.last_name].filter(Boolean).join(' ').trim() || picked.email
+    : value
+      ? 'Selected person'
+      : null
   const nameOf = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
 
   return (
@@ -915,21 +957,38 @@ function OwnersSection({
 }) {
   const client = useNivaroClient()
   const queryClient = useQueryClient()
+  const { isAdmin } = useItemEditAuth()
   const [adding, setAdding] = useState(false)
   const [userId, setUserId] = useState('')
   const [stateScope, setStateScope] = useState('')
   const [scopeOpen, setScopeOpen] = useState(false)
   const ownersKey = ['pipeline-instance-owners', collection, item]
 
+  // `meta.can_add` is the POST's own rule (admins + the current step's
+  // owners): seeded beside the shared owners cache, whose shape stays a list.
+  const canAddKey = ['pipeline-owners-can-add', collection, item]
+  const ownersRead = () =>
+    client
+      .request<{ data: PipelineInstanceOwner[]; meta?: { can_add?: boolean } }>(
+        get(`/pipelines/instance/${collection}/${item}/owners`)
+      )
+      .then((r) => {
+        queryClient.setQueryData(canAddKey, r.meta?.can_add ?? null)
+        return r
+      })
   const { data: owners, isLoading: ownersLoading } = useQuery<PipelineInstanceOwner[]>({
     queryKey: ownersKey,
-    queryFn: () =>
-      client
-        .request<{ data: PipelineInstanceOwner[] }>(
-          get(`/pipelines/instance/${collection}/${item}/owners`)
-        )
-        .then((r) => r.data)
+    queryFn: () => ownersRead().then((r) => r.data)
   })
+  const { data: canAddAnswer } = useQuery<boolean | null>({
+    queryKey: canAddKey,
+    queryFn: () => ownersRead().then((r) => r.meta?.can_add ?? null),
+    enabled: !ownersLoading,
+    staleTime: 30_000
+  })
+  // Offered only when the add would land — an approver's Add answered 403 every time.
+  // An older server without the flag: admins only.
+  const canAddOwner = typeof canAddAnswer === 'boolean' ? canAddAnswer : isAdmin
 
   // Resolved owners per state (owner-group derived) — same key/data as the
   // Approval Chain popover, so the cache is shared between the two.
@@ -994,7 +1053,8 @@ function OwnersSection({
       setAdding(false)
       toast.success('Owner added')
     },
-    onError: () => toast.error('Failed to add owner')
+    // The server's reason (a 403 says why), not a bare status phrase.
+    onError: (err) => toast.error(userErrorMessage(err, 'Failed to add owner'))
   })
 
   const removeOwner = useMutation({
@@ -1030,7 +1090,7 @@ function OwnersSection({
         </span>
         <span className='flex items-center gap-3'>
           {currentStateId && <WhyOwnersButton collection={collection} itemId={String(item)} />}
-          {!adding && (
+          {!adding && canAddOwner && (
             <button
               type='button'
               onClick={() => setAdding(true)}
@@ -1127,44 +1187,50 @@ function OwnersSection({
         <div className='mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-border p-3'>
           <p className='text-[11px] font-semibold text-slate-500'>Add owner</p>
           <AsyncUserPicker value={userId} onChange={setUserId} />
-          <Popover open={scopeOpen} onOpenChange={setScopeOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type='button'
-                className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-left text-[13px] text-slate-700 transition-colors hover:border-slate-300 dark:border-border dark:bg-transparent dark:text-slate-300'
-              >
-                <span className='truncate'>
-                  {stateScope
-                    ? (states.find((s) => s.id === stateScope)?.label ?? stateScope)
-                    : 'All states'}
-                </span>
-                <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align='start' sideOffset={4} className='w-52 p-1'>
-              {(['', ...states.map((s) => s.id)] as string[]).map((id) => {
-                const label =
-                  id === '' ? 'All states' : (states.find((s) => s.id === id)?.label ?? id)
-                const active = stateScope === id
-                return (
-                  <button
-                    key={id}
-                    type='button'
-                    className={cn(
-                      'flex w-full rounded px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-slate-50 dark:hover:bg-white/5',
-                      active && 'font-medium text-slate-800 dark:text-slate-200'
-                    )}
-                    onClick={() => {
-                      setStateScope(id)
-                      setScopeOpen(false)
-                    }}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </PopoverContent>
-          </Popover>
+          {!isAdmin ? (
+            <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+              Hands off the current step.
+            </p>
+          ) : (
+            <Popover open={scopeOpen} onOpenChange={setScopeOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-left text-[13px] text-slate-700 transition-colors hover:border-slate-300 dark:border-border dark:bg-transparent dark:text-slate-300'
+                >
+                  <span className='truncate'>
+                    {stateScope
+                      ? (states.find((s) => s.id === stateScope)?.label ?? stateScope)
+                      : 'All states'}
+                  </span>
+                  <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align='start' sideOffset={4} className='w-52 p-1'>
+                {(['', ...states.map((s) => s.id)] as string[]).map((id) => {
+                  const label =
+                    id === '' ? 'All states' : (states.find((s) => s.id === id)?.label ?? id)
+                  const active = stateScope === id
+                  return (
+                    <button
+                      key={id}
+                      type='button'
+                      className={cn(
+                        'flex w-full rounded px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-slate-50 dark:hover:bg-white/5',
+                        active && 'font-medium text-slate-800 dark:text-slate-200'
+                      )}
+                      onClick={() => {
+                        setStateScope(id)
+                        setScopeOpen(false)
+                      }}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </PopoverContent>
+            </Popover>
+          )}
           <div className='flex items-center justify-end gap-2 pt-0.5'>
             <Button
               type='button'
@@ -1631,21 +1697,44 @@ function PipelinePanelInner({
       setExpanded(defaultExpanded)
     }
   }, [defaultExpanded])
+  // One decision per press: a double click sent the transition twice (the
+  // guard below is awaited, so the button had not disabled yet) and the twin
+  // came back as an error toast.
+  const transitionBusyRef = useRef(false)
+  const runTransition = (vars: { transition_id: string; comment?: string }) => {
+    if (transitionBusyRef.current) return
+    transitionBusyRef.current = true
+    executeTransition.mutate(vars, {
+      onSettled: () => {
+        transitionBusyRef.current = false
+      }
+    })
+  }
   const trySetPending = async (txId: string) => {
+    if (transitionBusyRef.current) return
     if (pendingTransition === txId) {
       setPendingTransition(null)
       return
     }
     // The guard may save the form first, so it can be async — awaiting it is
     // what lets one click mean "save, then transition".
-    if (onBeforeTransition && !(await onBeforeTransition())) return
+    if (onBeforeTransition) {
+      transitionBusyRef.current = true
+      let ok = false
+      try {
+        ok = await onBeforeTransition()
+      } finally {
+        transitionBusyRef.current = false
+      }
+      if (!ok) return
+    }
     // Most transitions are simply "yes, move it on": a confirm step there is a
     // second click carrying no information. Only stop and ask when the
     // transition is configured to want a note.
     const tx = (transitions ?? []).find((t) => t.id === txId)
     const mode = String((tx as { comment_mode?: string } | undefined)?.comment_mode ?? 'none')
     if (mode !== 'optional' && mode !== 'required') {
-      executeTransition.mutate({ transition_id: txId })
+      runTransition({ transition_id: txId })
       return
     }
     setPendingTransition(txId)
@@ -1765,6 +1854,12 @@ function PipelinePanelInner({
       toast.success('Transition executed')
     },
     onError: (err: unknown, variables) => {
+      // The twin of a press already being applied (another tab, a retried
+      // request): nothing was done twice — refresh quietly, no error toast.
+      if (isDuplicateTransition(err)) {
+        queryClient.invalidateQueries({ queryKey })
+        return
+      }
       const requirements = transitionRequirementsFromError(err)
       if (requirements) {
         setRequirementsDialog((prev) => ({
@@ -1775,15 +1870,14 @@ function PipelinePanelInner({
         }))
         return
       }
-      // The SDK attaches the parsed error body as `response` (same shape
-      // transitionRequirementsFromError reads); `data.error` covers
-      // axios-shaped hosts. Show the FULL server message — for a blocked
-      // external submission it carries the transition label + HTTP status +
-      // response body, which is what the user needs to act on.
-      const resp = (
-        err as { response?: { status?: number; error?: string; data?: { error?: string } } }
-      )?.response
-      toast.error(resp?.error ?? resp?.data?.error ?? 'Failed to execute transition', {
+      // Show the FULL server message — for a blocked external submission it
+      // carries the transition label + HTTP status + response body, which is
+      // what the user needs to act on. userErrorMessage reads `error` unless
+      // it is only the status phrase, then `message`: a coded refusal from
+      // the global handler answers {error: 'Forbidden', message: '<why>'}
+      // and the toast used to say just "Forbidden".
+      const resp = (err as { response?: { status?: number } })?.response
+      toast.error(userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
         // #1867: a refusal carries "Why?" — the role, owner or access rule
         // that stopped it, and who can change it.
@@ -2003,7 +2097,7 @@ function PipelinePanelInner({
               comment.trim() === '')
           }
           onClick={() =>
-            executeTransition.mutate({
+            runTransition({
               transition_id: pendingTransition!,
               comment: comment.trim() || undefined
             })
@@ -2273,7 +2367,9 @@ export function PipelineTransitionButtons({
   item: string
   onBeforeTransition?: () => boolean | Promise<boolean>
   /** false = single-line buttons (header hosting): wrapping would absorb the
-   *  width pressure the header's overflow-collapse logic needs to see. */
+   *  width pressure the header's overflow-collapse logic needs to see. When
+   *  the header row still overflows with its tool strip folded, the buttons
+   *  fold into one "Actions" menu so every step stays reachable. */
   wrap?: boolean
 }) {
   if (item === 'new') return null
@@ -2305,21 +2401,46 @@ function PipelineTransitionButtonsInner({
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
   // #1722 — other viewers of the record see "Kim is approving" while this dialog is open.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const folded = useHeaderFold(rootRef, !wrap)
+  // One decision per press: a double click sent the transition twice (the
+  // guard below is awaited, so the button had not disabled yet) and the twin
+  // came back as an error toast.
+  const transitionBusyRef = useRef(false)
+  const runTransition = (vars: { transition_id: string; comment?: string }) => {
+    if (transitionBusyRef.current) return
+    transitionBusyRef.current = true
+    executeTransition.mutate(vars, {
+      onSettled: () => {
+        transitionBusyRef.current = false
+      }
+    })
+  }
   const trySetPending = async (txId: string) => {
+    if (transitionBusyRef.current) return
     if (pendingTransition === txId) {
       setPendingTransition(null)
       return
     }
     // The guard may save the form first, so it can be async — awaiting it is
     // what lets one click mean "save, then transition".
-    if (onBeforeTransition && !(await onBeforeTransition())) return
+    if (onBeforeTransition) {
+      transitionBusyRef.current = true
+      let ok = false
+      try {
+        ok = await onBeforeTransition()
+      } finally {
+        transitionBusyRef.current = false
+      }
+      if (!ok) return
+    }
     // Most transitions are simply "yes, move it on": a confirm step there is a
     // second click carrying no information. Only stop and ask when the
     // transition is configured to want a note.
     const tx = (transitions ?? []).find((t) => t.id === txId)
     const mode = String((tx as { comment_mode?: string } | undefined)?.comment_mode ?? 'none')
     if (mode !== 'optional' && mode !== 'required') {
-      executeTransition.mutate({ transition_id: txId })
+      runTransition({ transition_id: txId })
       return
     }
     setPendingTransition(txId)
@@ -2379,6 +2500,12 @@ function PipelineTransitionButtonsInner({
       toast.success('Transition executed')
     },
     onError: (err: unknown, variables) => {
+      // The twin of a press already being applied (another tab, a retried
+      // request): nothing was done twice — refresh quietly, no error toast.
+      if (isDuplicateTransition(err)) {
+        queryClient.invalidateQueries({ queryKey })
+        return
+      }
       const requirements = transitionRequirementsFromError(err)
       if (requirements) {
         setRequirementsDialog((prev) => ({
@@ -2389,15 +2516,14 @@ function PipelineTransitionButtonsInner({
         }))
         return
       }
-      // The SDK attaches the parsed error body as `response` (same shape
-      // transitionRequirementsFromError reads); `data.error` covers
-      // axios-shaped hosts. Show the FULL server message — for a blocked
-      // external submission it carries the transition label + HTTP status +
-      // response body, which is what the user needs to act on.
-      const resp = (
-        err as { response?: { status?: number; error?: string; data?: { error?: string } } }
-      )?.response
-      toast.error(resp?.error ?? resp?.data?.error ?? 'Failed to execute transition', {
+      // Show the FULL server message — for a blocked external submission it
+      // carries the transition label + HTTP status + response body, which is
+      // what the user needs to act on. userErrorMessage reads `error` unless
+      // it is only the status phrase, then `message`: a coded refusal from
+      // the global handler answers {error: 'Forbidden', message: '<why>'}
+      // and the toast used to say just "Forbidden".
+      const resp = (err as { response?: { status?: number } })?.response
+      toast.error(userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
         // #1867: a refusal carries "Why?" — the role, owner or access rule
         // that stopped it, and who can change it.
@@ -2475,79 +2601,60 @@ function PipelineTransitionButtonsInner({
     l.push(tx)
     byLabel.set(tx.label, l)
   }
+  const sortByTarget = (txs: PipelineTransition[]) =>
+    [...txs].sort(
+      (a, b) => (stateById.get(a.to_state)?.sort ?? 999) - (stateById.get(b.to_state)?.sort ?? 999)
+    )
+  // The confirm panel opens leftwards from the buttons; on a phone-width
+  // sheet 600px would run off the sheet's left edge, where it is clipped.
+  const confirmWidth = (() => {
+    const box = rootRef.current?.getBoundingClientRect()
+    if (!box) return 600
+    const host = rootRef.current?.closest('[role="dialog"]')?.getBoundingClientRect()
+    return Math.max(260, Math.min(600, box.right - (host?.left ?? 0) - 12))
+  })()
 
   return (
-    <div className='relative'>
-      <div
-        className={
-          wrap ? 'flex flex-wrap justify-end gap-2' : 'flex shrink-0 items-center justify-end gap-2'
-        }
-      >
-        {Array.from(byLabel.entries()).map(([label, txs]) => {
-          const txColor = txs[0]?.color ?? null
-          const isActive = txs.some((t) => t.id === pendingTransition)
-          const colorStyle = (active: boolean) =>
-            txColor
-              ? active
-                ? { backgroundColor: txColor, borderColor: txColor }
-                : { borderColor: txColor, color: txColor }
-              : undefined
-          if (txs.length === 1) {
-            const tx = txs[0]
-            const running =
-              executeTransition.isPending && executeTransition.variables?.transition_id === tx.id
-            const button = (
-              <Button
-                key={label}
-                size='sm'
-                variant={isActive ? 'default' : 'outline'}
-                className='gap-1.5 text-[12px]'
-                style={colorStyle(isActive)}
-                disabled={executeTransition.isPending}
-                onClick={() => trySetPending(tx.id)}
-              >
-                {running && <Loader2 className='h-3 w-3 animate-spin' />}
-                {label}
-              </Button>
-            )
-            // #616 — a step that sends something to a partner says, before
-            // it is pressed, whether what it sends is complete.
-            if (!(tx.pushes && tx.pushes > 0)) return button
-            return (
-              <span key={label} className='relative inline-flex'>
-                {button}
-                <PushReadinessChip
-                  collection={collection}
-                  itemId={item}
-                  transitionId={tx.id}
-                  label={label}
-                  compact
-                />
-              </span>
-            )
-          }
-          return (
-            <DropdownMenu key={label}>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size='sm'
-                  variant={isActive ? 'default' : 'outline'}
-                  className='gap-1.5 text-[12px]'
-                  style={colorStyle(isActive)}
-                  disabled={executeTransition.isPending}
-                >
-                  {label}
-                  <ChevronDown className='h-3 w-3' />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align='start'>
-                {[...txs]
-                  .sort(
-                    (a, b) =>
-                      (stateById.get(a.to_state)?.sort ?? 999) -
-                      (stateById.get(b.to_state)?.sort ?? 999)
-                  )
-                  .map((tx) => (
+    <div ref={rootRef} className='relative'>
+      {folded ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size='sm'
+              variant='outline'
+              className='shrink-0 gap-1.5 text-[12px]'
+              disabled={executeTransition.isPending}
+              data-transitions-folded
+            >
+              {executeTransition.isPending && <Loader2 className='h-3 w-3 animate-spin' />}
+              Actions
+              <ChevronDown className='h-3 w-3' />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end' className='min-w-[200px]'>
+            {Array.from(byLabel.entries()).map(([label, txs], gi, all) =>
+              txs.length === 1 ? (
+                <DropdownMenuGroup key={label}>
+                  {/* A plain step right after a labelled group is set apart
+                    from it, or it reads as one more target of that group. */}
+                  {gi > 0 && all[gi - 1][1].length > 1 && <DropdownMenuSeparator />}
+                  <DropdownMenuItem onSelect={() => trySetPending(txs[0].id)}>
+                    {txs[0].color && (
+                      <span
+                        className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
+                        style={{ backgroundColor: txs[0].color }}
+                      />
+                    )}
+                    {label}
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              ) : (
+                <DropdownMenuGroup key={label}>
+                  {gi > 0 && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel className='text-[11px] text-muted-foreground'>
+                    {label}
+                  </DropdownMenuLabel>
+                  {sortByTarget(txs).map((tx) => (
                     <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
                       {tx.color && (
                         <span
@@ -2558,13 +2665,99 @@ function PipelineTransitionButtonsInner({
                       {stateById.get(tx.to_state)?.label ?? tx.to_state}
                     </DropdownMenuItem>
                   ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )
-        })}
-      </div>
+                </DropdownMenuGroup>
+              )
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        <div
+          className={
+            wrap
+              ? 'flex flex-wrap justify-end gap-2'
+              : 'flex shrink-0 items-center justify-end gap-2'
+          }
+        >
+          {Array.from(byLabel.entries()).map(([label, txs]) => {
+            const txColor = txs[0]?.color ?? null
+            const isActive = txs.some((t) => t.id === pendingTransition)
+            const colorStyle = (active: boolean) =>
+              txColor
+                ? active
+                  ? { backgroundColor: txColor, borderColor: txColor }
+                  : { borderColor: txColor, color: txColor }
+                : undefined
+            if (txs.length === 1) {
+              const tx = txs[0]
+              const running =
+                executeTransition.isPending && executeTransition.variables?.transition_id === tx.id
+              const button = (
+                <Button
+                  key={label}
+                  size='sm'
+                  variant={isActive ? 'default' : 'outline'}
+                  className='gap-1.5 text-[12px]'
+                  style={colorStyle(isActive)}
+                  disabled={executeTransition.isPending}
+                  onClick={() => trySetPending(tx.id)}
+                >
+                  {running && <Loader2 className='h-3 w-3 animate-spin' />}
+                  {label}
+                </Button>
+              )
+              // #616 — a step that sends something to a partner says, before
+              // it is pressed, whether what it sends is complete.
+              if (!(tx.pushes && tx.pushes > 0)) return button
+              return (
+                <span key={label} className='relative inline-flex'>
+                  {button}
+                  <PushReadinessChip
+                    collection={collection}
+                    itemId={item}
+                    transitionId={tx.id}
+                    label={label}
+                    compact
+                  />
+                </span>
+              )
+            }
+            return (
+              <DropdownMenu key={label}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size='sm'
+                    variant={isActive ? 'default' : 'outline'}
+                    className='gap-1.5 text-[12px]'
+                    style={colorStyle(isActive)}
+                    disabled={executeTransition.isPending}
+                  >
+                    {label}
+                    <ChevronDown className='h-3 w-3' />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align='start'>
+                  {sortByTarget(txs).map((tx) => (
+                    <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
+                      {tx.color && (
+                        <span
+                          className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
+                          style={{ backgroundColor: tx.color }}
+                        />
+                      )}
+                      {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )
+          })}
+        </div>
+      )}
       {pendingTransition && (
-        <div className='absolute right-0 top-full z-50 mt-1 w-[600px] space-y-3 rounded-lg border border-slate-200 bg-white shadow-lg dark:bg-card dark:border-border p-3.5'>
+        <div
+          className='absolute right-0 top-full z-50 mt-1 space-y-3 rounded-lg border border-slate-200 bg-white shadow-lg dark:bg-card dark:border-border p-3.5'
+          style={{ width: confirmWidth }}
+        >
           <div className='flex flex-wrap items-center gap-2'>
             <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
             {pendingTx && (
@@ -2614,7 +2807,7 @@ function PipelineTransitionButtonsInner({
                   comment.trim() === '')
               }
               onClick={() =>
-                executeTransition.mutate({
+                runTransition({
                   transition_id: pendingTransition,
                   comment: comment.trim() || undefined
                 })

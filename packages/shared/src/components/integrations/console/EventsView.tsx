@@ -44,6 +44,40 @@ const DIRECTION_WORD: Record<EventDirection, string> = {
 const sourceOf = (e: IntegrationEvent) => e.provider ?? e.source ?? ''
 const eventKey = (e: IntegrationEvent) => `${sourceOf(e)}:${e.id}`
 
+/**
+ * Rows a reader cannot tell apart — same source, record, words and status in
+ * the same second — collapse into one with a count. A partner that sends a
+ * message twice (MDSi "Backorder · SO …" ×2, army 2026-10-24) left two
+ * identical lines. Only ADJACENT rows collapse (the feed is newest first), so
+ * order is kept; the first row is the one the path sheet opens.
+ */
+export function collapseRepeats(
+  entries: IntegrationEvent[]
+): Array<{ event: IntegrationEvent; repeats: number }> {
+  const sig = (e: IntegrationEvent) =>
+    [
+      sourceOf(e),
+      e.collection ?? '',
+      e.item_id ?? '',
+      e.label,
+      e.text,
+      e.context ?? '',
+      e.status ?? '',
+      e.partner ?? '',
+      e.caller ?? '',
+      String(e.created_at).slice(0, 19)
+    ].join('\u0000')
+  const out: Array<{ event: IntegrationEvent; repeats: number; sig: string }> = []
+  for (const e of entries) {
+    const k = sig(e)
+    const last = out[out.length - 1]
+    // A replayable row keeps its own line: its Replay acts on that one id.
+    if (last && last.sig === k && !e.replayable && !last.event.replayable) last.repeats++
+    else out.push({ event: e, repeats: 1, sig: k })
+  }
+  return out.map(({ event, repeats }) => ({ event, repeats }))
+}
+
 const STATUS_OPTIONS: Array<[EventStatus | '', string]> = [
   ['', 'All'],
   ['error', 'Problems'],
@@ -195,11 +229,14 @@ function RecordRef({
 
 function EventRow({
   event,
+  repeats = 1,
   direction,
   onOpenRecord,
   onSelect
 }: {
   event: IntegrationEvent
+  /** Identical rows this one stands for (collapseRepeats). */
+  repeats?: number
   direction: EventDirection | null
   onOpenRecord?: EventsViewProps['onOpenRecord']
   onSelect: (event: IntegrationEvent) => void
@@ -264,6 +301,15 @@ function EventRow({
             {event.record_count != null && event.record_count > 1 && (
               <span className='text-[12px] tabular-nums text-muted-foreground'>
                 {event.record_count} records
+              </span>
+            )}
+            {repeats > 1 && (
+              <span
+                className='text-[12px] tabular-nums text-muted-foreground'
+                data-ic-event-repeats={repeats}
+                data-tip={`${repeats} identical events in the same second`}
+              >
+                ×{repeats}
               </span>
             )}
             {status === 'error' && (
@@ -412,7 +458,7 @@ export function EventsView({ onOpenRecord }: EventsViewProps) {
       if (last && last.key === k) last.items.push(e)
       else groups.push({ key: k, label: dayHeading(e.created_at), items: [e] })
     }
-    return groups
+    return groups.map((g) => ({ ...g, rows: collapseRepeats(g.items) }))
   }, [entries])
 
   const filtered =
@@ -665,10 +711,11 @@ export function EventsView({ onOpenRecord }: EventsViewProps) {
               </span>
             </h3>
             <ul className='divide-y divide-border overflow-hidden rounded-lg border border-border bg-card'>
-              {d.items.map((e) => (
+              {d.rows.map(({ event: e, repeats }) => (
                 <EventRow
                   key={eventKey(e)}
                   event={e}
+                  repeats={repeats}
                   direction={directionOf(e)}
                   onOpenRecord={onOpenRecord}
                   onSelect={(ev) =>

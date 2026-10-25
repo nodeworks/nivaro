@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { likeContains } from '../lib/filter-like.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
@@ -160,7 +161,7 @@ function applyWidgetFilters(q: ReturnType<typeof db>, filters: unknown): ReturnT
           q.where(f.field, '<=', f.value as never)
           break
         case 'contains':
-          q.where(f.field, 'like', `%${f.value}%`)
+          q.where(f.field, 'like', likeContains(f.value))
           break
         case 'null':
           q.whereNull(f.field)

@@ -24,6 +24,7 @@ import {
   type NumberFilterOp,
   parseNumberFilter
 } from '../lib/number-filter'
+import { fitPins } from '../lib/table-pins'
 import { cn, formatNumber } from '../lib/utils'
 import { CellCopyLayer } from './CellCopyLayer'
 import { EmptyState } from './EmptyState'
@@ -895,26 +896,45 @@ export function DataTable<T = Record<string, unknown>>({
   const [pinPos, setPinPos] = useState<
     Record<string, { side: 'left' | 'right'; offset: number; seam: boolean }>
   >({})
+  // The pin budget depends on the visible width, which changes without a
+  // render (window resize, a rail collapsing) — re-render on it.
+  const [, setViewportWidth] = useState(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: isLoading swaps the skeleton for the scroll box — re-attach to the new element
+  useEffect(() => {
+    const el = hScrollRef.current
+    if (!pinsActive || !el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => setViewportWidth(el.clientWidth))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [pinsActive, isLoading])
   // biome-ignore lint/correctness/useExhaustiveDependencies: measures live DOM every render, guarded by value compare
   useLayoutEffect(() => {
     if (!pinsActive || !columnPins) return
-    const left = orderedColumns.filter((c) => columnPins[c.key] === 'left')
-    const right = orderedColumns.filter((c) => columnPins[c.key] === 'right')
     const widthOf = (key: string) => headCellRefs.current[key]?.getBoundingClientRect().width ?? 120
+    const checkboxWidth = onSelectionChange
+      ? (checkboxHeadRef.current?.getBoundingClientRect().width ?? 40)
+      : 0
+    const { left, right } = fitPins(
+      orderedColumns.filter((c) => columnPins[c.key] === 'left').map((c) => c.key),
+      orderedColumns.filter((c) => columnPins[c.key] === 'right').map((c) => c.key),
+      widthOf,
+      checkboxWidth,
+      hScrollRef.current?.clientWidth ?? 0
+    )
     const next: Record<string, { side: 'left' | 'right'; offset: number; seam: boolean }> = {}
-    let acc = onSelectionChange ? (checkboxHeadRef.current?.getBoundingClientRect().width ?? 40) : 0
+    let acc = checkboxWidth
     // Floor so adjacent pinned cells overlap by a sub-pixel instead of meeting
     // exactly on a fractional boundary — an exact meeting leaves a hairline for
     // the scrolling content to show through (see CollectionBrowserView).
-    left.forEach((c, i) => {
-      next[c.key] = { side: 'left', offset: Math.floor(acc), seam: i === left.length - 1 }
-      acc += widthOf(c.key)
+    left.forEach((key, i) => {
+      next[key] = { side: 'left', offset: Math.floor(acc), seam: i === left.length - 1 }
+      acc += widthOf(key)
     })
     let racc = 0
     for (let i = right.length - 1; i >= 0; i--) {
-      const c = right[i]
-      next[c.key] = { side: 'right', offset: Math.floor(racc), seam: i === 0 }
-      racc += widthOf(c.key)
+      const key = right[i]
+      next[key] = { side: 'right', offset: Math.floor(racc), seam: i === 0 }
+      racc += widthOf(key)
     }
     setPinPos((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
   })

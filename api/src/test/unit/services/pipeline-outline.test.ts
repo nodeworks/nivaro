@@ -63,6 +63,7 @@ describe('pipelineOutline', () => {
     // No role lists, actions or conditions leave the server.
     expect(Object.keys(out.transitions[0]).sort()).toEqual(
       [
+        'allow_creator',
         'color',
         'from_state',
         'group_label',

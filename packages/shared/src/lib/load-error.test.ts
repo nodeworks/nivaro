@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { loadErrorStatus, loadErrorText, serverErrorText } from './load-error'
+import {
+  isListTimeout,
+  listLoadErrorText,
+  loadErrorStatus,
+  loadErrorText,
+  serverErrorText
+} from './load-error'
 
 describe('loadErrorText (#2858)', () => {
   it('reads every error shape', () => {
@@ -39,5 +45,37 @@ describe('loadErrorText timeouts (#2857)', () => {
     expect(loadErrorText(Object.assign(new Error('x'), { name: 'TimeoutError' }))).toMatch(
       /too long/
     )
+  })
+})
+
+describe('list load errors', () => {
+  const timeout = {
+    status: 503,
+    response: {
+      statusCode: 503,
+      error: 'Service Unavailable',
+      message:
+        'This search took too long to finish. Try again, or search for something more specific.'
+    }
+  }
+  const busy = {
+    status: 503,
+    response: {
+      code: 'SERVER_BUSY',
+      message: 'The server is busy right now. Please try again in a few seconds.'
+    }
+  }
+  it('tells a list timeout apart (code or, with no code on 5xx, its sentence)', () => {
+    expect(isListTimeout(timeout)).toBe(true)
+    expect(isListTimeout({ status: 503, response: { code: 'LIST_TIMEOUT' } })).toBe(true)
+    expect(isListTimeout({ response: { status: 503, data: timeout.response } })).toBe(true)
+    expect(isListTimeout(busy)).toBe(false)
+    expect(isListTimeout({ status: 500, response: timeout.response })).toBe(false)
+  })
+  it("shows a 503's own words, else the plain sentence", () => {
+    expect(listLoadErrorText(timeout)).toBe(timeout.response.message)
+    expect(listLoadErrorText(busy)).toBe(busy.response.message)
+    expect(listLoadErrorText({ status: 503 })).toMatch(/busy/)
+    expect(listLoadErrorText({ status: 500 })).toBe('The server hit an error loading this list.')
   })
 })

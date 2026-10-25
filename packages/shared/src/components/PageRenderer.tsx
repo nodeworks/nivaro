@@ -10,15 +10,16 @@ import {
   useNivaroClient,
   useOverlayState
 } from '../context'
+import { useDebounced } from '../hooks/useDebounced'
 import { get, post } from '../lib/commands'
 import {
   explicitAllUrlParams,
   filterSelectionToSearch,
   initialFilterSelection
 } from '../lib/query-filter-seed'
-import { uniqueByValue } from '../lib/unique-options'
 import { userErrorMessage } from '../lib/safe-error'
 import { resolveSheetDef, type SheetDefInput, type SheetHeaderAsOf } from '../lib/sheet-def'
+import { uniqueByValue } from '../lib/unique-options'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -778,24 +779,47 @@ function resolveRowTokens(
   return hasUndef(resolved) ? undefined : resolved
 }
 
+/** How long a filter edit settles before the query runs; longer while an option list is open. */
+const FILTER_SETTLE_MS = 400
+const FILTER_OPEN_SETTLE_MS = 2500
+
+/** Order-free identity of a filter selection (its sent values). */
+export function selectionSignature(
+  rows: Array<Record<string, unknown>>,
+  valueField: string
+): string {
+  return rows
+    .map((r) => String(r[valueField] ?? ''))
+    .sort()
+    .join('\u0000')
+}
+
 function QueryFilterSelect({
   filter,
   selected,
   onChange,
   allowedIds,
-  scopeDefault
+  scopeDefault,
+  onOpenChange
 }: {
   filter: QueryWidgetFilter
   selected: Array<Record<string, unknown>>
   onChange: (rows: Array<Record<string, unknown>>) => void
+  /** Told when the option list opens/closes — the widget holds its query while one is open. */
+  onOpenChange?: (open: boolean) => void
   /** Restricted-scope ids for this dimension — narrows visible options
    *  (the items service enforces the restriction server-side regardless). */
   allowedIds?: Array<string | number>
-  /** True when the selection was seeded from the user's default scopes. */
+  /** True while the selection is still the one seeded from the user's default scopes. */
   scopeDefault?: boolean
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
+  const openChangeRef = useRef(onOpenChange)
+  openChangeRef.current = onOpenChange
+  useEffect(() => {
+    openChangeRef.current?.(open)
+  }, [open])
   const [search, setSearch] = useState('')
   const rootRef = useRef<HTMLDivElement>(null)
   const valueField = filter.value_field ?? 'id'
@@ -1124,9 +1148,10 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   const { scopes, ready: scopesReady } = useMyScopes()
   const scopeSeededRef = useRef(false)
   const [scopeGateOpen, setScopeGateOpen] = useState(false)
-  // Params whose selection came from default scopes — drives the visible
-  // "default" badge on the filter chip so seeding isn't silent.
-  const [scopeSeededParams, setScopeSeededParams] = useState<ReadonlySet<string>>(new Set())
+  // Params whose selection came from default scopes, with the values seeded —
+  // drives the visible "default" badge on the filter chip so seeding isn't
+  // silent, and only while the selection is still that default.
+  const [scopeSeeded, setScopeSeeded] = useState<ReadonlyMap<string, string>>(new Map())
   useEffect(() => {
     if (scopeSeededRef.current) return
     if (!scopesReady) return
@@ -1166,14 +1191,21 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
             }
             return next
           })
-          setScopeSeededParams(new Set(Object.keys(patch)))
+          setScopeSeeded(
+            new Map(
+              Object.entries(patch).map(([k, rows]) => {
+                const vf = (cfg.filters ?? []).find((f) => f.param === k)?.value_field ?? 'id'
+                return [k, selectionSignature(rows, vf)]
+              })
+            )
+          )
         }
       } finally {
         setScopeGateOpen(true)
       }
     })()
   }, [scopesReady, scopes, cfg.filters, filterSel, client, urlAll])
-  const effectiveParams = useMemo(() => {
+  const liveParams = useMemo(() => {
     const p: Record<string, unknown> = { ...(cfg.params ?? {}) }
     for (const f of cfg.filters ?? []) {
       const sel = filterSel[f.param] ?? []
@@ -1182,6 +1214,24 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     }
     return p
   }, [cfg.params, cfg.filters, filterSel])
+  // A person's filter edits settle before the query runs: unticking one type
+  // and ticking another was two full runs (5–18 s each on the forecast grid).
+  // While an option list is open the query waits for the list to close (or a
+  // long pause); the first, seeded load runs at once.
+  const [openFilters, setOpenFilters] = useState<ReadonlySet<string>>(new Set())
+  const editedRef = useRef(false)
+  const liveParamsJson = JSON.stringify(liveParams)
+  const settledParamsJson = useDebounced(
+    liveParamsJson,
+    !editedRef.current ? 0 : openFilters.size > 0 ? FILTER_OPEN_SETTLE_MS : FILTER_SETTLE_MS
+  )
+  // Before any edit (defaults, scope seeding) the query follows at once.
+  const queryParamsJson = editedRef.current ? settledParamsJson : liveParamsJson
+  // What the shown data was asked with — the stat strip, pivots and sheets read it.
+  const effectiveParams = useMemo(
+    () => JSON.parse(queryParamsJson) as Record<string, unknown>,
+    [queryParamsJson]
+  )
   // isPending, NOT isLoading: while the scope gate holds `enabled: false`,
   // isLoading is false (pending-but-not-fetching), so the widget fell through
   // and flashed "No data" before the gate opened and the loader appeared.
@@ -1198,7 +1248,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     refetch,
     isFetching
   } = useQuery<CustomQueryEnvelope>({
-    queryKey: ['page-renderer-query', cfg.query_slug, JSON.stringify(effectiveParams)],
+    queryKey: ['page-renderer-query', cfg.query_slug, queryParamsJson],
     queryFn: () => {
       const refresh = forceRefreshRef.current
       forceRefreshRef.current = false
@@ -1298,8 +1348,24 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
               filter={f}
               selected={filterSel[f.param] ?? []}
               allowedIds={restrictedIds.length > 0 ? restrictedIds : undefined}
-              scopeDefault={scopeSeededParams.has(f.param)}
-              onChange={(rows) => changeFilter(f.param, rows)}
+              scopeDefault={
+                scopeSeeded.has(f.param) &&
+                scopeSeeded.get(f.param) ===
+                  selectionSignature(filterSel[f.param] ?? [], f.value_field ?? 'id')
+              }
+              onChange={(rows) => {
+                editedRef.current = true
+                changeFilter(f.param, rows)
+              }}
+              onOpenChange={(isOpen) =>
+                setOpenFilters((cur) => {
+                  if (cur.has(f.param) === isOpen) return cur
+                  const next = new Set(cur)
+                  if (isOpen) next.add(f.param)
+                  else next.delete(f.param)
+                  return next
+                })
+              }
             />
           )
         })}

@@ -321,6 +321,7 @@ export { UserChip, UserRosterCluster } from './components/item-edit/UserChip'
 export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
+export { ListLoadError } from './components/ListLoadError'
 export { LiveRowMark } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
@@ -648,7 +649,13 @@ export * from './lib/live-list'
 export * from './lib/live-ops'
 export * from './lib/live-queries'
 export * from './lib/live-widgets'
-export { loadErrorStatus, loadErrorText, serverErrorText } from './lib/load-error'
+export {
+  isListTimeout,
+  listLoadErrorText,
+  loadErrorStatus,
+  loadErrorText,
+  serverErrorText
+} from './lib/load-error'
 export {
   createIdbMetadataStore,
   isMetadataKey,

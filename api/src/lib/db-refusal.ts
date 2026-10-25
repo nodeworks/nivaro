@@ -30,6 +30,18 @@ function refusalText(err: unknown): string {
     .join(' · ')
 }
 
+/** The request pool had no free connection within DB_ACQUIRE_TIMEOUT_MS (knex's
+ *  KnexTimeoutError "Timeout acquiring a connection"): the server is busy, the
+ *  database is fine — say so, and when to try again. */
+export function isPoolBusy(err: unknown): boolean {
+  const e = err as { name?: unknown; message?: unknown } | null
+  return (
+    !!e &&
+    (e.name === 'KnexTimeoutError' ||
+      /Timeout acquiring a connection\. The pool is probably full/i.test(String(e.message ?? '')))
+  )
+}
+
 export function describeDbRefusal(err: unknown): DbRefusal | null {
   const text = refusalText(err)
   if (!text) return null

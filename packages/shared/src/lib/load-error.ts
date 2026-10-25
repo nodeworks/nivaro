@@ -53,3 +53,39 @@ export function serverErrorText(err: unknown): string | null {
   if (!msg || BARE_STATUS.test(msg)) return null
   return msg.length > 200 ? `${msg.slice(0, 197)}…` : msg
 }
+
+/** The body of a failed read, whichever client carried it (SDK `response`, axios `response.data`). */
+function errorBody(err: unknown): { code?: unknown; message?: unknown } | null {
+  const e = err as { response?: { data?: unknown } & Record<string, unknown> } | null
+  const r = e?.response
+  if (!r || typeof r !== 'object') return null
+  const data = (r as { data?: unknown }).data
+  return (data && typeof data === 'object' ? data : r) as { code?: unknown; message?: unknown }
+}
+
+/**
+ * A list or search the server gave up on: 503 with code LIST_TIMEOUT, or (5xx
+ * bodies carry no code) its "took too long" sentence. Distinct from the busy
+ * pool's 503 SERVER_BUSY only in wording — both read as "try again", never as
+ * an empty list.
+ */
+export function isListTimeout(err: unknown): boolean {
+  if (loadErrorStatus(err) !== 503) return false
+  const body = errorBody(err)
+  if (body?.code === 'LIST_TIMEOUT') return true
+  return typeof body?.message === 'string' && /took too long/i.test(body.message)
+}
+
+/**
+ * What a list shows in place of its rows when the read failed: a 503's own
+ * words ("This search took too long to finish…", "The server is busy right
+ * now…"), else the plain load-error sentence. Never "0 items".
+ */
+export function listLoadErrorText(err: unknown): string {
+  if (loadErrorStatus(err) === 503) {
+    const msg = errorBody(err)?.message
+    if (typeof msg === 'string' && msg.trim()) return msg.trim()
+    return 'The server is busy right now. Please try again in a few seconds.'
+  }
+  return loadErrorText(err, 'this list')
+}

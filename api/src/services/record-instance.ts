@@ -16,12 +16,14 @@
  * record and every dotted path it names); the transition endpoint still judges
  * them, so a listed transition can still be refused. Owner-only transitions
  * (`require_owner`, #794) are offered only to a viewer who owns the current
- * step (delegation applied) and to admins — one owner resolution per page.
+ * step (delegation applied; never the binding's owner fallback), to the
+ * record's creator when the move says `allow_creator`, and to admins — one
+ * owner resolution per page.
  */
 import { db, dbRead } from '../db/index.js'
 import { excludeBranchChildren } from './branch-instances.js'
 import { selectInChunks } from './db-batch.js'
-import { ownerOnlyAllows, ownsStep } from './record-access.js'
+import { ownerOnlyAllows, ownsStep, recordCreators, sameUser } from './record-access.js'
 import { pickInstance } from './record-state.js'
 import { isAdminRole } from './user-scopes.js'
 
@@ -63,6 +65,7 @@ export interface TransitionRow {
   sort: number | null
   auto_trigger?: unknown
   require_owner?: unknown
+  allow_creator?: unknown
 }
 
 export interface HistoryRow {
@@ -112,21 +115,49 @@ const resolveStepOwners: StepOwnerResolver = async (instances) => {
         instanceId: i.id,
         collection: i.collection,
         itemId: String(i.item)
-      }))
+      })),
+    db,
+    { skipFallback: true }
   )
 }
 
+/** Creator of each instance's record, keyed by instance id. */
+export type CreatorResolver = (instances: InstanceRow[]) => Promise<Map<string, string>>
+
+const resolveCreators: CreatorResolver = async (instances) => {
+  const out = new Map<string, string>()
+  const byCollection = new Map<string, InstanceRow[]>()
+  for (const i of instances) {
+    const list = byCollection.get(i.collection) ?? []
+    list.push(i)
+    byCollection.set(i.collection, list)
+  }
+  for (const [collection, list] of byCollection) {
+    const creators = await recordCreators(
+      collection,
+      list.map((i) => String(i.item))
+    )
+    for (const i of list) {
+      const c = creators.get(String(i.item))
+      if (c) out.set(i.id, c)
+    }
+  }
+  return out
+}
+
 /**
- * Drop owner-only transitions the viewer does not own (#794) — the same
- * answer the execute paths give (ownerOnlyAllows over the resolved owners of
- * the current step, delegation applied). ONE owner resolution for every
- * instance on the page that offers such a transition; admins and pages with
- * none skip it entirely.
+ * Drop owner-only transitions the viewer may not run (#794) — the same answer
+ * the execute paths give (ownerOnlyAllows over the ASSIGNED owners of the
+ * current step, delegation applied; the record's creator too for an
+ * `allow_creator` move). ONE owner resolution — and one creator read, only
+ * when an `allow_creator` move is left to judge — for every instance on the
+ * page that offers such a transition; admins and pages with none skip it.
  */
 export async function applyOwnerOnly(
   entries: Array<{ instance: InstanceRow; available: TransitionRow[] }>,
   viewer: Viewer,
-  resolve: StepOwnerResolver = resolveStepOwners
+  resolve: StepOwnerResolver = resolveStepOwners,
+  creatorsOf: CreatorResolver = resolveCreators
 ): Promise<void> {
   if (viewer.isAdmin) return
   const gated = entries.filter((e) => e.available.some((t) => truthy(t.require_owner)))
@@ -138,12 +169,30 @@ export async function applyOwnerOnly(
     // An owner question that cannot be answered hides the move, never offers it.
     owners = new Map()
   }
-  for (const e of gated) {
+  const isOwnerOf = (e: (typeof gated)[number]) => {
     const list = owners.get(e.instance.id)
-    const isOwner =
-      viewer.userId && e.instance.current_state && list ? ownsStep(list, viewer.userId) : false
-    if (ownerOnlyAllows(false, { is_owner: isOwner })) continue
-    e.available = e.available.filter((t) => !truthy(t.require_owner))
+    return viewer.userId && e.instance.current_state && list ? ownsStep(list, viewer.userId) : false
+  }
+  const creatorAsk = gated.filter(
+    (e) =>
+      !isOwnerOf(e) && e.available.some((t) => truthy(t.require_owner) && truthy(t.allow_creator))
+  )
+  let creators = new Map<string, string>()
+  if (viewer.userId && creatorAsk.length > 0) {
+    try {
+      creators = await creatorsOf(creatorAsk.map((e) => e.instance))
+    } catch {
+      // Same rule: an unanswerable creator question offers nothing extra.
+    }
+  }
+  for (const e of gated) {
+    const verdict = {
+      is_owner: isOwnerOf(e),
+      is_creator: sameUser(creators.get(e.instance.id), viewer.userId)
+    }
+    e.available = e.available.filter(
+      (t) => !truthy(t.require_owner) || ownerOnlyAllows(false, verdict, truthy(t.allow_creator))
+    )
   }
 }
 

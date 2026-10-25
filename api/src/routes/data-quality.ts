@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { likeContains } from '../lib/filter-like.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
@@ -71,7 +72,7 @@ function applyCondition(q: ReturnType<typeof db>, cond: FormulaCondition): Retur
     case 'lte':
       return q.where(cond.field, '<=', cond.value as never)
     case 'contains':
-      return q.where(cond.field, 'like', `%${cond.value}%`)
+      return q.where(cond.field, 'like', likeContains(cond.value))
     case 'null':
       return q.whereNull(cond.field)
     case 'nnull':

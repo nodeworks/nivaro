@@ -1,5 +1,6 @@
-import { History, RotateCcw, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { ExternalLink, History, RotateCcw, Trash2 } from 'lucide-react'
+import { type ReactNode, useState } from 'react'
+import { useItemNavigation } from '../../context'
 import type { StoredDraft } from '../../lib/draft-store'
 import { formatRelative, titleCase } from '../../lib/utils'
 
@@ -20,6 +21,15 @@ export interface DraftRecoveryBannerProps {
   recordChanged: boolean
   onRestore: () => void
   onDiscard: () => void
+  /** This draft was already created as a record (its id; '' = id unknown):
+   *  the banner says so instead of offering a plain restore. */
+  createdId?: string | null
+  /** The record's collection — for the created record's link. */
+  collection?: string
+  /** A value as the person knows it (a related record's label, a choice's
+   *  text) — ids meant nothing to someone deciding whether to restore.
+   *  Absent = the value as stored. */
+  renderValue?: (field: string, value: unknown) => ReactNode
 }
 
 const fmt = (v: unknown): string => {
@@ -35,10 +45,15 @@ export function DraftRecoveryBanner({
   current,
   recordChanged,
   onRestore,
-  onDiscard
+  onDiscard,
+  createdId = null,
+  collection,
+  renderValue
 }: DraftRecoveryBannerProps) {
   const [open, setOpen] = useState(false)
+  const itemNav = useItemNavigation()
   const fields = Object.entries(draft.fields ?? {})
+  const created = createdId !== null
   const rows = Object.values(draft.pending_rows ?? {}).reduce((n, r) => n + r.length, 0)
   const edits = Object.values(draft.pending_edits ?? {}).reduce(
     (n, e) => n + Object.keys(e).length,
@@ -63,9 +78,17 @@ export function DraftRecoveryBanner({
       <div className='flex flex-wrap items-center gap-2'>
         <History className='h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400' />
         <span className='min-w-0 flex-1'>
-          <span className='font-semibold'>
-            Restore your unsaved changes from {formatRelative(draft.saved_at)}?
-          </span>{' '}
+          {created ? (
+            <span className='font-semibold' data-nvr-draft-created>
+              These changes from {formatRelative(draft.saved_at)} were already saved
+              {createdId ? ` as record ${createdId}` : ' as a new record'} — restoring them makes a
+              second one.
+            </span>
+          ) : (
+            <span className='font-semibold'>
+              Restore your unsaved changes from {formatRelative(draft.saved_at)}?
+            </span>
+          )}{' '}
           <span className='text-amber-800/80 dark:text-amber-200/80'>{parts.join(' · ')}</span>
           {recordChanged && (
             <span className='ml-1 rounded bg-amber-200/70 px-1 py-px text-[10.5px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-500/30 dark:text-amber-100'>
@@ -80,13 +103,30 @@ export function DraftRecoveryBanner({
         >
           {open ? 'Hide changes' : 'Show changes'}
         </button>
+        {created && createdId && collection && (
+          <a
+            href={itemNav.urlFor({ collection, itemId: createdId })}
+            onClick={(e) => {
+              e.preventDefault()
+              itemNav.open({ collection, itemId: createdId })
+            }}
+            className='inline-flex h-7 items-center gap-1 rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
+            data-nvr-draft-open-created
+          >
+            <ExternalLink className='h-3 w-3' /> Open record {createdId}
+          </a>
+        )}
         <button
           type='button'
           onClick={onRestore}
-          className='inline-flex h-7 items-center gap-1 rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
+          className={
+            created
+              ? 'inline-flex h-7 items-center gap-1 rounded-md border border-amber-300 px-2.5 text-[11.5px] font-medium hover:bg-amber-100 dark:border-amber-500/40 dark:hover:bg-amber-500/15'
+              : 'inline-flex h-7 items-center gap-1 rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
+          }
           data-nvr-draft-restore
         >
-          <RotateCcw className='h-3 w-3' /> Restore
+          <RotateCcw className='h-3 w-3' /> {created ? 'Restore anyway' : 'Restore'}
         </button>
         <button
           type='button'
@@ -103,8 +143,12 @@ export function DraftRecoveryBanner({
             <div key={k} className='text-[11.5px]'>
               <span className='font-medium'>{labelFor(k) || titleCase(k.replace(/_/g, ' '))}</span>
               <p className='break-words text-amber-800/80 dark:text-amber-200/80'>
-                <span className='line-through opacity-70'>{fmt(current[k])}</span>{' '}
-                <span className='font-medium text-amber-900 dark:text-amber-100'>{fmt(v)}</span>
+                <span className='line-through opacity-70'>
+                  {renderValue ? renderValue(k, current[k]) : fmt(current[k])}
+                </span>{' '}
+                <span className='font-medium text-amber-900 dark:text-amber-100'>
+                  {renderValue ? renderValue(k, v) : fmt(v)}
+                </span>
               </p>
             </div>
           ))}

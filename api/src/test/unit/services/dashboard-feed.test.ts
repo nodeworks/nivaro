@@ -117,7 +117,7 @@ describe('weekBuckets', () => {
       row('2026-08-25T10:00:00Z', { send_back: true, tta_hours: 999 })
     ]
     const out = weekBuckets(rows, 4, now)
-    expect(out.this_week).toEqual({ transitions: 2, send_backs: 1, completions: 1 })
+    expect(out.this_week).toEqual({ transitions: 2, approvals: 1, send_backs: 1, completions: 1 })
     // weekly counts [3, 1, 0, 5] → transitions median (1 + 3) / 2
     expect(out.median.transitions).toBe(2)
     // send-backs [1, 0, 0, 0] → 0; completions [1, 0, 0, 1] → 0.5
@@ -130,10 +130,22 @@ describe('weekBuckets', () => {
 
   it('answers nulls when there is nothing to measure', () => {
     const out = weekBuckets([], 4, now)
-    expect(out.this_week).toEqual({ transitions: 0, send_backs: 0, completions: 0 })
-    expect(out.median).toEqual({ transitions: 0, send_backs: 0, completions: 0 })
+    expect(out.this_week).toEqual({ transitions: 0, approvals: 0, send_backs: 0, completions: 0 })
+    expect(out.median).toEqual({ transitions: 0, approvals: 0, send_backs: 0, completions: 0 })
     expect(out.time_to_action_hours).toEqual({ this_week: null, median: null })
     expect(out.send_back_ratio).toBeNull()
+  })
+
+  it('never counts a cancel or a send-back as an approval', () => {
+    const rows = [
+      row('2026-09-28T10:00:00Z'),
+      row('2026-09-29T10:00:00Z'),
+      row('2026-09-29T11:00:00Z', { send_back: true }),
+      row('2026-09-30T09:00:00Z', { cancel: true })
+    ]
+    const out = weekBuckets(rows, 4, now)
+    expect(out.this_week.transitions).toBe(4)
+    expect(out.this_week.approvals).toBe(2)
   })
 
   it("buckets by the viewer's own Monday", () => {

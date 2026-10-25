@@ -20,7 +20,11 @@
  * this module is the CLIENT evaluator and the Table Editor's type source.
  */
 
-import { normalizeRecordConditions, type RecordCondition, recordMatchesAll } from './record-conditions'
+import {
+  normalizeRecordConditions,
+  type RecordCondition,
+  recordMatchesAll
+} from './record-conditions'
 
 export type SummaryMode = 'summary' | 'edit'
 export type SummaryStatesOp = 'in' | 'not_in'
@@ -36,6 +40,9 @@ export interface SummaryModeRule {
 export interface SummaryModeRules {
   default: SummaryMode
   rules: SummaryModeRule[]
+  /** Server-enforced edit lock (api services/edit-lock.ts) — not an opening
+   *  mode; carried through so a Form UX save never drops it. */
+  edit_lock?: { states: string[]; children: string[] }
 }
 
 export const NO_STATE = '__none__'
@@ -44,7 +51,7 @@ export const EMPTY_SUMMARY_RULES: SummaryModeRules = { default: 'edit', rules: [
 
 export function normalizeSummaryModeRules(raw: unknown): SummaryModeRules {
   if (!raw || typeof raw !== 'object') return EMPTY_SUMMARY_RULES
-  const o = raw as { default?: unknown; rules?: unknown }
+  const o = raw as { default?: unknown; rules?: unknown; edit_lock?: SummaryModeRules['edit_lock'] }
   const def: SummaryMode = o.default === 'summary' ? 'summary' : 'edit'
   const rules: SummaryModeRule[] = []
   if (Array.isArray(o.rules)) {
@@ -60,7 +67,7 @@ export function normalizeSummaryModeRules(raw: unknown): SummaryModeRules {
       })
     }
   }
-  return { default: def, rules }
+  return { default: def, rules, ...(o.edit_lock ? { edit_lock: o.edit_lock } : {}) }
 }
 
 /** True when any rule mentions roles — the evaluator then needs the viewer's role. */

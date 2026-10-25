@@ -15,6 +15,8 @@ import { errorText } from './types'
 
 export interface ReloadPushed {
   sockets: number
+  /** Distinct browser tabs among the sockets (one tab may hold two); older servers omit it. */
+  tabs?: number
   users?: number
   nodes?: number
   partial?: boolean
@@ -29,9 +31,11 @@ export function reloadPushedText(r: ReloadPushed): string {
   const later = r.remembered
     ? ` Tabs that connect in the next ${r.remember_hours ?? 24} h reload too.`
     : ''
+  // Tabs, not connections: a tab that briefly holds two sockets is still one tab.
+  const tabs = typeof r.tabs === 'number' && r.sockets > 0 ? Math.max(1, r.tabs) : r.sockets
   return (
-    (r.sockets > 0
-      ? `Reload pushed to ${r.sockets} open tab${r.sockets === 1 ? '' : 's'}${r.partial ? ' (another server did not answer — there may be more)' : ''}.`
+    (tabs > 0
+      ? `Reload pushed to ${tabs} open tab${tabs === 1 ? '' : 's'}${r.partial ? ' (another server did not answer — there may be more)' : ''}.`
       : r.partial
         ? 'Reload sent — another server did not answer, so their open tabs could not be counted.'
         : r.nodes != null

@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db, isMssql } from '../db/index.js'
+import { likeContains } from '../lib/filter-like.js'
 import { businessHoursElapsed } from '../routes/sla.js'
 import type { User } from '../types.js'
 import { getSlaScheduleSync } from './business-hours.js'
@@ -106,6 +107,32 @@ export interface NarrowScanRow {
   aging_hours: number | null
   /** JSON_VALUE of the extra.* sort key when the request sorts by one; else null. */
   sort_val: string | null
+  /** The sort key's typed twins (number / ISO day) when the value reads as one. */
+  sort_num?: number | null
+  sort_day?: string | null
+}
+
+/**
+ * Ascending order of two extra.* sort values, as the SQL path's ORDER BY reads
+ * them: number twin, then day twin, then the displayed text — a missing twin
+ * sorts before a present one (SQL Server's NULL-first ascending).
+ */
+function compareExtraSort(a: NarrowScanRow, b: NarrowScanRow): number {
+  const an = a.sort_num ?? null
+  const bn = b.sort_num ?? null
+  if (an != null || bn != null) {
+    if (an == null) return -1
+    if (bn == null) return 1
+    if (an !== bn) return an - bn
+  }
+  const ad = a.sort_day ?? null
+  const bd = b.sort_day ?? null
+  if (ad != null || bd != null) {
+    if (ad == null) return -1
+    if (bd == null) return 1
+    if (ad !== bd) return ad < bd ? -1 : 1
+  }
+  return String(a.sort_val).localeCompare(String(b.sort_val))
 }
 
 const SLA_RANK: Record<string, number> = { ok: 1, warning: 2, breached: 3 }
@@ -183,8 +210,9 @@ export function filterAndOrderNarrowRows(
     if (va == null && vb == null) return tie()
     if (va == null) return 1
     if (vb == null) return -1
-    const cmp =
-      typeof va === 'number' && typeof vb === 'number'
+    const cmp = key.startsWith('extra.')
+      ? compareExtraSort(a, b)
+      : typeof va === 'number' && typeof vb === 'number'
         ? va - vb
         : String(va).localeCompare(String(vb))
     if (cmp !== 0) return desc ? -cmp : cmp
@@ -802,7 +830,7 @@ export async function fetchMaterializedQueueItems(
             applyTypedExtraPredicate(this, field, op)
           })
         } else {
-          this.orWhereRaw('JSON_VALUE(qi.extra, ?) LIKE ?', [path, `%${v}%`])
+          this.orWhereRaw('JSON_VALUE(qi.extra, ?) LIKE ?', [path, likeContains(v)])
         }
       }
     })
@@ -818,7 +846,7 @@ export async function fetchMaterializedQueueItems(
   if (labelList.length > 0) {
     baseNoState.where(function () {
       for (const v of labelList) {
-        this.orWhereRaw('LOWER(qi.label) LIKE ?', [`%${v.toLowerCase()}%`])
+        this.orWhereRaw('LOWER(qi.label) LIKE ?', [likeContains(v.toLowerCase())])
       }
     })
   }
@@ -837,7 +865,7 @@ export async function fetchMaterializedQueueItems(
       }
     } else {
       baseNoState.whereRaw('LOWER(qi.owner_names) LIKE ?', [
-        `%${String(filters.owners).toLowerCase()}%`
+        likeContains(String(filters.owners).toLowerCase())
       ])
     }
   }
@@ -949,10 +977,13 @@ export async function fetchMaterializedQueueItems(
     // scan's order, so the scan needs one — the cache row id, as the SQL path.
     if (!sortKey) narrowQuery.orderBy('qi.id', 'asc')
     if (sortKey.startsWith('extra.')) {
+      const field = sortKey.slice('extra.'.length)
       narrowQuery.select(
-        db.raw('JSON_VALUE(qi.extra, ?) AS sort_val', [
-          extraJsonPath(sortKey.slice('extra.'.length))
-        ])
+        db.raw('JSON_VALUE(qi.extra, ?) AS sort_val', [extraJsonPath(field)]),
+        db.raw('TRY_CONVERT(float, JSON_VALUE(qi.extra, ?)) AS sort_num', [
+          twinJsonPath(field, 'n')
+        ]),
+        db.raw('JSON_VALUE(qi.extra, ?) AS sort_day', [twinJsonPath(field, 'd')])
       )
     }
     const narrowRaw = (await narrowQuery) as Array<{
@@ -967,6 +998,8 @@ export async function fetchMaterializedQueueItems(
       at_risk: boolean
       has_owner: number
       sort_val?: string | null
+      sort_num?: number | string | null
+      sort_day?: string | null
     }>
     const narrow: NarrowScanRow[] = narrowRaw.map((r) => {
       const sla = computeSla(r)
@@ -979,7 +1012,9 @@ export async function fetchMaterializedQueueItems(
         has_owner: !!r.has_owner,
         sla_status: sla.status,
         aging_hours: sla.aging_hours,
-        sort_val: r.sort_val ?? null
+        sort_val: r.sort_val ?? null,
+        sort_num: r.sort_num == null ? null : Number(r.sort_num),
+        sort_day: r.sort_day ?? null
       }
     })
     const orderedAll = filterAndOrderNarrowRows(narrow, filters, sort, displayCfgWeights)
@@ -1036,11 +1071,17 @@ export async function fetchMaterializedQueueItems(
         `CASE WHEN qi.owner_names IS NULL OR qi.owner_names = '' THEN 1 ELSE 0 END ASC, qi.owner_names ${desc ? 'DESC' : 'ASC'}`
       )
     } else if (sortKey.startsWith('extra.')) {
-      const path = extraJsonPath(sortKey.slice('extra.'.length))
+      const field = sortKey.slice('extra.'.length)
+      const path = extraJsonPath(field)
+      const dir = desc ? 'DESC' : 'ASC'
       // Nulls last regardless of direction — matches sortItems' convention.
+      // Numbers and dates order by their typed twins (the ones the column
+      // filters read), so "REQ $" sorts 1,986 < 8,192 < 16,461, not as text;
+      // plain text falls through to the displayed value. Mirrored by
+      // compareExtraSort for the narrow-scan path.
       base.orderByRaw(
-        `CASE WHEN JSON_VALUE(qi.extra, ?) IS NULL THEN 1 ELSE 0 END ASC, JSON_VALUE(qi.extra, ?) ${desc ? 'DESC' : 'ASC'}`,
-        [path, path]
+        `CASE WHEN JSON_VALUE(qi.extra, ?) IS NULL THEN 1 ELSE 0 END ASC, TRY_CONVERT(float, JSON_VALUE(qi.extra, ?)) ${dir}, JSON_VALUE(qi.extra, ?) ${dir}, JSON_VALUE(qi.extra, ?) ${dir}`,
+        [path, twinJsonPath(field, 'n'), twinJsonPath(field, 'd'), path]
       )
     } else {
       // MSSQL requires ORDER BY when OFFSET/FETCH is present; (SELECT NULL)

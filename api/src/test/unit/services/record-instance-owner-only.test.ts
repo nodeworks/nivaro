@@ -20,7 +20,11 @@ const inst = (id: string, state: string | null = 'S1'): InstanceRow => ({
   started_at: null,
   completed_at: null
 })
-const tx = (id: string, requireOwner: unknown = false): TransitionRow => ({
+const tx = (
+  id: string,
+  requireOwner: unknown = false,
+  allowCreator: unknown = false
+): TransitionRow => ({
   id,
   template: 'T',
   from_state: 'S1',
@@ -29,7 +33,8 @@ const tx = (id: string, requireOwner: unknown = false): TransitionRow => ({
   color: null,
   required_roles: null,
   sort: 0,
-  require_owner: requireOwner
+  require_owner: requireOwner,
+  allow_creator: allowCreator
 })
 const page = () => [
   { instance: inst('i1'), available: [tx('approve', true), tx('send-back')] },
@@ -101,5 +106,50 @@ describe('applyOwnerOnly ($workflow_instance.available_transitions, #794)', () =
       })
     )
     expect(broken.map(ids)).toEqual([['send-back'], ['send-back'], ['send-back']])
+  })
+
+  it('allow_creator moves stay for the record creator; plain owner-only ones do not', async () => {
+    const entries = [
+      { instance: inst('i1'), available: [tx('approve', true), tx('cancel', true, true)] },
+      { instance: inst('i2'), available: [tx('approve', true), tx('cancel', 1, 1)] }
+    ]
+    const creators = vi.fn(async () => new Map([['i1', ME.toLowerCase()]]))
+    await applyOwnerOnly(
+      entries,
+      { role: 'r', isAdmin: false, userId: ME },
+      vi.fn(async () => new Map([['i2', [{ id: OTHER }]]])),
+      creators
+    )
+    expect(entries.map(ids)).toEqual([['cancel'], []])
+    // Asked once, only for the instances where the creator could matter.
+    expect(creators).toHaveBeenCalledTimes(1)
+  })
+
+  it('an owner keeps allow_creator moves without a creator read', async () => {
+    const entries = [{ instance: inst('i1'), available: [tx('cancel', true, true)] }]
+    const creators = vi.fn(async () => new Map())
+    await applyOwnerOnly(
+      entries,
+      { role: 'r', isAdmin: false, userId: ME },
+      vi.fn(async () => new Map([['i1', [{ id: ME }]]])),
+      creators
+    )
+    expect(entries.map(ids)).toEqual([['cancel']])
+    expect(creators).not.toHaveBeenCalled()
+  })
+
+  it('a creator lookup that throws offers nothing extra', async () => {
+    const entries = [
+      { instance: inst('i1'), available: [tx('cancel', true, true), tx('send-back')] }
+    ]
+    await applyOwnerOnly(
+      entries,
+      { role: 'r', isAdmin: false, userId: ME },
+      vi.fn(async () => new Map()),
+      vi.fn(async () => {
+        throw new Error('db down')
+      })
+    )
+    expect(entries.map(ids)).toEqual([['send-back']])
   })
 })

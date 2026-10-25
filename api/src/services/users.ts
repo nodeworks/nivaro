@@ -178,9 +178,14 @@ async function configuredNewUserRole(): Promise<string | null> {
 }
 
 export async function getUser(id: string): Promise<User | undefined> {
+  // nivaro_users.id is a uniqueidentifier: anything else is nobody, not a
+  // conversion error from SQL Server.
+  if (!USER_ID_SHAPE.test(String(id ?? ''))) return undefined
   const row = await db<User>('nivaro_users').where({ id }).first()
   return row ? parsePreferences(row) : row
 }
+
+const USER_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const USER_COLS = [
   'id',
@@ -224,6 +229,8 @@ function parsePreferences<T extends { preferences?: unknown }>(row: T): T {
   }
   return row
 }
+
+const FILTERABLE_USER_COLS = new Set<string>(USER_COLS.filter((c) => c !== 'preferences'))
 
 const SORTABLE_USER_COLS = new Set<string>([
   'first_name',
@@ -302,12 +309,16 @@ export async function listUsers(
     }
     if (filter) {
       for (const [key, value] of Object.entries(filter)) {
+        // Listed columns only: an unknown name was a 500 with the driver's
+        // text, and a credential column (static_token) must never be
+        // probe-able through a filter — admins included.
+        if (!FILTERABLE_USER_COLS.has(key)) continue
         if (typeof value === 'object' && value !== null) {
           for (const [op, val] of Object.entries(value as Record<string, unknown>)) {
             if (op === '_eq') qb.where(key, '=', val as string)
             else if (op === '_neq') qb.where(key, '!=', val as string)
-            else if (op === '_in') qb.whereIn(key, val as string[])
-            else if (op === '_nin') qb.whereNotIn(key, val as string[])
+            else if (op === '_in' && Array.isArray(val)) qb.whereIn(key, val as string[])
+            else if (op === '_nin' && Array.isArray(val)) qb.whereNotIn(key, val as string[])
           }
         } else {
           qb.where(key, '=', value as string)

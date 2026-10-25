@@ -4,6 +4,11 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NivaroProvider } from '../../context'
+import {
+  type CollectionUpdateEvent,
+  type RealtimeAdapter,
+  RealtimeContext
+} from '../../lib/realtime'
 import { ItemLockBanner, useItemLock } from './ItemLockBanner'
 
 type Cmd = { _method: string; _path: string }
@@ -125,6 +130,126 @@ describe('useItemLock (lazy)', () => {
     render(true)
     await flush()
     expect(said(calls, 'POST')).toHaveLength(2)
+  })
+})
+
+describe('useItemLock — a lock someone else holds', () => {
+  function fakeFeed() {
+    const subs = new Set<(ev: CollectionUpdateEvent) => void>()
+    const adapter: RealtimeAdapter = {
+      subscribeCollections: (_cols, cb) => {
+        subs.add(cb)
+        return () => subs.delete(cb)
+      },
+      on: () => () => {},
+      emit: () => {}
+    }
+    const send = (ev: CollectionUpdateEvent) => {
+      for (const cb of subs) cb(ev)
+    }
+    return { adapter, send }
+  }
+
+  it('clears the banner when the holder lets go (the $lock notice)', async () => {
+    let held = true
+    const { client } = fakeClient(() => ({
+      data: held ? { locked_by: 'u-2', locked_by_name: 'Howard' } : null
+    }))
+    const feed = fakeFeed()
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <RealtimeContext.Provider value={feed.adapter}>
+            <Probe />
+          </RealtimeContext.Provider>
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    expect(lock?.isReadOnly).toBe(true)
+    held = false
+    // Another record's notice and a non-lock change are not this lock.
+    await act(async () =>
+      feed.send({ collection: 'workflows', item: '8', changed_fields: ['$lock'] })
+    )
+    await act(async () =>
+      feed.send({ collection: 'workflows', item: '7', changed_fields: ['name'] })
+    )
+    expect(lock?.isReadOnly).toBe(true)
+    await act(async () =>
+      feed.send({ collection: 'workflows', item: '7', changed_fields: ['$lock'] })
+    )
+    await flush()
+    expect(lock?.isReadOnly).toBe(false)
+    expect(lock?.lockHolder).toBeNull()
+  })
+
+  it('a lock taken while I only look turns the form read-only (the releaser cannot save over it)', async () => {
+    let holder: unknown = null
+    const { client } = fakeClient(() => ({ data: holder }))
+    const feed = fakeFeed()
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <RealtimeContext.Provider value={feed.adapter}>
+            <Probe />
+          </RealtimeContext.Provider>
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    expect(lock?.isReadOnly).toBe(false)
+    holder = { locked_by: 'u-3', locked_by_name: 'Andy' }
+    await act(async () =>
+      feed.send({ collection: 'workflows', item: '7', changed_fields: ['$lock'] })
+    )
+    await flush()
+    expect(lock?.lockHolder?.locked_by_name).toBe('Andy')
+  })
+
+  it('re-checks on a slow poll when no notice arrives', async () => {
+    vi.useFakeTimers()
+    let held = true
+    const { client } = fakeClient(() => ({
+      data: held ? { locked_by: 'u-2', locked_by_name: 'Howard' } : null
+    }))
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <Probe />
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    expect(lock?.isReadOnly).toBe(true)
+    held = false
+    await act(async () => {
+      vi.advanceTimersByTime(30_000)
+    })
+    await flush()
+    expect(lock?.isReadOnly).toBe(false)
+  })
+
+  it('"Ask to be next" on a lock nobody holds any more drops the banner', async () => {
+    const { client } = fakeClient((cmd) =>
+      cmd._path.endsWith('/lock/queue')
+        ? { data: { position: null, free: true, queue: [] } }
+        : { data: { locked_by: 'u-2', locked_by_name: 'Howard' } }
+    )
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <Probe />
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    expect(lock?.isReadOnly).toBe(true)
+    await act(async () => {
+      await lock?.joinQueue()
+    })
+    expect(lock?.isReadOnly).toBe(false)
+    expect(lock?.myPosition).toBeNull()
   })
 })
 

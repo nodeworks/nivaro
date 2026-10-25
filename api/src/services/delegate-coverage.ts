@@ -1,5 +1,7 @@
-import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { resolveStateOwnersBatch } from './pipeline-engine.js'
+import { ADDENDUM_COLLECTION } from './pipeline-subject.js'
+import { QUEUE_SANITY_CEILING } from './queues.js'
 
 /**
  * Delegation coverage helpers: #338 OOO conflict warnings, #414 delegation
@@ -44,24 +46,52 @@ export async function computeCoverageWarnings(userId: string): Promise<string[]>
   return warnings
 }
 
-/** Approximate count of open records the user currently owns (#414). */
+/**
+ * Open records whose current step resolves this user as an owner (#414) —
+ * the set their delegate inherits. The SAME resolution My Work and the
+ * owned-by-me queue use (bound collections + addenda, open, owner groups with
+ * their dimension filters + the binding's owner fallback field), with the
+ * ceiling those use. The old "any open instance in a state where I hold a
+ * seat" estimate ignored the groups' filters and said 117 for a hand-over of
+ * 42 (army 2026-10-24). Delegation is NOT applied: the preview runs before
+ * the switch and the briefing right after it, and both describe what the
+ * owner holds, not where it currently routes.
+ */
 export async function countOwnedApprovals(userId: string): Promise<number> {
-  // Owner-group membership × open instances in those states — an upper-bound
-  // estimate (dimension filters may exclude some), computed cheaply.
-  const rows = (await db('nivaro_pipeline_owner_group_users as gu')
-    .join('nivaro_pipeline_owner_groups as g', 'gu.group', 'g.id')
-    .where('gu.user', userId)
-    .distinct('g.state')) as Array<{ state: string }>
-  if (rows.length === 0) return 0
-  const counts = (await db('nivaro_workflow_instances')
-    .whereIn(
-      'current_state',
-      rows.map((r) => r.state)
-    )
-    .whereNull('completed_at')
-    .count('* as c')
-    .first()) as { c?: number | string } | undefined
-  return Number(counts?.c ?? 0)
+  const instances = (await db('nivaro_workflow_instances as wi')
+    .leftJoin('nivaro_workflow_bindings as b', 'wi.collection', 'b.collection')
+    .where((qb) => qb.whereNotNull('b.collection').orWhere('wi.collection', ADDENDUM_COLLECTION))
+    .whereNotNull('wi.current_state')
+    .whereNull('wi.completed_at')
+    .orderBy('wi.id')
+    .limit(QUEUE_SANITY_CEILING)
+    .select('wi.id as instance_id', 'wi.collection', 'wi.item', 'wi.current_state')) as Array<{
+    instance_id: string
+    collection: string
+    item: string
+    current_state: string
+  }>
+  if (instances.length === 0) return 0
+  const owners = await resolveStateOwnersBatch(
+    instances.map((i) => ({
+      key: `${i.collection}:${i.item}`,
+      stateId: i.current_state,
+      instanceId: i.instance_id,
+      collection: i.collection,
+      itemId: i.item
+    })),
+    db,
+    { skipDelegation: true }
+  )
+  return countOwnedBy(userId, owners)
+}
+
+/** Distinct records whose resolved owners include `userId` (case-insensitive ids). */
+export function countOwnedBy(userId: string, owners: Map<string, Array<{ id: string }>>): number {
+  const me = userId.toUpperCase()
+  let n = 0
+  for (const set of owners.values()) if (set.some((o) => String(o.id).toUpperCase() === me)) n++
+  return n
 }
 
 /** Email the delegate a coverage summary when coverage begins (#415). */
@@ -85,14 +115,17 @@ export async function sendDelegateBriefing(userId: string, delegateId: string): 
     state: string
   }>
   const seatList = seats.map((x) => `<li>${x.template} — ${x.state}</li>`).join('')
+  // My Work in whichever app the delegate's links open in (portal or admin).
+  const { linkTo } = await import('./app-links.js')
+  const myWork = await linkTo('my_work', {}, { recipientUserId: delegateId })
   const { sendRawMail } = await import('./mail.js')
   await sendRawMail({
     to: delegate.email,
     subject: `You're covering for ${myName}`,
     category: 'workflow',
     html: `<p><b>${myName}</b> is out of office and named you their delegate — their approvals now resolve to you.</p>
-<p>Roughly <b>${count}</b> open record(s) sit in steps they own.</p>
+<p><b>${count}</b> open record(s) sit in steps they own.</p>
 ${seatList ? `<p>Approval steps they sit in:</p><ul>${seatList}</ul>` : ''}
-<p><a href="${config.ADMIN_URL}/my-work">Open My Work</a> to see what's waiting.</p>`
+<p><a href="${myWork}">Open My Work</a> to see what's waiting.</p>`
   })
 }

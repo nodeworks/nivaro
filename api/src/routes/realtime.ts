@@ -409,7 +409,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
     await logActivity({
       action: 'client-force-refresh',
       user: req.user?.id,
-      comment: `${scope} — ${seconds}s${message ? ` — ${message}` : ''} (${hit.sockets} tabs${hit.partial ? ' on this node only — another replica did not answer' : ''})${remembered ? `; tabs that reconnect in the next ${rememberHours()} h get it too` : ''}`,
+      comment: `${scope} — ${seconds}s${message ? ` — ${message}` : ''} (${hit.tabs} tabs${hit.partial ? ' on this node only — another replica did not answer' : ''})${remembered ? `; tabs that reconnect in the next ${rememberHours()} h get it too` : ''}`,
       req
     })
     const { builds: _builds, api: _api, ...counts } = hit

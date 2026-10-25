@@ -11,7 +11,7 @@ import { db } from './db/index.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
-import { describeDbRefusal, errorText, messageWithoutSql } from './lib/db-refusal.js'
+import { describeDbRefusal, errorText, isPoolBusy, messageWithoutSql } from './lib/db-refusal.js'
 import { applyEarlyHints, loadEarlyHints } from './lib/early-hints.js'
 import { adminAssetCacheControl } from './lib/static-cache.js'
 import { scopeRefusalBody } from './middleware/authenticate.js'
@@ -543,6 +543,17 @@ export async function buildServer() {
       // A write the database refused over the caller's data (a link to a
       // record that does not exist, a duplicate) is a 4xx with a reason —
       // not a 500, not an issue, and never the database's own names.
+      // No free connection within DB_ACQUIRE_TIMEOUT_MS: busy, not broken. A short
+      // honest 503 the client may retry, not an issue and not a 60 s hang.
+      if (err.statusCode == null && isPoolBusy(err)) {
+        req.log.warn({ url: req.url }, 'request pool busy: no connection within the wait limit')
+        return reply.code(503).header('Retry-After', '5').send({
+          statusCode: 503,
+          error: 'Service Unavailable',
+          message: 'The server is busy right now. Please try again in a few seconds.',
+          code: 'SERVER_BUSY'
+        })
+      }
       const refusal = err.statusCode == null ? describeDbRefusal(err) : null
       if (refusal) {
         req.log.info({ code: refusal.code, url: req.url }, refusal.message)
@@ -596,7 +607,11 @@ export async function buildServer() {
         }).catch(() => {})
       }
       logRouteError(req.log, err, status, req.url)
-      const coded = !!err.code && status < 500 && /^[A-Z][A-Z0-9_]+$/.test(err.code)
+      // LIST_TIMEOUT is ours, not a driver code: clients show "took too long, Retry" on it.
+      const coded =
+        !!err.code &&
+        /^[A-Z][A-Z0-9_]+$/.test(err.code) &&
+        (status < 500 || err.code === 'LIST_TIMEOUT')
       reply.code(status).send({
         statusCode: status,
         error: STATUS_CODES[status] ?? 'Error',

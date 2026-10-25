@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
-import { ownerOnlyAllows, ownsStep } from '../../../services/record-access.js'
+import { offeredToActor, ownerOnlyAllows, ownsStep } from '../../../services/record-access.js'
 
 const OWNER = '6D0C0E3A-1111-4A2B-9C3D-000000000001'
 const DELEGATE = '6D0C0E3A-1111-4A2B-9C3D-000000000002'
@@ -40,5 +40,27 @@ describe('ownerOnlyAllows (#794)', () => {
     expect(ownerOnlyAllows(false, { is_owner: false })).toBe(false)
     // No open step to own — nobody but an admin.
     expect(ownerOnlyAllows(false, { is_owner: null })).toBe(false)
+  })
+})
+
+describe('allow_creator (army 2026-10-24)', () => {
+  it('the record creator passes only on a move that allows the creator', () => {
+    const creator = { is_owner: false, is_creator: true }
+    expect(ownerOnlyAllows(false, creator, true)).toBe(true)
+    expect(ownerOnlyAllows(false, creator, false)).toBe(false)
+    expect(ownerOnlyAllows(false, { is_owner: false, is_creator: false }, true)).toBe(false)
+  })
+
+  it('offeredToActor keeps open moves, owner moves for owners, creator moves for creators', () => {
+    const moves = [
+      { id: 'submit', require_owner: false },
+      { id: 'approve', require_owner: true },
+      { id: 'cancel', require_owner: 1, allow_creator: 1 }
+    ]
+    const ids = (a: { is_owner: boolean; is_creator: boolean }) =>
+      offeredToActor(moves, a).map((m) => m.id)
+    expect(ids({ is_owner: true, is_creator: false })).toEqual(['submit', 'approve', 'cancel'])
+    expect(ids({ is_owner: false, is_creator: true })).toEqual(['submit', 'cancel'])
+    expect(ids({ is_owner: false, is_creator: false })).toEqual(['submit'])
   })
 })

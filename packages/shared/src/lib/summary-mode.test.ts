@@ -16,10 +16,14 @@ const rules = normalizeSummaryModeRules({
 
 describe('resolveSummaryMode', () => {
   it('new records always edit', () => {
-    expect(resolveSummaryMode(rules, { role: null, stateKey: 'completed', isNew: true })).toBe('edit')
+    expect(resolveSummaryMode(rules, { role: null, stateKey: 'completed', isNew: true })).toBe(
+      'edit'
+    )
   })
   it('rule shape: started + stateless edit, everything else summary', () => {
-    expect(resolveSummaryMode(rules, { role: null, stateKey: 'started', isNew: false })).toBe('edit')
+    expect(resolveSummaryMode(rules, { role: null, stateKey: 'started', isNew: false })).toBe(
+      'edit'
+    )
     expect(resolveSummaryMode(rules, { role: null, stateKey: null, isNew: false })).toBe('edit')
     expect(resolveSummaryMode(rules, { role: null, stateKey: 'completed', isNew: false })).toBe(
       'summary'
@@ -45,7 +49,9 @@ describe('resolveSummaryMode', () => {
     expect(resolveSummaryMode(cfg, { role: 'other', stateKey: 'completed', isNew: false })).toBe(
       'edit'
     )
-    expect(resolveSummaryMode(cfg, { role: null, stateKey: 'completed', isNew: false })).toBe('edit')
+    expect(resolveSummaryMode(cfg, { role: null, stateKey: 'completed', isNew: false })).toBe(
+      'edit'
+    )
   })
   it('first matching rule wins', () => {
     const cfg = normalizeSummaryModeRules({
@@ -55,7 +61,9 @@ describe('resolveSummaryMode', () => {
         { states: ['completed'], mode: 'summary' }
       ]
     })
-    expect(resolveSummaryMode(cfg, { role: ROLE, stateKey: 'completed', isNew: false })).toBe('edit')
+    expect(resolveSummaryMode(cfg, { role: ROLE, stateKey: 'completed', isNew: false })).toBe(
+      'edit'
+    )
     expect(resolveSummaryMode(cfg, { role: 'z', stateKey: 'completed', isNew: false })).toBe(
       'summary'
     )
@@ -63,7 +71,9 @@ describe('resolveSummaryMode', () => {
   it('need-role / need-state detection', () => {
     expect(summaryRulesNeedRole(rules)).toBe(false)
     expect(summaryRulesNeedState(rules)).toBe(true)
-    expect(summaryRulesNeedRole(normalizeSummaryModeRules({ rules: [{ roles: [ROLE], mode: 'edit' }] }))).toBe(true)
+    expect(
+      summaryRulesNeedRole(normalizeSummaryModeRules({ rules: [{ roles: [ROLE], mode: 'edit' }] }))
+    ).toBe(true)
     expect(summaryRulesNeedState(null)).toBe(false)
   })
 })
@@ -96,3 +106,11 @@ describe('record conditions (#737)', () => {
   })
 })
 
+describe('edit_lock pass-through', () => {
+  it('normalizing keeps the server-enforced edit lock, so a Form UX save never drops it', () => {
+    const lock = { states: ['waiting_on_vp_approval'], children: ['workflow_line_items'] }
+    const out = normalizeSummaryModeRules({ default: 'summary', rules: [], edit_lock: lock })
+    expect(out.edit_lock).toEqual(lock)
+    expect(normalizeSummaryModeRules({ default: 'edit', rules: [] }).edit_lock).toBeUndefined()
+  })
+})

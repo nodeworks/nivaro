@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { itemActionRegistry } from '../extensions/item-actions.js'
+import { describeDbRefusal, messageWithoutSql } from '../lib/db-refusal.js'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
@@ -119,9 +120,16 @@ export async function itemActionsRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: 'collection and item are required' })
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection))
         return reply.status(400).send({ error: 'Not a valid collection' })
+      if (action.collections && !action.collections.includes(collection))
+        return reply.status(404).send({ error: 'Item action not found' })
       const { can } = await import('../services/permissions.js')
       if (!(await can(req.user!, 'read', collection)))
         return reply.status(403).send({ error: 'Forbidden' })
+      // The issues name the record's lines and fields — only for a record
+      // the caller can see.
+      const { readOne } = await import('../services/items.js')
+      const row = await readOne(req.user!, collection, item, undefined, ['id']).catch(() => null)
+      if (!row) return reply.status(404).send({ error: 'Not found' })
       if (typeof action.preflight !== 'function')
         return { data: { ready: true, supported: false, issues: [] } }
       try {
@@ -150,12 +158,19 @@ export async function itemActionsRoutes(app: FastifyInstance) {
           }
         }
       } catch (err) {
-        // Never "ready" on a check that failed.
+        // Never "ready" on a check that failed — and never driver text.
+        const message = err instanceof Error ? err.message.trim() : ''
+        if (!message || looksLikeDriverError(err, message))
+          req.log.error(
+            { err, action: req.params.id, collection, item },
+            'item action preflight failed'
+          )
         return {
           data: {
             ready: false,
             supported: true,
-            error: err instanceof Error ? err.message : 'Pre-flight check failed',
+            error:
+              message && !looksLikeDriverError(err, message) ? message : 'Pre-flight check failed',
             issues: []
           }
         }
@@ -163,7 +178,10 @@ export async function itemActionsRoutes(app: FastifyInstance) {
     }
   )
 
-  // Execute a registered item action
+  // Execute a registered item action. The action's mutation lives in
+  // extension code, so the gates the record form applies are enforced here:
+  // the action serves this collection, the caller may read AND update THIS
+  // record, and the action's own applicability check passes.
   app.post<{
     Params: { id: string }
     Body: { collection: string; itemId: string | number; payload?: Record<string, unknown> }
@@ -171,18 +189,44 @@ export async function itemActionsRoutes(app: FastifyInstance) {
     const action = itemActionRegistry.get(req.params.id)
     if (!action) return reply.status(404).send({ error: 'Item action not found' })
 
-    const { collection, itemId, payload } = req.body
-    if (!collection || itemId == null) {
+    const { collection, itemId, payload } = req.body ?? ({} as typeof req.body)
+    if (!collection || itemId == null || String(itemId).trim() === '') {
       return reply.status(400).send({ error: 'collection and itemId are required' })
     }
+    if (typeof collection !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection))
+      return reply.status(400).send({ error: 'Not a valid collection' })
+    if (action.collections && !action.collections.includes(collection))
+      return reply.status(404).send({ error: 'Item action not found' })
+
+    const user = req.user!
+    const { can } = await import('../services/permissions.js')
+    if (!(await can(user, 'read', collection)) || !(await can(user, 'update', collection)))
+      return reply.status(403).send({ error: 'Forbidden' })
+    const workspaceId = req.workspaceId ?? undefined
+    const { canUpdateItem, readOne } = await import('../services/items.js')
+    // readOne answers null (or throws) for a record the caller can't see —
+    // asked first, so a hidden record reads as missing, never as forbidden.
+    const row = await readOne(user, collection, itemId, workspaceId, ['id']).catch(() => null)
+    if (!row) return reply.status(404).send({ error: 'Not found' })
+    if (!(await canUpdateItem(user, collection, itemId, workspaceId)))
+      return reply.status(403).send({ error: 'You cannot change this record' })
 
     if (action.requires_addendum_create) {
       const { canCreateAddendum } = await import('../services/addendum-approve.js')
       const gate = await canCreateAddendum(collection, itemId, {
-        roleId: (req.user?.role as string | null) ?? null,
+        roleId: (user.role as string | null) ?? null,
         isAdmin: !!req.isAdmin
       })
       if (!gate.ok) return reply.status(403).send({ error: gate.reason ?? 'Addendums unavailable' })
+    }
+    if (action.applicable) {
+      // Same rule as the button list: a broken check must not block a
+      // working action — only a clear "no" refuses.
+      const ok = await action.applicable({ collection, itemId: String(itemId) }).catch(() => true)
+      if (!ok)
+        return reply
+          .status(409)
+          .send({ error: `${action.label} is not available on this record right now` })
     }
 
     try {
@@ -190,12 +234,12 @@ export async function itemActionsRoutes(app: FastifyInstance) {
         collection,
         itemId,
         payload,
-        userId: req.user?.id
+        userId: user.id
       })
       // The mutation itself lives in extension code — log the invocation.
       await logActivity({
         action: 'item-action-execute',
-        user: req.user?.id,
+        user: user.id,
         collection,
         item: String(itemId),
         comment: req.params.id,
@@ -203,8 +247,51 @@ export async function itemActionsRoutes(app: FastifyInstance) {
       })
       return { data: result }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Action failed'
-      return reply.status(500).send({ error: msg })
+      const failure = executeFailure(err)
+      if (failure.status >= 500)
+        req.log.error({ err, action: req.params.id, collection, itemId }, 'item action failed')
+      return reply
+        .status(failure.status)
+        .send({ error: failure.error, ...(failure.code ? { code: failure.code } : {}) })
     }
   })
+}
+
+/**
+ * What a failed item action answers. An extension marks a refusal that is the
+ * caller's doing (a missing field, a record in the wrong state) with a 4xx
+ * `statusCode` and a sentence written for people — that is passed on. A
+ * database refusal of the caller's data becomes its 4xx. Driver text (SQL,
+ * column names, conversion errors) never reaches the browser: it is logged and
+ * the answer is a plain 500. Any other extension error keeps its own message.
+ * Exported for the unit tests.
+ */
+export function executeFailure(err: unknown): { status: number; error: string; code?: string } {
+  const refusal = describeDbRefusal(err)
+  if (refusal) return { status: refusal.status, error: refusal.message, code: refusal.code }
+  const e = (err ?? {}) as { statusCode?: unknown; status?: unknown; code?: unknown }
+  const status = Number(e.statusCode ?? e.status)
+  const message = err instanceof Error ? err.message.trim() : ''
+  if (looksLikeDriverError(err, message))
+    return { status: 500, error: 'The action failed. The details are in the server log.' }
+  if (Number.isInteger(status) && status >= 400 && status < 500)
+    return {
+      status,
+      error: message || 'The action was refused',
+      ...(typeof e.code === 'string' ? { code: e.code } : {})
+    }
+  return { status: 500, error: message || 'The action failed' }
+}
+
+const DRIVER_TEXT =
+  /Invalid (column|object) name|Incorrect syntax near|Conversion failed when converting|Validation failed for parameter|Must declare the scalar variable|The multi-part identifier|Arithmetic overflow|deadlocked on lock|Timeout acquiring a connection|Cannot insert the value NULL|There is already an object named/i
+
+function looksLikeDriverError(err: unknown, message: string): boolean {
+  const e = (err ?? {}) as { name?: unknown; number?: unknown; errors?: unknown }
+  if (typeof e.number === 'number') return true // tedious RequestError carries the SQL error number
+  if (e.name === 'RequestError' || e.name === 'ConnectionError' || e.name === 'KnexTimeoutError')
+    return true
+  if (Array.isArray(e.errors)) return true // knex/mssql AggregateError
+  if (DRIVER_TEXT.test(message)) return true
+  return message !== '' && messageWithoutSql(err) !== message
 }

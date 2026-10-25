@@ -111,7 +111,7 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
   {
     key: 'workflow',
     label: 'Workflow & approvals',
-    help: 'A record you own or follow moves state, needs your approval, is sent back, or an approval chain reaches your step.'
+    help: 'A record you own or follow moves state, needs your approval, is sent back, or an approval chain reaches your step. Also support requests you work on the desk (new, assigned, replied).'
   },
   {
     key: 'sla',
@@ -156,7 +156,7 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
   {
     key: 'system',
     label: 'System & digests',
-    help: 'Maintenance windows, failing monitors, import results, and the daily action summary itself. Maintenance and monitor failures always email immediately.'
+    help: 'Maintenance windows, failing monitors, import results, updates on support requests you raised, and the daily action summary itself. Maintenance and monitor failures always email immediately.'
   },
   {
     key: 'other',
@@ -659,6 +659,8 @@ export function NotificationRulesCard() {
                         checked={row[ch] !== false}
                         onChange={() => toggle(c.key, ch)}
                         disabled={save.isPending}
+                        aria-label={`${ch === 'inapp' ? 'In-app' : 'Push'} for ${c.label}`}
+                        data-notify-channel={`${c.key}:${ch}`}
                         className='h-3.5 w-3.5'
                       />
                     </td>

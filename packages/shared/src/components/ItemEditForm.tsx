@@ -15,6 +15,7 @@ import {
   FileDown,
   LifeBuoy,
   Loader2,
+  Lock,
   MessageSquarePlus,
   PencilLine,
   PictureInPicture2,
@@ -48,15 +49,18 @@ import {
   StaleFieldReportContext,
   useApiFetchConfig,
   useItemNavigation,
-  useNivaroClient
+  useNivaroClient,
+  useRecordSurface
 } from '../context'
 import { formatApiPayload } from '../lib/api-payload'
 import { del, get, patch, post, put } from '../lib/commands'
 import {
   deleteDraft,
+  draftCreatedAs,
   draftHasContent,
   draftKey,
   loadDraft,
+  markDraftCreated,
   type StoredDraft,
   saveDraft
 } from '../lib/draft-store'
@@ -88,6 +92,7 @@ import { type LayoutGrantFlags, layoutGrantedTools } from '../lib/layout-grants'
 import { formLocale, translateFieldRow, translateGroup } from '../lib/layout-i18n'
 import { currentViewport } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
+import { useLeaveLinkGuard } from '../lib/leave-guard'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useRecordReader } from '../lib/record-loader'
 import {
@@ -182,7 +187,7 @@ import {
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { deferredSections } from './item-edit/lazy-sections'
-import { checkNumberEntry, NUMBER_FIELD_TYPES } from './item-edit/line-qty'
+import { checkNumberEntry, NUMBER_FIELD_TYPES, ruleValueFor } from './item-edit/line-qty'
 import {
   computeLiveRollup,
   isDerivedForRecord,
@@ -226,6 +231,7 @@ import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-e
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
+import { refusedFieldOf } from './item-edit/save-refusal'
 import { foldStagedLinks, foldStagedRows } from './item-edit/staged-links'
 import { useFormUsageBeacon } from './item-edit/useFormUsageBeacon'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
@@ -383,6 +389,9 @@ function GridContainer({ children }: { children: (containerWidth: number) => Rea
 
 // ─── Save progress dialog ──────────────────────────────────────────────────────
 
+/** The "can't save yet" toast — one at a time however often Save is pressed. */
+const VALIDATION_TOAST_ID = 'nvr-form-validation'
+
 type SaveStepStatus = 'pending' | 'running' | 'done' | 'error'
 interface SaveStepItem {
   id: string
@@ -448,7 +457,13 @@ function SaveProgressDialog({
             {!allSettled && <Loader2 className='h-4 w-4 animate-spin text-nvr-cyan' />}
             {allSettled && hasError && <AlertCircle className='h-4 w-4 text-red-500' />}
             {allSettled && !hasError && <Check className='h-4 w-4 text-green-500' />}
-            {hasError ? 'Saved with errors' : allSettled ? 'All changes saved' : 'Saving changes…'}
+            {hasError
+              ? doneCount === 0
+                ? 'Nothing was saved'
+                : 'Saved with errors'
+              : allSettled
+                ? 'All changes saved'
+                : 'Saving changes…'}
           </DialogTitle>
           <div className='flex items-center gap-3 pt-1'>
             <div className='flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-muted overflow-hidden'>
@@ -1044,6 +1059,28 @@ export function ruleJudgedOnSave(
     (rule.type === 'gte_field' || rule.type === 'lte_field' || rule.type === 'required_if') &&
     changed(partner)
   )
+}
+
+/** The `code` of a server refusal, from either client error shape (the SDK
+ *  puts the parsed body on `err.response`, axios under `err.response.data`). */
+export function serverErrorCode(err: unknown): string | null {
+  const r = (err as { response?: { code?: unknown; data?: { code?: unknown } } } | null)?.response
+  const code = r?.code ?? r?.data?.code
+  return typeof code === 'string' ? code : null
+}
+
+/** Who a live change on the open record is credited to in its notice: the
+ *  writer's name, or "You, in another tab" when it was this person's own
+ *  other tab (it used to read "Someone changed this"). Ids compare
+ *  case-insensitively (SQL Server uuids come back upper-case). */
+export function remoteChangeAuthor(
+  touch: { user_id?: unknown; user_name?: string | null } | null | undefined,
+  authUserId: string | null | undefined
+): string | null {
+  if (!touch?.user_id) return null
+  const mine =
+    !!authUserId && String(touch.user_id).toUpperCase() === String(authUserId).toUpperCase()
+  return mine ? 'You, in another tab' : (touch.user_name ?? null)
 }
 
 /** The save-blocking error for a value its own picker no longer offers. */
@@ -1867,7 +1904,11 @@ function ItemEditFormView({
   // draft is OFFERED (banner) — never applied silently.
   const recoveryKey = draftKey(collection, itemId, authUserId)
   const [recovery, setRecovery] = useState<
-    { state: 'checking' } | { state: 'offer'; draft: StoredDraft } | { state: 'none' }
+    | { state: 'checking' }
+    // createdId: this draft was already created as that record (lib/draft-store
+    // markDraftCreated) — '' when the create's answer carried no id.
+    | { state: 'offer'; draft: StoredDraft; createdId: string | null }
+    | { state: 'none' }
   >({ state: designOn ? 'none' : 'checking' })
   const recoveryRef = useRef(recovery)
   recoveryRef.current = recovery
@@ -2910,7 +2951,7 @@ function ItemEditFormView({
       const isOwnEdit = (k: string) => ownEdits.has(k)
       if (changed.length > 0) {
         const lt = lastTouchRef.current
-        const by = lt?.user_id && lt.user_id !== authUserId ? lt.user_name : null
+        const by = remoteChangeAuthor(lt, authUserId)
         const at = new Date().toISOString()
         setRemoteChanges((cur) => {
           const next = { ...cur }
@@ -3052,7 +3093,8 @@ function ItemEditFormView({
         setRecovery({ state: 'none' })
         return
       }
-      setRecovery({ state: 'offer', draft: pruned })
+      const created = isNew ? draftCreatedAs(recoveryKey, stored.saved_at) : null
+      setRecovery({ state: 'offer', draft: pruned, createdId: created ? created.id : null })
     })
     return () => {
       cancelled = true
@@ -3062,10 +3104,33 @@ function ItemEditFormView({
   // Persist: debounced after every change while dirty; cleared the moment
   // the form is clean. Held off while an offer is pending so the freshly
   // loaded (clean) form cannot delete the draft it is about to offer.
+  // The write still waiting on the debounce: a page left within it (browser
+  // Back, a sidebar link) runs it on unmount instead of dropping what was
+  // typed — except while a create is in flight or once it succeeded, when
+  // the draft is spent (a flush then would bring the created record back).
+  const persistPendingRef = useRef<(() => void) | null>(null)
+  const draftSpentRef = useRef(false)
+  // New work after a create (the form kept open on a fresh record) is a draft again.
+  const wasDirtyRef = useRef(isDirty)
+  useEffect(() => {
+    if (isDirty && !wasDirtyRef.current) draftSpentRef.current = false
+    wasDirtyRef.current = isDirty
+  }, [isDirty])
+  useEffect(
+    () => () => {
+      const run = persistPendingRef.current
+      persistPendingRef.current = null
+      if (run && !draftSpentRef.current) run()
+    },
+    []
+  )
   // biome-ignore lint/correctness/useExhaustiveDependencies: `draft` is the re-run trigger; the payload reads draftRef for the synchronous mirror
   useEffect(() => {
+    persistPendingRef.current = null
     if (recovery.state !== 'none' || recoveryCheckedKey !== recoveryKey) return
-    const t = setTimeout(() => {
+    const run = () => {
+      persistPendingRef.current = null
+      if (draftSpentRef.current) return
       if (!isDirty) {
         void deleteDraft(recoveryKey)
         if (authUserId && serverDraftRef.current) {
@@ -3132,7 +3197,9 @@ function ItemEditFormView({
             })
           )
           .catch(() => {})
-    }, 800)
+    }
+    persistPendingRef.current = run
+    const t = setTimeout(run, 800)
     return () => clearTimeout(t)
   }, [
     recovery.state,
@@ -3717,6 +3784,9 @@ function ItemEditFormView({
               const v = values[0]
               draftRef.current = { ...draftRef.current, [parent]: v }
               setDraft((prev) => ({ ...prev, [parent]: v }))
+              // Part of the person's work: the recovery draft keeps it (an
+              // IR's Project Type, filled from its Project, came back empty).
+              markAutoFilled([parent])
               setIsDirty(true)
               crossDefaultsRef.current?.(parent, v, 1)
               derivedOriginRef.current.set(parent, root)
@@ -3736,7 +3806,8 @@ function ItemEditFormView({
       m2mStagingCtx,
       client,
       undoDerivedFills,
-      recordDerivedFill
+      recordDerivedFill,
+      markAutoFilled
     ]
   )
   const upstreamCascadesRef = useRef(runUpstreamCascades)
@@ -4066,6 +4137,9 @@ function ItemEditFormView({
   rederiveRef.current = (field, value) => {
     evaluateFieldRulesForChange(field, undefined, { fillEmptyOnly: true })
     runCrossDefaults(field, value, 0, true)
+    // The parents a pick fills (Project → Project Type) — fill-only-when-empty
+    // like the rest, so a restored value always wins.
+    upstreamCascadesRef.current(field, value)
   }
 
   // M2M alias triggers never flow through handleFieldChange (they commit via
@@ -4298,6 +4372,35 @@ function ItemEditFormView({
     [fieldConfig]
   )
 
+  // ── Approval edit lock ─────────────────────────────────────────────────────
+  // A record in a locked step (summary_mode_rules.edit_lock) may be changed
+  // only by its creator, that step's owners and admins. The pipeline instance
+  // read answers for this viewer (`edit_lock`); everyone else gets the form
+  // read-only with the server's reason. The server refuses the write anyway
+  // (403 EDIT_LOCKED). Same key + reader as the lock-conditions query below.
+  const editLockConfigured = useMemo(
+    () => !!normalizeSummaryModeRules(colMeta?.summary_mode_rules).edit_lock,
+    [colMeta?.summary_mode_rules]
+  )
+  const { data: editLockInstance } = useQuery<{
+    edit_lock?: { locked?: boolean; allowed?: boolean; message?: string } | null
+  } | null>({
+    queryKey: ['pipeline-instance-lock', collection, itemId],
+    queryFn: () =>
+      client
+        .request<{ data: unknown }>(get(`/pipelines/instance/${collection}/${itemId}`))
+        .then((r) => r.data as { edit_lock?: { locked?: boolean; allowed?: boolean } } | null)
+        .catch(() => null),
+    staleTime: 30_000,
+    enabled: editLockConfigured && !isNew && !designOn
+  })
+  const editLock = editLockInstance?.edit_lock
+  const editLockMessage =
+    !designOn && !isNew && editLock?.locked === true && editLock.allowed === false
+      ? editLock.message?.trim() ||
+        'This record is in approval — you can view it but not change it.'
+      : null
+
   // ── Item lock ──────────────────────────────────────────────────────────────
   // Summary mode neither takes nor honours the edit lock: the lock is
   // only acquired once the opening mode has settled on Edit, released when
@@ -4311,7 +4414,10 @@ function ItemEditFormView({
     !isNew &&
     !!colMeta?.item_locking_enabled &&
     summaryModeSettled &&
-    !readMode
+    !readMode &&
+    !editLockMessage
+  // A background workspace tab (efp-new RecordSurfaceContext) counts as off screen.
+  const surfaceActive = useRecordSurface().active
   const {
     lockHolder,
     acquired: lockAcquired,
@@ -4332,8 +4438,11 @@ function ItemEditFormView({
     released: lockReleased,
     relock: relockLock,
     claim: claimLock
-  } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled, { lazy: true, active })
-  const isReadOnly = lockReadOnly || !!recordGone
+  } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled, {
+    lazy: true,
+    active: active && surfaceActive
+  })
+  const isReadOnly = lockReadOnly || !!recordGone || !!editLockMessage
   relockOnEditRef.current =
     lockEnabled && !lockAcquired && !lockHolder
       ? () => void (lockReleased ? relockLock() : claimLock())
@@ -6725,7 +6834,7 @@ function ItemEditFormView({
             if (!ruleJudgedOnSave(rule, f.field, isNew, changedThisSession)) continue
             const err = applyValidationRule(
               rule,
-              draft[f.field],
+              ruleValueFor(f.type, draft[f.field]),
               f.label ?? titleCase(f.field),
               draft
             )
@@ -6778,10 +6887,12 @@ function ItemEditFormView({
         const f = allFields.find((x) => x.field === keys[0])
         const label = f?.label || titleCase(keys[0])
         toast.error(
-          errs[keys[0]] === 'This field is required' ? `${label} is required` : errs[keys[0]]
+          errs[keys[0]] === 'This field is required' ? `${label} is required` : errs[keys[0]],
+          { id: VALIDATION_TOAST_ID }
         )
       } else {
-        toast.error(`Can’t save yet — ${n} fields need attention`)
+        // One toast id: pressing Create again replaces it, never stacks a copy.
+        toast.error(`Can’t save yet — ${n} fields need attention`, { id: VALIDATION_TOAST_ID })
       }
       // Jump-to-error (#191): scroll + flash the first invalid field.
       const firstBad = keys[0]
@@ -7019,8 +7130,22 @@ function ItemEditFormView({
   }
 
   // ── Save / delete ──────────────────────────────────────────────────────────
+  // A create's draft is spent from the moment it is sent: the unmount flush
+  // must not write it back (Back pressed mid-save left it to be restored and
+  // created a second time). Held again by the next edit after a success.
+  const forgetSpentDraft = () => {
+    draftSpentRef.current = true
+    void deleteDraft(recoveryKey)
+    if (authUserId) {
+      serverDraftRef.current = false
+      void client
+        .request(del(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`))
+        .catch(() => {})
+    }
+  }
   const saveMut = useMutation({
     mutationFn: async () => {
+      if (isNew) draftSpentRef.current = true
       // Never raw JS error text on a save step: a code error reads as one plain
       // sentence and goes to the issue log (lib/safe-error.ts).
       function errMsg(err: unknown): string {
@@ -7355,9 +7480,14 @@ function ItemEditFormView({
         }
         const msg = errMsg(err)
         updateStep('main', { status: 'error', error: msg, denied: isAccessRefusal(err) })
-        const resp = (err as { response?: { data?: { error?: string; field?: string } } })?.response
-        if (resp?.data?.field)
-          setValidationErrors({ [resp.data.field]: resp.data.error ?? 'Invalid' })
+        // The refused field gets its error and the form moves to it — for a
+        // child line ("workflow_lines[0]: Quantity can not be negative") that
+        // is the lines grid, on whichever step holds it.
+        const bad = refusedFieldOf(err, new Set(allFields.map((f) => f.field)))
+        if (bad) {
+          setValidationErrors({ [bad.field]: bad.message })
+          setTimeout(() => jumpToField(bad.field), 150)
+        }
         throw err
       }
 
@@ -7836,11 +7966,17 @@ function ItemEditFormView({
       return savedId
     },
     onSuccess: (id) => {
+      // Runs even when the page was left mid-save (the hook's own callbacks
+      // outlive the form): the draft — local AND server copy — goes now, and
+      // a marker says what it became in case a copy survives anyway.
+      if (isNew) {
+        markDraftCreated(recoveryKey, id ? String(id) : '')
+        forgetSpentDraft()
+      }
       if (isNew && !id) {
         // Created, but an older server answered with no row and no id: the
         // record exists, so the form must not offer the same Save again.
         setIsDirty(false)
-        void deleteDraft(recoveryKey)
         setM2mLinks(new Map())
         setM2mUnlinks(new Map())
         setPendingO2MRows(new Map())
@@ -7932,7 +8068,7 @@ function ItemEditFormView({
       setIsDirty(false)
       // The persisted recovery draft is spent — remove it now rather than on
       // the debounce, since a created record navigates away immediately.
-      void deleteDraft(recoveryKey)
+      if (!isNew) void deleteDraft(recoveryKey)
       setM2mLinks(new Map())
       setM2mUnlinks(new Map())
       setPendingComments([])
@@ -8009,10 +8145,29 @@ function ItemEditFormView({
         onSaved?.(id)
       }, 1200)
     },
-    onError: () => {
+    onError: (err) => {
+      // Nothing was created: what is on the form is still the person's draft.
+      if (isNew) draftSpentRef.current = false
+      // The step moved under this form (or the rule changed): re-read who may
+      // edit, so the form turns read-only with the server's reason.
+      if (serverErrorCode(err) === 'EDIT_LOCKED')
+        void qc.invalidateQueries({ queryKey: ['pipeline-instance-lock', collection, itemId] })
       // Dialog stays open showing error steps; user dismisses manually
     }
   })
+
+  // In-app links (sidebar, breadcrumbs) asked first while there is unsaved
+  // work — only reload used to warn. Browser Back cannot be held; the draft
+  // flush on unmount keeps what was typed for the next open instead. Only the
+  // record on screen asks (efp-new keeps background record tabs mounted).
+  const formRootRef = useRef<HTMLDivElement | null>(null)
+  const recordSurface = useRecordSurface()
+  const [leaveAsk, setLeaveAsk] = useState<{ go: () => void } | null>(null)
+  useLeaveLinkGuard(
+    hasUnsaved && recordSurface.active && !designOn && !saveMut.isPending,
+    (go) => setLeaveAsk({ go }),
+    formRootRef
+  )
 
   // ── Offline outbox (#1678) ────────────────────────────────────────────────
   // Back online with the entry held here: replay through the form's own save,
@@ -10298,6 +10453,50 @@ function ItemEditFormView({
           only the first live instance listens, so a form rendered inside a
           collection browser doesn't double up. */}
                               <TipLayer />
+                              <Dialog
+                                open={!!leaveAsk}
+                                onOpenChange={(open) => {
+                                  if (!open) setLeaveAsk(null)
+                                }}
+                              >
+                                <DialogContent className='max-w-md' data-nvr-leave-ask>
+                                  <DialogHeader>
+                                    <DialogTitle className='text-[15px]'>
+                                      Leave without saving?
+                                    </DialogTitle>
+                                  </DialogHeader>
+                                  <DialogBody>
+                                    <p className='text-[13px] text-slate-600 dark:text-slate-300'>
+                                      {unsavedSummary.text
+                                        ? `You have unsaved changes: ${unsavedSummary.text}.`
+                                        : 'You have unsaved changes.'}{' '}
+                                      They stay on this device as a draft — open this{' '}
+                                      {isNew ? 'form' : 'record'} again to restore them.
+                                    </p>
+                                  </DialogBody>
+                                  <DialogFooter>
+                                    <Button
+                                      variant='outline'
+                                      size='sm'
+                                      onClick={() => {
+                                        const go = leaveAsk?.go
+                                        setLeaveAsk(null)
+                                        go?.()
+                                      }}
+                                    >
+                                      Leave
+                                    </Button>
+                                    <Button
+                                      size='sm'
+                                      className='bg-nvr-cyan text-white'
+                                      autoFocus
+                                      onClick={() => setLeaveAsk(null)}
+                                    >
+                                      Stay
+                                    </Button>
+                                  </DialogFooter>
+                                </DialogContent>
+                              </Dialog>
                               <SaveProgressDialog
                                 open={saveDialogOpen}
                                 steps={saveSteps}
@@ -10369,11 +10568,14 @@ function ItemEditFormView({
                                   </DialogFooter>
                                 </DialogContent>
                               </Dialog>
-                              <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
+                              <div
+                                ref={formRootRef}
+                                className={cn('flex flex-1 min-h-0 flex-col', className)}
+                              >
                                 {showHeader && (
                                   <header
                                     className={cn(
-                                      'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 flex items-center gap-3 transition-[padding] duration-200',
+                                      'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 flex items-center gap-x-3 gap-y-2 max-md:[&[data-nvr-header-row]]:flex-wrap max-md:[&[data-nvr-header-row]]:px-4 transition-[padding] duration-200',
                                       headerCondensed ? 'py-1.5' : 'py-3.5',
                                       headerClassName
                                     )}
@@ -12369,6 +12571,25 @@ function ItemEditFormView({
                                           }
                                           onRestore={restoreDraft}
                                           onDiscard={discardDraft}
+                                          createdId={recovery.createdId}
+                                          collection={collection}
+                                          renderValue={(f, v) => (
+                                            <ChangeValue
+                                              value={v}
+                                              field={
+                                                (fieldConfig ?? []).find((x) => x.field === f) ??
+                                                null
+                                              }
+                                              m2oTarget={
+                                                relations.find(
+                                                  (r) =>
+                                                    r.many_collection === collection &&
+                                                    r.many_field === f &&
+                                                    !r.junction_field
+                                                )?.one_collection ?? null
+                                              }
+                                            />
+                                          )}
                                         />
                                       </div>
                                     )}
@@ -12424,6 +12645,16 @@ function ItemEditFormView({
                                     )}
                                     {/* The banner is null without a holder — mount it only then, or its
                                       empty wrapper costs a 16px gap in this space-y stack. */}
+                                    {editLockMessage && (
+                                      <div
+                                        className='nvr-expand-in flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'
+                                        data-edit-lock-banner
+                                        role='status'
+                                      >
+                                        <Lock className='mt-0.5 h-4 w-4 shrink-0 text-amber-500' />
+                                        <span>{editLockMessage}</span>
+                                      </div>
+                                    )}
                                     {showLockBanner && lockEnabled && lockHolder && (
                                       <div className='nvr-expand-in'>
                                         <ItemLockBanner

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { mcpCallerKey, mcpLogColumns, mcpStampOf } from '../services/mcp-calls.js'
@@ -176,7 +177,15 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   let buffer: ApiLogRow[] = []
   let flushing = false
 
-  async function flush(): Promise<void> {
+  // The flush starts from a request's onResponse (or the timer), so left alone it
+  // borrowed a REQUEST-pool connection for its insert and prune. Under load those
+  // writes waited in the same queue as the people they were logging (staging load
+  // test 2026-10-24); the background pool is where bookkeeping belongs.
+  function flush(): Promise<void> {
+    return runInBackgroundPool(() => flushNow())
+  }
+
+  async function flushNow(): Promise<void> {
     if (flushing || buffer.length === 0) return
     flushing = true
     const rows = buffer

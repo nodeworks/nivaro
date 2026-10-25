@@ -62,6 +62,18 @@ export const summaryMode: DocSection = {
     {
       type: 'p',
       text: 'GET /api/collections/:collection returns the normalized object (never null). The server validates on PATCH: at most 20 rules, 50 roles or states per rule, uuid-shaped roles, key-shaped states. Storing the empty default clears the column.'
+    },
+    { type: 'h3', id: 'summary-mode-edit-lock', text: 'Edit lock while a record waits' },
+    {
+      type: 'p',
+      text: 'The opening mode is only a first impression. `edit_lock` in the same object is enforced: while the record\u2019s open pipeline instance sits in one of `states`, only the record\u2019s creator, the people who own the current step (owner groups, instance owners, delegates, the owner fallback) and administrators may change it — or create, change or delete a row of a collection listed in `children` that points at it. Everyone else gets 403 `EDIT_LOCKED` with a sentence naming the step, and the form opens read-only for them: GET /api/pipelines/instance/:collection/:item returns `edit_lock` {locked, allowed, message} (null when nothing is locked for the caller). Children are named, never inferred — notes, forecasts and queue rows point at the record too, and other people write those. Writes the engine makes on its own (flows, transition actions, approved addendums, scheduled jobs, imports) are not judged.'
+    },
+    {
+      type: 'pre',
+      code: `"edit_lock": {
+  "states": ["waiting_on_manager_approval", "waiting_on_vp_approval"],
+  "children": ["workflow_line_items"]
+}`
     }
   ]
 }

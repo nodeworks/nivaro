@@ -397,17 +397,25 @@ function UserCardPopover({
       return null
     }
   })()
-  const lastSeen = user?.last_access
-    ? (() => {
-        const diff = Date.now() - new Date(user.last_access).getTime()
-        const mins = Math.floor(diff / 60_000)
-        if (mins < 2) return 'Just now'
-        if (mins < 60) return `${mins}m ago`
-        const hrs = Math.floor(mins / 60)
-        if (hrs < 24) return `${hrs}h ago`
-        return `${Math.floor(hrs / 24)}d ago`
-      })()
-    : null
+  // Live presence beats the stored last_access, which can be weeks old for
+  // someone online right now ("Online now" sat beside "Last seen 32d ago").
+  // Present now = the presence line says it (or "Just now").
+  const presentNow = !!online || !!live.word
+  const lastSeen = presentNow
+    ? live.word
+      ? null
+      : 'Just now'
+    : user?.last_access
+      ? (() => {
+          const diff = Date.now() - new Date(user.last_access).getTime()
+          const mins = Math.floor(diff / 60_000)
+          if (mins < 2) return 'Just now'
+          if (mins < 60) return `${mins}m ago`
+          const hrs = Math.floor(mins / 60)
+          if (hrs < 24) return `${hrs}h ago`
+          return `${Math.floor(hrs / 24)}d ago`
+        })()
+      : null
 
   return (
     <PopoverContent

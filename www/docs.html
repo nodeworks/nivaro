@@ -1922,7 +1922,8 @@ x-workspace: ws-uuid-here</code></pre>
             <li>Repeat guard: the same manual transition on the same record is refused with 409 <code class="doc-code">TRANSITION_DUPLICATE</code> when it is made again within 10 seconds, so a double click or a retried request never runs the side effects twice. The answer cites the first history row. Settings → Content changes the window; 0 turns the guard off. <code class="doc-code">TRANSITION_GUARD_SECONDS</code> sets the default per instance.</li>
             <li>auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).</li>
             <li>Failure memory (auto transitions): when an automatic transition's blocking push fails, the engine remembers the error class and a hash of what the blocking actions would send, and stops firing that transition while the hash is unchanged — a refused order is not re-sent on every write and every hourly sweep. The record shows "Needs a person" on the pipeline panel and a row under "Automatic moves waiting on a person" in the Integrations console. It fires again when what it would send changes (a record edit), when a person retries the push, re-runs the action or moves the record by hand, or — for transient, rate-limited and credential failures — on the remediation ladder (1, 5, 30, 120, 120 minutes, then held). The memory never blocks a manual transition. GET /api/pipelines/instance/:collection/:item returns the held transitions as auto_held.</li>
-            <li>require_owner: only the people who own the record's current step — a delegate covering for an out-of-office owner included — and administrators may run the transition. REST and GraphQL refuse anyone else with 403 code TRANSITION_OWNER_REQUIRED, and the transition is left out of available_transitions for them. Off by default; the "Only the step's owner" switch in the transition form, an "Owner only" badge on the route row.</li>
+            <li>require_owner: only the people who own the record's current step — a delegate covering for an out-of-office owner included — and administrators may run the transition. REST and GraphQL refuse anyone else with 403 code TRANSITION_OWNER_REQUIRED, and the transition is left out of available_transitions for them. Off by default; the "Only the step's owner" switch in the transition form, an "Owner only" badge on the route row. Owners here are the ASSIGNED owners (owner groups, instance owners, delegation) — the binding's owner fallback field keeps a record in that person's queue but does not let them make an owner-only move.</li>
+            <li>allow_creator (with require_owner): the record's creator may also run the move, even without owning the step — for requester moves such as Cancel or Uncancel; leave it off for approvals. The "…or the person who created the record" switch under "Only the step's owner"; the route badge reads "Owner or creator". The creator is the column flagged user-created, else user_created / creator / created_by. Bulk transitions apply the same gate per record.</li>
             <li>Related-row conditions: field "&lt;childCollection&gt;:&lt;fkField&gt;" with op related_some / related_none counts child rows pointing at the record. value is an optional JSON filter on those rows: plain columns, ONE hop through a child M2O as "m2o.col", "$record.&lt;field&gt;" tokens for the parent record values, ops _eq _neq _gt _gte _lt _lte _null _nnull _in _round_eq (rounded-dollar equality). Example, a linked PO on the same project whose amount matches the request total: {"purchase_order.project":{"_eq":"$record.project"},"purchase_order.amount":{"_round_eq":"$record.total_amount"}}. An unresolved $record token or unknown hop fails the filter closed.</li>
           </ul>
           <div class="doc-note">Workflow state sync: if binding has state_field set, the current state KEY is written to that column on every transition. Enables cross-system integration and custom queries.</div>
@@ -2403,6 +2404,7 @@ const { data: tx } = await nivaro.request(
               <tr><td>API_KEY_RATE_LIMITED</td><td>429</td><td>The key went past its calls-per-minute limit. <code class="doc-code">Retry-After</code> says how long to wait.</td></tr>
               <tr><td>RATE_LIMITED</td><td>429</td><td>The caller went past the instance limit, when one is set.</td></tr>
               <tr><td>MASQUERADE_EXPIRED</td><td>401</td><td>A view-as session ran out.</td></tr>
+              <tr><td>SIGN_IN_DISABLED</td><td>401</td><td>The account belongs to a role with sign-in turned off (the role's app access). Every session and token of that account is refused.</td></tr>
               <tr><td>ADMIN_ONLY</td><td>403</td><td>The route is for administrators.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Codes for refused writes</h3>
@@ -2419,8 +2421,18 @@ const { data: tx } = await nivaro.request(
               <tr><td>DELETE_GUARDED</td><td>409</td><td>A deletion guard on the collection refused the delete.</td></tr>
               <tr><td>DUPLICATE_ROW</td><td>409</td><td>A row of the same parent already holds these values. <code class="doc-code">rule</code> names the relation, <code class="doc-code">fields</code> the values compared, <code class="doc-code">existing_id</code> the row.</td></tr>
               <tr><td>LINK_LIMIT_REACHED</td><td>409</td><td>The record already holds as many links of this kind as the relation allows. <code class="doc-code">rule</code>, <code class="doc-code">max</code> and <code class="doc-code">current</code> say which and how many.</td></tr>
-              <tr><td>PICKER_RULE_VIOLATED</td><td>400</td><td>The value is one the field's picker would not offer for this record (a field set to enforce its picker rules on every write). <code class="doc-code">rule</code> says which rule, <code class="doc-code">field</code> which field, <code class="doc-code">parents</code> the parent fields a cascade read.</td></tr></tr></tbody>
+              <tr><td>PICKER_RULE_VIOLATED</td><td>400</td><td>The value is one the field's picker would not offer for this record (a field set to enforce its picker rules on every write). <code class="doc-code">rule</code> says which rule, <code class="doc-code">field</code> which field, <code class="doc-code">parents</code> the parent fields a cascade read.</td></tr>
+              <tr><td>RECORD_LOCKED</td><td>409</td><td>Another person holds the record's edit lock. The message names them.</td></tr>
+              <tr><td>EDIT_LOCKED</td><td>403</td><td>The record is in a step that only its creator, the step's owners and administrators may edit (the collection's summary-mode <code class="doc-code">edit_lock</code> rule). Child rows the rule lists are refused the same way.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Codes for reads and busy servers</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Code</th><th>Status</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>UNKNOWN_FIELD</td><td>400</td><td>A filter, sort or field list names a field the collection does not have. <code class="doc-code">fields</code> lists them.</td></tr>
+              <tr><td>LIST_TIMEOUT</td><td>503</td><td>A list or search took too long and was stopped. Narrow it or try again. When only the count timed out, the rows still come back with <code class="doc-code">meta.total_timed_out: true</code> and no total.</td></tr>
+              <tr><td>SERVER_BUSY</td><td>503</td><td>No database connection came free in time (<code class="doc-code">DB_ACQUIRE_TIMEOUT_MS</code>, default 10 s). <code class="doc-code">Retry-After</code> says when to try again.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">One list read returns at most 1000 rows, whatever <code class="doc-code">limit</code> asks for. The answer says so in <code class="doc-code">meta.limit_capped</code> and <code class="doc-code">meta.applied_limit</code>; page with <code class="doc-code">offset</code> (sort by a unique field such as <code class="doc-code">id</code>) to read more. <code class="doc-code">GET /items/:collection/export</code> pages for you up to 10,000 rows and sets <code class="doc-code">x-nivaro-export-truncated</code> when there were more.</div>
           <div class="doc-note">A refusal from the database names the constraint that refused the write. It never includes the statement or the database name. Administrators read every refused credential under Monitoring, Integrations, Inbound, in the Refused credentials list.</div>
           <!-- /SYNC:api-overview -->
         </div>
@@ -11240,7 +11252,7 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
         </div>
 
         <!-- SUMMARY MODE -->
-        <div class="doc-section" id="s-summary-mode" data-toc='[{"id":"summary-mode","label":"Summary Mode"}]'>
+        <div class="doc-section" id="s-summary-mode" data-toc='[{"id":"summary-mode","label":"Summary Mode"},{"id":"summary-mode-edit-lock","label":"Edit lock while a record waits"}]'>
           <!-- SYNC:summary-mode -->
           <h1 class="doc-h1" id="summary-mode">Summary Mode</h1>
           <p class="doc-p">Summary mode is the record form rendered as a read-only presentation: the active grouped layout as section cards and definition grids, child tables instead of editable grids, related records as labels and drill links. Nothing on the record itself can be changed until the viewer switches to Edit — but the Notes and Tasks slots stay live, so a reviewer can comment on or assign work from the summary without leaving it.</p>
@@ -11271,6 +11283,12 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
               <tr><td>rules[].mode</td><td>'edit' or 'summary' — the mode to open in when the rule matches.</td></tr></tr></tbody>
           </table></div>
           <p class="doc-p">GET /api/collections/:collection returns the normalized object (never null). The server validates on PATCH: at most 20 rules, 50 roles or states per rule, uuid-shaped roles, key-shaped states. Storing the empty default clears the column.</p>
+          <h3 class="doc-h3" id="summary-mode-edit-lock">Edit lock while a record waits</h3>
+          <p class="doc-p">The opening mode is only a first impression. <code class="doc-code">edit_lock</code> in the same object is enforced: while the record’s open pipeline instance sits in one of <code class="doc-code">states</code>, only the record’s creator, the people who own the current step (owner groups, instance owners, delegates, the owner fallback) and administrators may change it — or create, change or delete a row of a collection listed in <code class="doc-code">children</code> that points at it. Everyone else gets 403 <code class="doc-code">EDIT_LOCKED</code> with a sentence naming the step, and the form opens read-only for them: GET /api/pipelines/instance/:collection/:item returns <code class="doc-code">edit_lock</code> {locked, allowed, message} (null when nothing is locked for the caller). Children are named, never inferred — notes, forecasts and queue rows point at the record too, and other people write those. Writes the engine makes on its own (flows, transition actions, approved addendums, scheduled jobs, imports) are not judged.</p>
+          <pre class="doc-pre"><code>"edit_lock": {
+  "states": ["waiting_on_manager_approval", "waiting_on_vp_approval"],
+  "children": ["workflow_line_items"]
+}</code></pre>
           <!-- /SYNC:summary-mode -->
         </div>
 

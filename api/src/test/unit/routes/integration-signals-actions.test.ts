@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   dedupeRowKeys,
   fillRecordLabels,
   isUniqueConstraintViolation,
   planActionTargets,
+  refreshSignalAfterAction,
   validateSnoozeScope,
   validateSubscription
 } from '../../../routes/integration-signals.js'
@@ -36,6 +37,28 @@ describe('planActionTargets', () => {
       targets: [rows[0]],
       skipped: []
     })
+  })
+})
+
+describe('refreshSignalAfterAction', () => {
+  it('re-evaluates only the acted-on signal and waits for it', async () => {
+    let done = false
+    const run = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 5))
+      done = true
+    })
+    await refreshSignalAfterAction('erp:failed', run, 1000)
+    expect(run).toHaveBeenCalledWith({ only: ['erp:failed'] })
+    expect(done).toBe(true)
+  })
+
+  it('answers after waitMs when the evaluation hangs, and swallows a failed one', async () => {
+    const start = Date.now()
+    await refreshSignalAfterAction('x', () => new Promise(() => {}), 20)
+    expect(Date.now() - start).toBeLessThan(1000)
+    await expect(
+      refreshSignalAfterAction('x', () => Promise.reject(new Error('boom')), 1000)
+    ).resolves.toBeUndefined()
   })
 })
 

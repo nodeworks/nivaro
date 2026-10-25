@@ -7,8 +7,13 @@
  *   { default: 'edit' | 'summary',
  *     rules: [{ roles?: uuid[], states?: key[], states_op?: 'in'|'not_in',
  *               conditions?: [{field, op, value}],   // #737, at-risk ops
- *               mode: 'edit' | 'summary' }] }
+ *               mode: 'edit' | 'summary' }],
+ *     edit_lock?: { states: key[], children: collection[] } }   // edit-lock.ts
+ *
+ * `edit_lock` is not an opening mode: the server enforces it (edit-lock.ts);
+ * it lives here because it is the same per-collection Form UX setting.
  */
+import { type EditLockConfig, parseEditLock, validateEditLock } from './edit-lock.js'
 
 export type SummaryMode = 'summary' | 'edit'
 
@@ -29,11 +34,22 @@ export interface SummaryModeRule {
 export interface SummaryModeRules {
   default: SummaryMode
   rules: SummaryModeRule[]
+  edit_lock?: EditLockConfig
 }
 
 export const NO_STATE = '__none__'
 // The at-risk rule ops (routes/at-risk.ts) — one vocabulary for "a record like this".
-export const CONDITION_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'null', 'nnull'] as const
+export const CONDITION_OPS = [
+  'eq',
+  'neq',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'contains',
+  'null',
+  'nnull'
+] as const
 const MAX_CONDITIONS = 10
 const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/
 const MAX_RULES = 20
@@ -55,7 +71,7 @@ export function parseSummaryModeRules(raw: unknown): SummaryModeRules {
     }
   }
   if (!obj || typeof obj !== 'object') return EMPTY_RULES
-  const o = obj as { default?: unknown; rules?: unknown }
+  const o = obj as { default?: unknown; rules?: unknown; edit_lock?: unknown }
   const rules: SummaryModeRule[] = []
   if (Array.isArray(o.rules)) {
     for (const r of o.rules) {
@@ -77,7 +93,12 @@ export function parseSummaryModeRules(raw: unknown): SummaryModeRules {
       })
     }
   }
-  return { default: o.default === 'summary' ? 'summary' : 'edit', rules }
+  const lock = parseEditLock(o.edit_lock)
+  return {
+    default: o.default === 'summary' ? 'summary' : 'edit',
+    rules,
+    ...(lock ? { edit_lock: lock } : {})
+  }
 }
 
 /**
@@ -92,7 +113,9 @@ export function validateSummaryModeRules(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { error: 'summary_mode_rules must be an object' }
   }
-  const o = raw as { default?: unknown; rules?: unknown }
+  const o = raw as { default?: unknown; rules?: unknown; edit_lock?: unknown }
+  const lock = validateEditLock(o.edit_lock)
+  if (lock.error) return { error: lock.error }
   if (o.default !== undefined && o.default !== 'edit' && o.default !== 'summary') {
     return { error: "summary_mode_rules.default must be 'edit' or 'summary'" }
   }
@@ -197,6 +220,6 @@ export function validateSummaryModeRules(
       mode: rr.mode
     })
   }
-  if (def === 'edit' && rules.length === 0) return { value: null }
-  return { value: { default: def, rules } }
+  if (def === 'edit' && rules.length === 0 && !lock.value) return { value: null }
+  return { value: { default: def, rules, ...(lock.value ? { edit_lock: lock.value } : {}) } }
 }

@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { isAuthor, isUuid } from '../services/help-videos.js'
+import { isLockingEnabled, lockHolderName } from '../services/item-lock-guard.js'
 import {
   CollectionNotFoundError,
   ForbiddenError,
@@ -187,17 +188,6 @@ async function handOffToQueue(app: FastifyInstance, collection: string, item: st
   }
 }
 
-async function lockHolderName(userId: string): Promise<string | null> {
-  const user = (await db('nivaro_users')
-    .where({ id: userId })
-    .select('first_name', 'last_name', 'email')
-    .first()) as { first_name: string | null; last_name: string | null; email: string } | undefined
-  if (!user) return null
-  const name = [user.first_name, user.last_name].filter(Boolean).join(' ')
-  return name || user.email
-}
-
-/** Returns true when item_locking_enabled is 1/true for the collection. */
 /**
  * Minutes since the lock holder's last real input, from the LEGACY
  * user_presence table (user_id, last_active, is_idle). null when there is no
@@ -213,19 +203,6 @@ async function holderIdleMinutes(userId: string): Promise<number | null> {
   const at = new Date(row.last_active).getTime()
   if (!Number.isFinite(at)) return null
   return Math.max(0, Math.floor((Date.now() - at) / 60_000))
-}
-
-async function isLockingEnabled(collection: string): Promise<boolean> {
-  try {
-    const row = (await db('nivaro_collections')
-      .where({ collection })
-      .select('item_locking_enabled')
-      .first()) as { item_locking_enabled: number | boolean } | undefined
-    if (!row) return true
-    return row.item_locking_enabled === 1 || row.item_locking_enabled === true
-  } catch {
-    return true // column missing (migration pending) — default enabled
-  }
 }
 
 /**
@@ -646,6 +623,10 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (existing && existing.user === me.id) {
         return reply.code(400).send({ error: 'You already hold this lock' })
       }
+      // Nobody holds it (released before the ask arrived): there is nothing
+      // to wait for — answer `free` so the client drops its stale banner
+      // instead of queuing for a lock no one will ever release.
+      if (!existing) return reply.send({ data: { position: null, free: true, queue: [] } })
       let queue = await queueFor(collection, item)
       const already = queuePosition(queue, me.id)
       if (already === null) {
@@ -917,13 +898,15 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       // requester never queued, the head of the queue is told as usual.
       await leaveQueue(collection, item, to)
       await handOffToQueue(app, collection, item)
+      // The history names the person, never their raw id.
+      const toName = isUuid(to) ? await lockHolderName(to).catch(() => null) : null
       await logActivity({
         action: 'lock-release',
         user: me.id,
         collection,
         item: String(item),
         req,
-        comment: `handoff to ${to}`
+        comment: `Handed the edit lock to ${toName ?? 'the person who asked for it'}`
       })
     }
     const myName = [me.first_name, me.last_name].filter(Boolean).join(' ') || me.email || me.id

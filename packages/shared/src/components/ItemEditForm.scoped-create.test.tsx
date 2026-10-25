@@ -229,6 +229,8 @@ interface ServerOpts {
   /** Collections whose availability probes say the picked value is no longer
    *  an option (a location outside the Region picked after it). */
   unavailable?: string[]
+  /** The approval edit lock the pipeline instance read answers with. */
+  editLock?: { locked: boolean; allowed: boolean; message: string } | null
 }
 
 function makeServer(o: ServerOpts) {
@@ -264,7 +266,17 @@ function makeServer(o: ServerOpts) {
         }
       if (p === `/field-config/${o.shape.collection}`) return { data: o.shape.fields }
       if (p === `/collections/${o.shape.collection}`)
-        return { data: { display_name: o.shape.collection, singular: 'Workflow' } }
+        return {
+          data: {
+            display_name: o.shape.collection,
+            singular: 'Workflow',
+            ...(o.editLock !== undefined
+              ? { summary_mode_rules: { edit_lock: { states: ['l1'], children: [] } } }
+              : {})
+          }
+        }
+      if (p === `/pipelines/instance/${o.shape.collection}/${String(o.existing?.id)}`)
+        return { data: { instance: null, states: [], edit_lock: o.editLock ?? null } }
       if (p === `/data-model/relations/for/${o.shape.collection}`)
         return { data: o.shape.relations }
       if (p === '/data-model/relations/for/projects')
@@ -472,7 +484,7 @@ describe('new workflow — the 8170 case (3 Zones on the project, one picked)', 
     await m.save()
     await settle(() => false, 15)
     expect(m.created).toHaveLength(0)
-    expect(toasts.error).toHaveBeenCalledWith('Zone is required')
+    expect(toasts.error).toHaveBeenCalledWith('Zone is required', { id: 'nvr-form-validation' })
   })
 
   it('a pick its own picker flags "not an available option" blocks the save', async () => {
@@ -489,7 +501,9 @@ describe('new workflow — the 8170 case (3 Zones on the project, one picked)', 
     await m.save()
     await settle(() => false, 15)
     expect(m.created).toHaveLength(0)
-    expect(toasts.error).toHaveBeenCalledWith(UNAVAILABLE_OPTION_ERROR)
+    expect(toasts.error).toHaveBeenCalledWith(UNAVAILABLE_OPTION_ERROR, {
+      id: 'nvr-form-validation'
+    })
   })
 })
 
@@ -605,4 +619,44 @@ describe('an edit that moves the record out of the editor’s scope', () => {
       expect(host.textContent ?? '').not.toMatch(/Cannot read properties/)
     })
   }
+})
+
+describe('a record in a locked approval step', () => {
+  const TICKETS: Shape = {
+    name: 'tickets',
+    collection: 'tickets',
+    fields: [field('title', 'Title')],
+    relations: [],
+    followUps: [],
+    visibleToScoped: () => true,
+    reason: ''
+  }
+  const message =
+    'This record is at Waiting on Level 1 Approval — only the person who created it, the owners of that step and administrators can change it.'
+
+  it('opens read-only with the server’s reason when this viewer may not edit', async () => {
+    await mount({
+      shape: TICKETS,
+      scoped: false,
+      itemId: '55',
+      existing: { id: 55, title: 'before' },
+      editLock: { locked: true, allowed: false, message }
+    })
+    await settle(() => !!host.querySelector('[data-edit-lock-banner]'))
+    expect(host.querySelector('[data-edit-lock-banner]')?.textContent).toBe(message)
+    expect(host.querySelector('[data-field="title"] .pointer-events-none')).not.toBeNull()
+  })
+
+  it('stays editable for someone the lock allows', async () => {
+    await mount({
+      shape: TICKETS,
+      scoped: false,
+      itemId: '55',
+      existing: { id: 55, title: 'before' },
+      editLock: { locked: true, allowed: true, message }
+    })
+    await settle(() => false, 10)
+    expect(host.querySelector('[data-edit-lock-banner]')).toBeNull()
+    expect(host.querySelector('[data-field="title"] .pointer-events-none')).toBeNull()
+  })
 })
