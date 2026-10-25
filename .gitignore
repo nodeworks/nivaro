@@ -49,3 +49,6 @@ release-chain.config.json
 
 # Chaos CI result files and error gallery (#2857)
 /reports/
+
+# Scripted help-video tools + recordings (Playwright + ElevenLabs), local only
+/scripts/help-videos/
