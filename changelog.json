@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-25T07:02:37.819Z",
+  "generated_at": "2026-10-25T19:11:45.841Z",
   "releases": [
+    {
+      "version": "0.3.24",
+      "tag": "v0.3.24",
+      "date": "2026-10-25T15:11:32-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "cron",
+              "text": "miss detector reads the schedule's real previous run",
+              "hash": "fbd3742b3"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.23",
       "tag": "v0.3.23",
-      "date": "2026-10-25T03:02:22-04:00",
+      "date": "2026-10-25T03:02:37-04:00",
       "sections": [
         {
           "label": "Performance",
