@@ -7,7 +7,8 @@ const state = vi.hoisted(() => ({
   actions: new Map<string, Record<string, unknown>>(),
   can: { read: true, update: true } as Record<string, boolean>,
   hidden: new Set<string>(),
-  locked: new Set<string>()
+  locked: new Set<string>(),
+  editLock: 'open' as 'open' | 'refuse' | 'broken'
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => ({
@@ -25,6 +26,18 @@ vi.mock('../../../services/items.js', () => ({
     state.hidden.has(String(id)) ? null : { id },
   canUpdateItem: async (_u: unknown, _c: string, id: string) => !state.locked.has(String(id))
 }))
+vi.mock('../../../services/edit-lock.js', () => {
+  class EditLockedError extends Error {}
+  return {
+    EDIT_LOCKED: 'EDIT_LOCKED',
+    EditLockedError,
+    assertNotEditLocked: async () => {
+      if (state.editLock === 'refuse')
+        throw new EditLockedError('Only the step owners may change it.')
+      if (state.editLock === 'broken') throw new Error('db down')
+    }
+  }
+})
 vi.mock('../../../extensions/item-actions.js', () => ({
   itemActionRegistry: {
     get: (id: string) => state.actions.get(id),
@@ -53,6 +66,7 @@ beforeEach(() => {
   state.can = { read: true, update: true }
   state.hidden = new Set()
   state.locked = new Set()
+  state.editLock = 'open'
   execute.mockReset().mockResolvedValue({ message: 'done' })
   applicable.mockReset().mockResolvedValue(true)
   state.actions = new Map([
@@ -104,6 +118,25 @@ describe('item action execute gates', () => {
     state.locked.add('42')
     const res = await run({ collection: 'workflows', itemId: 42 })
     expect(res.statusCode).toBe(403)
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('refuses a record the approval edit lock holds for someone else', async () => {
+    state.editLock = 'refuse'
+    const res = await run({ collection: 'workflows', itemId: 42 })
+    expect(res.statusCode).toBe(403)
+    expect(res.json()).toEqual({
+      error: 'Only the step owners may change it.',
+      code: 'EDIT_LOCKED'
+    })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('refuses when the edit lock cannot be checked (fails closed)', async () => {
+    state.editLock = 'broken'
+    const res = await run({ collection: 'workflows', itemId: 42 })
+    expect(res.statusCode).toBe(403)
+    expect(res.json().code).toBe('EDIT_LOCKED')
     expect(execute).not.toHaveBeenCalled()
   })
 
