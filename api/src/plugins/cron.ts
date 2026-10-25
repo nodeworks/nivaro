@@ -830,19 +830,15 @@ export class CronManager {
   }
 
   /** #81 — when the schedule last SHOULD have fired (null for one-shot or
-   *  unparseable expressions). Derived from the next two runs' spacing, so an
-   *  irregular expression reads as its nearest regular period. */
+   *  unparseable expressions). The schedule's real previous fire time: guessing
+   *  it from the next two runs' spacing put a weekday job's "expected" run on
+   *  Sunday and raised false misses every weekend. */
   expectedPreviousRun(id: string, now = appDate()): Date | null {
     const e = this.entries.get(id)
     if (!e) return null
     try {
       const probe = new Cron(e.expression, { timezone: e.timezone })
-      const n1 = probe.nextRun(now)
-      const n2 = n1 ? probe.nextRun(n1) : null
-      if (!n1 || !n2) return null
-      const period = n2.getTime() - n1.getTime()
-      if (period <= 0) return null
-      return new Date(n1.getTime() - period)
+      return probe.previousRuns(1, now)[0] ?? null
     } catch {
       return null
     }
