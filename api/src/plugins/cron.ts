@@ -413,6 +413,10 @@ export class CronLeader {
 
 const ACTIVE_PREFIX = 'nvr:cron:active:'
 const HEAVY_KEY = 'nvr:cron:heavy'
+// nvr:cron:held:<id>  the latest scheduled slot maintenance mode held (epoch ms),
+// read by the miss detector (#81) so a held tick is not reported as missed.
+const HELD_PREFIX = 'nvr:cron:held:'
+const HELD_TTL_MS = 2 * 24 * 60 * 60_000
 const HOLD_MS = 5 * 60_000
 const HOLD_RENEW_MS = 60_000
 const HEAVY_POLL_MS = 5_000
@@ -887,7 +891,10 @@ export class CronManager {
         // Maintenance mode freezes scheduled work along with writes: a job
         // that would run now waits for the freeze to lift (run-now, which an
         // admin asks for by hand, is not gated).
-        if (await this.heldByMaintenance(id)) return
+        if (await this.heldByMaintenance(id)) {
+          await this.noteHeldSlot(id, scheduledFireTime(cronJob))
+          return
+        }
         if (this.leader.active && !(await this.leader.claimRun(id, scheduledFireTime(cronJob))))
           return
         // #1085 — an unsafe job already running (a run-now elsewhere) skips this tick.
@@ -993,6 +1000,38 @@ export class CronManager {
 
   /** Jobs whose skip was already logged this freeze (one line per job, not one per tick). */
   private maintenanceSkipped = new Set<string>()
+  /** Latest scheduled slot per job that maintenance held (epoch ms). */
+  private heldSlots = new Map<string, number>()
+
+  /**
+   * Remember a slot maintenance held, so the miss detector does not report it
+   * (the nightly staging rebuild holds ~20 jobs for an hour, and the detector,
+   * held too, used to flag every one the moment maintenance ended). Kept in
+   * Redis as well, for a detector on another process. Best-effort.
+   */
+  private async noteHeldSlot(id: string, slot: Date): Promise<void> {
+    this.heldSlots.set(id, slot.getTime())
+    const redis = this.leader.client()
+    if (!redis) return
+    try {
+      await redis.set(`${HELD_PREFIX}${id}`, String(slot.getTime()), 'PX', HELD_TTL_MS)
+    } catch {
+      /* the in-process record still covers this process */
+    }
+  }
+
+  /** True when maintenance held this job's tick at (or after) `slot`. */
+  async heldByMaintenanceAt(id: string, slot: Date): Promise<boolean> {
+    const at = slot.getTime() - 60_000
+    if ((this.heldSlots.get(id) ?? 0) >= at) return true
+    const redis = this.leader.client()
+    if (!redis) return false
+    try {
+      return Number((await redis.get(`${HELD_PREFIX}${id}`)) ?? 0) >= at
+    } catch {
+      return false
+    }
+  }
 
   /**
    * True while maintenance mode is on and this job did not opt in

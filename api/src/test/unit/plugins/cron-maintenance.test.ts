@@ -12,7 +12,10 @@ vi.mock('../../../services/security.js', () => ({
 
 const { CronManager } = await import('../../../plugins/cron.js')
 
-type Holder = { heldByMaintenance(id: string): Promise<boolean> }
+type Holder = {
+  heldByMaintenance(id: string): Promise<boolean>
+  noteHeldSlot(id: string, slot: Date): Promise<void>
+}
 
 describe('cron ticks during maintenance (2026-10-07)', () => {
   let m: InstanceType<typeof CronManager>
@@ -54,5 +57,17 @@ describe('cron ticks during maintenance (2026-10-07)', () => {
     expect(await h.heldByMaintenance('nightly')).toBe(true)
     state.on = false
     expect(await h.heldByMaintenance('nightly')).toBe(false)
+  })
+
+  it('remembers a held slot so the miss detector skips it (2026-10-25)', async () => {
+    const h = m as unknown as Holder
+    const slot = new Date('2026-10-25T04:35:00Z')
+    expect(await m.heldByMaintenanceAt('nightly', slot)).toBe(false)
+    await h.noteHeldSlot('nightly', slot)
+    expect(await m.heldByMaintenanceAt('nightly', slot)).toBe(true)
+    // An earlier expected slot is covered too; a later one (after maintenance) is not.
+    expect(await m.heldByMaintenanceAt('nightly', new Date('2026-10-25T04:00:00Z'))).toBe(true)
+    expect(await m.heldByMaintenanceAt('nightly', new Date('2026-10-26T04:35:00Z'))).toBe(false)
+    expect(await m.heldByMaintenanceAt('maintenance-windows', slot)).toBe(false)
   })
 })

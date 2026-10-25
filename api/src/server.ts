@@ -1799,6 +1799,8 @@ export async function buildServer() {
           if (expected.getTime() < bootAt) continue // expected before this process existed
           const last = lastBy.get(j.id) ?? 0
           if (last >= expected.getTime() - 60_000) continue
+          // Maintenance held that tick on purpose (nightly rebuild) — not a miss.
+          if (await app.cron.heldByMaintenanceAt(j.id, expected)) continue
           out.push({
             id: j.id,
             expected_at: expected.toISOString(),
