@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-25T19:11:45.841Z",
+  "generated_at": "2026-10-25T19:36:11.012Z",
   "releases": [
+    {
+      "version": "0.3.25",
+      "tag": "v0.3.25",
+      "date": "2026-10-25T15:35:57-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "cron",
+              "text": "miss detector skips ticks that maintenance held",
+              "hash": "194f662be"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.24",
       "tag": "v0.3.24",
-      "date": "2026-10-25T15:11:32-04:00",
+      "date": "2026-10-25T15:11:45-04:00",
       "sections": [
         {
           "label": "Fixed",
