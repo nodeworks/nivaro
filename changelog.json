@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-25T23:27:12.202Z",
+  "generated_at": "2026-10-25T23:54:38.914Z",
   "releases": [
+    {
+      "version": "0.3.27",
+      "tag": "v0.3.27",
+      "date": "2026-10-25T19:54:23-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "close three gaps a review found in the army v3 fixes",
+              "hash": "e689a6050"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.26",
       "tag": "v0.3.26",
-      "date": "2026-10-25T19:26:54-04:00",
+      "date": "2026-10-25T19:27:12-04:00",
       "sections": [
         {
           "label": "Fixed",
