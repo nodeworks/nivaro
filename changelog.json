@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-25T01:34:18.158Z",
+  "generated_at": "2026-10-25T01:47:42.647Z",
   "releases": [
+    {
+      "version": "0.3.22",
+      "tag": "v0.3.22",
+      "date": "2026-10-24T21:47:27-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-actions",
+              "text": "apply the approval edit lock before running an action",
+              "hash": "84877ee33"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.21",
       "tag": "v0.3.21",
-      "date": "2026-10-24T21:34:01-04:00",
+      "date": "2026-10-24T21:34:18-04:00",
       "sections": [
         {
           "label": "Fixed",
