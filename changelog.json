@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-25T01:47:42.647Z",
+  "generated_at": "2026-10-25T07:02:37.819Z",
   "releases": [
+    {
+      "version": "0.3.23",
+      "tag": "v0.3.23",
+      "date": "2026-10-25T03:02:22-04:00",
+      "sections": [
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "cheaper scoped list totals, searched lists and queue state filters",
+              "hash": "bbdac4670"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.22",
       "tag": "v0.3.22",
-      "date": "2026-10-24T21:47:27-04:00",
+      "date": "2026-10-24T21:47:42-04:00",
       "sections": [
         {
           "label": "Fixed",
