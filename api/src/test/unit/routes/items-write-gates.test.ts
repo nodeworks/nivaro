@@ -65,7 +65,17 @@ vi.mock('../../../services/collections.js', async (orig) => ({
             junction_field: null
           }
         ]
-      : []
+      : c === 'workflows'
+        ? [
+            {
+              many_collection: 'workflow_line_items',
+              many_field: 'workflow',
+              one_collection: 'workflows',
+              one_field: 'line_items',
+              junction_field: null
+            }
+          ]
+        : []
   )
 }))
 vi.mock('../../../services/auto-ids.js', async (orig) => ({
@@ -130,6 +140,7 @@ vi.mock('../../../services/item-lock-guard.js', async (orig) => ({
 
 import { draftPublishRoutes } from '../../../routes/draft-publish.js'
 import { itemsRoutes } from '../../../routes/items.js'
+import { getAllowedFields } from '../../../services/permissions.js'
 
 async function app() {
   const a = Fastify()
@@ -205,6 +216,27 @@ describe('resolve-paths', () => {
       url: '/api/items/workflow_line_items/1/resolve-paths?paths=workflow.name'
     })
     expect(Object.keys(res.json().data)).toEqual(['workflow.name'])
+  })
+
+  it('checks the segments after a to-many hop against that collection field list', async () => {
+    svc.row = { id: 1 }
+    vi.mocked(getAllowedFields).mockImplementation(async (_u, _a, c) =>
+      c === 'workflow_line_items' ? ['id', 'workflow', 'name'] : null
+    )
+    try {
+      const refused = await (await app()).inject({
+        method: 'GET',
+        url: '/api/items/workflows/1/resolve-paths?paths=line_items.secret_note'
+      })
+      expect(refused.json().data).toEqual({})
+      const allowed = await (await app()).inject({
+        method: 'GET',
+        url: '/api/items/workflows/1/resolve-paths?paths=line_items.name'
+      })
+      expect(Object.keys(allowed.json().data)).toEqual(['line_items.name'])
+    } finally {
+      vi.mocked(getAllowedFields).mockImplementation(async () => null)
+    }
   })
 })
 

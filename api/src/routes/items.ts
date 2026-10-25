@@ -903,10 +903,10 @@ export async function itemsRoutes(app: FastifyInstance) {
       if (hop.startsWith('nivaro_') && hop !== 'nivaro_users')
         return { readable: false, target: null }
       if (!(await can(user, 'read', hop))) return { readable: false, target: null }
+      // resolvePathValues recurses past a to-many hop too, so every remaining
+      // segment is checked against the collection it belongs to.
       current = hop
       target = hop
-      // A to-many hop is always the leaf (resolvePathValues stops there).
-      if (info.type !== 'm2o') break
     }
     return { readable: true, target }
   }

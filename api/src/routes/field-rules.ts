@@ -14,7 +14,13 @@ import {
   validateDynamicConfig
 } from '../services/field-rules.js'
 import { recordRuleEvalSample, ruleEvalStats } from '../services/field-rules-stats.js'
-import { applyFieldRules, readItems, readOne, updateOne } from '../services/items.js'
+import {
+  aggregateItems,
+  applyFieldRules,
+  readItems,
+  readOne,
+  updateOne
+} from '../services/items.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { planRowRuleChanges } from '../services/row-rules-apply.js'
@@ -25,7 +31,8 @@ import { isSecretColumn, isSystemCollection } from '../services/system-collectio
  * evaluate and apply routes run rules the client sends, so a rule's related
  * reads must never be raw: a related record comes through readOne (row
  * filter, User Scopes, field allow-list), a "first matching row" through
- * readItems, a distinct-value set only on a field the caller may read, and
+ * readItems, a distinct-value set through the caller's grouped aggregate
+ * and only on a field they may read, and
  * nothing at all from a system table. Administrators use the plain cache.
  */
 export class CallerRuleLookupCache extends RowRuleLookupCache {
@@ -92,10 +99,32 @@ export class CallerRuleLookupCache extends RowRuleLookupCache {
     )
   }
 
+  // The values the caller's own reads hold: a grouped aggregate runs the row
+  // filter, User Scopes and the field list (a raw DISTINCT would answer "does
+  // this value exist" over rows they cannot open).
   override async distinctValues(collection: string, column: string): Promise<Set<string>> {
     if (!(await this.mayRead(collection, column))) return new Set()
-    return super.distinctValues(collection, column)
+    const key = `${collection}|${column}`
+    const hit = this.ownSets.get(key)
+    if (hit) return hit
+    this.queries += 1
+    const p = aggregateItems(
+      this.req.user!,
+      collection,
+      {
+        filter: { [column]: { _nnull: true } },
+        aggregate: { groupBy: [column], limit: 1000 }
+      },
+      undefined,
+      this.req.workspaceId ?? undefined
+    )
+      .then((res) => new Set(res.data.map((r) => String(r.group[column]))))
+      .catch(() => new Set<string>())
+    this.ownSets.set(key, p)
+    return p
   }
+
+  private readonly ownSets = new Map<string, Promise<Set<string>>>()
 }
 
 /** The lookup cache a rule pass gets: the caller's for non-admins. */

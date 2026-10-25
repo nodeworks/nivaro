@@ -34,6 +34,12 @@ vi.mock('../../../services/items.js', () => ({
     state.visible ? { id, name: 'caller view' } : null
   ),
   readItems: vi.fn(async () => ({ data: state.visible ? [{ id: 7, name: 'caller view' }] : [] })),
+  aggregateItems: vi.fn(async () => ({
+    data: state.visible ? [{ group: { default_item: 'SEEN' } }] : [],
+    total: 1,
+    limit: 1000,
+    offset: 0
+  })),
   applyFieldRules: vi.fn(),
   updateOne: vi.fn()
 }))
@@ -74,6 +80,21 @@ describe('row-rule lookups as the caller', () => {
     expect(
       (await new CallerRuleLookupCache(caller).distinctValues('vendors', 'static_token')).size
     ).toBe(0)
+  })
+
+  it('takes distinct values from the caller grouped aggregate, never a raw DISTINCT', async () => {
+    const seen = await new CallerRuleLookupCache(caller).distinctValues(
+      'project_types',
+      'default_item'
+    )
+    expect([...seen]).toEqual(['SEEN'])
+    state.visible = false
+    const none = await new CallerRuleLookupCache(caller).distinctValues(
+      'project_types',
+      'default_item'
+    )
+    expect(none.size).toBe(0)
+    expect(state.raw).toEqual([])
   })
 })
 

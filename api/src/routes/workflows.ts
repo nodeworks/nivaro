@@ -88,6 +88,8 @@ const SPLIT_ROLE_SENTINEL = '["__split_config__"]'
 interface SplitConfig {
   branches: string[] // state keys
   join: string // state key
+  /** The step the split starts from (state key). Unset = only an admin may split. */
+  from?: string
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -195,7 +197,12 @@ export function matchSplitConfig(
   transitions: WorkflowTransition[],
   states: WorkflowState[],
   body: { split_id?: string; branch_states?: string[]; join_state?: string }
-): { id: string; branches: WorkflowState[]; join: WorkflowState } | null {
+): {
+  id: string
+  branches: WorkflowState[]
+  join: WorkflowState
+  from: WorkflowState | null
+} | null {
   const byKey = new Map(states.map((s) => [s.key, s]))
   const keyOf = (ref: string) =>
     states.find((s) => s.id.toUpperCase() === String(ref).toUpperCase() || s.key === ref)?.key
@@ -214,7 +221,9 @@ export function matchSplitConfig(
     const branches = cfg.branches.map((k) => byKey.get(k))
     const join = byKey.get(cfg.join)
     if (branches.length < 2 || branches.some((b) => !b) || !join) return null
-    return { id: tx.id, branches: branches as WorkflowState[], join }
+    const from = cfg.from ? byKey.get(cfg.from) : null
+    if (cfg.from && !from) return null
+    return { id: tx.id, branches: branches as WorkflowState[], join, from: from ?? null }
   }
   return null
 }
@@ -363,6 +372,7 @@ export async function workflowsRoutes(app: FastifyInstance) {
             .filter(Boolean)
             .map((s) => formatStateLite(s as WorkflowState)),
           join_state: cfg.join,
+          from_state: cfg.from ?? null,
           join_state_obj: byKey.has(cfg.join)
             ? formatStateLite(byKey.get(cfg.join) as WorkflowState)
             : null
@@ -374,7 +384,12 @@ export async function workflowsRoutes(app: FastifyInstance) {
 
   app.post('/templates/:id/splits', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const body = req.body as { branch_states?: string[]; join_state?: string; label?: string }
+    const body = req.body as {
+      branch_states?: string[]
+      join_state?: string
+      from_state?: string
+      label?: string
+    }
 
     if (!Array.isArray(body?.branch_states) || body.branch_states.length < 2) {
       return reply.code(400).send({ error: 'branch_states requires at least 2 state keys' })
@@ -391,15 +406,20 @@ export async function workflowsRoutes(app: FastifyInstance) {
       .where({ template: id })
       .select('*')) as WorkflowState[]
     const byKey = new Map(states.map((s) => [s.key, s]))
-    const missing = [...body.branch_states, body.join_state].filter((k) => !byKey.has(k))
+    const missing = [
+      ...body.branch_states,
+      body.join_state,
+      ...(body.from_state ? [body.from_state] : [])
+    ].filter((k) => !byKey.has(k))
     if (missing.length > 0) {
       return reply.code(400).send({ error: `Unknown state keys: ${missing.join(', ')}` })
     }
 
     const groupLabel = `${SPLIT_PREFIX}${JSON.stringify({
       branches: body.branch_states,
-      join: body.join_state
-    })}`
+      join: body.join_state,
+      ...(body.from_state ? { from: body.from_state } : {})
+    } satisfies SplitConfig)}`
     if (groupLabel.length > 255) {
       return reply.code(400).send({ error: 'Split config too large (group_label limit 255)' })
     }
@@ -510,6 +530,18 @@ export async function workflowsRoutes(app: FastifyInstance) {
     }
     const branchStates = config.branches
     const joinState = config.join
+
+    // A split fires only from the step it is set up for; one with no source
+    // step is an admin's to run (otherwise it would start from anywhere).
+    if (config.from) {
+      if (String(config.from.id).toUpperCase() !== String(instance.current_state).toUpperCase()) {
+        return reply
+          .code(400)
+          .send({ error: `This split starts from ${config.from.label ?? config.from.key}` })
+      }
+    } else if (!req.isAdmin) {
+      return reply.code(403).send({ error: 'Only an administrator can run this split' })
+    }
 
     // Splitting moves the record on: the current step's owner (or an admin)
     // decides, the same rule as an owner-only transition.

@@ -59,6 +59,10 @@ const splitRow = {
   from_state: 'S-JOIN',
   to_state: 'S-JOIN',
   required_roles: '["__split_config__"]',
+  group_label: 'split:{"branches":["legal","finance"],"join":"joined","from":"started"}'
+}
+const unboundSplitRow = {
+  ...splitRow,
   group_label: 'split:{"branches":["legal","finance"],"join":"joined"}'
 }
 const parent = {
@@ -167,6 +171,31 @@ describe('POST /instance/:id/split', () => {
     expect(res.statusCode).toBe(201)
     expect(JSON.parse(res.body).data.joined).toBe(false)
     expect(inserts.length).toBeGreaterThan(0)
+  })
+
+  it('refuses a split from a step other than the one it starts from', async () => {
+    const inserts = installDb({ instance: { ...parent, current_state: 'S-A' } })
+    const res = await post('/instance/inst-parent/split', { split_id: 'T-SPLIT' })
+    expect(res.statusCode).toBe(400)
+    expect(inserts).toHaveLength(0)
+    expect(checkTransitionOwner).not.toHaveBeenCalled()
+  })
+
+  it('leaves a split with no source step to admins', async () => {
+    const refused = installDb({ transitions: [unboundSplitRow] })
+    const res = await post('/instance/inst-parent/split', { split_id: 'T-SPLIT' })
+    expect(res.statusCode).toBe(403)
+    expect(refused).toHaveLength(0)
+
+    me.isAdmin = true
+    try {
+      const ran = installDb({ transitions: [unboundSplitRow] })
+      const ok = await post('/instance/inst-parent/split', { split_id: 'T-SPLIT' })
+      expect(ok.statusCode).toBe(201)
+      expect(ran.length).toBeGreaterThan(0)
+    } finally {
+      me.isAdmin = false
+    }
   })
 })
 
