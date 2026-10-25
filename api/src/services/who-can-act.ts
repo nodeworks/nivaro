@@ -23,6 +23,9 @@ export interface ActNowPerson {
   unavailable_reason: string | null
   online: boolean | null
   stands_in_for: string[]
+  /** Listed by the record's fallback field only: it sits in their queue,
+   *  but they cannot approve the step (owner-only moves skip the fallback). */
+  queue_only?: boolean
 }
 
 export interface ActNowAnswer {
@@ -50,12 +53,20 @@ async function onlineSet(ids: string[]): Promise<Set<string>> {
 
 export function actNowSummary(state: string, people: ActNowPerson[]): string {
   if (people.length === 0) return `Nobody owns ${state} for this record right now.`
-  const able = people.filter((p) => p.available)
+  const queueOnly = people.filter((p) => p.queue_only)
+  const queueText =
+    queueOnly.length > 0
+      ? ` ${listPhrase(queueOnly.map((p) => p.name))} ${queueOnly.length === 1 ? 'has' : 'have'} it in their queue but cannot approve it.`
+      : ''
+  const owners = people.filter((p) => !p.queue_only)
+  if (owners.length === 0)
+    return `Nobody can approve ${state} right now — no owner is assigned to it.${queueText}`
+  const able = owners.filter((p) => p.available)
   const online = able.filter((p) => p.online === true)
   if (able.length === 0)
     return `Nobody can act on ${state} right now — every owner is unavailable (${listPhrase(
-      people.map((p) => `${p.name}: ${p.unavailable_reason ?? 'unavailable'}`)
-    )}).`
+      owners.map((p) => `${p.name}: ${p.unavailable_reason ?? 'unavailable'}`)
+    )}).${queueText}`
   const who = listPhrase(
     able.map((p) =>
       p.stands_in_for.length ? `${p.name} (standing in for ${listPhrase(p.stands_in_for)})` : p.name
@@ -67,7 +78,7 @@ export function actNowSummary(state: string, people: ActNowPerson[]): string {
       : able.some((p) => p.online === false)
         ? ' None of them is online right now.'
         : ''
-  return `${who} can act on ${state} now.${onlineText}`
+  return `${who} can act on ${state} now.${onlineText}${queueText}`
 }
 
 export async function whoCanActNow(
@@ -95,7 +106,8 @@ export async function whoCanActNow(
         ? UNAVAILABLE_TEXT[o.unavailable as Unavailability].replace(/\.$/, '').toLowerCase()
         : null,
       online: visible.has(k) ? online.has(k) : null,
-      stands_in_for: covers.filter(Boolean)
+      stands_in_for: covers.filter(Boolean),
+      ...(o.queue_only ? { queue_only: true } : {})
     }
   })
   return {

@@ -22,8 +22,9 @@ export async function schemaRoutes(app: FastifyInstance) {
     }
   )
 
-  // OpenAPI 3.1 JSON spec — always fresh (queries nivaro_collections/fields each time)
-  app.get('/schema.json', async (req, reply) => {
+  // OpenAPI 3.1 JSON spec — always fresh (queries nivaro_collections/fields each time).
+  // Signed-in callers only (session or Bearer): it lists every collection and field.
+  app.get('/schema.json', { preHandler: authenticate }, async (req, reply) => {
     const baseUrl = `${req.protocol}://${req.hostname}${config.PORT !== 443 && config.PORT !== 80 ? `:${config.PORT}` : ''}`
     const spec = await buildOpenAPISpec(baseUrl)
     return reply

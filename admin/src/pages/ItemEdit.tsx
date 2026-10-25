@@ -1247,8 +1247,11 @@ export function ItemEditPage() {
                         } catch {
                           /* storage full — the new page just opens blank */
                         }
+                        // The source's own form (newer shared builds send it).
+                        const slug =
+                          (payload as { layout_slug?: string | null }).layout_slug || layoutSlug
                         navigate(
-                          `/collections/${collection}/new?dupe=${key}${layoutSlug ? `&layout=${layoutSlug}` : ''}`
+                          `/collections/${collection}/new?dupe=${key}${slug ? `&layout=${encodeURIComponent(slug)}` : ''}`
                         )
                       }
                 }

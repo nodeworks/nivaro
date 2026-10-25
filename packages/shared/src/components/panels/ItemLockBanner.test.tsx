@@ -336,3 +336,58 @@ describe('ItemLockBanner', () => {
     expect(takeOverShown()).toBe(true)
   })
 })
+
+describe('useItemLock — the approval edit lock refuses the holder', () => {
+  it('a 403 EDIT_LOCKED on a claim leaves the lock unheld and does not retry per keystroke', async () => {
+    const { client, calls } = fakeClient((cmd) => {
+      if (cmd._method === 'POST')
+        throw Object.assign(new Error('Forbidden'), {
+          status: 403,
+          response: { code: 'EDIT_LOCKED', error: 'This record is in approval' }
+        })
+      return { data: null }
+    })
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <Probe />
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    await act(async () => {
+      await lock?.claim()
+      await lock?.claim()
+      await lock?.claim()
+    })
+    expect(said(calls, 'POST')).toHaveLength(1)
+    expect(lock?.acquired).toBe(false)
+  })
+
+  it('a claim that cannot reach the server waits instead of firing again (offline)', async () => {
+    const { client, calls } = fakeClient((cmd) => {
+      if (cmd._method === 'POST') throw new TypeError('Failed to fetch')
+      return { data: null }
+    })
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <Probe />
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await lock?.claim()
+    })
+    expect(said(calls, 'POST')).toHaveLength(1)
+    // Back online: the next edit claims again.
+    act(() => {
+      window.dispatchEvent(new Event('online'))
+    })
+    await act(async () => {
+      await lock?.claim()
+    })
+    expect(said(calls, 'POST')).toHaveLength(2)
+  })
+})

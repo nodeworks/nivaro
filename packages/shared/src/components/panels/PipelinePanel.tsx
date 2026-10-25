@@ -1057,13 +1057,30 @@ function OwnersSection({
     onError: (err) => toast.error(userErrorMessage(err, 'Failed to add owner'))
   })
 
+  // One click removes (no confirm); the toast's Undo puts the same seat back.
   const removeOwner = useMutation({
-    mutationFn: (id: number) => client.request(del(`/pipelines/instance-owners/${id}`)),
-    onSuccess: () => {
+    mutationFn: (o: PipelineInstanceOwner) =>
+      client.request(del(`/pipelines/instance-owners/${o.id}`)),
+    onSuccess: (_r, o) => {
       invalidate()
-      toast.success('Owner removed')
+      const name = [o.first_name, o.last_name].filter(Boolean).join(' ') || o.email
+      toast.success(`${name} removed as an owner`, {
+        action: {
+          label: 'Undo',
+          onClick: () =>
+            void client
+              .request(
+                post(`/pipelines/instance/${collection}/${item}/owners`, {
+                  user: o.user,
+                  state: o.state || undefined
+                })
+              )
+              .then(() => invalidate())
+              .catch((err) => toast.error(userErrorMessage(err, 'Could not add the owner back')))
+        }
+      })
     },
-    onError: () => toast.error('Failed to remove owner')
+    onError: (err) => toast.error(userErrorMessage(err, 'Failed to remove owner'))
   })
 
   const ownerInitials = (o: PipelineInstanceOwner) => {
@@ -1146,9 +1163,18 @@ function OwnersSection({
                   </span>
                   <span className='block truncate text-[11px] text-slate-400'>{o.email}</span>
                 </div>
-                <span className='shrink-0 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy/70 dark:text-nvr-cyan'>
-                  owner group
-                </span>
+                {o.queue_only ? (
+                  <span
+                    className='shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                    data-tip='The record is in their queue, but only the step’s owners can move it'
+                  >
+                    in their queue
+                  </span>
+                ) : (
+                  <span className='shrink-0 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy/70 dark:text-nvr-cyan'>
+                    owner group
+                  </span>
+                )}
               </div>
             )
           })}
@@ -1174,8 +1200,10 @@ function OwnersSection({
               </span>
               <button
                 type='button'
-                onClick={() => removeOwner.mutate(o.id)}
-                className='shrink-0 rounded p-0.5 text-slate-300 opacity-0 transition-all hover:text-red-500 group-hover:opacity-100'
+                aria-label={`Remove ${[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email} as an owner`}
+                disabled={removeOwner.isPending}
+                onClick={() => removeOwner.mutate(o)}
+                className='shrink-0 rounded p-0.5 text-slate-300 opacity-0 transition-all hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100'
               >
                 <X className='h-3 w-3' />
               </button>
@@ -1265,7 +1293,15 @@ function OwnersSection({
 
 interface AllOwnersEntry {
   state: PipelineState
-  owners: Array<{ id: string; email: string; first_name: string | null; last_name: string | null }>
+  owners: Array<{
+    id: string
+    email: string
+    first_name: string | null
+    last_name: string | null
+    /** Named only by the binding's fallback field (the creator on a review
+     *  step): the record sits in their queue, but they cannot approve it. */
+    queue_only?: boolean
+  }>
   /** Server-predicted: this state's skip criteria currently evaluate true
    *  (no resolved owners, threshold conditions, lookup_compare…) — the
    *  pipeline will pass straight through it. */

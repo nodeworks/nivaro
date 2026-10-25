@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { isMachineAccount } from '../services/machine-accounts.js'
-import { can } from '../services/permissions.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 
 /**
@@ -26,6 +26,18 @@ export async function fieldHistoryRoutes(app: FastifyInstance) {
       }
       if (!(await can(req.user!, 'read', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
+      }
+      // The record as the caller reads it (row filter, User Scopes), and only
+      // a field they may read: past values disclose as much as the current one.
+      if (!req.isAdmin) {
+        const { readOne } = await import('../services/items.js')
+        const row = await readOne(req.user!, collection, id, req.workspaceId ?? undefined, [
+          'id'
+        ]).catch(() => null)
+        if (!row) return reply.code(404).send({ error: 'Not found' })
+        const allowed = await getAllowedFields(req.user!, 'read', collection)
+        if (allowed !== null && !allowed.includes('*') && !allowed.includes(field))
+          return reply.code(403).send({ error: 'Forbidden' })
       }
 
       const rows = (await db('nivaro_revisions as r')

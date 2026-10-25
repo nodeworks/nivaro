@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useLiveRecordQueries } from '../../lib/live'
+import { restoreSkippedNote } from '../../lib/restore-skipped'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { RelatedItemLabel } from '../item-edit/RelationCombobox'
 import { UserAvatar } from '../UserAvatar'
@@ -956,9 +957,11 @@ function RevisionRow({
 
   const rollbackMut = useMutation({
     mutationFn: () => client.request(post(`/revisions/${revision.id}/rollback`, {})),
-    onSuccess: () => {
+    onSuccess: (res) => {
       setConfirmRollback(false)
       toast.success('Rolled back to this revision')
+      const skipped = restoreSkippedNote(res)
+      if (skipped) toast.warning(skipped, { duration: 10_000 })
       if (inlineTableFields?.length && revision.timestamp) setRolledBackAt(revision.timestamp)
       onRollback?.()
     },
@@ -969,7 +972,7 @@ function RevisionRow({
     if (!rolledBackAt) return
     setO2MRestoring(f.field)
     try {
-      await client.request(
+      const res = await client.request(
         post('/revisions/o2m-restore', {
           collection: f.relatedCollection,
           many_field: f.manyField,
@@ -978,6 +981,8 @@ function RevisionRow({
         })
       )
       toast.success(`Restored ${f.label}`)
+      const skipped = restoreSkippedNote(res)
+      if (skipped) toast.warning(skipped, { duration: 10_000 })
     } catch {
       toast.error(`Failed to restore ${f.label}`)
     } finally {

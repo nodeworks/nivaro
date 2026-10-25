@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAuth } from '../middleware/authenticate.js'
-import { can } from '../services/permissions.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 
 /**
  * Record timeline — one chronological feed per record, merging what today
@@ -39,6 +39,18 @@ export async function timelineRoutes(app: FastifyInstance) {
     const { collection, item } = req.params as { collection: string; item: string }
     if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
+    }
+    // The record as the caller reads it (row filter, User Scopes): a hidden
+    // record has no timeline. Changed-field names keep to fields they may read.
+    let readable: Set<string> | null = null
+    if (!req.isAdmin) {
+      const { readOne } = await import('../services/items.js')
+      const row = await readOne(req.user!, collection, item, req.workspaceId ?? undefined, [
+        'id'
+      ]).catch(() => null)
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const allowed = await getAllowedFields(req.user!, 'read', collection)
+      readable = allowed === null || allowed.includes('*') ? null : new Set(allowed)
     }
 
     const [activity, revisions, instances, comments, tasks, addendums] = await Promise.all([
@@ -121,7 +133,9 @@ export async function timelineRoutes(app: FastifyInstance) {
     }
     for (const r of revisions as Array<Record<string, unknown>>) {
       const delta = parseJson<Record<string, unknown>>(r.delta)
-      const changed = delta ? Object.keys(delta).filter((k) => k !== 'id') : []
+      const changed = delta
+        ? Object.keys(delta).filter((k) => k !== 'id' && (!readable || readable.has(k)))
+        : []
       events.push({
         id: `r-${r.id}`,
         type: 'revision',

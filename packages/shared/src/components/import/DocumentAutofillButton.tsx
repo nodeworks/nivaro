@@ -15,6 +15,7 @@ import { useApiFetchConfig, useOptionalNivaroClient } from '../../context'
 import { type AskRelationInput, askPickerNarrowing } from '../../lib/autofill-ask-filter'
 import {
   dismissAutofillRun,
+  isAutofillProposalId,
   setAutofillRunPresented,
   startAutofillRun,
   useAutofillRun
@@ -192,7 +193,7 @@ export async function startDocumentExtraction(
   const id = String(json?.data?.proposal_id ?? '')
   if (!id) throw new Error('The server did not return a proposal id')
   if (opts.notify) {
-    await fetch(`${cfg.apiBase}/ai/extract-record/${id}/notify`, {
+    await fetch(`${cfg.apiBase}/ai/extract-record/${encodeURIComponent(id)}/notify`, {
       method: 'POST',
       headers: cfg.authHeaders,
       credentials: cfg.credentials
@@ -430,6 +431,12 @@ export function DocumentAutofillButton({
   useEffect(() => {
     if (!initialProposalId || consumedRef.current === initialProposalId) return
     consumedRef.current = initialProposalId
+    // `?autofill=` comes from a URL: anything but a proposal id is ignored
+    // (it used to be spliced into the API path — `../../admin` fetched /api/ai/admin).
+    if (!isAutofillProposalId(initialProposalId)) {
+      onProposalConsumed?.()
+      return
+    }
     startAutofillRun(apiCfg, { id: initialProposalId, collection })
     setActiveId(initialProposalId)
     setMinimized(false)
@@ -513,7 +520,7 @@ export function DocumentAutofillButton({
     // the notification covers closing the tab before it lands.
     setMinimized(true)
     try {
-      await fetch(`${apiBase}/ai/extract-record/${activeId}/notify`, {
+      await fetch(`${apiBase}/ai/extract-record/${encodeURIComponent(activeId)}/notify`, {
         method: 'POST',
         headers: authHeaders,
         credentials
@@ -563,7 +570,7 @@ export function DocumentAutofillButton({
         ]
       }
       // The scorecard row (#703): what was kept, what was answered.
-      void fetch(`${apiBase}/ai/extract-record/${proposal.id}/apply`, {
+      void fetch(`${apiBase}/ai/extract-record/${encodeURIComponent(String(proposal.id))}/apply`, {
         method: 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         credentials,

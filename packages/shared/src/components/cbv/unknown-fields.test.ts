@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dropUnknownField, unknownFieldsOf } from './unknown-fields'
+import { dropUnknownField, isFilterRefusal, unknownFieldsOf } from './unknown-fields'
 
 const f = (path: string[]) => ({
   id: path.join('.'),
@@ -18,6 +18,15 @@ describe('unknown-field refusals', () => {
     expect(unknownFieldsOf(axios)).toEqual(['a', 'b'])
     expect(unknownFieldsOf({ response: { code: 'FORBIDDEN' } })).toEqual([])
     expect(unknownFieldsOf(null)).toEqual([])
+  })
+
+  it('a path the list cannot follow (403 FIELD_NOT_READABLE) is a filter refusal, not an access wall', () => {
+    const err = { status: 403, response: { code: 'FIELD_NOT_READABLE', fields: ['zone'] } }
+    expect(unknownFieldsOf(err)).toEqual(['zone'])
+    expect(isFilterRefusal(err)).toBe(true)
+    // A real permission wall still offers Request access.
+    expect(isFilterRefusal({ status: 403, response: { code: 'FORBIDDEN' } })).toBe(false)
+    expect(isFilterRefusal({ status: 403, response: {} })).toBe(false)
   })
 
   it('takes the field out of filters, sort and column filters only', () => {

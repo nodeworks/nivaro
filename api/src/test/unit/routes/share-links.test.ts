@@ -5,6 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // (item '__form_preview__'): those live only behind the admin /layout-collab routes.
 
 const m = vi.hoisted(() => ({
+  admin: true,
+  readable: null as Record<string, unknown> | null,
+  readAs: [] as unknown[],
+  users: [] as Array<Record<string, unknown>>,
+  layouts: [] as Array<Record<string, unknown>>,
   link: null as Record<string, unknown> | null,
   rows: [] as Array<Record<string, unknown>>,
   inserted: [] as unknown[],
@@ -23,22 +28,45 @@ const sqlEq = (a: unknown, b: unknown) =>
 
 vi.mock('../../../middleware/authenticate.js', () => ({
   requireAuth: vi.fn(async (req: { user?: unknown; isAdmin?: boolean }) => {
-    req.user = { id: 'admin', role: 'admin-role' }
-    req.isAdmin = true
+    req.user = m.admin ? { id: 'admin', role: 'admin-role' } : { id: 'paul', role: 'approver' }
+    req.isAdmin = m.admin
+  })
+}))
+vi.mock('../../../services/items.js', () => ({
+  readOne: vi.fn(async (user: unknown) => {
+    m.readAs.push(user)
+    return m.readable
   })
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
 vi.mock('../../../services/form-layout.js', () => ({
-  loadFormLayout: vi.fn(async () => ({ tab_mode: 'tabs', field_paths: [], sections: [] }))
+  loadFormLayout: vi.fn(async () => ({
+    tab_mode: 'tabs',
+    field_paths: ['name', 'amount'],
+    sections: [
+      {
+        label: 'Main',
+        fields: [
+          { path: 'name', label: 'Name', db_type: 'string' },
+          { path: 'amount', label: 'Amount', db_type: 'decimal' }
+        ]
+      }
+    ]
+  }))
 }))
 vi.mock('../../../db/index.js', () => {
   const chain = (table: string) => {
     const preds: Array<(r: Record<string, unknown>) => boolean> = []
-    const hits = () =>
-      (table === 'nivaro_share_links' ? [...m.rows, ...(m.link ? [m.link] : [])] : []).filter((r) =>
-        preds.every((p) => p(r))
-      )
+    const source = () =>
+      table === 'nivaro_share_links'
+        ? [...m.rows, ...(m.link ? [m.link] : [])]
+        : table === 'nivaro_users'
+          ? m.users
+          : table === 'nivaro_collection_layouts'
+            ? m.layouts
+            : []
+    const hits = () => source().filter((r) => preds.every((p) => p(r)))
     const api: Record<string, unknown> = {
       where: (w: Record<string, unknown>) => {
         preds.push((r) => Object.entries(w).every(([k, v]) => sqlEq(r[k], v)))
@@ -50,6 +78,7 @@ vi.mock('../../../db/index.js', () => {
         return api
       },
       orderBy: async () => hits(),
+      update: () => ({ catch: () => undefined }),
       insert: async (row: unknown) => {
         m.inserted.push(row)
       },
@@ -86,6 +115,11 @@ const previewRow = {
 }
 
 beforeEach(() => {
+  m.admin = true
+  m.readable = { id: 42 }
+  m.readAs = []
+  m.users = []
+  m.layouts = []
   m.link = null
   m.rows = []
   m.inserted = []
@@ -171,5 +205,69 @@ describe('share links refuse form preview links', () => {
       ['nivaro_share_links', 'item', '__form_preview__'],
       ['nivaro_share_links', 'item', '__form_preview__']
     ])
+  })
+})
+
+describe('share links never reach past the creator’s own access', () => {
+  it('refuses a link to a record the caller cannot read', async () => {
+    m.admin = false
+    m.readable = null
+    const app = await build()
+    const r = await app.inject({
+      method: 'POST',
+      url: '/share-links',
+      payload: { collection: 'orders', item: 371801 }
+    })
+    expect(r.statusCode).toBe(404)
+    expect(m.inserted).toEqual([])
+  })
+  it('lets a reader of the record make one', async () => {
+    m.admin = false
+    const app = await build()
+    const r = await app.inject({
+      method: 'POST',
+      url: '/share-links',
+      payload: { collection: 'orders', item: 42 }
+    })
+    expect(r.statusCode).toBe(201)
+    expect(m.readAs[0]).toMatchObject({ id: 'paul' })
+  })
+  it('refuses a layout from another collection', async () => {
+    m.admin = false
+    m.layouts = [{ id: 9, collection: 'budgets' }]
+    const app = await build()
+    const r = await app.inject({
+      method: 'POST',
+      url: '/share-links',
+      payload: { collection: 'orders', item: 42, layout_id: 9 }
+    })
+    expect(r.statusCode).toBe(400)
+  })
+  it('lists only the caller’s own tokens, and nothing on a hidden record', async () => {
+    m.rows = [
+      { ...previewRow, item: '42', id: 'a', token: 'mine', created_by: 'paul' },
+      { ...previewRow, item: '42', id: 'b', token: 'theirs', created_by: 'kristina' }
+    ]
+    m.admin = false
+    const app = await build()
+    const list = await app.inject({ method: 'GET', url: '/share-links/for/orders/42' })
+    expect(list.json().data.map((r: { token: string }) => r.token)).toEqual(['mine'])
+    m.readable = null
+    const hidden = await app.inject({ method: 'GET', url: '/share-links/for/orders/42' })
+    expect(hidden.statusCode).toBe(404)
+  })
+  it('renders as the creator: only fields they can read, nothing once they are suspended', async () => {
+    m.link = { ...previewRow, item: '42', token: 'live', created_by: 'paul' }
+    m.users = [{ id: 'paul', role: 'approver', status: 'active' }]
+    m.readable = { id: 42, name: 'PO 42' }
+    const app = await build()
+    const r = await app.inject({ method: 'GET', url: '/share/live' })
+    expect(r.statusCode).toBe(200)
+    expect(r.body).toContain('PO 42')
+    expect(r.body).not.toContain('Amount')
+    expect(m.readAs[0]).toMatchObject({ id: 'paul' })
+    m.users = [{ id: 'paul', role: 'approver', status: 'suspended' }]
+    const gone = await app.inject({ method: 'GET', url: '/share/live' })
+    expect(gone.statusCode).toBe(404)
   })
 })

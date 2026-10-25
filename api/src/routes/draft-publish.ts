@@ -1,8 +1,15 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { can } from '../services/permissions.js'
+import {
+  CollectionNotFoundError,
+  ForbiddenError,
+  ItemNotFoundError,
+  readOne,
+  updateOne
+} from '../services/items.js'
+import { isSystemCollection } from '../services/system-collections.js'
 
 export async function draftPublishRoutes(app: FastifyInstance) {
   // GET /draft-publish/:collection/config
@@ -48,75 +55,53 @@ export async function draftPublishRoutes(app: FastifyInstance) {
     })
   })
 
-  // POST /draft-publish/:collection/:id/publish
-  app.post('/:collection/:id/publish', { preHandler: authenticate }, async (req, reply) => {
+  // Publish / unpublish / submit for review change the record, so they are
+  // the caller's own update through the items service: visibility (User
+  // Scopes, row filter), update permission, edit lock, hooks and history
+  // apply exactly as for a PATCH of `_status`.
+  async function setStatus(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    status: 'published' | 'draft' | 'review',
+    action: string
+  ) {
     const { collection, id } = req.params as { collection: string; id: string }
+    if (isSystemCollection(collection)) return reply.code(403).send({ error: 'Forbidden' })
+    try {
+      const item = await readOne(req.user!, collection, id, req.workspaceId ?? undefined, ['id'])
+      if (!item) return reply.code(404).send({ error: 'Item not found' })
+      await updateOne(
+        req.user!,
+        collection,
+        id,
+        { _status: status },
+        req,
+        req.workspaceId ?? undefined
+      )
+    } catch (err) {
+      if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
+      if (err instanceof CollectionNotFoundError || err instanceof ItemNotFoundError)
+        return reply.code(404).send({ error: 'Item not found' })
+      throw err
+    }
 
-    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
-    if (!(await can(req.user!, 'update', collection)))
-      return reply.code(403).send({ error: 'Forbidden' })
+    await logActivity({ action, user: req.user?.id, collection, item: id, req })
 
-    const item = await db(collection).where({ id }).first()
-    if (!item) return reply.code(404).send({ error: 'Item not found' })
+    return reply.send({ data: { id, _status: status } })
+  }
 
-    await db(collection).where({ id }).update({ _status: 'published' })
-
-    await logActivity({
-      action: 'publish',
-      user: req.user?.id,
-      collection,
-      item: id,
-      req
-    })
-
-    return reply.send({ data: { id, _status: 'published' } })
-  })
+  // POST /draft-publish/:collection/:id/publish
+  app.post('/:collection/:id/publish', { preHandler: authenticate }, (req, reply) =>
+    setStatus(req, reply, 'published', 'publish')
+  )
 
   // POST /draft-publish/:collection/:id/unpublish
-  app.post('/:collection/:id/unpublish', { preHandler: authenticate }, async (req, reply) => {
-    const { collection, id } = req.params as { collection: string; id: string }
-
-    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
-    if (!(await can(req.user!, 'update', collection)))
-      return reply.code(403).send({ error: 'Forbidden' })
-
-    const item = await db(collection).where({ id }).first()
-    if (!item) return reply.code(404).send({ error: 'Item not found' })
-
-    await db(collection).where({ id }).update({ _status: 'draft' })
-
-    await logActivity({
-      action: 'unpublish',
-      user: req.user?.id,
-      collection,
-      item: id,
-      req
-    })
-
-    return reply.send({ data: { id, _status: 'draft' } })
-  })
+  app.post('/:collection/:id/unpublish', { preHandler: authenticate }, (req, reply) =>
+    setStatus(req, reply, 'draft', 'unpublish')
+  )
 
   // POST /draft-publish/:collection/:id/submit-review
-  app.post('/:collection/:id/submit-review', { preHandler: authenticate }, async (req, reply) => {
-    const { collection, id } = req.params as { collection: string; id: string }
-
-    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
-    if (!(await can(req.user!, 'update', collection)))
-      return reply.code(403).send({ error: 'Forbidden' })
-
-    const item = await db(collection).where({ id }).first()
-    if (!item) return reply.code(404).send({ error: 'Item not found' })
-
-    await db(collection).where({ id }).update({ _status: 'review' })
-
-    await logActivity({
-      action: 'submit_review',
-      user: req.user?.id,
-      collection,
-      item: id,
-      req
-    })
-
-    return reply.send({ data: { id, _status: 'review' } })
-  })
+  app.post('/:collection/:id/submit-review', { preHandler: authenticate }, (req, reply) =>
+    setStatus(req, reply, 'review', 'submit_review')
+  )
 }

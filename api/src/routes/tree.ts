@@ -10,11 +10,15 @@ import {
   getTreeConfig,
   moveNode,
   type NestedNode,
+  nestNodes,
+  parseMaxDepth,
   type TreeConfig
 } from '../lib/tree.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { can } from '../services/permissions.js'
+import { ForbiddenError, updateOne } from '../services/items.js'
+import { can, getAllowedFields } from '../services/permissions.js'
+import { visibleRecordIds } from '../services/sla-visibility.js'
 import {
   ensurePathColumns,
   isPathMaintained,
@@ -59,6 +63,76 @@ function sortNestedNodes(nodes: NestedNode[], orderField: string | null): Nested
   return sortLevel(nodes)
 }
 
+/**
+ * The nodes as the caller reads them: only records they can see (User Scopes,
+ * row filter), only fields their policy allows (plus the tree's own id, depth
+ * and label). A hidden node's visible children surface as roots. Admins: all.
+ */
+export async function asViewer(
+  req: FastifyRequest,
+  config: TreeConfig,
+  nodes: FlatNode[]
+): Promise<FlatNode[]> {
+  if (req.isAdmin || nodes.length === 0) return nodes
+  const user = req.user!
+  const [seen, allowed] = await Promise.all([
+    visibleRecordIds(
+      user,
+      config.collection,
+      nodes.map((n) => String(n.id))
+    ),
+    getAllowedFields(user, 'read', config.collection)
+  ])
+  const readable = (f: string) => allowed === null || f === 'id' || allowed.includes(f)
+  return nodes
+    .filter((n) => seen.has(String(n.id)))
+    .map((n) => {
+      const out: FlatNode = { id: n.id, depth: n.depth, label: '' }
+      for (const [k, v] of Object.entries(n)) if (readable(k)) out[k] = v
+      out.depth = n.depth
+      out.label = readable(config.label_field) ? n.label : ''
+      return out
+    })
+}
+
+/** Driver and SQL text never reach a client: a failed tree read is a plain 500. */
+async function treeRead(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  run: () => Promise<unknown>
+): Promise<unknown> {
+  try {
+    return reply.send({ data: await run() })
+  } catch (err) {
+    const e = err as { statusCode?: number; message?: string }
+    if (e.statusCode === 400) return reply.code(400).send({ error: e.message ?? 'Bad request' })
+    req.log.error({ err }, 'tree read failed')
+    return reply.code(500).send({ error: 'The tree could not be read' })
+  }
+}
+
+/** A non-admin may only read a tree whose parent link they can read. */
+async function parentReadable(req: FastifyRequest, config: TreeConfig): Promise<boolean> {
+  if (req.isAdmin) return true
+  const allowed = await getAllowedFields(req.user!, 'read', config.collection)
+  return allowed === null || allowed.includes(config.parent_field)
+}
+
+/** A refused write (forbidden, edit-locked, invalid) as its own status, else null. */
+function writeRefusal(err: unknown): { code: number; error: string } | null {
+  if (err instanceof ForbiddenError) return { code: 403, error: 'Forbidden' }
+  const e = err as { statusCode?: number; message?: string }
+  if (e?.statusCode && e.statusCode < 500)
+    return { code: e.statusCode, error: e.message ?? 'Refused' }
+  return null
+}
+
+/** May the caller see this record (null id = the root, always). */
+async function seesNode(req: FastifyRequest, collection: string, id: unknown): Promise<boolean> {
+  if (req.isAdmin || id == null) return true
+  return (await visibleRecordIds(req.user!, collection, [String(id)])).has(String(id))
+}
+
 async function resolveConfig(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -71,6 +145,10 @@ async function resolveConfig(
   }
 
   if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+    reply.code(403).send({ error: 'Forbidden' })
+    return null
+  }
+  if (!(await parentReadable(req, config))) {
     reply.code(403).send({ error: 'Forbidden' })
     return null
   }
@@ -244,10 +322,12 @@ export async function treeRoutes(app: FastifyInstance) {
     if (!config) return
 
     const rootId = req.query.root ?? undefined
-    const maxDepth = req.query.maxDepth != null ? Number(req.query.maxDepth) : undefined
-
-    const nodes = await getNodes(config, { rootId, maxDepth })
-    return reply.send({ data: sortFlatNodes(nodes, config.order_field) })
+    return treeRead(req, reply, async () => {
+      const maxDepth = parseMaxDepth(req.query.maxDepth)
+      if (!(await seesNode(req, config.collection, rootId))) return []
+      const nodes = await asViewer(req, config, await getNodes(config, { rootId, maxDepth }))
+      return sortFlatNodes(nodes, config.order_field)
+    })
   })
 
   // GET /tree/:collection/nested — nested tree
@@ -259,8 +339,13 @@ export async function treeRoutes(app: FastifyInstance) {
     if (!config) return
 
     const rootId = req.query.root ?? undefined
-    const tree = await getNestedTree(config, { rootId })
-    return reply.send({ data: sortNestedNodes(tree, config.order_field) })
+    return treeRead(req, reply, async () => {
+      if (req.isAdmin)
+        return sortNestedNodes(await getNestedTree(config, { rootId }), config.order_field)
+      if (!(await seesNode(req, config.collection, rootId))) return []
+      const flat = await asViewer(req, config, await getNodes(config, { rootId }))
+      return sortNestedNodes(nestNodes(flat, config.parent_field), config.order_field)
+    })
   })
 
   // GET /tree/:collection/:id/ancestors — breadcrumb trail (root first)
@@ -271,8 +356,10 @@ export async function treeRoutes(app: FastifyInstance) {
       const config = await resolveConfig(req, reply, req.params.collection)
       if (!config) return
 
-      const ancestors = await getAncestors(config, req.params.id)
-      return reply.send({ data: ancestors })
+      return treeRead(req, reply, async () => {
+        if (!(await seesNode(req, config.collection, req.params.id))) return []
+        return asViewer(req, config, await getAncestors(config, req.params.id))
+      })
     }
   )
 
@@ -284,9 +371,11 @@ export async function treeRoutes(app: FastifyInstance) {
     const config = await resolveConfig(req, reply, req.params.collection)
     if (!config) return
 
-    const maxDepth = req.query.maxDepth != null ? Number(req.query.maxDepth) : undefined
-    const descendants = await getDescendants(config, req.params.id, { maxDepth })
-    return reply.send({ data: descendants })
+    return treeRead(req, reply, async () => {
+      const maxDepth = parseMaxDepth(req.query.maxDepth)
+      if (!(await seesNode(req, config.collection, req.params.id))) return []
+      return asViewer(req, config, await getDescendants(config, req.params.id, { maxDepth }))
+    })
   })
 
   // GET /tree/:collection/:id/children — direct children
@@ -297,11 +386,13 @@ export async function treeRoutes(app: FastifyInstance) {
       const config = await resolveConfig(req, reply, req.params.collection)
       if (!config) return
 
-      const children = await getChildren(config, req.params.id)
-      const sorted = config.order_field
-        ? [...children].sort(compareByOrderField(config.order_field))
-        : children
-      return reply.send({ data: sorted })
+      return treeRead(req, reply, async () => {
+        if (!(await seesNode(req, config.collection, req.params.id))) return []
+        const children = await asViewer(req, config, await getChildren(config, req.params.id))
+        return config.order_field
+          ? [...children].sort(compareByOrderField(config.order_field))
+          : children
+      })
     }
   )
 
@@ -318,14 +409,33 @@ export async function treeRoutes(app: FastifyInstance) {
     }
 
     const newParentId = req.body?.parent_id ?? null
+    // The node and its new parent must be records the caller can see.
+    if (
+      !(await seesNode(req, config.collection, req.params.id)) ||
+      !(await seesNode(req, config.collection, newParentId))
+    ) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
 
     try {
-      await moveNode(config, req.params.id, newParentId)
+      // Through the items service as the caller: update row filter, tree
+      // permissions, field allow-list, edit lock, hooks and revisions apply.
+      await moveNode(config, req.params.id, newParentId, (id, patch) =>
+        updateOne(
+          req.user!,
+          config.collection,
+          id as string | number,
+          patch,
+          req,
+          req.workspaceId ?? undefined,
+          {
+            callerPayload: true
+          }
+        )
+      )
     } catch (err: unknown) {
-      const e = err as { statusCode?: number; message?: string }
-      if (e.statusCode === 400) {
-        return reply.code(400).send({ error: e.message ?? 'Bad request' })
-      }
+      const refused = writeRefusal(err)
+      if (refused) return reply.code(refused.code).send({ error: refused.error })
       throw err
     }
 
@@ -393,10 +503,30 @@ export async function treeRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'All nodes must share the same parent' })
     }
 
+    if (!req.isAdmin) {
+      const seen = await visibleRecordIds(req.user!, config.collection, ids.map(String))
+      if (ids.some((id) => !seen.has(String(id)))) {
+        return reply.code(400).send({ error: 'One or more ids do not exist' })
+      }
+    }
+
+    // Each sort value is a write as the caller (same gates as a record PATCH).
     for (const entry of order) {
-      await db(config.collection)
-        .where({ id: entry.id })
-        .update({ [config.order_field]: Number(entry.sort) })
+      try {
+        await updateOne(
+          req.user!,
+          config.collection,
+          entry.id,
+          { [config.order_field]: Number(entry.sort) },
+          req,
+          req.workspaceId ?? undefined,
+          { callerPayload: true }
+        )
+      } catch (err) {
+        const refused = writeRefusal(err)
+        if (refused) return reply.code(refused.code).send({ error: refused.error })
+        throw err
+      }
     }
 
     await logActivity({

@@ -25,7 +25,7 @@ import {
 import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
-import { can } from './permissions.js'
+import { can, getAllowedFields } from './permissions.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -39,6 +39,7 @@ import { PathReadBatch } from './queue-path-batch.js'
 import { withReadGateEach } from './read-gate.js'
 import { span } from './request-trace.js'
 import { sendBackBatch } from './send-backs.js'
+import { isSecretColumn, isSystemCollection, sensitiveColumns } from './system-collections.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -884,9 +885,32 @@ function sortValue(
   if (key === 'priority') return computePriorityScore(item, weights)
   if (key.startsWith('extra.')) {
     const v = item.extra?.[key.slice('extra.'.length)]
-    return v == null ? null : String(v)
+    // An empty cell is no value: it sorts last, like null.
+    return v == null || v === '' ? null : String(v)
   }
   return null
+}
+
+const NUMBER_TEXT = /^\s*-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i
+// ISO days/datetimes and the Date.toString() text older cache rows still hold.
+const DATE_TEXT = /^\d{4}-\d{2}-\d{2}|^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{2} \d{4}/
+
+/** Typed order of two extra.* cell texts: numbers as numbers, dates as dates,
+ *  anything else as text — numbers before dates before text when they mix. */
+export function compareCellText(a: string, b: string): number {
+  const an = NUMBER_TEXT.test(a) ? Number(a) : null
+  const bn = NUMBER_TEXT.test(b) ? Number(b) : null
+  if (an != null && bn != null) return an - bn
+  if (an != null) return -1
+  if (bn != null) return 1
+  const ad = DATE_TEXT.test(a) ? Date.parse(a) : Number.NaN
+  const bd = DATE_TEXT.test(b) ? Date.parse(b) : Number.NaN
+  const aIsDate = !Number.isNaN(ad)
+  const bIsDate = !Number.isNaN(bd)
+  if (aIsDate && bIsDate) return ad - bd
+  if (aIsDate) return -1
+  if (bIsDate) return 1
+  return a.localeCompare(b)
 }
 
 export function sortItems(
@@ -909,7 +933,9 @@ export function sortItems(
     const cmp =
       typeof av === 'number' && typeof bv === 'number'
         ? av - bv
-        : String(av).localeCompare(String(bv))
+        : key.startsWith('extra.')
+          ? compareCellText(String(av), String(bv))
+          : String(av).localeCompare(String(bv))
     if (cmp !== 0) return desc ? -cmp : cmp
     return stableTie(a, b, key)
   })
@@ -1686,6 +1712,60 @@ export function newPathReadBatch(): PathReadBatch {
   )
 }
 
+/**
+ * May `user` read a dotted path from `baseCollection`, hop by hop? Every hop
+ * must be a collection they can read, and every segment a field their read
+ * policy on THAT hop allows — the relational ones included; credentials and
+ * system tables other than the people directory never. `firstHop` names the
+ * path's leading M2O so callers can keep only related rows the user can see.
+ */
+export async function pathReadableBy(
+  user: User,
+  baseCollection: string,
+  segments: string[],
+  relationsCache: Map<string, CMSRelation[]> = new Map()
+): Promise<{ readable: boolean; firstHop: { field: string; collection: string } | null }> {
+  const refused = { readable: false, firstHop: null }
+  let current = baseCollection
+  let firstHop: { field: string; collection: string } | null = null
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    if (!/^[A-Za-z0-9_]+$/.test(seg) || isSecretColumn(seg)) return refused
+    if (sensitiveColumns(current).includes(seg.toLowerCase())) return refused
+    const allowed = await getAllowedFields(user, 'read', current)
+    if (allowed && !allowed.includes('*') && !allowed.includes(seg) && seg !== 'id') return refused
+    let relations = relationsCache.get(current)
+    if (!relations) {
+      relations = await getRelations(current)
+      relationsCache.set(current, relations)
+    }
+    const info = classifyRelationSegment(current, seg, relations)
+    if (!info) return i === segments.length - 1 ? { readable: true, firstHop } : refused
+    const hop = info.relatedCollection
+    if (!hop) return refused
+    if (isSystemCollection(hop) && hop !== 'nivaro_users') return refused
+    if (!(await can(user, 'read', hop))) return refused
+    if (i === 0 && info.type === 'm2o') firstHop = { field: seg, collection: hop }
+    current = hop
+  }
+  return { readable: true, firstHop }
+}
+
+/**
+ * A stored value as path text. Dates go out as ISO — a DATE column (UTC
+ * midnight from the driver) as its day, "2026-10-19" — never Date.toString()
+ * ("Mon Oct 19 2026 …"), which sorted by weekday and read a day early.
+ */
+export function pathText(v: unknown): string {
+  if (v == null) return ''
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return ''
+    const iso = v.toISOString()
+    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso
+  }
+  return String(v)
+}
+
 export async function resolvePathValues(
   collection: string,
   ids: string[],
@@ -1695,6 +1775,9 @@ export async function resolvePathValues(
   batch?: PathReadBatch
 ): Promise<Map<string, PathValue>> {
   if (ids.length === 0 || segments.length === 0) return new Map()
+  // A credential is never a path segment, whoever configured the path — an
+  // export preset, a queue column or a layout field (`creator.static_token`).
+  if (segments.some((seg) => isSecretColumn(seg))) return new Map()
 
   let relations = relationsCache.get(collection)
   if (!relations) {
@@ -1722,7 +1805,7 @@ export async function resolvePathValues(
     const out = new Map<string, PathValue>()
     for (const row of rows as Array<Record<string, unknown>>) {
       const v = row[head]
-      out.set(String(row.id), { value: v == null ? '' : String(v), ids: [] })
+      out.set(String(row.id), { value: pathText(v), ids: [] })
     }
     return out
   }
@@ -1840,7 +1923,7 @@ export async function resolvePathValues(
           const nested = new Map<string, PathValue>()
           for (const row of leafRows) {
             const v = row[leaf]
-            nested.set(String(row.id), { value: v == null ? '' : String(v), ids: [] })
+            nested.set(String(row.id), { value: pathText(v), ids: [] })
           }
           return joinMultiHop(ids, grouped, nested)
         }

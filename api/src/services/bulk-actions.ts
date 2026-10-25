@@ -8,6 +8,7 @@ import {
 import { logActivity } from '../services/activity.js'
 import type { User } from '../types.js'
 import { type GuardRule, guardPasses, parseJsonLoose, renderTemplate } from './action-guards.js'
+import { commentMissing } from './manual-transition-gate.js'
 import { can } from './permissions.js'
 import {
   coerceBool,
@@ -654,6 +655,11 @@ export async function runDefinition(
           fail(item, owner.message)
           continue
         }
+      }
+      // A move marked "note required" needs the bulk reason as its note.
+      if (commentMissing(transition as { comment_mode?: string | null }, reason)) {
+        fail(item, 'A note is required for this move')
+        continue
       }
       if (transition.requirements) {
         const blocking = await evaluateTransitionRequirements(

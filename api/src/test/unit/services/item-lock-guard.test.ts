@@ -12,6 +12,14 @@ vi.mock('../../../db/index.js', () => ({
   })
 }))
 
+const voided = vi.hoisted(() => ({ users: new Set<string>() }))
+vi.mock('../../../services/edit-lock.js', () => ({
+  lockHolderVerdict: async (holder: string) =>
+    voided.users.has(holder)
+      ? { locked: true, allowed: false, message: 'This record is at Level 1.' }
+      : { locked: false, allowed: true, message: '' }
+}))
+
 import { editLockRefusal } from '../../../services/item-lock-guard.js'
 
 const person = (id: string, authMethod = 'session') => ({ user: { id }, authMethod }) as never
@@ -21,6 +29,14 @@ describe('editLockRefusal', () => {
     for (const k of Object.keys(rows)) delete rows[k]
     rows.nivaro_collections = { item_locking_enabled: 1 }
     rows.nivaro_users = { first_name: 'Andy', last_name: 'Francis', email: 'a@x' }
+    voided.users.clear()
+  })
+
+  it('ignores a lock its holder may no longer use (record moved into a step they do not own)', async () => {
+    rows.nivaro_item_locks = { user: 'U-BRYAN' }
+    expect((await editLockRefusal(person('u-peter'), 'workflows', '372793'))?.status).toBe(409)
+    voided.users.add('U-BRYAN')
+    expect(await editLockRefusal(person('u-peter'), 'workflows', '372793')).toBeNull()
   })
 
   it('refuses a save over a record someone else holds, naming them', async () => {

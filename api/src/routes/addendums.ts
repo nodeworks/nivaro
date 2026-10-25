@@ -6,6 +6,7 @@ import { addendumSummaryBatch } from '../services/addendum-summary.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { can } from '../services/permissions.js'
 import { syncAddendumInQueues } from '../services/queue-materialization.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { announceAddendumChange } from '../services/record-events.js'
 import { emitWorkflowStartEvent } from '../services/workflow-transitions.js'
 
@@ -125,6 +126,35 @@ async function parentReadable(
   return !!parent
 }
 
+/** Pipeline ids (upper-cased) a collection's addendums may start: every
+ *  addendum layout's pipeline plus the start-state rules' pipelines. */
+async function addendumPipelines(
+  collection: string,
+  startStates: string | null
+): Promise<Set<string>> {
+  const layouts = (await db('nivaro_collection_layouts')
+    .where({ collection, layout_type: 'addendum' })
+    .whereNotNull('workflow_template_id')
+    .select('workflow_template_id')) as Array<{ workflow_template_id: string }>
+  const out = new Set(layouts.map((l) => String(l.workflow_template_id).toUpperCase()))
+  const rules = parseJsonSafe(startStates) as Array<{ pipeline_id?: string }> | null
+  if (Array.isArray(rules))
+    for (const r of rules) if (r?.pipeline_id) out.add(String(r.pipeline_id).toUpperCase())
+  return out
+}
+
+/** cost_impact / timeline_impact_days must be finite numbers (or empty). */
+function numberFieldError(body: { cost_impact?: unknown; timeline_impact_days?: unknown }) {
+  for (const k of ['cost_impact', 'timeline_impact_days'] as const) {
+    const v = body[k]
+    if (v == null || v === '') continue
+    const n = typeof v === 'number' ? v : Number(v)
+    if (typeof v === 'boolean' || !Number.isFinite(n) || Math.abs(n) > 1e12)
+      return `${k} must be a number`
+  }
+  return null
+}
+
 /** formatAddendum + `data` redacted to what this caller may read. */
 async function formatAddendumFor(
   req: import('fastify').FastifyRequest,
@@ -185,7 +215,13 @@ export async function addendumsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Invalid collection' })
     if (!(await can(req.user!, 'read', body.collection)))
       return reply.code(403).send({ error: 'Forbidden' })
-    const ids = body.ids.map(String).filter(Boolean).slice(0, 500)
+    const asked = body.ids.map(String).filter(Boolean).slice(0, 500)
+    // Only the records the caller can see (row filter, User Scopes).
+    const gates = await compileAccessGates(req.user!, body.collection, {
+      actingAdmin: req.isAdmin
+    })
+    const seen = await visibleIds(gates, asked)
+    const ids = asked.filter((i) => seen.has(i))
     const map = await addendumSummaryBatch(body.collection, ids)
     return reply.send({ data: Object.fromEntries(map) })
   })
@@ -402,6 +438,16 @@ export async function addendumsRoutes(app: FastifyInstance) {
     if (!body.parent_collection || !body.parent_id || !body.title) {
       return reply.code(400).send({ error: 'parent_collection, parent_id, and title are required' })
     }
+    // A change proposal on a record needs the record: the caller must see it
+    // (row filter, User Scopes) and may change records of its collection.
+    if (
+      !(await parentReadable(req, body.parent_collection, String(body.parent_id))) ||
+      !(await can(req.user!, 'update', body.parent_collection))
+    ) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    const badNumber = numberFieldError(body)
+    if (badNumber) return reply.code(400).send({ error: badNumber })
 
     // Enabled / role / state gates — ONE implementation shared with surfaces
     // that lead here (services/addendum-approve.ts canCreateAddendum).
@@ -416,6 +462,18 @@ export async function addendumsRoutes(app: FastifyInstance) {
       .where({ collection: body.parent_collection })
       .select('addendum_start_states')
       .first()) as { addendum_start_states: string | null } | undefined
+
+    // Only a pipeline this collection's addendums are set up to run — an
+    // addendum layout's pipeline or a configured start rule's — never any id.
+    if (body.workflow_template_id) {
+      const allowed = await addendumPipelines(
+        body.parent_collection,
+        col?.addendum_start_states ?? null
+      )
+      if (!allowed.has(String(body.workflow_template_id).toUpperCase())) {
+        return reply.code(400).send({ error: 'That pipeline is not set up for these addendums' })
+      }
+    }
 
     // Validate that the provided addendum_layout_id belongs to this collection
     if (body.addendum_layout_id != null) {
@@ -615,10 +673,22 @@ export async function addendumsRoutes(app: FastifyInstance) {
       timeline_impact_days: number | null
     }>
 
+    const badNumber = numberFieldError(body)
+    if (badNumber) return reply.code(400).send({ error: badNumber })
+
     // The proposal is frozen once review starts: an approver must approve
-    // the version they read. Editable only while 'draft' AND its pipeline (if
-    // any) has not moved past the state it started in.
-    if ('data' in body) {
+    // the version they read — its changes, its money and timeline figures,
+    // its title and description alike. Editable only while 'draft' AND its
+    // pipeline (if any) has not moved past the state it started in.
+    const CONTENT = [
+      'title',
+      'description',
+      'fields_schema',
+      'data',
+      'cost_impact',
+      'timeline_impact_days'
+    ]
+    if (CONTENT.some((k) => k in body)) {
       let frozen = String(existing.status) !== 'draft'
       if (!frozen) {
         const moved = (await db('nivaro_workflow_history as h')
@@ -631,7 +701,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       }
       if (frozen)
         return reply.code(409).send({
-          error: 'This addendum is in review — its proposed changes can no longer be edited.'
+          error: 'This addendum is in review — it can no longer be edited.'
         })
     }
 

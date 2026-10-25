@@ -1,7 +1,6 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { itemActionRegistry } from '../extensions/item-actions.js'
-import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import type { BulkRunResult } from './bulk-actions.js'
 
@@ -23,8 +22,10 @@ import type { BulkRunResult } from './bulk-actions.js'
  *    `retrySubmissionRow`). A partner whose latest push landed is left alone.
  *
  * Records run ONE AT A TIME: parallel sends against the same partner invite
- * rate limiting. Every record is read as the caller first (RBAC, row filter,
- * user scopes) — a record the caller cannot open is a failure, never a push.
+ * rate limiting. Every record passes the single path's gates first (read as
+ * the caller, update rights on the record, the approval edit lock) — a record
+ * the caller cannot open or change is a failure, never a push. The dry run
+ * judges the same gates, so its preview matches the run.
  * `dryRun` classifies without sending anything.
  */
 
@@ -56,10 +57,21 @@ function recorder(result: BulkRunResult) {
   }
 }
 
-async function readable(user: User, collection: string, item: string): Promise<boolean> {
-  const { readOne } = await import('./items.js')
-  const row = await readOne(user, collection, item, undefined, ['id']).catch(() => null)
-  return !!row
+/**
+ * Why this person may not push this record, or null: the single-record
+ * path's gates (routes/item-actions.ts) — readable as the caller, theirs to
+ * change (update row filter, tree permission) and not refused by the
+ * approval edit lock. A push is a write in the partner's books.
+ */
+async function pushRefusal(req: FastifyRequest, collection: string, item: string) {
+  const { recordWriteRefusal } = await import('./edit-lock.js')
+  try {
+    const refused = await recordWriteRefusal(req, collection, item, { heldLock: false })
+    if (!refused) return null
+    return refused.status === 404 ? 'Record not found or not readable' : refused.body.error
+  } catch {
+    return 'Could not confirm you may change this record'
+  }
 }
 
 /** Item actions registered for the collection (what the Push buttons offer). */
@@ -82,15 +94,15 @@ export async function runItemActionOver(opts: {
     throw Object.assign(new Error(`"${action.label}" does not apply to ${collection}`), {
       statusCode: 400
     })
-  const user = req.user as User
   const result = emptyResult()
   const rec = recorder(result)
 
   for (const rawId of ids) {
     const item = String(rawId)
     try {
-      if (!(await readable(user, collection, item))) {
-        rec.fail(item, 'Record not found or not readable')
+      const refused = await pushRefusal(req, collection, item)
+      if (refused) {
+        rec.fail(item, refused)
         continue
       }
       if (action.requires_addendum_create) {
@@ -181,7 +193,6 @@ export async function retryFailedPushes(opts: {
   dryRun?: boolean
 }): Promise<BulkRunResult> {
   const { collection, ids, req } = opts
-  const user = req.user as User
   const result = emptyResult()
   const rec = recorder(result)
   const items = [...new Set(ids.map(String))]
@@ -221,8 +232,9 @@ export async function retryFailedPushes(opts: {
 
   for (const item of items) {
     try {
-      if (!(await readable(user, collection, item))) {
-        rec.fail(item, 'Record not found or not readable')
+      const refused = await pushRefusal(req, collection, item)
+      if (refused) {
+        rec.fail(item, refused)
         continue
       }
       const partners = latest.get(item) ?? []

@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { runAnomalyChecks, SENSITIVITY_DESCRIPTIONS } from '../services/anomaly-detect.js'
 import { logActivity } from '../services/activity.js'
+import { runAnomalyChecks, SENSITIVITY_DESCRIPTIONS } from '../services/anomaly-detect.js'
 import {
   parseJsonSafe,
   runMetricAlertChecks,
@@ -44,6 +45,13 @@ function canReadReport(report: ReportRowLite, req: FastifyRequest): boolean {
   if (!report.role_id) return true
   return String(report.role_id).toLowerCase() === String(req.user?.role ?? '').toLowerCase()
 }
+
+/** Anomaly rules are personal (no sharing column): people see their own rules
+ *  and the findings those rules raised; admins see every one. */
+export const ownAnomalyRules =
+  (req: Pick<FastifyRequest, 'isAdmin' | 'user'>) => (qb: Knex.QueryBuilder) => {
+    if (!req.isAdmin) void qb.where('r.created_by', req.user!.id)
+  }
 
 export async function metricAlertsRoutes(app: FastifyInstance) {
   // ─── Definitions (metric catalog) ───────────────────────────────────────────
@@ -524,9 +532,10 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
 
   // ─── Anomaly rules ──────────────────────────────────────────────────────────
 
-  app.get('/anomaly-rules', { preHandler: requireAuth }, async (_req, reply) => {
+  app.get('/anomaly-rules', { preHandler: requireAuth }, async (req, reply) => {
     const rows = (await db('nivaro_anomaly_rules as r')
       .join('nivaro_anomaly_definitions as d', 'd.id', 'r.definition_id')
+      .modify(ownAnomalyRules(req))
       .orderBy('r.created_at', 'desc')
       .limit(200)
       .select(
@@ -645,6 +654,7 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     const limit = Math.min(Number((req.query as { limit?: string }).limit) || 200, 500)
     const rows = (await db('nivaro_anomaly_log as l')
       .join('nivaro_anomaly_rules as r', 'r.id', 'l.rule_id')
+      .modify(ownAnomalyRules(req))
       .orderBy('l.detected_at', 'desc')
       .limit(limit)
       .select('l.*', 'r.name as rule_name')) as Array<Record<string, unknown>>
@@ -659,7 +669,11 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     if (!['acknowledged', 'resolved'].includes(status)) {
       return reply.code(400).send({ error: 'status must be acknowledged or resolved' })
     }
-    const entry = await db('nivaro_anomaly_log').where({ id }).first('id')
+    const entry = await db('nivaro_anomaly_log as l')
+      .join('nivaro_anomaly_rules as r', 'r.id', 'l.rule_id')
+      .where('l.id', id)
+      .modify(ownAnomalyRules(req))
+      .first('l.id')
     if (!entry) return reply.code(404).send({ error: 'Not found' })
     const updates: Record<string, unknown> = { status }
     if (status === 'resolved') updates.resolved_at = new Date()

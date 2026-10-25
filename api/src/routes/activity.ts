@@ -63,8 +63,11 @@ export async function activityRoutes(app: FastifyInstance) {
 
   app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as Record<string, string>
-    const limit = Math.min(q.limit ? Number(q.limit) : 25, 200)
-    const offset = q.offset ? Number(q.offset) : 0
+    // Negative, fractional or non-numeric paging reads the first page (never a knex 500).
+    const asked = Math.floor(Number(q.limit))
+    const limit = Math.min(Number.isFinite(asked) && asked > 0 ? asked : 25, 200)
+    const from = Math.floor(Number(q.offset))
+    const offset = Number.isFinite(from) && from > 0 ? from : 0
 
     // The page in two steps: the ids by a narrow (timestamp, id) sort, then those rows with
     // their user. Sorting the whole joined row (comment text and all) over every match took

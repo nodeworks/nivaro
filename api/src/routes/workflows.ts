@@ -3,10 +3,14 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { findRecordInstance, verifiedBranchChildren } from '../services/branch-instances.js'
 import { chainFields } from '../services/chain-columns.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
+import { manualTransitionRefusal } from '../services/manual-transition-gate.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
+import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from '../services/record-access.js'
+import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
 import { syncStateField } from '../services/workflow-transitions.js'
 
 // ─── Types (mirrors routes/pipelines.ts — same underlying tables) ─────────────
@@ -34,6 +38,12 @@ interface WorkflowTransition {
   actions: string | null
   sort: number
   group_label: string | null
+  auto_trigger?: boolean | number | null
+  require_owner?: boolean | number | null
+  allow_creator?: boolean | number | null
+  comment_mode?: string | null
+  requirements?: string | null
+  condition_rules?: string | null
 }
 
 interface WorkflowInstance {
@@ -172,6 +182,80 @@ async function getOpenSplit(instanceId: string): Promise<SplitRecord | null> {
     if (!parsed?.action) continue
     if (parsed.action === 'join') return null // last lifecycle event was a join — closed
     if (parsed.action === 'split') return parsed as SplitRecord
+  }
+  return null
+}
+
+/**
+ * The authored split config a request names: by `split_id`, else by its exact
+ * branch list and join state. A split is never free-form — only the shapes an
+ * admin configured on the template may run.
+ */
+export function matchSplitConfig(
+  transitions: WorkflowTransition[],
+  states: WorkflowState[],
+  body: { split_id?: string; branch_states?: string[]; join_state?: string }
+): { id: string; branches: WorkflowState[]; join: WorkflowState } | null {
+  const byKey = new Map(states.map((s) => [s.key, s]))
+  const keyOf = (ref: string) =>
+    states.find((s) => s.id.toUpperCase() === String(ref).toUpperCase() || s.key === ref)?.key
+  const wantBranches = (body.branch_states ?? []).map(keyOf)
+  const wantJoin = body.join_state ? keyOf(body.join_state) : undefined
+  for (const tx of transitions) {
+    const cfg = parseSplitConfig(tx)
+    if (!cfg) continue
+    const named = body.split_id ? tx.id.toUpperCase() === body.split_id.toUpperCase() : false
+    const shaped =
+      !body.split_id &&
+      wantJoin === cfg.join &&
+      wantBranches.length === cfg.branches.length &&
+      wantBranches.every((k, i) => k === cfg.branches[i])
+    if (!named && !shaped) continue
+    const branches = cfg.branches.map((k) => byKey.get(k))
+    const join = byKey.get(cfg.join)
+    if (branches.length < 2 || branches.some((b) => !b) || !join) return null
+    return { id: tx.id, branches: branches as WorkflowState[], join }
+  }
+  return null
+}
+
+/**
+ * The parent id when `instance` is a verified branch child (engine lifecycle
+ * rows, mutual reference — services/branch-instances.ts) of a split that is
+ * still open; null for every other instance, the record's own included.
+ */
+async function openBranchParent(instance: WorkflowInstance): Promise<string | null> {
+  const siblings = (await db('nivaro_workflow_instances')
+    .where({ collection: instance.collection, item: String(instance.item) })
+    .select('id', 'collection', 'item', 'template')) as Array<
+    Pick<WorkflowInstance, 'id' | 'collection' | 'item' | 'template'>
+  >
+  if (siblings.length < 2) return null
+  const rows = (await db('nivaro_workflow_history')
+    .whereIn(
+      'instance',
+      siblings.map((s) => s.id)
+    )
+    .whereNull('transition')
+    .where('comment', 'like', '%"action":%')
+    .select('instance', 'transition', 'comment')) as Array<{
+    instance: string
+    transition: string | null
+    comment: string | null
+  }>
+  const children = verifiedBranchChildren(
+    siblings.map((s) => ({ ...s, item: String(s.item) })),
+    rows
+  )
+  if (![...children].some((c) => c.toUpperCase() === instance.id.toUpperCase())) return null
+  for (const row of rows) {
+    if (row.instance.toUpperCase() !== instance.id.toUpperCase()) continue
+    const life = parseJson<{ action?: string; parent?: string }>(row.comment)
+    if (life?.action !== 'branch' || !life.parent) continue
+    const open = await getOpenSplit(life.parent)
+    if (open?.children.some((c) => c.toUpperCase() === instance.id.toUpperCase())) {
+      return life.parent
+    }
   }
   return null
 }
@@ -375,12 +459,18 @@ export async function workflowsRoutes(app: FastifyInstance) {
 
   app.post('/instance/:id/split', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const body = req.body as { branch_states?: string[]; join_state?: string }
-
-    if (!Array.isArray(body?.branch_states) || body.branch_states.length < 2) {
-      return reply.code(400).send({ error: 'branch_states requires at least 2 states' })
+    const body = (req.body ?? {}) as {
+      split_id?: string
+      branch_states?: string[]
+      join_state?: string
     }
-    if (!body.join_state) return reply.code(400).send({ error: 'join_state is required' })
+
+    if (!body.split_id) {
+      if (!Array.isArray(body.branch_states) || body.branch_states.length < 2) {
+        return reply.code(400).send({ error: 'branch_states requires at least 2 states' })
+      }
+      if (!body.join_state) return reply.code(400).send({ error: 'join_state is required' })
+    }
 
     const instance = (await db('nivaro_workflow_instances').where({ id }).first()) as
       | WorkflowInstance
@@ -391,25 +481,49 @@ export async function workflowsRoutes(app: FastifyInstance) {
     if (instance.completed_at) {
       return reply.code(400).send({ error: 'Workflow is already completed' })
     }
+    // Only the record's own instance splits — never a branch child.
+    const own = await findRecordInstance(instance.collection, String(instance.item))
+    if (!own || String(own.id).toUpperCase() !== String(instance.id).toUpperCase()) {
+      return reply.code(400).send({ error: "Only the record's pipeline can be split" })
+    }
 
     const existing = await getOpenSplit(id)
     if (existing) {
       return reply.code(409).send({ error: 'Instance already has active parallel branches' })
     }
 
-    // Resolve states by id or key within the instance template.
-    const states = (await db('nivaro_workflow_states')
-      .where({ template: instance.template })
-      .select('*')) as WorkflowState[]
-    const resolve = (ref: string) => states.find((s) => s.id === ref || s.key === ref) ?? null
-
-    const branchStates = body.branch_states.map(resolve)
-    const joinState = resolve(body.join_state)
-    if (branchStates.some((s) => !s) || !joinState) {
-      return reply.code(400).send({ error: 'One or more states not found on this template' })
+    // The split must be one the template authors — never caller-chosen states
+    // (any state + an immediate join was a jump to anywhere).
+    const [states, transitions] = await Promise.all([
+      db('nivaro_workflow_states').where({ template: instance.template }).select('*') as Promise<
+        WorkflowState[]
+      >,
+      db('nivaro_workflow_transitions')
+        .where({ template: instance.template })
+        .select('*') as Promise<WorkflowTransition[]>
+    ])
+    const config = matchSplitConfig(transitions, states, body)
+    if (!config) {
+      return reply
+        .code(400)
+        .send({ error: 'No parallel split like this is set up on this pipeline' })
     }
-    if (branchStates.some((s) => s?.id === joinState.id)) {
-      return reply.code(400).send({ error: 'join_state cannot be one of the branch states' })
+    const branchStates = config.branches
+    const joinState = config.join
+
+    // Splitting moves the record on: the current step's owner (or an admin)
+    // decides, the same rule as an owner-only transition.
+    if (req.user) {
+      const owner = await checkTransitionOwner({
+        user: req.user,
+        isAdmin: req.isAdmin ?? false,
+        collection: instance.collection,
+        item: String(instance.item),
+        instanceId: String(instance.id)
+      })
+      if (!owner.allowed) {
+        return reply.code(403).send({ error: owner.message, code: TRANSITION_OWNER_REQUIRED })
+      }
     }
 
     const now = new Date()
@@ -600,6 +714,12 @@ export async function workflowsRoutes(app: FastifyInstance) {
     if (instance.completed_at) {
       return reply.code(400).send({ error: 'This branch is already completed' })
     }
+    // Branch children only: the record's own instance moves through
+    // POST /pipelines/instance/:collection/:item/transition, which also runs
+    // the transition's actions, queue sync and state mirror.
+    if (!(await openBranchParent(instance))) {
+      return reply.code(404).send({ error: 'Not an open parallel branch' })
+    }
 
     const transition = (await db('nivaro_workflow_transitions')
       .where({ id: body.transition_id, template: instance.template })
@@ -608,13 +728,33 @@ export async function workflowsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Transition not found' })
     }
 
-    const fromOk =
-      transition.from_state === null || transition.from_state === instance.current_state
-    if (!fromOk) {
-      return reply.code(400).send({ error: 'Transition is not valid from the current state' })
-    }
-    if (!transitionAllowed(transition, req)) {
-      return reply.code(403).send({ error: 'You do not have permission for this transition' })
+    // The full manual gate chain (roles, owner-only on THIS branch's step,
+    // required note, requirements, conditions, auto refusal) — the same one
+    // the record's own transition route runs.
+    const refusal = await manualTransitionRefusal({
+      user: req.user,
+      isAdmin: req.isAdmin ?? false,
+      collection: instance.collection,
+      item: String(instance.item),
+      instance,
+      transition,
+      comment: body.comment ?? null,
+      log: req.log
+    })
+    if (refusal) return reply.code(refusal.status).send(refusal.body)
+
+    // Double-fire guard, after every gate and before any mutation.
+    try {
+      await claimTransition({
+        instanceId: String(instance.id),
+        transitionId: String(transition.id),
+        label: transition.label
+      })
+    } catch (err) {
+      if (err instanceof TransitionDuplicateError) {
+        return reply.code(409).send({ error: err.message, code: err.code, first: err.first })
+      }
+      throw err
     }
 
     const newStateObj = (await db('nivaro_workflow_states')

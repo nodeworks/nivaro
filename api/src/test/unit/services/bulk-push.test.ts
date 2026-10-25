@@ -5,6 +5,7 @@ const state = vi.hoisted(() => ({
   submissions: [] as Array<Record<string, unknown>>,
   apis: [] as Array<{ id: number; name: string }>,
   unreadable: new Set<string>(),
+  locked: new Set<string>(),
   actions: new Map<string, Record<string, unknown>>(),
   retry: vi.fn(),
   log: vi.fn()
@@ -26,9 +27,14 @@ vi.mock('../../../db/index.js', () => {
   }
   return { db }
 })
-vi.mock('../../../services/items.js', () => ({
-  readOne: async (_u: unknown, _c: string, id: string) =>
-    state.unreadable.has(String(id)) ? null : { id }
+// The single-record path's gates (readable, updatable, approval edit lock).
+vi.mock('../../../services/edit-lock.js', () => ({
+  recordWriteRefusal: async (_req: unknown, _c: string, id: string) =>
+    state.unreadable.has(String(id))
+      ? { status: 404, body: { error: 'Not found' } }
+      : state.locked.has(String(id))
+        ? { status: 403, body: { error: 'This record is at L1 — locked', code: 'EDIT_LOCKED' } }
+        : null
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: state.log }))
 vi.mock('../../../extensions/item-actions.js', () => ({
@@ -54,6 +60,7 @@ beforeEach(() => {
     { id: 2, name: 'Partner B' }
   ]
   state.unreadable = new Set()
+  state.locked = new Set()
   state.actions = new Map()
   state.retry.mockReset()
   state.log.mockReset()
@@ -104,6 +111,28 @@ describe('runItemActionOver (#620 push)', () => {
     expect(execute).toHaveBeenCalledTimes(3)
     expect(execute.mock.calls[0][0]).toMatchObject({ payload: { message: 'note' }, userId: 'U1' })
     expect(r).toMatchObject({ succeeded: 2, failed: 2, skipped: 1 })
+  })
+
+  it('refuses an approval-locked record like the single path, dry run included; others push', async () => {
+    const execute = vi.fn(async () => ({ message: 'sent' }))
+    state.actions.set('push-a', { id: 'push-a', label: 'Push to A', execute })
+    state.locked.add('7')
+    for (const dryRun of [true, false]) {
+      const r = await runItemActionOver({
+        actionId: 'push-a',
+        collection: 'orders',
+        ids: ['7', '8'],
+        req,
+        dryRun
+      })
+      expect(r.outcomes.map((o) => [o.item, o.outcome])).toEqual([
+        ['7', 'fail'],
+        ['8', 'change']
+      ])
+      expect(r.outcomes[0].reason).toContain('locked')
+    }
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect((execute.mock.calls[0] as unknown[])[0]).toMatchObject({ itemId: '8' })
   })
 
   it('a dry run classifies without executing', async () => {
@@ -167,6 +196,21 @@ describe('retryFailedPushes (#620 retry)', () => {
     const r = await retryFailedPushes({ collection: 'orders', ids: ['1'], req, dryRun: true })
     expect(state.retry).not.toHaveBeenCalled()
     expect(r.outcomes[0]).toMatchObject({ outcome: 'change', reason: 'would retry Partner B' })
+  })
+
+  it('never retries an approval-locked record', async () => {
+    state.submissions = [
+      { id: 3, item: '1', external_api: 1, status: 'failed', attempts: 1 },
+      { id: 4, item: '2', external_api: 1, status: 'failed', attempts: 1 }
+    ]
+    state.locked.add('1')
+    state.retry.mockResolvedValue({ status: 'accepted', error: null })
+    const r = await retryFailedPushes({ collection: 'orders', ids: ['1', '2'], req })
+    expect(state.retry).toHaveBeenCalledTimes(1)
+    expect(r.outcomes.map((o) => [o.item, o.outcome])).toEqual([
+      ['1', 'fail'],
+      ['2', 'change']
+    ])
   })
 
   it('never retries a record the caller cannot read', async () => {

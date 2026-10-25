@@ -15,6 +15,7 @@ import {
   resolveAutoIdTokensDetailed,
   validateAutoIdPattern
 } from '../services/auto-ids.js'
+import { clearAutoFailures } from '../services/auto-transition-memory.js'
 import {
   BATCH_READ_MAX,
   type BatchReadInput,
@@ -23,8 +24,7 @@ import {
 } from '../services/batch-read.js'
 import { findRecordInstance } from '../services/branch-instances.js'
 import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
-import { chainFields } from '../services/chain-columns.js'
-import { assertNotEditLocked } from '../services/edit-lock.js'
+import { withChainStep } from '../services/chain.js'
 import { isFilesCollection } from '../services/help-video-files.js'
 import { idempotencyPreHandler } from '../services/idempotency.js'
 import { instanceAccessAllowed } from '../services/instance-guard.js'
@@ -45,27 +45,28 @@ import {
   readOne,
   rehearseCreate,
   updateOne,
-  upsertInfoOf
+  upsertInfoOf,
+  upsertKeysOf
 } from '../services/items.js'
 import { startJobRun } from '../services/job-runs.js'
 import { openBulkRowProgress } from '../services/live-progress.js'
-import { can, getAllowedFields } from '../services/permissions.js'
 import {
-  coerceBool,
-  parseJson,
-  resolveTransitionTarget,
-  type WorkflowTransition
-} from '../services/pipeline-engine.js'
-import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from '../services/record-access.js'
+  type GateInstance,
+  type GateTransition,
+  manualTransitionRefusal
+} from '../services/manual-transition-gate.js'
+import { can, getAllowedFields } from '../services/permissions.js'
+import { parseJson, type WorkflowTransition } from '../services/pipeline-engine.js'
 import {
   isSecretColumn,
   isSystemCollection,
   sensitiveColumns
 } from '../services/system-collections.js'
 import { registerTempCacheHooks } from '../services/traffic-actions/temp-cache.js'
-import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
-import { withTriggerSafeReturning } from '../services/trigger-safe.js'
+import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
 import { runUnit } from '../services/unit-of-work.js'
+import { TransitionBlockedError } from '../services/workflow-actions.js'
+import { applyTransition, runAutoTransitions } from '../services/workflow-transitions.js'
 import type { ItemsQuery, User } from '../types.js'
 import { registerBulkFieldsRoute } from './bulk-fields.js'
 
@@ -573,7 +574,16 @@ export async function itemsRoutes(app: FastifyInstance) {
             continue
           }
         }
-        await updateOne(req.user!, collection, id, data, req, req.workspaceId ?? undefined)
+        const held = await editLockRefusal(req, collection, String(id))
+        if (held) {
+          upFailed++
+          upReason = String(held.body.error)
+          continue
+        }
+        // A copy per record: the service drops fields the caller may not set.
+        await updateOne(req.user!, collection, id, { ...data }, req, req.workspaceId ?? undefined, {
+          callerPayload: true
+        })
         updated++
       } catch (err) {
         // skip permission/not-found errors per item
@@ -592,7 +602,12 @@ export async function itemsRoutes(app: FastifyInstance) {
 
   app.post('/:collection/bulk-transition', async (req, reply) => {
     const { collection } = req.params as { collection: string }
-    const { ids, transition_id } = req.body as { ids: string[]; transition_id: string }
+    const { ids, transition_id, comment } = req.body as {
+      ids: string[]
+      transition_id: string
+      /** The note a transition that requires one asks for, given once for all. */
+      comment?: string
+    }
     if (!Array.isArray(ids) || ids.length === 0)
       return reply.code(400).send({ error: 'ids array required' })
     if (!transition_id) return reply.code(400).send({ error: 'transition_id required' })
@@ -615,8 +630,6 @@ export async function itemsRoutes(app: FastifyInstance) {
         }
       }
     }
-
-    const binding = await db('nivaro_workflow_bindings').where({ collection }).first()
 
     let succeeded = 0
     let failed = 0
@@ -650,7 +663,7 @@ export async function itemsRoutes(app: FastifyInstance) {
         const instance = (await findRecordInstance(collection, String(item))) as
           | Record<string, any>
           | undefined
-        if (!instance || instance.completed_at) {
+        if (!instance) {
           failed++
           continue
         }
@@ -660,86 +673,70 @@ export async function itemsRoutes(app: FastifyInstance) {
           continue
         }
 
-        const fromOk =
-          transition.from_state === null || transition.from_state === instance.current_state
-        if (!fromOk) {
+        // The single-record route's whole gate chain, per record: completed /
+        // escape, from-state, automatic refusal, roles, owner-only, required
+        // note, requirements and condition rules (manual-transition-gate.ts).
+        const refusal = await manualTransitionRefusal({
+          user: req.user,
+          isAdmin,
+          collection,
+          item: String(item),
+          instance: instance as unknown as GateInstance,
+          transition: transition as unknown as GateTransition,
+          comment: comment ?? null,
+          log: req.log
+        })
+        if (refusal) {
           failed++
+          errors.push({
+            item: String(item),
+            error: String(refusal.body.code ?? refusal.body.error ?? 'Refused')
+          })
           continue
         }
 
-        // Owner-only (#794): the single-item route's gate, per record.
-        if (coerceBool(transition.require_owner) && !(req.isAdmin ?? false)) {
-          const owner = await checkTransitionOwner({
-            user: req.user!,
-            isAdmin: false,
-            collection,
-            item: String(item),
+        // Double-fire guard, then the shared mutation chain: blocking actions
+        // (an ERP submission) run before the state moves, and a refusal there
+        // leaves the record where it is — exactly as the single route.
+        let claim: Awaited<ReturnType<typeof claimTransition>>
+        try {
+          claim = await claimTransition({
             instanceId: String(instance.id),
-            allowCreator: coerceBool(transition.allow_creator)
+            transitionId: String(transition.id),
+            label: transition.label
           })
-          if (!owner.allowed) {
+        } catch (err) {
+          if (err instanceof TransitionDuplicateError) {
             failed++
-            errors.push({ item: String(item), error: TRANSITION_OWNER_REQUIRED })
+            errors.push({ item: String(item), error: err.code })
             continue
           }
+          throw err
         }
-
-        // Transition requirements gate — mirrors the single-item transition
-        // route so bulk actions can't bypass incomplete child-row data.
-        if (transition.requirements) {
-          const blocking = await evaluateTransitionRequirements(
-            db,
-            transition.requirements,
-            String(item),
-            req.log,
-            collection
-          )
-          if (blocking) {
+        await clearAutoFailures({ instanceId: String(instance.id) })
+        let applied: Awaited<ReturnType<typeof applyTransition>>
+        try {
+          applied = await applyTransition({
+            instance: instance as unknown as Parameters<typeof applyTransition>[0]['instance'],
+            transition: transition as unknown as Parameters<
+              typeof applyTransition
+            >[0]['transition'],
+            userId: req.user?.id ?? null,
+            comment: comment ?? null,
+            source: 'manual'
+          })
+        } catch (err) {
+          await claim.release()
+          if (err instanceof TransitionBlockedError) {
             failed++
-            errors.push({ item: String(item), error: 'TRANSITION_REQUIREMENTS' })
+            errors.push({ item: String(item), error: err.message })
             continue
           }
+          throw err
         }
-
-        const resolvedTarget = await resolveTransitionTarget(
-          transition.to_state,
-          instance.template,
-          collection,
-          item,
-          instance.id,
-          db
+        await withChainStep(applied.history_id ? `history:${applied.history_id}` : 'auto', () =>
+          runAutoTransitions(collection, String(item))
         )
-        const newStateId = resolvedTarget?.id ?? transition.to_state
-        const newStateObj =
-          resolvedTarget ?? (await db('nivaro_workflow_states').where({ id: newStateId }).first())
-
-        await db('nivaro_workflow_instances')
-          .where({ id: instance.id })
-          .update({
-            current_state: newStateId,
-            completed_at: newStateObj && coerceBool(newStateObj.is_terminal) ? new Date() : null
-          })
-
-        await db('nivaro_workflow_history').insert({
-          ...(await chainFields('nivaro_workflow_history')),
-          instance: instance.id,
-          transition: transition.id,
-          from_state: instance.current_state,
-          to_state: newStateId,
-          user: req.user?.id ?? null,
-          comment: null,
-          timestamp: new Date()
-        })
-
-        if (binding?.state_field && newStateObj) {
-          try {
-            await db(collection)
-              .where({ id: item })
-              .update({ [binding.state_field]: newStateObj.key })
-          } catch {
-            /* non-fatal */
-          }
-        }
 
         await logActivity({
           action: 'pipeline-transition',
@@ -747,7 +744,7 @@ export async function itemsRoutes(app: FastifyInstance) {
           item: String(item),
           user: req.user?.id,
           req,
-          comment: `bulk: ${transition.label} → ${newStateObj?.label ?? newStateId}`
+          comment: `bulk: ${transition.label} → ${applied.newStateObj?.label ?? transition.to_state}`
         })
 
         succeeded++
@@ -793,9 +790,11 @@ export async function itemsRoutes(app: FastifyInstance) {
     let seqValue = '#'.repeat(width)
     // An id the key column cannot hold (a mistyped URL) previews as a new record.
     if (body.record_id != null && (await idFitsCollection(collection, body.record_id))) {
-      const row = (await db(collection).where({ id: body.record_id }).first(body.field)) as
-        | Record<string, unknown>
-        | undefined
+      // As the caller: a record they cannot read previews as a new one.
+      const row = (await readOne(user, collection, body.record_id, req.workspaceId ?? undefined, [
+        'id',
+        body.field
+      ]).catch(() => null)) as Record<string, unknown> | null
       const current = row?.[body.field]
       if (typeof current === 'string' && current) {
         seqValue = extractSuffix(parsed, current) ?? seqValue
@@ -888,19 +887,17 @@ export async function itemsRoutes(app: FastifyInstance) {
     for (const seg of segments) {
       // A credential is never a path's leaf (`created_by.static_token`).
       if (isSecretColumn(seg)) return { readable: false, target: null }
+      if (isSystemCollection(current) && sensitiveColumns(current).includes(seg.toLowerCase()))
+        return { readable: false, target: null }
+      // Every segment — a hop's field or the leaf — must be on the caller's
+      // read field list for the collection it belongs to.
+      const fields = await getAllowedFields(user, 'read', current)
+      if (fields && !fields.includes('*') && !fields.includes(seg))
+        return { readable: false, target: null }
       const relations = await getRelations(current)
       const info = classifyRelationSegment(current, seg, relations)
-      if (!info) {
-        // plain column leaf — no further hop. On a system table, only a
-        // column the caller may read there.
-        if (isSystemCollection(current)) {
-          if (sensitiveColumns(current).includes(seg.toLowerCase()))
-            return { readable: false, target: null }
-          const fields = await getAllowedFields(user, 'read', current)
-          if (fields && !fields.includes(seg)) return { readable: false, target: null }
-        }
-        return { readable: true, target }
-      }
+      // plain column leaf — no further hop
+      if (!info) return { readable: true, target }
       const hop = info.relatedCollection
       if (!hop) return { readable: false, target: null }
       if (hop.startsWith('nivaro_') && hop !== 'nivaro_users')
@@ -908,8 +905,49 @@ export async function itemsRoutes(app: FastifyInstance) {
       if (!(await can(user, 'read', hop))) return { readable: false, target: null }
       current = hop
       target = hop
+      // A to-many hop is always the leaf (resolvePathValues stops there).
+      if (info.type !== 'm2o') break
     }
     return { readable: true, target }
+  }
+
+  /**
+   * The ids among `ids` of `collection` the caller may read (row filter,
+   * User Scopes) — a resolved path names a related record only when the
+   * caller could open it.
+   */
+  async function readableIds(
+    req: FastifyRequest,
+    collection: string,
+    ids: string[]
+  ): Promise<Set<string>> {
+    const out = new Set<string>()
+    const unique = [...new Set(ids)]
+    for (let i = 0; i < unique.length; i += 500) {
+      const chunk = unique.slice(i, i + 500)
+      const page = await readItems(
+        req.user!,
+        collection,
+        { filter: { id: { _in: chunk } }, fields: ['id'], limit: chunk.length } as ItemsQuery,
+        req,
+        req.workspaceId ?? undefined
+      )
+      for (const r of page.data) out.add(String((r as { id?: unknown }).id))
+    }
+    return out
+  }
+
+  /** Drop the values that name a related record the caller cannot read. */
+  async function keepReadable(
+    req: FastifyRequest,
+    target: string | null,
+    byRow: Map<string, { value: string; ids: string[] }>
+  ): Promise<Map<string, { value: string; ids: string[] }>> {
+    if (!target) return byRow
+    const all = [...byRow.values()].flatMap((v) => v.ids)
+    if (all.length === 0) return byRow
+    const ok = await readableIds(req, target, all)
+    return new Map([...byRow].filter(([, v]) => v.ids.every((id) => ok.has(String(id)))))
   }
 
   // GET /items/:collection/distinct?field=<col>&limit=200 — distinct non-null
@@ -932,12 +970,19 @@ export async function itemsRoutes(app: FastifyInstance) {
     if (!colCheck?.length) return reply.code(400).send({ error: 'Unknown column' })
     const cap = Math.min(Math.max(Number(limit) || 200, 1), 500)
     try {
-      const rows = (await db(collection)
-        .distinct(field)
-        .whereNotNull(field)
-        .orderBy(field, 'asc')
-        .limit(cap)) as Array<Record<string, unknown>>
-      return reply.send({ data: rows.map((r) => r[field]) })
+      // The values of the rows a list read would give this caller: a grouped
+      // aggregate runs the row filter, User Scopes and the field list.
+      const result = await aggregateItems(
+        req.user!,
+        collection,
+        {
+          filter: { [field]: { _nnull: true } },
+          aggregate: { groupBy: [field], sort: [field], limit: cap }
+        },
+        req,
+        req.workspaceId ?? undefined
+      )
+      return reply.send({ data: result.data.map((r) => r.group[field]) })
     } catch (err) {
       return handleError(err, reply)
     }
@@ -1101,9 +1146,14 @@ export async function itemsRoutes(app: FastifyInstance) {
           const hops = await pathHopsReadable(req.user!, collection, segments)
           if (!hops.readable) return
           targets[path] = hops.target
-          const byRow = await resolvePathValues(collection, idList, segments, relationsCache)
+          const byRow = await keepReadable(
+            req,
+            hops.target,
+            await resolvePathValues(collection, idList, segments, relationsCache)
+          )
           for (const [rowId, pv] of byRow) {
-            ;(rowsOut[rowId] ??= {})[path] = { value: pv.value, ids: pv.ids }
+            rowsOut[rowId] ??= {}
+            rowsOut[rowId][path] = { value: pv.value, ids: pv.ids }
           }
         } catch {
           // skip broken path
@@ -1146,7 +1196,11 @@ export async function itemsRoutes(app: FastifyInstance) {
           const segments = path.split('.')
           const hops = await pathHopsReadable(req.user!, collection, segments)
           if (!hops.readable) return
-          const byRow = await resolvePathValues(collection, [String(id)], segments, relationsCache)
+          const byRow = await keepReadable(
+            req,
+            hops.target,
+            await resolvePathValues(collection, [String(id)], segments, relationsCache)
+          )
           const pv = byRow.get(String(id))
           if (pv) out[path] = { ...pv, target_collection: hops.target }
         } catch {
@@ -1223,13 +1277,17 @@ export async function itemsRoutes(app: FastifyInstance) {
       }
       const { id: _id, ...patch } = row
       try {
+        // Someone else holding the record's edit lock refuses this row, as a PATCH does.
+        const held = await editLockRefusal(req, collection, String(rowId))
+        if (held) throw new Error(String(held.body.error))
         const item = (await updateOne(
           req.user!,
           collection,
           String(rowId),
           patch,
           req,
-          req.workspaceId ?? undefined
+          req.workspaceId ?? undefined,
+          { callerPayload: true }
         )) as Record<string, unknown> | null
         results.push({
           op: 'update',
@@ -1314,10 +1372,6 @@ export async function itemsRoutes(app: FastifyInstance) {
     opts: {
       atomic: boolean
       req?: import('fastify').FastifyRequest
-      /** A background run has no request: the caller's admin flag, kept from
-       *  it, so the approval-state edit lock still holds (edit-lock.ts reads
-       *  only the request's presence and isAdmin). */
-      guard?: Pick<import('fastify').FastifyRequest, 'isAdmin'>
       workspaceId?: string
       slim: boolean
       onProgress?: (done: number, failed: number) => void
@@ -1347,25 +1401,23 @@ export async function itemsRoutes(app: FastifyInstance) {
           if (row == null || typeof row !== 'object' || Array.isArray(row)) {
             throw Object.assign(new Error('Each row must be an object'), { statusCode: 400 })
           }
-          // With a request the items service runs this gate itself.
-          if (!opts.req && opts.guard) {
-            const { id, ...patch } = row
-            await assertNotEditLocked(
-              user,
-              collection,
-              isUpdate ? { ids: [id as string | number], payload: patch } : { payload: row },
-              opts.guard as import('fastify').FastifyRequest
-            )
-          }
           if (isUpdate) {
             const { id, ...patch } = row
+            // Someone else holding the record's edit lock refuses this row, as a PATCH does.
+            const held = opts.req ? await editLockRefusal(opts.req, collection, String(id)) : null
+            if (held)
+              throw Object.assign(new Error(String(held.body.error)), {
+                statusCode: held.status,
+                code: held.body.code
+              })
             const item = (await updateOne(
               user,
               collection,
               String(id),
               patch,
               opts.req,
-              opts.workspaceId
+              opts.workspaceId,
+              { callerPayload: true }
             )) as Record<string, unknown> | null
             results.push({
               index,
@@ -1512,7 +1564,10 @@ export async function itemsRoutes(app: FastifyInstance) {
         try {
           const out = await runBulk(user, collection, rows, {
             atomic,
-            guard: { isAdmin: req.isAdmin ?? false },
+            // The caller's request, carried into the background run: every
+            // request-scoped guard (approval edit lock, forecast closed months,
+            // field drops for non-admins) judges these rows as it would inline.
+            req: Object.create(req) as FastifyRequest,
             workspaceId,
             slim,
             onProgress: (done, failed) => run.progress({ done, failed, total: rows.length }),
@@ -1629,7 +1684,8 @@ export async function itemsRoutes(app: FastifyInstance) {
           collection,
           (req.body ?? {}) as Record<string, unknown>,
           req,
-          req.workspaceId ?? undefined
+          req.workspaceId ?? undefined,
+          { callerPayload: true }
         )
         if (dryRun) return reply.code(200).send(report)
         // Sandbox: shaped like the real answer.
@@ -1721,7 +1777,7 @@ export async function itemsRoutes(app: FastifyInstance) {
         req.body as Record<string, unknown>,
         req,
         req.workspaceId ?? undefined,
-        { outcome }
+        { outcome, callerPayload: true }
       )
       if (parentCollection && parentId) {
         await logActivity({
@@ -1781,9 +1837,12 @@ export async function itemsRoutes(app: FastifyInstance) {
               String(rows[0].id),
               body,
               req,
-              req.workspaceId ?? undefined
+              req.workspaceId ?? undefined,
+              { callerPayload: true }
             )
-          : await createOne(req.user!, collection, body, req, req.workspaceId ?? undefined)
+          : await createOne(req.user!, collection, body, req, req.workspaceId ?? undefined, {
+              callerPayload: true
+            })
       return reply.send({ data: item })
     } catch (err) {
       return handleError(err, reply)
@@ -1805,12 +1864,14 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
     // capture snapshot before deletion so we can store it in parent activity
     let childSnapshot: Record<string, unknown> | null = null
+    // Read as the caller: the parent's history never carries columns they cannot see.
     if (parentCollection && parentId) {
-      childSnapshot =
-        (await db(collection)
-          .where({ id })
-          .first()
-          .catch(() => null)) ?? null
+      childSnapshot = ((await readOne(
+        req.user!,
+        collection,
+        id,
+        req.workspaceId ?? undefined
+      ).catch(() => null)) ?? null) as Record<string, unknown> | null
     }
     try {
       await deleteOne(req.user!, collection, id, req, req.workspaceId ?? undefined)
@@ -1845,27 +1906,20 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
 
     try {
-      // The clone writes raw, so it is gated here: a registered business
-      // collection the caller may both read and create in. System tables never.
       if (isSystemCollection(collection)) return reply.code(403).send({ error: 'Forbidden' })
-      const { getCollection } = await import('../services/collections.js')
-      if (!(await getCollection(collection))) throw new CollectionNotFoundError(collection)
-      if (
-        !(await can(req.user!, 'read', collection)) ||
-        !(await can(req.user!, 'create', collection))
-      )
-        return reply.code(403).send({ error: 'Forbidden' })
-      const original = (await db(collection).where({ id }).first()) as
-        | Record<string, unknown>
-        | undefined
+      // Read as the caller: User Scopes, the row filter and the read field list
+      // decide what exists and what can be copied.
+      const original = (await readOne(
+        req.user!,
+        collection,
+        id,
+        req.workspaceId ?? undefined
+      )) as Record<string, unknown> | null
       if (!original) return reply.code(404).send({ error: 'Not found' })
 
-      // Build clone: omit the id field
-      const clone = { ...original }
-      delete clone.id
-
-      // Apply caller-supplied field overrides — restricted to registered CMS fields only.
-      // Never allow overwriting system/protected columns.
+      // Never copied: the id and protected columns, the server's own fields
+      // (creator + stamps, read-only fields such as rollup totals and state
+      // mirrors) and auto-ids — the create numbers and stamps the copy itself.
       const PROTECTED_FIELDS = new Set([
         'id',
         'created_at',
@@ -1876,11 +1930,30 @@ export async function itemsRoutes(app: FastifyInstance) {
         'workspace_id',
         'is_redacted'
       ])
+      const { getCollection, getFields } = await import('../services/collections.js')
+      const colMeta = await getCollection(collection)
+      if (!colMeta) throw new CollectionNotFoundError(collection)
+      const registered = await getFields(collection)
+      const autoIds = new Set((await autoIdFieldsFor(db, collection)).map((f) => f.field))
+      const serverSet = new Set(
+        registered
+          .filter(
+            (f) =>
+              f.readonly ||
+              autoIds.has(f.field) ||
+              (f.special ?? []).some((sp) => /^(user|date)-(created|updated)$/.test(sp))
+          )
+          .map((f) => f.field)
+      )
+      const clone: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(original)) {
+        if (!PROTECTED_FIELDS.has(k) && !serverSet.has(k)) clone[k] = v
+      }
+
+      // Apply caller-supplied field overrides — restricted to registered CMS fields only.
+      // Never allow overwriting system/protected columns.
       if (body.field_overrides) {
-        const allowedFields = (await db('nivaro_fields')
-          .where({ collection })
-          .pluck('field')) as string[]
-        const allowedSet = new Set(allowedFields)
+        const allowedSet = new Set(registered.map((f) => f.field))
         for (const [field, value] of Object.entries(body.field_overrides)) {
           if (allowedSet.has(field) && !PROTECTED_FIELDS.has(field)) {
             clone[field] = value
@@ -1895,16 +1968,35 @@ export async function itemsRoutes(app: FastifyInstance) {
         }
       }
 
+      // A copy holding the original's natural key would be routed onto the
+      // original by the create (natural-key upsert) — refuse instead.
+      const keys = upsertKeysOf(colMeta as { upsert_keys?: string | null }).map((k) =>
+        k.replace(/\?$/, '')
+      )
+      if (
+        keys.length > 0 &&
+        keys.every((k) => String(clone[k] ?? '') === String(original[k] ?? ''))
+      )
+        return reply.code(409).send({
+          error: `A copy needs a different ${keys.join(' / ')} — this one would replace the original`,
+          code: 'CLONE_SAME_KEY'
+        })
+
       // If collection has draft_publish_enabled, set _status to draft
-      const colMeta = await db('nivaro_collections').where({ collection }).first()
-      if (colMeta?.draft_publish_enabled) {
+      if ((colMeta as { draft_publish_enabled?: unknown }).draft_publish_enabled) {
         clone._status = 'draft'
       }
 
-      const [row] = (await withTriggerSafeReturning(collection, (opts) =>
-        db(collection).insert(clone).returning('id', opts)
-      )) as unknown[]
-      const newId = typeof row === 'object' ? (row as { id: unknown }).id : row
+      // A create as the caller: permissions, scope guard, edit lock of a
+      // parent in approval, hooks, rules, validation and auto-ids all apply.
+      const made = await createOneReported(
+        req.user!,
+        collection,
+        clone,
+        req,
+        req.workspaceId ?? undefined
+      )
+      const newId = made.id
 
       // Clone sub-rows for requested fields
       if (body.include_sub_rows?.length) {
@@ -1967,10 +2059,13 @@ async function simulateSandboxWrite(
   }
   const payload = (req.body ?? {}) as Record<string, unknown>
   if (action === 'update') {
-    const current = ((await db(collection)
-      .where({ id })
-      .first()
-      .catch(() => null)) ?? null) as Record<string, unknown> | null
+    // As the caller: a sandbox key never sees a row its user could not open.
+    const current = ((await readOne(
+      req.user!,
+      collection,
+      String(id),
+      req.workspaceId ?? undefined
+    ).catch(() => null)) ?? null) as Record<string, unknown> | null
     if (!current) return { code: 404, body: { error: 'Not found' } }
     return { code: 200, body: { data: { ...current, ...payload }, sandbox: true } }
   }

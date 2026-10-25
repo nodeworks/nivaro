@@ -28,7 +28,7 @@ vi.mock('@/lib/api', () => ({ api: { get: apiGet, patch: vi.fn(), post: vi.fn() 
 vi.mock('@/lib/auth', () => ({ useAuth: () => ({ user: { id: 'me-1' } }) }))
 vi.mock('@/lib/socket', () => ({ getSocket: () => null }))
 
-import { useOnlineUsers } from './chat-presence'
+import { PRESENCE_PATH_MAX, presencePathForBeat, useOnlineUsers } from './chat-presence'
 
 type Listener = (payload: unknown) => void
 function fakeRealtime() {
@@ -100,5 +100,15 @@ describe('admin useOnlineUsers', () => {
     vi.useRealTimers()
     await waitFor(() => expect(sdk.paths).toHaveLength(2))
     expect(sdk.paths.every((p) => p === '/presence/online')).toBe(true)
+  })
+})
+
+describe('presence path', () => {
+  it('keeps a normal path and fits a long one into the column', () => {
+    expect(presencePathForBeat('/collections/workflows/12')).toBe('/collections/workflows/12')
+    const longQuery = `/collections/workflows?filter=${'x'.repeat(400)}`
+    expect(presencePathForBeat(longQuery)).toBe('/collections/workflows')
+    const longId = `/collections/workflows/${'9'.repeat(400)}`
+    expect(presencePathForBeat(longId)).toHaveLength(PRESENCE_PATH_MAX)
   })
 })

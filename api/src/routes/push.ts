@@ -37,6 +37,15 @@ export async function pushRoutes(app: FastifyInstance) {
       const hash = endpointHash(endpoint)
       const existing = await db('nivaro_push_subscriptions').where({ endpoint_hash: hash }).first()
       if (existing) {
+        // The same browser subscription (same keys) moves to whoever signs in
+        // on it; anyone else's endpoint is not re-pointed by naming it.
+        const sameBrowser = existing.keys_p256dh === keys.p256dh && existing.keys_auth === keys.auth
+        if (
+          String(existing.user ?? '').toUpperCase() !== String(req.user!.id).toUpperCase() &&
+          !sameBrowser
+        ) {
+          return reply.code(409).send({ error: 'This push endpoint belongs to another account' })
+        }
         await db('nivaro_push_subscriptions')
           .where({ endpoint_hash: hash })
           .update({

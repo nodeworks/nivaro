@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // bypass sign-off entirely (or pile up duplicate pending approvals).
 //
 // Gate ladder (routes/approvals.ts:400-425):
-//   400 missing fields → 403 can(read, collection) → 404 chain → 400 inactive
+//   400 missing fields → 403 can(read, collection) → 404 record hidden from the
+//   caller (row filter / User Scopes) → 404 chain → 400 inactive
 //   → 400 collection mismatch → 400 no steps → 409 duplicate pending
 // then: insert instance at steps[0].step_order and notify ONLY step 0.
 
@@ -35,6 +36,14 @@ vi.mock('../../../services/notification-channels.js', () => ({ notifyUser: vi.fn
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
 vi.mock('../../../routes/message-actions.js', () => ({ sendApprovalCard: vi.fn(async () => {}) }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+// Record visibility: every id passes unless a test hides it.
+const hidden = new Set<string>()
+vi.mock('../../../services/record-access.js', () => ({
+  compileAccessGates: vi.fn(async () => ({})),
+  visibleIds: vi.fn(
+    async (_g: unknown, ids: string[]) => new Set(ids.filter((i) => !hidden.has(i)))
+  )
+}))
 
 import { db } from '../../../db/index.js'
 import { approvalsRoutes } from '../../../routes/approvals.js'
@@ -177,6 +186,19 @@ describe('POST /approvals/start — authorization and chain validity', () => {
     expect(res.statusCode).toBe(403)
     expect(JSON.parse(res.body)).toEqual({ error: 'Forbidden' })
     expect(instanceInsert).not.toHaveBeenCalled()
+  })
+
+  it('404s a record the caller cannot see, before any chain is read', async () => {
+    hidden.add('wf-hidden')
+    const instanceInsert = vi.fn()
+    installDb({ instanceInsert })
+
+    const res = await start({ chain_id: 7, collection: 'workflows', item: 'wf-hidden' })
+    hidden.clear()
+
+    expect(res.statusCode).toBe(404)
+    expect(instanceInsert).not.toHaveBeenCalled()
+    expect(notifyUser).not.toHaveBeenCalled()
   })
 
   it('404s an unknown chain', async () => {

@@ -1,10 +1,12 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
-import { readItems } from '../services/items.js'
-import { can } from '../services/permissions.js'
+import { readItems, readOne } from '../services/items.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
+import { withReadGate } from '../services/read-gate.js'
 import { parseRollupFormula } from '../services/rollups.js'
+import { visibleRecordIds } from '../services/socket-access.js'
 
 /**
  * Number lineage — "why is this number what it is".
@@ -13,10 +15,23 @@ import { parseRollupFormula } from '../services/rollups.js'
  * from: for a rollup field, the actual contributing child rows with each
  * one's value, label and last touch (who/when, and whether an import did
  * it); for a write-computed field, the formula and the current input values.
- * Read-only composition over data the caller can already read — the field's
- * own collection is permission-checked, and child rows surface only
+ * Read-only composition over data the caller can already read — the record
+ * is read as the caller (readOne: row filter, User Scopes) and the field and
+ * every formula input must be fields they may read; child rows surface only
  * label + contribution, same disclosure level as the rollup total itself.
  */
+
+/** The record as the caller reads it, plus the fields they may read (null =
+ *  all). null when they cannot open it — the routes answer 404. */
+async function callerRecord(req: FastifyRequest, collection: string, item: string) {
+  const row = (await readOne(req.user!, collection, item, req.workspaceId ?? undefined).catch(
+    () => null
+  )) as Record<string, unknown> | null
+  if (!row) return null
+  const allowed = req.isAdmin ? null : await getAllowedFields(req.user!, 'read', collection)
+  const fields = allowed === null || allowed.includes('*') ? null : new Set(allowed)
+  return { row, mayRead: (f: string) => fields === null || fields.has(f) }
+}
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -42,8 +57,9 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
     if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection) || !IDENT.test(field)) {
       return reply.code(400).send({ error: 'Invalid collection or field' })
     }
-    if (!(await can(req.user!, 'read', collection)))
-      return reply.code(403).send({ error: 'Forbidden' })
+    const parent = await callerRecord(req, collection, item)
+    if (!parent) return reply.code(404).send({ error: 'Record not found' })
+    if (!parent.mayRead(field)) return reply.code(403).send({ error: 'Forbidden' })
     const hours = Math.min(24 * 365, Math.max(1, Number(req.query.hours) || 24))
     const since = req.query.since
       ? new Date(req.query.since)
@@ -65,7 +81,16 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
       }
     }
     const { numberTrail } = await import('../services/number-trail.js')
-    return reply.send({ data: await numberTrail(collection, item, field, since) })
+    const visible = req.isAdmin
+      ? undefined
+      : async (col: string, ids: string[]) =>
+          new Set(await visibleRecordIds(req.user!, col, ids, false))
+    const data = await withReadGate(
+      req.user!.id,
+      () => numberTrail(collection, item, field, since, { visible }),
+      { label: 'lineage:changes' }
+    )
+    return reply.send({ data })
   })
 
   app.get<{ Params: { collection: string; item: string; field: string } }>(
@@ -80,9 +105,9 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
       ) {
         return reply.code(400).send({ error: 'Invalid collection or field' })
       }
-      if (!(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
+      const visible = await callerRecord(req, collection, item)
+      if (!visible) return reply.code(404).send({ error: 'Record not found' })
+      if (!visible.mayRead(field)) return reply.code(403).send({ error: 'Forbidden' })
       const fieldRow = (await db('nivaro_fields')
         .where({ collection, field })
         .first('computed_type', 'computed_formula', 'computed_store')) as
@@ -92,17 +117,15 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(404).send({ error: 'Field is not computed' })
       }
 
-      const record = (await db(collection).where('id', item).first()) as
-        | Record<string, unknown>
-        | undefined
-      if (!record) return reply.code(404).send({ error: 'Record not found' })
+      const record = visible.row
 
       // ── write- or read-computed: formula + its current inputs ─────────────
       if (fieldRow.computed_type === 'write' || fieldRow.computed_type === 'read') {
         const formula = fieldRow.computed_formula
         const inputs: Record<string, unknown> = {}
+        // Inputs the caller may not read are left out.
         for (const m of formula.matchAll(/item\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
-          inputs[m[1]] = record[m[1]] ?? null
+          if (visible.mayRead(m[1])) inputs[m[1]] = record[m[1]] ?? null
         }
         return {
           data: {

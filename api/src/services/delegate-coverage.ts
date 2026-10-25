@@ -8,17 +8,44 @@ import { QUEUE_SANITY_CEILING } from './queues.js'
  * preview, #415 delegate briefing.
  */
 
+/** A group name a person gave it, or null for a machine key such as
+ *  "legacy:owners:4635" (imports and owner-copy collapses name groups so). */
+export function readableGroupName(name: string | null | undefined): string | null {
+  const n = String(name ?? '').trim()
+  if (!n || /^[\w.-]+(:[\w.-]+)+$/.test(n)) return null
+  return n
+}
+
+/** How a coverage warning names a group: its own name when a person gave it
+ *  one, else the step it owns ("Your owner group for Level 1 Approval in Workflows"). */
+export function coverageGroupPhrase(
+  name: string | null | undefined,
+  stateLabel: string,
+  templateName?: string | null
+): string {
+  const readable = readableGroupName(name)
+  if (readable) return `"${readable}" (${stateLabel})`
+  return `Your owner group for ${stateLabel}${templateName?.trim() ? ` in ${templateName.trim()}` : ''}`
+}
+
 /** Owner groups where this user is the LAST working member (#338). */
 export async function computeCoverageWarnings(userId: string): Promise<string[]> {
   const myGroups = (await db('nivaro_pipeline_owner_group_users as gu')
     .join('nivaro_pipeline_owner_groups as g', 'gu.group', 'g.id')
     .join('nivaro_workflow_states as s', 'g.state', 's.id')
+    .leftJoin('nivaro_workflow_templates as t', 's.template', 't.id')
     .where('gu.user', userId)
     .limit(300)
-    .select('g.id as gid', 'g.name as gname', 's.label as state_label')) as Array<{
+    .select(
+      'g.id as gid',
+      'g.name as gname',
+      's.label as state_label',
+      't.name as template_name'
+    )) as Array<{
     gid: number
     gname: string | null
     state_label: string
+    template_name: string | null
   }>
   if (myGroups.length === 0) return []
   const warnings: string[] = []
@@ -38,7 +65,7 @@ export async function computeCoverageWarnings(userId: string): Promise<string[]>
     )
     if (working.length === 0) {
       warnings.push(
-        `"${g.gname ?? g.state_label}" (${g.state_label}) has no other working member — approvals there stall while you're out unless your delegate covers them.`
+        `${coverageGroupPhrase(g.gname, g.state_label, g.template_name)} has no other working member — approvals there stall while you're out unless your delegate covers them.`
       )
     }
     if (warnings.length >= 10) break

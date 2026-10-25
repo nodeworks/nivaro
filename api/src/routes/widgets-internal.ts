@@ -5,6 +5,8 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { customQueryCacheValue } from '../services/custom-query-cache.js'
 import { cachedDefinition } from '../services/definition-cache.js'
+import { recordWriteRefusal } from '../services/edit-lock.js'
+import { readOne, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import { recordCacheOutcome, recordSharedRun } from '../services/query-cache-stats.js'
 import { queryFreshness } from '../services/query-freshness.js'
@@ -72,13 +74,6 @@ function substituteFilters(filters: unknown, inputs: Record<string, unknown>): u
     )
   }
   return filters
-}
-
-// Returns true only when the collection has a registered workspace_id field.
-// Prevents applying a workspace filter against tables that lack the column.
-async function collectionHasWorkspaceId(collection: string): Promise<boolean> {
-  const row = await db('nivaro_fields').where({ collection, field: 'workspace_id' }).first()
-  return !!row
 }
 
 async function fetchRelRows(): Promise<RelRow[]> {
@@ -1035,35 +1030,25 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       const itemId = inputs[idInput]
       if (!itemId) return reply.code(400).send({ error: `Missing input: ${idInput}` })
 
-      const wsScoped = req.workspaceId && (await collectionHasWorkspaceId(collection))
-      let existQ = db(collection).where('id', itemId).select('id')
-      if (wsScoped)
-        existQ = existQ.where(function () {
-          this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id')
-        })
-      const existing = await existQ.first()
-      if (!existing) return reply.code(404).send({ error: 'Record not found' })
+      // The record answers like a PATCH of it: visible to the caller, theirs
+      // to change, not locked — and the write goes through the items service
+      // (field policy, row filters, User Scopes, hooks, revisions, rollups).
+      const refused = await recordWriteRefusal(req, collection, String(itemId))
+      if (refused) return reply.code(refused.status).send(refused.body)
 
       const fieldUpdates: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(actionConfig)) {
         if (k === 'collection' || k === 'id_input') continue
         fieldUpdates[k] = typeof v === 'string' ? substituteInputs(v, inputs) : v
       }
-      let updQ = db(collection).where('id', itemId)
-      if (wsScoped)
-        updQ = updQ.where(function () {
-          this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id')
-        })
-      await updQ.update(fieldUpdates)
-      // Raw update bypasses the items service, so log directly.
-      await logActivity({
-        action: 'update',
-        user: req.user?.id,
+      await updateOne(
+        req.user!,
         collection,
-        item: String(itemId),
-        comment: `widget field-update: ${Object.keys(fieldUpdates).join(', ')}`,
-        req
-      })
+        String(itemId),
+        fieldUpdates,
+        req,
+        req.workspaceId ?? undefined
+      )
       return reply.send({ data: { success: true } })
     }
 
@@ -1109,33 +1094,29 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
       const normBit = (v: unknown) =>
         v === true || v === 1 ? '1' : v === false || v === 0 ? '0' : String(v ?? '')
 
-      // always read current value from DB — inputs reflect the context item, not the target record
-      const wsScoped = req.workspaceId && (await collectionHasWorkspaceId(collection))
-      let existQ = db(collection).where('id', itemId).select('id', field)
-      if (wsScoped)
-        existQ = existQ.where(function () {
-          this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id')
-        })
-      const existing = (await existQ.first()) as Record<string, unknown> | undefined
+      // Gated like a PATCH of the record, then the current value is read AS
+      // THE CALLER (inputs reflect the context item, not the target record).
+      const refused = await recordWriteRefusal(req, collection, String(itemId))
+      if (refused) return reply.code(refused.status).send(refused.body)
+      const existing = (await readOne(
+        req.user!,
+        collection,
+        String(itemId),
+        req.workspaceId ?? undefined,
+        ['id', field]
+      )) as Record<string, unknown> | null
       if (!existing) return reply.code(404).send({ error: 'Record not found' })
       const currentRaw = existing[field]
       const newValue = normBit(currentRaw) === normBit(onValue) ? offValue : onValue
 
-      let updQ = db(collection).where('id', itemId)
-      if (wsScoped)
-        updQ = updQ.where(function () {
-          this.where('workspace_id', req.workspaceId!).orWhereNull('workspace_id')
-        })
-      await updQ.update({ [field]: newValue })
-      // Raw update bypasses the items service, so log directly.
-      await logActivity({
-        action: 'update',
-        user: req.user?.id,
+      await updateOne(
+        req.user!,
         collection,
-        item: String(itemId),
-        comment: `widget toggle: ${field} → ${newValue}`,
-        req
-      })
+        String(itemId),
+        { [field]: newValue },
+        req,
+        req.workspaceId ?? undefined
+      )
       return reply.send({ data: { success: true, new_value: newValue } })
     }
 

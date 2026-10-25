@@ -1,8 +1,15 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { can } from '../services/permissions.js'
+import { recordWriteRefusal } from '../services/edit-lock.js'
+import {
+  CollectionNotFoundError,
+  ForbiddenError,
+  ItemNotFoundError,
+  readOne
+} from '../services/items.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 
 function parseJsonSafe(val: unknown): unknown {
   if (typeof val !== 'string') return val
@@ -17,6 +24,55 @@ function formatSubRow(row: Record<string, unknown>) {
   return {
     ...row,
     data: parseJsonSafe(row.data)
+  }
+}
+
+/**
+ * Sub-rows hang off ONE record's field, so they answer to that record: the
+ * caller reads the record as themselves (row filter, User Scopes — an
+ * invisible record is a 404), the field is in their field policy, and a
+ * write also passes what a PATCH of the record would (update row filter,
+ * edit lock, approval lock — services/edit-lock.ts recordWriteRefusal).
+ * Sends the refusal and returns false; true = go ahead.
+ */
+async function subRowGate(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  collection: string,
+  itemId: string,
+  field: string,
+  mode: 'read' | 'write'
+): Promise<boolean> {
+  const refuse = (status: number, body: Record<string, unknown>) => {
+    reply.code(status).send(body)
+    return false
+  }
+  if (/^(nivaro_|directus_)/i.test(collection)) return refuse(403, { error: 'Forbidden' })
+  const user = req.user!
+  if (!(await can(user, mode === 'read' ? 'read' : 'update', collection)))
+    return refuse(403, { error: 'Forbidden' })
+  if (!req.isAdmin) {
+    const fields = await getAllowedFields(user, mode === 'read' ? 'read' : 'update', collection)
+    if (fields && !fields.includes('*') && !fields.includes(field))
+      return refuse(403, { error: 'Forbidden' })
+  }
+  if (mode === 'write') {
+    const refused = await recordWriteRefusal(req, collection, itemId)
+    return refused ? refuse(refused.status, refused.body) : true
+  }
+  if (req.isAdmin) return true
+  try {
+    const row = await readOne(user, collection, itemId, req.workspaceId ?? undefined, ['id'])
+    return row == null ? refuse(404, { error: 'Not found' }) : true
+  } catch (err) {
+    if (err instanceof ForbiddenError) return refuse(403, { error: 'Forbidden' })
+    if (
+      err instanceof CollectionNotFoundError ||
+      err instanceof ItemNotFoundError ||
+      (err as { statusCode?: number })?.statusCode === 400
+    )
+      return refuse(404, { error: 'Not found' })
+    throw err
   }
 }
 
@@ -145,9 +201,8 @@ export async function subRowsRoutes(app: FastifyInstance) {
         .code(400)
         .send({ error: 'collection, item_id, field, and order array are required' })
     }
-    if (body.collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
-    if (!(await can(req.user!, 'update', body.collection)))
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await subRowGate(req, reply, body.collection, body.item_id, body.field, 'write')))
+      return reply
 
     for (const item of body.order) {
       await db('nivaro_sub_rows')
@@ -177,8 +232,7 @@ export async function subRowsRoutes(app: FastifyInstance) {
       field: string
     }
 
-    if (!(await can(req.user!, 'read', collection)))
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await subRowGate(req, reply, collection, itemId, field, 'read'))) return reply
 
     const rows = (await db('nivaro_sub_rows')
       .where({ collection, item_id: itemId, field })
@@ -196,9 +250,7 @@ export async function subRowsRoutes(app: FastifyInstance) {
       field: string
     }
 
-    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
-    if (!(await can(req.user!, 'update', collection)))
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await subRowGate(req, reply, collection, itemId, field, 'write'))) return reply
 
     const body = req.body as { data: Record<string, unknown> }
     if (!body.data || typeof body.data !== 'object') {
@@ -251,9 +303,7 @@ export async function subRowsRoutes(app: FastifyInstance) {
       field: string
     }
 
-    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
-    if (!(await can(req.user!, 'update', collection)))
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await subRowGate(req, reply, collection, itemId, field, 'write'))) return reply
 
     const body = req.body as {
       items: Array<{ id?: number | string; sort: number; data: Record<string, unknown> }>
@@ -313,9 +363,7 @@ export async function subRowsRoutes(app: FastifyInstance) {
         subRowId: string
       }
 
-      if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
-      if (!(await can(req.user!, 'update', collection)))
-        return reply.code(403).send({ error: 'Forbidden' })
+      if (!(await subRowGate(req, reply, collection, itemId, field, 'write'))) return reply
 
       const existing = await db('nivaro_sub_rows')
         .where({ id: subRowId, collection, item_id: itemId, field })

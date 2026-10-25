@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -20,6 +21,23 @@ function formatTemplate(row: Record<string, unknown>) {
   }
 }
 
+/**
+ * Templates a person may list and apply: their own, shared ones (to every role
+ * when `role_id` is empty, else to that role), and ones aimed at their role.
+ * An unshared template with no role is its creator's alone.
+ */
+export function visibleTemplates(userId: string, userRole: string | null | undefined) {
+  return (qb: Knex.QueryBuilder) => {
+    void qb.where({ created_by: userId }).orWhere((shared) => {
+      void shared.where({ is_shared: 1 }).where((r) => {
+        void r.whereNull('role_id')
+        if (userRole) void r.orWhere({ role_id: userRole })
+      })
+    })
+    if (userRole) void qb.orWhere({ role_id: userRole })
+  }
+}
+
 export async function recordTemplatesRoutes(app: FastifyInstance) {
   // GET /record-templates?collection= — list templates across collections (own + shared + role-scoped)
   app.get('/', { preHandler: authenticate }, async (req, reply) => {
@@ -28,12 +46,7 @@ export async function recordTemplatesRoutes(app: FastifyInstance) {
     const userRole = req.user!.role
 
     const query = db('nivaro_record_templates')
-      .where(function () {
-        this.where({ created_by: userId }).orWhere({ is_shared: 1 }).orWhere({ role_id: null })
-        if (userRole) {
-          this.orWhere({ role_id: userRole })
-        }
-      })
+      .where(visibleTemplates(userId, userRole))
       .orderBy('created_at', 'desc')
 
     if (collection) query.where({ collection })
@@ -50,12 +63,7 @@ export async function recordTemplatesRoutes(app: FastifyInstance) {
 
     const rows = (await db('nivaro_record_templates')
       .where({ collection })
-      .where(function () {
-        this.where({ created_by: userId }).orWhere({ is_shared: 1 }).orWhere({ role_id: null })
-        if (userRole) {
-          this.orWhere({ role_id: userRole })
-        }
-      })
+      .where(visibleTemplates(userId, userRole))
       .orderBy('created_at', 'desc')) as Record<string, unknown>[]
 
     return reply.send({ data: rows.map(formatTemplate) })
@@ -188,12 +196,7 @@ export async function recordTemplatesRoutes(app: FastifyInstance) {
 
     const template = (await db('nivaro_record_templates')
       .where({ id })
-      .where(function () {
-        this.where({ created_by: userId }).orWhere({ is_shared: 1 }).orWhere({ role_id: null })
-        if (userRole) {
-          this.orWhere({ role_id: userRole })
-        }
-      })
+      .where(visibleTemplates(userId, userRole))
       .first()) as Record<string, unknown> | undefined
     if (!template) return reply.code(404).send({ error: 'Not found' })
 

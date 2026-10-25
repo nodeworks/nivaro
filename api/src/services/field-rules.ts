@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify'
 import type { Knex } from 'knex'
-import { getActualColumns } from './items.js'
+import type { User } from '../types.js'
+import { getActualColumns, readItems, readOne } from './items.js'
 
 // ─── Field rules — cascading auto-fill engine ─────────────────────────────────
 //
@@ -10,6 +11,41 @@ import { getActualColumns } from './items.js'
 // docs/superpowers/specs/2026-07-20-dynamic-field-rules-design.md.
 
 export type Logger = Pick<FastifyBaseLogger, 'warn'>
+
+/**
+ * Who a live evaluation runs for (POST /field-rules/evaluate). With a
+ * non-admin caller every related read — the trigger's record, its child or
+ * junction rows, a set_lookup's rows — goes through the items service AS
+ * them (row filter, User Scopes, field allow-list): a record they cannot open
+ * yields no value (army 2026-10-25: a chosen trigger_value read any record's
+ * fields raw). Left out (write path, imports, autofill), reads stay raw.
+ */
+export interface RuleCaller {
+  user: User
+  isAdmin?: boolean
+  workspaceId?: string | null
+}
+
+function asCaller(caller?: RuleCaller): RuleCaller | null {
+  return caller && !caller.isAdmin ? caller : null
+}
+
+/** Rows of `collection` matching `filter`, as the caller; [] when refused. */
+async function callerRows(
+  caller: RuleCaller,
+  collection: string,
+  filter: Record<string, unknown>,
+  fields: string[]
+): Promise<Record<string, unknown>[]> {
+  const res = await readItems(
+    caller.user,
+    collection,
+    { filter, fields, limit: LOOKUP_CAP, count: false },
+    undefined,
+    caller.workspaceId ?? undefined
+  ).catch(() => null)
+  return (res?.data as Record<string, unknown>[] | undefined) ?? []
+}
 
 // Mirrors the logger fallback idiom in transition-requirements.ts / review-list.ts —
 // callers without a Fastify request logger fall back to console.
@@ -187,7 +223,8 @@ async function resolveSetLookup(
   database: Knex,
   rule: FieldRuleRow,
   triggerValue: unknown,
-  logger: Logger
+  logger: Logger,
+  caller?: RuleCaller
 ): Promise<unknown> {
   const cfg = parseSetLookupConfig(rule.dynamic_config)
   if (!cfg) {
@@ -198,6 +235,20 @@ async function resolveSetLookup(
     return undefined
   }
   if (isEmptyValue(triggerValue)) return undefined
+  const as = asCaller(caller)
+  if (as) {
+    const rows = await callerRows(
+      as,
+      cfg.collection,
+      {
+        [cfg.filter_field]: Array.isArray(triggerValue)
+          ? { _in: triggerValue }
+          : { _eq: triggerValue }
+      },
+      [cfg.select]
+    )
+    return rows.map((r) => r[cfg.select])
+  }
 
   try {
     const q = database(cfg.collection).select(cfg.select).limit(LOOKUP_CAP)
@@ -253,8 +304,10 @@ async function resolveSetFromTrigger(
   triggerField: string,
   triggerValue: unknown,
   rule: FieldRuleRow,
-  logger: Logger
+  logger: Logger,
+  caller?: RuleCaller
 ): Promise<unknown> {
+  const as = asCaller(caller)
   const cfg = parseSetFromTriggerConfig(rule.dynamic_config)
   if (!cfg) {
     logger.warn(
@@ -285,10 +338,18 @@ async function resolveSetFromTrigger(
     // must run before the projected fetch, not after.
     const oneColumns = await getActualColumns(oneCollection)
     const isPlainColumn = oneColumns.has(cfg.field)
-    const record = (await database(oneCollection)
-      .where({ id: fkId })
-      .select(isPlainColumn ? ['id', cfg.field] : ['id'])
-      .first()) as Record<string, unknown> | undefined
+    const record = as
+      ? (((await readOne(
+          as.user,
+          oneCollection,
+          String(fkId),
+          as.workspaceId ?? undefined,
+          isPlainColumn ? ['id', cfg.field] : ['id']
+        ).catch(() => null)) as Record<string, unknown> | null) ?? undefined)
+      : ((await database(oneCollection)
+          .where({ id: fkId })
+          .select(isPlainColumn ? ['id', cfg.field] : ['id'])
+          .first()) as Record<string, unknown> | undefined)
     if (!record) return undefined
 
     // Plain column on the related record.
@@ -327,10 +388,14 @@ async function resolveSetFromTrigger(
         )
         return undefined
       }
-      const rows = (await database(aliasRel.many_collection)
-        .where({ [aliasRel.many_field]: fkId })
-        .select(cfg.map)
-        .limit(LOOKUP_CAP)) as Record<string, unknown>[]
+      const rows = as
+        ? await callerRows(as, aliasRel.many_collection, { [aliasRel.many_field]: { _eq: fkId } }, [
+            cfg.map
+          ])
+        : ((await database(aliasRel.many_collection)
+            .where({ [aliasRel.many_field]: fkId })
+            .select(cfg.map)
+            .limit(LOOKUP_CAP)) as Record<string, unknown>[])
       return rows.map((r) => r[cfg.map as string])
     }
 
@@ -344,10 +409,14 @@ async function resolveSetFromTrigger(
       )
       return undefined
     }
-    const rows = (await database(aliasRel.many_collection)
-      .where({ [aliasRel.many_field]: fkId })
-      .select(col)
-      .limit(LOOKUP_CAP)) as Record<string, unknown>[]
+    const rows = as
+      ? await callerRows(as, aliasRel.many_collection, { [aliasRel.many_field]: { _eq: fkId } }, [
+          col
+        ])
+      : ((await database(aliasRel.many_collection)
+          .where({ [aliasRel.many_field]: fkId })
+          .select(col)
+          .limit(LOOKUP_CAP)) as Record<string, unknown>[])
     return rows.map((r) => r[col])
   } catch (err) {
     logger.warn(
@@ -440,7 +509,8 @@ export async function evaluateRulesForTrigger(
   triggerField: string,
   triggerValue: unknown,
   draft: Record<string, unknown>,
-  logger: Logger = consoleLogger
+  logger: Logger = consoleLogger,
+  caller?: RuleCaller
 ): Promise<Record<string, unknown>> {
   let rules: FieldRuleRow[]
   try {
@@ -452,7 +522,16 @@ export async function evaluateRulesForTrigger(
     // Table may not exist yet before migration runs — non-fatal.
     return {}
   }
-  return evaluateRuleRows(database, collection, triggerField, triggerValue, draft, rules, logger)
+  return evaluateRuleRows(
+    database,
+    collection,
+    triggerField,
+    triggerValue,
+    draft,
+    rules,
+    logger,
+    caller
+  )
 }
 
 /**
@@ -467,7 +546,8 @@ export async function evaluateRuleRows(
   triggerValue: unknown,
   draft: Record<string, unknown>,
   rules: FieldRuleRow[],
-  logger: Logger = consoleLogger
+  logger: Logger = consoleLogger,
+  caller?: RuleCaller
 ): Promise<Record<string, unknown>> {
   const updates: Record<string, unknown> = {}
   for (const rule of rules) {
@@ -485,7 +565,7 @@ export async function evaluateRuleRows(
     } else if (rule.target_type === 'set') {
       if (rule.target_value !== null) updates[rule.target_field] = rule.target_value
     } else if (rule.target_type === 'set_lookup') {
-      const resolved = await resolveSetLookup(database, rule, triggerValue, logger)
+      const resolved = await resolveSetLookup(database, rule, triggerValue, logger, caller)
       if (resolved !== undefined)
         updates[rule.target_field] = await scalarizeForColumn(
           database,
@@ -501,7 +581,8 @@ export async function evaluateRuleRows(
         triggerField,
         triggerValue,
         rule,
-        logger
+        logger,
+        caller
       )
       if (resolved !== undefined)
         updates[rule.target_field] = await scalarizeForColumn(

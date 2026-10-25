@@ -89,6 +89,7 @@ import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/IntegrationDots'
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
+import { ListLoadError } from '../ListLoadError'
 import { LiveRowMark } from '../LiveRowMark'
 import { RealtimeStaleMark } from '../RealtimeStatusBanner'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
@@ -103,12 +104,12 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { OwnerAvatars } from './OwnerAvatars'
-import { ListLoadError } from '../ListLoadError'
 import { QueueBulkBar } from './QueueBulkBar'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
 import { QueueQuickFilters } from './QueueQuickFilters'
 import { QueueWorkloadView } from './QueueWorkloadView'
+import { needsTransitionNote, useTransitionNote } from './transition-note'
 
 /** Root drill entry may pin a grouped layout; nested levels never do. */
 type DrillEntry = DrilldownTarget & { rootLayoutSlug?: string | null }
@@ -1361,6 +1362,7 @@ export function QueueWorklist({
     [serverGrouped, data?.data]
   )
   const rowViewers = useRowPresence(presenceRows)
+  const transitionNote = useTransitionNote()
   // Long-request honesty (#370)
   const loadElapsed = useElapsedLoading(isFetching && !liveRefetchRef.current)
 
@@ -1368,7 +1370,12 @@ export function QueueWorklist({
     const instanceRes = await client.request<{
       data: {
         states: Array<{ id: string; key: string }>
-        available_transitions: Array<{ id: string; to_state: string }>
+        available_transitions: Array<{
+          id: string
+          to_state: string
+          label?: string | null
+          comment_mode?: string | null
+        }>
       } | null
     }>(get(`/pipelines/instance/${item.collection}/${item.item_id}`))
     const instanceData = instanceRes.data
@@ -1384,9 +1391,17 @@ export function QueueWorklist({
     )
     if (!transition) throw new Error('No transition available to move this item here')
 
+    // Send Back / Cancel need a note (the server refuses them without one):
+    // ask — once for a whole bulk run — instead of failing every row.
+    let comment: string | null = null
+    if (needsTransitionNote(transition)) {
+      comment = await transitionNote.ask(transition.label?.trim() || 'Move')
+      if (!comment) throw new Error('Not moved — this move needs a note')
+    }
     await client.request(
       post(`/pipelines/instance/${item.collection}/${item.item_id}/transition`, {
-        transition_id: transition.id
+        transition_id: transition.id,
+        ...(comment ? { comment } : {})
       })
     )
   }
@@ -2339,7 +2354,9 @@ export function QueueWorklist({
   async function runBulk(label: string, fn: (row: QueueItemRow) => Promise<unknown>) {
     const rows = items.filter((r) => selectedIds.includes(rowId(r)))
     setBulkBusy(true)
+    transitionNote.beginBatch()
     const results = await Promise.allSettled(rows.map(fn))
+    transitionNote.endBatch()
     const ok = results.filter((r) => r.status === 'fulfilled').length
     const fail = results.length - ok
     setBulkBusy(false)
@@ -4741,6 +4758,7 @@ export function QueueWorklist({
         onNext={() => sheetItem && startWorkNext(sheetItem)}
         refetchItems={() => qc.invalidateQueries({ queryKey: ['queue-items', queueId] })}
       />
+      {transitionNote.dialog}
     </div>
   )
 }

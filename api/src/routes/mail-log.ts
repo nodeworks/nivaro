@@ -176,10 +176,11 @@ export async function mailLogReadRoutes(app: FastifyInstance) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection)) {
         return reply.code(400).send({ error: 'Invalid collection' })
       }
-      const { can } = await import('../services/permissions.js')
-      if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
+      // The record itself must be visible to the caller (User Scopes, row
+      // filters), not just its collection.
+      const { recordRefusal } = await import('../services/erp-record-gate.js')
+      const refusal = await recordRefusal(req, collection, item, 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
       // Tagged rows first-class; UNTAGGED rows (senders that predate record
       // context, or third-party paths) are caught by the record's human id
       // appearing in the subject — flow mails and legacy sends all carry it.

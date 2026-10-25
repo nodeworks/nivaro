@@ -80,6 +80,7 @@ export const LIVE_RECONCILE_HEADS: readonly string[] = [
   'tasks',
   'addendums',
   'pipeline-instance',
+  'pipeline-instance-lock',
   'pipeline-all-owners',
   'pipeline-instance-owners',
   'pipeline-owners-resolved',

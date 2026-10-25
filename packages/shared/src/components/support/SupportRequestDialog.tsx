@@ -51,6 +51,10 @@ export function SupportRequestDialog({
   // Taken when the dialog opens — by the time the question is typed the
   // rolling buffer would hold mostly this dialog.
   const moment = useRef<{ clip: PreparedReplayClip; route: string } | null>(null)
+  // Set on the first click, before React re-renders the button disabled: the
+  // second click of a double-click sent the same request again (two tickets,
+  // two context uploads).
+  const sendingRef = useRef(false)
   useEffect(() => {
     installReplayTail()
   }, [])
@@ -121,7 +125,22 @@ export function SupportRequestDialog({
       reset()
       onOpenChange(false)
     },
-    onError: (e) => setError((e as Error).message || 'Could not send the request')
+    onError: (e) => {
+      // The same request was just sent (a second click, another tab): the
+      // server kept the first ticket — that is a success, not a failure.
+      const body = (e as { response?: { code?: string; data?: { code?: string } } }).response
+      if ((body?.data?.code ?? body?.code) === 'DUPLICATE_REQUEST') {
+        void qc.invalidateQueries({ queryKey: ['support-tickets'] })
+        void qc.invalidateQueries({ queryKey: ['support-summary'] })
+        reset()
+        onOpenChange(false)
+        return
+      }
+      setError((e as Error).message || 'Could not send the request')
+    },
+    onSettled: () => {
+      sendingRef.current = false
+    }
   })
 
   async function addFiles(list: FileList | null) {
@@ -166,7 +185,9 @@ export function SupportRequestDialog({
           className='space-y-4 px-6 pb-5 pt-3'
           onSubmit={(e) => {
             e.preventDefault()
-            if (canSend) create.mutate()
+            if (!canSend || sendingRef.current) return
+            sendingRef.current = true
+            create.mutate()
           }}
         >
           {categories.length > 0 && (

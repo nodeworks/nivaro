@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
@@ -14,7 +14,7 @@ import { can } from '../services/permissions.js'
 import { resolveStateOwners } from '../services/pipeline-engine.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
-import { canSeeRecordRoom } from '../services/socket-access.js'
+import { canSeeRecordRoom, visibleRecordIds } from '../services/socket-access.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -133,6 +133,30 @@ async function resolveMentions(text: string): Promise<MentionUserRow[]> {
   return Array.from(found.values())
 }
 
+/**
+ * May the caller open the record a comment thread hangs on? The record read
+ * gate (role read, row filter, User Scopes — canSeeRecordRoom), not just the
+ * collection: comments, notes and reactions on a record the caller cannot
+ * open answer 404 like the record does. A history annotation (#372) hangs on
+ * a revision row — judged by the revision's own record.
+ */
+async function recordVisible(
+  req: FastifyRequest,
+  collection: string,
+  item: string | number | null | undefined
+): Promise<boolean> {
+  if (req.isAdmin) return true
+  if (item == null || item === '') return false
+  if (collection === 'nivaro_revisions') {
+    const rev = (await db('nivaro_revisions')
+      .where({ id: Number(item) })
+      .first('collection', 'item')) as { collection?: string; item?: string | number } | undefined
+    if (!rev?.collection || rev.item == null) return false
+    return canSeeRecordRoom(req.user!, rev.collection, String(rev.item), false)
+  }
+  return canSeeRecordRoom(req.user!, collection, String(item), false)
+}
+
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
 export async function commentsRoutes(app: FastifyInstance) {
@@ -145,9 +169,8 @@ export async function commentsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'collection and item are required' })
     }
 
-    // Gate on read permission for the parent collection.
-    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await recordVisible(req, collection, item))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
 
     const comments = (await db('nivaro_comments as c')
@@ -334,8 +357,8 @@ export async function commentsRoutes(app: FastifyInstance) {
       if (!collection || !item) {
         return reply.code(400).send({ error: 'collection and item are required' })
       }
-      if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
+      if (!(await recordVisible(req, collection, item))) {
+        return reply.code(404).send({ error: 'Not found' })
       }
 
       return reply.send({ data: await loadRecordNotes(collection, String(item), req.user!.id) })
@@ -356,10 +379,13 @@ export async function commentsRoutes(app: FastifyInstance) {
     if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
+    // Counts only for the rows the caller can open (row filter, User Scopes).
+    const visible = req.isAdmin ? ids : await visibleRecordIds(req.user!, collection, ids, false)
+    if (visible.length === 0) return { data: {} }
     const rows = (await db('nivaro_comments')
       .where({ collection })
       .whereNull('deleted_at')
-      .whereIn('item', ids)
+      .whereIn('item', visible)
       .groupBy('item')
       .select('item')
       .count({ c: '*' })) as Array<{ item: string; c: number }>
@@ -381,8 +407,8 @@ export async function commentsRoutes(app: FastifyInstance) {
         | { id: string; collection: string; item?: string | number | null }
         | undefined
       if (!comment) return reply.code(404).send({ error: 'Comment not found' })
-      if (!req.isAdmin && !(await can(req.user!, 'read', comment.collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
+      if (!(await recordVisible(req, comment.collection, comment.item))) {
+        return reply.code(404).send({ error: 'Comment not found' })
       }
       const existing = await db('nivaro_comment_reactions')
         .where({ comment: comment.id, user: req.user!.id, emoji })
@@ -412,8 +438,8 @@ export async function commentsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'collection, item and entry_key are required' })
       }
       if (!REACTION_EMOJI.has(emoji)) return reply.code(400).send({ error: 'Unknown reaction' })
-      if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
+      if (!(await recordVisible(req, collection, item))) {
+        return reply.code(404).send({ error: 'Not found' })
       }
       const existing = await db('nivaro_entry_reactions')
         .where({ entry_key: String(entry_key).slice(0, 200), user: req.user!.id, emoji })
@@ -459,6 +485,11 @@ export async function commentsRoutes(app: FastifyInstance) {
           return reply.code(403).send({ error: 'Forbidden' })
       } else if (!req.isAdmin && !(await can(req.user!, 'create', body.collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
+      }
+      // …and on the record itself: no comment (and no @owners / @watchers
+      // fan-out naming its people) on a record the caller cannot open.
+      if (!(await recordVisible(req, body.collection, body.item))) {
+        return reply.code(404).send({ error: 'Not found' })
       }
 
       const userId = req.user!.id
@@ -605,8 +636,8 @@ export async function commentsRoutes(app: FastifyInstance) {
       | CommentRow
       | undefined
     if (!comment) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && !(await can(req.user!, 'read', comment.collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await recordVisible(req, comment.collection, comment.item))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
     const me = String(req.user!.id).toLowerCase()
     let allowed = !!req.isAdmin || String(comment.user).toLowerCase() === me

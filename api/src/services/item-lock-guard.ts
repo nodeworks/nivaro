@@ -40,6 +40,17 @@ export interface EditLockRefusal {
   }
 }
 
+/** A write refused over a person-held lock, thrown by the items-service gate. */
+export class RecordLockedError extends Error {
+  statusCode = 409
+  code = 'RECORD_LOCKED' as const
+  meta: { locked_by: string; locked_by_name: string | null }
+  constructor(body: EditLockRefusal['body']) {
+    super(body.error)
+    this.meta = { locked_by: body.locked_by, locked_by_name: body.locked_by_name }
+  }
+}
+
 /**
  * Edit locks are enforced, not advisory: a person's write to a record another
  * person holds a live lock on is refused (409 RECORD_LOCKED, naming the
@@ -47,7 +58,10 @@ export interface EditLockRefusal {
  * still Save over the new holder's work. No lock, an expired one, the
  * writer's own (any of their tabs) or locking turned off = no refusal.
  * Admins are no exception: Take over (POST …/lock/force) makes the lock
- * theirs first. Called by the single-record PATCH route.
+ * theirs first. A lock its holder may no longer use (the record moved into
+ * an approval step they do not own — edit-lock.ts lockHolderVerdict) is void
+ * and refuses nobody. Called by the single-record PATCH route and, for a
+ * record's own rows (lines, junction rows), by the items-service gate.
  */
 export async function editLockRefusal(
   req: Pick<FastifyRequest, 'user' | 'authMethod'>,
@@ -65,6 +79,8 @@ export async function editLockRefusal(
   if (!lock?.user) return null
   if (String(lock.user).toUpperCase() === String(me).toUpperCase()) return null
   if (!(await isLockingEnabled(collection))) return null
+  const { lockHolderVerdict } = await import('./edit-lock.js')
+  if (!(await lockHolderVerdict(lock.user, collection, String(item))).allowed) return null
   const name = await lockHolderName(lock.user).catch(() => null)
   return {
     status: 409,

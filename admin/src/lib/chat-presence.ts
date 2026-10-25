@@ -98,7 +98,18 @@ async function beat(...args: BeatArgs) {
   }
 }
 
-async function writeBeat(userId: string, name: string, path: string, roleName: string | null) {
+/** The presence row's current_path column holds 255 characters; a longer
+ *  URL (a pasted 400-digit record id, a long query string) made every
+ *  heartbeat fail with 422 VALUE_TOO_LONG. The query string goes first. */
+export const PRESENCE_PATH_MAX = 255
+export function presencePathForBeat(path: string): string {
+  if (path.length <= PRESENCE_PATH_MAX) return path
+  const bare = path.split(/[?#]/)[0]
+  return bare.length <= PRESENCE_PATH_MAX ? bare : bare.slice(0, PRESENCE_PATH_MAX)
+}
+
+async function writeBeat(userId: string, name: string, rawPath: string, roleName: string | null) {
+  const path = presencePathForBeat(rawPath)
   const visible = tabIsVisible()
   const payload = {
     user_id: userId,

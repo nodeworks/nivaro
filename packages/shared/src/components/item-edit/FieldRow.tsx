@@ -642,6 +642,28 @@ export function FieldRow({
     const want = el.tagName === 'BUTTON' ? `${labelId} ${el.id}` : labelId
     if (el.getAttribute('aria-labelledby') !== want) el.setAttribute('aria-labelledby', want)
   })
+  // A locked field is locked for the keyboard too: the overlay below only
+  // swallowed the mouse, so Tab + typing still edited a locked record, stored
+  // a draft and lit "Save all". `inert` (set by hand — React 18 hosts do not
+  // know the prop) takes the control out of focus and input; a caret already
+  // inside is let go first, so presence stops reporting the field as edited.
+  const inputLocked = locked && !isFileField
+  const lockedBoxRef = useRef<HTMLDivElement>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: autoFillTick remounts the box (its key)
+  useEffect(() => {
+    const el = lockedBoxRef.current
+    if (!el) return
+    if (!inputLocked) {
+      el.removeAttribute('inert')
+      return
+    }
+    const active = typeof document !== 'undefined' ? document.activeElement : null
+    if (active instanceof HTMLElement && el.contains(active)) active.blur()
+    el.setAttribute('inert', '')
+  }, [inputLocked, autoFillTick])
+  const commit = (v: unknown) => {
+    if (!locked) onChange(field.field, v)
+  }
   const {
     onContextMenu: onFieldContextMenu,
     onKeyDown: onFieldMenuKeyDown,
@@ -1160,6 +1182,7 @@ export function FieldRow({
         >
           <div
             key={autoFillTick ?? 0}
+            ref={lockedBoxRef}
             className={cn(
               // A locked FILE field stays interactive: its chips keep the
               // download link and preview click (the component itself hides
@@ -1186,7 +1209,7 @@ export function FieldRow({
               renderField({
                 field,
                 value,
-                onChange: (v) => onChange(field.field, v),
+                onChange: commit,
                 disabled: locked,
                 collection,
                 itemId,
@@ -1199,7 +1222,7 @@ export function FieldRow({
               <FieldRenderer
                 field={locked && isFileField ? { ...field, readonly: true } : field}
                 value={value}
-                onChange={(v) => onChange(field.field, v)}
+                onChange={commit}
                 relations={relations}
                 collection={collection}
                 itemId={itemId}

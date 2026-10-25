@@ -1,9 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAuth } from '../middleware/authenticate.js'
+import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { deleteOne, updateOne } from '../services/items.js'
-import { can } from '../services/permissions.js'
 
 /**
  * Record merge — combine duplicate records into one survivor.
@@ -49,7 +48,7 @@ export async function mergeRoutes(app: FastifyInstance) {
   // Preview: field values per record + inbound reference counts
   app.get<{ Querystring: { collection?: string; ids?: string } }>(
     '/preview',
-    { preHandler: requireAuth },
+    { preHandler: requireAdmin },
     async (req, reply) => {
       const collection = String(req.query.collection ?? '')
       const ids = String(req.query.ids ?? '')
@@ -62,10 +61,6 @@ export async function mergeRoutes(app: FastifyInstance) {
       if (ids.length < 2 || ids.length > 5) {
         return reply.code(400).send({ error: 'Provide 2–5 ids' })
       }
-      if (!(await can(req.user!, 'update', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
-
       const rows = (await db(collection).whereIn('id', ids)) as Array<Record<string, unknown>>
       if (rows.length !== ids.length) {
         return reply.code(404).send({ error: 'Some records were not found' })
@@ -122,7 +117,7 @@ export async function mergeRoutes(app: FastifyInstance) {
       loser_ids?: string[]
       field_choices?: Record<string, unknown>
     }
-  }>('/', { preHandler: requireAuth }, async (req, reply) => {
+  }>('/', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection, survivor_id, loser_ids, field_choices } = req.body ?? {}
     if (!collection || !/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_')) {
       return reply.code(400).send({ error: 'Invalid collection' })
@@ -130,16 +125,11 @@ export async function mergeRoutes(app: FastifyInstance) {
     if (!survivor_id || !Array.isArray(loser_ids) || loser_ids.length === 0) {
       return reply.code(400).send({ error: 'survivor_id and loser_ids are required' })
     }
+    if (loser_ids.length > 5)
+      return reply.code(400).send({ error: 'Merge at most 5 records at once' })
     if (loser_ids.includes(survivor_id)) {
       return reply.code(400).send({ error: 'Survivor cannot also be a loser' })
     }
-    if (
-      !(await can(req.user!, 'update', collection)) ||
-      !(await can(req.user!, 'delete', collection))
-    ) {
-      return reply.code(403).send({ error: 'Merge needs update + delete permission' })
-    }
-
     const survivor = await db(collection).where({ id: survivor_id }).first()
     if (!survivor) return reply.code(404).send({ error: 'Survivor not found' })
 

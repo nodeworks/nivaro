@@ -1573,7 +1573,9 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         try {
-          const item = await createOne(ctx.user, name, data, ctx.req)
+          const item = await createOne(ctx.user, name, data, ctx.req, undefined, {
+            callerPayload: true
+          })
           const upsert = upsertInfoOf(item)
           if (upsert) ctx.upserts?.push({ collection: name, ...upsert })
           return item
@@ -1630,7 +1632,11 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         try {
           // Saved but now hidden from its writer: the id, never null (the
           // same answer createOne gives for a hidden create).
-          return (await updateOne(ctx.user, name, id, data, ctx.req)) ?? { id }
+          return (
+            (await updateOne(ctx.user, name, id, data, ctx.req, undefined, {
+              callerPayload: true
+            })) ?? { id }
+          )
         } catch (e) {
           wrapError(e)
         }
@@ -1677,7 +1683,16 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           const results: unknown[] = []
           try {
             for (const row of rows) {
-              const item = await createOne(user, name, row as Record<string, unknown>, ctx.req)
+              const item = await createOne(
+                user,
+                name,
+                row as Record<string, unknown>,
+                ctx.req,
+                undefined,
+                {
+                  callerPayload: true
+                }
+              )
               const upsert = upsertInfoOf(item)
               if (upsert) ctx.upserts?.push({ collection: name, ...upsert })
               results.push(item)
@@ -1749,7 +1764,9 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           for (const k of Object.keys(change.data))
             if (!k.startsWith('_') && k in before) prior[k] = before[k]
           results.push(
-            (await updateOne(user, name, change.id, { ...change.data }, ctx.req)) ?? {
+            (await updateOne(user, name, change.id, { ...change.data }, ctx.req, undefined, {
+              callerPayload: true
+            })) ?? {
               id: change.id
             }
           )

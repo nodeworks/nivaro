@@ -92,6 +92,9 @@ export interface RecordGridEditorConfig {
   month_sets?: Array<{ suffix: string; label: string }>
   allow_add?: boolean
   allow_delete?: boolean
+  /** Amounts may be negative (default: zero or more — a forecast is never
+   *  negative, the same rule the forecast worksheet applies). */
+  allow_negative?: boolean
   /** Written on save as the sum of the FIRST month set's values. */
   computed_total_field?: string
   /** Custom query run after a successful save — params support '$scope.<f>'. */
@@ -489,8 +492,15 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
                     <td key={c.field} className='py-0.5 pr-2 text-right'>
                       <input
                         type='number'
+                        min={config.allow_negative ? undefined : 0}
                         value={cellValue(row, c.field)}
-                        onChange={(e) => setCell(row.key, c.field, e.target.value)}
+                        title={config.allow_negative ? undefined : NEGATIVE_AMOUNT_MESSAGE}
+                        onChange={(e) => {
+                          // Same rule as the browse grid's amount cells.
+                          if (!config.allow_negative && e.target.value.trim().startsWith('-'))
+                            return
+                          setCell(row.key, c.field, e.target.value)
+                        }}
                         className='h-7 w-[84px] rounded border border-slate-200 bg-white px-1.5 text-right text-[12px] tabular-nums outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
                       />
                     </td>
@@ -558,44 +568,97 @@ const fmtNum = (v: number | null | undefined, opts?: { blankZero?: boolean }) =>
 }
 
 /** Numeric input that reads formatted (1,234,567.5) until focused. */
-function NumberCell({
+export const NEGATIVE_AMOUNT_MESSAGE = 'Enter an amount of zero or more'
+
+/** What an amount cell keeps of a keystroke: digits, one decimal point and —
+ *  only where negatives are allowed — one leading minus. A minus where they
+ *  are not is refused outright (the old value stays, the cell says why);
+ *  "1-2" or "10-5000" can no longer be typed. */
+export function sanitizeAmount(
+  raw: string,
+  allowNegative: boolean
+): { value: string | null; refused: string | null } {
+  const s = raw.replace(/[^\d.-]/g, '')
+  if (s.includes('-') && !allowNegative) return { value: null, refused: NEGATIVE_AMOUNT_MESSAGE }
+  const sign = s.startsWith('-') ? '-' : ''
+  const body = s.replace(/-/g, '')
+  const dot = body.indexOf('.')
+  const clean =
+    dot < 0 ? body : `${body.slice(0, dot + 1)}${body.slice(dot + 1).replace(/\./g, '')}`
+  return { value: `${sign}${clean}`, refused: null }
+}
+
+export function NumberCell({
   value,
   original,
   onChange,
-  disabled
+  disabled,
+  allowNegative = false
 }: {
   value: string
   original: string
   onChange: (v: string) => void
   disabled?: boolean
+  allowNegative?: boolean
 }) {
   const [focused, setFocused] = useState(false)
+  const [refused, setRefused] = useState<string | null>(null)
   const edited = value !== original
   const num = value === '' ? null : Number(value)
   const shown = focused ? value : num == null || Number.isNaN(num) ? value : fmtNum(num)
   const delta = edited && num != null && !Number.isNaN(num) ? num - (Number(original) || 0) : 0
   return (
-    <input
-      type='text'
-      inputMode='decimal'
-      value={shown}
-      disabled={disabled}
-      title={
-        edited
-          ? `Was ${fmtNum(Number(original) || 0)} (${delta >= 0 ? '+' : '−'}${fmtNum(Math.abs(delta))})`
-          : undefined
-      }
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-      onChange={(e) => onChange(e.target.value.replace(/[^\d.-]/g, ''))}
-      className={cn(
-        'h-7 w-[92px] rounded-md border bg-white px-1.5 text-right text-[12px] tabular-nums outline-none transition-colors focus:border-nvr-cyan disabled:bg-transparent dark:bg-background',
-        edited
-          ? 'border-nvr-cyan bg-nvr-cyan/[0.06] dark:bg-nvr-cyan/10'
-          : 'border-slate-200 dark:border-border',
-        !edited && (num === 0 || num == null) && 'text-slate-400'
+    <span className='relative inline-block'>
+      <input
+        type='text'
+        inputMode='decimal'
+        value={shown}
+        disabled={disabled}
+        aria-invalid={refused ? true : undefined}
+        title={
+          refused ??
+          (edited
+            ? `Was ${fmtNum(Number(original) || 0)} (${delta >= 0 ? '+' : '−'}${fmtNum(Math.abs(delta))})`
+            : undefined)
+        }
+        onFocus={(e) => {
+          setFocused(true)
+          // Focus swaps "10.00" for "10", which drops the browser's
+          // select-all — Tab + type then appended (10 → 105000). Select after
+          // the swap so typing replaces the value.
+          const el = e.currentTarget
+          requestAnimationFrame(() => {
+            if (document.activeElement === el) el.select()
+          })
+        }}
+        onBlur={() => {
+          setFocused(false)
+          setRefused(null)
+        }}
+        onChange={(e) => {
+          const next = sanitizeAmount(e.target.value, allowNegative)
+          setRefused(next.refused)
+          if (next.value != null) onChange(next.value)
+        }}
+        className={cn(
+          'h-7 w-[92px] rounded-md border bg-white px-1.5 text-right text-[12px] tabular-nums outline-none transition-colors focus:border-nvr-cyan disabled:bg-transparent dark:bg-background',
+          refused
+            ? 'border-red-400 focus:border-red-400'
+            : edited
+              ? 'border-nvr-cyan bg-nvr-cyan/[0.06] dark:bg-nvr-cyan/10'
+              : 'border-slate-200 dark:border-border',
+          !edited && (num === 0 || num == null) && 'text-slate-400'
+        )}
+      />
+      {refused && (
+        <span
+          role='alert'
+          className='absolute right-0 top-full z-10 mt-0.5 whitespace-nowrap rounded bg-red-600 px-1.5 py-0.5 text-[10.5px] font-medium text-white shadow'
+        >
+          {refused}
+        </span>
       )}
-    />
+    </span>
   )
 }
 
@@ -995,6 +1058,7 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
                             value={cellValue(row, c.field)}
                             original={original(row, c.field)}
                             onChange={(v) => setCell(row.key, c.field, v)}
+                            allowNegative={!!config.allow_negative}
                           />
                         </td>
                       ))}

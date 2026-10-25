@@ -3,7 +3,6 @@ import type Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hooks/ai-validation.js'
-import { likeContains } from '../lib/filter-like.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { MAX_ROUNDS, runChatLoop } from '../services/ai-chat-loop.js'
@@ -38,9 +37,15 @@ import { ACCEPTED_EXTENSIONS, extractDocumentText } from '../services/document-e
 import { getFile, readFileBuffer, uploadFileBuffer } from '../services/files.js'
 import { withJobRun } from '../services/job-runs.js'
 import { notifyUser } from '../services/notification-channels.js'
-import { can } from '../services/permissions.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { currentTraceMeta, runInTrace } from '../services/request-trace.js'
+import {
+  isSecretColumn,
+  isSystemCollection,
+  sensitiveColumns,
+  systemReadableColumns
+} from '../services/system-collections.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { isAdminRole } from '../services/user-scopes.js'
 import { userTimeZone } from '../services/user-time.js'
@@ -58,12 +63,39 @@ async function aiFeatureEnabled(key: string): Promise<boolean> {
   }
 }
 
-type FieldValue = string | number | boolean | Date | null
-
 interface AiFilter {
   field: string
   op: string
   value?: unknown
+}
+
+/** One /ai/query filter as an items-service filter: a direct field is
+ *  `{field: {_op: v}}`, a dotted relation path `{alias: {field: {_op: v}}}`
+ *  (the items service reads a to-many alias as "some related row matches"). */
+export function aiFilterToItems(f: AiFilter): Record<string, unknown> {
+  let leaf: Record<string, unknown>
+  switch (f.op) {
+    case 'eq':
+      leaf = f.value === null ? { _null: true } : { _eq: f.value }
+      break
+    case 'neq':
+      leaf = f.value === null ? { _nnull: true } : { _neq: f.value }
+      break
+    case 'in':
+      leaf = { _in: Array.isArray(f.value) ? f.value : [f.value] }
+      break
+    case 'null':
+      leaf = { _null: true }
+      break
+    case 'nnull':
+      leaf = { _nnull: true }
+      break
+    default:
+      leaf = { [`_${f.op}`]: f.value }
+  }
+  const dot = f.field.indexOf('.')
+  if (dot < 0) return { [f.field]: leaf }
+  return { [f.field.slice(0, dot)]: { [f.field.slice(dot + 1)]: leaf } }
 }
 
 /** #2739 — the live mirror for a turn in a shared conversation (null when nobody else is in it). */
@@ -101,6 +133,28 @@ const ALLOWED_OPS = new Set([
 ])
 
 const VALUELESS_OPS = new Set(['null', 'nnull'])
+
+/**
+ * The record gate for AI tools that read one record's data or history: the
+ * record must be readable as the caller (readOne — row filter, User Scopes,
+ * tree permission), and only the fields they may read ride along. null = the
+ * caller cannot open it (answer 404); `fields` null = every field.
+ */
+async function readableRecord(
+  req: FastifyRequest,
+  collection: string,
+  item: string | number
+): Promise<{ row: Record<string, unknown>; fields: Set<string> | null } | null> {
+  const { readOne } = await import('../services/items.js')
+  const { getAllowedFields } = await import('../services/permissions.js')
+  const row = (await readOne(req.user!, collection, item, req.workspaceId ?? undefined).catch(
+    () => null
+  )) as Record<string, unknown> | null
+  if (!row) return null
+  if (req.isAdmin) return { row, fields: null }
+  const allowed = await getAllowedFields(req.user!, 'read', collection)
+  return { row, fields: allowed === null || allowed.includes('*') ? null : new Set(allowed) }
+}
 
 // Extract a JSON object from a model response — strips code fences and surrounding prose.
 function extractJson(text: string): unknown {
@@ -265,7 +319,16 @@ export async function aiRoutes(app: FastifyInstance) {
       if (r.one_field) virtualFieldNames.add(r.one_field)
       else virtualFieldNames.add(r.many_collection)
     }
-    const directFields = fields.filter((f) => !virtualFieldNames.has(f.field))
+    // Only fields the caller may read are offered, filtered or sorted on: a
+    // filter is an oracle as surely as a column in the answer.
+    const isAdmin = !!req.isAdmin
+    const allowedHere = isAdmin ? null : await getAllowedFields(req.user!, 'read', collection)
+    const directFields = fields.filter(
+      (f) =>
+        !virtualFieldNames.has(f.field) &&
+        !isSecretColumn(f.field) &&
+        (allowedHere === null || allowedHere.includes('*') || allowedHere.includes(f.field))
+    )
     const fieldNames = new Set(directFields.map((f) => f.field))
 
     // ── Relation context ──────────────────────────────────────────────────────
@@ -300,10 +363,34 @@ export async function aiRoutes(app: FastifyInstance) {
     const relationalFieldMap = new Map<string, RelInfo>()
     const relPromptLines: string[] = []
 
-    // Returns real (non-virtual) fields for a collection.
+    // Returns the real (non-virtual) fields of a related collection the caller
+    // may filter on: never a credential, on a system table only the columns a
+    // non-admin may read there (none past the person directory), elsewhere
+    // only what the caller's read policy allows.
+    async function realFields(col: string): Promise<Array<{ field: string; type: string }>> {
+      let allowed: readonly string[] | null = null
+      if (isSystemCollection(col)) {
+        if (!isAdmin) {
+          allowed = systemReadableColumns(col)
+          if (!allowed) return []
+        }
+      } else if (!isAdmin) {
+        if (!(await can(req.user!, 'read', col))) return []
+        const own = await getAllowedFields(req.user!, 'read', col)
+        allowed = own === null || own.includes('*') ? null : own
+      }
+      const sensitive = sensitiveColumns(col)
+      return (await allFields(col)).filter(
+        (f) =>
+          !isSecretColumn(f.field) &&
+          !sensitive.includes(f.field.toLowerCase()) &&
+          (allowed === null || allowed.includes(f.field))
+      )
+    }
+
     // Falls back to DB column introspection when nivaro_fields has no registered fields
     // (or only 'id'), so unregistered lookup tables still expose their columns to the AI.
-    async function realFields(col: string): Promise<Array<{ field: string; type: string }>> {
+    async function allFields(col: string): Promise<Array<{ field: string; type: string }>> {
       const [all, rels] = await Promise.all([
         db('nivaro_fields').where({ collection: col }).select('field', 'type') as Promise<
           Array<{ field: string; type: string }>
@@ -363,8 +450,11 @@ export async function aiRoutes(app: FastifyInstance) {
 
     // O2M — FK lives on many_collection, points back here.
     // one_field may be null for unnamed relations; fall back to many_collection as path prefix.
+    // An unnamed relation (no alias field) has no filter path in the items
+    // service, which runs the query — it is not offered.
     for (const rel of o2mRelsMeta) {
-      const prefix = rel.one_field ?? rel.many_collection
+      if (!rel.one_field) continue
+      const prefix = rel.one_field
       const relFields = await realFields(rel.many_collection)
       if (!relFields.length) continue
       relPromptLines.push(
@@ -390,8 +480,8 @@ export async function aiRoutes(app: FastifyInstance) {
     // matching findM2MRelation() in services/items.ts and schema-builder.ts.
     // The relation row itself can never match (its many_field ≠ its junction_field).
     for (const rel of m2mRelsMeta) {
-      // one_field may be null for unnamed relations; fall back to many_collection as path prefix.
-      const prefix = rel.one_field ?? rel.many_collection
+      if (!rel.one_field) continue
+      const prefix = rel.one_field
       const otherRel = (await db('nivaro_relations')
         .where({ many_collection: rel.many_collection, many_field: rel.junction_field })
         .whereNotNull('one_collection')
@@ -521,108 +611,35 @@ export async function aiRoutes(app: FastifyInstance) {
 
     const limit = Math.min(Math.max(Number(parsed.limit) || 50, 1), 200)
 
-    // Helper: apply a single op+value to a knex query builder on a given column
-    function applyOp(q: ReturnType<typeof db>, col: string, op: string, value: unknown) {
-      const v = value as FieldValue
-      switch (op) {
-        case 'eq':
-          v === null ? q.whereNull(col) : q.where(col, v)
-          break
-        case 'neq':
-          v === null ? q.whereNotNull(col) : q.whereNot(col, v)
-          break
-        case 'gt':
-          q.where(col, '>', v)
-          break
-        case 'gte':
-          q.where(col, '>=', v)
-          break
-        case 'lt':
-          q.where(col, '<', v)
-          break
-        case 'lte':
-          q.where(col, '<=', v)
-          break
-        case 'contains':
-          q.where(col, 'like', likeContains(v))
-          break
-        case 'in':
-          q.whereIn(col, (Array.isArray(value) ? value : [value]) as Array<string | number>)
-          break
-        case 'null':
-          q.whereNull(col)
-          break
-        case 'nnull':
-          q.whereNotNull(col)
-          break
-      }
-    }
-
-    // Build the query — knex bindings only, never raw string interpolation
-    const q = db(collection)
-    for (const f of filters) {
-      const relInfo = relationalFieldMap.get(f.field)
-
-      if (!relInfo) {
-        // Direct field
-        applyOp(q, f.field, f.op, f.value)
-        continue
-      }
-
-      if (relInfo.type === 'm2o') {
-        // WHERE fk_field IN (SELECT id FROM related WHERE related_field op value)
-        const subq = db(relInfo.relatedCollection).select('id')
-        applyOp(subq, relInfo.relatedField, f.op, f.value)
-        q.whereIn(relInfo.fkField, subq)
-      } else if (relInfo.type === 'o2m') {
-        // WHERE id IN (SELECT fk_field FROM many_collection WHERE related_field op value)
-        const subq = db(relInfo.manyCollection).select(relInfo.fkField)
-        applyOp(subq, relInfo.relatedField, f.op, f.value)
-        q.whereIn('id', subq)
-      } else if (relInfo.type === 'm2m') {
-        // WHERE id IN (SELECT junctionFk FROM junction WHERE junctionRelFk IN (SELECT id FROM related WHERE ...))
-        const innerSubq = db(relInfo.relatedCollection).select('id')
-        applyOp(innerSubq, relInfo.relatedField, f.op, f.value)
-        const junctionSubq = db(relInfo.junctionCollection)
-          .whereIn(relInfo.junctionRelFk, innerSubq)
-          .select(relInfo.junctionFk)
-        q.whereIn('id', junctionSubq)
-      }
-    }
+    // Run it as the caller through the items service: row filter, User Scopes,
+    // field allow-list and the credential / system-column refusals all apply,
+    // exactly as on GET /items. Relation paths become nested items filters.
     const offset = Math.max(Number(preOffset) || 0, 0)
-
-    if (sort) q.orderBy(sort.field, sort.dir)
-    else if (offset > 0) q.orderBy('id', 'asc') // MSSQL requires ORDER BY for OFFSET/FETCH
-
-    // COUNT uses the same filters without LIMIT/OFFSET
-    const countQ = db(collection)
-    for (const f of filters) {
-      const relInfo = relationalFieldMap.get(f.field)
-      if (!relInfo) {
-        applyOp(countQ, f.field, f.op, f.value)
-        continue
-      }
-      if (relInfo.type === 'm2o') {
-        const subq = db(relInfo.relatedCollection).select('id')
-        applyOp(subq, relInfo.relatedField, f.op, f.value)
-        countQ.whereIn(relInfo.fkField, subq)
-      } else if (relInfo.type === 'o2m') {
-        const subq = db(relInfo.manyCollection).select(relInfo.fkField)
-        applyOp(subq, relInfo.relatedField, f.op, f.value)
-        countQ.whereIn('id', subq)
-      } else if (relInfo.type === 'm2m') {
-        const innerSubq = db(relInfo.relatedCollection).select('id')
-        applyOp(innerSubq, relInfo.relatedField, f.op, f.value)
-        const junctionSubq = db(relInfo.junctionCollection)
-          .whereIn(relInfo.junctionRelFk, innerSubq)
-          .select(relInfo.junctionFk)
-        countQ.whereIn('id', junctionSubq)
-      }
+    const itemsFilter = { _and: filters.map(aiFilterToItems) }
+    let result: { data: unknown[]; total?: number | null }
+    try {
+      const { readItems } = await import('../services/items.js')
+      result = (await readItems(
+        req.user!,
+        collection,
+        {
+          filter: filters.length > 0 ? itemsFilter : undefined,
+          sort: sort ? [`${sort.dir === 'desc' ? '-' : ''}${sort.field}`] : undefined,
+          limit,
+          offset
+        },
+        undefined,
+        req.workspaceId ?? undefined
+      )) as typeof result
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode
+      if (status === 400 || status === 422)
+        return reply.code(422).send({ error: (err as Error).message })
+      if (status === 403) return reply.code(403).send({ error: 'Forbidden' })
+      throw err
     }
-    const [countRow] = await countQ.count('* as count')
-    const total = Number((countRow as { count: number | string }).count)
-
-    const data = await q.limit(limit).offset(offset)
+    const data = result.data
+    const total = Number(result.total ?? data.length)
 
     if (!interpreted) {
       interpreted = describeQuery(collection, filters, sort, limit)
@@ -1204,10 +1221,8 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection) || /^nivaro_/i.test(collection) || !item) {
       return reply.code(400).send({ error: 'collection and item are required' })
     }
-    const { can } = await import('../services/permissions.js')
-    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
-    }
+    const visible = await readableRecord(req, collection, item)
+    if (!visible) return reply.code(404).send({ error: 'Not found' })
     const days = Math.max(1, Math.min(365, Number(b.days) || 30))
     const revs = (await db('nivaro_revisions')
       .join('nivaro_activity', 'nivaro_revisions.activity', 'nivaro_activity.id')
@@ -1250,6 +1265,7 @@ export async function aiRoutes(app: FastifyInstance) {
         const who = (r.user && nameOf.get(r.user)) || 'system'
         const when = new Date(r.timestamp).toISOString().slice(0, 10)
         const fields = Object.entries(delta)
+          .filter(([k]) => !visible.fields || visible.fields.has(k))
           .slice(0, 12)
           .map(([k, v]) => `${k} → ${String(v).slice(0, 60)}`)
           .join('; ')
@@ -1304,12 +1320,12 @@ export async function aiRoutes(app: FastifyInstance) {
     if (/^nivaro_/i.test(collection) || !/^[A-Za-z0-9_]+$/.test(collection)) {
       return reply.code(400).send({ error: 'Invalid collection' })
     }
-    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
-    }
-
-    const record = await db(collection).where({ id: item }).first()
-    if (!record) return reply.code(404).send({ error: 'Item not found' })
+    // Read as the caller: a record they cannot open is not found, and the
+    // model sees only the fields (and child rows) they may read.
+    const visible = await readableRecord(req, collection, item)
+    if (!visible) return reply.code(404).send({ error: 'Item not found' })
+    const record = visible.row
+    const { readItems } = await import('../services/items.js')
 
     // Pull up to 3 O2M child sets so line items ride into the review.
     const children: Record<string, unknown[]> = {}
@@ -1326,9 +1342,15 @@ export async function aiRoutes(app: FastifyInstance) {
         if (!rel.many_collection || !rel.many_field) continue
         if (!/^[A-Za-z0-9_]+$/.test(rel.many_collection) || !/^[A-Za-z0-9_]+$/.test(rel.many_field))
           continue
-        const rows = await db(rel.many_collection)
-          .where({ [rel.many_field]: record.id })
-          .limit(50)
+        const rows = await readItems(
+          req.user!,
+          rel.many_collection,
+          { filter: { [rel.many_field]: { _eq: record.id } }, limit: 50, count: false },
+          undefined,
+          req.workspaceId ?? undefined
+        )
+          .then((r) => r.data as unknown[])
+          .catch(() => [] as unknown[])
         if (rows.length) children[rel.many_collection] = rows
       }
     } catch {

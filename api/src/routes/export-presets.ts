@@ -3,6 +3,8 @@ import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { readItems } from '../services/items.js'
+import { can } from '../services/permissions.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import type { CMSRelation } from '../types.js'
 
 /**
@@ -37,6 +39,36 @@ function parseConfig(raw: unknown): PresetConfig | null {
   }
 }
 
+/** Base row ids whose `firstHop` related record the user can see. */
+async function visibleRelated(
+  user: import('../types.js').User,
+  isAdmin: boolean,
+  collection: string,
+  ids: string[],
+  firstHop: { field: string; collection: string }
+): Promise<Set<string>> {
+  const { selectInChunks } = await import('../services/db-batch.js')
+  const links = (await selectInChunks(ids, 2000, (chunk) =>
+    db(collection).whereIn('id', chunk).select('id', firstHop.field)
+  )) as Array<Record<string, unknown>>
+  const targets = [
+    ...new Set(
+      links
+        .map((r) => r[firstHop.field])
+        .filter((v) => v != null)
+        .map(String)
+    )
+  ]
+  const gates = await compileAccessGates(user, firstHop.collection, { actingAdmin: isAdmin })
+  const seen = new Set<string>()
+  for (const id of await visibleIds(gates, targets)) seen.add(id.toLowerCase())
+  return new Set(
+    links
+      .filter((r) => r[firstHop.field] != null && seen.has(String(r[firstHop.field]).toLowerCase()))
+      .map((r) => String(r.id))
+  )
+}
+
 export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', authenticate)
 
@@ -67,12 +99,16 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
     if (!collection || !name || !config) {
       return reply.code(400).send({ error: 'collection, name and a columns config are required' })
     }
+    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
     const [created] = (await db('nivaro_export_presets')
       .insert({
         collection,
         name: name.slice(0, 200),
         config: JSON.stringify(config),
-        is_shared: req.body?.is_shared !== false,
+        // A shared preset lands on everyone's export menu: admins only.
+        is_shared: !!req.isAdmin && req.body?.is_shared !== false,
         created_by: req.user?.id ?? null,
         created_at: new Date()
       })
@@ -168,22 +204,27 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
 
     // Dotted relation columns resolve the same way the browser's related
     // columns do — batched per path over the exported ids.
+    // Each path is judged as the runner, hop by hop (readable collections,
+    // allowed fields, never a credential), and a leading M2O keeps only the
+    // related rows the runner can see — a parent outside their scope exports
+    // blank, as the browser shows it.
     const dottedValues = new Map<string, Map<string, string>>()
     if (dotted.length > 0 && rows.length > 0) {
-      const { resolvePathValues } = await import('../services/queues.js')
+      const { pathReadableBy, resolvePathValues } = await import('../services/queues.js')
       const relationsCache = new Map<string, CMSRelation[]>()
       const ids = rows.map((r) => String(r.id))
       await Promise.all(
         dotted.map(async (path) => {
           try {
-            const byRow = await resolvePathValues(
-              preset.collection,
-              ids,
-              path.split('.'),
-              relationsCache
-            )
+            const segments = path.split('.')
+            const hops = await pathReadableBy(user, preset.collection, segments, relationsCache)
+            if (!hops.readable) return
+            const seen = hops.firstHop
+              ? await visibleRelated(user, isAdmin, preset.collection, ids, hops.firstHop)
+              : null
+            const byRow = await resolvePathValues(preset.collection, ids, segments, relationsCache)
             const m = new Map<string, string>()
-            for (const [rowId, pv] of byRow) m.set(rowId, pv.value)
+            for (const [rowId, pv] of byRow) if (!seen || seen.has(rowId)) m.set(rowId, pv.value)
             dottedValues.set(path, m)
           } catch {
             // broken path exports blank

@@ -20,10 +20,13 @@ import {
   healthWord,
   hourBuckets,
   integrationPartnersRoutes,
+  lowerPct,
   mergeCallHistory,
   type OutboundListRow,
   pathFromUrl,
-  percentile
+  percentile,
+  pushOutcomes,
+  worseHealth
 } from '../../../routes/integration-partners.js'
 import type { FactUser } from '../../../services/submission-detail.js'
 
@@ -545,5 +548,37 @@ describe('GET /integration-partners/:id/calls/:callId', () => {
     expect(d.response_status).toBe(401)
     expect(d.error).toBe('HTTP 401')
     await app.close()
+  })
+})
+
+describe('push outcomes on the partner card (army3: Fusion IIP read Healthy while every push failed)', () => {
+  const since24 = new Date(Date.now() - 86_400_000)
+  const ago = (m: number) => new Date(Date.now() - m * 60_000)
+  it('counts 2xx pushes the partner refused as failures', () => {
+    const p = pushOutcomes(
+      [
+        { status: 'failed', updated_at: ago(10), last_error: 'reference already exists' },
+        { status: 'failed', updated_at: ago(30), last_error: 'reference already exists' }
+      ],
+      since24
+    )
+    expect(p).toMatchObject({ pushes24: 2, failures24: 2, lastOkAt: null })
+    expect(p.lastFailReason).toBe('reference already exists')
+    const pushHealth = healthWord({
+      calls24: p.pushes24,
+      failures24: p.failures24,
+      lastOkAt: p.lastOkAt,
+      lastFailAt: p.lastFailAt,
+      authFailing: false
+    })
+    expect(worseHealth('healthy', pushHealth)).toBe('failing')
+    expect(lowerPct(100, 0)).toBe(0)
+  })
+  it('leaves a partner whose pushes landed healthy', () => {
+    const p = pushOutcomes([{ status: 'accepted', updated_at: ago(5), last_error: null }], since24)
+    expect(p).toMatchObject({ pushes24: 1, failures24: 0, lastFailAt: null })
+    expect(worseHealth('healthy', 'healthy')).toBe('healthy')
+    expect(lowerPct(100, null)).toBe(100)
+    expect(lowerPct(null, null)).toBeNull()
   })
 })

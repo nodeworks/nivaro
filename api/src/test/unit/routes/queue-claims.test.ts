@@ -2,10 +2,12 @@ import Fastify from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Claiming is how an approver takes ownership of work off a shared worklist.
-// Two things must hold: (1) visibility — you cannot claim out of a queue you
-// were never allowed to read, and (2) the write-through — claiming self-adds
-// you as a pipeline instance owner, and releasing removes only the grant the
-// claim itself created (added_by = self), never an owner-group grant.
+// Three things must hold: (1) visibility — you cannot claim out of a queue you
+// were never allowed to read, (2) the write-through — claiming adds you as an
+// owner of the record's CURRENT step only when you already own it (or are an
+// admin): a claim never makes a non-owner an approver (army 2026-10-25), and
+// (3) releasing removes only the grant the claim itself created
+// (added_by = self), never an owner-group grant.
 
 const APPROVER_ROLE = 'role-workflow-approver'
 const OTHER_ROLE = 'role-other'
@@ -51,10 +53,21 @@ vi.mock('../../../services/queues.js', () => ({
   validateColumnFormats: vi.fn(() => null)
 }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+vi.mock('../../../services/branch-instances.js', () => ({ findRecordInstance: vi.fn() }))
+vi.mock('../../../services/record-access.js', () => ({
+  checkTransitionOwner: vi.fn(async () => ({
+    allowed: true,
+    message: '',
+    is_owner: true,
+    is_creator: false
+  }))
+}))
 
 import { db } from '../../../db/index.js'
 import { canReadQueue, queuesRoutes } from '../../../routes/queues.js'
+import { findRecordInstance } from '../../../services/branch-instances.js'
 import { fetchQueueItems } from '../../../services/queues.js'
+import { checkTransitionOwner } from '../../../services/record-access.js'
 
 function buildApp() {
   const app = Fastify({ logger: false })
@@ -90,7 +103,10 @@ interface Fx {
 
 function makeDbMock(fx: Fx) {
   const queue = Object.hasOwn(fx, 'queue') ? fx.queue : sharedQueue
-  const instance = Object.hasOwn(fx, 'instance') ? fx.instance : { id: 'inst-1' }
+  const instance = Object.hasOwn(fx, 'instance')
+    ? fx.instance
+    : { id: 'inst-1', collection: 'workflows', item: 'wf-1', current_state: 'state-1' }
+  vi.mocked(findRecordInstance).mockResolvedValue(instance as never)
 
   return vi.fn((table: string) => {
     switch (table) {
@@ -110,8 +126,10 @@ function makeDbMock(fx: Fx) {
         return {
           where: vi.fn((...args: unknown[]) => {
             fx.ownerWhereSpy?.(...args)
+            const first = vi.fn(() => Promise.resolve(fx.owner))
             return {
-              first: vi.fn(() => Promise.resolve(fx.owner)),
+              where: vi.fn(() => ({ first })),
+              first,
               delete: fx.ownerDelete ?? vi.fn(() => Promise.resolve(1))
             }
           }),
@@ -273,7 +291,7 @@ describe('POST /queues/:id/claim', () => {
     expect(claimInsert).not.toHaveBeenCalled()
   })
 
-  it('write-through: self-adds the claimer as a pipeline instance owner', async () => {
+  it('write-through: a current-step owner is added as owner of THAT step only', async () => {
     const ownerInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
     installDb({ ownerInsert })
 
@@ -282,10 +300,51 @@ describe('POST /queues/:id/claim', () => {
     expect(ownerInsert).toHaveBeenCalledTimes(1)
     expect(ownerInsert.mock.calls[0][0]).toMatchObject({
       instance: 'inst-1',
-      state: null,
+      state: 'state-1',
       user: 'user-approver',
       added_by: 'user-approver'
     })
+  })
+
+  it('a claimer who does not own the step gets the queue claim but never an owner grant', async () => {
+    vi.mocked(checkTransitionOwner).mockResolvedValueOnce({
+      allowed: false,
+      message: 'Only the owner of the current step can make this move.',
+      is_owner: false,
+      is_creator: false
+    })
+    const claimInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
+    const ownerInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
+    installDb({ claimInsert, ownerInsert })
+
+    const res = await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
+
+    expect(res.statusCode).toBe(201)
+    expect(claimInsert).toHaveBeenCalledTimes(1)
+    expect(ownerInsert).not.toHaveBeenCalled()
+  })
+
+  it('an admin claim is added as owner of the current step without the owner check', async () => {
+    login('user-admin', null, true)
+    const ownerInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
+    installDb({ ownerInsert })
+
+    await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
+
+    expect(checkTransitionOwner).not.toHaveBeenCalled()
+    expect(ownerInsert.mock.calls[0][0]).toMatchObject({ state: 'state-1', user: 'user-admin' })
+  })
+
+  it('a finished pipeline has no step to own — no grant', async () => {
+    const ownerInsert = vi.fn((_row: unknown) => Promise.resolve([1]))
+    installDb({
+      instance: { id: 'inst-1', current_state: 'done', completed_at: new Date() },
+      ownerInsert
+    })
+
+    await post('/queues/00000000-0000-4000-8000-000000000001/claim', claimBody)
+
+    expect(ownerInsert).not.toHaveBeenCalled()
   })
 
   it('does not duplicate an owner grant the user already holds', async () => {

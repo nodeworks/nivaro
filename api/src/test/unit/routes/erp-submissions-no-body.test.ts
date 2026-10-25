@@ -19,6 +19,8 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
 vi.mock('../../../services/external-apis.js', () => ({ callExternalApi: vi.fn() }))
+// The per-record gate has its own tests (erp-submissions-record-gate.test.ts).
+vi.mock('../../../services/erp-record-gate.js', () => ({ recordRefusal: vi.fn(async () => null) }))
 
 import { db } from '../../../db/index.js'
 import {

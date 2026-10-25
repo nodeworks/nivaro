@@ -19,6 +19,14 @@ vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
+// The record's current value is read as the caller (readOne): a record the
+// caller cannot open (User Scope, row filter) previews as a new one.
+const record = vi.hoisted(() => ({ row: null as Record<string, unknown> | null }))
+vi.mock('../../../services/items.js', async (orig) => ({
+  ...(await orig<object>()),
+  readOne: vi.fn(async () => record.row)
+}))
+
 import { db } from '../../../db/index.js'
 import { itemsRoutes } from '../../../routes/items.js'
 import { can } from '../../../services/permissions.js'
@@ -53,7 +61,10 @@ function makeDbMock(opts: {
   })
 }
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  vi.clearAllMocks()
+  record.row = null
+})
 
 describe('POST /items/:collection/auto-id-preview', () => {
   it('400s when the field has no auto_id config', async () => {
@@ -109,6 +120,7 @@ describe('POST /items/:collection/auto-id-preview', () => {
         recordRow: { sku: 'INV-0007' }
       }) as unknown as typeof db
     )
+    record.row = { id: 42, sku: 'INV-0007' }
 
     const app = buildApp()
     await app.ready()
@@ -122,6 +134,30 @@ describe('POST /items/:collection/auto-id-preview', () => {
     expect(res.statusCode).toBe(200)
     const body = JSON.parse(res.body) as { preview: string }
     expect(body.preview).toBe('INV-0007')
+  })
+
+  it('never reveals the suffix of a record the caller cannot read', async () => {
+    vi.mocked(db).mockImplementation(
+      makeDbMock({
+        fieldRows: [
+          { field: 'sku', options: JSON.stringify({ auto_id: { pattern: 'INV-{seq4}' } }) }
+        ],
+        recordRow: { sku: 'INV-0007' }
+      }) as unknown as typeof db
+    )
+    record.row = null
+
+    const app = buildApp()
+    await app.ready()
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/items/invoices-record-hidden/auto-id-preview',
+      payload: { field: 'sku', record_id: 42 }
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect((JSON.parse(res.body) as { preview: string }).preview).toBe('INV-####')
   })
 
   it('403s when the caller lacks read permission on the collection', async () => {

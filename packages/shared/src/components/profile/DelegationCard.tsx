@@ -10,6 +10,14 @@ import { Field, PersonChip, SectionCard, Toggle } from './primitives'
 
 // ── Out of office / delegation ───────────────────────────────────────────────
 
+type DelegatePreview = {
+  approx_open_approvals: number
+  coverage_warnings: string[]
+  /** Of the records the person owns approvals on: how many the picked
+   *  delegate cannot open (newer servers). */
+  delegate_reach?: { owned: number; hidden: number } | null
+}
+
 export function DelegationCard({
   user,
   onSaved,
@@ -70,24 +78,29 @@ export function DelegationCard({
 
   // Delegation preview (#414): what the delegate would inherit, fetched when
   // a delegate is picked while going OOO.
-  const { data: delegatePreview } = useQuery<{
-    approx_open_approvals: number
-    coverage_warnings: string[]
-  }>({
-    queryKey: ['delegate-preview'],
+  // Keyed on the picked delegate: the server also says how many of those
+  // approvals this delegate can open (`delegate_reach`) — a delegate who can
+  // see none of them would stall every one.
+  const { data: delegatePreview } = useQuery<DelegatePreview>({
+    queryKey: ['delegate-preview', delegate],
     queryFn: () =>
       client
-        .request<{ data: { approx_open_approvals: number; coverage_warnings: string[] } }>(
-          get('/users/me/delegate-preview')
+        .request<{ data: DelegatePreview }>(
+          get('/users/me/delegate-preview', delegate ? { delegate_id: delegate } : undefined)
         )
         .then((r) => r.data),
     enabled: !forUser && !!delegate && (ooo || (!!oooStart && !!oooEnd)),
     staleTime: 60_000
   })
   const [saveWarnings, setSaveWarnings] = useState<string[]>([])
+  // 409 DELEGATE_CANNOT_SEE: the server's sentence, and Save anyway resends
+  // with acknowledge_unreachable.
+  const [unreachable, setUnreachable] = useState<string | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new pick clears the old refusal
+  useEffect(() => setUnreachable(null), [delegate])
 
   const save = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ acknowledge = false }: { acknowledge?: boolean } = {}) => {
       const body = {
         is_out_of_office: ooo,
         delegate_id: delegate,
@@ -97,7 +110,10 @@ export function DelegationCard({
         ooo_start: oooStart ? new Date(`${oooStart}T00:00:00`).toISOString() : null,
         ooo_end: oooEnd ? new Date(`${oooEnd}T23:59:59`).toISOString() : null
       }
-      if (!forUser) return client.request(setMyDelegate(body))
+      if (!forUser)
+        return acknowledge
+          ? client.request(post('/users/me/delegate', { ...body, acknowledge_unreachable: true }))
+          : client.request(setMyDelegate(body))
       // Admin path: the delegation route validates the delegate and hands
       // open tasks over; the window rides the plain user PATCH.
       const res = await client.request(
@@ -116,7 +132,18 @@ export function DelegationCard({
       // OOO conflict warnings (#338): the save reports teams this window guts.
       const warnings = (res as { warnings?: string[] })?.warnings ?? []
       setSaveWarnings(warnings)
+      setUnreachable(null)
       onSaved()
+    },
+    onError: (err) => {
+      const r = (
+        err as {
+          response?: { code?: string; error?: string; data?: { code?: string; error?: string } }
+        }
+      ).response
+      const body = r?.data ?? r
+      if (body?.code === 'DELEGATE_CANNOT_SEE')
+        setUnreachable(body.error || 'Your delegate cannot open the records you own approvals on.')
     }
   })
 
@@ -159,7 +186,7 @@ export function DelegationCard({
             <button
               type='button'
               disabled={save.isPending}
-              onClick={() => save.mutate()}
+              onClick={() => save.mutate({})}
               className='inline-flex h-7 items-center gap-1 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white transition-opacity disabled:opacity-50'
             >
               {save.isPending ? (
@@ -217,6 +244,48 @@ export function DelegationCard({
           Your delegate would inherit{' '}
           <b className='tabular-nums'>{delegatePreview.approx_open_approvals}</b> open approval
           {delegatePreview.approx_open_approvals === 1 ? '' : 's'} while you're out.
+        </div>
+      )}
+      {delegate && delegatePreview?.delegate_reach && delegatePreview.delegate_reach.hidden > 0 && (
+        <div
+          className='mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'
+          data-delegate-reach
+        >
+          Your delegate cannot open{' '}
+          <b className='tabular-nums'>
+            {delegatePreview.delegate_reach.hidden === delegatePreview.delegate_reach.owned
+              ? 'any'
+              : delegatePreview.delegate_reach.hidden}
+          </b>{' '}
+          of the {delegatePreview.delegate_reach.owned} record
+          {delegatePreview.delegate_reach.owned === 1 ? '' : 's'} you own approvals on — those would
+          wait for you. Pick someone who can see them.
+        </div>
+      )}
+      {unreachable && (
+        <div
+          className='mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300'
+          role='alert'
+          data-delegate-unreachable
+        >
+          <p>{unreachable}</p>
+          <div className='mt-1.5 flex gap-1.5'>
+            <button
+              type='button'
+              disabled={save.isPending}
+              onClick={() => save.mutate({ acknowledge: true })}
+              className='h-7 rounded-md border border-red-300 px-2.5 text-[11.5px] font-medium hover:bg-red-100 disabled:opacity-50 dark:border-red-500/40 dark:hover:bg-red-500/15'
+            >
+              Save anyway
+            </button>
+            <button
+              type='button'
+              onClick={() => setUnreachable(null)}
+              className='h-7 rounded-md px-2.5 text-[11.5px] text-red-600 hover:underline dark:text-red-300'
+            >
+              Pick someone else
+            </button>
+          </div>
         </div>
       )}
       {/* OOO conflict warnings (#338) — reported by the save */}

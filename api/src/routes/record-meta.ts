@@ -2,12 +2,13 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { findRecordInstance, type InstanceIdentity } from '../services/branch-instances.js'
-import { can } from '../services/permissions.js'
+import { recordRefusal } from '../services/erp-record-gate.js'
 
 /**
  * Record & Form UX sprint routes: audience panel (#123), integrations tab
- * (#241), owner history (#144). All read-only aggregations, read-gated by
- * can() on the record's collection.
+ * (#241), owner history (#144). All read-only aggregations, read-gated on
+ * the record itself (recordRefusal: visible to the caller, User Scopes and
+ * row filters included — a collection-level can() alone leaked them, army3).
  */
 
 export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
@@ -18,8 +19,8 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
     '/audience/:collection/:item',
     async (req, reply) => {
       const { collection, item } = req.params
-      if (!(await can(req.user!, 'read', collection)))
-        return reply.code(403).send({ error: 'Forbidden' })
+      const refusal = await recordRefusal(req, collection, String(item), 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
 
       // Field watchers on this collection (record-scoped or collection-wide).
       const watches = (await db('nivaro_field_watches as w')
@@ -250,8 +251,8 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
     '/record-integrations/:collection/:item',
     async (req, reply) => {
       const { collection, item } = req.params
-      if (!(await can(req.user!, 'read', collection)))
-        return reply.code(403).send({ error: 'Forbidden' })
+      const refusal = await recordRefusal(req, collection, String(item), 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
       const [erp, webhooks] = await Promise.all([
         db('nivaro_erp_submissions')
           .where({ collection, item: String(item) })
@@ -282,8 +283,8 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
     '/owner-history/:collection/:item',
     async (req, reply) => {
       const { collection, item } = req.params
-      if (!(await can(req.user!, 'read', collection)))
-        return reply.code(403).send({ error: 'Forbidden' })
+      const refusal = await recordRefusal(req, collection, String(item), 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
       const inst = await findRecordInstance(collection, String(item))
       if (!inst) return reply.send({ data: [] })
       const history = (await db('nivaro_workflow_history as h')

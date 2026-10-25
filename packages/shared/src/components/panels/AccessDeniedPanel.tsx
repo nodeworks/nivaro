@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Check, Lock, Send } from 'lucide-react'
-import { toast } from 'sonner'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 
@@ -17,6 +17,20 @@ interface AccessReason {
   dimension?: string
   dimension_label?: string
   allowed_values?: string[]
+}
+
+/** What /access-explain's own 404 means: there is no such record to
+ *  explain (an id no record can have — a 400-digit number, junk). Reading it
+ *  as "no answer" titled the panel "You can't view this record". */
+const NOT_FOUND_EXPLAIN: { access: boolean; reasons: AccessReason[] } = {
+  access: false,
+  reasons: [{ type: 'not_found', message: 'There is no record with this id.' }]
+}
+export function explainMissing(err: unknown): boolean {
+  // The SDK puts the code on err.status; an axios-backed client on err.response.
+  const e = err as { status?: number; response?: { status?: number } } | null
+  const status = e?.status ?? e?.response?.status
+  return status === 404
 }
 
 export function AccessDeniedPanel({
@@ -48,7 +62,7 @@ export function AccessDeniedPanel({
           get(`/access-explain/${collection}/${encodeURIComponent(itemId)}`)
         )
         .then((r) => r.data ?? null)
-        .catch(() => null),
+        .catch((err: unknown) => (explainMissing(err) ? NOT_FOUND_EXPLAIN : null)),
     staleTime: 30_000
   })
 
@@ -66,7 +80,7 @@ export function AccessDeniedPanel({
             <h2 className='text-[15px] font-semibold text-slate-800 dark:text-slate-100'>
               {notFound ? 'Record not found' : "You can't view this record"}
             </h2>
-            <p className='text-[12px] text-slate-500 dark:text-slate-400'>
+            <p className='break-all text-[12px] text-slate-500 dark:text-slate-400'>
               {collection.replace(/_/g, ' ')} · #{itemId}
             </p>
           </div>
@@ -89,16 +103,16 @@ export function AccessDeniedPanel({
             ))
           ) : (
             <div className='rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[13px] leading-relaxed text-slate-700 dark:border-border dark:bg-muted/40 dark:text-slate-300'>
-              This record could not be loaded. It may have been deleted, or an access rule may
-              be hiding it.
+              This record could not be loaded. It may have been deleted, or an access rule may be
+              hiding it.
             </div>
           )}
         </div>
 
         {!notFound && !isLoading && reasons.length > 0 && (
           <p className='mt-4 text-[12px] text-slate-500 dark:text-slate-400'>
-            If you need access, request it below — an administrator gets the record and the
-            reason attached, and can adjust your role's permissions or access filters.
+            If you need access, request it below — an administrator gets the record and the reason
+            attached, and can adjust your role's permissions or access filters.
           </p>
         )}
 

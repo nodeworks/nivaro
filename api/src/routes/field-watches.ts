@@ -1,8 +1,8 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { can } from '../services/permissions.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 
 interface FieldWatch {
   id: number
@@ -32,6 +32,34 @@ function formatWatch(
   }
 }
 
+/**
+ * May the caller watch this field (of this record)? A watch notification
+ * carries the old and new value, so the field must be one they may read and
+ * the record one they can open (readOne: row filter, User Scopes). Answers
+ * the refusal, or null when they may.
+ */
+async function mayWatch(
+  req: FastifyRequest,
+  collection: string,
+  field: string,
+  itemId: string | null
+): Promise<{ status: number; error: string } | null> {
+  if (req.isAdmin) return null
+  const known = await db('nivaro_fields').where({ collection, field }).first('field')
+  if (!known) return { status: 400, error: `Unknown field: ${field}` }
+  const allowed = await getAllowedFields(req.user!, 'read', collection)
+  if (allowed !== null && !allowed.includes('*') && !allowed.includes(field))
+    return { status: 403, error: 'Forbidden' }
+  if (itemId != null) {
+    const { readOne } = await import('../services/items.js')
+    const row = await readOne(req.user!, collection, itemId, req.workspaceId ?? undefined, [
+      'id'
+    ]).catch(() => null)
+    if (!row) return { status: 404, error: 'Not found' }
+  }
+  return null
+}
+
 export async function fieldWatchesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
 
@@ -43,7 +71,11 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
       // Admins see all watches with subscriber count + is_subscribed for self
       const rows = await db('nivaro_field_watches as fw')
         .leftJoin(
-          db('nivaro_field_watch_subscribers').count('id as cnt').groupBy('watch').as('sc'),
+          db('nivaro_field_watch_subscribers')
+            .select('watch')
+            .count('id as cnt')
+            .groupBy('watch')
+            .as('sc'),
           'fw.id',
           'sc.watch'
         )
@@ -76,7 +108,11 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
     const rows = await db('nivaro_field_watches as fw')
       .join('nivaro_field_watch_subscribers as sub', 'fw.id', 'sub.watch')
       .leftJoin(
-        db('nivaro_field_watch_subscribers').count('id as cnt').groupBy('watch').as('sc'),
+        db('nivaro_field_watch_subscribers')
+          .select('watch')
+          .count('id as cnt')
+          .groupBy('watch')
+          .as('sc'),
         'fw.id',
         'sc.watch'
       )
@@ -175,6 +211,8 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
       if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
+      const gate = await mayWatch(req, collection, field, String(item_id))
+      if (gate) return reply.code(gate.status).send({ error: gate.error })
       let watch = (await db('nivaro_field_watches')
         .where({ collection, field, item_id: String(item_id) })
         .first()) as { id: number } | undefined
@@ -363,10 +401,14 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
       .first()
     if (!watch) return reply.code(404).send({ error: 'Not found' })
 
-    // Gate: user must have read access to the watched collection
+    // Gate: user must have read access to the watched collection, the field
+    // and (for a record watch) the record itself.
     if (!req.isAdmin && !(await can(req.user!, 'read', watch.collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
+    const scoped = (watch as { item_id?: string | null }).item_id
+    const gate = await mayWatch(req, watch.collection, watch.field, scoped ?? null)
+    if (gate) return reply.code(gate.status).send({ error: gate.error })
 
     const existing = await db<FieldWatchSubscriber>('nivaro_field_watch_subscribers')
       .where({ watch: Number(id), user: userId })

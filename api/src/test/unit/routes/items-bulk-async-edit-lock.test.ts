@@ -1,11 +1,12 @@
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// POST /items/:collection/bulk?async=1 runs in the background without the
-// request. The approval-state edit lock (edit-lock.ts) skips writes that carry
-// no request, so the background run hands it the caller's admin flag: a
-// non-owner's async update of an edit-locked record is refused per row, as
-// the synchronous path refuses it, and the job itself does not fail.
+// POST /items/:collection/bulk?async=1 runs in the background after the
+// answer. Request-scoped guards (the approval-state edit lock, the EFP
+// forecast closed-month guard) skip writes that carry no request, so the run
+// carries the caller's request: a non-owner's async update of an edit-locked
+// record is refused per row, as the synchronous path refuses it, and the job
+// itself does not fail.
 
 const who = vi.hoisted(() => ({ isAdmin: false }))
 vi.mock('../../../middleware/authenticate.js', () => ({
@@ -40,32 +41,16 @@ vi.mock('../../../services/permissions.js', async (orig) => ({
   ...(await orig<object>()),
   can: vi.fn(async () => true)
 }))
-const lock = vi.hoisted(() => ({
-  calls: [] as Array<{ ids?: unknown[]; isAdmin: unknown; hasReq: boolean }>
+// Nobody else holds a record's form lock here (item-lock-guard.ts has its own tests).
+vi.mock('../../../services/item-lock-guard.js', async (orig) => ({
+  ...(await orig<object>()),
+  editLockRefusal: vi.fn(async () => null)
 }))
-vi.mock('../../../services/edit-lock.js', async (orig) => {
-  const real = await orig<typeof import('../../../services/edit-lock.js')>()
-  return {
-    ...real,
-    assertNotEditLocked: vi.fn(
-      async (
-        _u: unknown,
-        _c: string,
-        opts: { ids?: Array<string | number> },
-        req?: { isAdmin?: boolean }
-      ) => {
-        lock.calls.push({ ids: opts.ids, isAdmin: req?.isAdmin, hasReq: !!req })
-        if (!req) return
-        if (!req.isAdmin && (opts.ids ?? []).map(String).includes('LOCKED'))
-          throw new real.EditLockedError(
-            'This record is at Level 1 Approval — only the person who created it, the owners of that step and administrators can change it.'
-          )
-      }
-    )
-  }
-})
+// The items service runs the approval-state edit lock itself (edit-lock.ts,
+// covered on its own); here updateOne stands in for it and records the
+// request each row arrived with.
 const svc = vi.hoisted(() => ({
-  updateOne: vi.fn(async (_u: unknown, _c: string, id: string) => ({ id })),
+  calls: [] as Array<{ id: string; hasReq: boolean; isAdmin: unknown; user: unknown }>,
   createOneReported: vi.fn(async () => ({
     id: 'NEW',
     item: { id: 'NEW' },
@@ -74,10 +59,29 @@ const svc = vi.hoisted(() => ({
     upserted: false
   }))
 }))
-vi.mock('../../../services/items.js', async (orig) => ({
-  ...(await orig<object>()),
-  ...svc
-}))
+vi.mock('../../../services/items.js', async (orig) => {
+  const { EditLockedError } = await import('../../../services/edit-lock.js')
+  return {
+    ...(await orig<object>()),
+    createOneReported: svc.createOneReported,
+    updateOne: vi.fn(
+      async (
+        _u: unknown,
+        _c: string,
+        id: string,
+        _p: unknown,
+        req?: { isAdmin?: boolean; user?: unknown }
+      ) => {
+        svc.calls.push({ id, hasReq: !!req, isAdmin: req?.isAdmin, user: req?.user })
+        if (!req?.isAdmin && id === 'LOCKED')
+          throw new EditLockedError(
+            'This record is at Level 1 Approval — only the person who created it, the owners of that step and administrators can change it.'
+          )
+        return { id }
+      }
+    )
+  }
+})
 
 import { itemsRoutes } from '../../../routes/items.js'
 
@@ -106,8 +110,7 @@ async function finalState() {
 
 beforeEach(() => {
   stored.clear()
-  lock.calls.length = 0
-  svc.updateOne.mockClear()
+  svc.calls.length = 0
   run.complete.mockClear()
   run.fail.mockClear()
   who.isAdmin = false
@@ -130,10 +133,11 @@ describe('POST /items/:collection/bulk?async=1 — approval-state edit lock', ()
     expect(state.status).toBe('completed')
     expect(state.results[0]).toMatchObject({ index: 0, status: 403, code: 'EDIT_LOCKED' })
     expect(state.results[1]).toMatchObject({ index: 1, status: 200, id: 'OPEN' })
-    // The refused row never reached the write.
-    expect(svc.updateOne.mock.calls.map((c) => c[2])).toEqual(['OPEN'])
-    // The gate ran with the caller's context, not skipped for a missing request.
-    expect(lock.calls.filter((c) => c.hasReq && c.isAdmin === false).length).toBeGreaterThan(0)
+    // Every row reached the service with the caller's request carried into the
+    // background run, so request-scoped guards judge it as they would inline.
+    expect(svc.calls.map((c) => c.id)).toEqual(['LOCKED', 'OPEN'])
+    expect(svc.calls.every((c) => c.hasReq && c.isAdmin === false)).toBe(true)
+    expect(svc.calls[0].user).toMatchObject({ id: 'USER-1' })
     expect(run.complete).toHaveBeenCalled()
     expect(run.fail).not.toHaveBeenCalled()
   })

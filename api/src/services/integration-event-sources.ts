@@ -282,7 +282,9 @@ function mapSubmission(r: Record<string, unknown>): EventEntry {
     context: failed
       ? String(r.last_error ?? '').slice(0, 200)
       : ((r.requested_via as string | null | undefined) ?? null),
-    created_at: new Date(r.created_at as string).toISOString(),
+    // A retried push is news at its newest attempt, not its first (army3):
+    // updated_at moves on every send, created_at never does.
+    created_at: new Date((r.updated_at ?? r.created_at) as string).toISOString(),
     status: failed ? 'error' : 'ok',
     user: (r.requested_by as string | null | undefined) ?? null,
     collection: (r.collection as string | null) ?? null,
@@ -306,6 +308,7 @@ async function submissionColumns(): Promise<string[]> {
     's.attempts',
     's.last_error',
     's.created_at',
+    's.updated_at',
     's.payload',
     'a.name as api_name',
     ...requester.map((c) => `s.${c}`),
@@ -327,10 +330,10 @@ const outbound: EventSourceDef = {
     const q = db('nivaro_erp_submissions as s')
       .leftJoin('nivaro_external_apis as a', 'a.id', 's.external_api')
       .select(...(await submissionColumns()))
-      .orderBy('s.created_at', 'desc')
+      .orderBy('s.updated_at', 'desc')
       .orderBy('s.id', 'desc')
       .limit(Math.min(opts.limit, 500))
-    if (opts.before) q.where('s.created_at', '<', new Date(opts.before))
+    if (opts.before) q.where('s.updated_at', '<', new Date(opts.before))
     if (opts.status === 'error') q.whereIn('s.status', ['failed', 'rejected'])
     if (opts.status === 'ok') q.whereIn('s.status', ['accepted', 'pending'])
     if (opts.status === 'info') return []

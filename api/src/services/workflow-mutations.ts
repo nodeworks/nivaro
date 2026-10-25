@@ -8,6 +8,7 @@ import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { assertInstanceAccess, InstanceAccessError } from './instance-guard.js'
 import { writeStartHistory } from './instance-start.js'
+import { commentMissing, TRANSITION_COMMENT_REQUIRED } from './manual-transition-gate.js'
 import { originFields } from './note-authorship.js'
 import { parseJson } from './pipeline-engine.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
@@ -254,6 +255,14 @@ export async function executeWorkflowTransition(opts: {
     if (!owner.allowed) {
       throw new WorkflowMutationError(403, owner.message, { code: TRANSITION_OWNER_REQUIRED })
     }
+  }
+
+  // A move marked "note required" needs one here too (the record panel
+  // enforces it only in the browser).
+  if (commentMissing(transition as { comment_mode?: string | null }, opts.comment)) {
+    throw new WorkflowMutationError(422, 'A note is required for this move.', {
+      code: TRANSITION_COMMENT_REQUIRED
+    })
   }
 
   // Data-entry gate: incomplete child-row / record-field requirements block

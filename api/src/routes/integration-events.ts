@@ -3,6 +3,7 @@ import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chainIdsForRoots, recordReplayRoot } from '../services/chain-roots.js'
+import { recordRefusal } from '../services/erp-record-gate.js'
 import { buildChainPath, buildEventPath, type EventPath } from '../services/event-path/index.js'
 import { chainsTouchingRecord, findRecordRef } from '../services/event-path/record-ref.js'
 import { redactError } from '../services/event-path/redact.js'
@@ -283,11 +284,27 @@ export async function integrationEventsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'This integration source cannot replay events' })
     if (body.entry_id == null || body.entry_id === '')
       return reply.code(400).send({ error: 'entry_id is required' })
-    // Replaying re-applies data to the provider's collection — an update, not a read.
-    if (!req.isAdmin && !(await can(req.user!, 'update', provider.collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
-    }
     const entryId = String(body.entry_id)
+    // Replaying re-applies data to the entry's record — the caller must be able
+    // to change THAT record (visible, updatable, not edit-locked), not just the
+    // collection (army3: any approver could replay a shipment on any request).
+    // A provider that cannot name an entry's record replays for admins only.
+    if (!req.isAdmin) {
+      if (!provider.get) return reply.code(403).send({ error: 'Forbidden' })
+      const entry = await provider.get(entryId).catch(() => null)
+      if (!entry?.item_id) return reply.code(404).send({ error: 'Event not found' })
+      const refusal = await recordRefusal(
+        req,
+        entry.collection || provider.collection,
+        String(entry.item_id),
+        'update'
+      )
+      if (refusal) {
+        return refusal.code === 404
+          ? reply.code(404).send({ error: 'Event not found' })
+          : reply.code(refusal.code).send(refusal.body)
+      }
+    }
     // The replay runs on this request's chain; mark it as a replay of the
     // chain the original event started (null when that one predates chains).
     const original = (await chainIdsForRoots(provider.id, [entryId])).get(entryId)

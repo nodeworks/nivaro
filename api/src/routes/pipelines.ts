@@ -23,6 +23,11 @@ import { selectInChunks } from '../services/db-batch.js'
 import { editLockVerdictFor } from '../services/edit-lock.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
+import {
+  type GateInstance,
+  type GateTransition,
+  manualTransitionRefusal
+} from '../services/manual-transition-gate.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
@@ -39,14 +44,10 @@ import {
   checkTransitionOwner,
   compileAccessGates,
   offeredToActor,
-  TRANSITION_OWNER_REQUIRED,
   visibleIds
 } from '../services/record-access.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
-import {
-  evaluateTransitionRequirements,
-  IDENTIFIER_RE
-} from '../services/transition-requirements.js'
+import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import {
   pickRerunAction,
   runTransitionActions,
@@ -567,6 +568,34 @@ async function readableIds(req: FastifyRequest, collection: string, ids: string[
   const gates = await compileAccessGates(req.user, collection)
   const ok = await visibleIds(gates, ids)
   return ids.filter((i) => ok.has(i))
+}
+
+/** Addendum ids (of those given) whose parent record the caller can see. */
+async function readableAddendumIds(req: FastifyRequest, ids: string[]): Promise<string[]> {
+  const numeric = ids.filter((i) => /^\d{1,12}$/.test(i))
+  if (numeric.length === 0 || !req.user) return []
+  const rows = (await selectInChunks(numeric, 2000, (chunk) =>
+    db(ADDENDUM_COLLECTION).whereIn('id', chunk).select('id', 'parent_collection', 'parent_id')
+  )) as Array<{ id: unknown; parent_collection: string; parent_id: unknown }>
+  const byParent = new Map<string, Array<{ id: string; parent: string }>>()
+  for (const r of rows) {
+    const list = byParent.get(r.parent_collection) ?? []
+    list.push({ id: String(r.id), parent: String(r.parent_id) })
+    byParent.set(r.parent_collection, list)
+  }
+  const out: string[] = []
+  for (const [parentCollection, list] of byParent) {
+    if (!(await can(req.user, 'read', parentCollection))) continue
+    const seen = new Set(
+      await readableIds(
+        req,
+        parentCollection,
+        list.map((l) => l.parent)
+      )
+    )
+    for (const l of list) if (seen.has(l.parent)) out.push(l.id)
+  }
+  return out
 }
 
 export async function pipelinesRoutes(app: FastifyInstance) {
@@ -1980,7 +2009,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   })
 
   // Flow map — transition volumes for a template over a period (Sankey).
-  app.get('/:id/flow-map', { preHandler: requireAuth }, async (req, reply) => {
+  // Admin: company-wide counts for the pipeline editor (cumulative-flow is the
+  // viewer-scoped one).
+  app.get('/:id/flow-map', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const days = Math.min(730, Math.max(1, Number((req.query as { days?: string }).days) || 90))
     const since = new Date(Date.now() - days * 86_400_000)
@@ -2039,7 +2070,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Replay — daily state distribution reconstruction for the time-lapse.
   // Baseline = each instance's state at window start (aggregated in SQL);
   // then transition events sweep forward as +1/-1 deltas per day.
-  app.get('/:id/replay', { preHandler: requireAuth }, async (req, reply) => {
+  app.get('/:id/replay', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const days = Math.min(365, Math.max(7, Number((req.query as { days?: string }).days) || 90))
     const start = new Date(Date.now() - days * 86_400_000)
@@ -2260,6 +2291,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
+    // The record itself must be visible (row filter, User Scopes) — the
+    // simulation echoes its values and owners.
+    if (!(await recordReadGate(req, reply, collection, item))) return
 
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
@@ -2299,6 +2333,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
     const userRole = req.user?.role ?? null
     const isAdmin = req.isAdmin ?? false
+    // Condition values are echoed only for fields the caller's policy reads.
+    const readable = isAdmin ? null : await getAllowedFields(req.user!, 'read', collection)
+    const mayRead = (f: string) => !readable || readable.includes('*') || readable.includes(f)
 
     const simTransitions = transitions.map((tx) => {
       const fromOk = tx.from_state === null || tx.from_state === currentState
@@ -2309,7 +2346,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           field: r.field,
           op: r.op,
           value: r.value ?? null,
-          record_value: record[r.field] ?? null,
+          record_value: mayRead(r.field) ? (record[r.field] ?? null) : null,
           passed: evalConditionRule(r, record)
         }))
       const conditionsPass = ruleResults.every((r) => r.passed)
@@ -2694,86 +2731,21 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         .first()
       if (!transition) return reply.code(404).send({ error: 'Transition not found' })
 
-      // A completed instance normally refuses transitions — EXCEPT when the
-      // template explicitly authors an escape hatch out of the terminal state
-      // the record sits in (Uncancel: canceled → previous). applyTransition
-      // clears completed_at when the resolved target is non-terminal.
-      if (instance.completed_at) {
-        const escapes =
-          String(transition.from_state ?? '').toUpperCase() ===
-          String(instance.current_state ?? '').toUpperCase()
-        if (!escapes) return reply.code(400).send({ error: 'Pipeline is already completed' })
-      }
-
-      // Validate the transition is valid from current state
-      const fromOk =
-        transition.from_state === null || transition.from_state === instance.current_state
-      if (!fromOk) {
-        return reply.code(400).send({ error: 'Transition is not valid from the current state' })
-      }
-
-      // Automatic transitions belong to the engine — never user-executable
-      if (coerceBool(transition.auto_trigger)) {
-        return reply.code(400).send({ error: 'Automatic transitions cannot be executed manually' })
-      }
-
-      // Check role permission
-      const isAdmin = req.isAdmin ?? false
-      if (!isAdmin && transition.required_roles) {
-        const roles = parseJson(transition.required_roles) as string[] | null
-        if (roles && roles.length > 0) {
-          const userRole = req.user?.role ?? null
-          if (!userRole || !roles.includes(userRole)) {
-            return reply.code(403).send({ error: 'You do not have permission for this transition' })
-          }
-        }
-      }
-
-      // Owner-only (#794): the caller must own the current step — delegates
-      // standing in for an out-of-office owner included, admins exempt.
-      if (coerceBool(transition.require_owner) && req.user) {
-        const owner = await checkTransitionOwner({
-          user: req.user,
-          isAdmin,
-          collection,
-          item,
-          instanceId: String(instance.id),
-          allowCreator: coerceBool(transition.allow_creator)
-        })
-        if (!owner.allowed) {
-          return reply.code(403).send({ error: owner.message, code: TRANSITION_OWNER_REQUIRED })
-        }
-      }
-
-      // Transition requirements gate: block on incomplete child-row data before
-      // even considering condition rules — a data-entry gate takes priority over
-      // conditional branching, and API callers can't bypass it.
-      if (transition.requirements) {
-        const blocking = await evaluateTransitionRequirements(
-          db,
-          transition.requirements,
-          item,
-          req.log,
-          collection,
-          // The requirements dialog's own re-submit: the person just reviewed
-          // the rows, so a `review_when` entry no longer asks again.
-          { reviewed: body.reviewed === true }
-        )
-        if (blocking) {
-          return reply.code(422).send({ error: 'TRANSITION_REQUIREMENTS', requirements: blocking })
-        }
-      }
-
-      // Conditional branching guard: re-fetch the item and revalidate condition
-      // rules server-side — the client's view may be stale.
-      if (transition.condition_rules) {
-        const conditionRecord = await fetchRecordForConditions(collection, item, [
-          transition.condition_rules
-        ])
-        if (!evaluateConditionRules(transition.condition_rules, conditionRecord)) {
-          return reply.code(409).send({ error: 'Transition conditions not met' })
-        }
-      }
+      // The shared manual-transition gate chain: completed/escape, from-state,
+      // auto refusal, roles, owner-only, required note, requirements and
+      // condition rules — the same chain branch and bulk transitions run.
+      const refusal = await manualTransitionRefusal({
+        user: req.user,
+        isAdmin: req.isAdmin ?? false,
+        collection,
+        item,
+        instance: instance as unknown as GateInstance,
+        transition: transition as unknown as GateTransition,
+        comment: body.comment ?? null,
+        reviewed: body.reviewed === true,
+        log: req.log
+      })
+      if (refusal) return reply.code(refusal.status).send(refusal.body)
 
       // Shared mutation chain (instance update, history, materialized queue
       // sync, state_field mirror incl. state_field_map, transition actions).
@@ -2968,6 +2940,22 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     if (!binding && collection !== ADDENDUM_COLLECTION) return reply.send({ data: null })
     if (ids && ids.length === 0) {
       return reply.send({ data: { binding: binding ?? null, instances: {} } })
+    }
+    // Every record's state is a fact about the record: non-admins name the
+    // records (ids) and get only the ones they can see — an addendum through
+    // its parent record.
+    if (!req.isAdmin) {
+      if (!ids) return reply.code(400).send({ error: 'ids is required' })
+      const allowed =
+        collection === ADDENDUM_COLLECTION
+          ? await readableAddendumIds(req, ids)
+          : (await can(req.user!, 'read', collection))
+            ? await readableIds(req, collection, ids)
+            : []
+      ids.splice(0, ids.length, ...allowed)
+      if (ids.length === 0) {
+        return reply.send({ data: { binding: binding ?? null, instances: {} } })
+      }
     }
 
     const rows = await db('nivaro_workflow_instances as i')
@@ -3888,8 +3876,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   // Full owner matrix for a template: all states → groups → users.
   // No record context — returns the raw configured groups.
-  // Useful for SDK / admin reporting.
-  app.get('/:id/matrix', { preHandler: requireAuth }, async (req, reply) => {
+  // Useful for SDK / admin reporting. Admin-only: group filters + member emails.
+  app.get('/:id/matrix', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const template = await db('nivaro_workflow_templates').where({ id }).first()
     if (!template) return reply.code(404).send({ error: 'Not found' })
@@ -4003,6 +3991,31 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           unavailable: e?.unavailable ?? [],
           blocked: e?.blocked ?? false
         }
+      }
+      // The current step's people named only by the binding's fallback field
+      // keep the record in their queue but cannot approve it (owner-only moves
+      // judge assigned owners) — say so, so the roster never lists them as
+      // owners who can act.
+      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
+      const current = instance?.current_state ? result[instance.current_state] : undefined
+      if (instance && current && current.owners.length > 0) {
+        const assigned = await resolveStateOwnersBatch(
+          [
+            {
+              key: 'x',
+              stateId: String(instance.current_state),
+              instanceId: String(instance.id),
+              collection,
+              itemId: String(item)
+            }
+          ],
+          db,
+          { skipFallback: true }
+        )
+        const ids = new Set((assigned.get('x') ?? []).map((o) => String(o.id).toUpperCase()))
+        current.owners = current.owners.map((o) =>
+          ids.has(String(o.id).toUpperCase()) ? o : { ...o, queue_only: true }
+        )
       }
       return reply.send({ data: result })
     }

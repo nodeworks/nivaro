@@ -43,6 +43,61 @@ export function healthWord(i: {
   return 'healthy'
 }
 
+const HEALTH_RANK = { idle: 0, healthy: 1, degraded: 2, failing: 3 } as const
+
+/**
+ * A partner's pushes judged by the partner's BUSINESS answer, not the HTTP
+ * status: a 200 whose body refused ("transaction reference already exists")
+ * is a failed submission (army3: Fusion IIP read Healthy · 100% while every
+ * push that day failed). `pushes` = this partner's submissions touched in the
+ * last 7 days. Returns the push half of the card; `foldPushHealth` merges it.
+ */
+export function pushOutcomes(
+  pushes: Array<{ status: string; updated_at: Date | string; last_error: string | null }>,
+  since24: Date
+): {
+  pushes24: number
+  failures24: number
+  pushes7d: number
+  failures7d: number
+  lastOkAt: Date | null
+  lastFailAt: Date | null
+  lastFailReason: string | null
+} {
+  const failed = (p: { status: string }) => p.status === 'failed' || p.status === 'rejected'
+  const sorted = [...pushes].sort((x, y) => +new Date(y.updated_at) - +new Date(x.updated_at))
+  const d24 = sorted.filter((p) => new Date(p.updated_at) >= since24)
+  const lastOk = sorted.find((p) => !failed(p))
+  const lastFail = sorted.find(failed)
+  return {
+    pushes24: d24.length,
+    failures24: d24.filter(failed).length,
+    pushes7d: sorted.length,
+    failures7d: sorted.filter(failed).length,
+    lastOkAt: lastOk ? new Date(lastOk.updated_at) : null,
+    lastFailAt: lastFail ? new Date(lastFail.updated_at) : null,
+    lastFailReason: lastFail ? (lastFail.last_error ?? `Push ${lastFail.status}`) : null
+  }
+}
+
+/** The worse of the call-level and push-level health words. */
+export function worseHealth(
+  a: 'healthy' | 'degraded' | 'failing' | 'idle',
+  b: 'healthy' | 'degraded' | 'failing' | 'idle'
+): 'healthy' | 'degraded' | 'failing' | 'idle' {
+  return HEALTH_RANK[b] > HEALTH_RANK[a] ? b : a
+}
+
+const pct = (ok: number, total: number): number | null =>
+  total ? Math.round((ok / total) * 1000) / 10 : null
+
+/** The lower of two success percentages, ignoring a side with no traffic. */
+export function lowerPct(a: number | null, b: number | null): number | null {
+  if (a == null) return b
+  if (b == null) return a
+  return Math.min(a, b)
+}
+
 export function hourBuckets(
   calls: Array<{ created_at: Date; ok: boolean }>,
   now: Date,
@@ -331,6 +386,18 @@ async function buildCards(onlyId?: number) {
     duration_ms: number
     created_at: Date
   }>
+  // The partner's business answers: a push the partner refused inside a 2xx
+  // is a failed submission, never a failed call.
+  const submissions = (await db('nivaro_erp_submissions')
+    .where('updated_at', '>=', since7)
+    .modify((x) => (onlyId != null ? x.where({ external_api: onlyId }) : x))
+    .select('external_api', 'status', 'updated_at', 'last_error')
+    .catch(() => [])) as Array<{
+    external_api: number
+    status: string
+    updated_at: Date
+    last_error: string | null
+  }>
   const obl = (await db('nivaro_integration_obligations')
     .whereNull('resolved_at')
     .orWhere('created_at', '>=', since7)
@@ -366,27 +433,58 @@ async function buildCards(onlyId?: number) {
       if (o.api === a.name && o.outcome in counts)
         counts[o.outcome as keyof typeof counts] = Number(o.n)
     const owner = owners.find((u) => u.id === a.owner_user)
+    const push = pushOutcomes(
+      submissions.filter((p) => p.external_api === a.id),
+      since24
+    )
+    const callHealth = healthWord({
+      calls24: d24.length,
+      failures24: d24.length - ok24,
+      lastOkAt: lastOk ? new Date(lastOk.created_at) : null,
+      lastFailAt: lastFail ? new Date(lastFail.created_at) : null,
+      authFailing
+    })
+    const pushHealth = healthWord({
+      calls24: push.pushes24,
+      failures24: push.failures24,
+      lastOkAt: push.lastOkAt,
+      lastFailAt: push.lastFailAt,
+      authFailing: false
+    })
+    const callFailAt = lastFail ? new Date(lastFail.created_at) : null
+    // The newest failure of either kind is the one the card names.
+    const pushFailNewer =
+      push.lastFailAt != null && (callFailAt == null || push.lastFailAt > callFailAt)
     return {
       id: a.id,
       name: a.name,
       enabled: !!a.enabled,
-      health: healthWord({
-        calls24: d24.length,
-        failures24: d24.length - ok24,
-        lastOkAt: lastOk ? new Date(lastOk.created_at) : null,
-        lastFailAt: lastFail ? new Date(lastFail.created_at) : null,
-        authFailing
-      }),
+      health: worseHealth(callHealth, pushHealth),
       calls24: d24.length,
-      success_pct24: d24.length ? Math.round((ok24 / d24.length) * 1000) / 10 : null,
-      success_pct7d: mine.length ? Math.round((ok7 / mine.length) * 1000) / 10 : null,
+      success_pct24: lowerPct(
+        pct(ok24, d24.length),
+        pct(push.pushes24 - push.failures24, push.pushes24)
+      ),
+      success_pct7d: lowerPct(
+        pct(ok7, mine.length),
+        pct(push.pushes7d - push.failures7d, push.pushes7d)
+      ),
+      pushes24: push.pushes24,
+      push_failures24: push.failures24,
       p50_ms: percentile(durations, 50),
       p95_ms: percentile(durations, 95),
       last_ok_at: lastOk ? new Date(lastOk.created_at).toISOString() : null,
-      last_fail_at: lastFail ? new Date(lastFail.created_at).toISOString() : null,
-      last_fail_reason: lastFail
-        ? (lastFail.error ?? (lastFail.status != null ? `HTTP ${lastFail.status}` : 'No response'))
-        : null,
+      last_fail_at: pushFailNewer
+        ? (push.lastFailAt as Date).toISOString()
+        : callFailAt
+          ? callFailAt.toISOString()
+          : null,
+      last_fail_reason: pushFailNewer
+        ? push.lastFailReason
+        : lastFail
+          ? (lastFail.error ??
+            (lastFail.status != null ? `HTTP ${lastFail.status}` : 'No response'))
+          : null,
       hourly: hourBuckets(
         mine.map((c) => ({ created_at: c.created_at, ok: !!c.ok })),
         now,

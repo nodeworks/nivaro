@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -19,16 +19,57 @@ import { sendSms } from '../services/sms.js'
 
 const MASK = '••••••'
 
+/** Credential columns: masked on every read (admins included) and kept when the
+ *  mask comes back on PATCH. */
+const SECRET_KEYS = [
+  'anthropic_api_key',
+  'ai_gateway_client_secret',
+  'smtp_pass',
+  'sms_auth_token',
+  'directory_password',
+  'directory_refresh_token',
+  'vapid_private_key',
+  'storage_s3_access_key',
+  'storage_s3_secret',
+  'provision_secret',
+  'teams_webhook_url',
+  'teams_test_webhook_url'
+] as const
+
 function maskSettings(settings: Record<string, unknown>) {
-  return {
-    ...settings,
-    anthropic_api_key: settings.anthropic_api_key ? MASK : null,
-    ai_gateway_client_secret: settings.ai_gateway_client_secret ? MASK : null,
-    smtp_pass: settings.smtp_pass ? MASK : null,
-    sms_auth_token: settings.sms_auth_token ? MASK : null,
-    directory_password: settings.directory_password ? MASK : null,
-    directory_refresh_token: settings.directory_refresh_token ? MASK : null
-  }
+  const out: Record<string, unknown> = { ...settings }
+  for (const k of SECRET_KEYS) if (k in out) out[k] = out[k] ? MASK : null
+  return out
+}
+
+/**
+ * What a signed-in non-admin reads of the settings row: only the display
+ * values the apps use (sidebar name/logo/colour and tab title, default time
+ * zone, accent palette, formula constants + fiscal calendar, whether two-step
+ * sign-in is offered, per-role home-page defaults). Everything else — internal
+ * hosts, allowlists, role maps, credentials — is for administrators.
+ */
+export const PUBLIC_SETTINGS_KEYS = [
+  'project_name',
+  'project_color',
+  'brand_logo',
+  'default_timezone',
+  'theme_accents',
+  'formula_constants',
+  'fiscal_year_start_month',
+  'two_factor_enabled',
+  'dashboard_role_defaults'
+] as const
+
+export function publicSettings(settings: Record<string, unknown> | undefined | null) {
+  const out: Record<string, unknown> = {}
+  for (const k of PUBLIC_SETTINGS_KEYS) out[k] = settings?.[k] ?? null
+  return out
+}
+
+/** requireAdmin's answer without the throw: an admin, on a key not limited to named collections. */
+function isFullReader(req: FastifyRequest): boolean {
+  return !!req.isAdmin && !req.user?.api_key_scopes
 }
 
 const allowedSettingsKeys = [
@@ -184,9 +225,11 @@ const allowedSettingsKeys = [
 ]
 
 export async function settingsRoutes(app: FastifyInstance) {
-  // GET is accessible to all authenticated users — sidebar + tab title use it
-  app.get('/', { preHandler: authenticate }, async (_req, reply) => {
+  // GET is accessible to all authenticated users — sidebar + tab title use it.
+  // Non-admins get the public display keys only (publicSettings).
+  app.get('/', { preHandler: authenticate }, async (req, reply) => {
     const settings = await db('nivaro_settings').orderBy('id', 'asc').first()
+    if (!isFullReader(req)) return reply.send({ data: publicSettings(settings) })
     // Which keys THIS instance overrides via NIVARO_SETTINGS_OVERRIDES — the
     // values shown/edited stay the shared DB row; this is provenance only.
     // Virtual, read-only: what the process environment contributes to mail /
@@ -515,12 +558,7 @@ export async function settingsRoutes(app: FastifyInstance) {
     }
 
     // Preserve secrets if masked value re-submitted
-    if (patch.anthropic_api_key === MASK) delete patch.anthropic_api_key
-    if (patch.ai_gateway_client_secret === MASK) delete patch.ai_gateway_client_secret
-    if (patch.smtp_pass === MASK) delete patch.smtp_pass
-    if (patch.sms_auth_token === MASK) delete patch.sms_auth_token
-    if (patch.directory_password === MASK) delete patch.directory_password
-    if (patch.directory_refresh_token === MASK) delete patch.directory_refresh_token
+    for (const k of SECRET_KEYS) if (patch[k] === MASK) delete patch[k]
     if ('directory_auth_mode' in patch) {
       patch.directory_auth_mode =
         patch.directory_auth_mode === 'service_account' || patch.directory_auth_mode === 'connected'

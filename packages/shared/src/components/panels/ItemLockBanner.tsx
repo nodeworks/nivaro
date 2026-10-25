@@ -1,5 +1,6 @@
+import { QueryClientContext } from '@tanstack/react-query'
 import { Lock, LockOpen } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
@@ -15,6 +16,14 @@ const HEARTBEAT_MS = 60_000
 const OFF_SCREEN_RELEASE_MS = 2 * 60_000
 /** How often a viewer locked out re-reads the lock when no live notice came. */
 const HOLDER_RECHECK_MS = 30_000
+/** How often a viewer who knows of no holder re-reads the lock: a `$lock`
+ *  notice can be missed (served by another replica, a dropped socket), and
+ *  the form then stayed editable for minutes while someone else held it. */
+const IDLE_RECHECK_MS = 60_000
+/** After a claim failed without a holder to name (offline, an error), the
+ *  next one waits this long — or until the browser is back online — instead
+ *  of firing per keystroke. */
+const CLAIM_RETRY_MS = 15_000
 
 export interface LockHolder {
   locked_by: string
@@ -63,6 +72,8 @@ export function useItemLock(
   const { lazy = false, active = true } = opts
   const client = useNivaroClient()
   const { isAdmin, userId } = useItemEditAuth()
+  // Optional: a host without react-query (a bare lock probe) just skips the re-read.
+  const qc = useContext(QueryClientContext)
   const [lockHolder, setLockHolder] = useState<LockHolder | null>(null)
   const [acquired, setAcquired] = useState(false)
   const [takingOver, setTakingOver] = useState(false)
@@ -84,6 +95,7 @@ export function useItemLock(
   // back the moment it is shown again.
   const offScreenReleasedRef = useRef(false)
   const claimingRef = useRef(false)
+  const claimRetryAtRef = useRef(0)
   // The lock routes answer 404 for a record this person cannot read: there is
   // nothing to lock, so stop asking (no heartbeat, no retries, no banner).
   const notVisibleRef = useRef(false)
@@ -96,6 +108,35 @@ export function useItemLock(
       heartbeatRef.current = null
     }
   }, [])
+
+  // 403 EDIT_LOCKED on acquire or heartbeat: the approval edit lock refuses
+  // this person (the record moved into a step they do not own, and the server
+  // voided their lock). Stop holding, say why, and re-read who may edit — the
+  // form turns read-only from the refreshed verdict.
+  const onEditLocked = useCallback(
+    (err: unknown): boolean => {
+      const e = err as {
+        status?: number
+        response?: {
+          status?: number
+          code?: string
+          error?: string
+          data?: { code?: string; error?: string }
+        }
+      }
+      const status = e.status ?? e.response?.status
+      const body = e.response?.data ?? e.response
+      if (status !== 403 || body?.code !== 'EDIT_LOCKED') return false
+      stopHeartbeat()
+      acquiredRef.current = false
+      setAcquired(false)
+      toast.warning(body.error || 'You can no longer edit this record — your edit lock was let go')
+      void qc?.invalidateQueries({ queryKey: ['pipeline-instance-lock', collection, item] })
+      void qc?.invalidateQueries({ queryKey: ['pipeline-instance', collection, item] })
+      return true
+    },
+    [qc, collection, item, stopHeartbeat]
+  )
 
   const acquire = useCallback(async () => {
     if (!collection || !item || notVisibleRef.current) return false
@@ -143,6 +184,7 @@ export function useItemLock(
               response?: (LockHolder & { status?: number; data?: LockHolder }) | undefined
             }
             const status = e.status ?? e.response?.status
+            if (onEditLocked(err)) return
             if (status !== 404 && status !== 409) return
             const body = (e.response?.data ?? e.response) as LockHolder | undefined
             // Nobody holds it any more — another window of this person let it
@@ -180,6 +222,7 @@ export function useItemLock(
       const status = e.status ?? e.response?.status
       const body = (e.response?.data ?? e.response) as LockHolder | undefined
       lastRefusalRef.current = status ?? null
+      if (onEditLocked(err)) return false
       if (status === 404) {
         notVisibleRef.current = true
         stopHeartbeat()
@@ -198,7 +241,7 @@ export function useItemLock(
       }
       return false
     }
-  }, [client, collection, item, stopHeartbeat])
+  }, [client, collection, item, stopHeartbeat, onEditLocked])
 
   const refreshLockInfo = useCallback(async () => {
     if (!collection || !item) return
@@ -307,15 +350,27 @@ export function useItemLock(
    *  lockHolder like any acquire — the form turns read-only and says who. */
   const claim = useCallback(async () => {
     if (!enabled || acquiredRef.current || claimingRef.current) return
+    if (Date.now() < claimRetryAtRef.current) return
     claimingRef.current = true
     try {
       const ok = await acquire()
       if (!ok && lastRefusalRef.current === 409)
         toast.warning('Someone else is editing this record — your change can’t be saved yet')
+      // No answer (offline) or a refusal that is not "someone holds it": every
+      // keystroke used to fire another claim (49 failed POSTs in 5 s offline).
+      if (!ok && lastRefusalRef.current !== 409 && !notVisibleRef.current)
+        claimRetryAtRef.current = Date.now() + CLAIM_RETRY_MS
     } finally {
       claimingRef.current = false
     }
   }, [enabled, acquire])
+  useEffect(() => {
+    const online = () => {
+      claimRetryAtRef.current = 0
+    }
+    window.addEventListener('online', online)
+    return () => window.removeEventListener('online', online)
+  }, [])
 
   // Off screen (hidden browser tab, background workspace tab): stop holding
   // the record for others after a while; take it back on return.
@@ -343,6 +398,17 @@ export function useItemLock(
     }, OFF_SCREEN_RELEASE_MS)
     return () => clearTimeout(t)
   }, [enabled, onScreen, collection, item, acquire, client, stopHeartbeat, userId])
+
+  // Nobody known to hold it, and not holding it ourselves: re-read now and
+  // then while the form is on screen, so a missed `$lock` notice corrects
+  // itself (the 30 s holder recheck only runs once a holder is known).
+  useEffect(() => {
+    if (!enabled || !lazy || !collection || !item || lockedById || !onScreen) return
+    const t = setInterval(() => {
+      if (!acquiredRef.current && !notVisibleRef.current) void refreshLockInfo()
+    }, IDLE_RECHECK_MS)
+    return () => clearInterval(t)
+  }, [enabled, lazy, collection, item, lockedById, onScreen, refreshLockInfo])
 
   // Leaving the page (close, reload, cross-document navigation): an unmount
   // cleanup's request rarely makes it out, so the lock sat until its TTL ran

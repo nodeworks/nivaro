@@ -9,6 +9,18 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Revision } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
 
+/** Fields a rollback left as they were because this person may not write
+ *  them (`skipped_fields` on the answer) — same sentence as the shared
+ *  RevisionsPanel (packages/shared lib/restore-skipped.ts). */
+function restoreSkippedNote(body: unknown): string | null {
+  const r = body as { skipped_fields?: unknown; data?: { skipped_fields?: unknown } } | null
+  const raw = r?.data?.skipped_fields ?? r?.skipped_fields
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const names = [...new Set(raw.map((f) => String(f).replace(/_/g, ' ')))]
+  const more = names.length > 5 ? ` and ${names.length - 5} more` : ''
+  return `Not restored (you can't change ${names.length === 1 ? 'it' : 'them'}): ${names.slice(0, 5).join(', ')}${more}`
+}
+
 const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 'secondary'> = {
   create: 'success',
   update: 'default',
@@ -269,9 +281,11 @@ function RevisionRow({
 
   const rollbackMut = useMutation({
     mutationFn: () => api.post(`/revisions/${revision.id}/rollback`),
-    onSuccess: () => {
+    onSuccess: (res) => {
       setConfirmRollback(false)
       toast.success('Rolled back to this revision')
+      const skipped = restoreSkippedNote(res.data)
+      if (skipped) toast.warning(skipped, { duration: 10_000 })
       onRollback?.()
     },
     onError: () => toast.error('Failed to rollback')
@@ -446,8 +460,10 @@ function TimeTravelView({
 
   const restoreMut = useMutation({
     mutationFn: () => api.post(`/revisions/${selected.id}/rollback`),
-    onSuccess: () => {
+    onSuccess: (res) => {
       toast.success('Record restored to this point in time')
+      const skipped = restoreSkippedNote(res.data)
+      if (skipped) toast.warning(skipped, { duration: 10_000 })
       setConfirming(false)
       onRollback?.()
     },

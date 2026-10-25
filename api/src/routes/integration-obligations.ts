@@ -13,6 +13,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { recordRefusal } from '../services/erp-record-gate.js'
 import { NO_BODY } from '../services/erp-resend-guard.js'
 import { registerIntegrationNoteSources } from '../services/integration-notes.js'
 import {
@@ -23,6 +24,7 @@ import {
 } from '../services/integration-obligations.js'
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 
 const MAX_LIMIT = 200
 const RECORD_CAP = 50
@@ -274,10 +276,18 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
     { preHandler: requireAuth },
     async (req, reply) => {
       const collection = String(req.body?.collection ?? '')
-      const ids = (req.body?.ids ?? []).map(String).filter(Boolean).slice(0, SUMMARY_ID_CAP)
+      let ids = (req.body?.ids ?? []).map(String).filter(Boolean).slice(0, SUMMARY_ID_CAP)
       if (!collection || ids.length === 0) return { data: {} }
       if (!(await can(req.user!, 'read', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
+      }
+      // Only the page's rows the caller can actually see (User Scopes, row
+      // filter) — partner outcomes are per-record data (army3).
+      if (!req.isAdmin) {
+        const gates = await compileAccessGates(req.user!, collection)
+        const ok = new Set([...(await visibleIds(gates, ids))].map((i) => i.toLowerCase()))
+        ids = ids.filter((i) => ok.has(i.toLowerCase()))
+        if (ids.length === 0) return { data: {} }
       }
       const rows = (await selectInChunks(ids, 2000, (chunk) =>
         db('nivaro_integration_obligations')
@@ -287,7 +297,10 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
           .select('item', 'api', 'outcome')
       )) as Array<{ item: string; api: string; outcome: string }>
       const out: Record<string, Array<{ api: string; outcome: string }>> = {}
-      for (const r of rows) (out[r.item] ??= []).push({ api: r.api, outcome: r.outcome })
+      for (const r of rows) {
+        out[r.item] ??= []
+        out[r.item].push({ api: r.api, outcome: r.outcome })
+      }
       return { data: out }
     }
   )
@@ -382,16 +395,15 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
   })
 
   // One record's ledger, newest first. NOT admin-only — gated on the
-  // caller's read permission for the record's own collection, so it works
-  // for whoever the record belongs to.
+  // record itself (visible to the caller: User Scopes and row filters
+  // apply), so it works for whoever the record belongs to.
   app.get<{ Params: { collection: string; item: string } }>(
     '/integration-obligations/record/:collection/:item',
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params
-      if (!(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
+      const refusal = await recordRefusal(req, collection, String(item), 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
       // Rides ix_integration_obligations_record (collection, item, kind, id
       // DESC) — order by id, not due_at, so the index actually serves it.
       const rows = await db('nivaro_integration_obligations')

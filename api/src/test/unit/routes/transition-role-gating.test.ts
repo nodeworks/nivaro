@@ -647,8 +647,9 @@ describe('POST /items/:collection/bulk-transition — required_roles gating', ()
     expect(body.succeeded).toBe(0)
     expect(body.failed).toBe(1)
     expect(instanceUpdate).not.toHaveBeenCalled()
-    // Documents a rough edge: state-mismatch failures carry no per-item reason,
-    // so the caller cannot tell them apart from a missing instance.
-    expect(body.errors).toEqual([])
+    // The single route's gate chain names the reason per record.
+    expect(body.errors).toEqual([
+      { item: 'wf-1', error: 'Transition is not valid from the current state' }
+    ])
   })
 })

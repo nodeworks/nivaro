@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
-import { authenticate, checkApiKeyScope } from '../middleware/authenticate.js'
+import { authenticate, checkApiKeyScope, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { createOne, readItems, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
@@ -127,8 +127,13 @@ export async function zapierRoutes(app: FastifyInstance) {
   )
 
   // ── POST /zapier/hooks — REST hook subscribe ──────────────────────────────
+  // Admin-only, like every other webhook write (webhooks.ts): the hook is a
+  // global nivaro_webhooks row that delivers every later write of the
+  // collection, by anyone, to the target URL — not just what the subscriber
+  // could read (army3 audit-core-mz).
   app.post<{ Body: { target_url?: string; event?: string; collection?: string } }>(
     '/hooks',
+    { preHandler: requireAdmin },
     async (req, reply) => {
       const { target_url, event, collection } = req.body ?? {}
 
@@ -193,33 +198,38 @@ export async function zapierRoutes(app: FastifyInstance) {
   )
 
   // ── DELETE /zapier/hooks/:id — REST hook unsubscribe ──────────────────────
-  app.delete<{ Params: { id: string } }>('/hooks/:id', async (req, reply) => {
-    const id = Number(req.params.id)
-    if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Invalid hook id' })
+  // Admin-only for the same reason: it removes a global hook, whoever made it.
+  app.delete<{ Params: { id: string } }>(
+    '/hooks/:id',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Invalid hook id' })
 
-    const row = (await db('nivaro_webhooks').where({ id }).first()) as
-      | { id: number; headers: string | null }
-      | undefined
-    if (!row) return reply.code(404).send({ error: 'Hook not found' })
+      const row = (await db('nivaro_webhooks').where({ id }).first()) as
+        | { id: number; headers: string | null }
+        | undefined
+      if (!row) return reply.code(404).send({ error: 'Hook not found' })
 
-    // Only hooks created via the Zapier subscribe endpoint may be deleted here
-    const headers = parseJson<Record<string, string>>(row.headers)
-    if (headers?.[ZAPIER_SOURCE_HEADER] !== ZAPIER_SOURCE_VALUE) {
-      return reply.code(404).send({ error: 'Hook not found' })
+      // Only hooks created via the Zapier subscribe endpoint may be deleted here
+      const headers = parseJson<Record<string, string>>(row.headers)
+      if (headers?.[ZAPIER_SOURCE_HEADER] !== ZAPIER_SOURCE_VALUE) {
+        return reply.code(404).send({ error: 'Hook not found' })
+      }
+
+      await db('nivaro_webhooks').where({ id }).delete()
+      await logActivity({
+        action: 'delete',
+        collection: 'nivaro_webhooks',
+        item: String(id),
+        user: req.user?.id,
+        req,
+        comment: 'zapier unsubscribe'
+      })
+
+      return reply.code(204).send()
     }
-
-    await db('nivaro_webhooks').where({ id }).delete()
-    await logActivity({
-      action: 'delete',
-      collection: 'nivaro_webhooks',
-      item: String(id),
-      user: req.user?.id,
-      req,
-      comment: 'zapier unsubscribe'
-    })
-
-    return reply.code(204).send()
-  })
+  )
 
   // ── POST /zapier/actions/create-item ───────────────────────────────────────
   app.post<{ Body: { collection?: string; data?: Record<string, unknown> } }>(

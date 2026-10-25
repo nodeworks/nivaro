@@ -39,6 +39,7 @@ import {
   parseImportFile,
   parsePostRunFlows
 } from '../services/staged-imports.js'
+import type { User } from '../types.js'
 
 /**
  * Staged imports (`/api/staged-imports`) — queue + definition registry for
@@ -64,6 +65,16 @@ function parseReceipt(v: unknown): { enabled: boolean } | null {
   }
   if (!o || typeof o !== 'object') return null
   return { enabled: (o as { enabled?: unknown }).enabled === true }
+}
+
+/** Admins see every run; anyone else only the runs they queued (as /queue). */
+export function ownRuns(
+  req: { user?: { id?: unknown } | null; isAdmin?: boolean },
+  column = 'q.created_by'
+) {
+  return (qb: Knex.QueryBuilder) => {
+    if (!req.isAdmin) qb.where(column, String(req.user?.id ?? '__none__'))
+  }
 }
 
 export async function stagedImportRoutes(app: FastifyInstance) {
@@ -327,7 +338,9 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     data: listImportProcessors()
   }))
 
-  app.get('/definitions', async (req) => {
+  // Definitions carry procedure bodies, staging tables and column maps: admin
+  // material, like every definition write.
+  app.get('/definitions', { preHandler: requireAdmin }, async (req) => {
     const all = (req.query as { all?: string })?.all === 'true'
     return { data: await listImportDefinitions(!all) }
   })
@@ -687,7 +700,9 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     }
   }
 
-  app.get('/', async (req) => {
+  // The run list (every uploader, file and error log) is admin-only; anyone else
+  // reaches only their own runs, by id (/:id, /:id/items, /queue).
+  app.get('/', { preHandler: requireAdmin }, async (req) => {
     const q = req.query as {
       limit?: string
       page?: string
@@ -741,7 +756,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     }
   })
 
-  app.get('/stats', async (req) => {
+  app.get('/stats', { preHandler: requireAdmin }, async (req) => {
     const days = Math.max(
       0,
       Math.min(Number((req.query as { days?: string }).days ?? 30) || 0, 3650)
@@ -821,6 +836,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     const row = await runQuery()
       .select([...RUN_COLUMNS, 'q.report'])
       .where('q.id', req.params.id)
+      .modify(ownRuns(req))
       .first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
     return { data: { ...row, report: parseRunReport(row.report) } }
@@ -894,17 +910,62 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     revert_note: string | null
   }
 
-  /** Field names become labels and relation ids become the names people use. */
-  async function presentItems(rows: StoredItem[]) {
+  /** Field names become labels and relation ids become the names people use.
+   *  Anyone but an admin sees records they can read now, the fields their
+   *  policy allows, and labels read as themselves. */
+  async function presentItems(
+    rows: StoredItem[],
+    req: { user?: unknown; isAdmin?: boolean } = { isAdmin: true }
+  ) {
     const { labelledChanges } = await import('../services/mail-types.js')
-    const { getLabels } = await import('../services/queues.js')
     const cache = new Map()
     const want = new Map<string, Set<string>>()
     for (const r of rows) {
-      if (!r.collection || !r.item_id || (r.label ?? '').trim()) continue
+      if (!r.collection || !r.item_id) continue
       want.set(r.collection, (want.get(r.collection) ?? new Set<string>()).add(String(r.item_id)))
     }
-    const names = want.size ? await getLabels(want).catch(() => ({}) as Record<string, string>) : {}
+    const fieldsOf = new Map<string, string[] | null>()
+    if (!req.isAdmin) {
+      const { visibleRecordIds } = await import('../services/sla-visibility.js')
+      const { getAllowedFields } = await import('../services/permissions.js')
+      const user = req.user as User
+      const seen = new Map<string, Set<string>>()
+      for (const [collection, ids] of want) {
+        seen.set(collection, await visibleRecordIds(user, collection, [...ids]))
+        fieldsOf.set(
+          collection,
+          await getAllowedFields(user, 'read', collection).catch(() => [] as string[])
+        )
+      }
+      // Rows about a record the caller cannot see (or no record: a file row
+      // the run left out) say nothing beyond that they exist.
+      rows = rows.map((r) =>
+        r.collection && r.item_id && seen.get(r.collection)?.has(String(r.item_id))
+          ? r
+          : { ...r, item_id: null, label: null, message: null, changes: null }
+      )
+      for (const [collection, ids] of want) {
+        const ok = seen.get(collection) ?? new Set<string>()
+        for (const id of [...ids]) if (!ok.has(id)) ids.delete(id)
+      }
+    }
+    const unnamed = new Map<string, Set<string>>()
+    for (const r of rows) {
+      if (!r.collection || !r.item_id || (r.label ?? '').trim()) continue
+      unnamed.set(
+        r.collection,
+        (unnamed.get(r.collection) ?? new Set<string>()).add(String(r.item_id))
+      )
+    }
+    const names: Record<string, string> = !unnamed.size
+      ? {}
+      : req.isAdmin
+        ? await (await import('../services/queues.js'))
+            .getLabels(unnamed)
+            .catch(() => ({}) as Record<string, string>)
+        : await (await import('../services/ai-link-labels.js'))
+            .linkLabelsAsUser(req.user as User, unnamed)
+            .catch(() => ({}) as Record<string, string>)
     return Promise.all(
       rows.map(async (r) => {
         let raw: Array<{ field: string; from?: unknown; to: unknown }> = []
@@ -913,6 +974,9 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         } catch {
           raw = []
         }
+        const allowed = r.collection ? fieldsOf.get(r.collection) : undefined
+        if (allowed !== undefined && allowed !== null)
+          raw = raw.filter((c) => allowed.includes(c.field))
         const delta: Record<string, unknown> = {}
         const previous: Record<string, unknown> = {}
         for (const c of raw) {
@@ -965,6 +1029,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     }
     const limit = Math.min(Math.max(Number(q.limit ?? 50) || 50, 1), 200)
     const page = Math.max(1, Number(q.page ?? 1) || 1)
+    if (!req.isAdmin) {
+      const own = await db('nivaro_import_queue')
+        .where({ id: runId })
+        .modify(ownRuns(req, 'created_by'))
+        .first('id')
+      if (!own) return reply.code(404).send({ error: 'Not found' })
+    }
     const access = await readableCollections(runId, req)
 
     const [rows, counted, facets] = await Promise.all([
@@ -1001,7 +1072,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       if (f.collection) byCollection[f.collection] = (byCollection[f.collection] ?? 0) + Number(f.c)
     }
     return {
-      data: await presentItems(rows),
+      data: await presentItems(rows, req),
       total: Number(counted?.c ?? 0),
       page,
       limit,

@@ -129,7 +129,7 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'aggregate',
-    description: `Count/sum/avg/min/max over a collection, optionally grouped by one column. Use for "how many", totals, and breakdowns instead of fetching rows. ${FILTER_DOC}`,
+    description: `Count/sum/avg/min/max over a collection, optionally grouped by one column. Use for "how many", totals, and breakdowns instead of fetching rows — never page through rows and tally them yourself. The filter may cross relations and to-many links (e.g. {"regions.short_name": {"_eq": "NE"}}) while grouping by a plain or link column; a link group comes back as {id, label}. ${FILTER_DOC}`,
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -138,7 +138,8 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
         field: { type: 'string', description: 'Required for sum/avg/min/max.' },
         group_by: {
           type: 'string',
-          description: 'Optional plain column to group by (top 20 groups).'
+          description:
+            'Optional column of this collection to group by (top 20 groups) — a link column like vendor groups by the linked record and answers its label.'
         },
         filter: { type: 'object', description: 'Same shape as query_items filter.' }
       },
@@ -1131,7 +1132,12 @@ async function runChatTool(
       }
       if (groupBy) {
         q.select(groupBy).groupBy(groupBy).orderBy(aggAlias, 'desc').limit(20)
-        const rows = await q
+        // A link group (vendor: 1201) answers {id, label} as the asker — a bare
+        // id sent the model off paging rows to name the groups and counting
+        // them by hand (army 2026-10-25: the wrong vendor named the leader).
+        const rows = await labelForeignKeys(user, await q, await relationsFor(collection), {
+          labels: input.link_labels !== false
+        })
         return { result: rows, summary: `${op} by ${groupBy}: ${rows.length} group(s)` }
       }
       const [row] = await q
@@ -1766,7 +1772,7 @@ export const CHAT_SYSTEM_PROMPT = `You are the data assistant inside Nivaro, a h
 
 Rules:
 - Always ground answers in tool results. If a tool errors or returns nothing, say so plainly.
-- Prefer aggregate for counts/totals/breakdowns; query_items for record lists. When someone names a place, vendor, title or id, query_items with "search" finds it across the collection's text columns in one call — semantic_search only covers indexed records and is a last resort.
+- Prefer aggregate for counts/totals/breakdowns; query_items for record lists. Never tally a breakdown from query_items rows by hand — aggregate with group_by gives the exact figure (filters may cross relations); if you must estimate, say the figure is approximate. When someone names a place, vendor, title or id, query_items with "search" finds it across the collection's text columns in one call — semantic_search only covers indexed records and is a last resort.
 - When someone asks whether or why an external system was or was not told about a record ("why didn't X get this", "did the partner receive it"), call integration_status with the record's collection and id — it returns the real reason from the ledger; never guess from the record's own fields.
 - For "what happened to this record across systems", "what did the import / the partner do to it", "why did that push fire", call record_event_path — it walks the real chain of writes, transitions, flows and partner calls. For "why can't I (or Beth) see this record" call explain_access. For "who can approve this right now" call who_can_act; for "why is Kim the owner" call explain_owners; for "what can Beth see / edit" call explain_person_access — repeat the reasons they return, never reason about access yourself. For "what is wrong with this record" or "how clean is this collection's data" call record_integrity. A saved query listed below answers its question in one call — run_custom_query with its slug beats rebuilding the figure from rows.
 - For "what is stuck in / what is in / how is the X queue" call queue_summary with the queue's name or id from the queues listed below — ONE call returns the totals, the by-state breakdown, the SLA breaches, the oldest and unowned records and the at-risk reasons. Lead with what needs attention (breaches, unowned, the oldest), name records by the friendly id the tool returns, and never rebuild a queue from query_items.

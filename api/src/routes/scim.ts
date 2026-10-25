@@ -7,8 +7,11 @@ import type { Role, User } from '../types.js'
 /**
  * SCIM 2.0 user provisioning endpoints (prefix /scim/v2).
  *
- * Auth: Bearer token must be a named API key (nvk_*) whose scopes include
- * `{ collection: 'scim' }` (or the wildcard collection '*').
+ * Auth: Bearer token must be a named API key (nvk_*) owned by an
+ * administrator whose scopes name `{ collection: 'scim' }` explicitly — the
+ * default `*` scope never counts, since SCIM sets roles, emails and status of
+ * every account. Roles granting admin access are never assigned through it
+ * (an IdP group cannot mint an administrator).
  */
 
 const SCIM_USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User'
@@ -34,8 +37,11 @@ async function scimAuth(req: FastifyRequest, reply: FastifyReply) {
     return scimError(reply, 401, 'Invalid API key')
   }
   const scopes = req.apiKeyScopes
-  if (!scopes?.some((s) => s.collection === 'scim' || s.collection === '*')) {
+  if (!scopes?.some((s) => s.collection === 'scim')) {
     return scimError(reply, 401, 'API key is missing the scim scope')
+  }
+  if (!req.isAdmin) {
+    return scimError(reply, 403, 'SCIM needs an API key owned by an administrator')
   }
 }
 
@@ -82,8 +88,8 @@ function groupNames(groups: ScimUserPayload['groups']): string[] {
 async function resolveRoleFromGroups(groups: ScimUserPayload['groups']): Promise<string | null> {
   const names = groupNames(groups)
   if (names.length === 0) return null
-  const role = await db<Role>('nivaro_roles').whereIn('name', names).first()
-  return role?.id ?? null
+  const roles = (await db<Role>('nivaro_roles').whereIn('name', names)) as Role[]
+  return roles.find((r) => !r.admin_access)?.id ?? null
 }
 
 export async function scimRoutes(app: FastifyInstance) {

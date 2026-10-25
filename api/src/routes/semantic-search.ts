@@ -10,7 +10,8 @@ import {
   upsertItemEmbedding
 } from '../services/embeddings.js'
 import { isFilesCollection } from '../services/help-video-files.js'
-import { can } from '../services/permissions.js'
+import { readItems } from '../services/items.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 
 // Registered under the /search prefix → /api/search/semantic, /api/search/reindex/:collection
 export async function semanticSearchRoutes(app: FastifyInstance) {
@@ -35,14 +36,26 @@ export async function semanticSearchRoutes(app: FastifyInstance) {
     const max = Math.min(Math.max(Number(limit) || 10, 1), 100)
 
     const queryVec = await embedText(query)
-    const matches = await searchEmbeddings(collection, queryVec, max)
+    // A match on a field the caller's policy hides would say what that field holds.
+    const allowed = await getAllowedFields(req.user!, 'read', collection)
+    const matches = (await searchEmbeddings(collection, queryVec, max)).filter(
+      (m) => allowed === null || allowed.includes(m.field)
+    )
     if (matches.length === 0) {
       return reply.send({ data: [] })
     }
 
-    // Hydrate only the rows that actually matched
+    // Hydrate only the rows that actually matched — as the caller, so User
+    // Scopes, the row filter and the field allow-list apply.
     const ids = [...new Set(matches.map((m) => m.item))]
-    const rows = (await db(collection).whereIn('id', ids)) as Array<Record<string, unknown>>
+    const res = await readItems(
+      req.user!,
+      collection,
+      { filter: { id: { _in: ids } }, limit: ids.length, count: false },
+      req,
+      req.workspaceId ?? undefined
+    )
+    const rows = (res.data ?? []) as Array<Record<string, unknown>>
     const byId = new Map(rows.map((r) => [String(r.id), r]))
 
     const data = matches

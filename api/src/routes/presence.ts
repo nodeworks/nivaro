@@ -1,9 +1,9 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
-import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { withDeadlockRetry } from '../services/deadlock-retry.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
 import { PRESENCE_ONLINE_WINDOW_MS } from '../services/presence-sockets.js'
@@ -14,6 +14,7 @@ import {
   stuckMinutes
 } from '../services/presence-stuck.js'
 import { createShortCache } from '../services/short-cache.js'
+import { canSeeRecord } from '../services/sla-visibility.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 
@@ -280,6 +281,21 @@ function embeddableScript(pingInterval: number): string {
 })();`
 }
 
+/**
+ * The signed-in person behind a public ping, or null. These routes take no
+ * auth (external sites call them), so a body `userId` is only a claim: a ping
+ * names a person ONLY when its own credential (session cookie / bearer) does.
+ */
+export async function pingIdentity(req: FastifyRequest, reply: FastifyReply): Promise<User | null> {
+  if (!req.headers.authorization && !req.headers.cookie) return null
+  try {
+    await authenticate(req, reply)
+    return req.user ?? null
+  } catch {
+    return null
+  }
+}
+
 // Public routes — no auth, called from external sites under open CORS scope
 export async function presencePublicRoutes(app: FastifyInstance) {
   // ── POST /ping ───────────────────────────────────────────────────────────
@@ -319,11 +335,23 @@ export async function presencePublicRoutes(app: FastifyInstance) {
         ? (JSON.parse(existing) as PresenceSession).firstSeen
         : new Date().toISOString()
 
+      // An existing session that names a person is that person's alone.
+      const prior = existing ? (JSON.parse(existing) as PresenceSession) : null
+      const me = await pingIdentity(req, reply)
+      if (
+        prior?.userId &&
+        String(prior.userId).toUpperCase() !== String(me?.id ?? '').toUpperCase()
+      )
+        return reply.code(204).send()
+      const meName = me ? [me.first_name, me.last_name].filter(Boolean).join(' ').trim() : ''
+
       const session: PresenceSession = {
         sessionId,
-        userId: body.userId ?? null,
-        userEmail: body.userEmail ?? null,
-        userName: body.userName ?? null,
+        // Anonymous pings keep the visitor's self-description for the admin
+        // sessions view, but name no account — people answers skip them.
+        userId: me?.id ?? null,
+        userEmail: me ? me.email : (body.userEmail ?? null),
+        userName: me ? meName || me.email : (body.userName ?? null),
         pageUrl: body.pageUrl,
         pageTitle: body.pageTitle ?? null,
         referrer: body.referrer ?? null,
@@ -351,7 +379,16 @@ export async function presencePublicRoutes(app: FastifyInstance) {
     if (app.redis && req.body?.sessionId) {
       const sessionId = sanitizeId(req.body.sessionId)
       if (sessionId) {
-        await app.redis.del(sessionKeyPrefix() + sessionId)
+        const key = sessionKeyPrefix() + sessionId
+        const raw = await app.redis.get(key)
+        const owner = raw ? (JSON.parse(raw) as PresenceSession).userId : null
+        // A signed-in person's session ends only by that person (or its TTL).
+        if (owner) {
+          const me = await pingIdentity(req, reply)
+          if (String(me?.id ?? '').toUpperCase() !== String(owner).toUpperCase())
+            return reply.code(204).send()
+        }
+        await app.redis.del(key)
         schedulePresenceBroadcast(app)
       }
     }
@@ -1360,6 +1397,10 @@ export async function presenceAdminRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!app.redis) return reply.code(503).send({ error: 'Redis unavailable' })
       const { collection, item } = req.params
+      // Who is looking at a record is about that record: hidden → nobody.
+      if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+        return reply.send({ data: [] })
+      }
       const suffix = `/collections/${collection}/${item}`
 
       const sessions = await getActiveSessions(app)
@@ -1374,8 +1415,10 @@ export async function presenceAdminRoutes(app: FastifyInstance) {
           path = s.pageUrl
         }
         if (path !== suffix && !path.endsWith(suffix)) continue
+        // An anonymous ping names nobody (its name is the sender's claim).
+        if (!s.userId) continue
 
-        const key = s.userId ?? s.sessionId
+        const key = s.userId
         if (seen.has(key)) continue
         seen.add(key)
         viewers.push({

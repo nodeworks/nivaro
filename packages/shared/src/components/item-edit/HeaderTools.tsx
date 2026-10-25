@@ -176,7 +176,10 @@ export function HeaderTools({ children }: { children: ReactNode }) {
                     zIndex: 110
                   }
             }
-            className='flex flex-wrap items-center justify-end gap-1.5 rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card'
+            // A tool group is one unbreakable pill in the header row; here it
+            // must wrap, or a group wider than the panel ran off its LEFT edge
+            // (justify-end) and the first tools could not be reached on a phone.
+            className='flex flex-wrap items-center justify-end gap-1.5 rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card [&_[data-nvr-header-tool-group]]:h-auto [&_[data-nvr-header-tool-group]]:min-h-9 [&_[data-nvr-header-tool-group]]:max-w-full [&_[data-nvr-header-tool-group]]:shrink [&_[data-nvr-header-tool-group]]:flex-wrap'
           >
             {children}
           </div>,
@@ -241,6 +244,16 @@ export function useHeaderFold(ref: RefObject<HTMLElement | null>, enabled: boole
  * unchanged). Closes on outside click; portals into a hosting dialog when
  * inside a sheet (body portals inherit the modal lock's pointer-events: none).
  */
+/** Width of the HeaderMenu panel (its `w-[240px]`). */
+const MENU_WIDTH = 240
+
+/** The menu's right offset: under its button's right edge, but never so far
+ *  right that its left edge leaves the host (a button near the left edge of a
+ *  phone sheet put four rows off screen). */
+export function menuRight(fromButton: number, hostWidth: number): number {
+  return Math.max(8, Math.min(fromButton, hostWidth - MENU_WIDTH - 8))
+}
+
 export function HeaderMenu({
   children,
   label = 'More',
@@ -324,13 +337,16 @@ export function HeaderMenu({
                 ? {
                     position: 'fixed',
                     top: rect.bottom + 6,
-                    right: Math.max(8, window.innerWidth - rect.right),
+                    right: menuRight(window.innerWidth - rect.right, window.innerWidth),
                     zIndex: 110
                   }
                 : {
                     position: 'absolute',
                     top: rect.bottom - container.getBoundingClientRect().top + 6,
-                    right: Math.max(8, container.getBoundingClientRect().right - rect.right),
+                    right: menuRight(
+                      container.getBoundingClientRect().right - rect.right,
+                      container.getBoundingClientRect().width
+                    ),
                     zIndex: 110
                   }
             }

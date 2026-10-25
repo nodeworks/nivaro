@@ -4,6 +4,15 @@ type Row = Record<string, any>
 const tables: Record<string, Row[]> = {}
 let owners: Array<{ id: string }> = []
 let nextId = 1
+// The record the thread hangs on is visible unless a test hides it.
+const record = vi.hoisted(() => ({ visible: true }))
+vi.mock('../../../services/socket-access.js', () => ({
+  canSeeRecordRoom: vi.fn(async () => record.visible),
+  visibleRecordIds: vi.fn(async (_u: unknown, _c: string, ids: string[]) =>
+    record.visible ? ids : []
+  )
+}))
+vi.mock('../../../services/record-notes.js', () => ({ loadRecordNotes: vi.fn(async () => []) }))
 
 vi.mock('../../../config.js', () => ({
   config: { NODE_ENV: 'test', DB_DATABASE: 'testdb', DB_HOST: 'localhost', ENCRYPTION_KEY: null }
@@ -31,12 +40,14 @@ vi.mock('../../../db/index.js', () => {
     const strip = (c: string) => c.split('.').pop()!
     const rows = () => {
       let r = t().filter((x) => filters.every((f) => f(x)))
-      if (order) r = [...r].sort((a, b) => (a[order![0]] - b[order![0]]) * (order![1] === 'asc' ? 1 : -1))
+      if (order)
+        r = [...r].sort((a, b) => (a[order![0]] - b[order![0]]) * (order![1] === 'asc' ? 1 : -1))
       return r
     }
     const b: any = {
       where(c: any, v?: any) {
-        if (typeof c === 'object') for (const [k, val] of Object.entries(c)) filters.push((r) => r[strip(k)] === val)
+        if (typeof c === 'object')
+          for (const [k, val] of Object.entries(c)) filters.push((r) => r[strip(k)] === val)
         else filters.push((r) => r[strip(c)] === v)
         return b
       },
@@ -59,7 +70,10 @@ vi.mock('../../../db/index.js', () => {
       select: () => Promise.resolve(rows()),
       insert(v: Row) {
         const row = { id: name === 'nivaro_comment_versions' ? nextId++ : v.id, ...v }
-        if (name === 'nivaro_comment_versions' && t().some((r) => r.comment === v.comment && r.version === v.version))
+        if (
+          name === 'nivaro_comment_versions' &&
+          t().some((r) => r.comment === v.comment && r.version === v.version)
+        )
           return Promise.reject(new Error('unique violation'))
         t().push(row)
         return Promise.resolve([row.id])
@@ -98,9 +112,18 @@ async function app(user: string, admin = false) {
 beforeEach(() => {
   for (const k of Object.keys(tables)) delete tables[k]
   tables.nivaro_comments = [
-    { id: 'c1', collection: 'x', item: '1', user: 'author', text: 'v0', deleted_at: null, deleted_by: null }
+    {
+      id: 'c1',
+      collection: 'x',
+      item: '1',
+      user: 'author',
+      text: 'v0',
+      deleted_at: null,
+      deleted_by: null
+    }
   ]
   owners = [{ id: 'owner' }]
+  record.visible = true
 })
 
 describe('comment history', () => {
@@ -147,5 +170,32 @@ describe('comment history', () => {
     const r = await a.inject({ method: 'GET', url: '/comments/c1/history' })
     expect(r.statusCode).toBe(status)
     if (status === 200) expect(r.json().data[0]).toMatchObject({ version: 1, text: 'old' })
+  })
+
+  it('a record the caller cannot open has no thread: list, notes, history and create answer 404', async () => {
+    record.visible = false
+    const a = await app('author')
+    for (const url of [
+      '/comments?collection=x&item=1',
+      '/comments/related?collection=x&item=1',
+      '/comments/c1/history'
+    ]) {
+      expect((await a.inject({ method: 'GET', url })).statusCode).toBe(404)
+    }
+    const post = await a.inject({
+      method: 'POST',
+      url: '/comments',
+      payload: { collection: 'x', item: '1', text: '@owners probe' }
+    })
+    expect(post.statusCode).toBe(404)
+    expect(tables.nivaro_comments).toHaveLength(1)
+    const counts = await a.inject({ method: 'GET', url: '/comments/counts?collection=x&ids=1' })
+    expect(counts.json()).toEqual({ data: {} })
+  })
+
+  it('a caller who can open the record reads its notes', async () => {
+    const a = await app('reader')
+    const r = await a.inject({ method: 'GET', url: '/comments/related?collection=x&item=1' })
+    expect(r.statusCode).toBe(200)
   })
 })

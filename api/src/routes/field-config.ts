@@ -263,6 +263,15 @@ async function loadFieldRows(collection: string): Promise<FieldRow[]> {
     .orderBy('sort', 'asc')) as FieldRow[]
 }
 
+/** The `values` object the config evaluators read, or null when the body
+ *  has none (a missing body used to throw → 500). */
+function evaluatorValues(body: unknown): Record<string, unknown> | null {
+  const values = (body as { values?: unknown } | null | undefined)?.values
+  return values && typeof values === 'object' && !Array.isArray(values)
+    ? (values as Record<string, unknown>)
+    : null
+}
+
 /**
  * The field-config rows for `assignments`: one formatted row per (field,
  * group_key) placement (a field placed twice appears twice), unplaced fields
@@ -550,6 +559,21 @@ export async function formatLayoutFieldRows(
 
   ;(formatted as Array<{ sort?: number }>).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
 
+  // The column's character limit, so forms can stop a too-long value before
+  // the save fails (army 2026-10-25: "Vendor Contact" too long, no field named).
+  // null = not a sized string column (nvarchar(max), numbers, virtual fields).
+  const { columnShapes } = await import('../services/items.js')
+  const shapes = (await columnShapes(collection).catch(() => new Map())) as Map<
+    string,
+    { type: string; length?: number | null }
+  >
+  for (const row of formatted as Array<{ field?: string; max_length?: number | null }>) {
+    const shape = row.field ? shapes.get(row.field.toLowerCase()) : undefined
+    const len = Number(shape?.length)
+    row.max_length =
+      shape && /char/i.test(String(shape.type)) && Number.isFinite(len) && len > 0 ? len : null
+  }
+
   return { data: formatted, ungrouped_sort }
 }
 
@@ -797,7 +821,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
   app.post('/:collection/evaluate-visibility', { preHandler: authenticate }, async (req, reply) => {
     markConfigRead(req)
     const { collection } = req.params as { collection: string }
-    const { values } = req.body as { values: Record<string, unknown> }
+    const values = evaluatorValues(req.body)
+    if (!values) return reply.code(400).send({ error: 'values must be an object' })
 
     const rows = (await db('nivaro_fields')
       .where({ collection })
@@ -837,10 +862,10 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
   app.post('/:collection/evaluate-defaults', { preHandler: authenticate }, async (req, reply) => {
     markConfigRead(req)
     const { collection } = req.params as { collection: string }
-    const { trigger_field, values } = req.body as {
-      trigger_field: string
-      values: Record<string, unknown>
-    }
+    const values = evaluatorValues(req.body)
+    const trigger_field = (req.body as { trigger_field?: unknown } | null)?.trigger_field
+    if (!values || typeof trigger_field !== 'string')
+      return reply.code(400).send({ error: 'trigger_field and values are required' })
 
     const rows = (await db('nivaro_fields')
       .where({ collection })
@@ -869,7 +894,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
   app.post('/:collection/evaluate-lock', { preHandler: authenticate }, async (req, reply) => {
     markConfigRead(req)
     const { collection } = req.params as { collection: string }
-    const { values } = req.body as { values: Record<string, unknown> }
+    const values = evaluatorValues(req.body)
+    if (!values) return reply.code(400).send({ error: 'values must be an object' })
 
     const rows = (await db('nivaro_fields')
       .where({ collection })
@@ -896,10 +922,10 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
   app.post('/:collection/cascade', { preHandler: authenticate }, async (req, reply) => {
     markConfigRead(req)
     const { collection } = req.params as { collection: string }
-    const { changed_field, values } = req.body as {
-      changed_field: string
-      values: Record<string, unknown>
-    }
+    const values = evaluatorValues(req.body)
+    const changed_field = (req.body as { changed_field?: unknown } | null)?.changed_field
+    if (!values || typeof changed_field !== 'string')
+      return reply.code(400).send({ error: 'changed_field and values are required' })
 
     const rows = (await db('nivaro_fields')
       .where({ collection })

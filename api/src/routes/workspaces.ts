@@ -391,6 +391,22 @@ async function replayTemplate(
   }
 }
 
+/** Whether a person may make `workspaceId` their current workspace (see the switch route). */
+export async function mayUseWorkspace(
+  isAdmin: boolean | undefined,
+  roleId: string | null | undefined,
+  workspaceId: string
+): Promise<boolean> {
+  if (isAdmin) return true
+  if (workspaceId.toLowerCase() === (await fetchDefaultWorkspaceId()).toLowerCase()) return true
+  if (!roleId) return false
+  const role = (await db('nivaro_roles').where({ id: roleId }).first('workspace')) as
+    | { workspace: string | null }
+    | undefined
+  if (!role) return false
+  return !role.workspace || String(role.workspace).toLowerCase() === workspaceId.toLowerCase()
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 export async function workspacesRoutes(app: FastifyInstance) {
@@ -603,11 +619,16 @@ export async function workspacesRoutes(app: FastifyInstance) {
     return reply.code(204).send()
   })
 
-  // Switch current user's workspace
+  // Switch current user's workspace. Membership is the role's workspace: a
+  // role with no workspace belongs to all of them; one tied to a workspace may
+  // switch only to it (and back to the default). Admins switch anywhere.
   app.post('/:id/switch', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const workspace = await db<Workspace>('nivaro_workspaces').where({ id }).first()
     if (!workspace) return reply.code(404).send({ error: 'Workspace not found' })
+    if (!(await mayUseWorkspace(req.isAdmin, req.user!.role, workspace.id))) {
+      return reply.code(403).send({ error: 'Your role does not belong to this workspace' })
+    }
     await db('nivaro_users').where({ id: req.user!.id }).update({ current_workspace: id })
     return reply.send({ data: { workspace_id: id } })
   })

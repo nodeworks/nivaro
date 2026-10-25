@@ -60,6 +60,8 @@ import {
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { type RecordHeadline, recordHeadlines } from '../services/record-headline.js'
+import { canSeeRecord, visibleRecordIds } from '../services/sla-visibility.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { announceNotificationsRead, movesNotificationState } from '../services/user-sync.js'
 
 // Actual schema (migration 003 + renamed in 012):
@@ -233,6 +235,34 @@ function notificationsFilter(userId: string, q: FilterQuery) {
     query = query.where((qb) => qb.where('subject', 'like', like).orWhere('message', 'like', like))
   }
   return query
+}
+
+/** Categories a non-admin may send a person in (everything else reads as a system notice). */
+const PERSON_CATEGORIES = new Set<NotifyCategory>(['mentions', 'workflow', 'other'])
+export function personCategory(c: NotifyCategory | undefined): NotifyCategory {
+  return c && PERSON_CATEGORIES.has(c) ? c : 'other'
+}
+
+/** Direct notices one sender may send: 30 a minute, 200 an hour (per tenant). */
+const DIRECT_NOTICE_LIMITS = [
+  { windowMs: 60_000, max: 30 },
+  { windowMs: 3_600_000, max: 200 }
+]
+const directNoticeLog = new Map<string, number[]>()
+export function directNoticeAllowed(senderId: string, now = Date.now()): boolean {
+  const key = `${currentTenantKey()}:${String(senderId).toUpperCase()}`
+  const longest = Math.max(...DIRECT_NOTICE_LIMITS.map((l) => l.windowMs))
+  const sent = (directNoticeLog.get(key) ?? []).filter((t) => now - t < longest)
+  const over = DIRECT_NOTICE_LIMITS.some(
+    (l) => sent.filter((t) => now - t < l.windowMs).length >= l.max
+  )
+  if (!over) sent.push(now)
+  directNoticeLog.set(key, sent)
+  if (directNoticeLog.size > 5000) {
+    for (const [k, v] of directNoticeLog)
+      if (!v.some((t) => now - t < longest)) directNoticeLog.delete(k)
+  }
+  return !over
 }
 
 export async function notificationsRoutes(app: FastifyInstance) {
@@ -617,18 +647,30 @@ export async function notificationsRoutes(app: FastifyInstance) {
     if (!body.recipient || !body.subject?.trim()) {
       return reply.code(400).send({ error: 'recipient and subject are required' })
     }
+    if (!req.isAdmin && !directNoticeAllowed(req.user!.id)) {
+      return reply.code(429).send({ error: 'Too many notifications sent — try again later' })
+    }
     const target = await db('nivaro_users')
       .where({ id: body.recipient, status: 'active' })
       .first('id')
     if (!target) return reply.code(404).send({ error: 'Recipient not found' })
 
+    // A person's notice must not pass for a system one: anyone but an admin
+    // sends in a person-to-person category, and links only a record they can see.
+    const category = NOTIFY_CATEGORIES.find((c) => c === body.category)
+    const linked =
+      !!body.collection &&
+      body.item != null &&
+      (req.isAdmin || (await canSeeRecord(req.user!, String(body.collection), String(body.item))))
     await notifyUser(app, String(target.id), {
       subject: body.subject.trim().slice(0, 255),
       message: (body.message ?? '').slice(0, 500),
       sender: req.user!.id,
-      collection: body.collection,
-      item: body.item,
-      category: NOTIFY_CATEGORIES.find((c) => c === body.category)
+      collection: linked ? body.collection : undefined,
+      item: linked ? body.item : undefined,
+      category: req.isAdmin
+        ? category
+        : personCategory(category ?? classifyNotification(body.subject.trim()))
     })
     return reply.code(201).send({ ok: true })
   })
@@ -730,7 +772,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
       preview?: boolean
     }
     const collection = String(b.collection ?? '')
-    const ids = (Array.isArray(b.ids) ? b.ids : []).map(String).filter(Boolean).slice(0, 200)
+    let ids = (Array.isArray(b.ids) ? b.ids : []).map(String).filter(Boolean).slice(0, 200)
     const subject = String(b.subject ?? '').trim()
     const message = String(b.message ?? '').trim()
     if (collection && !(await builtinAllowed(collection, 'message', req)))
@@ -745,6 +787,12 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const { can } = await import('../services/permissions.js')
     if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
+    }
+    // Only records the sender can see: a hidden id names nobody.
+    if (!req.isAdmin) {
+      const seen = await visibleRecordIds(req.user!, collection, ids)
+      ids = ids.filter((id) => seen.has(id))
+      if (ids.length === 0) return reply.code(404).send({ error: 'No such records' })
     }
 
     const wantOwners = b.include?.owners !== false

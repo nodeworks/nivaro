@@ -3,6 +3,7 @@ import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { EDIT_LOCKED, lockHolderVerdict } from '../services/edit-lock.js'
 import { isAuthor, isUuid } from '../services/help-videos.js'
 import { isLockingEnabled, lockHolderName } from '../services/item-lock-guard.js'
 import {
@@ -109,7 +110,41 @@ async function getCurrentLock(collection: string, item: string): Promise<ItemLoc
     if (_app) await handOffToQueue(_app, collection, item)
     return null
   }
+  // A lock its holder may no longer use is void: the record moved into an
+  // approval step they do not own (army v3 — the creator was locked out of
+  // their own record by an approver's lock). Dropped like an expiry, and the
+  // holder is told why.
+  const verdict = await lockHolderVerdict(lock.user, collection, item)
+  if (!verdict.allowed) {
+    await db('nivaro_item_locks').where({ id: lock.id }).delete()
+    if (_app) {
+      emitLockEvent(_app, collection, item, lock.user, false)
+      await handOffToQueue(_app, collection, item)
+      const { notifyUser } = await import('../services/notification-channels.js')
+      const what = await lockSubject(collection, String(item))
+      await notifyUser(_app, lock.user, {
+        subject: 'Your edit lock was released',
+        message: `${verdict.message} Your edit lock on ${what.label} was released.`,
+        collection,
+        item: String(item),
+        category: 'system',
+        target: what.target
+      }).catch(() => {})
+    } else noteLockAnnounced(collection, item, false)
+    return null
+  }
   return lock
+}
+
+/** 403 for a person the approval edit lock refuses: a lock they could not use. */
+async function approvalRefusal(
+  req: FastifyRequest,
+  collection: string,
+  item: string
+): Promise<{ error: string; code: typeof EDIT_LOCKED } | null> {
+  if (req.isAdmin) return null
+  const verdict = await lockHolderVerdict(req.user!, collection, item)
+  return verdict.allowed ? null : { error: verdict.message, code: EDIT_LOCKED }
 }
 
 // ── Wait queue (migration 306) ─────────────────────────────────────────────
@@ -214,27 +249,31 @@ function emitLockEvent(
   collection: string,
   item: string,
   user: string,
-  locked: boolean
+  locked: boolean,
+  fresh = false
 ) {
   // Cloud: this tenant's room (tenant-rooms.ts). Nothing in core joins item rooms today.
   app.io
     ?.to(tenantScopedRoom(`item:${collection}:${item}`))
     .emit('item-lock', { collection, item, user, locked })
-  noteLockAnnounced(collection, item, locked)
+  noteLockAnnounced(collection, item, locked, fresh)
 }
 
 // Lists show a lock icon per row, so a lock taken or released is also a
 // payload-free `$lock` notice on the collection feed (rows re-read their
 // locks). A refresh of a lock already announced is not news: remember the
-// last state announced per record and only speak on a change.
+// last state announced per record and only speak on a change. The memory is
+// this process's only: a release served by another replica never clears it,
+// so a lock newly TAKEN (`fresh`) is always news (army v3 — viewers were never
+// told a new holder had the record).
 const announcedLocks = new Map<string, boolean>()
 const ANNOUNCED_MAX = 5000
 
-function noteLockAnnounced(collection: string, item: string, locked: boolean) {
+function noteLockAnnounced(collection: string, item: string, locked: boolean, fresh = false) {
   if (/^(nivaro_|directus_)/i.test(collection)) return
   // Per tenant: the same record id in two tenants is two records.
   const key = `${currentTenantKey()}\u0000${collection}\u0000${item}`
-  if (announcedLocks.get(key) === locked) return
+  if (!fresh && announcedLocks.get(key) === locked) return
   if (announcedLocks.size >= ANNOUNCED_MAX) announcedLocks.clear()
   if (locked) announcedLocks.set(key, true)
   else announcedLocks.delete(key)
@@ -517,6 +556,17 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       }
 
       const existing = await getCurrentLock(collection, item)
+      // Someone the approval edit lock refuses gets no lock: they could not
+      // save, and holding it would lock out the people who may.
+      const waiting = await approvalRefusal(req, collection, item)
+      if (waiting) {
+        if (existing && existing.user === me) {
+          await db('nivaro_item_locks').where({ id: existing.id }).delete()
+          emitLockEvent(app, collection, item, me, false)
+          await handOffToQueue(app, collection, item)
+        }
+        return reply.code(403).send(waiting)
+      }
       if (existing && existing.user !== me) {
         return reply.code(409).send({
           error: 'Item is locked by another user',
@@ -562,7 +612,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
 
       // Holding the lock means no longer waiting for it.
       await leaveQueue(collection, item, me)
-      emitLockEvent(app, collection, item, me, true)
+      emitLockEvent(app, collection, item, me, true, !existing)
 
       if (!existing) {
         await logActivity({
@@ -697,6 +747,8 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (!(await mayTakeOver(req.user, !!req.isAdmin))) {
         return reply.code(403).send({ error: 'Your role may not take over locks' })
       }
+      const waiting = await approvalRefusal(req, collection, item)
+      if (waiting) return reply.code(403).send(waiting)
       const existing = await getCurrentLock(collection, item)
       if (existing && existing.user !== req.user!.id) {
         await db('nivaro_item_locks').where({ collection, item }).del()
@@ -721,6 +773,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       // The taker now holds it — they are no longer waiting. The rest of the
       // queue stays: the lock was not released, it changed hands.
       await leaveQueue(collection, item, req.user!.id)
+      emitLockEvent(app, collection, item, req.user!.id, true, true)
       await logActivity({
         action: 'lock-force-take',
         user: req.user!.id,
@@ -744,6 +797,13 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       }
 
       const existing = await getCurrentLock(collection, item)
+      // The record moved into a step this person may not change: their lock
+      // was dropped (getCurrentLock) — say so, so the form turns read-only
+      // instead of re-acquiring.
+      if (!existing) {
+        const waiting = await approvalRefusal(req, collection, item)
+        if (waiting) return reply.code(403).send(waiting)
+      }
       if (!existing || existing.user !== me) {
         // Say WHO holds it now. A heartbeat is the only moment a client whose
         // lock was taken over finds out, and without the holder it cannot show

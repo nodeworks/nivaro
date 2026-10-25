@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { linkLabelsAsUser } from '../services/ai-link-labels.js'
+import { aggregateItems } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import { inferDrillTarget } from '../services/report-drill.js'
 import {
@@ -10,7 +13,7 @@ import {
   type EntityFilter,
   isRegisteredBusinessCollection,
   parseJson,
-  physicalColumns,
+  readableColumns,
   renderReportEmailHtml,
   resolveWidgetData,
   resolveWidgetDataFull,
@@ -49,6 +52,21 @@ function canReadReport(report: ReportRow, req: FastifyRequest): boolean {
 
 function canEditReport(report: ReportRow, req: FastifyRequest): boolean {
   return !!req.isAdmin || report.owner === req.user!.id
+}
+
+/**
+ * A snapshot holds figures computed as whoever took it, so it is shown only to
+ * that person; the owner also sees the scheduled ones (created_by NULL, taken as
+ * the owner); admins see all.
+ */
+export function snapshotsVisibleTo(report: ReportRow, req: FastifyRequest) {
+  return (qb: Knex.QueryBuilder) => {
+    if (req.isAdmin) return
+    const me = req.user!.id
+    if (report.owner === me)
+      void qb.where((w) => w.where('created_by', me).orWhereNull('created_by'))
+    else void qb.where('created_by', me)
+  }
 }
 
 function formatReport(r: ReportRow, widgets?: WidgetRow[]) {
@@ -651,6 +669,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
   // the data), mail test mode applies like any other send.
   app.post<{ Params: { id: string }; Body: { to?: string; widget_id?: string } }>(
     '/:id/email',
+    { preHandler: requireAuth },
     async (req, reply) => {
       const report = (await db('nivaro_report_defs').where({ id: req.params.id }).first()) as
         | ReportRow
@@ -1137,33 +1156,33 @@ export async function reportStudioRoutes(app: FastifyInstance) {
           // registered business collections the VIEWER can read â€” nothing else
           if (!(await isRegisteredBusinessCollection(col))) continue
           if (!(await can(req.user!, 'read', col))) continue
-          const valid = await physicalColumns(col)
-          if (!valid.has(field)) continue
-          const rows = (await db(col).distinct(field).whereNotNull(field).limit(100)) as Array<
-            Record<string, unknown>
-          >
-          // FK? resolve labels
+          // A field the viewer's policy hides lists nothing.
+          if (!(await readableColumns(req.user!, col)).readable.has(field)) continue
+          // Distinct values as the viewer: row filter and User Scopes apply.
+          const res = await aggregateItems(req.user!, col, {
+            aggregate: { groupBy: [field], countAll: true, limit: 100 },
+            filter: { [field]: { _nnull: true } }
+          })
+          const values = (res.data ?? [])
+            .map((r) => r.group?.[field])
+            .filter((v) => v != null && v !== '')
+          // FK? resolve labels â€” read as the viewer
           const rel = (await db('nivaro_relations')
             .where({ many_collection: col, many_field: field })
             .whereNull('junction_field')
             .first()) as { one_collection: string | null } | undefined
           if (rel?.one_collection && !rel.one_collection.startsWith('nivaro_')) {
-            const ids = rows.map((r) => r[field]).filter((v) => v != null)
-            const related = (await db(rel.one_collection).whereIn(
-              'id',
-              ids as Array<string | number>
-            )) as Array<Record<string, unknown>>
-            for (const r of related) {
-              seen.set(
-                String(r.id),
-                String(r.title ?? r.name ?? r.label ?? r.subject ?? r.id).slice(0, 60)
-              )
+            const target = rel.one_collection
+            const labels = await linkLabelsAsUser(
+              req.user!,
+              new Map([[target, new Set(values.map(String))]])
+            )
+            for (const v of values) {
+              const label = labels[`${target}:${String(v)}`]
+              if (label) seen.set(String(v), label.slice(0, 60))
             }
           } else {
-            for (const r of rows) {
-              const v = r[field]
-              if (v != null) seen.set(String(v), String(v).slice(0, 60))
-            }
+            for (const v of values) seen.set(String(v), String(v).slice(0, 60))
           }
         } catch {
           /* skip mismatched collections */
@@ -1458,6 +1477,7 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
       if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
       const rows = await db('nivaro_report_snapshots')
         .where({ report: report.id })
+        .modify(snapshotsVisibleTo(report, req))
         .orderBy('id', 'desc')
         .limit(30)
         .select('id', 'name', 'taken_at')
@@ -1474,6 +1494,7 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available â
       if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
       const row = await db('nivaro_report_snapshots')
         .where({ report: report.id, id: Number(req.params.snapId) })
+        .modify(snapshotsVisibleTo(report, req))
         .first()
       if (!row) return reply.code(404).send({ error: 'Snapshot not found' })
       return reply.send({

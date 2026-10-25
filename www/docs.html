@@ -12547,14 +12547,14 @@ PATCH /api/collections/chat_messages
         <div class="doc-section" id="s-record-merge" data-toc='[{"id":"record-merge","label":"Record Merge"}]'>
           <!-- SYNC:record-merge -->
           <h1 class="doc-h1" id="record-merge">Record Merge</h1>
-          <p class="doc-p">Combine duplicate records into one survivor. Select 2–5 rows in the collection browser and hit Merge: a side-by-side sheet shows every differing field, you pick the surviving record (defaults to the most-referenced) and which value wins per field.</p>
+          <p class="doc-p">Combine duplicate records into one survivor. Administrators select 2–5 rows in the collection browser and hit Merge: a side-by-side sheet shows every differing field, you pick the surviving record (defaults to the most-referenced) and which value wins per field.</p>
           <pre class="doc-pre"><code>GET  /api/merge/preview?collection=&amp;ids=a,b   # field values + inbound reference counts
 POST /api/merge  { collection, survivor_id, loser_ids, field_choices }</code></pre>
           <ul class="doc-ul">
             <li>Every inbound reference repoints to the survivor: M2O foreign keys in bulk, M2M junction rows individually (rows that would duplicate an existing pairing are dropped).</li>
             <li>Chosen field values apply through the normal update path — hooks, validation and row security run.</li>
             <li>Losers are deleted through the items service, so they land in Trash and stay restorable.</li>
-            <li>Requires update + delete permission on the collection.</li>
+            <li>Administrators only — both routes (preview and merge) answer 403 to everyone else.</li>
           </ul>
           <!-- /SYNC:record-merge -->
         </div>

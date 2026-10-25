@@ -1,8 +1,18 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { can } from '../services/permissions.js'
+
+/** readOne as the caller: null (or a throw) = the record is hidden from them. */
+async function recordReadable(req: FastifyRequest, collection: string, id: string) {
+  if (req.isAdmin) return true
+  const { readOne } = await import('../services/items.js')
+  const row = await readOne(req.user!, collection, id, req.workspaceId ?? undefined, ['id']).catch(
+    () => null
+  )
+  return !!row
+}
 
 /**
  * "Edited 3d ago by Beth" — the newest human-relevant activity row for one
@@ -21,6 +31,10 @@ export async function lastTouchRoutes(app: FastifyInstance) {
       }
       if (!(await can(req.user!, 'read', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
+      }
+      // Who touched a record is for people who can open it (row filter, User Scopes).
+      if (!(await recordReadable(req, collection, id))) {
+        return reply.code(404).send({ error: 'Not found' })
       }
       const row = (await db('nivaro_activity as a')
         .leftJoin('nivaro_users as u', 'a.user', 'u.id')
@@ -64,6 +78,10 @@ export async function lastTouchRoutes(app: FastifyInstance) {
       }
       if (!(await can(req.user!, 'read', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
+      }
+      // Who touched a record is for people who can open it (row filter, User Scopes).
+      if (!(await recordReadable(req, collection, id))) {
+        return reply.code(404).send({ error: 'Not found' })
       }
       // Provenance judges the record's ORIGIN — bookkeeping rows must not
       // outrank it. Per-collection read logging can write a 'read' row

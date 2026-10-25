@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -16,6 +16,41 @@ function parseOptions(raw: unknown): string[] | null {
   } catch {
     return null
   }
+}
+
+/** Why a value does not fit its definition's type, or null when it does
+ *  (null / '' clears the value and always fits). */
+export function attributeValueError(
+  def: { key: string; type: string; options?: unknown },
+  value: unknown
+): string | null {
+  if (value == null || value === '') return null
+  if (typeof value === 'object') return `${def.key} must be a single value`
+  const text = String(value)
+  switch (def.type) {
+    case 'number':
+      return Number.isFinite(Number(text)) ? null : `${def.key} must be a number`
+    case 'boolean':
+      return ['true', 'false', '1', '0'].includes(text.toLowerCase())
+        ? null
+        : `${def.key} must be true or false`
+    case 'date':
+      return Number.isNaN(Date.parse(text)) ? `${def.key} must be a date` : null
+    case 'select': {
+      const choices = parseOptions(def.options)
+      return !choices || choices.includes(text) ? null : `${def.key} is not one of its choices`
+    }
+    default:
+      return text.length > 4000 ? `${def.key} is too long` : null
+  }
+}
+
+/** The record as the caller reads it (readOne: row filter, User Scopes). */
+async function recordReadable(req: FastifyRequest, collection: string, itemId: string) {
+  const { readOne } = await import('../services/items.js')
+  return !!(await readOne(req.user!, collection, itemId, req.workspaceId ?? undefined, [
+    'id'
+  ]).catch(() => null))
 }
 
 export async function attributesRoutes(app: FastifyInstance) {
@@ -188,6 +223,9 @@ export async function attributesRoutes(app: FastifyInstance) {
       if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
+      if (!(await recordReadable(req, collection, itemId))) {
+        return reply.code(404).send({ error: 'Not found' })
+      }
       const defs = await db('nivaro_attribute_definitions')
         .where({ collection, is_active: true })
         .orderBy('sort')
@@ -214,16 +252,46 @@ export async function attributesRoutes(app: FastifyInstance) {
       if (!req.isAdmin && !(await can(req.user!, 'update', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
+      // The same gates a PATCH of the record runs: it must be visible to the
+      // caller, updatable by them, and not edit-locked.
+      if (!(await recordReadable(req, collection, itemId))) {
+        return reply.code(404).send({ error: 'Not found' })
+      }
+      if (!req.isAdmin) {
+        const { canUpdateItem } = await import('../services/items.js')
+        if (!(await canUpdateItem(req.user!, collection, itemId, req.workspaceId ?? undefined)))
+          return reply.code(403).send({ error: 'You cannot change this record' })
+      }
+      {
+        const { assertNotEditLocked, EditLockedError, EDIT_LOCKED } = await import(
+          '../services/edit-lock.js'
+        )
+        try {
+          await assertNotEditLocked(req.user, collection, { ids: [itemId] }, req)
+        } catch (e) {
+          const message =
+            e instanceof EditLockedError
+              ? e.message
+              : 'Could not confirm you may change this record while it waits.'
+          return reply.code(403).send({ error: message, code: EDIT_LOCKED })
+        }
+      }
       const body = (req.body ?? {}) as Record<string, unknown>
 
-      // Only allow keys that have an active definition for this collection
-      const defs = await db('nivaro_attribute_definitions')
+      // Only allow keys that have an active definition for this collection,
+      // with values that fit the definition's type.
+      const defs = (await db('nivaro_attribute_definitions')
         .where({ collection, is_active: true })
-        .select('key')
-      const allowed = new Set(defs.map((d: Record<string, unknown>) => String(d.key)))
+        .select('key', 'type', 'options')) as Array<{ key: string; type: string; options: unknown }>
+      const byKey = new Map(defs.map((d) => [String(d.key), d]))
+      for (const [key, value] of Object.entries(body)) {
+        const def = byKey.get(key)
+        const problem = def ? attributeValueError(def, value) : null
+        if (problem) return reply.code(400).send({ error: problem })
+      }
 
       for (const [key, value] of Object.entries(body)) {
-        if (!allowed.has(key)) continue
+        if (!byKey.has(key)) continue
         const strValue = value != null ? String(value) : null
         const existing = await db('nivaro_attribute_values')
           .where({ collection, item_id: String(itemId), attribute_key: key })

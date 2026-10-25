@@ -274,6 +274,19 @@ interface ActivitySummary {
   collections: Array<{ collection: string; collection_label?: string | null; count: number }>
 }
 
+/** Whether an activity row opens its record: not a system object (a query
+ *  run, a setting — no record page shows those) and not a delete (the record
+ *  is gone; the link only ever said "Record not found"). */
+export function activityLinkable(entry: {
+  action: string
+  collection: string | null
+  item: string | null
+}): boolean {
+  if (!entry.collection || !entry.item) return false
+  if (/^(nivaro|directus)_/i.test(entry.collection)) return false
+  return entry.action !== 'delete'
+}
+
 /** A junction write is a link, not a record — say so. */
 function verbFor(entry: ActivityEntry): string {
   if (!entry.link) return entry.action
@@ -450,10 +463,9 @@ export function ActivityFeedCard({ userId }: { userId: string }) {
               <ol className='relative ml-1 border-l border-slate-100 dark:border-border'>
                 {group.entries.map((entry) => {
                   const meta = ACTION_META[entry.action] ?? ACTION_FALLBACK
-                  const href =
-                    entry.collection && entry.item
-                      ? urlFor({ collection: entry.collection, itemId: entry.item })
-                      : null
+                  const href = activityLinkable(entry)
+                    ? urlFor({ collection: entry.collection!, itemId: entry.item! })
+                    : null
                   return (
                     <li key={entry.id} className='relative py-2 pl-4' data-activity-row={entry.id}>
                       <span
@@ -493,8 +505,17 @@ export function ActivityFeedCard({ userId }: { userId: string }) {
                               </span>
                             </a>
                           ) : (
-                            <span className='text-[12.5px] text-slate-600 dark:text-slate-300'>
-                              {entry.collection_label ?? entry.collection}
+                            <span className='min-w-0 truncate text-[12.5px] text-slate-600 dark:text-slate-300'>
+                              {entry.link && entry.record_label ? null : (
+                                <span className='text-slate-400'>
+                                  {entry.collection_label ?? entry.collection}{' '}
+                                </span>
+                              )}
+                              {entry.record_label ? (
+                                <span className='font-medium'>{entry.record_label}</span>
+                              ) : entry.item ? (
+                                <span className='font-medium'>#{entry.item}</span>
+                              ) : null}
                             </span>
                           ))}
                         <span

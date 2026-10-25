@@ -52,7 +52,7 @@ export const mergeDocs: DocSection = {
     { type: 'h1', id: 'record-merge', text: 'Record Merge' },
     {
       type: 'p',
-      text: 'Combine duplicate records into one survivor. Select 2–5 rows in the collection browser and hit Merge: a side-by-side sheet shows every differing field, you pick the surviving record (defaults to the most-referenced) and which value wins per field.'
+      text: 'Combine duplicate records into one survivor. Administrators select 2–5 rows in the collection browser and hit Merge: a side-by-side sheet shows every differing field, you pick the surviving record (defaults to the most-referenced) and which value wins per field.'
     },
     {
       type: 'pre',
@@ -65,7 +65,7 @@ POST /api/merge  { collection, survivor_id, loser_ids, field_choices }`
         'Every inbound reference repoints to the survivor: M2O foreign keys in bulk, M2M junction rows individually (rows that would duplicate an existing pairing are dropped).',
         'Chosen field values apply through the normal update path — hooks, validation and row security run.',
         'Losers are deleted through the items service, so they land in Trash and stay restorable.',
-        'Requires update + delete permission on the collection.'
+        'Administrators only — both routes (preview and merge) answer 403 to everyone else.'
       ]
     }
   ]

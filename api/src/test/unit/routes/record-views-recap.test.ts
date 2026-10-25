@@ -12,6 +12,8 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 }))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+// The record gate (readOne as the caller) has its own tests — this file is about the recap.
+vi.mock('../../../services/erp-record-gate.js', () => ({ recordRefusal: vi.fn(async () => null) }))
 
 import { db } from '../../../db/index.js'
 import { recordRecapSince, recordViewRoutes } from '../../../routes/record-views.js'

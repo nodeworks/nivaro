@@ -118,7 +118,11 @@ import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
 import { withTriggerSafeReturning } from './trigger-safe.js'
 import { applyDirectoryListingRules } from './user-directory-cols.js'
-import { applyUserScopesToQuery } from './user-scopes.js'
+import {
+  applyScopeEnforcement,
+  applyUserScopesToQuery,
+  getUserScopeEnforcement
+} from './user-scopes.js'
 import { enforceValidationRules, FieldValidationError } from './validation-rules.js'
 import {
   ADDENDUMS_FIELD,
@@ -363,9 +367,19 @@ export async function columnShapes(collection: string): Promise<Map<string, Colu
         dot > 0 ? [collection.slice(0, dot), collection.slice(dot + 1)] : [null, collection]
       // A bare name resolves like SQL Server does: the login's default schema
       // first, then dbo — only the winning schema's columns are read.
-      const rows = rawRows<{ c: string; t: string; p: number | null; s: number | null }>(
+      const rows = rawRows<{
+        c: string
+        t: string
+        p: number | null
+        s: number | null
+        l: number | null
+        k: number | null
+      }>(
         await db.raw(
-          `SELECT COLUMN_NAME AS c, DATA_TYPE AS t, NUMERIC_PRECISION AS p, NUMERIC_SCALE AS s
+          `SELECT COLUMN_NAME AS c, DATA_TYPE AS t, NUMERIC_PRECISION AS p, NUMERIC_SCALE AS s,
+                  CHARACTER_MAXIMUM_LENGTH AS l,
+                  COLUMNPROPERTY(OBJECT_ID(QUOTENAME(TABLE_SCHEMA) + '.' + QUOTENAME(TABLE_NAME)),
+                                 COLUMN_NAME, 'IsComputed') AS k
            FROM INFORMATION_SCHEMA.COLUMNS
            WHERE TABLE_NAME = ? AND TABLE_SCHEMA = COALESCE(?, (
              SELECT TOP 1 TABLE_SCHEMA FROM INFORMATION_SCHEMA.TABLES
@@ -380,7 +394,13 @@ export async function columnShapes(collection: string): Promise<Map<string, Colu
         )
       )
       for (const r of rows) {
-        shapes.set(String(r.c).toLowerCase(), { type: String(r.t), precision: r.p, scale: r.s })
+        shapes.set(String(r.c).toLowerCase(), {
+          type: String(r.t),
+          precision: r.p,
+          scale: r.s,
+          length: r.l,
+          computed: r.k === 1
+        } as ColumnShape)
       }
     } else {
       const info = (await db(collection).columnInfo()) as Record<string, { type?: string }>
@@ -409,6 +429,86 @@ export async function idFitsCollection(collection: string, id: unknown): Promise
  * (lib/sql-value-fit.ts numberProblem): a 400 naming the field, where 1e308
  * used to come back as "Bigint must be safe integer…" with a 500.
  */
+/**
+ * A text value longer than its column holds is refused naming the field —
+ * SQL Server's own refusal ("String or binary data would be truncated") does
+ * not say which column on this stack, so the form could not point at it.
+ * `max` columns (length -1) take anything.
+ */
+/**
+ * SQL computed columns belong to the database: a write naming one (a
+ * duplicated record's child rows copying them) was a 500 carrying the
+ * statement (error 271). They are never written.
+ */
+export async function dropComputedColumns(
+  collection: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  const shapes = await columnShapes(collection)
+  for (const field of Object.keys(payload)) {
+    if ((shapes.get(field.toLowerCase()) as { computed?: boolean } | undefined)?.computed)
+      delete payload[field]
+  }
+}
+
+/**
+ * A non-admin links only a file they may read (file-access.ts): naming the id
+ * of a file attached to a record they cannot open — in a file field or a files
+ * junction row — would hand them its bytes through their own record.
+ */
+export async function assertLinkedFilesReadable(
+  collection: string,
+  payload: Record<string, unknown>,
+  callerFields: Set<string>,
+  req: FastifyRequest | undefined,
+  previous?: Record<string, unknown> | null
+): Promise<void> {
+  if (!req?.user || req.isAdmin || isSystemCollection(collection)) return
+  const { getFileRefColumns } = await import('./file-usage.js')
+  const sites = await getFileRefColumns().catch(() => [])
+  const ids: Array<{ field: string; id: string }> = []
+  for (const site of sites) {
+    if (site.table.toLowerCase() !== collection.toLowerCase()) continue
+    const field = [...callerFields].find((f) => f.toLowerCase() === site.column.toLowerCase())
+    const v = field ? payload[field] : null
+    if (!field || v == null || v === '' || typeof v === 'object') continue
+    if (previous && String(previous[field] ?? '').toLowerCase() === String(v).toLowerCase())
+      continue
+    ids.push({ field, id: String(v) })
+  }
+  if (ids.length === 0) return
+  const { readableFileIdList } = await import('./file-access.js')
+  const ok = await readableFileIdList(
+    ids.map((x) => x.id),
+    req
+  )
+  const bad = ids.find((x) => !ok.has(x.id.toLowerCase()))
+  if (bad)
+    throw Object.assign(
+      new Error('That file belongs to a record you cannot open, so it cannot be linked here'),
+      { statusCode: 403, code: 'FILE_NOT_READABLE', field: bad.field }
+    )
+}
+
+export async function assertStringsFit(
+  collection: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  const shapes = await columnShapes(collection)
+  if (shapes.size === 0) return
+  for (const [field, value] of Object.entries(payload)) {
+    if (typeof value !== 'string') continue
+    const max = (shapes.get(field.toLowerCase()) as { length?: number | null } | undefined)?.length
+    if (typeof max !== 'number' || max <= 0 || value.length <= max) continue
+    const label = field.replace(/_/g, ' ')
+    throw new FieldValidationError(
+      `${label.charAt(0).toUpperCase()}${label.slice(1)} is too long — at most ${max} characters (this has ${value.length})`,
+      field,
+      'max_length'
+    )
+  }
+}
+
 async function assertNumbersFit(
   collection: string,
   payload: Record<string, unknown>
@@ -639,7 +739,9 @@ function resolveFilterHop(
   const cur = current.toLowerCase()
   const eq = (a: string | null | undefined, b: string) => (a ?? '').toLowerCase() === b
   for (const r of rels) {
-    if (!eq(r.many_collection, cur) || r.junction_field != null || !r.one_collection) continue
+    // A relation whose FK column is on `current` is an M2O from here — a
+    // junction's own legs too (junction_field only marks the pairing).
+    if (!eq(r.many_collection, cur) || !r.one_collection) continue
     const fk = r.many_field.toLowerCase()
     if (fk === k || (fk.endsWith('_id') && fk.slice(0, -3) === k))
       return { next: r.one_collection, column: r.many_field }
@@ -877,6 +979,77 @@ async function applyAuditSpecials(
       now ??= new Date()
       payload[f.field] = now
     }
+  }
+}
+
+const AUDIT_SPECIALS = ['user-created', 'date-created', 'user-updated', 'date-updated']
+
+/**
+ * Fields a non-admin never sets (create or update): the audit specials
+ * (creator, created/changed stamps — creator decides who may change a record
+ * in approval and who may make owner-or-creator moves), fields outside the
+ * role's create/update field list and, for the caller's own payload
+ * (`callerPayload`), fields the data model marks read-only (pipeline-state
+ * mirrors, rollup totals). Dropped before anything reads the payload, so the
+ * audit pass stamps the real values. Admins and server code without a request
+ * keep them; server code that writes a read-only field on someone's behalf
+ * (bulk actions, extensions) does not pass `callerPayload`.
+ */
+export async function dropServerSetFields(
+  user: User,
+  collection: string,
+  payload: Record<string, unknown>,
+  phase: 'create' | 'update',
+  req: FastifyRequest | undefined,
+  callerPayload: boolean
+): Promise<string[]> {
+  if (!req || req.isAdmin) return []
+  let fields: CMSField[]
+  try {
+    fields = await getFields(collection)
+  } catch {
+    return []
+  }
+  const byName = new Map(fields.map((f) => [f.field, f]))
+  const allowed = await getAllowedFields(user, phase, collection)
+  const listed = allowed && !allowed.includes('*') ? new Set(allowed) : null
+  const dropped: string[] = []
+  for (const key of Object.keys(payload)) {
+    if (key.startsWith('_') || key === 'id') continue
+    const f = byName.get(key)
+    const audit = (f?.special ?? []).some((s) => AUDIT_SPECIALS.includes(s))
+    const readonly = callerPayload && f?.readonly === true
+    if (audit || readonly || (listed && !listed.has(key))) {
+      delete payload[key]
+      dropped.push(key)
+    }
+  }
+  return dropped
+}
+
+/**
+ * Leading/trailing spaces typed or pasted into a single-line text input are
+ * never part of the value (they leaked into record names built from it) —
+ * trimmed on the caller's own payload. Multi-line, rich-text and code fields,
+ * and system tables, keep what was sent.
+ */
+export async function trimSingleLineInputs(
+  collection: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  if (isSystemCollection(collection)) return
+  let fields: CMSField[]
+  try {
+    fields = await getFields(collection)
+  } catch {
+    return
+  }
+  for (const f of fields) {
+    const v = payload[f.field]
+    if (typeof v !== 'string' || f.interface !== 'input') continue
+    if (f.type !== 'string' && f.type !== 'text') continue
+    const trimmed = v.trim()
+    if (trimmed !== v) payload[f.field] = trimmed
   }
 }
 
@@ -1530,6 +1703,39 @@ async function getRelsForCollection(collection: string): Promise<CMSRelation[]> 
   return rels
 }
 
+/**
+ * A junction row's write is a change of its PARENT's many-to-many field
+ * (a workflow's Zones, Funding Years, Files): an open parent record hears
+ * only its own collection's events, so it is told too — the alias name as
+ * the changed field, ids only (army v3: a Zone change by someone else never
+ * reached an open record, and Duplicate copied the stale Zone).
+ */
+async function broadcastJunctionParents(
+  req: FastifyRequest | undefined,
+  collection: string,
+  rows: Array<Record<string, unknown> | null | undefined>
+): Promise<void> {
+  const rels = await getRelsForCollection(collection).catch(() => [] as CMSRelation[])
+  const legs = rels.filter(
+    (r) => r.many_collection === collection && r.junction_field && r.one_collection && r.one_field
+  )
+  if (legs.length === 0) return
+  const sent = new Set<string>()
+  for (const leg of legs) {
+    for (const row of rows) {
+      const parent = row?.[leg.many_field]
+      if (parent == null || parent === '' || typeof parent === 'object') continue
+      const key = `${leg.one_collection}\u0001${String(parent)}\u0001${leg.one_field}`
+      if (sent.has(key)) continue
+      sent.add(key)
+      broadcastCollectionUpdate(req?.server?.io, leg.one_collection as string, String(parent), {
+        action: 'update',
+        changed_fields: [leg.one_field as string]
+      })
+    }
+  }
+}
+
 function clearRelCache() {
   relCache.clear()
 }
@@ -1594,7 +1800,9 @@ async function expandRelations(
   if ('*' in nested) {
     const wildcardSubs = nested['*']
     for (const r of rels) {
-      if (r.many_collection === collection && r.many_field && !r.junction_field) {
+      // A junction's own legs are M2O from the junction (junction_field only
+      // marks the pairing — gotchas: never filter it out for M2O legs).
+      if (r.many_collection === collection && r.many_field) {
         const f = r.many_field
         if (!expandEntries.find(([k]) => k === f)) {
           expandEntries.push([f, wildcardSubs])
@@ -1604,9 +1812,7 @@ async function expandRelations(
   }
 
   for (const [fieldName, subFields] of expandEntries) {
-    const rel = rels.find(
-      (r) => r.many_collection === collection && r.many_field === fieldName && !r.junction_field
-    )
+    const rel = rels.find((r) => r.many_collection === collection && r.many_field === fieldName)
     if (!rel?.one_collection) continue
 
     const relCollection = rel.one_collection
@@ -1745,7 +1951,8 @@ function findM2ORelation(
 ): { rel: CMSRelation; fkField: string } | null {
   for (const rel of rels) {
     if (rel.many_collection !== collection) continue
-    if (rel.junction_field != null) continue // M2M junction — not M2O
+    // The FK column is on this collection, so this is M2O from here — a
+    // junction's own legs included (their junction_field marks the pairing).
     if (!rel.one_collection) continue
 
     const fk = rel.many_field
@@ -2712,6 +2919,45 @@ type PathPlan = { hops: PathHop[]; leafTable: string; leafCol: string } | null
  */
 async function applyUserScopes(q: QB, collection: string, user: User): Promise<void> {
   await applyUserScopesToQuery(q, collection, user)
+}
+
+/**
+ * Writes answer to the same User Scopes reads do: an update or delete of a
+ * record outside the caller's scope (another Zone) is a not-found, never a
+ * silent success. `restricts` false = no restriction for this person (admins,
+ * unscoped people), so the gate costs no query.
+ */
+async function writeScopeFor(
+  user: User,
+  collection: string
+): Promise<{ restricts: boolean; apply: (q: QB) => void }> {
+  const enforcement = await getUserScopeEnforcement(user, collection)
+  return {
+    restricts: enforcement.deny || enforcement.filters.length > 0,
+    apply: (q) => applyScopeEnforcement(q, collection, enforcement)
+  }
+}
+
+/**
+ * Before any hook runs: the record must exist inside the caller's workspace,
+ * row filter and User Scopes, or the write is a 404. Only queries when one of
+ * them restricts this person.
+ */
+async function assertWritableRow(
+  collection: string,
+  id: string | number,
+  user: User,
+  scope: { restricts: boolean; apply: (q: QB) => void },
+  rowFilter: Awaited<ReturnType<typeof getRowFilter>>,
+  workspaceId?: string
+): Promise<void> {
+  const wsScoped = !!workspaceId && (await workspaceColumnExists(collection))
+  if (!scope.restricts && !rowFilter && !wsScoped) return
+  const q = db(collection).where({ id }).select('id')
+  await applyWorkspaceScope(q, collection, workspaceId)
+  if (rowFilter) applyRowFilter(q, rowFilter, user)
+  scope.apply(q)
+  if (!(await q.first())) throw new ItemNotFoundError()
 }
 
 export async function planConditionPath(collection: string, path: string[]): Promise<PathPlan> {
@@ -3763,7 +4009,15 @@ export async function readItems(
   if (instanceSplit.instance && directFields[0] !== '*' && !directFields.includes('id'))
     directFields.push('id')
 
-  const effectiveOffset = keyset ? 0 : page ? (page - 1) * limit : offset
+  // A negative or fractional page/offset reads from the start, never a driver
+  // error ("A non-negative integer must be provided to offset" was a 500).
+  const effectiveOffset = keyset
+    ? 0
+    : page && Number.isFinite(page)
+      ? (Math.max(1, Math.floor(page)) - 1) * limit
+      : Number.isFinite(offset)
+        ? Math.max(0, Math.floor(offset))
+        : 0
   let selectFields =
     allowedFields === null
       ? directFields[0] === '*'
@@ -4171,7 +4425,7 @@ export async function readItems(
       )
     }
     for (const r of rows) {
-      keyset.sorts.forEach((_, i) => delete r[KEYSET_COL(i)])
+      for (let i = 0; i < keyset.sorts.length; i++) delete r[KEYSET_COL(i)]
       for (const c of keysetAdded) delete r[c]
     }
   }
@@ -5055,7 +5309,8 @@ async function applyAliasO2MWrites(
   writes: AliasO2MWrite[],
   req: FastifyRequest | undefined,
   workspaceId: string | undefined,
-  isNewParent: boolean
+  isNewParent: boolean,
+  callerPayload = false
 ): Promise<NestedCreated> {
   const created: NestedCreated = []
   // Rows changed in place, with what they held before, for the undo.
@@ -5122,7 +5377,7 @@ async function applyAliasO2MWrites(
           const prior: Record<string, unknown> = {}
           for (const k of Object.keys(patch))
             if (before && !k.startsWith('_') && k in before) prior[k] = before[k]
-          await updateOne(user, w.collection, u.id, patch, req, workspaceId)
+          await updateOne(user, w.collection, u.id, patch, req, workspaceId, { callerPayload })
           changed.push({ collection: w.collection, id: u.id, prior })
         } catch (err) {
           throw nestedError(err, w, `${w.field}[${u.id}]`)
@@ -5140,7 +5395,7 @@ async function applyAliasO2MWrites(
             { ...w.rows[i], [w.fk]: parentId },
             req,
             workspaceId,
-            { skipRollupRecalc: true, outcome }
+            { skipRollupRecalc: true, outcome, callerPayload }
           )) as Record<string, unknown> | null
           const rid = (row?.id as string | number | undefined) ?? outcome.id
           if (rid != null && !preExisting.has(String(rid)))
@@ -5261,7 +5516,8 @@ export function upsertInfoOf(item: unknown): UpsertInfo | null {
   return item && typeof item === 'object' ? (upsertMarks.get(item) ?? null) : null
 }
 
-function upsertKeysOf(col: { upsert_keys?: string | null } | null): string[] {
+/** A collection's natural-key fields (`?` = optional key). */
+export function upsertKeysOf(col: { upsert_keys?: string | null } | null): string[] {
   try {
     const parsed = JSON.parse(String(col?.upsert_keys ?? ''))
     return Array.isArray(parsed)
@@ -5450,11 +5706,12 @@ export async function rehearseCreate(
   data: Record<string, unknown>,
   req?: FastifyRequest,
   workspaceId?: string,
-  opts?: { insert?: boolean }
+  opts?: { insert?: boolean; callerPayload?: boolean }
 ): Promise<DryRunReport> {
   try {
     const out = await createOne(user, collection, structuredClone(data ?? {}), req, workspaceId, {
-      dryRun: { insert: opts?.insert !== false }
+      dryRun: { insert: opts?.insert !== false },
+      callerPayload: opts?.callerPayload === true
     })
     if (out && typeof out === 'object' && dryReports.has(out)) return out as DryRunReport
     throw new Error('The rehearsal produced no report')
@@ -5529,7 +5786,8 @@ export async function createOneReported(
   const outcome: CreateOutcome = {}
   const item = (await createOne(user, collection, data, req, workspaceId, {
     outcome,
-    scopeGuard: true
+    scopeGuard: true,
+    callerPayload: true
   })) as Record<string, unknown> | null
   const hidden = item == null || isOutOfView(item)
   const id = (item?.id as string | number | undefined) ?? outcome.id ?? null
@@ -5554,6 +5812,8 @@ export async function createOne(
     outcome?: CreateOutcome
     /** Judge this create with the create scope guard (create-scope-guard.ts). */
     scopeGuard?: boolean
+    /** The payload is the caller's own (write routes): read-only fields are dropped too. */
+    callerPayload?: boolean
   }
 ) {
   await assertServable(user, collection, 'create')
@@ -5563,6 +5823,10 @@ export async function createOne(
   // Contract check on the RAW caller payload, before rules/computed passes
   // reshape it — the contract judges what the integration actually sent.
   await enforceContracts(collection, user?.id, data, 'create')
+  // Creator, stamps, read-only and unlisted fields are the server's — dropped
+  // before the nested sets and the caller's field list are read off the payload.
+  await dropServerSetFields(user, collection, data, 'create', req, opts?.callerPayload === true)
+  if (opts?.callerPayload) await trimSingleLineInputs(collection, data)
   // Nested child sets leave the payload BEFORE anything reads it as columns.
   let nestedWrites = await extractAliasO2MWrites(collection, data)
   data = await coerceRelationObjects(collection, data)
@@ -5598,11 +5862,15 @@ export async function createOne(
   )
   if (upsertTarget != null && dry) {
     if (!(await can(user, 'update', collection))) throw new ForbiddenError()
+    // A rehearsal echoes the matched row only as the caller reads it — a
+    // natural key never reaches past a User Scope, row filter or field list.
+    // (The real path's updateOne applies the same gates to the write.)
+    const current = (await readOne(user, collection, upsertTarget, workspaceId)) as Record<
+      string,
+      unknown
+    > | null
+    if (!current) throw new ItemNotFoundError()
     const cols = await getActualColumns(collection)
-    const stored = (await db(collection).where({ id: upsertTarget }).first()) as
-      | Record<string, unknown>
-      | undefined
-    const current = stored ? await decryptItemFields(collection, { ...stored }) : {}
     const sent = filterToActualColumns(data, cols)
     const changes = Object.entries(sent)
       .filter(([k, v]) => k !== 'id' && !sameStored(current[k], v))
@@ -5774,7 +6042,10 @@ export async function createOne(
   const securedPayload = await encryptItemFields(collection, ctx.payload)
 
   const actualCols = await getActualColumns(collection)
+  await dropComputedColumns(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
+  await assertStringsFit(collection, securedPayload)
+  await assertLinkedFilesReadable(collection, securedPayload, callerFields, req)
   if (dry) {
     const writable = filterToActualColumns(securedPayload, actualCols)
     const notes: string[] = []
@@ -5804,7 +6075,8 @@ export async function createOne(
         const { [w.fk]: _parent, ...row } = w.rows[i]
         try {
           const r = await rehearseCreate(user, w.collection, row, req, workspaceId, {
-            insert: false
+            insert: false,
+            callerPayload: opts?.callerPayload === true
           })
           list.push({
             index: i,
@@ -5915,7 +6187,8 @@ export async function createOne(
           nestedWrites,
           req,
           workspaceId,
-          true
+          true,
+          opts?.callerPayload === true
         )
       } catch (err) {
         await undoNewParent(collection, returnedId as string | number, aliasWrites)
@@ -5965,11 +6238,14 @@ export async function createOne(
         .catch(() => {})
     )
 
-    void deferEffect('realtime:create', () =>
+    void deferEffect('realtime:create', async () => {
       broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number, {
         action: 'create'
       })
-    )
+      await broadcastJunctionParents(req, collection, [
+        (result ?? ctx.payload) as Record<string, unknown>
+      ])
+    })
 
     // Hidden from its own writer: the id, never null (see markOutOfView).
     return result ?? markOutOfView(returnedId as string | number)
@@ -6001,6 +6277,7 @@ export async function canUpdateItem(
   const q = db(collection).where({ id }).select('id')
   await applyWorkspaceScope(q, collection, workspaceId)
   if (rowFilter) applyRowFilter(q, rowFilter, user)
+  ;(await writeScopeFor(user, collection)).apply(q)
   return !!(await q.first())
 }
 
@@ -6011,12 +6288,19 @@ export async function updateOne(
   data: Record<string, unknown>,
   req?: FastifyRequest,
   workspaceId?: string,
-  opts?: { outcome?: CreateOutcome }
+  opts?: {
+    outcome?: CreateOutcome
+    /** The payload is the caller's own (write routes): read-only fields are dropped too. */
+    callerPayload?: boolean
+  }
 ) {
   await assertServable(user, collection, 'update')
   assertRecordId(id)
   if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
   await enforceContracts(collection, user?.id, data, 'update')
+  // Creator, stamps, read-only and unlisted fields are the server's (see createOne).
+  await dropServerSetFields(user, collection, data, 'update', req, opts?.callerPayload === true)
+  if (opts?.callerPayload) await trimSingleLineInputs(collection, data)
   let nestedWrites = await extractAliasO2MWrites(collection, data)
   data = await coerceRelationObjects(collection, data)
   let aliasWrites = await extractAliasM2MWrites(collection, data)
@@ -6025,6 +6309,12 @@ export async function updateOne(
 
   const allowed = await can(user, 'update', collection)
   if (!allowed) throw new ForbiddenError()
+  // Row-level security + User Scopes — a record the caller cannot reach is a
+  // 404 before anything reads it or any hook runs; both also bind the
+  // previousData read and the UPDATE itself below.
+  const rowFilter = await getRowFilter(user, 'update', collection)
+  const writeScope = await writeScopeFor(user, collection)
+  await assertWritableRow(collection, id, user, writeScope, rowFilter, workspaceId)
 
   // The fields the caller explicitly sent — validation only judges these.
   const callerFields = new Set(Object.keys(data))
@@ -6131,17 +6421,15 @@ export async function updateOne(
   }
   delete (ctx.payload as Record<string, unknown>)._change_reason
 
-  // Row-level security — filter applies to both the previousData fetch and the mutation
-  const rowFilter = await getRowFilter(user, 'update', collection)
-
   const prevQ = db(collection).where({ id }).select('*')
   await applyWorkspaceScope(prevQ, collection, workspaceId)
   if (rowFilter) applyRowFilter(prevQ, rowFilter, user)
+  writeScope.apply(prevQ)
   const previousData = (await prevQ.first()) as Record<string, unknown> | undefined
 
-  // Cross-workspace, row-filtered-out, or missing row → 404 when scoping is active
+  // Cross-workspace, row-filtered-out, out-of-scope or missing row → 404 when scoping is active
   if (!previousData) {
-    if (rowFilter) throw new ItemNotFoundError()
+    if (rowFilter || writeScope.restricts) throw new ItemNotFoundError()
     if (workspaceId && (await workspaceColumnExists(collection))) {
       throw new ItemNotFoundError()
     }
@@ -6262,7 +6550,10 @@ export async function updateOne(
   const securedPayload = await encryptItemFields(collection, ctx.payload)
 
   const actualCols = await getActualColumns(collection)
+  await dropComputedColumns(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
+  await assertStringsFit(collection, securedPayload)
+  await assertLinkedFilesReadable(collection, securedPayload, callerFields, req, previousData)
   const columnPayload = filterToActualColumns(securedPayload, actualCols)
   // A payload of only alias/virtual fields (e.g. an M2A alias like
   // internal_contact) leaves nothing to write — knex throws on an empty
@@ -6276,6 +6567,7 @@ export async function updateOne(
       const updQ = db(collection).where({ id })
       await applyWorkspaceScope(updQ, collection, workspaceId)
       if (rowFilter) applyRowFilter(updQ, rowFilter, user)
+      writeScope.apply(updQ)
       await updQ.update(columnPayload)
     })
   }
@@ -6285,7 +6577,15 @@ export async function updateOne(
   if (opts?.outcome) opts.outcome.linkFailures = linkFailures
   // Nested child sets are ADDED to the record (rows without an id only).
   if (nestedWrites.length > 0)
-    await applyAliasO2MWrites(user, id, nestedWrites, req, workspaceId, false)
+    await applyAliasO2MWrites(
+      user,
+      id,
+      nestedWrites,
+      req,
+      workspaceId,
+      false,
+      opts?.callerPayload === true
+    )
 
   const result = await span('read-back', () => readOne(user, collection, id, workspaceId))
   if (opts?.outcome) {
@@ -6318,12 +6618,18 @@ export async function updateOne(
     })
   )
 
-  void deferEffect('realtime:update', () =>
+  void deferEffect('realtime:update', async () => {
     broadcastCollectionUpdate(req?.server?.io, collection, id, {
       action: 'update',
       changed_fields: Object.keys(columnPayload ?? {})
     })
-  )
+    // Both parents when the row moved from one record to another.
+    if (Object.keys(columnPayload ?? {}).length > 0)
+      await broadcastJunctionParents(req, collection, [
+        previousData,
+        { ...(previousData ?? {}), ...columnPayload }
+      ])
+  })
 
   return result
 }
@@ -6348,19 +6654,22 @@ export async function deleteOne(
   // nearest matching ancestor blocks the delete; null/true changes nothing.
   const treeAllow = await getTreePermission(user, 'delete', collection, id)
   if (treeAllow === false) throw new ForbiddenError()
-  await assertNotEditLocked(user, collection, { ids: [id] }, req)
-
-  // Row-level security — filter applies to both the previousData fetch and the mutation
+  // Row-level security + User Scopes bind the previousData fetch and the
+  // mutation; a record outside them is a 404 (see updateOne).
   const rowFilter = await getRowFilter(user, 'delete', collection)
+  const writeScope = await writeScopeFor(user, collection)
+  await assertWritableRow(collection, id, user, writeScope, rowFilter, workspaceId)
+  await assertNotEditLocked(user, collection, { ids: [id] }, req)
 
   const prevQ = db(collection).where({ id }).select('*')
   await applyWorkspaceScope(prevQ, collection, workspaceId)
   if (rowFilter) applyRowFilter(prevQ, rowFilter, user)
+  writeScope.apply(prevQ)
   const previousData = (await prevQ.first()) as Record<string, unknown> | undefined
 
-  // Cross-workspace, row-filtered-out, or missing row → 404 when scoping is active
+  // Cross-workspace, row-filtered-out, out-of-scope or missing row → 404 when scoping is active
   if (!previousData) {
-    if (rowFilter) throw new ItemNotFoundError()
+    if (rowFilter || writeScope.restricts) throw new ItemNotFoundError()
     if (workspaceId && (await workspaceColumnExists(collection))) {
       throw new ItemNotFoundError()
     }
@@ -6433,6 +6742,7 @@ export async function deleteOne(
   const delQ = db(collection).where({ id })
   await applyWorkspaceScope(delQ, collection, workspaceId)
   if (rowFilter) applyRowFilter(delQ, rowFilter, user)
+  writeScope.apply(delQ)
   await delQ.delete()
 
   // Trash safety net — full-row snapshot, restorable for 30 days
@@ -6455,7 +6765,8 @@ export async function deleteOne(
 
   await hooks.trigger('after', { ...ctx, previousData })
 
-  void deferEffect('realtime:delete', () =>
+  void deferEffect('realtime:delete', async () => {
     broadcastCollectionUpdate(req?.server?.io, collection, id, { action: 'delete' })
-  )
+    await broadcastJunctionParents(req, collection, [previousData])
+  })
 }

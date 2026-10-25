@@ -26,6 +26,23 @@ export function safeIdent(s: string): string {
   return `[${s}]`
 }
 
+/** A depth cap that reaches raw SQL: a whole number 0–100, else a 400 (never `< NaN`). */
+export function parseMaxDepth(raw: unknown): number | undefined {
+  if (raw == null || raw === '') return undefined
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 0 || n > 100) {
+    throw Object.assign(new Error('maxDepth must be a whole number from 0 to 100'), {
+      statusCode: 400
+    })
+  }
+  return n
+}
+
+function depthClause(maxDepth: number | undefined): string {
+  const n = parseMaxDepth(maxDepth)
+  return n != null ? `AND t.[__depth] < ${n}` : ''
+}
+
 /** Fetch the tree config for a collection, or null if not found. */
 export async function getTreeConfig(collection: string): Promise<TreeConfig | null> {
   const row = await db('nivaro_tree_configs').where({ collection }).first<TreeConfig>()
@@ -63,7 +80,7 @@ export async function getNodes(
     anchorWhere = `WHERE ${parentCol} IS NULL`
   }
 
-  const depthFilter = opts?.maxDepth != null ? `AND t.[__depth] < ${Number(opts.maxDepth)}` : ''
+  const depthFilter = depthClause(opts?.maxDepth)
 
   const sql = `
     WITH tree AS (
@@ -172,7 +189,7 @@ export async function getDescendants(
   const tbl = safeIdent(config.collection)
   const parentCol = safeIdent(config.parent_field)
 
-  const depthFilter = opts?.maxDepth != null ? `AND t.[__depth] < ${Number(opts.maxDepth)}` : ''
+  const depthFilter = depthClause(opts?.maxDepth)
 
   const sql = `
     WITH descendants AS (
@@ -236,7 +253,10 @@ export async function isDescendantOf(
 export async function moveNode(
   config: TreeConfig,
   itemId: unknown,
-  newParentId: unknown | null
+  newParentId: unknown | null,
+  /** How the parent field is written — routes pass the items service as the caller. */
+  write: (id: unknown, patch: Record<string, unknown>) => Promise<unknown> = (id, patch) =>
+    db(config.collection).where({ id }).update(patch)
 ): Promise<void> {
   if (newParentId != null && String(itemId) === String(newParentId)) {
     throw Object.assign(new Error('A node cannot be its own parent'), { statusCode: 400 })
@@ -251,7 +271,5 @@ export async function moveNode(
     }
   }
 
-  await db(config.collection)
-    .where({ id: itemId })
-    .update({ [config.parent_field]: newParentId ?? null })
+  await write(itemId, { [config.parent_field]: newParentId ?? null })
 }

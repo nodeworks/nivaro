@@ -153,6 +153,28 @@ export async function recordViewRoutes(app: FastifyInstance) {
         if (ok) visible.push(r)
         if (visible.length >= limit) break
       }
+      // A record viewed once may have left the caller's User Scope / row filter
+      // since: its label and state are record data, so keep only rows still visible.
+      if (!req.isAdmin && visible.length > 0) {
+        const { compileAccessGates, visibleIds } = await import('../services/record-access.js')
+        const idsByCollection = new Map<string, string[]>()
+        for (const r of visible) {
+          const list = idsByCollection.get(r.collection) ?? []
+          list.push(String(r.item_id))
+          idsByCollection.set(r.collection, list)
+        }
+        const seen = new Set<string>()
+        for (const [collection, ids] of idsByCollection) {
+          const gates = await compileAccessGates(req.user!, collection).catch(() => null)
+          if (!gates) continue
+          const ok = await visibleIds(gates, ids).catch(() => new Set<string>())
+          for (const id of ok) seen.add(`${collection}:${id.toLowerCase()}`)
+        }
+        for (let i = visible.length - 1; i >= 0; i--) {
+          const r = visible[i]
+          if (!seen.has(`${r.collection}:${String(r.item_id).toLowerCase()}`)) visible.splice(i, 1)
+        }
+      }
       if (visible.length === 0) return reply.send({ data: [] })
       const byCollection = new Map<string, Set<string>>()
       for (const r of visible) {
@@ -260,9 +282,11 @@ export async function recordViewRoutes(app: FastifyInstance) {
       if (!IDENT.test(collection) || /^nivaro_/i.test(collection)) {
         return reply.code(400).send({ error: 'Not a valid collection' })
       }
-      if (!(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
+      // The recap names who changed what on THIS record — it must be visible to
+      // the caller, not just its collection (army3).
+      const { recordRefusal } = await import('../services/erp-record-gate.js')
+      const refusal = await recordRefusal(req, collection, String(id), 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
 
       const now = new Date()
       const existing = (await db('nivaro_record_views')

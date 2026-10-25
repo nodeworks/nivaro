@@ -4,14 +4,18 @@ import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { loadFormLayout } from '../services/form-layout.js'
+import { readOne } from '../services/items.js'
 import { FORM_PREVIEW_ITEM } from '../services/layout-preview.js'
 import { can } from '../services/permissions.js'
+import type { User } from '../types.js'
 
 /**
  * Record share links — "send the vendor this PO's status": an expiring
  * token URL rendering ONE record read-only through a grouped layout.
- * Curation-not-security, same as widget feeds: the creator decides what to
- * expose and to whom they hand the link.
+ * The creator decides whom they hand the link to, but never what it may show
+ * beyond their own access: a link can only be made for (and listed on) a
+ * record the creator can read, and the public page reads the record AS THE
+ * CREATOR, field allow-list included — a suspended creator's links stop.
  *
  * Form preview links (#2666) share this table under item FORM_PREVIEW_ITEM; they are made,
  * listed and revoked only through /layout-collab (admin), so every route here refuses them.
@@ -30,6 +34,23 @@ function esc(v: unknown): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+}
+
+/** The record as `user` reads it (User Scopes, row filter, field allow-list), or null. */
+async function readAs(
+  user: User,
+  collection: string,
+  item: string,
+  workspaceId?: string | null
+): Promise<Record<string, unknown> | null> {
+  try {
+    return ((await readOne(user, collection, item, workspaceId ?? undefined)) ?? null) as Record<
+      string,
+      unknown
+    > | null
+  } catch {
+    return null
+  }
 }
 
 function formatValue(dbType: string, v: unknown): string {
@@ -69,6 +90,16 @@ export async function shareLinksRoutes(app: FastifyInstance) {
     if (!req.isAdmin && !(await can(req.user!, 'read', b.collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
+    // Only a record the creator can see — a hidden id answers like a missing one.
+    if (!(await readAs(req.user!, b.collection, String(b.item), req.workspaceId))) {
+      return reply.code(404).send({ error: 'Record not found' })
+    }
+    if (b.layout_id != null) {
+      const layout = await db('nivaro_collection_layouts').where({ id: b.layout_id }).first()
+      if (!layout || layout.collection !== b.collection) {
+        return reply.code(400).send({ error: 'That layout does not belong to this collection' })
+      }
+    }
     const id = randomUUID()
     const token = randomBytes(24).toString('hex')
     const expiresAt =
@@ -103,10 +134,15 @@ export async function shareLinksRoutes(app: FastifyInstance) {
     if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
-    const rows = await db('nivaro_share_links')
+    if (!req.isAdmin && !(await readAs(req.user!, collection, item, req.workspaceId))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    // A token is a credential: people see their own links, admins every link.
+    const q = db('nivaro_share_links')
       .where({ collection, item })
       .whereNot('item', FORM_PREVIEW_ITEM)
-      .orderBy('created_at', 'desc')
+    if (!req.isAdmin) void q.where({ created_by: req.user!.id })
+    const rows = await q.orderBy('created_at', 'desc')
     return reply.send({
       data: rows.map((r: Record<string, unknown>) => ({
         ...r,
@@ -171,14 +207,17 @@ export async function sharePublicRoutes(app: FastifyInstance) {
       ? await loadFormLayout(layoutId, collection, { includeReadonly: true })
       : null
 
-    let record: Record<string, unknown> | undefined
-    try {
-      record = (await db(collection).where({ id: link.item }).first()) as
-        | Record<string, unknown>
-        | undefined
-    } catch {
-      record = undefined
+    // Read as the creator: the page never shows more than they could see now.
+    const creator = link.created_by
+      ? ((await db('nivaro_users')
+          .where({ id: link.created_by })
+          .first()
+          .catch(() => null)) as User | null)
+      : null
+    if (creator?.status !== 'active') {
+      return gone('Link not found', 'This share link does not exist or was revoked.')
     }
+    const record = await readAs(creator, collection, String(link.item))
     if (!record) return gone('Record unavailable', 'The shared record no longer exists.')
 
     const colMeta = await db('nivaro_collections').where({ collection }).first()
@@ -197,9 +236,11 @@ export async function sharePublicRoutes(app: FastifyInstance) {
     const sections = layout.sections
       .map((sec) => {
         const rows = sec.fields
+          // Fields outside the creator's read allow-list are not in the record.
+          .filter((f) => Object.hasOwn(record, f.path))
           .map((f) => {
-            const choice = f.choices?.find((c) => String(c.value) === String(record?.[f.path]))
-            const val = choice ? choice.text : formatValue(f.db_type, record?.[f.path])
+            const choice = f.choices?.find((c) => String(c.value) === String(record[f.path]))
+            const val = choice ? choice.text : formatValue(f.db_type, record[f.path])
             return `<div class="row"><div class="k">${esc(f.label)}</div><div class="v">${esc(val)}</div></div>`
           })
           .join('')

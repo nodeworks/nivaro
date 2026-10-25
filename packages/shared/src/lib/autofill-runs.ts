@@ -97,6 +97,12 @@ export function useAutofillRun(id: string | null | undefined): AutofillRun | und
  * the proposal lands or fails; the run stays in the store until it is
  * dismissed or its proposal is consumed by a form.
  */
+/** A proposal id as the server mints it (a UUID); a link's `?autofill=` is
+ *  only ever treated as one when it looks like one. */
+export function isAutofillProposalId(id: unknown): id is string {
+  return typeof id === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(id)
+}
+
 export function startAutofillRun(
   cfg: FetchCfg,
   run: { id: string; collection: string; documentName?: string; layoutId?: number | null },
@@ -120,10 +126,13 @@ export function startAutofillRun(
   const poll = deps.poll ?? pollProposal
   const stop = poll({
     fetchResult: async () => {
-      const res = await fetch(`${cfg.apiBase}/ai/extract-record/result/${run.id}`, {
-        headers: cfg.authHeaders,
-        credentials: cfg.credentials
-      })
+      const res = await fetch(
+        `${cfg.apiBase}/ai/extract-record/result/${encodeURIComponent(run.id)}`,
+        {
+          headers: cfg.authHeaders,
+          credentials: cfg.credentials
+        }
+      )
       const json = await res.json().catch(() => ({}))
       return { status: res.status, ok: res.ok, json }
     },

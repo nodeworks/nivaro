@@ -13,11 +13,11 @@ import {
 } from '../services/body-secrets.js'
 import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
+import { recordRefusal } from '../services/erp-record-gate.js'
 import { requesterInsertFields } from '../services/erp-requester-columns.js'
 import { hasResendableBody, NO_BODY, NoBodyToResendError } from '../services/erp-resend-guard.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
-import { can } from '../services/permissions.js'
 import { maskBodySecrets, sameLoggedBody } from '../services/secret-mask.js'
 import { buildSubmissionDetail, gatherSubmissionFacts } from '../services/submission-detail.js'
 import {
@@ -86,6 +86,9 @@ function serialize(row: ErpSubmissionRow) {
     updated_at: row.updated_at
   }
 }
+
+/** Statuses a non-admin may re-send: a push that landed (or may yet) is never re-sent by hand. */
+const RESENDABLE = new Set<ErpStatus>(['failed', 'rejected'])
 
 // ─── Response interpretation ────────────────────────────────────────────────
 
@@ -234,7 +237,10 @@ export async function retrySubmissionRow(
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
 export async function erpSubmissionsRoutes(app: FastifyInstance) {
-  // Submit an item to an external ERP system
+  // Submit an item to an external ERP system. Admin-only: the caller picks the
+  // API, the endpoint path and the fields, and the body is the raw row — an
+  // ad-hoc push. Product pushes go through transition actions (erp_submit,
+  // payload templates), which never call this route (army3).
   app.post<{
     Body: {
       collection: string
@@ -243,18 +249,15 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       endpoint_path: string
       payload_fields?: string[]
     }
-  }>('/', { preHandler: authenticate }, async (req, reply) => {
+  }>('/', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection, item, external_api, endpoint_path, payload_fields } = req.body ?? {}
     if (!collection || item == null || !external_api || !endpoint_path) {
       return reply
         .code(400)
         .send({ error: 'collection, item, external_api and endpoint_path are required' })
     }
-    if (/^nivaro_/i.test(collection)) {
+    if (/^(nivaro|directus)_/i.test(collection) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection)) {
       return reply.code(400).send({ error: 'System collections cannot be submitted' })
-    }
-    if (!(await can(req.user!, 'update', collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
     }
 
     const row = (await db(collection).where({ id: item }).first()) as
@@ -462,9 +465,8 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     { preHandler: authenticate },
     async (req, reply) => {
       const { collection, item } = req.params
-      if (!(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
+      const refusal = await recordRefusal(req, collection, item, 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
       const rows = (await db('nivaro_erp_submissions')
         .where({ collection, item })
         .orderBy('created_at', 'desc')
@@ -504,9 +506,8 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         | ErpSubmissionRow
         | undefined
       if (!row) return reply.code(404).send({ error: 'Not found' })
-      if (!(await can(req.user!, 'read', row.collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
+      const refusal = await recordRefusal(req, row.collection, String(row.item), 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
       const stored = (await db('nivaro_erp_submission_attempts')
         .where({ submission_id: id })
         .orderBy('attempt', 'asc')
@@ -619,8 +620,15 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         | ErpSubmissionRow
         | undefined
       if (!row) return reply.code(404).send({ error: 'Not found' })
-      if (!(await can(req.user!, 'update', row.collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
+      const refusal = await recordRefusal(req, row.collection, String(row.item), 'update')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
+      // A pending or accepted push already reached the partner — re-sending it
+      // by hand makes a duplicate order. Admins (Firefight, traffic map) may.
+      if (!req.isAdmin && !RESENDABLE.has(row.status)) {
+        return reply.code(409).send({
+          error: `This submission is ${row.status} — only failed or rejected pushes can be retried`,
+          code: 'NOT_RETRYABLE'
+        })
       }
 
       const stored = parseJson<StoredPayload>(row.payload)
@@ -677,8 +685,10 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
           results.push({ id, status: 'skipped', error: `already ${row.status}` })
           continue
         }
-        if (!(await can(req.user!, 'update', row.collection))) {
-          results.push({ id, status: 'forbidden' })
+        const refusal = await recordRefusal(req, row.collection, String(row.item), 'update')
+        if (refusal) {
+          // Hidden records read as missing, the same as the single route.
+          results.push({ id, status: refusal.code === 404 ? 'missing' : 'forbidden' })
           continue
         }
         const stored = parseJson<StoredPayload>(row.payload)

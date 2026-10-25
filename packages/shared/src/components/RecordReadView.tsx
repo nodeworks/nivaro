@@ -674,6 +674,8 @@ function ChildTable({
       return pv.value
     }
     const v = row[f.field]
+    // An unset yes/no reads "No", as its switch on the form does.
+    if (f.type === 'boolean' && v == null) return <BoolPill value={false} />
     if (v == null || v === '') return <Empty />
     const target = m2oOf(f.field)
     if (target === 'nivaro_users')
@@ -1447,6 +1449,8 @@ function RecordReadViewBody({
         </span>
       )
     if (target) return <RelatedOrFile collection={target} id={v} />
+    // An unset yes/no reads "No", as its switch on the form does.
+    if (f?.type === 'boolean' && (v == null || v === '')) return <BoolPill value={false} />
     if (v == null || v === '') return <Empty />
     if (f?.type === 'boolean')
       return (

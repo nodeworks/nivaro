@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import {
   ACTIVE_STATUSES,
@@ -383,9 +385,14 @@ export async function tasksRoutes(app: FastifyInstance) {
       if (collection.startsWith('nivaro_')) return reply.send({ data: {} })
       if (!(await can(req.user!, 'read', collection)))
         return reply.code(403).send({ error: 'Forbidden' })
+      // Counts only for the records the caller can see (row filter, User Scopes).
+      const gates = await compileAccessGates(req.user!, collection, { actingAdmin: req.isAdmin })
+      const seen = await visibleIds(gates, ids)
+      const visible = ids.filter((i) => seen.has(i))
+      if (visible.length === 0) return reply.send({ data: {} })
       const rows = (await db('nivaro_tasks')
         .where('collection', collection)
-        .whereIn('item', ids)
+        .whereIn('item', visible)
         .whereIn('status', ACTIVE_STATUSES)
         .where((w) => w.whereNull('kind').orWhereNot('kind', 'support'))
         .groupBy('item')
@@ -520,6 +527,8 @@ export async function tasksRoutes(app: FastifyInstance) {
     if (body.description !== undefined) patch.description = body.description || null
     if (body.assignee !== undefined && !same(body.assignee, existing.assignee)) {
       if (body.assignee) {
+        if (!UUID_RE.test(String(body.assignee)))
+          return reply.code(400).send({ error: 'Unknown assignee' })
         const assigneeUser = await db('nivaro_users').where({ id: body.assignee }).first('id')
         if (!assigneeUser) return reply.code(400).send({ error: 'Unknown assignee' })
       } else if (existing.team_id == null && existing.kind !== 'support') {
@@ -529,7 +538,11 @@ export async function tasksRoutes(app: FastifyInstance) {
       if (cols.reminders) patch.reminded_at = null
     }
     if (body.due_date !== undefined) {
-      patch.due_date = body.due_date ? new Date(body.due_date) : null
+      const due = body.due_date ? new Date(body.due_date) : null
+      if (due && Number.isNaN(due.getTime())) {
+        return reply.code(400).send({ error: 'due_date must be a date' })
+      }
+      patch.due_date = due
       // A new due date earns a new reminder and a fresh overdue clock.
       if (cols.reminders) {
         patch.reminded_at = null

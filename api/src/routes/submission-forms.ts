@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { overWindowLimit } from '../services/windowed-limit.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,9 @@ async function verifyPassword(password: string, stored: string): Promise<boolean
   const derived = (await scryptAsync(password, salt, 64)) as Buffer
   return hashBuf.length === derived.length && timingSafeEqual(hashBuf, derived)
 }
+
+/** Password attempts one IP gets per form per hour on top of the form's own submission rate. */
+const PASSWORD_ATTEMPTS_FLOOR = 10
 
 function generateToken(): string {
   return randomUUID().replace(/-/g, '').slice(0, 32)
@@ -332,10 +336,21 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       return reply.code(410).send({ error: 'This form has expired' })
     }
 
-    // Password check
+    // Password check. Every attempt on a protected form counts against the
+    // caller's IP before the password is compared, so guesses are capped — a
+    // correct password after the cap is refused too until the window passes.
+    const ip = req.ip ?? null
     if (form.password_hash) {
       if (!body.password) {
         return reply.code(401).send({ error: 'Password required' })
+      }
+      const maxAttempts =
+        Math.max(PASSWORD_ATTEMPTS_FLOOR, Number(form.rate_limit_per_hour) || 0) +
+        PASSWORD_ATTEMPTS_FLOOR
+      if (
+        await overWindowLimit(app.redis, `subform-pw:${form.id}:${ip ?? '-'}`, maxAttempts, 3600)
+      ) {
+        return reply.code(429).send({ error: 'Too many attempts. Please try again later.' })
       }
       if (!(await verifyPassword(body.password, form.password_hash))) {
         return reply.code(401).send({ error: 'Incorrect password' })
@@ -343,7 +358,6 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
     }
 
     // Rate limiting: count submissions from this IP in the last hour
-    const ip = req.ip ?? null
     if (ip) {
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
       const [{ count: recentCount }] = (await db('nivaro_submissions')
@@ -379,12 +393,21 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
 
     // Insert into the target collection
     const collectionId = randomUUID()
-    await db(form.collection).insert({
-      id: collectionId,
-      ...filteredData,
-      created_at: new Date(),
-      updated_at: new Date()
-    })
+    try {
+      await db(form.collection).insert({
+        id: collectionId,
+        ...filteredData,
+        created_at: new Date(),
+        updated_at: new Date()
+      })
+    } catch (err) {
+      // A value that does not fit its column (wrong type, too long) is the
+      // submitter's to fix — never a 500 carrying the driver's text.
+      req.log.warn({ err, form: form.id }, 'public submission insert refused')
+      return reply
+        .code(400)
+        .send({ error: 'One of the values does not fit its field. Check the form and try again.' })
+    }
 
     // Insert submission record
     const submissionId = randomUUID()

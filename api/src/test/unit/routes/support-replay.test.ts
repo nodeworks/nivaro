@@ -92,7 +92,8 @@ beforeEach(() => {
 describe('POST /support/tickets — replay', () => {
   it('stores the requester’s own recording and answers it on the ticket', async () => {
     h.queues.set('nivaro_session_recordings', [{ id: REC }])
-    h.queues.set('nivaro_tasks', [[{ id: 7 }]])
+    // First nivaro_tasks read = the double-click twin lookup (none), then the insert.
+    h.queues.set('nivaro_tasks', [[], [{ id: 7 }]])
     h.queues.set('nivaro_tasks as t', [TICKET])
     const res = await raise({
       title: 'Stuck on upload',
@@ -109,7 +110,7 @@ describe('POST /support/tickets — replay', () => {
 
   it('drops someone else’s (or a malformed) recording', async () => {
     h.queues.set('nivaro_session_recordings', [undefined])
-    h.queues.set('nivaro_tasks', [[{ id: 7 }]])
+    h.queues.set('nivaro_tasks', [[], [{ id: 7 }]])
     h.queues.set('nivaro_tasks as t', [{ ...TICKET, replay_recording_id: null }])
     const res = await raise({ title: 'x', replay: { recording_id: REC } })
     expect(res.statusCode).toBe(201)

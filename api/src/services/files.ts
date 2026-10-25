@@ -170,13 +170,73 @@ export async function uploadFile(
   folderId?: string
 ): Promise<StoredFile> {
   const buffer = await multipart.toBuffer()
-  return uploadFileBuffer(
-    user,
-    buffer,
-    multipart.filename,
-    multipart.mimetype || mime.lookup(multipart.filename) || 'application/octet-stream',
-    folderId
-  )
+  const filename = cleanDownloadName(multipart.filename)
+  const mimeType = multipart.mimetype || mime.lookup(filename) || 'application/octet-stream'
+  assertUploadContent(buffer, filename, mimeType)
+  return uploadFileBuffer(user, buffer, filename, mimeType, folderId)
+}
+
+/** Programs, by their first bytes: PE/DOS, ELF, Mach-O (thin + fat). */
+const EXECUTABLE_MAGIC = [
+  [0x4d, 0x5a],
+  [0x7f, 0x45, 0x4c, 0x46],
+  [0xfe, 0xed, 0xfa, 0xce],
+  [0xfe, 0xed, 0xfa, 0xcf],
+  [0xce, 0xfa, 0xed, 0xfe],
+  [0xcf, 0xfa, 0xed, 0xfe],
+  [0xca, 0xfe, 0xba, 0xbe]
+]
+const EXECUTABLE_EXT = new Set([
+  '.exe',
+  '.dll',
+  '.msi',
+  '.com',
+  '.sys',
+  '.so',
+  '.dylib',
+  '.bin',
+  '.elf'
+])
+const ZIP = [0x50, 0x4b]
+const OLE = [0xd0, 0xcf, 0x11, 0xe0]
+/** What a file of this extension must start with (any of). PDF may carry a short preamble. */
+const EXPECTED_MAGIC: Record<string, number[][]> = {
+  '.png': [[0x89, 0x50, 0x4e, 0x47]],
+  '.jpg': [[0xff, 0xd8, 0xff]],
+  '.jpeg': [[0xff, 0xd8, 0xff]],
+  '.gif': [[0x47, 0x49, 0x46, 0x38]],
+  '.zip': [ZIP],
+  '.docx': [ZIP, OLE],
+  '.xlsx': [ZIP, OLE],
+  '.pptx': [ZIP, OLE]
+}
+
+function startsWith(buf: Buffer, magic: number[]): boolean {
+  return buf.length >= magic.length && magic.every((b, i) => buf[i] === b)
+}
+
+/**
+ * Refuse an upload whose bytes cannot be what its name says (army 2026-10-25:
+ * a Windows program renamed .pdf travelled to approvers as application/pdf):
+ * an empty file, a program under a non-program name, and a PDF, image or
+ * Office file whose first bytes are not that format's. Throws a 400-shaped
+ * error. Only the upload and replace paths call it; internal renders do not.
+ */
+export function assertUploadContent(buffer: Buffer, filename: string, mimeType: string): void {
+  const fail = (message: string) => {
+    throw Object.assign(new Error(message), { statusCode: 400 })
+  }
+  if (buffer.length === 0) fail('The file is empty.')
+  const ext = extname(filename).toLowerCase()
+  if (EXECUTABLE_MAGIC.some((m) => startsWith(buffer, m)) && !EXECUTABLE_EXT.has(ext))
+    fail(`This file is a program, not a ${ext || 'document'} file.`)
+  if (ext === '.pdf' || (!ext && mimeType === 'application/pdf')) {
+    if (!buffer.subarray(0, 1024).includes('%PDF-')) fail('This file is not a PDF.')
+    return
+  }
+  const expected = EXPECTED_MAGIC[ext]
+  if (expected && !expected.some((m) => startsWith(buffer, m)))
+    fail(`This file's content does not match its ${ext} name.`)
 }
 
 /**
@@ -268,9 +328,11 @@ export async function listFiles(
     /** Who is asking: private renders/exports (tag `__private`) list only for their maker
      *  and administrators. Leave out for internal callers that show every file. */
     viewer?: { id?: string | null; isAdmin?: boolean }
+    /** Only files this person uploaded (a non-admin browsing the library). */
+    uploadedBy?: string
   } = {}
 ) {
-  const { folder, limit = 50, offset = 0, search, ids, tag, viewer } = opts
+  const { folder, limit = 50, offset = 0, search, ids, tag, viewer, uploadedBy } = opts
   // Help-video recordings, renders, captions and posters never list here:
   // they are served only through the ticketed help-video media routes.
   const { helpVideoFileColumnsReady, whereNotHelpVideoFile } = await import('./help-video-files.js')
@@ -312,6 +374,15 @@ export async function listFiles(
       this.whereNull('tags').orWhere('tags', 'not like', marker)
       if (own) this.orWhere('uploaded_by', own)
     })
+  }
+  if (uploadedBy !== undefined) {
+    if (uploadedBy) {
+      q.where('f.uploaded_by', uploadedBy)
+      countQ.where('uploaded_by', uploadedBy)
+    } else {
+      q.whereRaw('1 = 0')
+      countQ.whereRaw('1 = 0')
+    }
   }
   if (folder) countQ.where({ folder })
   if (ids && ids.length > 0) countQ.whereIn('id', ids)
@@ -380,12 +451,15 @@ export async function updateFileMeta(
   return getFile(id)
 }
 
-/** A download name is a single path segment: no separators, no control
- *  characters, never empty — the Content-Disposition header and the local
+/** Direction overrides and marks: `‮fdp.txt` renders as `txt.pdf`. */
+const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/
+
+/** A download name is a single path segment: no separators, no control or
+ *  direction-override characters, never empty — the Content-Disposition header and the local
  *  disk both read it. Throws a 400-shaped error on an unusable name. */
 export function cleanDownloadName(raw: string): string {
   const name = Array.from(String(raw ?? ''))
-    .filter((ch) => ch !== '/' && ch !== '\\' && ch.charCodeAt(0) >= 0x20)
+    .filter((ch) => ch !== '/' && ch !== '\\' && ch.charCodeAt(0) >= 0x20 && !BIDI_CONTROL.test(ch))
     .join('')
     .trim()
     .slice(0, 255)

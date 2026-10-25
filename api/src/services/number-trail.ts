@@ -163,11 +163,21 @@ async function snapshotBefore(
   return prev ? parse<Record<string, unknown>>(prev.data) : null
 }
 
+/** Rows that LEFT a parent are found by a LIKE scan over revision and trash
+ *  snapshots — a year of revisions timed out at 15 s on staging. Past this
+ *  window only the rows linked now are traced. */
+export const MOVED_OUT_SCAN_DAYS = 31
+
 export async function numberTrail(
   collection: string,
   itemId: string,
   field: string,
-  since: Date
+  since: Date,
+  opts: {
+    /** The child row ids (of those given) the caller may open; events on any
+     *  other row — deleted rows included — are left out. Unset = all. */
+    visible?: (collection: string, ids: string[]) => Promise<Set<string>>
+  } = {}
 ): Promise<NumberTrail> {
   const fieldRow = (await db('nivaro_fields')
     .where({ collection, field })
@@ -189,6 +199,10 @@ export async function numberTrail(
       : null
   const importish = (r: { action: string; comment: string | null }) =>
     /^import|staged-import|^cron-|legacy/i.test(r.action) || /^import:/.test(r.comment ?? '')
+  const scanMovedOut = Date.now() - since.getTime() <= MOVED_OUT_SCAN_DAYS * 86_400_000
+  const addNote = (n: string) => {
+    note = note ? `${note} ${n}` : n
+  }
 
   if (cfg) {
     await Promise.all(cfg.sources.map((src) => trailSource(src)))
@@ -222,14 +236,19 @@ export async function numberTrail(
   async function trailSource(src: NormalizedRollup['sources'][number]) {
     if (!IDENT.test(src.related_collection) || !IDENT.test(src.fk_field)) return
     if (src.recursive) {
-      note = 'Recursive rollup — the trail covers direct children only.'
+      addNote('Recursive rollup — the trail covers direct children only.')
     }
     const child = src.related_collection
     const fk = src.fk_field
     const valueField = src.value_field && IDENT.test(src.value_field) ? src.value_field : null
     const isCount = src.aggregate === 'count'
     if (!isCount && !valueField) {
-      note = 'Formula rollup — rows are listed, deltas are not computed for the formula.'
+      addNote('Formula rollup — rows are listed, deltas are not computed for the formula.')
+    }
+    if (!scanMovedOut) {
+      addNote(
+        `Rows that moved away or were deleted are traced for the last ${MOVED_OUT_SCAN_DAYS} days only.`
+      )
     }
     const parentKey = String(itemId)
     // Rows linked now, plus any revision in the window whose snapshot names
@@ -238,17 +257,21 @@ export async function numberTrail(
       .where(fk, itemId as never)
       .select('id')) as Array<{ id: unknown }>
     const currentIds = current.map((c) => String(c.id))
-    const revs = await revisionsSince(child, since, (q) =>
-      q.where((b) => {
-        if (currentIds.length) b.whereIn('r.item', currentIds.slice(0, 1500))
-        b.orWhere(
-          'r.data',
-          'like',
-          `%"${fk}":${/^\d+$/.test(parentKey) ? parentKey : `"${parentKey}"`}%`
-        )
-        b.orWhere('r.data', 'like', `%"${fk}":"${parentKey}"%`)
-      })
-    )
+    const revs =
+      currentIds.length > 0 || scanMovedOut
+        ? await revisionsSince(child, since, (q) =>
+            q.where((b) => {
+              if (currentIds.length) b.whereIn('r.item', currentIds.slice(0, 1500))
+              if (!scanMovedOut) return
+              b.orWhere(
+                'r.data',
+                'like',
+                `%"${fk}":${/^\d+$/.test(parentKey) ? parentKey : `"${parentKey}"`}%`
+              )
+              b.orWhere('r.data', 'like', `%"${fk}":"${parentKey}"%`)
+            })
+          )
+        : []
     if (revs.length > CAP) truncated = true
     const ids = new Set<string>()
     const pending: Array<{
@@ -264,27 +287,31 @@ export async function numberTrail(
       ids.add(String(r.item))
     }
     // Deleted children live only in trash.
-    const trashed = (await db('nivaro_trash as t')
-      .leftJoin('nivaro_users as u', 'u.id', 't.deleted_by')
-      .where('t.collection', child)
-      .where('t.deleted_at', '>=', since)
-      .where((b) => {
-        b.where(
-          't.data',
-          'like',
-          `%"${fk}":${/^\d+$/.test(parentKey) ? parentKey : `"${parentKey}"`}%`
-        )
-        b.orWhere('t.data', 'like', `%"${fk}":"${parentKey}"%`)
-      })
-      .limit(CAP)
-      .select(
-        't.item_id',
-        't.data',
-        't.deleted_at',
-        't.deleted_by',
-        'u.first_name',
-        'u.last_name'
-      )) as Array<{
+    const trashed = (
+      !scanMovedOut
+        ? []
+        : await db('nivaro_trash as t')
+            .leftJoin('nivaro_users as u', 'u.id', 't.deleted_by')
+            .where('t.collection', child)
+            .where('t.deleted_at', '>=', since)
+            .where((b) => {
+              b.where(
+                't.data',
+                'like',
+                `%"${fk}":${/^\d+$/.test(parentKey) ? parentKey : `"${parentKey}"`}%`
+              )
+              b.orWhere('t.data', 'like', `%"${fk}":"${parentKey}"%`)
+            })
+            .limit(CAP)
+            .select(
+              't.item_id',
+              't.data',
+              't.deleted_at',
+              't.deleted_by',
+              'u.first_name',
+              'u.last_name'
+            )
+    ) as Array<{
       item_id: string
       data: string | null
       deleted_at: Date
@@ -360,6 +387,28 @@ export async function numberTrail(
         comment: null,
         via_import: false
       })
+    }
+  }
+
+  if (opts.visible && cfg) {
+    const byCollection = new Map<string, Set<string>>()
+    for (const e of events) {
+      if (e.action === 'parent') continue
+      const set = byCollection.get(e.collection) ?? new Set<string>()
+      set.add(e.item_id)
+      byCollection.set(e.collection, set)
+    }
+    const seen = new Set<string>()
+    for (const [col, ids] of byCollection)
+      for (const id of await opts.visible(col, [...ids])) seen.add(`${col}\u0001${id}`)
+    const before = events.length
+    const kept = events.filter(
+      (e) => e.action === 'parent' || seen.has(`${e.collection}\u0001${e.item_id}`)
+    )
+    if (kept.length < before) {
+      events.length = 0
+      events.push(...kept)
+      addNote('Changes on records you cannot open are not listed.')
     }
   }
 

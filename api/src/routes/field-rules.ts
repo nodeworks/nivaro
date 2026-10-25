@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -14,10 +14,94 @@ import {
   validateDynamicConfig
 } from '../services/field-rules.js'
 import { recordRuleEvalSample, ruleEvalStats } from '../services/field-rules-stats.js'
-import { applyFieldRules, updateOne } from '../services/items.js'
-import { can } from '../services/permissions.js'
+import { applyFieldRules, readItems, readOne, updateOne } from '../services/items.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { planRowRuleChanges } from '../services/row-rules-apply.js'
+import { isSecretColumn, isSystemCollection } from '../services/system-collections.js'
+
+/**
+ * The row-rule evaluator's lookups AS THE CALLER (army 2026-10-25). The
+ * evaluate and apply routes run rules the client sends, so a rule's related
+ * reads must never be raw: a related record comes through readOne (row
+ * filter, User Scopes, field allow-list), a "first matching row" through
+ * readItems, a distinct-value set only on a field the caller may read, and
+ * nothing at all from a system table. Administrators use the plain cache.
+ */
+export class CallerRuleLookupCache extends RowRuleLookupCache {
+  private readonly own = new Map<string, Promise<Record<string, unknown> | undefined>>()
+
+  constructor(private readonly req: Pick<FastifyRequest, 'user' | 'workspaceId'>) {
+    super(db)
+  }
+
+  private async mayRead(collection: string, column?: string): Promise<boolean> {
+    if (isSystemCollection(collection) || (column && isSecretColumn(column))) return false
+    if (!(await can(this.req.user!, 'read', collection))) return false
+    if (!column) return true
+    const allowed = await getAllowedFields(this.req.user!, 'read', collection)
+    return allowed === null || allowed.includes('*') || allowed.includes(column)
+  }
+
+  private once(key: string, run: () => Promise<Record<string, unknown> | undefined>) {
+    const hit = this.own.get(key)
+    if (hit) return hit
+    this.queries += 1
+    const p = run().catch((err) => {
+      this.own.delete(key)
+      throw err
+    })
+    this.own.set(key, p)
+    return p
+  }
+
+  override record(collection: string, id: unknown) {
+    return this.once(`${collection}|${String(id)}`, async () => {
+      if (!(await this.mayRead(collection))) return undefined
+      const row = await readOne(
+        this.req.user!,
+        collection,
+        String(id),
+        this.req.workspaceId ?? undefined
+      ).catch(() => null)
+      return (row as Record<string, unknown> | null) ?? undefined
+    })
+  }
+
+  override firstWhere(collection: string, where: Record<string, string>) {
+    const keys = Object.keys(where).sort()
+    return this.once(
+      `first|${collection}|${keys.map((k) => `${k}=${where[k]}`).join('&')}`,
+      async () => {
+        if (!(await this.mayRead(collection))) return undefined
+        for (const k of keys) if (!(await this.mayRead(collection, k))) return undefined
+        const res = await readItems(
+          this.req.user!,
+          collection,
+          {
+            filter: { _and: keys.map((k) => ({ [k]: { _eq: where[k] } })) },
+            sort: ['id'],
+            limit: 1,
+            count: false
+          },
+          undefined,
+          this.req.workspaceId ?? undefined
+        ).catch(() => null)
+        return (res?.data?.[0] as Record<string, unknown> | undefined) ?? undefined
+      }
+    )
+  }
+
+  override async distinctValues(collection: string, column: string): Promise<Set<string>> {
+    if (!(await this.mayRead(collection, column))) return new Set()
+    return super.distinctValues(collection, column)
+  }
+}
+
+/** The lookup cache a rule pass gets: the caller's for non-admins. */
+function lookupCacheFor(req: FastifyRequest): RowRuleLookupCache {
+  return req.isAdmin ? new RowRuleLookupCache(db) : new CallerRuleLookupCache(req)
+}
 
 interface FieldRuleBody {
   collection?: string
@@ -239,7 +323,8 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         trigger_field,
         evalBody.trigger_value,
         draft,
-        req.log
+        req.log,
+        { user: req.user!, isAdmin: req.isAdmin, workspaceId: req.workspaceId }
       )
       return reply.send({ data })
     }
@@ -288,6 +373,17 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     if (!body.collection || !body.data || typeof body.data !== 'object') {
       return reply.code(400).send({ error: 'collection and data are required' })
     }
+    if (isSystemCollection(body.collection) && !req.isAdmin) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    if (
+      !(await db('nivaro_collections').where({ collection: body.collection }).first('collection'))
+    ) {
+      return reply.code(400).send({ error: `Unknown collection "${body.collection}"` })
+    }
+    if (!req.isAdmin && !(await can(req.user!, 'read', body.collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
 
     const before = { ...body.data }
     const working = { ...body.data }
@@ -305,7 +401,7 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       // runs the same rules for direct API child-row creates, so the logic
       // must not fork between the live-edit path and the write path.
       const rules = body.row_rules as RowRule[]
-      const cache = new RowRuleLookupCache(db)
+      const cache = lookupCacheFor(req)
       const startedAt = Date.now()
       const targetFields = Array.isArray(body.target_fields)
         ? body.target_fields.filter((f): f is string => typeof f === 'string')
@@ -465,19 +561,36 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
 
     let saved: Array<Record<string, unknown>> = []
     if (body.parent_id != null) {
-      let q = db(collection)
-        .where({ [fk_field]: String(body.parent_id) })
-        .orderBy('id')
-      if (Array.isArray(body.row_ids) && body.row_ids.length)
-        q = q.whereIn('id', body.row_ids.map(String))
-      saved = (await q.limit(500)) as Array<Record<string, unknown>>
+      if (req.isAdmin) {
+        let q = db(collection)
+          .where({ [fk_field]: String(body.parent_id) })
+          .orderBy('id')
+        if (Array.isArray(body.row_ids) && body.row_ids.length)
+          q = q.whereIn('id', body.row_ids.map(String))
+        saved = (await q.limit(500)) as Array<Record<string, unknown>>
+      } else {
+        // The saved rows as the caller reads them (row filter, User Scopes,
+        // field allow-list) — never a raw read of another parent's lines.
+        const filter: Record<string, unknown>[] = [{ [fk_field]: { _eq: String(body.parent_id) } }]
+        if (Array.isArray(body.row_ids) && body.row_ids.length)
+          filter.push({ id: { _in: body.row_ids.map(String) } })
+        const res = await readItems(
+          req.user!,
+          collection,
+          { filter: { _and: filter }, sort: ['id'], limit: 500, count: false },
+          undefined,
+          req.workspaceId ?? undefined
+        ).catch(() => null)
+        if (!res) return reply.code(403).send({ error: 'Forbidden' })
+        saved = res.data as Array<Record<string, unknown>>
+      }
     }
     const overrides = body.saved_overrides ?? {}
     saved = saved.map((r) => ({ ...r, ...(overrides[String(r.id)] ?? {}) }))
     const pendingIds = new Set(pendingRows.map((r) => String(r.id)))
     const rows = [...saved, ...pendingRows]
     const parentContext = body.parent_context ?? {}
-    const cache = new RowRuleLookupCache(db)
+    const cache = lookupCacheFor(req)
     const startedAt = Date.now()
     // One planner shared with the Data Integrity sweep + fixes — the grid's
     // preview and the integrity finding must agree on what the rules derive.

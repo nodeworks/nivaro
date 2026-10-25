@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -25,6 +26,7 @@ import {
   userName,
   viewerOf
 } from '../services/support-tickets.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { resolveFriendlyId } from '../services/workflow-transitions.js'
 
 /**
@@ -186,8 +188,76 @@ export async function ownReplayLink(
   }
 }
 
+/** How long the same request from the same person counts as one (a double-click, a retry). */
+const DUPLICATE_WINDOW_S = 30
+
+/** Pure: the claim key of a ticket send — the person plus what they asked about. */
+function ticketSendKey(
+  userId: string,
+  f: {
+    title: string
+    description: string | null
+    collection: string | null
+    item: string | null
+    category_id: number | null
+  },
+  tenant = ''
+): string {
+  const what = createHash('sha256')
+    .update(
+      JSON.stringify([f.title, f.description ?? '', f.collection, f.item, f.category_id ?? null])
+    )
+    .digest('hex')
+    .slice(0, 32)
+  return `nvr:support-send:${tenant}:${String(userId).toUpperCase()}:${what}`
+}
+
+const sendClaims = new Map<string, number>()
+
+/** First send of a key in the window wins: Redis SET NX, this process alone when Redis is down. */
+async function claimTicketSend(
+  redis: FastifyInstance['redis'] | undefined,
+  key: string
+): Promise<boolean> {
+  try {
+    if (!redis) throw new Error('no redis')
+    return (await redis.set(key, '1', 'EX', DUPLICATE_WINDOW_S, 'NX')) === 'OK'
+  } catch {
+    const now = Date.now()
+    const until = sendClaims.get(key)
+    if (until && until > now) return false
+    if (sendClaims.size > 5000) sendClaims.clear()
+    sendClaims.set(key, now + DUPLICATE_WINDOW_S * 1000)
+    return true
+  }
+}
+
+/** The ticket this person raised for the same request inside the window, if any. */
+async function recentTwin(
+  userId: string,
+  f: { title: string; description: string | null; collection: string | null; item: string | null }
+): Promise<(TicketRow & Record<string, unknown>) | undefined> {
+  const q = db('nivaro_tasks')
+    .where({ kind: SUPPORT_KIND, created_by: userId, title: f.title.slice(0, 500) })
+    .where('created_at', '>=', new Date(Date.now() - DUPLICATE_WINDOW_S * 1000))
+  if (f.collection) q.where({ collection: f.collection, item: f.item })
+  else q.whereNull('collection')
+  const rows = (await q.orderBy('id', 'asc').limit(5).select('id', 'description')) as Array<{
+    id: number
+    description: string | null
+  }>
+  const twin = rows.find((r) => (r.description ?? null) === (f.description ?? null))
+  return twin ? loadTicket(Number(twin.id)) : undefined
+}
+
+/** A positive safe integer id, or null — `1e99` or a 20-digit number is "not found", never a driver error. */
+function safeId(raw: unknown): number | null {
+  const n = Number(raw)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
+}
+
 async function loadTicket(id: number): Promise<(TicketRow & Record<string, unknown>) | undefined> {
-  if (!Number.isInteger(id) || id <= 0) return undefined
+  if (!Number.isSafeInteger(id) || id <= 0) return undefined
   return (await ticketQuery().where('t.id', id).first()) as
     | (TicketRow & Record<string, unknown>)
     | undefined
@@ -349,8 +419,8 @@ export async function supportRoutes(app: FastifyInstance) {
     '/categories/:id',
     { preHandler: requireAdmin },
     async (req, reply) => {
-      const id = Number(req.params.id)
-      const existing = await db('nivaro_task_categories').where({ id }).first('id')
+      const id = safeId(req.params.id)
+      const existing = id != null && (await db('nivaro_task_categories').where({ id }).first('id'))
       if (!existing) return reply.code(404).send({ error: 'Not found' })
       const b = req.body ?? {}
       const patch: Record<string, unknown> = { updated_at: new Date() }
@@ -375,7 +445,8 @@ export async function supportRoutes(app: FastifyInstance) {
     '/categories/:id',
     { preHandler: requireAdmin },
     async (req, reply) => {
-      const id = Number(req.params.id)
+      const id = safeId(req.params.id)
+      if (id == null) return reply.code(404).send({ error: 'Not found' })
       const used = await db('nivaro_tasks').where('category_id', id).first('id')
       if (used) {
         await db('nivaro_task_categories')
@@ -466,7 +537,7 @@ export async function supportRoutes(app: FastifyInstance) {
     const viewer = viewerOf(req)
     const qs = req.query
     const limit = Math.min(Math.max(Number(qs.limit) || 50, 1), 200)
-    const page = Math.max(Number(qs.page) || 1, 1)
+    const page = Math.min(Math.max(Math.trunc(Number(qs.page)) || 1, 1), 100_000)
     let q = ticketQuery()
     if (qs.scope === 'desk') {
       if (!(await canWorkDesk(viewer))) return reply.code(403).send({ error: 'Forbidden' })
@@ -488,7 +559,7 @@ export async function supportRoutes(app: FastifyInstance) {
     else if (status === 'closed') q = q.whereIn('t.status', ['done', 'cancelled'])
     else if ((TICKET_STATUSES as readonly string[]).includes(status))
       q = q.where('t.status', status)
-    if (qs.category) q = q.where('t.category_id', Number(qs.category))
+    if (qs.category) q = q.where('t.category_id', safeId(qs.category) ?? -1)
     if (qs.assignee === 'me') q = q.where('t.assignee', viewer.id)
     else if (qs.assignee === 'unassigned') q = q.whereNull('t.assignee')
     const search = qs.q?.trim() ?? ''
@@ -622,25 +693,66 @@ export async function supportRoutes(app: FastifyInstance) {
     }
     let category: CategoryRow | undefined
     if (b.category_id != null) {
-      category = (await db('nivaro_task_categories')
-        .where({ id: Number(b.category_id), is_active: true })
-        .first()) as CategoryRow | undefined
+      const categoryId = safeId(b.category_id)
+      category =
+        categoryId == null
+          ? undefined
+          : ((await db('nivaro_task_categories')
+              .where({ id: categoryId, is_active: true })
+              .first()) as CategoryRow | undefined)
       if (!category) return reply.code(400).send({ error: 'Unknown support type' })
       if (category.collection && category.collection !== collection) {
         return reply.code(400).send({ error: 'That type is only for a different kind of record' })
       }
     }
     const priority = b.priority && PRIORITIES.includes(b.priority) ? b.priority : 'normal'
-    const s = await raiseTicket(app, req, {
-      title,
-      description: b.description ?? null,
-      collection,
-      item,
-      category: category ?? null,
-      priority,
-      attachments: await ownFilesOf(req, b.attachments),
-      replay: await ownReplayLink(req.user!.id, b.replay)
-    })
+    // A double-click (or a client retry) files ONE ticket: the same person
+    // sending the same request within DUPLICATE_WINDOW_S gets the first
+    // ticket back. Attachments are left out of the match — each click
+    // uploads its own "what I was doing" file.
+    const description = b.description ?? null
+    const ask = { title, description, collection, item }
+    const userId = String(req.user!.id)
+    const twinAnswer = async (t: TicketRow & Record<string, unknown>) => {
+      const [first] = await serializeTickets([t])
+      return reply.code(200).send({ data: first, duplicate: true })
+    }
+    const earlier = await recentTwin(userId, ask)
+    if (earlier) return twinAnswer(earlier)
+    const sendKey = ticketSendKey(
+      userId,
+      { ...ask, category_id: category?.id ?? null },
+      currentTenantKey()
+    )
+    if (!(await claimTicketSend(app.redis, sendKey))) {
+      // The first send is still being written: wait briefly for it.
+      for (let i = 0; i < 10; i++) {
+        await new Promise((r) => setTimeout(r, 300))
+        const first = await recentTwin(userId, ask)
+        if (first) return twinAnswer(first)
+      }
+      return reply
+        .code(409)
+        .send({ error: 'This request was just sent', code: 'DUPLICATE_REQUEST' })
+    }
+    let s: Awaited<ReturnType<typeof raiseTicket>>
+    try {
+      s = await raiseTicket(app, req, {
+        title,
+        description,
+        collection,
+        item,
+        category: category ?? null,
+        priority,
+        attachments: await ownFilesOf(req, b.attachments),
+        replay: await ownReplayLink(req.user!.id, b.replay)
+      })
+    } catch (err) {
+      // Nothing was filed: free the claim so the person can send again at once.
+      sendClaims.delete(sendKey)
+      await app.redis?.del(sendKey).catch(() => {})
+      throw err
+    }
     return reply.code(201).send({ data: s })
   })
 
@@ -887,7 +999,7 @@ export async function supportRoutes(app: FastifyInstance) {
       let label = 'no type'
       if (b.category_id != null) {
         const c = (await db('nivaro_task_categories')
-          .where({ id: Number(b.category_id) })
+          .where({ id: safeId(b.category_id) ?? -1 })
           .first('id', 'name', 'team_id')) as
           | { id: number; name: string; team_id: number | null }
           | undefined

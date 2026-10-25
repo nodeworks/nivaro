@@ -12,9 +12,16 @@
  * While the record's open pipeline instance sits in one of `states`, only the
  * record's creator, the people who own the current step (owner groups,
  * instance owners, delegation, the binding's owner fallback) and admins may
- * change it — or create, change or delete a row of a listed child collection
- * pointing at it. Children are named, never inferred: notes, forecasts and
- * queue rows are children too, and approvers and finance write those.
+ * change it — or create, change or delete one of the record's OWN rows
+ * pointing at it (army v3, Rob: "the lock covers lines, zones, funding years,
+ * file links"). Its own rows: a listed child collection, the junction rows of
+ * its many-to-many and file fields, and the rows of an inline-grid field.
+ * Other one-to-many children (notes, forecasts, queue rows) stay open unless
+ * listed: approvers and finance write those while the record waits.
+ *
+ * The same own rows ride the record's person-held edit lock (item-lock-guard):
+ * a line or a zone link of a record someone else is editing is refused 409
+ * RECORD_LOCKED like the record itself.
  *
  * Judged on REQUEST writes only (the items service is handed the request):
  * the engine's own writes — flows, transition actions, addendum apply, crons,
@@ -82,15 +89,68 @@ export function validateEditLock(
   return { value: parseEditLock(raw) }
 }
 
+interface ChildLink {
+  parent: string
+  field: string
+}
+
 interface LockPlan {
   /** bound collection → its lock */
   locks: Map<string, EditLockConfig>
-  /** child collection → the FK columns that point at a locked parent */
-  childLinks: Map<string, Array<{ parent: string; field: string }>>
+  /** own-row collection → the FK columns that point at a parent with an approval lock */
+  childLinks: Map<string, ChildLink[]>
+  /** own-row collection → the FK columns that point at any parent (person-held locks) */
+  heldLinks: Map<string, ChildLink[]>
 }
 
 const PLAN_TTL_MS = 30_000
 const planCache = new Map<string, { at: number; plan: Promise<LockPlan> }>()
+const SYSTEM_TABLE = /^(nivaro_|directus_)/i
+
+interface RelationRow {
+  many_collection: string
+  many_field: string
+  one_collection: string
+  one_field: string | null
+  junction_field: string | null
+}
+
+/**
+ * Which relations make the many side one of the parent's OWN rows: a listed
+ * child, a junction leg of a many-to-many / files field, or the rows of an
+ * inline-grid field. Exported for the tests.
+ */
+export function ownRowLinks(
+  locks: Map<string, EditLockConfig>,
+  rels: RelationRow[],
+  inlineGrids: Set<string>
+): Pick<LockPlan, 'childLinks' | 'heldLinks'> {
+  const childLinks = new Map<string, ChildLink[]>()
+  const heldLinks = new Map<string, ChildLink[]>()
+  const add = (map: Map<string, ChildLink[]>, child: string, link: ChildLink) => {
+    const list = map.get(child) ?? []
+    if (!list.some((l) => l.parent === link.parent && l.field === link.field)) list.push(link)
+    map.set(child, list)
+  }
+  for (const r of rels) {
+    const child = String(r.many_collection ?? '')
+    const parent = String(r.one_collection ?? '')
+    const field = String(r.many_field ?? '')
+    if (!IDENT.test(child) || !IDENT.test(parent) || !IDENT.test(field)) continue
+    if (child === parent || SYSTEM_TABLE.test(parent) || SYSTEM_TABLE.test(child)) continue
+    const lock = locks.get(parent)
+    const listed = !!lock?.children.includes(child)
+    const grid = !!r.one_field && inlineGrids.has(`${parent}.${r.one_field}`)
+    // The far leg of a junction (divisions_id → divisions) is not the
+    // record's row: only the leg the parent shows as a field, or a leg of a
+    // locked parent, counts.
+    const junction = !!r.junction_field && (!!r.one_field || !!lock)
+    if (!listed && !grid && !junction) continue
+    add(heldLinks, child, { parent, field })
+    if (lock) add(childLinks, child, { parent, field })
+  }
+  return { childLinks, heldLinks }
+}
 
 async function readPlan(): Promise<LockPlan> {
   const rows = (await db('nivaro_collections')
@@ -108,36 +168,16 @@ async function readPlan(): Promise<LockPlan> {
     const lock = parseEditLock((obj as { edit_lock?: unknown } | null)?.edit_lock)
     if (lock) locks.set(r.collection, lock)
   }
-  const childLinks = new Map<string, Array<{ parent: string; field: string }>>()
-  const wanted = [...locks.entries()].flatMap(([parent, l]) =>
-    l.children.map((child) => ({ parent, child }))
-  )
-  if (wanted.length > 0) {
-    const rels = (await db('nivaro_relations')
-      .whereIn(
-        'many_collection',
-        wanted.map((w) => w.child)
-      )
-      .whereIn(
-        'one_collection',
-        wanted.map((w) => w.parent)
-      )
-      .select('many_collection', 'many_field', 'one_collection')) as Array<{
-      many_collection: string
-      many_field: string
-      one_collection: string
-    }>
-    for (const w of wanted) {
-      for (const r of rels) {
-        if (r.many_collection !== w.child || r.one_collection !== w.parent) continue
-        if (!IDENT.test(String(r.many_field))) continue
-        const list = childLinks.get(w.child) ?? []
-        list.push({ parent: w.parent, field: r.many_field })
-        childLinks.set(w.child, list)
-      }
-    }
-  }
-  return { locks, childLinks }
+  const rels = (await db('nivaro_relations')
+    .whereNotNull('one_collection')
+    .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')
+    .catch(() => [])) as RelationRow[]
+  const grids = (await db('nivaro_fields')
+    .where('interface', 'inline-grid')
+    .select('collection', 'field')
+    .catch(() => [])) as Array<{ collection: string; field: string }>
+  const inlineGrids = new Set(grids.map((g) => `${g.collection}.${g.field}`))
+  return { locks, ...ownRowLinks(locks, rels, inlineGrids) }
 }
 
 function lockPlan(): Promise<LockPlan> {
@@ -207,9 +247,48 @@ export async function editLockVerdictFor(
 }
 
 /**
+ * The approval-lock verdict for a person HOLDING (or asking for) the
+ * record's person-held edit lock: admins and records without a lock are
+ * open. A lock its holder may no longer use (the record moved into a step
+ * they do not own) is void — the lock routes drop it and the save guard
+ * ignores it, so the creator and the step owners are not locked out.
+ * A question that cannot be answered keeps the lock (never voids it).
+ */
+export async function lockHolderVerdict(
+  holder: { id: string; role?: string | null } | string,
+  collection: string,
+  item: string
+): Promise<EditLockVerdict> {
+  const plan = await lockPlan().catch(() => null)
+  const cfg = plan?.locks.get(collection)
+  if (!cfg) return OPEN
+  try {
+    const user =
+      typeof holder === 'string'
+        ? ((await db('nivaro_users').where({ id: holder }).first('id', 'role')) as User | undefined)
+        : (holder as User)
+    if (!user) return OPEN
+    const { isAdminRole } = await import('./permissions.js')
+    if (await isAdminRole(user)) return OPEN
+    return await editLockVerdictFor(user, collection, String(item), cfg)
+  } catch {
+    return OPEN
+  }
+}
+
+function fkOf(value: unknown): string | null {
+  const fk = value && typeof value === 'object' ? (value as { id?: unknown }).id : value
+  return fk != null && fk !== '' ? String(fk) : null
+}
+
+/**
  * The gate the items service runs on a request write. `ids` = the rows being
  * changed or deleted; `payload` = the values being written (a child row's FK
- * to its parent may be among them). Throws EditLockedError on a refusal.
+ * to its parent may be among them). Judges, for a record's own rows (a
+ * listed child, a junction row of a many-to-many / files field, an inline-grid
+ * row) the parent's person-held edit lock (409 RECORD_LOCKED, admins
+ * included, as on the record) and, for a record and its own rows, the
+ * approval edit lock (403 EDIT_LOCKED, admins pass). Throws on a refusal.
  */
 export async function assertNotEditLocked(
   user: User | null | undefined,
@@ -219,33 +298,59 @@ export async function assertNotEditLocked(
 ): Promise<void> {
   if (!req || !user) return
   const plan = await lockPlan()
-  if (plan.locks.size === 0) return
   const own = plan.locks.get(collection)
   const links = plan.childLinks.get(collection)
+  const held = plan.heldLinks.get(collection)
+  if (!own && !links && !held) return
+
+  // The rows' current parents, read once for both locks. A row moved OUT of a
+  // locked parent counts as much as one moved in (the payload's FK).
+  const ids = (opts.ids ?? []).map(String)
+  const fields = [...new Set([...(links ?? []), ...(held ?? [])].map((l) => l.field))]
+  let current: Array<Record<string, unknown>> = []
+  let currentFailed = false
+  if (ids.length > 0 && fields.length > 0) {
+    try {
+      current = (await db(collection).whereIn('id', ids).select(fields)) as Array<
+        Record<string, unknown>
+      >
+    } catch {
+      currentFailed = true
+    }
+  }
+  const parentsOf = (ls: ChildLink[]) => {
+    const out: Array<{ parent: string; id: string }> = []
+    const seen = new Set<string>()
+    const push = (parent: string, id: string | null) => {
+      if (id == null) return
+      const k = `${parent}:${id.toLowerCase()}`
+      if (seen.has(k)) return
+      seen.add(k)
+      out.push({ parent, id })
+    }
+    for (const link of ls) {
+      push(link.parent, fkOf(opts.payload?.[link.field]))
+      for (const r of current) push(link.parent, fkOf(r[link.field]))
+    }
+    return out
+  }
+
+  if (held) {
+    const { editLockRefusal, RecordLockedError } = await import('./item-lock-guard.js')
+    for (const t of parentsOf(held)) {
+      const refused = await editLockRefusal(req, t.parent, t.id)
+      if (refused) throw new RecordLockedError(refused.body)
+    }
+  }
   if (!own && !links) return
   const { isAdminRole } = await import('./permissions.js')
   if (req.isAdmin || (await isAdminRole(user))) return
+  if (links && currentFailed)
+    throw new EditLockedError('Could not confirm you may change this record while it waits.')
 
   const targets: Array<{ parent: string; id: string }> = []
-  if (own) for (const id of opts.ids ?? []) targets.push({ parent: collection, id: String(id) })
-  if (links) {
-    const ids = (opts.ids ?? []).map(String)
-    for (const link of links) {
-      const fromPayload = opts.payload?.[link.field]
-      const fk =
-        fromPayload && typeof fromPayload === 'object'
-          ? (fromPayload as { id?: unknown }).id
-          : fromPayload
-      if (fk != null && fk !== '') targets.push({ parent: link.parent, id: String(fk) })
-      if (ids.length > 0) {
-        const rows = (await db(collection)
-          .whereIn('id', ids)
-          .select(`${link.field} as fk`)) as Array<{ fk: unknown }>
-        for (const r of rows)
-          if (r.fk != null && r.fk !== '') targets.push({ parent: link.parent, id: String(r.fk) })
-      }
-    }
-  }
+  if (own) for (const id of ids) targets.push({ parent: collection, id })
+  if (links) targets.push(...parentsOf(links))
   const seen = new Set<string>()
   for (const t of targets) {
     const k = `${t.parent}:${t.id.toLowerCase()}`
@@ -265,5 +370,62 @@ export async function assertNotEditLocked(
 export async function editLockTouches(collection: string): Promise<boolean> {
   const plan = await lockPlan().catch(() => null)
   if (!plan) return true
-  return plan.locks.has(collection) || plan.childLinks.has(collection)
+  return plan.locks.has(collection) || plan.heldLinks.has(collection)
+}
+
+export interface RecordWriteRefusal {
+  status: 403 | 404 | 409
+  body: { error: string; code?: string; locked_by?: string; locked_by_name?: string | null }
+}
+
+/**
+ * Everything a person's write to ONE record must pass, for the routes that
+ * change a record (or rows hanging off it) outside updateOne — the same
+ * sequence as the single-record item action (item-actions.ts): the caller
+ * reads it as themselves (row filter, User Scopes; invisible = 404), may
+ * update it (update row filter, tree permission), nobody else holds its
+ * person-held edit lock (409 RECORD_LOCKED, admins included) and its
+ * approval lock lets them (403 EDIT_LOCKED). null = go ahead. `heldLock:
+ * false` skips the person-held lock (an outbound push, like the record's own
+ * Push button, does not write the form someone has open).
+ */
+export async function recordWriteRefusal(
+  req: FastifyRequest,
+  collection: string,
+  id: string | number,
+  opts: { heldLock?: boolean } = {}
+): Promise<RecordWriteRefusal | null> {
+  const user = req.user
+  if (!user) return { status: 403, body: { error: 'Forbidden' } }
+  if (opts.heldLock !== false) {
+    const { editLockRefusal } = await import('./item-lock-guard.js')
+    const held = await editLockRefusal(req, collection, id)
+    if (held) return held
+  }
+  if (req.isAdmin) return null
+  const items = await import('./items.js')
+  let row: unknown = null
+  try {
+    row = await items.readOne(user, collection, id, req.workspaceId ?? undefined, ['id'])
+  } catch (err) {
+    if (err instanceof items.ForbiddenError) return { status: 403, body: { error: 'Forbidden' } }
+    if (
+      err instanceof items.CollectionNotFoundError ||
+      err instanceof items.ItemNotFoundError ||
+      (err as { statusCode?: number })?.statusCode === 400
+    )
+      return { status: 404, body: { error: 'Not found' } }
+    throw err
+  }
+  if (row == null) return { status: 404, body: { error: 'Not found' } }
+  if (!(await items.canUpdateItem(user, collection, id, req.workspaceId ?? undefined)))
+    return { status: 403, body: { error: 'You do not have permission to change this record' } }
+  try {
+    await assertNotEditLocked(user, collection, { ids: [id] }, req)
+  } catch (err) {
+    if (err instanceof EditLockedError)
+      return { status: 403, body: { error: err.message, code: EDIT_LOCKED } }
+    throw err
+  }
+  return null
 }

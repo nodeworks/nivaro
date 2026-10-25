@@ -137,6 +137,7 @@ import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordReader } from '../../lib/record-loader'
+import { restoreSkippedNote } from '../../lib/restore-skipped'
 import type { RuleProvenance } from '../../lib/rule-provenance'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
@@ -1865,7 +1866,7 @@ export function InlineTableField({
   async function restoreAllTo(timestamp: string) {
     setRestoringAll(true)
     try {
-      await client.request(
+      const res = await client.request(
         post('/revisions/o2m-restore', {
           collection: relatedCollection,
           many_field: manyField,
@@ -1873,6 +1874,8 @@ export function InlineTableField({
           target_timestamp: timestamp
         })
       )
+      const skipped = restoreSkippedNote(res)
+      if (skipped) toast.warning(skipped, { duration: 10_000 })
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       qc.invalidateQueries({
         queryKey: ['o2m-field-snapshots', relatedCollection, manyField, parentId]

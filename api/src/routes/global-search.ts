@@ -100,7 +100,7 @@ interface PlanEntry {
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const NAMEISH = ['name', 'title', 'label', 'subject']
 const MAX_COLS_PER_COLLECTION = 3
-const PER_COLLECTION = 5
+const PER_COLLECTION = 8
 const RECORD_CAP = 30
 // A contains-LIKE is a table scan; multi-million-row tables (invoices 2.7M,
 // legacy logs 1.6M) each cost 4-13s and blow the 15s statement timeout for
@@ -232,10 +232,15 @@ async function searchRecords(
         likes.length > 1
           ? `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${p.columns.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
           : p.columns.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')
+      // Best matches first within each collection (army 2026-10-25: an exact
+      // name came back nowhere because TOP took an arbitrary five): a column
+      // equal to the phrase, then one starting with it, then the newest.
+      const rank = `CASE WHEN ${p.columns.map((c) => `[${c}] = ?`).join(' OR ')} THEN 0 WHEN ${p.columns.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')} THEN 1 ELSE 2 END`
       parts.push(
-        `SELECT TOP ${PER_COLLECTION} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id, ${labelExpr} AS label FROM [${p.collection}] WHERE ${wheres}`
+        `SELECT * FROM (SELECT TOP ${PER_COLLECTION} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id, ${labelExpr} AS label FROM [${p.collection}] WHERE ${wheres} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`
       )
       if (likes.length === 1) bindings.push(...p.columns.map(() => likes[0]))
+      bindings.push(...p.columns.map(() => q), ...p.columns.map(() => `${escapeLike(q)}%`))
     }
     const cte =
       likes.length > 1
@@ -307,10 +312,16 @@ async function searchRecords(
   )
 
   const lower = q.toLowerCase()
+  const tier = (r: { id: unknown; label: string; snippet: string }) => {
+    const label = r.label.toLowerCase()
+    const snippet = r.snippet.toLowerCase()
+    if (label === lower || snippet === lower || String(r.id) === q) return 0
+    if (label.startsWith(lower) || snippet.startsWith(lower)) return 1
+    return 2
+  }
   results.sort((a, b) => {
-    const aExact = a.label.toLowerCase() === lower || String(a.id) === q ? 0 : 1
-    const bExact = b.label.toLowerCase() === lower || String(b.id) === q ? 0 : 1
-    if (aExact !== bExact) return aExact - bExact
+    const t = tier(a) - tier(b)
+    if (t !== 0) return t
     return a.label.length - b.label.length
   })
   return results.slice(0, RECORD_CAP)
@@ -412,12 +423,16 @@ export async function globalSearchRoutes(app: FastifyInstance) {
             if (hits.length === 0) continue
             const fields = pickSearchFields(byCollection.get(collection) ?? [])
             const labelField = fields[0] ?? 'id'
-            const rows = (await db(collection)
-              .select(['id', labelField])
-              .whereIn(
-                'id',
-                hits.map((h) => h.item)
-              )) as Array<Record<string, unknown>>
+            // Confirmed as the caller, like the keyword path: row filter and
+            // User Scopes drop hits they cannot open.
+            const rows = (
+              await readItems(user as User, collection, {
+                filter: { id: { _in: hits.map((h) => h.item) } },
+                fields: [...new Set(['id', labelField])],
+                limit: hits.length,
+                count: false
+              }).catch(() => ({ data: [] as unknown[] }))
+            ).data as Array<Record<string, unknown>>
             for (const row of rows) {
               const key = `${collection}:${String(row.id)}`
               if (seen.has(key)) continue

@@ -195,7 +195,33 @@ function htmlPage(title: string, body: string, status = 200) {
   }
 }
 
+const escapeHtml = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+
+/** A decision link's landing page: the decision happens only when the person
+ *  presses the button (a POST) — mail and chat link scanners that prefetch a
+ *  GET can never approve or reject. */
+function confirmPage(token: string, decision: 'approve' | 'reject') {
+  const verb = decision === 'approve' ? 'Approve' : 'Reject'
+  return {
+    status: 200,
+    html: `<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>${verb}</title></head><body style="font-family:Arial,Helvetica,sans-serif;display:flex;align-items:center;justify-content:center;height:90vh;"><form method="post" action="callback" style="text-align:center;"><h2 style="color:#172940;">${verb} this request?</h2><input type="hidden" name="token" value="${escapeHtml(token)}"><button type="submit" style="font-size:16px;padding:10px 24px;border:0;border-radius:6px;background:#00ceff;color:#fff;cursor:pointer;">${verb}</button></form></body></html>`
+  }
+}
+
 export async function messageActionsRoutes(app: FastifyInstance) {
+  // The confirm page posts its token back as a plain HTML form.
+  app.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    { parseAs: 'string' },
+    (_req, body, done) => {
+      try {
+        done(null, Object.fromEntries(new URLSearchParams(body as string)))
+      } catch (err) {
+        done(err as Error, undefined)
+      }
+    }
+  )
+
   // Token-authenticated — no session/bearer auth on the callback
   const handler = async (token: string | undefined) => {
     if (!token) return { redirect: null, ...htmlPage('Error', 'Missing token', 400) }
@@ -263,7 +289,18 @@ export async function messageActionsRoutes(app: FastifyInstance) {
   }
 
   app.get<{ Querystring: { token?: string } }>('/callback', async (req, reply) => {
-    const result = await handler(req.query.token)
+    // A decision never happens on GET: the page asks, the button POSTs.
+    const token = req.query.token
+    const payload = token ? verifyActionToken(token) : null
+    if (token && payload?.kind === 'approval' && payload.action_id !== 'view') {
+      const page = confirmPage(token, payload.action_id === 'approve' ? 'approve' : 'reject')
+      return reply
+        .code(page.status)
+        .header('cache-control', 'no-store')
+        .type('text/html')
+        .send(page.html)
+    }
+    const result = await handler(token)
     if (result.redirect) return reply.redirect(result.redirect)
     return reply.code(result.status).type('text/html').send(result.html)
   })

@@ -10,11 +10,24 @@ import { logActivity } from '../services/activity.js'
  * existence check is authenticated so record forms can show a hold badge.
  */
 export async function legalHoldRoutes(app: FastifyInstance): Promise<void> {
-  /** Is this record held? (badge check — read permission implied by use.) */
+  /** Is this record held? (badge check — for people who can open the record.) */
   app.get<{ Params: { collection: string; id: string } }>(
     '/check/:collection/:id',
     { preHandler: requireAuth },
-    async (req) => {
+    async (req, reply) => {
+      // Only for a record the caller can open (readOne: row filter, User
+      // Scopes) — the hold's reason is about that record.
+      if (!req.isAdmin) {
+        const { readOne } = await import('../services/items.js')
+        const row = await readOne(
+          req.user!,
+          req.params.collection,
+          req.params.id,
+          req.workspaceId ?? undefined,
+          ['id']
+        ).catch(() => null)
+        if (!row) return reply.code(404).send({ error: 'Not found' })
+      }
       const hold = await db('nivaro_legal_holds')
         .where({ collection: req.params.collection, item_id: req.params.id })
         .whereNull('released_at')

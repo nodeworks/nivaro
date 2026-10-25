@@ -11,6 +11,12 @@ const P = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 
 const st = vi.hoisted(() => ({ gets: [] as string[], puts: [] as string[] }))
 
+// Record-attachment gates are covered in files-access.test.ts — open here.
+vi.mock('../../../services/file-access.js', () => ({
+  mayReadFile: async () => true,
+  mayChangeFile: async () => ({ ok: true }),
+  readableFileIdList: async (ids: string[]) => new Set(ids.map((i) => i.toLowerCase()))
+}))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: async (req: { user?: unknown }) => {
     req.user = { id: 'U1', role: 'R' }

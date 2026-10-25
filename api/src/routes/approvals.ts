@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import type { User } from '../types.js'
 
 interface ApprovalChain {
@@ -58,6 +59,18 @@ async function getOrderedSteps(chainId: number): Promise<ApprovalChainStep[]> {
 }
 
 /** Resolve the users who may decide a step: direct approver, or everyone holding the role. */
+/** The ids (of `ids`) of `collection` the caller can open (row filter, User Scopes). */
+async function visibleRecordIds(
+  req: import('fastify').FastifyRequest,
+  collection: string,
+  ids: string[]
+): Promise<Set<string>> {
+  const gates = await compileAccessGates(req.user!, collection, { actingAdmin: req.isAdmin })
+  const seen = await visibleIds(gates, [...new Set(ids)])
+  const lower = new Set([...seen].map((v) => v.toLowerCase()))
+  return new Set(ids.filter((v) => lower.has(v.toLowerCase())))
+}
+
 export async function resolveStepApprovers(step: ApprovalChainStep): Promise<string[]> {
   if (step.approver) return [step.approver]
   if (step.approver_role) {
@@ -439,6 +452,10 @@ export async function approvalsRoutes(app: FastifyInstance) {
       if (!(await can(req.user!, 'read', collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
+      // The record itself must be one the caller can open.
+      if (!(await visibleRecordIds(req, collection, [String(item)])).has(String(item))) {
+        return reply.code(404).send({ error: 'Not found' })
+      }
 
       const chain = (await db('nivaro_approval_chains')
         .where({ id: Number(chain_id) })
@@ -540,7 +557,23 @@ export async function approvalsRoutes(app: FastifyInstance) {
       if (item) query = query.where('i.item', String(item))
       if (status) query = query.where('i.status', status)
 
-      const instances = (await query) as Array<ApprovalInstance & Record<string, unknown>>
+      const found = (await query) as Array<ApprovalInstance & Record<string, unknown>>
+      // Non-admins see the chains on records they can open, nothing else.
+      let instances = found
+      if (!req.isAdmin) {
+        const byCollection = new Map<string, string[]>()
+        for (const i of found)
+          byCollection.set(i.collection, [
+            ...(byCollection.get(i.collection) ?? []),
+            String(i.item)
+          ])
+        const seen = new Set<string>()
+        for (const [c, ids] of byCollection) {
+          if (!(await can(req.user!, 'read', c))) continue
+          for (const id of await visibleRecordIds(req, c, ids)) seen.add(`${c}\u0000${id}`)
+        }
+        instances = found.filter((i) => seen.has(`${i.collection}\u0000${String(i.item)}`))
+      }
       if (!instances.length) return reply.send({ data: [] })
 
       const instanceIds = instances.map((i) => i.id)

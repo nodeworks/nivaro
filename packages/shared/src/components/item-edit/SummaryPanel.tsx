@@ -108,6 +108,34 @@ function M2MSummaryCount({
     enabled: !!parentId && parentId !== 'new'
   })
 
+  // A many-to-any link (Ship-To Contact: a person OR an external contact)
+  // has no single far collection — its junction row names it in the
+  // discriminator column. Read that and label each pick in its own table;
+  // it used to read "1 item".
+  const m2aField = relatedCollection
+    ? null
+    : ([...allRelations, ...(junctionRelations ?? [])].find(
+        (r) =>
+          r.many_collection === relation.many_collection &&
+          r.many_field === junctionField &&
+          !!r.one_collection_field
+      )?.one_collection_field ?? null)
+  const { data: m2aItems = [] } = useQuery<Record<string, unknown>[]>({
+    queryKey: ['summary-m2a-items', relation.many_collection, manyField, parentId, m2aField],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${relation.many_collection}`, {
+            filter: JSON.stringify({ [manyField]: { _eq: parentId } }),
+            limit: 200,
+            fields: `id,${junctionField},${m2aField}`
+          })
+        )
+        .then((r) => r.data ?? []),
+    staleTime: 30_000,
+    enabled: !!m2aField && !!parentId && parentId !== 'new'
+  })
+
   const isFilesCollection =
     relatedCollection === 'nivaro_files' || relatedCollection === 'directus_files'
   const { data: colMeta } = useQuery<{ display_template?: string }>({
@@ -153,11 +181,39 @@ function M2MSummaryCount({
     )
   }
 
+  const m2aShown = m2aField
+    ? m2aItems
+        .filter((i) => !stagedUnlinks.has(i.id) && i[junctionField] != null && i[m2aField])
+        .slice(0, 5)
+    : []
+  if (m2aShown.length > 0 && stagedLinks.length === 0) {
+    const extra = allRelatedIds.length - m2aShown.length
+    return (
+      <span className='text-[12px] text-slate-700 dark:text-slate-200'>
+        {m2aShown.map((i, n) => (
+          <span key={String(i.id)}>
+            {n > 0 && ', '}
+            <M2OSummaryValue
+              collection={m2aCollection(String(i[m2aField as string]))}
+              id={i[junctionField]}
+            />
+          </span>
+        ))}
+        {extra > 0 && <span className='text-slate-400 dark:text-slate-500'> +{extra} more</span>}
+      </span>
+    )
+  }
+
   return (
     <span className='text-slate-700 dark:text-slate-200'>
       {allRelatedIds.length} item{allRelatedIds.length !== 1 ? 's' : ''}
     </span>
   )
+}
+
+/** The legacy Directus users table is nivaro_users here. */
+function m2aCollection(name: string): string {
+  return name === 'directus_users' ? 'nivaro_users' : name
 }
 
 /** A collection's display template, cached. Without it a relation renders as
@@ -468,6 +524,9 @@ function SummaryFieldValueInner({
   }
 
   const isEmpty = val === null || val === undefined || val === ''
+  // An unset yes/no reads "No", as its switch on the form does.
+  if (isEmpty && field.type === 'boolean')
+    return <span className='text-slate-700 dark:text-slate-200'>No</span>
   if (isEmpty) return <span className='text-slate-400 dark:text-slate-500'>—</span>
 
   // Rich text: judged by CONTENT, not interface. A field whose interface is

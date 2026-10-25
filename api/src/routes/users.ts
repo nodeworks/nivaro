@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { UUID_RE } from '../lib/sql-value-fit.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
@@ -78,6 +79,56 @@ export function isUserIdParam(id: unknown): boolean {
   return typeof id === 'string' && (id === 'me' || USER_ID_RE.test(id))
 }
 const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The checks every self-service delegation write makes (POST /me/delegate and
+ * a PATCH of one's own row): a real, active other person, a real expiry, and
+ * a delegate who can open the approvals they would inherit — handing them to
+ * someone who sees none of them is refused unless the person confirms
+ * (`acknowledge_unreachable`); seeing only some of them comes back as a warning.
+ */
+async function delegateWriteCheck(
+  userId: string,
+  body: {
+    delegate_id?: unknown
+    delegate_expires_at?: unknown
+    is_out_of_office?: unknown
+    acknowledge_unreachable?: unknown
+  },
+  /** Judge whether the delegate can open the inherited records (self-service). */
+  opts: { reach?: boolean } = { reach: true }
+): Promise<{ status: number; error: string; code?: string } | { warning: string | null }> {
+  const id = body.delegate_id
+  if (body.delegate_expires_at != null && body.delegate_expires_at !== '') {
+    if (Number.isNaN(new Date(String(body.delegate_expires_at)).getTime()))
+      return { status: 400, error: 'delegate_expires_at must be a date' }
+  }
+  if ('is_out_of_office' in body && typeof body.is_out_of_office !== 'boolean')
+    return { status: 400, error: 'is_out_of_office must be true or false' }
+  if (id == null || id === '') return { warning: null }
+  if (typeof id !== 'string' || !UUID_RE.test(id))
+    return { status: 400, error: 'Delegate user not found' }
+  if (id.toUpperCase() === userId.toUpperCase())
+    return { status: 400, error: 'Cannot delegate to yourself' }
+  const delegate = (await db('nivaro_users')
+    .where({ id })
+    .first('id', 'status', 'first_name', 'last_name', 'email')) as
+    | { status: string | null; first_name: string | null; last_name: string | null; email: string }
+    | undefined
+  if (!delegate) return { status: 400, error: 'Delegate user not found' }
+  if (String(delegate.status ?? '').toLowerCase() === 'suspended')
+    return { status: 400, error: 'That delegate is suspended' }
+  if (opts.reach === false) return { warning: null }
+  const { delegateReach, reachWarning } = await import('../services/delegate-visibility.js')
+  const reach = await delegateReach(userId, id).catch(() => null)
+  if (!reach) return { warning: null }
+  const name = [delegate.first_name, delegate.last_name].filter(Boolean).join(' ') || delegate.email
+  const warning = reachWarning(reach, name)
+  if (warning && reach.hidden === reach.owned && body.acknowledge_unreachable !== true) {
+    return { status: 409, error: warning, code: 'DELEGATE_CANNOT_SEE' }
+  }
+  return { warning }
+}
 
 export async function usersRoutes(app: FastifyInstance) {
   // Every /:id below names a nivaro_users row (uniqueidentifier). A mistyped
@@ -263,6 +314,25 @@ export async function usersRoutes(app: FastifyInstance) {
     const filtered = Object.fromEntries(
       Object.entries(body).filter(([k]) => (allowed as string[]).includes(k))
     )
+    // Delegation fields get the same checks POST /users/me/delegate makes —
+    // on one's own row; an admin setting someone else's delegate keeps the
+    // shape checks only.
+    let delegateWarning: string | null = null
+    if (['delegate_id', 'delegate_expires_at', 'is_out_of_office'].some((k) => k in filtered)) {
+      const check = await delegateWriteCheck(
+        String(id),
+        { ...filtered, acknowledge_unreachable: body.acknowledge_unreachable },
+        { reach: String(id).toUpperCase() === String(req.user!.id).toUpperCase() }
+      )
+      if ('error' in check)
+        return reply.code(check.status).send({ error: check.error, code: check.code })
+      delegateWarning = check.warning
+      if (filtered.delegate_id === '') filtered.delegate_id = null
+      if ('delegate_expires_at' in filtered)
+        filtered.delegate_expires_at = filtered.delegate_expires_at
+          ? new Date(String(filtered.delegate_expires_at))
+          : null
+    }
     if ('account_kind' in filtered) {
       const kind = filtered.account_kind
       if (kind === '' || kind === null) filtered.account_kind = null
@@ -316,7 +386,7 @@ export async function usersRoutes(app: FastifyInstance) {
       const { stripAiMemory } = await import('../services/ai-memory.js')
       return reply.send({ data: stripAiMemory(user) })
     }
-    return reply.send({ data: user })
+    return reply.send({ data: user, ...(delegateWarning ? { warnings: [delegateWarning] } : {}) })
   })
 
   // Digest test-send (#96): build + send MY digest right now, regardless of
@@ -1299,11 +1369,24 @@ export async function usersRoutes(app: FastifyInstance) {
     const { countOwnedApprovals, computeCoverageWarnings } = await import(
       '../services/delegate-coverage.js'
     )
-    const [count, warnings] = await Promise.all([
+    // ?delegate_id= also says how many of those records that person can open.
+    const delegateId = (req.query as { delegate_id?: string }).delegate_id
+    const [count, warnings, reach] = await Promise.all([
       countOwnedApprovals(req.user!.id),
-      computeCoverageWarnings(req.user!.id)
+      computeCoverageWarnings(req.user!.id),
+      delegateId && UUID_RE.test(delegateId)
+        ? import('../services/delegate-visibility.js').then((m) =>
+            m.delegateReach(req.user!.id, delegateId).catch(() => null)
+          )
+        : Promise.resolve(null)
     ])
-    return reply.send({ data: { approx_open_approvals: count, coverage_warnings: warnings } })
+    return reply.send({
+      data: {
+        approx_open_approvals: count,
+        coverage_warnings: warnings,
+        ...(reach ? { delegate_reach: reach } : {})
+      }
+    })
   })
 
   app.post('/me/delegate', { preHandler: authenticate }, async (req, reply) => {
@@ -1313,16 +1396,14 @@ export async function usersRoutes(app: FastifyInstance) {
       is_out_of_office?: boolean
       ooo_start?: string | null
       ooo_end?: string | null
+      /** Hand approvals to a delegate who cannot open them anyway. */
+      acknowledge_unreachable?: boolean
     }
     const userId = req.user!.id
 
-    if (body.delegate_id && body.delegate_id === userId) {
-      return reply.code(400).send({ error: 'Cannot delegate to yourself' })
-    }
-    if (body.delegate_id) {
-      const delegate = await db('nivaro_users').where({ id: body.delegate_id }).first()
-      if (!delegate) return reply.code(400).send({ error: 'Delegate user not found' })
-    }
+    const check = await delegateWriteCheck(userId, body)
+    if ('error' in check)
+      return reply.code(check.status).send({ error: check.error, code: check.code })
 
     const oooStart = body.ooo_start ? new Date(body.ooo_start) : null
     const oooEnd = body.ooo_end ? new Date(body.ooo_end) : null
@@ -1395,6 +1476,7 @@ export async function usersRoutes(app: FastifyInstance) {
         delta
       })
     }
+    if (check.warning) coverageWarnings = [check.warning, ...coverageWarnings]
     return reply.send({ data: user, warnings: coverageWarnings })
   })
 

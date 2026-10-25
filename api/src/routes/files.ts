@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto'
 import { posix } from 'node:path'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import mime from 'mime-types'
 import sharp from 'sharp'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { mayChangeFile, mayReadFile, readableFileIdList } from '../services/file-access.js'
 import { findOrphanFiles, forgetUnusedFiles, getFileUsage } from '../services/file-usage.js'
 import {
+  assertUploadContent,
   cleanDownloadName,
   createPresignedFile,
   deleteFile,
@@ -48,16 +50,20 @@ const TRANSFORM_KEY = /^transforms\/([0-9a-fA-F-]{36})\/[0-9a-f]{16}\.(?:webp|jp
  *  media routes (they re-check role and visibility), so here they answer the
  *  same 404 as an unknown file, to everyone. The check uses the row's own id,
  *  never the caller's string. */
-async function servableFile(
-  id: string,
-  req?: { user?: { id?: string } | null; isAdmin?: boolean }
-) {
+async function servableFile(id: string, req: FastifyRequest) {
   const file = await getFile(id)
   if (!file || (await isHelpVideoFile(String(file.id)))) return undefined
   // A render or export made from records is private to whoever made it (and administrators):
   // anyone else gets the same 404 as an unknown file.
-  if (!viewerMaySeeFile(file, { id: req?.user?.id, isAdmin: req?.isAdmin })) return undefined
+  if (!viewerMaySeeFile(file, { id: req.user?.id, isAdmin: req.isAdmin })) return undefined
+  // A record's attachment reads only for someone who can open one of its records.
+  if (!(await mayReadFile(file, req))) return undefined
   return file
+}
+
+/** The ids (of those given) the caller may read, lower-cased; exact uuids only. */
+function readableIds(ids: string[], req: FastifyRequest): Promise<Set<string>> {
+  return readableFileIdList(ids.filter(isUuid), req)
 }
 
 export async function filesRoutes(app: FastifyInstance) {
@@ -84,6 +90,13 @@ export async function filesRoutes(app: FastifyInstance) {
         /* malformed filter — ignore */
       }
     }
+    // Non-admins list their own uploads; an id lookup answers only the files
+    // they may read (a record's attachments follow the record).
+    if (ids && !req.isAdmin) {
+      const readable = await readableIds(ids, req)
+      ids = ids.filter((id) => readable.has(id.toLowerCase()))
+      if (ids.length === 0) return reply.send({ data: [], total: 0 })
+    }
     const result = await listFiles({
       folder: q.folder,
       limit: Number(q.limit ?? 50),
@@ -91,7 +104,8 @@ export async function filesRoutes(app: FastifyInstance) {
       search: q.search,
       ids,
       tag: q.tag,
-      viewer: { id: req.user?.id, isAdmin: !!req.isAdmin }
+      viewer: { id: req.user?.id, isAdmin: !!req.isAdmin },
+      ...(!ids && !req.isAdmin ? { uploadedBy: req.user?.id ?? '' } : {})
     })
     return reply.send(result)
   })
@@ -107,7 +121,8 @@ export async function filesRoutes(app: FastifyInstance) {
     // Exact uuids only (SQL Server would match '<uuid>xyz' to '<uuid>'), and a
     // help-video file gets no verdict, exactly like an unknown id. The check
     // runs on the ids of the rows actually found.
-    const found = await verifyFiles(ids.filter(isUuid))
+    const readable = await readableIds(ids, req)
+    const found = await verifyFiles(ids.filter((id) => readable.has(id.toLowerCase())))
     const hidden = await helpVideoFileIds(found.map((v) => v.id))
     const verdicts = found.filter((v) => !hidden.has(String(v.id).toUpperCase()))
     return reply.send({
@@ -119,7 +134,14 @@ export async function filesRoutes(app: FastifyInstance) {
     const multipart = await req.file()
     if (!multipart) return reply.code(400).send({ error: 'No file provided' })
     const folder = (req.query as Record<string, string>).folder
-    const file = await uploadFile(req.user!, multipart, folder)
+    let file: Awaited<ReturnType<typeof uploadFile>>
+    try {
+      file = await uploadFile(req.user!, multipart, folder)
+    } catch (err) {
+      if ((err as { statusCode?: number }).statusCode === 400)
+        return reply.code(400).send({ error: (err as Error).message })
+      throw err
+    }
     await logActivity({
       action: 'create',
       collection: 'nivaro_files',
@@ -269,7 +291,8 @@ export async function filesRoutes(app: FastifyInstance) {
     const counts = new Map<string, number>(ids.map((id) => [id, 0]))
     // Only exact uuids are looked up (SQL Server would match '<uuid>xyz' to
     // '<uuid>'); anything else reads as unknown: zero.
-    const exact = ids.filter(isUuid)
+    const readable = await readableIds(ids, req)
+    const exact = ids.filter((id) => readable.has(id.toLowerCase()))
     const found: Array<[string, number]> = []
     for (const ref of exact.length ? refs : []) {
       try {
@@ -515,6 +538,8 @@ export async function filesRoutes(app: FastifyInstance) {
 
     const existing = await servableFile(id, req)
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    const verdict = await mayChangeFile(existing, req)
+    if (!verdict.ok) return reply.code(403).send({ error: verdict.message, code: verdict.code })
 
     const patch: Parameters<typeof updateFileMeta>[1] = {}
     if ('title' in body) patch.title = body.title
@@ -557,11 +582,18 @@ export async function filesRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const existing = await servableFile(id, req)
     if (!existing) return reply.code(404).send({ error: 'Not found' })
+    const verdict = await mayChangeFile(existing, req)
+    if (!verdict.ok) return reply.code(403).send({ error: verdict.message, code: verdict.code })
     const multipart = await req.file()
     if (!multipart) return reply.code(400).send({ error: 'No file provided' })
     const buffer = await multipart.toBuffer()
     const mimeType =
       multipart.mimetype || mime.lookup(multipart.filename) || 'application/octet-stream'
+    try {
+      assertUploadContent(buffer, multipart.filename, String(mimeType))
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message })
+    }
     const file = await replaceFileContent(
       String(existing.id),
       buffer,
@@ -586,6 +618,8 @@ export async function filesRoutes(app: FastifyInstance) {
     // never deleted here; purging a video removes its files).
     const file = await servableFile(id, req)
     if (!file) return reply.code(404).send({ error: 'Not found' })
+    const verdict = await mayChangeFile(file, req)
+    if (!verdict.ok) return reply.code(403).send({ error: verdict.message, code: verdict.code })
     await deleteFile(String(file.id))
     await logActivity({
       action: 'delete',

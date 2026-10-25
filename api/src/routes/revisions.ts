@@ -1,20 +1,26 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { getFields } from '../services/collections.js'
 import { chunkArray } from '../services/db-batch.js'
+import { assertNotEditLocked } from '../services/edit-lock.js'
 import {
   apiKeyNames,
   callerOf,
   inboundSelectColumns,
   inboundStampedSince
 } from '../services/inbound-attribution.js'
-import { updateOne } from '../services/items.js'
+import { canUpdateItem, createOne, deleteOne, updateOne } from '../services/items.js'
 import { isMachineAccount } from '../services/machine-accounts.js'
 import { checkLastValueAccess, myLastValue } from '../services/my-last-value.js'
 import { originOfRow } from '../services/note-authorship.js'
-import { can } from '../services/permissions.js'
-import { o2mParentVisibleTo, recordVisibleTo } from '../services/revision-access.js'
+import { can, getAllowedFields } from '../services/permissions.js'
+import {
+  o2mParentCollection,
+  o2mParentVisibleTo,
+  recordVisibleTo
+} from '../services/revision-access.js'
 import { getRevision, listRevisions } from '../services/revisions.js'
 
 // Candidate child item ids for a parent's O2M history: rows currently linked
@@ -37,6 +43,59 @@ async function o2mCandidateItemIds(
     .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
     .select('a.item')) as Array<{ item: string | number }>
   return [...new Set([...currentIds.map(String), ...deletedRows.map((r) => String(r.item))])]
+}
+
+const AUDIT_SPECIALS = ['user-created', 'date-created', 'user-updated', 'date-updated']
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a == null || b == null) return a == null && b == null
+  if (a instanceof Date || b instanceof Date) {
+    const ta = new Date(a as string).getTime()
+    const tb = new Date(b as string).getTime()
+    return Number.isFinite(ta) && ta === tb
+  }
+  if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b)
+  return String(a) === String(b)
+}
+
+/**
+ * The part of a revision snapshot a restore writes AS THE CALLER: registered
+ * stored fields only (no id, no alias / virtual computed fields, no audit
+ * stamps — the write re-stamps those), never a readonly field for a
+ * non-admin, only fields the caller's write policy allows, and — against the
+ * current row — only values that differ. `skipped` names snapshot fields that
+ * differ but the caller may not write.
+ */
+export async function snapshotChanges(
+  user: NonNullable<FastifyRequest['user']>,
+  isAdmin: boolean,
+  collection: string,
+  action: 'create' | 'update',
+  snapshot: Record<string, unknown>,
+  current: Record<string, unknown> | null
+): Promise<{ values: Record<string, unknown>; skipped: string[] }> {
+  const fields = await getFields(collection)
+  const allowed = isAdmin ? null : await getAllowedFields(user, action, collection)
+  const values: Record<string, unknown> = {}
+  const skipped: string[] = []
+  for (const f of fields) {
+    const name = f.field
+    if (name === 'id' || !(name in snapshot)) continue
+    if (f.type === 'alias' || (f.computed_formula && !f.computed_store)) continue
+    const special = f.special ?? []
+    if (special.some((x) => AUDIT_SPECIALS.includes(x) || x === 'o2m' || x === 'm2m')) continue
+    if (current && sameValue(snapshot[name], current[name])) continue
+    const writable =
+      (allowed == null || allowed.includes('*') || allowed.includes(name)) &&
+      (isAdmin || !f.readonly) &&
+      f.computed_type !== 'write'
+    if (!writable) {
+      skipped.push(name)
+      continue
+    }
+    values[name] = snapshot[name]
+  }
+  return { values, skipped }
 }
 
 export async function revisionsRoutes(app: FastifyInstance) {
@@ -484,8 +543,13 @@ export async function revisionsRoutes(app: FastifyInstance) {
     return reply.send({ data: out })
   })
 
-  // POST /revisions/o2m-restore — bulk-replace O2M rows with a snapshot.
-  // Two modes: explicit rows[] OR target_timestamp (server reconstructs from revision history).
+  // POST /revisions/o2m-restore — put a parent's O2M rows back as they were
+  // at target_timestamp, rebuilt on the server from revision history. Every
+  // change goes through the items service AS THE CALLER (create / update /
+  // delete permission, field policy, row filters, User Scopes, the parent's
+  // edit lock and approval lock, hooks, revisions): rows that exist then and
+  // now are updated in place, rows gone since are re-created, rows added
+  // since are deleted. Free-form `rows` from the client are admin-only.
   app.post('/o2m-restore', async (req, reply) => {
     const { collection, many_field, parent_id, rows, target_timestamp } = req.body as {
       collection?: string
@@ -500,10 +564,15 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!Array.isArray(rows) && !target_timestamp) {
       return reply.code(400).send({ error: 'Either rows or target_timestamp is required' })
     }
+    if (Array.isArray(rows) && !target_timestamp && !req.isAdmin) {
+      return reply
+        .code(403)
+        .send({ error: 'Only administrators may restore rows they supply; restore to a time' })
+    }
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(many_field)) {
       return reply.code(400).send({ error: 'Invalid many_field' })
     }
-    if (collection.startsWith('nivaro_')) {
+    if (/^(nivaro_|directus_)/i.test(collection)) {
       return reply.code(400).send({ error: 'Cannot restore system table rows' })
     }
     if (!(await can(req.user!, 'update', collection))) {
@@ -512,8 +581,20 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!(await o2mParentVisibleTo(req, collection, many_field, String(parent_id)))) {
       return reply.code(404).send({ error: 'Not found' })
     }
+    // Restoring a record's rows edits the record: the caller must be able to
+    // change it, and its locks (person-held, approval) must let them.
+    const parent = await o2mParentCollection(collection, many_field)
+    if (
+      parent &&
+      !req.isAdmin &&
+      !(await canUpdateItem(req.user!, parent, String(parent_id), req.workspaceId ?? undefined))
+    ) {
+      return reply.code(403).send({ error: 'You may not change this record' })
+    }
+    await assertNotEditLocked(req.user!, collection, { payload: { [many_field]: parent_id } }, req)
 
-    let restoredRows: Array<Record<string, unknown>>
+    // item id (null = a supplied row with no id) → the row as it should be
+    let restoredRows: Array<{ id: string | null; data: Record<string, unknown> }>
 
     if (target_timestamp) {
       // Reconstruct: for each item that ever belonged to this parent, find its latest revision
@@ -555,25 +636,56 @@ export async function revisionsRoutes(app: FastifyInstance) {
                 }
               })()
             : (rev.data ?? {})
-        latestByItem.set(rev.item_id, { action: rev.action, data })
+        latestByItem.set(String(rev.item_id), { action: rev.action, data })
       }
       restoredRows = []
-      for (const [, { action, data }] of latestByItem) {
-        if (action !== 'delete') restoredRows.push(data)
+      for (const [itemId, { action, data }] of latestByItem) {
+        if (action !== 'delete') restoredRows.push({ id: itemId, data })
       }
     } else {
-      restoredRows = rows!
+      restoredRows = rows!.map((r) => ({
+        id: r?.id != null && r.id !== '' ? String(r.id) : null,
+        data: r ?? {}
+      }))
     }
 
-    // Delete all current rows for this parent then insert restored snapshot
-    await db(collection)
+    const currentRows = (await db(collection)
       .where({ [many_field]: parent_id })
-      .delete()
+      .select('*')) as Array<Record<string, unknown>>
+    const currentById = new Map(currentRows.map((r) => [String(r.id), r]))
+    const keep = new Set(restoredRows.flatMap((r) => (r.id ? [r.id] : [])))
+    const user = req.user!
+    const ws = req.workspaceId ?? undefined
+    const isAdmin = !!req.isAdmin
+    let created = 0
+    let updated = 0
+    let deleted = 0
+    const skipped = new Set<string>()
+    for (const row of currentRows) {
+      if (keep.has(String(row.id))) continue
+      await deleteOne(user, collection, String(row.id), req, ws)
+      deleted++
+    }
     for (const row of restoredRows) {
-      const payload = { ...row }
-      delete payload.id
-      payload[many_field] = parent_id
-      await db(collection).insert(payload)
+      const current = row.id ? (currentById.get(row.id) ?? null) : null
+      const change = await snapshotChanges(
+        user,
+        isAdmin,
+        collection,
+        current ? 'update' : 'create',
+        row.data,
+        current
+      )
+      for (const f of change.skipped) skipped.add(f)
+      if (current) {
+        delete change.values[many_field]
+        if (Object.keys(change.values).length === 0) continue
+        await updateOne(user, collection, String(row.id), change.values, req, ws)
+        updated++
+      } else {
+        await createOne(user, collection, { ...change.values, [many_field]: parent_id }, req, ws)
+        created++
+      }
     }
     await logActivity({
       action: 'o2m-restore',
@@ -583,7 +695,16 @@ export async function revisionsRoutes(app: FastifyInstance) {
       comment: JSON.stringify({ many_field, restored_count: restoredRows.length }),
       req
     })
-    return reply.send({ data: { success: true, restored: restoredRows.length } })
+    return reply.send({
+      data: {
+        success: true,
+        restored: restoredRows.length,
+        created,
+        updated,
+        deleted,
+        skipped_fields: [...skipped]
+      }
+    })
   })
 
   // GET /revisions/my-last-value?collection=&field=&exclude= — #2706 "Repeat
@@ -639,7 +760,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Activity record not found for this revision' })
     }
 
-    if (activity.collection.startsWith('nivaro_') && !(req.isAdmin ?? false)) {
+    if (/^(nivaro_|directus_)/i.test(activity.collection) && !(req.isAdmin ?? false)) {
       return reply.code(403).send({ error: 'Cannot rollback system table records' })
     }
     if (!(await can(req.user!, 'update', activity.collection))) {
@@ -649,12 +770,40 @@ export async function revisionsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Not found' })
     }
 
-    // Remove the id from the update payload
-    const updatePayload = { ...revisionData }
-    delete updatePayload.id
-
-    // Restore the item
-    await db(activity.collection).where({ id: activity.item }).update(updatePayload)
+    // Business records are restored through the items service AS THE CALLER
+    // (edit lock, approval lock, field policy, update row filter, hooks, a
+    // fresh revision, rollups) — only the fields that differ and that the
+    // caller may write. System tables (admins only) keep the raw restore.
+    let skipped: string[] = []
+    if (/^(nivaro_|directus_)/i.test(activity.collection)) {
+      const updatePayload = { ...revisionData }
+      delete updatePayload.id
+      await db(activity.collection).where({ id: activity.item }).update(updatePayload)
+    } else {
+      const current = (await db(activity.collection).where({ id: activity.item }).first()) as
+        | Record<string, unknown>
+        | undefined
+      if (!current) return reply.code(404).send({ error: 'Not found' })
+      const change = await snapshotChanges(
+        req.user!,
+        !!req.isAdmin,
+        activity.collection,
+        'update',
+        revisionData,
+        current
+      )
+      skipped = change.skipped
+      if (Object.keys(change.values).length > 0) {
+        await updateOne(
+          req.user!,
+          activity.collection,
+          activity.item,
+          change.values,
+          req,
+          req.workspaceId ?? undefined
+        )
+      }
+    }
 
     // Log the rollback action
     await logActivity({
@@ -670,15 +819,15 @@ export async function revisionsRoutes(app: FastifyInstance) {
       data: {
         success: true,
         collection: activity.collection,
-        item: activity.item
+        item: activity.item,
+        skipped_fields: skipped
       }
     })
   })
 
   // POST /revisions/:id/revert-field — single-field revert (#667). Takes JUST
   // one field's value from a revision snapshot and writes it through the items
-  // service AS THE CALLER, so RBAC/RLS/validation/hooks/activity all apply —
-  // unlike the whole-snapshot rollback above, which raw-writes deliberately.
+  // service AS THE CALLER, so RBAC/RLS/validation/hooks/activity all apply.
   app.post('/:id/revert-field', async (req, reply) => {
     const { id } = req.params as { id: string }
     const { field } = (req.body ?? {}) as { field?: string }

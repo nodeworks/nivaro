@@ -36,7 +36,9 @@ const perms = vi.hoisted(() => ({ create: true }))
 vi.mock('../../../services/permissions.js', async (orig) => ({
   ...(await orig<object>()),
   can: vi.fn(async (_u: unknown, action: string) => action !== 'create' || perms.create),
-  getAllowedFields: vi.fn(async () => ['id', 'first_name', 'last_name', 'email'])
+  getAllowedFields: vi.fn(async (_u: unknown, _a: string, c: string) =>
+    c === 'nivaro_users' ? ['id', 'first_name', 'last_name', 'email'] : null
+  )
 }))
 vi.mock('../../../services/collections.js', async (orig) => ({
   ...(await orig<object>()),

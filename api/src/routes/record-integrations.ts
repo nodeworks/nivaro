@@ -1,16 +1,24 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { recordReadable, recordRefusal } from '../services/erp-record-gate.js'
 import {
   inboundChangesForCaller,
   inboundRequestForActivity,
   inboundWritesForRecord
 } from '../services/inbound-attribution.js'
 import { outboundPreview, transitionPreflight } from '../services/integration-preview.js'
-import { can } from '../services/permissions.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import { ADDENDUM_COLLECTION, resolvePipelineSubject } from '../services/pipeline-subject.js'
 import { registerNoteSource } from '../services/record-notes.js'
+import type { User } from '../types.js'
 
 const COLLECTION_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** Whether the caller's read policy on the collection covers every field. */
+async function readsEveryField(user: User, collection: string): Promise<boolean> {
+  const allowed = await getAllowedFields(user, 'read', collection).catch((): string[] => [])
+  return allowed === null || allowed.includes('*')
+}
 
 function recordCollectionOk(collection: string): boolean {
   return COLLECTION_RE.test(collection) && !/^nivaro_/i.test(collection)
@@ -76,9 +84,19 @@ export async function recordIntegrationsRoutes(app: FastifyInstance) {
       const { collection, item } = req.params
       if (!recordCollectionOk(collection))
         return reply.code(400).send({ error: 'Not a valid collection' })
-      if (!(await can(req.user!, 'read', collection)))
-        return reply.code(403).send({ error: 'Forbidden' })
+      // The record itself must be visible to the caller — a collection-level
+      // read let anyone render the payload of a record outside their scope.
+      const refusal = await recordRefusal(req, collection, item, 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
       const data = await outboundPreview(collection, item, req.user?.id ?? null)
+      if (!req.isAdmin && !(await readsEveryField(req.user!, collection))) {
+        // The payload is built from the record's fields (and lookups) whatever
+        // the caller's field policy says, so a field-limited reader sees which
+        // values would change, not the values themselves.
+        for (const g of data.integrations) {
+          g.changes = g.changes.map((c) => ({ ...c, from: null, to: null }))
+        }
+      }
       return reply.send({ data })
     }
   )
@@ -95,7 +113,9 @@ export async function recordIntegrationsRoutes(app: FastifyInstance) {
       if (!transitionId) return reply.code(400).send({ error: 'transition_id is required' })
       const gate = await pipelineGateCollection(collection, item)
       if (!gate) return reply.code(400).send({ error: 'Not a valid collection' })
-      if (!(await can(req.user!, 'read', gate))) return reply.code(403).send({ error: 'Forbidden' })
+      // assertInstanceAccess resolves an addendum to its parent record itself.
+      const refusal = await recordRefusal(req, collection, item, 'read')
+      if (refusal) return reply.code(refusal.code).send(refusal.body)
       const data = await transitionPreflight(collection, item, transitionId, req.user?.id ?? null)
       if (!data) return reply.code(404).send({ error: 'No such transition for this record' })
       return reply.send({ data })
@@ -113,9 +133,14 @@ export async function recordIntegrationsRoutes(app: FastifyInstance) {
       const collection = String(found.activity.collection ?? '')
       // A record write: its readers may see what wrote it. Anything else
       // (a system table) is for administrators.
+      // The record must be visible to them, not just its collection.
+      const item = String(found.activity.item ?? '')
       const allowed =
         req.isAdmin ||
-        (recordCollectionOk(collection) && (await can(req.user!, 'read', collection)))
+        (recordCollectionOk(collection) &&
+          item !== '' &&
+          (await can(req.user!, 'read', collection)) &&
+          (await recordReadable(req, collection, item)))
       if (!allowed) return reply.code(403).send({ error: 'Forbidden' })
       const r = found.request
       return reply.send({

@@ -10,9 +10,119 @@ import {
   renderChangesToken,
   renderNotificationTemplate
 } from '../services/notification-templates.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import { computeDelta } from '../services/revisions.js'
+import { canSeeRecord } from '../services/sla-visibility.js'
 import { deferEffect } from '../services/unit-of-work.js'
+import type { User } from '../types.js'
 import { hooks } from './registry.js'
+
+type Change = { field: string; label: string; old: string; new: string; of?: string }
+
+/** What one subscriber may be told about a write. A subscription is a standing
+ *  read, so it gets the reads a person would: the record must be visible to them
+ *  (User Scopes, row filter — a deleted row can't be read, so only the role's
+ *  collection read), its filters may only test fields they can read (else the
+ *  match itself would answer a question about a hidden value), and change lines
+ *  only name fields they can read. */
+export interface RecipientView {
+  user: User
+  /** Can this person read `field` of `of` (default: the record's collection)? */
+  reads(field: string, of?: string): Promise<boolean>
+  /** The change lines this person may see (`of` = the lines' collection). */
+  changes<T extends Change>(list: T[], of?: string): Promise<T[]>
+  /** The row with only the fields this person may read. */
+  row(r: Record<string, unknown> | null | undefined): Promise<Record<string, unknown> | null>
+}
+
+export interface RecipientViewDeps {
+  loadUser(id: string): Promise<User | null>
+  canRead(user: User, collection: string): Promise<boolean>
+  canSee(user: User, collection: string, item: string): Promise<boolean>
+  allowedFields(user: User, collection: string): Promise<string[] | null>
+}
+
+const viewDeps: RecipientViewDeps = {
+  loadUser: async (id) =>
+    ((await db('nivaro_users').where({ id }).first()) as User | undefined) ?? null,
+  canRead: (user, collection) => can(user, 'read', collection),
+  canSee: (user, collection, item) => canSeeRecord(user, collection, item),
+  allowedFields: (user, collection) => getAllowedFields(user, 'read', collection)
+}
+
+export async function recipientView(
+  userId: string,
+  collection: string,
+  item: string,
+  event: 'create' | 'update' | 'delete' | 'transition',
+  deps: RecipientViewDeps = viewDeps
+): Promise<RecipientView | null> {
+  try {
+    const user = await deps.loadUser(userId)
+    if (!user) return null
+    const visible =
+      event === 'delete'
+        ? await deps.canRead(user, collection)
+        : item
+          ? await deps.canSee(user, collection, item)
+          : false
+    if (!visible) return null
+    const allowed = new Map<string, Promise<string[] | null>>()
+    const reads = async (field: string, of = collection) => {
+      // A rolled-up add/remove line names a row, not a field.
+      if (field.startsWith('__')) return true
+      let p = allowed.get(of)
+      if (!p) {
+        p = deps.allowedFields(user, of).catch(() => [] as string[])
+        allowed.set(of, p)
+      }
+      const list = await p
+      const top = field.split('.')[0]
+      return list === null || list.includes(top) || (top === 'id' && of === collection)
+    }
+    return {
+      user,
+      reads,
+      async changes(list, of) {
+        const out: typeof list = []
+        for (const c of list) {
+          if (await reads(c.field, c.of ?? of ?? collection)) {
+            const { of: _of, ...rest } = c
+            out.push(rest as typeof c)
+          }
+        }
+        return out
+      },
+      async row(r) {
+        if (!r) return null
+        const out: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(r)) if (await reads(k)) out[k] = v
+        return out
+      }
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Every field a subscription's own filters test (filter_field + `filters`). */
+function subFilterFields(sub: { filter_field?: string | null; filters?: unknown }): string[] {
+  const out = sub.filter_field ? [String(sub.filter_field)] : []
+  for (const f of parseSubFilters(sub.filters)) out.push(f.field)
+  return out
+}
+
+async function readsFilterFields(
+  view: RecipientView,
+  sub: { filter_field?: string | null; filters?: unknown },
+  skip: string[] = []
+): Promise<boolean> {
+  for (const f of subFilterFields(sub)) {
+    if (skip.includes(f)) continue
+    if (!(await view.reads(f))) return false
+  }
+  return true
+}
 
 /** A subscription that names ONE record (the per-record bell): filter_field
  *  'id', or a single `id eq` entry in `filters`. Such a watch is an explicit
@@ -160,7 +270,8 @@ export function setApp(app: FastifyInstance) {
  *  diffs plus child-row diffs / adds / removes, each labelled the way the
  *  email table shows them. */
 export interface RecordChangeBundle {
-  changes: Array<{ field: string; label: string; old: string; new: string }>
+  /** `of` = the child collection a rolled-up line's field belongs to. */
+  changes: Change[]
   /** Distinct child collections touched, for the subject line. */
   children: string[]
   /** Number of distinct writes folded in. */
@@ -413,6 +524,17 @@ async function fireSubscriptionNotifications(
       // Child-row roll-ups reach record watchers only.
       if (viaChild && !recordScoped) continue
 
+      // As the subscriber: a record they cannot see, or a filter on a field
+      // they cannot read, tells them nothing.
+      const view = await recipientView(sub.user, collection, item, eventType)
+      if (!view || !(await readsFilterFields(view, sub))) continue
+      const seenBundle = bundle ? await view.changes(bundle.changes) : null
+      if (bundle && seenBundle!.length === 0) continue
+      const seenChild = viaChild?.changes
+        ? await view.changes(viaChild.changes, viaChild.collection)
+        : undefined
+      const seenRow = await view.changes(rowChanges)
+
       // Apply optional field filter
       if (sub.filter_field && data) {
         const actualVal = String(data[sub.filter_field as string] ?? '')
@@ -455,21 +577,21 @@ async function fireSubscriptionNotifications(
           ? `${childLabel} ${viaChild.label}`
           : `${childLabel} row`
         : null
-      const childWhat = viaChild?.changes?.length
-        ? ` — ${viaChild.changes
+      const childWhat = seenChild?.length
+        ? ` — ${seenChild
             .slice(0, 3)
             .map((c) => `${c.label}: ${c.old ? `${c.old} → ` : ''}${c.new}`)
-            .join(', ')}${viaChild.changes.length > 3 ? ', …' : ''}`
+            .join(', ')}${seenChild.length > 3 ? ', …' : ''}`
         : ''
       const recordRef = recordName
-      const bundleWhat = bundle
-        ? ` — ${bundle.changes
+      const bundleWhat = seenBundle
+        ? ` — ${seenBundle
             .slice(0, 3)
             .map((c) => `${c.label}: ${c.old ? `${c.old} → ` : ''}${c.new}`)
-            .join(', ')}${bundle.changes.length > 3 ? `, +${bundle.changes.length - 3} more` : ''}`
+            .join(', ')}${seenBundle.length > 3 ? `, +${seenBundle.length - 3} more` : ''}`
         : ''
-      let subject = bundle
-        ? `${label}: ${bundle.changes.length} ${bundle.changes.length === 1 ? 'change' : 'changes'}${by}`
+      let subject = seenBundle
+        ? `${label}: ${seenBundle.length} ${seenBundle.length === 1 ? 'change' : 'changes'}${by}`
         : viaChild
           ? `${label}: ${childRef} ${viaChild.event}d${by}`
           : friendly
@@ -491,7 +613,7 @@ async function fireSubscriptionNotifications(
         actor: actorName ?? '',
         event: eventType,
         label,
-        changes: renderChangesToken(data as Record<string, unknown>, null)
+        changes: renderChangesToken(await view.row(data), null)
       }).catch(() => null)
       // A coalesced bundle already says exactly what moved — an admin
       // template for the bare event would hide it.
@@ -510,7 +632,7 @@ async function fireSubscriptionNotifications(
         // Stored detail (#27 / #77): every change line the message summarised
         // ("+3 more" expands in the bell) and which watch produced the row.
         const detail = detailColumn({
-          changes: bundle ? bundle.changes : viaChild ? (viaChild.changes ?? []) : rowChanges,
+          changes: seenBundle ?? (viaChild ? (seenChild ?? []) : seenRow),
           via_child: viaChild
             ? {
                 collection: viaChild.collection,
@@ -607,12 +729,12 @@ async function fireSubscriptionNotifications(
               card?.url ??
               `${config.ADMIN_URL}/collections/${openCollection}/${openItem}${rowQuery ? `?${rowQuery}` : ''}`,
             friendly_id: friendly ?? card?.title ?? String(item),
-            changes: bundle
-              ? bundle.changes
+            changes: seenBundle
+              ? seenBundle
               : viaChild
-                ? (viaChild.changes ?? [])
+                ? (seenChild ?? [])
                 : delta
-                  ? await labelledChanges(collection, delta, previous)
+                  ? await view.changes(await labelledChanges(collection, delta, previous))
                   : [],
             via_child: viaChild
               ? {
@@ -806,6 +928,9 @@ export async function fireWorkflowStateSubscriptions(opts: {
     const now = new Date()
     for (const sub of relevant) {
       if (opts.actorUserId && sub.user === opts.actorUserId && !isRecordScoped(sub)) continue
+      // Same reads as the change path; `to_state` is the transition, not a field.
+      const view = await recipientView(sub.user, opts.collection, opts.item, 'transition')
+      if (!view || !(await readsFilterFields(view, sub, ['to_state']))) continue
 
       let filters: SubFilter[] = []
       try {
@@ -937,7 +1062,7 @@ async function rollUpToParents(
   // What moved on the child row — the email shows THAT, not the parent's
   // header fields (Rob: "show the changes instead of a blanket set of
   // fields"). A child update that changed nothing rolls up to nobody.
-  let changes: Array<{ field: string; label: string; old: string; new: string }> | undefined
+  let changes: Change[] | undefined
   if (event === 'update') {
     if (!previous) return
     const delta = computeDelta(previous, row)
@@ -957,6 +1082,9 @@ async function rollUpToParents(
   // field name alone does not say which child row moved.
   if (rowLabel && changes)
     changes = changes.map((c) => ({ ...c, label: `${c.label} · ${rowLabel}` }))
+  // Each line's field belongs to the child collection (the parent's watchers'
+  // field allow-list is judged per collection at delivery).
+  if (changes) changes = changes.map((c) => ({ ...c, of: child }))
   const childLabel = child.replace(/_/g, ' ')
   const rowRef = rowLabel ? `${childLabel} ${rowLabel}` : `${childLabel} row`
   // Adds/removes become one change line each; updates carry their diff.

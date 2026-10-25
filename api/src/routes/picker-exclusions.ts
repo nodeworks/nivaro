@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { selectInChunks } from '../services/db-batch.js'
 import { type RecordToolRequest, recordToolRefusal } from '../services/record-tool-gate.js'
 
 /**
@@ -23,6 +24,9 @@ export function pickerToggleRefusal(
     denied: 'Only administrators can change picker visibility here'
   })
 }
+
+/** Most ids one batch-status call checks. */
+export const BATCH_STATUS_MAX = 5000
 
 export async function pickerExclusionRoutes(app: FastifyInstance) {
   // GET status for a single item
@@ -100,10 +104,20 @@ export async function pickerExclusionRoutes(app: FastifyInstance) {
       if (!collection || !Array.isArray(ids))
         return reply.code(400).send({ error: 'collection and ids required' })
       if (ids.length === 0) return reply.send({ data: { excluded: [] } })
-      const rows = (await db('nivaro_picker_exclusions')
-        .where({ collection })
-        .whereIn('item_id', ids.map(String))
-        .select('item_id')) as Array<{ item_id: string }>
+      const unique = [...new Set(ids.map(String))]
+      if (unique.length > BATCH_STATUS_MAX) {
+        return reply.code(400).send({ error: `At most ${BATCH_STATUS_MAX} ids per request` })
+      }
+      // SQL Server takes ~2100 bound parameters per statement.
+      const rows = await selectInChunks(
+        unique,
+        1000,
+        (chunk) =>
+          db('nivaro_picker_exclusions')
+            .where({ collection })
+            .whereIn('item_id', chunk)
+            .select('item_id') as Promise<Array<{ item_id: string }>>
+      )
       return reply.send({ data: { excluded: rows.map((r) => r.item_id) } })
     }
   )

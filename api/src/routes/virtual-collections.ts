@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { can, getAllowedFields } from '../services/permissions.js'
+import { getUserScopes } from '../services/user-scopes.js'
 
 export async function virtualCollectionsRoutes(app: FastifyInstance) {
   // GET /virtual-collections — list all virtual collections
@@ -121,15 +123,38 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'No virtual SQL defined for this collection' })
     }
 
+    // The SQL runs as the service account, so it answers only to people the
+    // role lets read the collection, never to a User-Scoped person (raw SQL
+    // cannot apply their scope), and only with the columns their policy allows.
+    let allowed: string[] | null = null
+    if (!req.isAdmin) {
+      if (!(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const scoped =
+        (req.user!.api_key_scope_restrictions?.length ?? 0) > 0 ||
+        (await getUserScopes(req.user!.id)).some(
+          (s) => s.mode === 'restrict' && s.values.length > 0
+        )
+      if (scoped) return reply.code(403).send({ error: 'Forbidden' })
+      allowed = await getAllowedFields(req.user!, 'read', collection)
+    }
+
     try {
       const wrapped = `SELECT TOP 100 * FROM (${col.virtual_sql}) _v`
       const result = await db.raw(wrapped)
       // knex mssql returns result in result[0]
-      const rows = Array.isArray(result) ? result[0] : result
+      let rows = (Array.isArray(result) ? result[0] : result) as unknown
+      if (allowed && Array.isArray(rows)) {
+        const keep = new Set(allowed)
+        rows = (rows as Array<Record<string, unknown>>).map((r) =>
+          Object.fromEntries(Object.entries(r).filter(([k]) => k === 'id' || keep.has(k)))
+        )
+      }
       return reply.send({ data: rows })
     } catch (err) {
-      console.error('Virtual collection query failed:', err)
-      return reply.code(400).send({ error: 'Query execution failed', detail: String(err) })
+      req.log.error({ err, collection }, 'virtual collection query failed')
+      return reply.code(400).send({ error: 'Query execution failed' })
     }
   })
 
@@ -186,11 +211,9 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
         })
         return reply.send({ data: { table: target, rows: Number(n?.n ?? 0) } })
       } catch (err) {
-        return reply
-          .code(400)
-          .send({
-            error: err instanceof Error ? err.message.slice(0, 300) : 'Materialization failed'
-          })
+        return reply.code(400).send({
+          error: err instanceof Error ? err.message.slice(0, 300) : 'Materialization failed'
+        })
       }
     }
   )

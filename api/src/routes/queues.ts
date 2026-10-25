@@ -4,6 +4,7 @@ import { enqueueQueueMaterializationBackfill } from '../functions/queue-material
 import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { findRecordInstance } from '../services/branch-instances.js'
 import { builtinAllowed } from '../services/bulk-actions.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
 import { canUserReadQueue } from '../services/queue-access.js'
@@ -27,6 +28,7 @@ import {
 } from '../services/queues.js'
 import { clientGoneSignal, gateServerTiming } from '../services/read-gate.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
+import { checkTransitionOwner } from '../services/record-access.js'
 
 // Format-only validation for extra_fields entries used as SQL column identifiers in
 // resolveCollectionSource's .select(['id', ...extraFieldNames]) — mirrors
@@ -34,6 +36,33 @@ import { broadcastCollectionUpdate } from '../services/realtime.js'
 // rather than imported from widget.ts to avoid a circular import (widget.ts already
 // imports canReadQueue from this file).
 const FIELD_NAME_RE = /^[a-zA-Z0-9_]+$/
+
+/**
+ * May a queue claim make the caller an owner of the record's current step?
+ * Admins and the step's existing owners only — the Owners panel's rule. A
+ * finished pipeline has no step to own.
+ */
+export async function claimMayOwnStep(
+  req: Pick<FastifyRequest, 'user' | 'isAdmin'>,
+  instance: {
+    id: string
+    collection: string
+    item: string
+    current_state: string | null
+    completed_at: Date | null
+  }
+): Promise<boolean> {
+  if (!instance.current_state || instance.completed_at || !req.user) return false
+  if (req.isAdmin) return true
+  const owner = await checkTransitionOwner({
+    user: req.user,
+    isAdmin: false,
+    collection: instance.collection,
+    item: String(instance.item),
+    instanceId: String(instance.id)
+  })
+  return owner.allowed
+}
 
 function formatQueue(row: QueueRow) {
   return {
@@ -798,9 +827,11 @@ export async function queuesRoutes(app: FastifyInstance) {
         data: { count, truncated: (result.matchedCount ?? count) > count || count >= 2000 }
       })
     } catch (err) {
+      // The driver's text names tables and columns — log it, never send it.
+      req.log.warn({ err }, 'queue preview-count failed')
       return reply
         .code(422)
-        .send({ error: `Could not resolve: ${err instanceof Error ? err.message : 'error'}` })
+        .send({ error: 'Could not count this source — check its collection and filters.' })
     }
   })
 
@@ -1400,23 +1431,28 @@ export async function queuesRoutes(app: FastifyInstance) {
 
     // Write-through: for sources pointing at a real collection record (everything
     // except 'tasks', whose item_id is a task's own PK, not a business record id),
-    // also add the caller as a pipeline instance owner when a live workflow instance
-    // exists — same self-add rule the Pipeline Owners panel already uses (POST
-    // /pipelines/instance/:collection/:item/owners). Approvals sources point at a
-    // real collection+item just like collection sources do, so they get the same
-    // treatment, not an exclusion.
+    // also add the caller as an owner of the record's CURRENT step — under the
+    // Pipeline Owners panel's own rule (POST /pipelines/instance/:c/:i/owners):
+    // only admins and people who already own that step. Anyone else's claim
+    // stays a queue marker; it never makes them an approver.
     if (body.source_collection !== 'tasks') {
-      const instance = await db('nivaro_workflow_instances')
-        .where({ collection: body.source_collection, item: body.item_id })
-        .first()
-      if (instance) {
+      const instance = await findRecordInstance<{
+        id: string
+        collection: string
+        item: string
+        template: string
+        current_state: string | null
+        completed_at: Date | null
+      }>(body.source_collection, body.item_id)
+      if (instance && (await claimMayOwnStep(req, instance))) {
         const alreadyOwner = await db('nivaro_pipeline_instance_owners')
           .where({ instance: instance.id, user: req.user!.id })
+          .where((q) => q.whereNull('state').orWhere('state', instance.current_state))
           .first()
         if (!alreadyOwner) {
           await db('nivaro_pipeline_instance_owners').insert({
             instance: instance.id,
-            state: null,
+            state: instance.current_state,
             user: req.user!.id,
             added_by: req.user!.id,
             added_at: new Date()

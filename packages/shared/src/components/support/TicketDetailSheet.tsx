@@ -65,15 +65,29 @@ export function TicketDetailSheet({
   const [reply, setReply] = useState('')
   const [err, setErr] = useState<string | null>(null)
   // #1882 / #2026 — who else has this ticket open, and who is writing a reply.
-  const presence = useTopicPresence(ticketId != null ? `ticket:${ticketId}` : null)
+  const presence = useTopicPresence(
+    ticketId != null && Number.isSafeInteger(ticketId) && ticketId > 0 ? `ticket:${ticketId}` : null
+  )
 
-  const { data: t, isLoading } = useQuery({
+  // A link's ?ticket= may be anything (-1, 1e99, a 20-digit number): only a
+  // real id is asked for, and a refused or missing one says so instead of
+  // spinning forever.
+  const validId = ticketId != null && Number.isSafeInteger(ticketId) && ticketId > 0
+  const {
+    data: t,
+    isLoading,
+    isError
+  } = useQuery({
     queryKey: ['support-ticket', ticketId],
     queryFn: () =>
       client
         .request<{ data: SupportTicketDetail }>(get(`/support/tickets/${ticketId}`))
         .then((r) => r.data),
-    enabled: ticketId != null
+    enabled: validId,
+    retry: (count, err) => {
+      const status = (err as { status?: number } | null)?.status
+      return status !== 404 && status !== 403 && status !== 400 && count < 2
+    }
   })
   const { data: categories = [] } = useQuery({
     queryKey: ['support-categories', 'all-for', t?.collection ?? null],
@@ -123,7 +137,18 @@ export function TicketDetailSheet({
         className='flex w-[560px] max-w-[96vw] flex-col gap-0 p-0 sm:max-w-[560px] dark:bg-card'
         data-support-ticket={ticketId ?? ''}
       >
-        {isLoading || !t ? (
+        {!validId || isError ? (
+          <div className='flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center'>
+            <SheetTitle className='text-[14px] font-semibold text-slate-800 dark:text-slate-100'>
+              Request not found
+            </SheetTitle>
+            <SheetDescription className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+              {validId
+                ? `Request #${ticketId} does not exist, or it is not one you can open.`
+                : 'This link does not point to a request.'}
+            </SheetDescription>
+          </div>
+        ) : isLoading || !t ? (
           <div className='flex flex-1 items-center justify-center text-slate-400'>
             <Loader2 className='h-5 w-5 animate-spin' />
           </div>

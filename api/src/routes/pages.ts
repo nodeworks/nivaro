@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { likeContains } from '../lib/filter-like.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { can } from '../services/permissions.js'
+import { aggregateItems, readItems } from '../services/items.js'
+import { can, getAllowedFields } from '../services/permissions.js'
+import { visibleRecordIds } from '../services/sla-visibility.js'
 import type { User } from '../types.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -130,57 +131,55 @@ function isSystemCollection(collection: unknown): boolean {
 }
 
 /**
- * Apply widget filters to a knex query. Supports:
+ * A widget's stored filters as an items-service filter. Supports:
  *   - object form: { field: value } (equality)
  *   - array form:  [{ field, op, value }]
- * Identifiers are passed through knex's identifier escaping.
+ * Also returns every field the filters test — each must be readable by the
+ * viewer, or the widget's answer would describe values they cannot see.
  */
-function applyWidgetFilters(q: ReturnType<typeof db>, filters: unknown): ReturnType<typeof db> {
-  if (!filters) return q
-
+export function widgetFilter(filters: unknown): {
+  filter: Record<string, unknown>
+  fields: string[]
+} {
+  const and: Array<Record<string, unknown>> = []
+  const fields: string[] = []
+  const add = (field: string, cond: Record<string, unknown>) => {
+    fields.push(field)
+    and.push({ [field]: cond })
+  }
   if (Array.isArray(filters)) {
     for (const f of filters as FilterRule[]) {
       if (!f || typeof f.field !== 'string' || !f.field) continue
       switch (f.op) {
         case 'eq':
-          q.where(f.field, '=', f.value as never)
-          break
         case 'neq':
-          q.where(f.field, '!=', f.value as never)
-          break
         case 'gt':
-          q.where(f.field, '>', f.value as never)
-          break
         case 'gte':
-          q.where(f.field, '>=', f.value as never)
-          break
         case 'lt':
-          q.where(f.field, '<', f.value as never)
-          break
         case 'lte':
-          q.where(f.field, '<=', f.value as never)
-          break
         case 'contains':
-          q.where(f.field, 'like', likeContains(f.value))
+          add(f.field, { [`_${f.op}`]: f.value })
           break
         case 'null':
-          q.whereNull(f.field)
+          add(f.field, { _null: true })
           break
         case 'nnull':
-          q.whereNotNull(f.field)
+          add(f.field, { _nnull: true })
           break
       }
     }
-    return q
-  }
-
-  if (typeof filters === 'object') {
+  } else if (filters && typeof filters === 'object') {
     for (const [field, value] of Object.entries(filters as Record<string, unknown>)) {
-      if (value === null) q.whereNull(field)
-      else q.where(field, '=', value as never)
+      add(field, value === null ? { _null: true } : { _eq: value })
     }
   }
-  return q
+  return { filter: and.length ? { _and: and } : {}, fields }
+}
+
+/** Every named field is readable by the viewer (null allow-list = all). */
+async function fieldsReadable(user: User, collection: string, fields: string[]) {
+  const allowed = await getAllowedFields(user, 'read', collection)
+  return allowed === null || fields.every((f) => f === 'id' || allowed.includes(f.split('.')[0]))
 }
 
 const VALID_WIDGET_TYPES = new Set<string>([
@@ -415,12 +414,21 @@ export async function pagesRoutes(app: FastifyInstance) {
                 )
               : null
 
-            const q = db(collection as string)
-              .select(columns?.length ? columns : '*')
-              .limit(limit)
-            applyWidgetFilters(q as never, cfg.filters)
-            const rows = await q
-            return { data: { rows } }
+            // As the viewer: row filter, User Scopes and the field allow-list apply.
+            const { filter, fields } = widgetFilter(cfg.filters)
+            if (
+              !(await fieldsReadable(user, collection as string, [...fields, ...(columns ?? [])]))
+            ) {
+              return reply.code(403).send({ error: 'No read access to a field this widget uses' })
+            }
+            const res = await readItems(
+              user,
+              collection as string,
+              { ...(columns?.length ? { fields: columns } : {}), filter, limit, count: false },
+              req,
+              req.workspaceId ?? undefined
+            )
+            return { data: { rows: res.data ?? [] } }
           }
 
           case 'kpi': {
@@ -440,16 +448,30 @@ export async function pagesRoutes(app: FastifyInstance) {
               return reply.code(400).send({ error: 'field is required for sum/avg' })
             }
 
-            const q = db(collection as string)
-            applyWidgetFilters(q as never, cfg.filters)
-
-            let result: { v: number | string | null } | undefined
-            if (aggregate === 'count') {
-              result = (await q.count('* as v').first()) as { v: number } | undefined
-            } else if (aggregate === 'sum') {
-              result = (await q.sum(`${field} as v`).first()) as { v: number | null } | undefined
-            } else {
-              result = (await q.avg(`${field} as v`).first()) as { v: number | null } | undefined
+            const { filter, fields } = widgetFilter(cfg.filters)
+            const tested = aggregate === 'count' ? fields : [...fields, field]
+            if (!(await fieldsReadable(user, collection as string, tested))) {
+              return reply.code(403).send({ error: 'No read access to a field this widget uses' })
+            }
+            const res = await aggregateItems(
+              user,
+              collection as string,
+              {
+                filter,
+                aggregate: aggregate === 'count' ? { countAll: true } : { [aggregate]: [field] }
+              },
+              req,
+              req.workspaceId ?? undefined
+            )
+            const agg = (res.data ?? [])[0] as unknown as Record<string, unknown> | undefined
+            const result = {
+              v:
+                aggregate === 'count'
+                  ? ((agg?.countAll as number | undefined) ?? 0)
+                  : (((agg?.[aggregate] as Record<string, unknown> | undefined)?.[field] as
+                      | number
+                      | null
+                      | undefined) ?? null)
             }
             const value = result?.v != null ? Number(result.v) : aggregate === 'count' ? 0 : null
             return { data: { value, label: typeof cfg.label === 'string' ? cfg.label : null } }
@@ -469,12 +491,22 @@ export async function pagesRoutes(app: FastifyInstance) {
               return reply.code(403).send({ error: 'Unscoped activity requires admin access' })
             }
             const limit = Math.min(Math.max(Number(cfg.limit) || 10, 1), 50)
+            // A non-admin sees activity only on records they can see: read a
+            // wider window, keep the visible ones.
             let q = db('nivaro_activity')
               .select('id', 'action', 'collection', 'item', 'user', 'timestamp')
               .orderBy('timestamp', 'desc')
-              .limit(limit)
+              .limit(req.isAdmin ? limit : limit * 5)
             if (collection) q = q.where({ collection })
-            const rows = await q
+            let rows = (await q) as Array<{ item: unknown }>
+            if (!req.isAdmin && collection) {
+              const seen = await visibleRecordIds(
+                user,
+                collection,
+                rows.map((r) => String(r.item ?? '')).filter(Boolean)
+              )
+              rows = rows.filter((r) => r.item != null && seen.has(String(r.item))).slice(0, limit)
+            }
             return { data: { rows } }
           }
 

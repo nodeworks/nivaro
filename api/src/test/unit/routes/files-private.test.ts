@@ -9,6 +9,12 @@ const PUBLIC = '22222222-2222-4222-8222-222222222222'
 const state = vi.hoisted(() => ({ user: 'OWNER', admin: false }))
 const listed = vi.hoisted(() => ({ calls: [] as any[] }))
 
+// Record-attachment gates are covered in files-access.test.ts — open here.
+vi.mock('../../../services/file-access.js', () => ({
+  mayReadFile: async () => true,
+  mayChangeFile: async () => ({ ok: true }),
+  readableFileIdList: async (ids: string[]) => new Set(ids.map((i) => i.toLowerCase()))
+}))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: async (req: { user?: unknown; isAdmin?: boolean }) => {
     req.user = { id: state.user, role: 'R' }

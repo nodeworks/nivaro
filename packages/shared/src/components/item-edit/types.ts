@@ -3,6 +3,9 @@ import type { ReactNode } from 'react'
 export interface CMSField {
   field: string
   type: string
+  /** The column's character limit for text columns (field-config), null for
+   *  (max) / non-text. Optional: older servers do not send it. */
+  max_length?: number | null
   interface: string | null
   label: string | null
   required: boolean

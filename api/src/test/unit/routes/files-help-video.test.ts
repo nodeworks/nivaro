@@ -14,6 +14,12 @@ const HIDDEN = new Set([SOURCE, RENDER, POSTER])
 
 const state = vi.hoisted(() => ({ admin: false }))
 
+// Record-attachment gates are covered in files-access.test.ts — open here.
+vi.mock('../../../services/file-access.js', () => ({
+  mayReadFile: async () => true,
+  mayChangeFile: async () => ({ ok: true }),
+  readableFileIdList: async (ids: string[]) => new Set(ids.map((i) => i.toLowerCase()))
+}))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: async (req: { user?: unknown; isAdmin?: boolean }) => {
     req.user = { id: 'U1', role: state.admin ? 'ADMIN-ROLE' : 'VIEWER-ROLE' }
@@ -37,6 +43,7 @@ const files = vi.hoisted(() => ({
   replaceFileContent: vi.fn(async (id: string) => ({ id }))
 }))
 vi.mock('../../../services/files.js', () => ({
+  assertUploadContent: vi.fn(),
   cleanDownloadName: (s: string) => s,
   createPresignedFile: vi.fn(),
   deleteFile: files.deleteFile,

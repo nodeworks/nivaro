@@ -4,6 +4,7 @@ import { emitTrigger } from '../flows/registry.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { chainFields } from '../services/chain-columns.js'
 import { deferEffect } from '../services/unit-of-work.js'
+import type { User } from '../types.js'
 import { hooks } from './registry.js'
 
 // Store app reference so the hook can emit socket notifications after startup.
@@ -11,6 +12,35 @@ let _app: FastifyInstance | null = null
 
 export function setApp(app: FastifyInstance) {
   _app = app
+}
+
+/** The subscribers (of those given) who may open the record and read the field. */
+export async function subscribersWhoMayRead(
+  subs: User[],
+  collection: string,
+  item: string,
+  field: string
+): Promise<User[]> {
+  const [{ canSeeRecordRoom }, { getAllowedFields, isAdminRole }] = await Promise.all([
+    import('../services/socket-access.js'),
+    import('../services/permissions.js')
+  ])
+  const out: User[] = []
+  for (const sub of subs) {
+    try {
+      if (sub.status === 'suspended' || sub.status === 'inactive') continue
+      const admin = await isAdminRole(sub)
+      if (!(await canSeeRecordRoom(sub, collection, item, admin))) continue
+      if (!admin) {
+        const allowed = await getAllowedFields(sub, 'read', collection)
+        if (allowed !== null && !allowed.includes('*') && !allowed.includes(field)) continue
+      }
+      out.push(sub)
+    } catch {
+      // a subscriber whose access cannot be judged hears nothing
+    }
+  }
+  return out
 }
 
 export function registerFieldWatchHooks() {
@@ -77,16 +107,15 @@ export function registerFieldWatchHooks() {
       }
 
       // Get subscribers for this watch
-      const subs = (await db('nivaro_field_watch_subscribers as s')
+      const subscribed = (await db('nivaro_field_watch_subscribers as s')
         .join('nivaro_users as u', 's.user', 'u.id')
         .where({ 's.watch': watch.id })
-        .select('u.id', 'u.email', 'u.first_name', 'u.last_name')) as Array<{
-        id: string
-        email: string
-        first_name: string | null
-        last_name: string | null
-      }>
+        .select('u.id', 'u.email', 'u.first_name', 'u.last_name', 'u.role', 'u.status')) as User[]
 
+      if (subscribed.length === 0) continue
+      // The values ride the message, so only subscribers who can open THIS
+      // record (row filter, User Scopes) and read the field hear about it.
+      const subs = await subscribersWhoMayRead(subscribed, collection, item, field)
       if (subs.length === 0) continue
 
       const message = `${field} changed from "${String(oldVal ?? '(empty)')}" to "${String(newVal ?? '(empty)')}"`

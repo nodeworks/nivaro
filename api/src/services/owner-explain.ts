@@ -42,6 +42,10 @@ export interface ExplainedOwner {
   sentences: string[]
   /** Set when they cannot act (suspended, redacted, out with no delegate). */
   unavailable: string | null
+  /** Named only by the binding's fallback field: the record stays in their
+   *  queue, but owner-only moves judge the assigned owners (skipFallback), so
+   *  they cannot approve this step. */
+  queue_only?: boolean
 }
 
 export interface OwnerExplanation {
@@ -82,6 +86,16 @@ export interface GroupFilterFact {
   related_collection?: string | null
   record_ids?: string[]
   wants_id?: string | null
+}
+
+/** Why someone is listed, plus — for a fallback-only person — what it does not give them. */
+function ownerSentences(name: string, sources: OwnerSource[], queueOnly: boolean): string[] {
+  const out = sources.map((s) => ownerSourceSentence(name, s))
+  if (queueOnly)
+    out.push(
+      `The record stays in ${name}'s queue, but only the step's assigned owners can approve it.`
+    )
+  return out
 }
 
 function idsOf(v: ResolvedFilterValue | undefined): string[] {
@@ -320,11 +334,14 @@ export async function explainRecordOwners(
       itemId: String(item)
     }
   ]
-  const [finalMap, rawMap] = await Promise.all([
+  const [finalMap, rawMap, assignedMap] = await Promise.all([
     resolveStateOwnersBatch(req),
-    resolveStateOwnersBatch(req, db, { skipDelegation: true })
+    resolveStateOwnersBatch(req, db, { skipDelegation: true }),
+    // Who the owner-only gate counts (checkTransitionOwner: no fallback user).
+    resolveStateOwnersBatch(req, db, { skipFallback: true })
   ])
   const finals = finalMap.get('x') ?? []
+  const assignedIds = new Set((assignedMap.get('x') ?? []).map((o) => String(o.id).toUpperCase()))
   const raws = rawMap.get('x') ?? []
   const subs =
     entry.groups.length > 0
@@ -416,13 +433,16 @@ export async function explainRecordOwners(
       })
     const u = availById.get(k)
     const unavailable = u ? unavailabilityOf(u as never) : null
+    const queueOnly = !assignedIds.has(k)
+    const sentences = ownerSentences(name, sources, queueOnly)
     return {
       id: o.id,
       name,
       email: o.email ?? null,
       sources,
-      sentences: sources.map((s) => ownerSourceSentence(name, s)),
-      unavailable
+      sentences,
+      unavailable,
+      ...(queueOnly ? { queue_only: true } : {})
     }
   })
 
@@ -537,7 +557,7 @@ export async function redactOwnerFacts(
       if (s.kind === 'fallback') return { ...s, field: null }
       return s
     })
-    return { ...o, sources, sentences: sources.map((s) => ownerSourceSentence(o.name, s)) }
+    return { ...o, sources, sentences: ownerSentences(o.name, sources, !!o.queue_only) }
   })
   return { ...ex, groups, owners }
 }

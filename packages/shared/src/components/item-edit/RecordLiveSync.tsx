@@ -89,6 +89,7 @@ export const RECORD_QUERY_HEADS = [
   'tasks',
   'addendums',
   'pipeline-instance',
+  'pipeline-instance-lock',
   'pipeline-all-owners',
   'pipeline-instance-owners',
   'pipeline-owners-resolved',

@@ -127,7 +127,7 @@ import {
 import { FormulaColumnAdder } from './cbv/FormulaColumnAdder'
 import { HierarchyScopePicker, useHierarchyScope } from './cbv/HierarchyScope'
 import { riskFilterEntry, splitRiskFilter } from './cbv/saved-view-risk'
-import { dropUnknownField, unknownFieldsOf } from './cbv/unknown-fields'
+import { dropUnknownField, isFilterRefusal, unknownFieldsOf } from './cbv/unknown-fields'
 import { ViewDefaultMenu } from './cbv/ViewDefaultMenu'
 import { canOpenChatRoom, discussRecord, useRecordRoomTypes } from './chat/chat-core'
 import { FilterControl } from './DataTable'
@@ -702,6 +702,25 @@ export function invalidateCbvRowQueries(qc: QueryClient, collection: string): vo
     void qc.invalidateQueries({ queryKey: [key, collection] })
 }
 
+type MyPermissions = {
+  is_admin?: boolean
+  collections?: Array<{ collection: string; actions: string[] }>
+}
+
+/** Whether the person's role policies allow deleting in this collection. */
+export function roleMayDelete(
+  perms: MyPermissions | null | undefined,
+  collection: string
+): boolean {
+  if (!perms) return false
+  if (perms.is_admin) return true
+  return (perms.collections ?? []).some(
+    (c) =>
+      (c.collection === collection || c.collection === '*') &&
+      (c.actions.includes('delete') || c.actions.includes('*'))
+  )
+}
+
 export function RowActionsMenu({
   collection,
   id,
@@ -737,10 +756,23 @@ export function RowActionsMenu({
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
+  const { isAdmin } = useItemEditAuth()
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const btnRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  // Delete is offered only to people whose role may delete here (same answer
+  // and cache as the profile's "What can I access?"); the server still judges
+  // the record itself.
+  const { data: myPermissions } = useQuery<MyPermissions>({
+    queryKey: ['my-permissions'],
+    queryFn: () =>
+      client.request<{ data: MyPermissions }>(get('/security/my/permissions')).then((r) => r.data),
+    enabled: open && !isAdmin,
+    staleTime: 5 * 60_000
+  })
+  const mayDelete = isAdmin || roleMayDelete(myPermissions, collection)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   // "Discuss" (#968) only where chat is hosted and the collection has rooms.
   const roomTypes = useRecordRoomTypes(open)
   const discussable = canOpenChatRoom() && !!roomTypes?.some((t) => t.collection === collection)
@@ -770,6 +802,8 @@ export function RowActionsMenu({
     to_state?: string | null
     /** Per-transition list-menu gate (nivaro_workflow_transitions.in_row_menu). */
     in_row_menu?: boolean
+    /** 'required' = the move needs a note (Send Back, Cancel). */
+    comment_mode?: string | null
   }
   type RowState = { id: string; label: string; color?: string | null }
   const { data: instance } = useQuery<{
@@ -876,6 +910,7 @@ export function RowActionsMenu({
     if (!open) {
       setConfirm(null)
       setReason('')
+      setConfirmDelete(false)
     }
   }, [open])
   // A push with a choose step (e.g. which file to send): options load when
@@ -1128,7 +1163,9 @@ export function RowActionsMenu({
                         ? (confirm.push.action.confirm?.input?.placeholder ??
                           confirm.push.action.confirm?.input?.label ??
                           '')
-                        : confirm.action?.require_reason
+                        : confirm.action?.require_reason ||
+                            transitions.find((t) => t.id === confirm.picked)?.comment_mode ===
+                              'required'
                           ? 'Reason (required — recorded on the record’s history)…'
                           : 'Reason (optional)…'
                     }
@@ -1149,7 +1186,11 @@ export function RowActionsMenu({
                         : confirm.action
                           ? actionMut.isPending ||
                             (confirm.action.require_reason && reason.trim().length === 0)
-                          : !confirm.picked || transitionMut.isPending
+                          : !confirm.picked ||
+                            transitionMut.isPending ||
+                            (transitions.find((t) => t.id === confirm.picked)?.comment_mode ===
+                              'required' &&
+                              reason.trim().length === 0)
                     }
                     onClick={() => {
                       if (confirm.push)
@@ -1332,14 +1373,38 @@ export function RowActionsMenu({
                   )
                   toast.success('Link copied')
                 })}
-                {divider}
-                {item(
-                  'Delete',
-                  () => {
-                    setOpen(false)
-                    if (window.confirm(`Delete record ${id}? It moves to trash.`)) onDeleted()
-                  },
-                  true
+                {mayDelete && (
+                  <>
+                    {divider}
+                    {confirmDelete ? (
+                      <div className='px-3 py-1.5' data-row-delete-confirm>
+                        <p className='text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
+                          Delete record {id}? It moves to trash.
+                        </p>
+                        <div className='mt-1.5 flex gap-1.5'>
+                          <button
+                            type='button'
+                            onClick={() => {
+                              setOpen(false)
+                              onDeleted()
+                            }}
+                            className='h-7 flex-1 rounded-md bg-red-600 text-[12px] font-semibold text-white hover:bg-red-700'
+                          >
+                            Delete
+                          </button>
+                          <button
+                            type='button'
+                            onClick={() => setConfirmDelete(false)}
+                            className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] text-slate-500 dark:border-slate-700 dark:text-slate-400'
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      item('Delete', () => setConfirmDelete(true), true)
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -7957,7 +8022,7 @@ export function CollectionBrowserView({
               ? listLoadErrorText(error)
               : userErrorMessage(error, 'Failed to load records')}
           </span>
-          {(error as { status?: number })?.status === 403 && (
+          {(error as { status?: number })?.status === 403 && !isFilterRefusal(error) && (
             <button
               type='button'
               disabled={accessRequested}
@@ -7984,7 +8049,7 @@ export function CollectionBrowserView({
                 setColFilters(next.colFilters)
                 setPage(1)
               }}
-              title={`Remove the filter or sort on "${field}" — the list no longer has that field`}
+              title={`Remove the filter or sort on "${field}" — this list cannot filter on it`}
               className='inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-red-300 bg-white px-2 text-[12px] font-medium line-through decoration-red-400 hover:bg-red-100 dark:border-red-500/40 dark:bg-transparent dark:hover:bg-red-900/20'
               data-cbv-broken-filter={field}
             >

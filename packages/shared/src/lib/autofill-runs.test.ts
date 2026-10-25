@@ -4,6 +4,7 @@ import {
   getAutofillRun,
   getAutofillRuns,
   hydrateAutofillRuns,
+  isAutofillProposalId,
   resetAutofillRuns,
   setAutofillRunPresented,
   startAutofillRun,
@@ -95,5 +96,31 @@ describe('autofill runs persistence', () => {
     hydrateAutofillRuns(cfg)
     expect(getAutofillRuns().map((r) => [r.id, r.documentName])).toEqual([['p1', 'a.pdf']])
     void fresh
+  })
+})
+
+describe('proposal ids from a link', () => {
+  it('accepts the ids the server mints and refuses anything that could leave the path', () => {
+    expect(isAutofillProposalId('3f2a9c1e-6b7d-4e0a-9c55-0d2f5a1b7e44')).toBe(true)
+    expect(isAutofillProposalId('../../admin')).toBe(false)
+    expect(isAutofillProposalId('..%2F..%2Fadmin')).toBe(false)
+    expect(isAutofillProposalId('abc')).toBe(false)
+    expect(isAutofillProposalId(42)).toBe(false)
+  })
+
+  it('encodes the id into the result URL', async () => {
+    const { poll, last } = fakePoll()
+    const fetchMock = vi.fn(async () => ({ status: 202, ok: true, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      startAutofillRun(cfg, { id: 'a/b?c', collection: 'workflows' }, { poll })
+      await last().fetchResult()
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/ai/extract-record/result/a%2Fb%3Fc',
+        expect.anything()
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

@@ -2,13 +2,16 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { linkLabelsAsUser } from '../services/ai-link-labels.js'
 import { ownerFilterEntries } from '../services/owner-filter-lint.js'
 import {
   type OwnerResolutionRequest,
   resolveStateOwnersBatch
 } from '../services/pipeline-engine.js'
 import { getLabels } from '../services/queues.js'
+import { visibleRecordIds } from '../services/sla-visibility.js'
 import { listUsers } from '../services/users.js'
+import type { User } from '../types.js'
 import { computeStatusBatch } from './sla.js'
 
 function parseJson(val: unknown): unknown {
@@ -19,6 +22,31 @@ function parseJson(val: unknown): unknown {
   } catch {
     return null
   }
+}
+
+/**
+ * Of these (collection, item) rows, the ones the viewer can see — a team page
+ * counts and lists only records the person looking at it may read (User
+ * Scopes, row filters). Admins: all.
+ */
+export async function visibleRows<T extends { collection: string; item: unknown }>(
+  user: User,
+  isAdmin: boolean | undefined,
+  rows: T[]
+): Promise<T[]> {
+  if (isAdmin || rows.length === 0) return rows
+  rows = rows.filter((r) => r.collection && r.item != null)
+  const byCollection = new Map<string, Set<string>>()
+  for (const r of rows) {
+    const set = byCollection.get(r.collection) ?? new Set<string>()
+    set.add(String(r.item))
+    byCollection.set(r.collection, set)
+  }
+  const seen = new Map<string, Set<string>>()
+  for (const [collection, ids] of byCollection) {
+    seen.set(collection, await visibleRecordIds(user, collection, [...ids]))
+  }
+  return rows.filter((r) => seen.get(r.collection)?.has(String(r.item)))
 }
 
 /** team_id → { dimension: values[] } for a set of teams, one query. */
@@ -598,17 +626,31 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       if (rosterIds.length > 0) {
         const since90 = new Date(Date.now() - 90 * 86400_000)
         const since30 = new Date(Date.now() - 30 * 86400_000)
-        const hist = (await db('nivaro_workflow_history as h')
-          .leftJoin('nivaro_workflow_states as sf', 'sf.id', 'h.from_state')
-          .leftJoin('nivaro_workflow_states as st', 'st.id', 'h.to_state')
-          .whereIn('h.user', rosterIds)
-          .where('h.timestamp', '>', since90)
-          .select('h.user', 'h.timestamp', 'sf.sort as from_sort', 'st.sort as to_sort')) as Array<{
-          user: string
-          timestamp: Date | string
-          from_sort: number | null
-          to_sort: number | null
-        }>
+        const hist = await visibleRows(
+          req.user!,
+          req.isAdmin,
+          (await db('nivaro_workflow_history as h')
+            .leftJoin('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+            .leftJoin('nivaro_workflow_states as sf', 'sf.id', 'h.from_state')
+            .leftJoin('nivaro_workflow_states as st', 'st.id', 'h.to_state')
+            .whereIn('h.user', rosterIds)
+            .where('h.timestamp', '>', since90)
+            .select(
+              'h.user',
+              'h.timestamp',
+              'sf.sort as from_sort',
+              'st.sort as to_sort',
+              'i.collection',
+              'i.item'
+            )) as Array<{
+            user: string
+            timestamp: Date | string
+            from_sort: number | null
+            to_sort: number | null
+            collection: string
+            item: string
+          }>
+        )
         total90 = hist.length
         const weekMap = new Map<string, number>()
         for (const h of hist) {
@@ -706,7 +748,7 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       const stateById = new Map(stateMeta.map((s) => [String(s.id).toUpperCase(), s]))
 
       const CAP = 4000
-      const instances = (await db('nivaro_workflow_instances')
+      const allInstances = (await db('nivaro_workflow_instances')
         .whereIn('current_state', stateIds)
         .whereNull('completed_at')
         .orderBy('started_at', 'desc')
@@ -718,6 +760,9 @@ export async function userGroupsRoutes(app: FastifyInstance) {
         current_state: string
         started_at: Date | string | null
       }>
+
+      // Only records the viewer can see are counted or listed.
+      const instances = await visibleRows(req.user!, req.isAdmin, allInstances)
 
       const requests: OwnerResolutionRequest[] = instances.map((i) => ({
         key: `${i.collection}:${i.item}`,
@@ -817,7 +862,9 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       }
       let labels: Record<string, string> = {}
       try {
-        labels = await getLabels(labelReq)
+        labels = req.isAdmin
+          ? await getLabels(labelReq)
+          : await linkLabelsAsUser(req.user!, labelReq)
       } catch {
         /* label failure → ids shown */
       }
@@ -833,7 +880,7 @@ export async function userGroupsRoutes(app: FastifyInstance) {
       return reply.send({
         data: {
           total: kept.length,
-          truncated: instances.length >= CAP,
+          truncated: allInstances.length >= CAP,
           by_state: [...byState.values()].sort((a, b) => b.count - a.count),
           members: memberNames
             .map((m) => ({

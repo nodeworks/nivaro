@@ -1610,29 +1610,32 @@ export function CatalogPickerField({
         )}
       />
     )
+    // A refused quantity says why right under its box, until the box is
+    // focused again: the popover it used to open closed on the next click
+    // anywhere, so 1.5 / -7 / 99999999999 seemed to snap back silently.
     return (
-      <Popover open={!!issue} onOpenChange={(open) => !open && clearIssue()}>
-        <PopoverAnchor asChild>{input}</PopoverAnchor>
+      <Popover open={issue?.kind === 'remove'} onOpenChange={(open) => !open && clearIssue()}>
+        <PopoverAnchor asChild>
+          <span className='inline-flex shrink-0 flex-col items-end'>
+            {input}
+            {issue?.kind === 'error' && (
+              <span
+                role='alert'
+                className='mt-0.5 flex max-w-[220px] items-start gap-1 text-right text-[11px] leading-snug text-red-600 dark:text-red-400'
+                data-catalog-qty-error
+              >
+                <AlertCircle className='mt-px h-3 w-3 shrink-0' />
+                {issue.message}
+                {qty && qty > 0 ? ` — still ${qty}` : ''}
+              </span>
+            )}
+          </span>
+        </PopoverAnchor>
         <PopoverContent
           align='end'
           side='bottom'
           className='w-auto max-w-[260px] p-2.5 text-[12px]'
-          // The message must not pull focus out of the form.
-          onOpenAutoFocus={(e) => {
-            if (issue?.kind === 'error') e.preventDefault()
-          }}
         >
-          {issue?.kind === 'error' && (
-            <p
-              role='alert'
-              className='flex items-start gap-1.5 text-red-600 dark:text-red-400'
-              data-catalog-qty-error
-            >
-              <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0' />
-              {issue.message}
-              {qty && qty > 0 ? ` — still ${qty}` : ''}
-            </p>
-          )}
           {issue?.kind === 'remove' && (
             <div data-catalog-qty-remove>
               <p className='text-slate-700 dark:text-slate-200'>Remove this line?</p>
@@ -1677,60 +1680,54 @@ export function CatalogPickerField({
         return n
       })
     const stored = row[field] == null ? '' : String(row[field])
+    // The reason sits under the box until it is focused again (see qtyInput).
     return (
-      <Popover key={key} open={!!issue} onOpenChange={(open) => !open && clearIssue()}>
-        <PopoverAnchor asChild>
-          <input
-            key={`${key}:${stored}`}
-            type='number'
-            min={0}
-            step='any'
-            defaultValue={stored}
-            aria-invalid={!!issue || undefined}
-            onFocus={clearIssue}
-            onBlur={(ev) => {
-              const raw = ev.target.value
-              if (raw !== stored) {
-                const t = childFields.find((f) => f.field === field)
-                const check = checkNumberEntry(raw, {
-                  type: t?.type,
-                  label: t?.label || titleCase(field)
-                })
-                const err = check.ok ? childRuleError(field, check.value, row) : check.message
-                if (err) {
-                  ev.target.value = stored
-                  setCellIssue((p) => ({ ...p, [key]: err }))
-                  return
-                }
+      <span key={key} className='inline-flex shrink-0 flex-col items-end'>
+        <input
+          key={`${key}:${stored}`}
+          type='number'
+          min={0}
+          step='any'
+          defaultValue={stored}
+          aria-invalid={!!issue || undefined}
+          onFocus={clearIssue}
+          onBlur={(ev) => {
+            const raw = ev.target.value
+            if (raw !== stored) {
+              const t = childFields.find((f) => f.field === field)
+              const check = checkNumberEntry(raw, {
+                type: t?.type,
+                label: t?.label || titleCase(field)
+              })
+              const err = check.ok ? childRuleError(field, check.value, row) : check.message
+              if (err) {
+                ev.target.value = stored
+                setCellIssue((p) => ({ ...p, [key]: err }))
+                return
               }
-              void commitField(catalogId, field, raw)
-            }}
-            onKeyDown={(ev) => {
-              if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur()
-            }}
-            className={cn(
-              'h-7 w-20 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background',
-              issue && 'border-red-400 dark:border-red-600'
-            )}
-          />
-        </PopoverAnchor>
-        <PopoverContent
-          align='end'
-          side='bottom'
-          className='w-auto max-w-[260px] p-2.5 text-[12px]'
-          onOpenAutoFocus={(e) => e.preventDefault()}
-        >
-          <p
+            }
+            void commitField(catalogId, field, raw)
+          }}
+          onKeyDown={(ev) => {
+            if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur()
+          }}
+          className={cn(
+            'h-7 w-20 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background',
+            issue && 'border-red-400 dark:border-red-600'
+          )}
+        />
+        {issue && (
+          <span
             role='alert'
-            className='flex items-start gap-1.5 text-red-600 dark:text-red-400'
+            className='mt-0.5 flex max-w-[220px] items-start gap-1 text-right text-[11px] leading-snug text-red-600 dark:text-red-400'
             data-catalog-cell-error
           >
-            <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0' />
+            <AlertCircle className='mt-px h-3 w-3 shrink-0' />
             {issue}
             {stored !== '' ? ` — still ${stored}` : ''}
-          </p>
-        </PopoverContent>
-      </Popover>
+          </span>
+        )}
+      </span>
     )
   }
 

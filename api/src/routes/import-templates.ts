@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
-import { runUnit } from '../services/unit-of-work.js'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -30,6 +29,7 @@ import { normalizeImportTemplateConfig } from '../services/import-templates-conf
 import { applyFieldRules, createOne, findM2MRelation, getActualColumns } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import { getRollupContributors, recalcRollupsForParent } from '../services/rollups.js'
+import { runUnit } from '../services/unit-of-work.js'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const MODES = ['prefill', 'direct', 'both'] as const
@@ -97,7 +97,13 @@ function parseArrayStrings(rows: Record<string, unknown>[]): Record<string, unkn
  *  collation is already case-insensitive, but the pipeline normalizes anyway.
  *  `onError` lets a stale-config lookup failure (dropped/renamed column) degrade to an
  *  error issue the route appends, instead of throwing a 500 out of the pipeline. */
-export function makeLookupFetcher(onError?: (message: string) => void): LookupFetcher {
+export function makeLookupFetcher(
+  onError?: (message: string) => void,
+  /** Run the lookups AS this caller (non-admins): through readItems, so the
+   *  row filter, User Scopes and field allow-list decide which rows match —
+   *  an uploaded sheet must not probe values in rows the caller cannot see. */
+  caller?: Pick<FastifyRequest, 'user' | 'isAdmin' | 'workspaceId'>
+): LookupFetcher {
   return async ({ collection, match_field, values, scope_filters }) => {
     // $users is a sentinel, not a real collection — resolved against nivaro_users directly,
     // scoped to non-redacted rows, ignoring scope_filters entirely. Must run BEFORE the
@@ -111,6 +117,29 @@ export function makeLookupFetcher(onError?: (message: string) => void): LookupFe
       )
     }
     if (/^nivaro_/i.test(collection) || !COLLECTION_NAME_RE.test(collection)) return []
+    if (caller?.user && !caller.isAdmin) {
+      try {
+        const { readItems } = await import('../services/items.js')
+        const rows: Record<string, unknown>[] = []
+        for (const chunk of chunkArray(values, 500)) {
+          const filter: Record<string, unknown>[] = [{ [match_field]: { _in: chunk } }]
+          for (const f of scope_filters)
+            filter.push({ [f.field]: { [f.op === 'neq' ? '_neq' : '_eq']: f.value } })
+          const res = await readItems(
+            caller.user,
+            collection,
+            { filter: { _and: filter }, limit: chunk.length * 5, count: false },
+            undefined,
+            caller.workspaceId ?? undefined
+          )
+          rows.push(...(res.data as Record<string, unknown>[]))
+        }
+        return parseArrayStrings(rows)
+      } catch {
+        onError?.(`Lookup against "${collection}" failed — you may not be able to read it`)
+        return []
+      }
+    }
     try {
       const rows = await selectInChunks(values, 500, (chunk) => {
         let q = db(collection).select('*').whereIn(match_field, chunk)
@@ -645,6 +674,24 @@ async function validateConfigAgainstSchema(
   }
 }
 
+/** GET /'s visibility rule for one template: admins see all; others their
+ *  own, or an active shared template for everyone or their role. */
+export function templateVisibleTo(
+  template: Record<string, unknown>,
+  req: Pick<FastifyRequest, 'user' | 'isAdmin'>
+): boolean {
+  if (req.isAdmin) return true
+  if (!template.is_active) return false
+  const me = String(req.user?.id ?? '').toLowerCase()
+  if (me && String(template.created_by ?? '').toLowerCase() === me) return true
+  if (!template.is_shared) return false
+  return (
+    template.role_id == null ||
+    (!!req.user?.role &&
+      String(template.role_id).toLowerCase() === String(req.user.role).toLowerCase())
+  )
+}
+
 export async function importTemplatesRoutes(app: FastifyInstance) {
   // GET /import-templates?collection=&mode= — visibility: created_by=me OR
   // (is_shared=1 AND (role_id IS NULL OR role_id=myRole)); only is_active=1 unless admin.
@@ -875,7 +922,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     const template = (await db('nivaro_import_templates').where({ id }).first()) as
       | Record<string, unknown>
       | undefined
-    if (!template) return reply.code(404).send({ error: 'Not found' })
+    if (!template || !templateVisibleTo(template, req))
+      return reply.code(404).send({ error: 'Not found' })
 
     const collection = template.collection as string
     if (!(await can(req.user!, 'create', collection))) {
@@ -918,8 +966,9 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     const result = await runImportPipeline({
       config,
       rows,
-      lookup: makeLookupFetcher((message) =>
-        lookupIssues.push({ severity: 'error', rule: 'lookup', message })
+      lookup: makeLookupFetcher(
+        (message) => lookupIssues.push({ severity: 'error', rule: 'lookup', message }),
+        req
       ),
       applyLineFieldRules,
       m2mFields: new Set(m2mMap.keys())
@@ -988,7 +1037,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       const template = (await db('nivaro_import_templates').where({ id }).first()) as
         | Record<string, unknown>
         | undefined
-      if (!template) return reply.code(404).send({ error: 'Not found' })
+      if (!template || !templateVisibleTo(template, req))
+        return reply.code(404).send({ error: 'Not found' })
 
       const collection = template.collection as string
       if (!(await can(req.user!, 'create', collection))) {
@@ -1022,13 +1072,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
 
       const bodyIssues = body.issues as ImportIssue[]
       if (bodyIssues.some((issue) => issue.severity === 'error')) {
-        {
-          unit.discard()
-          return reply.code(422).send({
-            error: 'Cannot execute import while unresolved errors remain',
-            issues: bodyIssues
-          })
-        }
+        unit.discard()
+        return reply.code(422).send({
+          error: 'Cannot execute import while unresolved errors remain',
+          issues: bodyIssues
+        })
       }
 
       const values = { ...(body.values as Record<string, unknown>) }
@@ -1068,37 +1116,33 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       const totalCreates = createGroups.length
       const totalRows = lines.length + totalM2mIds + totalMembers + totalCreates
       if (totalRows > IMPORT_ROW_CAP) {
-        {
-          unit.discard()
-          return reply.code(422).send({
-            error: `Too many rows — the import cap is ${IMPORT_ROW_CAP} rows`,
-            issues: [
-              ...bodyIssues,
-              {
-                severity: 'error',
-                rule: 'execute',
-                message: `Submitted ${totalRows} rows (${lines.length} line items + ${totalM2mIds} linked records${totalMembers > 0 ? ` + ${totalMembers} nested members` : ''}${totalCreates > 0 ? ` + ${totalCreates} records to create` : ''}); the import cap is ${IMPORT_ROW_CAP} rows`
-              }
-            ]
-          })
-        }
+        unit.discard()
+        return reply.code(422).send({
+          error: `Too many rows — the import cap is ${IMPORT_ROW_CAP} rows`,
+          issues: [
+            ...bodyIssues,
+            {
+              severity: 'error',
+              rule: 'execute',
+              message: `Submitted ${totalRows} rows (${lines.length} line items + ${totalM2mIds} linked records${totalMembers > 0 ? ` + ${totalMembers} nested members` : ''}${totalCreates > 0 ? ` + ${totalCreates} records to create` : ''}); the import cap is ${IMPORT_ROW_CAP} rows`
+            }
+          ]
+        })
       }
 
       if (lines.length > 0 && !childRelation) {
-        {
-          unit.discard()
-          return reply.code(422).send({
-            error: 'Template has no line mapping for the submitted lines',
-            issues: [
-              ...bodyIssues,
-              {
-                severity: 'error',
-                rule: 'execute',
-                message: 'Template has no line mapping for the submitted lines'
-              }
-            ]
-          })
-        }
+        unit.discard()
+        return reply.code(422).send({
+          error: 'Template has no line mapping for the submitted lines',
+          issues: [
+            ...bodyIssues,
+            {
+              severity: 'error',
+              rule: 'execute',
+              message: 'Template has no line mapping for the submitted lines'
+            }
+          ]
+        })
       }
 
       // Stale-template guard: every body.m2m key must still resolve to a real M2M
@@ -1109,20 +1153,18 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         m2mAliasMap = await resolveM2mAliasFields(collection)
         const unresolved = m2mEntries.filter(([field]) => !m2mAliasMap.has(field))
         if (unresolved.length > 0) {
-          {
-            unit.discard()
-            return reply.code(422).send({
-              error: 'Template references an M2M field that could not be resolved',
-              issues: [
-                ...bodyIssues,
-                ...unresolved.map(([field]) => ({
-                  severity: 'error' as const,
-                  rule: 'execute',
-                  message: `M2M field "${field}" could not be resolved to a relation on ${collection} — the template may be stale`
-                }))
-              ]
-            })
-          }
+          unit.discard()
+          return reply.code(422).send({
+            error: 'Template references an M2M field that could not be resolved',
+            issues: [
+              ...bodyIssues,
+              ...unresolved.map(([field]) => ({
+                severity: 'error' as const,
+                rule: 'execute',
+                message: `M2M field "${field}" could not be resolved to a relation on ${collection} — the template may be stale`
+              }))
+            ]
+          })
         }
       }
 
@@ -1217,20 +1259,18 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           } catch {
             // swallow — compensation already reported the real error
           }
-          {
-            unit.discard()
-            return reply.code(422).send({
-              error: 'Import failed while creating referenced records — nothing was created',
-              issues: [
-                ...bodyIssues,
-                {
-                  severity: 'error',
-                  rule: 'execute',
-                  message: `Creating a referenced record in "${failedCreateCollection}" failed: ${message}`
-                }
-              ]
-            })
-          }
+          unit.discard()
+          return reply.code(422).send({
+            error: 'Import failed while creating referenced records — nothing was created',
+            issues: [
+              ...bodyIssues,
+              {
+                severity: 'error',
+                rule: 'execute',
+                message: `Creating a referenced record in "${failedCreateCollection}" failed: ${message}`
+              }
+            ]
+          })
         }
       }
 
@@ -1422,16 +1462,13 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         } catch {
           // swallow
         }
-
-        {
-          unit.discard()
-          return reply.code(422).send({
-            error: failedM2mField
-              ? `Import failed while linking "${failedM2mField}" — nothing was created`
-              : `Import failed on line ${failedAtLine} — nothing was created`,
-            issues: [...bodyIssues, ...compensationIssues]
-          })
-        }
+        unit.discard()
+        return reply.code(422).send({
+          error: failedM2mField
+            ? `Import failed while linking "${failedM2mField}" — nothing was created`
+            : `Import failed on line ${failedAtLine} — nothing was created`,
+          issues: [...bodyIssues, ...compensationIssues]
+        })
       }
 
       // The full create phase succeeded — every createOne call above skipped its own

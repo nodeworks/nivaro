@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { load as yamlLoad } from 'js-yaml'
 import { db } from '../db/index.js'
-import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   BodySecretError,
@@ -1337,7 +1337,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
     }
   )
 
-  // Call a pre-defined endpoint by id or slug (authenticated, not admin-only)
+  // Call a pre-defined endpoint by id or slug. Admin-only: the call carries the
+  // API's stored credentials, so whoever may call it acts as the integration
+  // account on the partner host (army3 P9). Product sends (transition actions,
+  // ERP pushes, extensions) go through callExternalApi in-process, not here.
   app.post<{
     Params: { eid: string }
     Body?: {
@@ -1345,7 +1348,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       query?: Record<string, string>
       headers?: Record<string, string>
     }
-  }>('/endpoints/:eid/call', { preHandler: authenticate }, async (req, reply) => {
+  }>('/endpoints/:eid/call', { preHandler: requireAdmin }, async (req, reply) => {
     const endpoint = await resolveEndpoint(req.params.eid)
     if (!endpoint) return reply.code(404).send({ error: 'Not found' })
 
@@ -1485,7 +1488,8 @@ export async function externalApisRoutes(app: FastifyInstance) {
     }
   })
 
-  // Call any arbitrary endpoint on a configured API (authenticated, not admin-only)
+  // Call any arbitrary endpoint on a configured API — admin-only, same reason as
+  // /endpoints/:eid/call: any method, path and body with the stored credentials.
   app.post<{
     Params: { id: string }
     Body: {
@@ -1495,7 +1499,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       query?: Record<string, string>
       headers?: Record<string, string>
     }
-  }>('/:id/call', { preHandler: authenticate }, async (req, reply) => {
+  }>('/:id/call', { preHandler: requireAdmin }, async (req, reply) => {
     const api = (await db('nivaro_external_apis')
       .where({ id: Number(req.params.id) })
       .first()) as ExternalApiRow | undefined

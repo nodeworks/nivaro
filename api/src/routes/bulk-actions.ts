@@ -22,6 +22,7 @@ import {
   transitionLabelsFor
 } from '../services/bulk-actions.js'
 import { BULK_PUSH_MAX, retryFailedPushes, runItemActionOver } from '../services/bulk-push.js'
+import { recordWriteRefusal } from '../services/edit-lock.js'
 import { can } from '../services/permissions.js'
 import type { User } from '../types.js'
 
@@ -30,6 +31,30 @@ import type { User } from '../types.js'
  * See services/bulk-actions.ts for the semantics. Surfaces call
  * GET /bulk-actions/available then POST /bulk-actions/run.
  */
+/** Turn the dry run's "change" outcomes the real write would refuse into failures. Exported for the tests. */
+export async function refuseUnwritable(
+  result: Awaited<ReturnType<typeof runDefinition>>,
+  collection: string,
+  req: FastifyRequest
+): Promise<void> {
+  for (const o of result.outcomes) {
+    if (o.outcome !== 'change') continue
+    const refused = await recordWriteRefusal(req, collection, o.item, { heldLock: false }).catch(
+      () => ({
+        status: 403 as const,
+        body: { error: 'Could not confirm you may change this record' }
+      })
+    )
+    if (!refused) continue
+    const why = refused.status === 404 ? 'Record not found or not readable' : refused.body.error
+    o.outcome = 'fail'
+    o.reason = why
+    result.succeeded--
+    result.failed++
+    result.errors.push({ item: o.item, error: why })
+  }
+}
+
 export async function bulkActionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
@@ -194,6 +219,10 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'You cannot run this action' })
     try {
       const result = await runDefinition(def, ids, null, req, { dryRun: true })
+      // A field update the run would refuse (update rights on the record, the
+      // approval edit lock — updateOne's gates) is a failure in the preview
+      // too, never "would change". Transitions already judge their own rules.
+      if (def.kind === 'update_fields') await refuseUnwritable(result, def.collection, req)
       return {
         data: {
           would_change: result.succeeded,

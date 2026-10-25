@@ -31,6 +31,29 @@ export interface StoredDraft {
   pending_deletes: Record<string, string[]>
   m2m_links: Record<string, unknown[]>
   m2m_unlinks: Record<string, unknown[]>
+  /** A new form's starting point (a Duplicate of record B, a ?prefill= link):
+   *  every new form shares one draft key, so a draft is only offered back on
+   *  a form that started from the same prefill. Absent = a blank new form. */
+  prefill_sig?: string | null
+}
+
+/** A short, stable signature of a new form's prefill (null when blank). */
+export function prefillSignature(prefill: unknown): string | null {
+  if (prefill == null) return null
+  const text = JSON.stringify(prefill, (_k, v) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v
+  )
+  if (!text || text === '{}' || text === '[]') return null
+  let h = 5381
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0
+  return `p${(h >>> 0).toString(36)}:${text.length}`
+}
+
+/** Whether a stored new-form draft belongs to the form opening now. */
+export function draftMatchesPrefill(stored: { prefill_sig?: string | null }, sig: string | null) {
+  return (stored.prefill_sig ?? null) === sig
 }
 
 export function draftKey(

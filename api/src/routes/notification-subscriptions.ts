@@ -1,9 +1,11 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import { resolveStateOwners } from '../services/pipeline-engine.js'
 import type { QueueRow } from '../services/queues.js'
+import { canSeeRecord } from '../services/sla-visibility.js'
 import { canReadQueue } from './queues.js'
 
 const VALID_EVENT_TYPES = ['create', 'update', 'delete', 'all', 'workflow_transition'] as const
@@ -38,6 +40,41 @@ function serialize(row: Record<string, unknown>) {
   }
 }
 
+/**
+ * A collection subscription is a standing read of every future write, so the
+ * caller must be able to read the collection now, and every field its filters
+ * test (a filter on a hidden field would answer questions about its values).
+ * Delivery re-checks the record and the fields per recipient
+ * (hooks/notification-subscriptions.ts recipientView). Null = allowed.
+ */
+export async function collectionSubscriptionRefusal(
+  req: FastifyRequest,
+  collection: string,
+  filterFields: string[]
+): Promise<{ code: number; error: string } | null> {
+  if (req.isAdmin) return null
+  if (/^(nivaro_|directus_)/i.test(collection)) {
+    return { code: 403, error: 'System collections cannot be subscribed to' }
+  }
+  if (!(await can(req.user!, 'read', collection))) return { code: 403, error: 'Forbidden' }
+  const allowed = await getAllowedFields(req.user!, 'read', collection)
+  if (allowed === null) return null
+  for (const f of filterFields) {
+    const top = f.split('.')[0]
+    if (top === 'id' || top === 'to_state' || allowed.includes(top)) continue
+    return { code: 403, error: `You cannot filter on ${f}` }
+  }
+  return null
+}
+
+const filterFieldsOf = (
+  filterField: string | null | undefined,
+  filters: Array<{ field?: unknown }> | null | undefined
+) => [
+  ...(filterField ? [filterField] : []),
+  ...(Array.isArray(filters) ? filters.map((f) => String(f?.field ?? '')).filter(Boolean) : [])
+]
+
 export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
 
@@ -52,6 +89,10 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
     }
     const userId = String(req.user!.id).toUpperCase()
     const reasons: string[] = []
+    // A hidden record answers like one with no reasons.
+    if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+      return reply.send({ data: { reasons } })
+    }
     try {
       const row = (await db(collection).where({ id: item }).first()) as
         | Record<string, unknown>
@@ -167,6 +208,15 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
     const filter_field = hasQueue ? null : body.filter_field?.trim() || null
     const filter_value = hasQueue ? null : body.filter_value?.trim() || null
 
+    if (collection) {
+      const refusal = await collectionSubscriptionRefusal(
+        req,
+        collection,
+        filterFieldsOf(filter_field, body.filters)
+      )
+      if (refusal) return reply.code(refusal.code).send({ error: refusal.error })
+    }
+
     // Prevent exact duplicates
     const existing = hasQueue
       ? await db('nivaro_notification_subscriptions')
@@ -272,6 +322,20 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
     if ('filters' in body) {
       updates.filters =
         Array.isArray(body.filters) && body.filters.length ? JSON.stringify(body.filters) : null
+    }
+
+    if (existing.collection && ('filter_field' in updates || 'filters' in updates)) {
+      const refusal = await collectionSubscriptionRefusal(
+        req,
+        String(existing.collection),
+        filterFieldsOf(
+          'filter_field' in updates
+            ? (updates.filter_field as string | null)
+            : existing.filter_field,
+          'filters' in body ? body.filters : serialize(existing).filters
+        )
+      )
+      if (refusal) return reply.code(refusal.code).send({ error: refusal.error })
     }
 
     if (Object.keys(updates).length === 0) {

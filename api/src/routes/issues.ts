@@ -1,15 +1,61 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { CLIENT_HEADER, parseClientHeader } from '../services/client-version.js'
 import { trackError } from '../services/error-tracking.js'
+import { readOne } from '../services/items.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
 
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const
+
+/**
+ * Non-admins see the issues they raised or are assigned, plus manual issues
+ * on a record they can open (`recordVisible`); never another person's server
+ * or client errors. Server issues carry driver text and request context in
+ * `details`, so that column is cleared for non-admins even on their own.
+ */
+function ownIssues<Q extends Knex.QueryBuilder>(q: Q, userId: string, prefix = ''): Q {
+  return q.where((w) =>
+    w.where(`${prefix}raised_by`, userId).orWhere(`${prefix}assigned_to`, userId)
+  ) as Q
+}
+
+function forViewer<T extends Record<string, unknown>>(row: T, isAdmin: boolean): T {
+  if (isAdmin || row.source !== 'server') return row
+  return { ...row, details: null }
+}
+
+async function recordVisible(
+  req: FastifyRequest,
+  collection: string | null | undefined,
+  item: string | null | undefined
+): Promise<boolean> {
+  if (!collection || !item || /^(nivaro|directus)_/i.test(collection)) return false
+  try {
+    return !!(await readOne(req.user!, collection, item, req.workspaceId ?? undefined, ['id']))
+  } catch {
+    return false
+  }
+}
+
+function isOwn(issue: { raised_by?: unknown; assigned_to?: unknown }, userId: string): boolean {
+  const me = userId.toUpperCase()
+  return (
+    String(issue.raised_by ?? '').toUpperCase() === me ||
+    String(issue.assigned_to ?? '').toUpperCase() === me
+  )
+}
+
+/** A positive safe integer id, or null (`1e99`, `abc`, `-1`). */
+function issueId(raw: unknown): number | null {
+  const n = Number(raw)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
+}
 
 interface Issue {
   id: number
@@ -170,20 +216,26 @@ export async function issuesRoutes(app: FastifyInstance) {
     if (assigned_to) {
       query = query.where('i.assigned_to', assigned_to === 'me' ? req.user!.id : assigned_to)
     }
+    if (!req.isAdmin) {
+      const userId = req.user!.id
+      const onRecord = collection && item ? await recordVisible(req, collection, item) : false
+      query = query.where((w) => {
+        ownIssues(w as Knex.QueryBuilder, userId, 'i.')
+        if (onRecord) w.orWhere('i.source', 'manual')
+      })
+    }
 
-    const rows = await query
-    return reply.send({ data: rows })
+    const rows = (await query) as Array<Record<string, unknown>>
+    return reply.send({ data: rows.map((r) => forViewer(r, !!req.isAdmin)) })
   })
 
   // GET /issues/summary — counts by status + severity
-  app.get('/summary', { preHandler: requireAuth }, async (_req, reply) => {
+  app.get('/summary', { preHandler: requireAuth }, async (req, reply) => {
+    const base = () =>
+      req.isAdmin ? db('nivaro_issues') : ownIssues(db('nivaro_issues'), req.user!.id)
     const [byStatus, bySeverity] = await Promise.all([
-      db('nivaro_issues').select('status').count('* as count').groupBy('status'),
-      db('nivaro_issues')
-        .select('severity')
-        .count('* as count')
-        .whereNot('status', 'closed')
-        .groupBy('severity')
+      base().select('status').count('* as count').groupBy('status'),
+      base().select('severity').count('* as count').whereNot('status', 'closed').groupBy('severity')
     ])
 
     const statusCounts: Record<string, number> = {}
@@ -196,18 +248,26 @@ export async function issuesRoutes(app: FastifyInstance) {
 
   // GET /issues/:id
   app.get('/:id', { preHandler: requireAuth }, async (req, reply) => {
-    const { id } = req.params as { id: string }
-    const row = await db<Issue>('nivaro_issues')
-      .where({ id: Number(id) })
-      .first()
+    const id = issueId((req.params as { id: string }).id)
+    if (id == null) return reply.code(404).send({ error: 'Not found' })
+    const row = (await db('nivaro_issues').where({ id }).first()) as
+      | (Issue & Record<string, unknown>)
+      | undefined
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    return reply.send({ data: row })
+    if (
+      !req.isAdmin &&
+      !isOwn(row, req.user!.id) &&
+      !(row.source === 'manual' && (await recordVisible(req, row.collection, row.item)))
+    ) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    return reply.send({ data: forViewer(row, !!req.isAdmin) })
   })
 
   // GET /issues/:id/occurrences — the last hits (who, route, build). Admin only: it names people.
   app.get('/:id/occurrences', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = Number((req.params as { id: string }).id)
-    if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Bad id' })
+    const id = issueId((req.params as { id: string }).id)
+    if (id == null) return reply.code(400).send({ error: 'Bad id' })
     if (!(await db.schema.hasTable('nivaro_issue_occurrences'))) return reply.send({ data: [] })
     const rows = await db('nivaro_issue_occurrences')
       .where('issue', id)
@@ -299,11 +359,17 @@ export async function issuesRoutes(app: FastifyInstance) {
     if (!['open', 'acknowledged', 'resolved'].includes(status)) {
       return reply.code(400).send({ error: 'status must be open, acknowledged or resolved' })
     }
-    const ids = (Array.isArray(b.ids) ? b.ids : []).slice(0, 200)
+    const ids = (Array.isArray(b.ids) ? b.ids : [])
+      .map(issueId)
+      .filter((n): n is number => n != null)
+      .slice(0, 200)
     if (ids.length === 0) return reply.code(400).send({ error: 'ids[] is required' })
-    const updated = await db('nivaro_issues')
-      .whereIn('id', ids as never[])
-      .update({ status, updated_at: new Date() })
+    // The single PATCH's rule, row by row: assignee, raiser, or an admin.
+    const q = db('nivaro_issues').whereIn('id', ids)
+    const updated = await (req.isAdmin ? q : ownIssues(q, req.user!.id)).update({
+      status,
+      updated_at: new Date()
+    })
     await logActivity({
       action: 'issue-bulk-status',
       user: req.user?.id,
@@ -316,6 +382,7 @@ export async function issuesRoutes(app: FastifyInstance) {
 
   app.patch('/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    if (issueId(id) == null) return reply.code(404).send({ error: 'Not found' })
     const existing = await db<Issue>('nivaro_issues')
       .where({ id: Number(id) })
       .first()
@@ -385,6 +452,7 @@ export async function issuesRoutes(app: FastifyInstance) {
   // DELETE /issues/:id — admin only
   app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
+    if (issueId(id) == null) return reply.code(404).send({ error: 'Not found' })
     const existing = await db<Issue>('nivaro_issues')
       .where({ id: Number(id) })
       .first()

@@ -861,6 +861,7 @@ export {
   SETTLED_READ_MS,
   withGetCoalescing
 } from './lib/request-gate'
+export { restoreSkippedNote } from './lib/restore-skipped'
 export { coarseCollectionUpdate, createRoomGapTracker, refetchEventsFor } from './lib/room-gaps'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'
 export { rumRouteChange, rumWidget, startRum } from './lib/rum'

@@ -24,6 +24,7 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { type CatalogModeConfig, CatalogPickerField } from './CatalogPickerField'
+import { columnMaxLength } from './column-length'
 import { useFieldAffordances } from './FieldAffordances'
 import {
   AddressAutocompleteField,
@@ -655,6 +656,7 @@ export function FieldRenderer({
     return (
       <Textarea
         rows={4}
+        maxLength={columnMaxLength(field) ?? undefined}
         value={strVal}
         onChange={(e) => onChange(e.target.value)}
         placeholder={field.placeholder ?? undefined}
@@ -1052,15 +1054,19 @@ export function FieldRenderer({
   // Input mask (#137): options.input_mask (# digit, A letter, * any; other
   // chars are literals shown while typing). The STORED value is clean.
   const mask = maskFor(field)
+  // The column's own limit stops the input there (a 10,000-character paste
+  // used to fail the whole save with no field named).
+  const columnMax = columnMaxLength(field)
   const maxLen = (() => {
     const o = parseJson<{ max_length?: number }>(field.options)
     if (Number.isFinite(Number(o?.max_length))) return Number(o?.max_length)
     const rules = parseJson<Array<{ type?: string; value?: number }>>(field.validation_rules)
     const maxRule = Array.isArray(rules) ? rules.find((r) => r?.type === 'max') : null
-    return maxRule && Number.isFinite(Number(maxRule.value)) ? Number(maxRule.value) : null
+    return maxRule && Number.isFinite(Number(maxRule.value)) ? Number(maxRule.value) : columnMax
   })()
   const input = (
     <Input
+      maxLength={mask ? undefined : (columnMax ?? undefined)}
       value={mask ? applyInputMask(mask, strVal).display : strVal}
       onChange={(e) => {
         if (mask) {

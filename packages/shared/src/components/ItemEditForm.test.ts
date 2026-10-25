@@ -3,10 +3,14 @@ import {
   appendUniqueM2MId,
   applyLayoutDefaults,
   computeM2MEffectiveIds,
+  draftDiffers,
   dropSatisfiedRequired,
   dropUnsettledAliasResults,
+  duplicateChildRow,
   type FieldRule,
   idsNeedingStaging,
+  isNoDuplicate,
+  keepCollisionBase,
   type M2MFieldState,
   mergeRuleResults,
   ownEditFields,
@@ -471,5 +475,88 @@ describe('serverErrorCode', () => {
     )
     expect(serverErrorCode(new Error('x'))).toBeNull()
     expect(serverErrorCode(null)).toBeNull()
+  })
+})
+
+describe('draftDiffers (Revert leaves the form clean)', () => {
+  it('is false once every field is back to the loaded record', () => {
+    const base = { id: 1, considerations: '<p>TECH REFRESH</p>', __meta: 1 }
+    expect(draftDiffers({ ...base }, base)).toBe(false)
+    expect(draftDiffers({ ...base, __meta: 2 }, base)).toBe(false)
+    expect(draftDiffers({ ...base, considerations: '<p>TECH REFRESH x</p>' }, base)).toBe(true)
+  })
+})
+
+describe('keepCollisionBase (no silent overwrite of a newer save)', () => {
+  it('holds the baseline while an own edit stands against the newer value', () => {
+    const own = new Set(['considerations'])
+    const draft = { considerations: 'tab A edit' }
+    expect(
+      keepCollisionBase(['considerations'], own, draft, { considerations: 'tab B edit' })
+    ).toBe(true)
+  })
+
+  it('moves it when the change touched only fields this form did not edit', () => {
+    expect(
+      keepCollisionBase(
+        ['vendor'],
+        new Set(['considerations']),
+        { considerations: 'a' },
+        {
+          vendor: 7
+        }
+      )
+    ).toBe(false)
+  })
+
+  it('moves it when the person already holds the same value', () => {
+    const own = new Set(['considerations'])
+    expect(
+      keepCollisionBase(
+        ['considerations'],
+        own,
+        { considerations: 'same' },
+        {
+          considerations: 'same'
+        }
+      )
+    ).toBe(false)
+  })
+})
+
+describe('Duplicate (child rows and do-not-duplicate fields)', () => {
+  it('honours no_duplicate in object or JSON options', () => {
+    expect(isNoDuplicate({ options: { no_duplicate: true } })).toBe(true)
+    expect(isNoDuplicate({ options: '{"no_duplicate":true}' })).toBe(true)
+    expect(isNoDuplicate({ options: null })).toBe(false)
+  })
+
+  it('a copied line leaves its sales order, shipped qty and stamps behind', () => {
+    const line = {
+      id: 9,
+      inventory_request: 37062,
+      material: 'M-1',
+      quantity: 4,
+      sales_order_id: 'SO-77',
+      shipped_qty: 4,
+      created: '2026-10-25',
+      notes: null
+    }
+    const config = [
+      { field: 'sales_order_id', options: { no_duplicate: true } },
+      { field: 'shipped_qty', readonly: true },
+      { field: 'quantity' }
+    ]
+    expect(duplicateChildRow(line, 'inventory_request', config)).toEqual({
+      material: 'M-1',
+      quantity: 4
+    })
+    // Child config unreadable: only the fixed skips apply (today's behaviour).
+    expect(duplicateChildRow(line, 'inventory_request', null)).toEqual({
+      material: 'M-1',
+      quantity: 4,
+      sales_order_id: 'SO-77',
+      shipped_qty: 4
+    })
   })
 })

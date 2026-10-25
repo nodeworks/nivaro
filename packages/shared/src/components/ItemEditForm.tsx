@@ -59,8 +59,10 @@ import {
   draftCreatedAs,
   draftHasContent,
   draftKey,
+  draftMatchesPrefill,
   loadDraft,
   markDraftCreated,
+  prefillSignature,
   type StoredDraft,
   saveDraft
 } from '../lib/draft-store'
@@ -154,6 +156,7 @@ import {
 } from './item-edit/ChangeReasonDialog'
 import { type ChangeItem, ChangesTray } from './item-edit/ChangesTray'
 import { CloneDialog } from './item-edit/CloneDialog'
+import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
 import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
@@ -652,6 +655,9 @@ export interface ItemEditFormProps {
     values: Record<string, unknown>
     links: Record<string, unknown[]>
     rows: Record<string, Array<Record<string, unknown>>>
+    /** The form the source record opened in — the copy should open in it
+     *  too, not the collection's default. */
+    layout_slug?: string | null
   }) => void
   showRevisions?: boolean
   showClone?: boolean
@@ -1038,6 +1044,80 @@ export function ownEditFields(
   baseline: Record<string, unknown>
 ): Set<string> {
   return new Set(changed.filter((k) => touched.has(k) && !valuesEqual(draft[k], baseline[k])))
+}
+
+/** A field the layout / field config marks "do not duplicate". */
+export function isNoDuplicate(field: { options?: unknown }): boolean {
+  const o = field.options
+  const opts =
+    typeof o === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(o) as Record<string, unknown>
+          } catch {
+            return null
+          }
+        })()
+      : (o as Record<string, unknown> | null | undefined)
+  return !!opts && typeof opts === 'object' && !!opts.no_duplicate
+}
+
+/** Audit / identity columns no copied child row carries. */
+const DUPLICATE_CHILD_SKIP = new Set([
+  'id',
+  'user_created',
+  'date_created',
+  'user_updated',
+  'date_updated',
+  'created_at',
+  'updated_at',
+  'created',
+  'changed',
+  'creator'
+])
+
+/** One child row (a line) as Duplicate stages it on the new record: no id,
+ *  audit stamps, parent link, nested objects or empty values, and none of the
+ *  columns the child's field config marks read-only or "do not duplicate"
+ *  (a line's sales order number, its shipped quantity). Without the child
+ *  config (unreadable) only the fixed skips apply. */
+export function duplicateChildRow(
+  row: Record<string, unknown>,
+  parentField: string,
+  childConfig: Array<{ field: string; readonly?: boolean | null; options?: unknown }> | null
+): Record<string, unknown> {
+  const blocked = new Set(
+    (childConfig ?? []).filter((f) => f.readonly || isNoDuplicate(f)).map((f) => f.field)
+  )
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(row)) {
+    if (DUPLICATE_CHILD_SKIP.has(k) || k === parentField || blocked.has(k)) continue
+    if (v === null || typeof v === 'object') continue
+    out[k] = v
+  }
+  return out
+}
+
+/** Whether any field of the draft still differs from the record it was
+ *  loaded from (`__` keys are form bookkeeping, never a change). */
+export function draftDiffers(
+  draft: Record<string, unknown>,
+  baseline: Record<string, unknown>
+): boolean {
+  return Object.keys(draft).some((k) => !k.startsWith('__') && !valuesEqual(draft[k], baseline[k]))
+}
+
+/** Whether a remote write leaves the collision baseline where it is: it does
+ *  while any field it changed is still the person's own, different edit, so
+ *  the next save meets the server's mid-air check (409, "Someone else changed
+ *  this record") instead of quietly writing over the newer value. */
+export function keepCollisionBase(
+  changed: string[],
+  ownEdits: Set<string>,
+  draft: Record<string, unknown>,
+  incoming: Record<string, unknown>
+): boolean {
+  return changed.some((k) => ownEdits.has(k) && !valuesEqual(draft[k], incoming[k]))
 }
 
 /** Whether a field's validation rule is judged on this save — the server's
@@ -1801,6 +1881,13 @@ function ItemEditFormView({
   // Synchronous mirror of draft — the save payload reads from this so that
   // grid-flush callbacks firing onChange mid-save still land in the PATCH.
   const draftRef = useRef<Record<string, unknown>>({})
+  // The record is read-only for this person (someone else holds the edit
+  // lock, the approval edit lock refuses them, the record is gone): edits
+  // from any input are dropped, so nothing dirties the form, writes a draft
+  // or lights "Save all". `undoingRef` lets Revert / Take theirs through —
+  // they put back what the server has.
+  const readOnlyRef = useRef(false)
+  const undoingRef = useRef(false)
   // Fields the user actually edited this session (drives cascade auto-clear)
   const userTouchedRef = useRef<Set<string>>(new Set())
   // Stale-response guard for /field-rules/evaluate (see InlineTableField for
@@ -1903,6 +1990,20 @@ function ItemEditFormView({
   // after the last change, and removed on save / discard. On open, a stored
   // draft is OFFERED (banner) — never applied silently.
   const recoveryKey = draftKey(collection, itemId, authUserId)
+  // Every new form shares one draft key: a Duplicate of record B must not be
+  // offered the lines of an unfinished new record A. The prefill it opened
+  // with signs its draft.
+  const prefillSig = useMemo(
+    () =>
+      isNew && (initialValues || initialLinks || initialRows)
+        ? prefillSignature({
+            v: initialValues ?? null,
+            l: initialLinks ?? null,
+            r: initialRows ?? null
+          })
+        : null,
+    [isNew, initialValues, initialLinks, initialRows]
+  )
   const [recovery, setRecovery] = useState<
     | { state: 'checking' }
     // createdId: this draft was already created as that record (lib/draft-store
@@ -2021,7 +2122,14 @@ function ItemEditFormView({
     // Only a SAVE compares against it — a record nobody edits never needs the
     // read (a scan of the record's history on every open, on every tab).
     enabled: !isNew && !!itemId && isDirty,
-    staleTime: 60_000
+    // The baseline only moves when the form adopts the server's values (its
+    // own save, a remote change it took in) — those invalidate it. Refetching
+    // on its own (stale + window focus) moved it past another tab's save while
+    // this tab still held the older edit, and the save wrote over the newer
+    // value with no collision prompt.
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false
   })
 
   // ── Save progress dialog ───────────────────────────────────────────────────
@@ -2965,9 +3073,12 @@ function ItemEditFormView({
           }
           return next
         })
+        // The collision baseline moves with the adopted values — but not past
+        // a conflict: with the person's own edit of a field still standing
+        // against the newer value, the save must meet the mid-air check.
+        if (!keepCollisionBase(changed, ownEdits, draftRef.current, itemData))
+          void qc.invalidateQueries({ queryKey: ['collision-base', collection, itemId] })
         for (const k of changed) if (!isOwnEdit(k)) userTouchedRef.current.delete(k)
-        // The collision baseline moves with the adopted values.
-        void qc.invalidateQueries({ queryKey: ['collision-base', collection, itemId] })
         const editsLeft = [...userTouchedRef.current].some(
           (k) => !valuesEqual(draftRef.current[k], itemData[k])
         )
@@ -3079,7 +3190,11 @@ function ItemEditFormView({
             ? remote
             : local
           : (local ?? remote)
-      if (!stored || !draftHasContent(stored)) {
+      if (
+        !stored ||
+        !draftHasContent(stored) ||
+        (isNew && !draftMatchesPrefill(stored, prefillSig))
+      ) {
         setRecovery({ state: 'none' })
         return
       }
@@ -3173,7 +3288,8 @@ function ItemEditFormView({
         ) as StoredDraft['pending_edits'],
         pending_deletes: obj(pendingO2MDeletes, (d) => [...d]) as StoredDraft['pending_deletes'],
         m2m_links: obj(m2mLinks, (l) => [...l]) as StoredDraft['m2m_links'],
-        m2m_unlinks: obj(m2mUnlinks, (u) => [...u]) as StoredDraft['m2m_unlinks']
+        m2m_unlinks: obj(m2mUnlinks, (u) => [...u]) as StoredDraft['m2m_unlinks'],
+        ...(isNew ? { prefill_sig: prefillSig } : {})
       }
       if (!draftHasContent(stored)) {
         void deleteDraft(recoveryKey)
@@ -4200,6 +4316,7 @@ function ItemEditFormView({
     (field: string, value: unknown) => {
       // Design mode: inputs are inert.
       if (designOn) return
+      if (readOnlyRef.current && !undoingRef.current) return
       // No-op guard: editors can emit a change with an IDENTICAL value (rich
       // text normalizing on mount is the classic) — that must not dirty the
       // form, or a freshly loaded record claims unsaved changes with nothing
@@ -4230,7 +4347,10 @@ function ItemEditFormView({
       }
       draftRef.current = next
       setDraft(next)
-      setIsDirty(true)
+      // Revert / Take theirs that puts the last change back leaves nothing to
+      // save: the form is clean again (the tab dot, the leave-page prompt and
+      // the stored draft all follow isDirty).
+      setIsDirty(undoingRef.current ? draftDiffers(next, initialDataRef.current) : true)
       const isEmpty = value === null || value === undefined || value === ''
       if (!isEmpty) touchedFields.current.add(field)
       setValidationErrors((prev) => {
@@ -4251,6 +4371,19 @@ function ItemEditFormView({
       if (!isEmpty) upstreamCascadesRef.current(field, value)
     },
     [designOn, fieldConfig, evaluateFieldRulesForChange, runCrossDefaults]
+  )
+  /** Puts a field back (Revert, Take theirs): allowed on a read-only form and
+   *  leaves it clean when nothing else differs. */
+  const undoTo = useCallback(
+    (field: string, value: unknown) => {
+      undoingRef.current = true
+      try {
+        handleFieldChange(field, value)
+      } finally {
+        undoingRef.current = false
+      }
+    },
+    [handleFieldChange]
   )
 
   const [fieldCounts, setFieldCounts] = useState<Record<string, number>>({})
@@ -4443,6 +4576,31 @@ function ItemEditFormView({
     active: active && surfaceActive
   })
   const isReadOnly = lockReadOnly || !!recordGone || !!editLockMessage
+  readOnlyRef.current = isReadOnly && !isNew
+  // The step moved (this form's own transition, a live state change, another
+  // tab): who may edit now is the server's call — re-read the edit-lock
+  // verdict, so a record that just went into approval turns read-only (and
+  // lets go of its edit lock) for the people it now refuses. Every path that
+  // moves the step refreshes 'pipeline-instance'; only a changed state counts.
+  useEffect(
+    () =>
+      qc.getQueryCache().subscribe((event) => {
+        if (event.type !== 'updated' || event.action.type !== 'success') return
+        const k = event.query.queryKey
+        if (!Array.isArray(k) || k[0] !== 'pipeline-instance' || k[1] !== collection) return
+        if (String(k[2]) !== String(itemId) || k.length > 3) return
+        const next = (event.query.state.data as { instance?: { current_state?: string | null } })
+          ?.instance?.current_state
+        const cur = qc.getQueryData<{ instance?: { current_state?: string | null } | null }>([
+          'pipeline-instance-lock',
+          collection,
+          itemId
+        ])?.instance?.current_state
+        if (next !== undefined && cur !== undefined && next !== cur)
+          void qc.invalidateQueries({ queryKey: ['pipeline-instance-lock', collection, itemId] })
+      }),
+    [qc, collection, itemId]
+  )
   relockOnEditRef.current =
     lockEnabled && !lockAcquired && !lockHolder
       ? () => void (lockReleased ? relockLock() : claimLock())
@@ -4492,7 +4650,7 @@ function ItemEditFormView({
   const designStateKey = design?.stateKey ?? null
   const { data: pipelineInstanceQueried, isError: pipelineInstanceError } = useQuery<{
     instance?: { current_state?: string | null } | null
-    states?: Array<{ id: string; key: string }>
+    states?: Array<{ id: string; key: string; label?: string | null }>
   } | null>({
     queryKey: ['pipeline-instance-lock', collection, itemId],
     queryFn: () =>
@@ -4502,7 +4660,7 @@ function ItemEditFormView({
           (r) =>
             r.data as {
               instance?: { current_state?: string | null } | null
-              states?: Array<{ id: string; key: string }>
+              states?: Array<{ id: string; key: string; label?: string | null }>
             }
         )
         .catch(() => null),
@@ -6850,6 +7008,12 @@ function ItemEditFormView({
         const over = fieldCounterError(f, draft[f.field], f.label ?? titleCase(f.field))
         if (over) errs[f.field] = over
       }
+      // Text past its column's limit: the server could only refuse the whole
+      // save ("A value is too long for its field") without naming the field.
+      if (!errs[f.field] && (isNew || changedThisSession(f.field))) {
+        const over = columnLengthError(f, draft[f.field], f.label ?? titleCase(f.field))
+        if (over) errs[f.field] = over
+      }
       // A number the column cannot hold (1e308, a fraction in an integer
       // column, past the type's range) — FieldRenderer says so under the
       // input; this keeps it from being sent. A stored value nobody changed
@@ -7103,6 +7267,15 @@ function ItemEditFormView({
 
   function handleSave() {
     if (recordGone) return
+    // The header Save is disabled on a read-only record; the host's triggers
+    // (workspace "Save all", the entry keyboard) are not — they land here.
+    if (isReadOnly && !isNew) {
+      toast.info(
+        editLockMessage ??
+          `${lockHolder?.locked_by_name ?? 'Someone else'} is editing this record — nothing was saved`
+      )
+      return
+    }
     if (!validateAll()) return
     void (async () => {
       const collectionChallenge = await preflightChangeReason()
@@ -8383,10 +8556,14 @@ function ItemEditFormView({
     lockReasons[f] = `The "${label}" section is locked for your role`
   {
     const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
-    const currentStateKey = currentStateId
-      ? ((pipelineInstanceData?.states ?? []).find((s) => s.id === currentStateId)?.key ?? null)
+    const currentState = currentStateId
+      ? ((pipelineInstanceData?.states ?? []).find((s) => s.id === currentStateId) ?? null)
       : null
-    const stateLabel = currentStateKey ? titleCase(currentStateKey.replace(/_/g, ' ')) : null
+    // The step's own label ("Waiting on Level 1 Approval") — the title-cased
+    // key named a state nobody sees anywhere else.
+    const stateLabel = currentState
+      ? currentState.label?.trim() || titleCase(currentState.key.replace(/_/g, ' '))
+      : null
     for (const a of assignments) {
       if (!a.lock_conditions || !lockedFields.has(a.field)) continue
       try {
@@ -8409,6 +8586,10 @@ function ItemEditFormView({
       if (lockReasons[key]) continue
       if (viewAs.active && viewAs.readonly.has(key)) {
         lockReasons[key] = `${viewAs.preview?.role.name ?? 'This role'} cannot edit this field`
+        continue
+      }
+      if (editLockMessage) {
+        lockReasons[key] = editLockMessage
         continue
       }
       if (isReadOnly) {
@@ -8524,7 +8705,7 @@ function ItemEditFormView({
       field: k,
       from: initialDataRef.current[k],
       to: draft[k],
-      onRevert: () => handleFieldChange(k, initialDataRef.current[k] ?? null),
+      onRevert: () => undoTo(k, initialDataRef.current[k] ?? null),
       onJump: () => jumpToField(k)
     })
   const gridLabel = (rc: string) => titleCase(rc.replace(/_/g, ' '))
@@ -8697,12 +8878,16 @@ function ItemEditFormView({
     takeRemoteChange: (field: string) => {
       const ch = remoteChanges[field]
       if (!ch?.conflict) return
-      handleFieldChange(field, ch.theirs ?? null)
+      undoTo(field, ch.theirs ?? null)
       setRemoteChanges((cur) => {
         const next = { ...cur }
         delete next[field]
         return next
       })
+      // The last conflict taken: the newer value is what the form holds now,
+      // so the collision baseline may move up to it.
+      if (!Object.entries(remoteChanges).some(([k, c]) => k !== field && c.conflict))
+        void qc.invalidateQueries({ queryKey: ['collision-base', collection, itemId] })
     },
     lockReasons: exactLockReasons,
     onLockHover: lockWhy.want,
@@ -10427,7 +10612,9 @@ function ItemEditFormView({
 
   return (
     <ReimportHandlerContext.Provider
-      value={isNew ? null : (handleReimportParsed as import('../context').ReimportHandler)}
+      value={
+        isNew || isReadOnly ? null : (handleReimportParsed as import('../context').ReimportHandler)
+      }
     >
       <RelationPathDataContext.Provider value={relationPathData}>
         <AddendumO2MContext.Provider value={addendumO2MMap}>
@@ -10908,7 +11095,11 @@ function ItemEditFormView({
                                               role='radio'
                                               aria-checked={!readMode}
                                               data-summary-mode-option='edit'
-                                              title='Edit mode — change this record'
+                                              title={
+                                                editLockMessage
+                                                  ? `Form view — read-only: ${editLockMessage}`
+                                                  : 'Edit mode — change this record'
+                                              }
                                               onClick={() => setReadMode(false)}
                                               className={cn(
                                                 'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
@@ -10917,8 +11108,22 @@ function ItemEditFormView({
                                                   : 'text-slate-600 hover:bg-muted dark:text-slate-300'
                                               )}
                                             >
-                                              <PencilLine className='h-3.5 w-3.5' strokeWidth={2} />
-                                              Edit
+                                              {/* An approval-locked record is not offered "Edit":
+                                                  the full form still opens, read-only. */}
+                                              {editLockMessage ? (
+                                                <>
+                                                  <Lock className='h-3.5 w-3.5' strokeWidth={2} />
+                                                  Form
+                                                </>
+                                              ) : (
+                                                <>
+                                                  <PencilLine
+                                                    className='h-3.5 w-3.5'
+                                                    strokeWidth={2}
+                                                  />
+                                                  Edit
+                                                </>
+                                              )}
                                             </button>
                                           </div>
                                         ) : null}
@@ -11183,8 +11388,83 @@ function ItemEditFormView({
                                                       copyable.add(fc.field)
                                                     }
                                                   }
+                                                  // Copy the record as it is NOW, not the copy this
+                                                  // tab loaded: a junction edit (Zone, funding year)
+                                                  // made elsewhere never reaches an open form, and the
+                                                  // duplicate carried values the record no longer had.
+                                                  // The person's own unsaved edits still win.
+                                                  const fresh = await client
+                                                    .request<{ data: Record<string, unknown> }>(
+                                                      get(`/items/${collection}/${itemId}`)
+                                                    )
+                                                    .then((r) => r.data ?? null)
+                                                    .catch(() => null)
+                                                  const source: Record<string, unknown> = fresh
+                                                    ? { ...fresh }
+                                                    : { ...draft }
+                                                  if (fresh)
+                                                    for (const k of userTouchedRef.current)
+                                                      if (
+                                                        !valuesEqual(
+                                                          draft[k],
+                                                          initialDataRef.current[k]
+                                                        )
+                                                      )
+                                                        source[k] = draft[k]
+                                                  const freshLinks = await Promise.all(
+                                                    [...m2mAliasFieldsForRules.values()].map(
+                                                      (info) =>
+                                                        qc
+                                                          .fetchQuery({
+                                                            queryKey: [
+                                                              'm2m-items',
+                                                              info.manyCollection,
+                                                              info.manyField,
+                                                              itemId
+                                                            ],
+                                                            queryFn: () =>
+                                                              client
+                                                                .request<{
+                                                                  data: Record<string, unknown>[]
+                                                                }>(
+                                                                  get(
+                                                                    `/items/${info.manyCollection}`,
+                                                                    {
+                                                                      filter: JSON.stringify({
+                                                                        [info.manyField]: {
+                                                                          _eq: itemId
+                                                                        }
+                                                                      }),
+                                                                      limit: 200,
+                                                                      fields: `id,${info.junctionField}`
+                                                                    }
+                                                                  )
+                                                                )
+                                                                .then((r) => r.data ?? []),
+                                                            staleTime: 0
+                                                          })
+                                                          .then(
+                                                            (rows) =>
+                                                              [
+                                                                info.stagingKey,
+                                                                computeM2MEffectiveIds(
+                                                                  rows,
+                                                                  info.junctionField,
+                                                                  m2mLinks.get(info.stagingKey),
+                                                                  m2mUnlinks.get(info.stagingKey)
+                                                                )
+                                                              ] as const
+                                                          )
+                                                          .catch(() => null)
+                                                    )
+                                                  )
+                                                  const freshIds = new Map(
+                                                    freshLinks.filter(
+                                                      (e): e is readonly [string, string[]] => !!e
+                                                    )
+                                                  )
                                                   const values: Record<string, unknown> = {}
-                                                  for (const [k, v] of Object.entries(draft)) {
+                                                  for (const [k, v] of Object.entries(source)) {
                                                     if (
                                                       !copyable.has(k) ||
                                                       skip.has(k) ||
@@ -11210,8 +11490,14 @@ function ItemEditFormView({
                                                       /_files$/i.test(info.manyCollection)
                                                     )
                                                       continue
+                                                    const aliasFc = (fieldConfig ?? []).find(
+                                                      (f) => f.field === aliasField
+                                                    )
+                                                    if (aliasFc && isNoDuplicate(aliasFc)) continue
                                                     const ids =
-                                                      m2mAliasFieldStates[aliasField]?.ids ?? []
+                                                      freshIds.get(info.stagingKey) ??
+                                                      m2mAliasFieldStates[aliasField]?.ids ??
+                                                      []
                                                     if (ids.length) links[info.stagingKey] = ids
                                                   }
                                                   // O2M child rows for the grids this layout shows (files
@@ -11220,20 +11506,16 @@ function ItemEditFormView({
                                                     string,
                                                     Array<Record<string, unknown>>
                                                   > = {}
-                                                  const CHILD_SKIP = [
-                                                    'id',
-                                                    'user_created',
-                                                    'date_created',
-                                                    'user_updated',
-                                                    'date_updated',
-                                                    'created_at',
-                                                    'updated_at',
-                                                    'created',
-                                                    'changed',
-                                                    'creator'
-                                                  ]
                                                   for (const fc of fieldConfig ?? []) {
-                                                    if (fc.hidden) continue
+                                                    // A child set the record marks "do not
+                                                    // duplicate" (integration logs, queue rows) or
+                                                    // read-only never follows the copy.
+                                                    if (
+                                                      fc.hidden ||
+                                                      fc.readonly ||
+                                                      isNoDuplicate(fc)
+                                                    )
+                                                      continue
                                                     const rel = (relations ?? []).find(
                                                       (r) =>
                                                         r.one_collection === collection &&
@@ -11246,37 +11528,65 @@ function ItemEditFormView({
                                                     const key = `${rel.many_collection}.${rel.many_field}`
                                                     if (rows[key]) continue
                                                     try {
-                                                      const res = (await client.request(
-                                                        get<{
-                                                          data: Array<Record<string, unknown>>
-                                                        }>(`/items/${rel.many_collection}`, {
-                                                          limit: 200,
-                                                          filter: JSON.stringify({
-                                                            [rel.many_field]: { _eq: itemId }
+                                                      const [res, childConfig] = await Promise.all([
+                                                        client.request(
+                                                          get<{
+                                                            data: Array<Record<string, unknown>>
+                                                          }>(`/items/${rel.many_collection}`, {
+                                                            limit: 200,
+                                                            filter: JSON.stringify({
+                                                              [rel.many_field]: { _eq: itemId }
+                                                            })
                                                           })
-                                                        })
-                                                      )) as { data: Array<Record<string, unknown>> }
-                                                      const childRows = (res.data ?? []).map(
-                                                        (r0) => {
-                                                          const c = { ...r0 }
-                                                          for (const k of CHILD_SKIP) delete c[k]
-                                                          delete c[rel.many_field as string]
-                                                          for (const k of Object.keys(c)) {
-                                                            if (
-                                                              c[k] === null ||
-                                                              typeof c[k] === 'object'
-                                                            )
-                                                              delete c[k]
-                                                          }
-                                                          return c
-                                                        }
+                                                        ) as Promise<{
+                                                          data: Array<Record<string, unknown>>
+                                                        }>,
+                                                        // The line's own field config: its
+                                                        // read-only / "do not duplicate" columns
+                                                        // (a sales order number, shipped qty)
+                                                        // stay behind. Unreadable = copy as before.
+                                                        qc
+                                                          .fetchQuery({
+                                                            queryKey: [
+                                                              'field-config',
+                                                              rel.many_collection,
+                                                              null
+                                                            ],
+                                                            queryFn: () =>
+                                                              client
+                                                                .request<{ data: CMSField[] }>(
+                                                                  get(
+                                                                    `/field-config/${rel.many_collection}`
+                                                                  )
+                                                                )
+                                                                .then((r) => r.data ?? []),
+                                                            staleTime: 60_000
+                                                          })
+                                                          .catch(() => null)
+                                                      ])
+                                                      const childRows = (res.data ?? []).map((r0) =>
+                                                        duplicateChildRow(
+                                                          r0,
+                                                          rel.many_field as string,
+                                                          childConfig
+                                                        )
                                                       )
                                                       if (childRows.length) rows[key] = childRows
                                                     } catch {
                                                       /* a grid that fails to read just doesn't copy */
                                                     }
                                                   }
-                                                  onDuplicate({ values, links, rows })
+                                                  onDuplicate({
+                                                    values,
+                                                    links,
+                                                    rows,
+                                                    layout_slug:
+                                                      (
+                                                        layoutMeta as
+                                                          | { slug?: string | null }
+                                                          | undefined
+                                                      )?.slug ?? null
+                                                  })
                                                 }}
                                                 className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
                                                 data-duplicate-record
@@ -12549,7 +12859,9 @@ function ItemEditFormView({
                                         />
                                       </div>
                                     )}
-                                    {recovery.state === 'offer' && (
+                                    {/* Never offer to restore edits onto a record this person
+                                        cannot change; the draft stays for when they can. */}
+                                    {recovery.state === 'offer' && !(isReadOnly && !isNew) && (
                                       <div className='nvr-expand-in'>
                                         <DraftRecoveryBanner
                                           draft={recovery.draft}

@@ -48,6 +48,10 @@ vi.mock('../../../db/index.js', () => {
       st.count = true
       return b
     }
+    b.offset = (n: unknown) => {
+      calls.list.push({ kind: 'offset', detail: n })
+      return b
+    }
     b.first = async () => ({ id: 7, action: 'update' })
     const answer = async () => {
       if (st.count) {
@@ -131,6 +135,20 @@ describe('GET /api/activity', () => {
       { column: 'a.id', order: 'desc' }
     ])
     expect(calls.list.find((c) => c.kind === 'rows')?.detail).toEqual([3, 1, 2])
+  })
+
+  it('reads the first page for a negative or non-numeric offset / limit, never a 500', async () => {
+    const a = await app()
+    for (const q of ['offset=-1', 'offset=abc', 'limit=-5&offset=-2', 'offset=2.5']) {
+      calls.list.length = 0
+      const r = await a.inject({ method: 'GET', url: `/api/activity?${q}` })
+      expect(r.statusCode, q).toBe(200)
+      const offsets = calls.list.filter((c) => c.kind === 'offset').map((c) => c.detail)
+      expect(
+        offsets.every((o) => Number.isInteger(o) && (o as number) >= 0),
+        q
+      ).toBe(true)
+    }
   })
 
   it('takes the unfiltered total from the partition row counts, a filtered one from COUNT', async () => {

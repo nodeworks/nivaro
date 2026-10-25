@@ -840,7 +840,14 @@ export function RelatedItemLabel({
     queryKey: ['relation-single', collection, String(id), nestedFields ?? ''],
     queryFn: () =>
       isFiles
-        ? client.request<{ data: Record<string, unknown> }>(get(`/files/${id}`)).then((r) => r.data)
+        ? // The file's row, not its bytes: GET /files/:id downloads the whole
+          // file (twice with the retry, 404 when storage lost it) only to read
+          // its name, and a missing object left the raw id as the label.
+          client
+            .request<{ data: Record<string, unknown> }>(
+              get(`/files/${encodeURIComponent(String(id))}/meta`)
+            )
+            .then((r) => r.data)
         : (readRow(collection, id as string | number, nestedFields) as Promise<
             Record<string, unknown>
           >),
