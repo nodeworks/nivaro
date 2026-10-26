@@ -1277,6 +1277,13 @@ export async function buildServer() {
         await runQueueEntryNotifyPass(app)
       })
 
+      // A materialized worklist with no cache rows (a database restored or
+      // promoted without its regenerated tables) reads empty: rebuild it.
+      app.cron.schedule('queue-cache-heal', '*/15 * * * *', async () => {
+        const { healEmptyMaterializedQueues } = await import('./services/queue-owner-refresh.js')
+        await healEmptyMaterializedQueues()
+      })
+
       // Outbox worker (#326/#335): deliver pending rows every minute.
       app.cron.schedule('outbox-worker', '* * * * *', async () => {
         const { runOutboxPass } = await import('./services/outbox.js')

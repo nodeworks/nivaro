@@ -25,21 +25,42 @@ const USER_COLUMNS_RE =
 
 /** Exported for tests. */
 export function isOwnerWrite(sql: string): boolean {
-  if (!sql) return false
+  return ownerWriteKind(sql) != null
+}
+
+// A transition moves one record (its instance row), and every cache keyed by
+// record already hears about that record's own write; any OTHER owner table
+// changes who owns records nobody wrote.
+const RULE_TABLES_RE = new RegExp(
+  `\\b(?:${TABLES.filter((t) => t !== 'nivaro_workflow_instances').join('|')})\\b`,
+  'i'
+)
+
+/**
+ * null: not an owner write. 'records': only workflow instances moved (a
+ * transition — the record re-syncs itself). 'rules': owner groups, their
+ * people or teams, team members, bindings, manual owners, a delegate or out
+ * of office — owners of records nobody wrote changed.
+ */
+export function ownerWriteKind(sql: string): OwnerChangeKind | null {
+  if (!sql) return null
   if (/^\s*(?:select|with)\b/i.test(sql) && !/\b(?:insert|update|delete|merge)\b/i.test(sql)) {
-    return false
+    return null
   }
   const plain = sql.replace(/[[\]]/g, '')
-  if (TABLES_RE.test(plain)) return true
+  if (TABLES_RE.test(plain)) {
+    return RULE_TABLES_RE.test(plain) ? 'rules' : 'records'
+  }
   if (/\b(?:update|merge)\s+nivaro_users\b/i.test(plain)) {
     // Only the SET list matters; a WHERE on status is not a change to it.
     const set = /\bset\b([\s\S]*?)(?:\bwhere\b|\boutput\b|$)/i.exec(plain)?.[1] ?? ''
-    return USER_COLUMNS_RE.test(set)
+    return USER_COLUMNS_RE.test(set) ? 'rules' : null
   }
-  return /\bdelete\s+(?:from\s+)?nivaro_users\b/i.test(plain)
+  return /\bdelete\s+(?:from\s+)?nivaro_users\b/i.test(plain) ? 'rules' : null
 }
 
-type Listener = () => void
+export type OwnerChangeKind = 'records' | 'rules'
+type Listener = (change: { kind: OwnerChangeKind }) => void
 const listeners = new Set<Listener>()
 let raised = 0
 
@@ -48,11 +69,11 @@ export function onOwnersChanged(fn: Listener): () => void {
   return () => listeners.delete(fn)
 }
 
-export function ownersChanged(): void {
+export function ownersChanged(kind: OwnerChangeKind = 'rules'): void {
   raised++
   for (const fn of listeners) {
     try {
-      fn()
+      fn({ kind })
     } catch {
       /* a cache that fails to clear must not affect the write */
     }

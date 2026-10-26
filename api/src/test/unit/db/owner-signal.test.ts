@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { isOwnerWrite, onOwnersChanged, ownersChanged } from '../../../db/owner-signal.js'
+import {
+  isOwnerWrite,
+  onOwnersChanged,
+  ownersChanged,
+  ownerWriteKind
+} from '../../../db/owner-signal.js'
 
 describe('isOwnerWrite', () => {
   it('counts a state move, a manual owner and an owner group change', () => {
@@ -38,6 +43,34 @@ describe('isOwnerWrite', () => {
     expect(isOwnerWrite('insert into [nivaro_workflow_history] ([instance]) values (@p0)')).toBe(
       false
     )
+  })
+})
+
+describe('ownerWriteKind', () => {
+  it('a transition alone is a records change; anything else that moves owners is a rules change', () => {
+    expect(
+      ownerWriteKind(
+        'update [nivaro_workflow_instances] set [current_state] = @p0 where [id] = @p1'
+      )
+    ).toBe('records')
+    expect(
+      ownerWriteKind('insert into [nivaro_pipeline_instance_owners] ([user]) values (@p0)')
+    ).toBe('rules')
+    expect(ownerWriteKind('delete from [nivaro_user_group_members] where [id] = @p0')).toBe('rules')
+    expect(ownerWriteKind('update [nivaro_users] set [delegate_id] = @p0 where [id] = @p1')).toBe(
+      'rules'
+    )
+    expect(ownerWriteKind('update [nivaro_users] set [last_access] = @p0')).toBeNull()
+    expect(ownerWriteKind('select * from [nivaro_pipeline_owner_groups]')).toBeNull()
+  })
+
+  it('tells every listener which kind it was', () => {
+    const fn = vi.fn()
+    const off = onOwnersChanged(fn)
+    ownersChanged('records')
+    ownersChanged()
+    expect(fn.mock.calls.map((c) => c[0])).toEqual([{ kind: 'records' }, { kind: 'rules' }])
+    off()
   })
 })
 

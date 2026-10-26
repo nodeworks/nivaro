@@ -40,6 +40,7 @@ import { withReadGateEach } from './read-gate.js'
 import { span } from './request-trace.js'
 import { sendBackBatch } from './send-backs.js'
 import { isSecretColumn, isSystemCollection, sensitiveColumns } from './system-collections.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -3158,6 +3159,22 @@ export async function resolveOwnedBySource(
 
 // ─── Orchestrator ───────────────────────────────────────────────────────────────
 
+const cacheRebuildAskedAt = new Map<string, number>()
+const CACHE_REBUILD_GAP_MS = 5 * 60_000
+
+/** Enqueue a backfill for a materialized worklist found with an empty cache,
+ *  at most once per 5 minutes per tenant + worklist (the backfill lock still
+ *  collapses replicas). Never throws, never waits. */
+function requestCacheRebuild(queueId: string): void {
+  const key = `${currentTenantKey()}|${queueId}`
+  const last = cacheRebuildAskedAt.get(key) ?? 0
+  if (Date.now() - last < CACHE_REBUILD_GAP_MS) return
+  cacheRebuildAskedAt.set(key, Date.now())
+  void import('../functions/queue-materialization-jobs.js')
+    .then((m) => m.enqueueQueueMaterializationBackfill(queueId))
+    .catch(() => {})
+}
+
 export async function fetchQueueItems(
   queueId: string,
   user: User,
@@ -3254,7 +3271,17 @@ export async function fetchQueueItems(
       owners: Array<{ id: string; name: string }>
     }
   }> | null = null
-  if (queueRow?.materialized) {
+  // A materialized worklist with no cache rows at all (a restored or promoted
+  // database never carries them; a rebuild empties them while it runs) reads
+  // live instead of empty, and asks for its rebuild — at most every 5 minutes.
+  const cacheEmpty =
+    !!queueRow?.materialized &&
+    !(await db('nivaro_queue_items')
+      .where({ queue_id: queueId })
+      .first('id')
+      .catch(() => ({ id: 0 })))
+  if (cacheEmpty && !options.readOnly) requestCacheRebuild(queueId)
+  if (queueRow?.materialized && !cacheEmpty) {
     const { requiresLiveResolveFallback, fetchMaterializedQueueItems, fetchMaterializedStats } =
       await import('./queue-materialization-read.js')
     const { hasTypedExtraFilter, cacheHasTypedTwins } = await import(

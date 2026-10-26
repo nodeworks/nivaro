@@ -36,7 +36,7 @@ import {
   setMetadataL2PrimaryScope
 } from './metadata-l2.js'
 import { opsTopicsOfWrite, raiseOpsWrite } from './ops-signal.js'
-import { isOwnerWrite, ownersChanged } from './owner-signal.js'
+import { ownersChanged, ownerWriteKind } from './owner-signal.js'
 
 const TABLES = new Set([
   'nivaro_relations',
@@ -221,7 +221,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     if (isConfigWrite(sql)) noteConfigWrite(sql)
 
     // Caches derived from owner resolution clear once the write has landed.
-    const ownerWrite = isOwnerWrite(sql)
+    const ownerWrite = ownerWriteKind(sql)
     // Live operations pages (issues, support, my work…) hear about writes the same way.
     const opsTopics = opsTopicsOfWrite(sql)
 
@@ -231,13 +231,13 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
       clearMetadataQueryCache()
       return original.call(this, connection, query).finally(() => {
         clearMetadataQueryCache()
-        if (ownerWrite) ownersChanged()
+        if (ownerWrite) ownersChanged(ownerWrite)
         if (opsTopics.length) raiseOpsWrite(opsTopics)
       })
     }
     if (ownerWrite || opsTopics.length) {
       return original.call(this, connection, query).finally(() => {
-        if (ownerWrite) ownersChanged()
+        if (ownerWrite) ownersChanged(ownerWrite)
         if (opsTopics.length) raiseOpsWrite(opsTopics)
       })
     }

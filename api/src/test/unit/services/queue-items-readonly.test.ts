@@ -77,3 +77,24 @@ describe('fetchQueueItems readOnly', () => {
     spy.mockRestore()
   })
 })
+
+describe('fetchQueueItems — a materialized worklist with an empty cache', () => {
+  it('reads live instead of empty and asks for its rebuild once', async () => {
+    const user = makeAdminUser()
+    rowsFor.nivaro_queues = { id: 'q-empty', materialized: true, display_config: null }
+    rowsFor.nivaro_queue_items = []
+    try {
+      const first = await fetchQueueItems('q-empty', user, 'all', { page: 1, limit: 25 })
+      // The live tasks source answered: not an empty page.
+      expect(first.total).toBe(5001)
+      expect(enqueueQueueMaterializationBackfill).toHaveBeenCalledWith('q-empty')
+      vi.mocked(enqueueQueueMaterializationBackfill).mockClear()
+      await fetchQueueItems('q-empty', user, 'all', { page: 1, limit: 25 })
+      // Asked at most once per five minutes.
+      expect(enqueueQueueMaterializationBackfill).not.toHaveBeenCalled()
+    } finally {
+      rowsFor.nivaro_queues = { id: 'q1', materialized: false, display_config: null }
+      delete rowsFor.nivaro_queue_items
+    }
+  })
+})

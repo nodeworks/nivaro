@@ -68,6 +68,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Hourly — re-reads each number someone is watching from Ask AI (as that person), alerts on a crossed threshold or an unusual move, and keeps the series the daily summary reports.',
   'line-sla-sweep':
     'Daily — records with grid lines still missing a required id past their line-SLA window; notifies current owners once per day and feeds the digest.',
+  'queue-cache-heal':
+    'Every 15 minutes — rebuilds any materialized worklist whose cache is empty (a database restored or promoted without its cache tables), so it never reads as an empty list.',
   'queue-entry-notify':
     'Every 5 minutes — tells queue subscribers about items that newly entered their queue.',
   'scheduled-broadcasts':

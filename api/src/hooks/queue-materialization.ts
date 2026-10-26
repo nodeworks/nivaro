@@ -1,4 +1,6 @@
 import { syncMaterializedQueueItem } from '../services/queue-materialization.js'
+// Side effect: owner-rule changes re-sync materialized worklists' owners.
+import '../services/queue-owner-refresh.js'
 import { hooks } from './registry.js'
 
 // Keeps nivaro_queue_items in sync with every collection write. syncMaterializedQueueItem
