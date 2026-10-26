@@ -130,4 +130,55 @@ describe('RowActionsMenu — registry actions follow the record', () => {
     expect(shown).toEqual([])
     expect(calls.some((c) => c._path === '/bulk-actions/available')).toBe(false)
   })
+
+  it('a push the record is not ready for is listed disabled, not hidden', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const host = document.createElement('div')
+    document.body.append(host)
+    root = createRoot(host)
+    const request = vi.fn(async (cmd: Cmd) => {
+      if (cmd._path === '/bulk-actions/available')
+        return { data: [{ key: 'push', kind: 'builtin', source: 'builtin', label: 'Push…' }] }
+      if (cmd._path === '/item-actions/registered')
+        return cmd._params?.item
+          ? { data: [] }
+          : {
+              data: [
+                { id: 'push-to-fusion', label: 'Push to Fusion' },
+                { id: 'po-closeout', label: 'Close out PO', requires_addendum_create: true }
+              ]
+            }
+      return { data: null }
+    })
+    await act(async () =>
+      root?.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={{ url: 'http://test', getToken: () => null, request } as never}>
+            <ItemEditAuthContext.Provider value={{ isAdmin: true } as never}>
+              <RowActionsMenu
+                collection='workflows'
+                id={5}
+                hasPipeline={false}
+                onOpen={() => {}}
+                urlFor={() => '#'}
+                onDeleted={() => {}}
+              />
+            </ItemEditAuthContext.Provider>
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    )
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Actions for 5"]')?.click()
+    )
+    for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 0)))
+    const fusion = document.querySelector<HTMLButtonElement>(
+      '[data-row-push-action="push-to-fusion"]'
+    )
+    expect(fusion).not.toBeNull()
+    expect(fusion?.disabled).toBe(true)
+    // An action withheld by permission (an addendum the person could not
+    // create) stays hidden.
+    expect(document.querySelector('[data-row-push-action="po-closeout"]')).toBeNull()
+  })
 })

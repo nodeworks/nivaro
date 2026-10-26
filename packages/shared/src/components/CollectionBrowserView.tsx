@@ -1369,7 +1369,12 @@ export function RowActionsMenu({
                         key={a.id}
                         type='button'
                         data-row-push-action={a.id}
-                        title={`Push now — ${a.label}`}
+                        disabled={!a.ready}
+                        data-tip={
+                          a.ready
+                            ? `Send now — ${a.label}`
+                            : 'Not ready to send from this record’s current step'
+                        }
                         onClick={() =>
                           setConfirm({
                             label: a.label,
@@ -1378,7 +1383,7 @@ export function RowActionsMenu({
                             push: { kind: 'push', action: a }
                           })
                         }
-                        className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                        className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent dark:text-slate-200 dark:hover:bg-slate-800 dark:disabled:text-slate-500'
                       >
                         {a.label}
                       </button>

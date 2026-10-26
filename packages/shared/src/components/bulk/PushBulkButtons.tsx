@@ -45,6 +45,8 @@ export interface PushItemAction {
   /** Pick one of a per-record list first — asked on one-record pushes only;
    *  bulk runs leave it to the action's default. */
   choose?: ItemActionChooseMeta
+  /** Hidden from people who could not create the addendum it makes. */
+  requires_addendum_create?: boolean
 }
 
 export type PushRunOutcome = BulkRunResult & {

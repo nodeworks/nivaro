@@ -51,12 +51,29 @@ export function useRowPushActions({
   open: boolean
   bulkData: Record<string, AvailableBulkAction[]> | undefined
   bulkEnabledKeys?: string[] | null
-}): { pushActions: PushItemAction[]; failedPartners: string[] } {
+}): {
+  /** Every push the collection offers; `ready` = it applies to this record now. */
+  pushActions: Array<PushItemAction & { ready: boolean }>
+  failedPartners: string[]
+} {
   const client = useNivaroClient()
   const pushOn = builtinListed(bulkData, bulkEnabledKeys, collection, 'push')
   const retryOn = builtinListed(bulkData, bulkEnabledKeys, collection, 'retry-push')
+  // Every push the collection offers (same key + shape as the bulk bar's) — a
+  // push the record is not ready for is listed disabled rather than missing,
+  // so "Push to Fusion" never vanishes beside "Retry" (Rob 2026-10-26).
+  const { data: allActions = [] } = useQuery({
+    queryKey: ['bulk-push-actions', collection],
+    queryFn: () =>
+      client
+        .request<{ data: PushItemAction[] }>(get('/item-actions/registered', { collection }))
+        .then((r) => r.data ?? [])
+        .catch(() => [] as PushItemAction[]),
+    enabled: open && pushOn,
+    staleTime: 5 * 60_000
+  })
   // Same key + shape as the record form's ItemActionButtons — one fetch serves both.
-  const { data: pushActions = [] } = useQuery({
+  const { data: readyActions = [] } = useQuery({
     queryKey: ['item-actions', collection, String(id)],
     queryFn: () =>
       client
@@ -78,6 +95,15 @@ export function useRowPushActions({
     enabled: open && retryOn,
     staleTime: 15_000
   })
+  const readyIds = new Set(readyActions.map((a) => a.id))
+  const pushActions = [
+    ...readyActions.map((a) => ({ ...a, ready: true })),
+    // Not ready here: listed, disabled — unless it is withheld from this person
+    // (an addendum they could not create), which stays hidden.
+    ...allActions
+      .filter((a) => !readyIds.has(a.id) && !a.requires_addendum_create)
+      .map((a) => ({ ...a, ready: false }))
+  ]
   return { pushActions: pushOn ? pushActions : [], failedPartners: retryOn ? failedPartners : [] }
 }
 
