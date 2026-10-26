@@ -349,6 +349,15 @@ async function roomTypes(): Promise<Map<string, RoomType>> {
   return byPrefix
 }
 
+/**
+ * The active room-type rows (every column) from the per-tenant registry above — the one cache
+ * of nivaro_chat_room_types, cleared on every replica by clearChatCaches(). chat-records.ts
+ * reads its typed list from here instead of keeping a cache of its own.
+ */
+export async function activeRoomTypeRows(): Promise<Array<Record<string, unknown>>> {
+  return [...(await roomTypes()).values()] as unknown as Array<Record<string, unknown>>
+}
+
 function channelFromRow(r: Record<string, unknown>): ChatChannel {
   return {
     ...r,
@@ -892,7 +901,7 @@ async function unreadMentionsPerRoom(
 
 const columnMemo = new Map<string, { at: number; v: boolean }>()
 async function hasColumnCached(table: string, col: string): Promise<boolean> {
-  const k = `${table}.${col}`
+  const k = `${currentTenantKey()}|${table}.${col}`
   const hit = columnMemo.get(k)
   if (hit && (hit.v || Date.now() - hit.at < 60_000)) return hit.v
   const { hasColumn } = await import('../lib/column-probe.js')
@@ -910,7 +919,7 @@ async function hasColumnCached(table: string, col: string): Promise<boolean> {
 const autoJoinChecked = new Map<string, number>()
 export async function autoJoinDefaultChannels(user: User): Promise<void> {
   if (!user.role) return
-  const key = `${user.id}|${user.role}`
+  const key = `${currentTenantKey()}|${user.id}|${user.role}`
   const at = autoJoinChecked.get(key)
   if (at && Date.now() - at < 10 * 60_000) return
   autoJoinChecked.set(key, Date.now())

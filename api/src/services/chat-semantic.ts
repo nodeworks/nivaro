@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { tenantState } from './ai-tenant-state.js'
 import { channelByKey, parseRoom } from './chat.js'
 import { cosineSim, embedText } from './embeddings.js'
 
@@ -48,18 +49,19 @@ export async function roomMayBeEmbedded(room: string): Promise<boolean> {
   }
 }
 
-let tableOk: boolean | null = null
-let probedAt = 0
+// Per tenant: each tenant database is probed on its own.
+const probe = tenantState<{ ok: boolean | null; at: number }>(() => ({ ok: null, at: 0 }))
 async function embeddingsTable(): Promise<boolean> {
-  if (tableOk === true) return true
-  if (tableOk === false && Date.now() - probedAt < 60_000) return false
+  const p = probe()
+  if (p.ok === true) return true
+  if (p.ok === false && Date.now() - p.at < 60_000) return false
   try {
-    tableOk = await db.schema.hasTable('nivaro_chat_embeddings')
+    p.ok = await db.schema.hasTable('nivaro_chat_embeddings')
   } catch {
-    tableOk = false
+    p.ok = false
   }
-  probedAt = Date.now()
-  return tableOk
+  p.at = Date.now()
+  return p.ok
 }
 
 /** Text worth embedding: not a platform line, long enough to carry meaning. Pure. */

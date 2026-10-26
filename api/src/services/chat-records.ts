@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
-import { canSeeRoom, parseRoom } from './chat.js'
+import { activeRoomTypeRows, canSeeRoom, clearChatCaches, parseRoom } from './chat.js'
 
 /**
  * Record rooms ↔ records.
@@ -27,17 +27,14 @@ export interface RoomType {
   owners_follow?: boolean
 }
 
-let typeCache: { at: number; rows: RoomType[] } | null = null
-
+/** Room types now live in chat.ts's per-tenant registry (cleared on every replica); this
+ *  keeps the old name for its callers. */
 export function clearRoomTypeCache(): void {
-  typeCache = null
+  clearChatCaches()
 }
 
 export async function roomTypes(): Promise<RoomType[]> {
-  if (typeCache && Date.now() - typeCache.at < 30_000) return typeCache.rows
-  const rows = (
-    (await db('nivaro_chat_room_types').where('is_active', true)) as Array<Record<string, unknown>>
-  ).map(
+  return (await activeRoomTypeRows()).map(
     (r) =>
       ({
         ...r,
@@ -46,8 +43,6 @@ export async function roomTypes(): Promise<RoomType[]> {
         owners_follow: !!r.owners_follow
       }) as RoomType
   )
-  typeCache = { at: Date.now(), rows }
-  return rows
 }
 
 export interface RoomRecord {

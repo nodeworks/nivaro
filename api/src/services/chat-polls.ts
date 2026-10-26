@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { tenantState } from './ai-tenant-state.js'
 import { canSeeRoom } from './chat.js'
 import { ChatSendError, postChatMessage } from './chat-send.js'
 
@@ -42,21 +43,22 @@ export interface PollView {
   can_close: boolean
 }
 
-let tablesOk: boolean | null = null
-let probedAt = 0
+// Per tenant: each tenant database is probed on its own.
+const probe = tenantState<{ ok: boolean | null; at: number }>(() => ({ ok: null, at: 0 }))
 /** A tenant behind migration 430 simply has no polls. A hit caches; a miss re-probes. */
 export async function pollTablesExist(): Promise<boolean> {
-  if (tablesOk === true) return true
-  if (tablesOk === false && Date.now() - probedAt < 60_000) return false
+  const p = probe()
+  if (p.ok === true) return true
+  if (p.ok === false && Date.now() - p.at < 60_000) return false
   try {
-    tablesOk =
+    p.ok =
       (await db.schema.hasTable('nivaro_chat_polls')) &&
       (await db.schema.hasTable('nivaro_chat_poll_votes'))
   } catch {
-    tablesOk = false
+    p.ok = false
   }
-  probedAt = Date.now()
-  return tablesOk
+  p.at = Date.now()
+  return p.ok
 }
 
 function parseOptions(raw: unknown): string[] {

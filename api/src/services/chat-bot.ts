@@ -6,6 +6,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { getAiClient } from './ai-client.js'
+import { tenantState } from './ai-tenant-state.js'
 import { parseRoom } from './chat.js'
 import type { BotCall, Verdict, VerifyContext } from './chat-bot-audience.js'
 import type { RoomRecord } from './chat-records.js'
@@ -26,21 +27,25 @@ export type { BotToolDef } from '@nivaro/extension-kit'
  * picker and the directory.
  */
 
-let botNameCache: { at: number; name: string | null } | null = null
+// Per tenant: the bot's name is a setting, and one cloud process serves many tenants.
+const botNameCache = tenantState<{ v: { at: number; name: string | null } | null }>(() => ({
+  v: null
+}))
 
 export async function chatBotName(): Promise<string | null> {
-  if (botNameCache && Date.now() - botNameCache.at < 30_000) return botNameCache.name
+  const cached = botNameCache().v
+  if (cached && Date.now() - cached.at < 30_000) return cached.name
   const row = await db('nivaro_settings')
     .orderBy('id', 'asc')
     .first('chat_bot_name')
     .catch(() => null)
   const name = String(row?.chat_bot_name ?? '').trim() || null
-  botNameCache = { at: Date.now(), name }
+  botNameCache().v = { at: Date.now(), name }
   return name
 }
 
 export function clearChatBotCache(): void {
-  botNameCache = null
+  botNameCache().v = null
 }
 
 export async function botUserId(): Promise<string> {
