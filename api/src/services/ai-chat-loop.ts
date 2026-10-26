@@ -148,6 +148,8 @@ export function describeToolCall(tool: string, input: Record<string, unknown>): 
       return 'Drafting a proposal for you to approve…'
     case 'my_tasks':
       return 'Checking tasks…'
+    case 'waiting_on_me':
+      return 'Checking what is waiting on you…'
     case 'integration_status':
     case 'record_event_path':
     case 'record_integrity':

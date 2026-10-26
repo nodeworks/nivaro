@@ -1,9 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
-import { resolveOwnedByMeSource } from '../services/queues.js'
 import { span } from '../services/request-trace.js'
-import { computeStatusBatch, type SlaBatchEntry } from './sla.js'
+import { approvalStepsFor, ownedWithSla } from '../services/waiting-on-me.js'
 
 /**
  * My Work — one actionable inbox: approvals waiting on ME (records whose
@@ -14,18 +13,6 @@ import { computeStatusBatch, type SlaBatchEntry } from './sla.js'
  * resolver, SLA batch, tasks, approval instances, notifications) so this page
  * can never disagree with the queues/panels that show the same facts.
  */
-
-interface OwnedEntry {
-  collection: string
-  item: string
-  label: string
-  state: string | null
-  state_color: string | null
-  url: string
-  sla: SlaBatchEntry | null
-}
-
-const SLA_RANK: Record<string, number> = { breached: 0, warning: 1, ok: 2 }
 
 export async function myWorkRoutes(app: FastifyInstance) {
   app.get('/my-work', { preHandler: requireAuth }, async (req, reply) => {
@@ -68,30 +55,15 @@ export async function myWorkRoutes(app: FastifyInstance) {
 
     const [ownedResult, tasks, approvalSteps, notifications, teamTasks, requested] =
       await Promise.all([
-        span('my-work:owned', () => resolveOwnedByMeSource(userId)).catch(() => ({
-          items: [],
-          matchedCount: 0,
-          truncated: false
-        })),
+        // Owned records + SLA, most urgent first — the same set Ask AI's
+        // waiting_on_me answers from (services/waiting-on-me.ts).
+        span('my-work:owned', () => ownedWithSla(userId)),
         taskBase()
           .where('t.assignee', userId)
           .catch(() => []),
         // Approval chains — pending instances whose CURRENT step approver is me
         // (directly, or via my role).
-        db('nivaro_approval_instances as ai')
-          .join('nivaro_approval_chains as c', 'ai.chain', 'c.id')
-          .join('nivaro_approval_steps as st', (j) => {
-            j.on('st.chain', 'c.id').andOn('st.step_order', 'ai.current_step')
-          })
-          .where('ai.status', 'pending')
-          .where((qb) => {
-            void qb.where('st.approver_user', userId).orWhereIn('st.approver_role', (sub) => {
-              void sub.from('nivaro_users').where('id', userId).select('role')
-            })
-          })
-          .select('ai.id', 'ai.collection', 'ai.item', 'c.name as chain_name', 'ai.current_step')
-          .limit(50)
-          .catch(() => []),
+        approvalStepsFor(userId),
         db('nivaro_notifications')
           .where({ recipient: userId, status: 'inbox' })
           .orderBy('timestamp', 'desc')
@@ -152,40 +124,7 @@ export async function myWorkRoutes(app: FastifyInstance) {
         assignee_last: undefined
       }))
 
-    // SLA per owned record, batched per collection.
-    const owned: OwnedEntry[] = ownedResult.items.map((i) => ({
-      collection: i.collection,
-      item: String(i.item_id),
-      label: i.label,
-      state: i.state,
-      state_color: i.state_color,
-      url: i.url,
-      sla: null
-    }))
-    const byCollection = new Map<string, string[]>()
-    for (const o of owned) {
-      const list = byCollection.get(o.collection) ?? []
-      list.push(o.item)
-      byCollection.set(o.collection, list)
-    }
-    await span('my-work:sla', () =>
-      Promise.all(
-        [...byCollection.entries()].map(async ([collection, ids]) => {
-          try {
-            const statuses = await computeStatusBatch(collection, ids)
-            for (const o of owned) {
-              if (o.collection === collection && statuses[o.item]) o.sla = statuses[o.item]
-            }
-          } catch {
-            /* SLA is decoration — never fail the inbox */
-          }
-        })
-      )
-    )
-    // Most urgent first: breached, warning, then by state entry recency proxy (stable).
-    owned.sort(
-      (a, b) => (SLA_RANK[a.sla?.status ?? ''] ?? 3) - (SLA_RANK[b.sla?.status ?? ''] ?? 3)
-    )
+    const owned = ownedResult.owned
 
     return reply.send({
       data: {
