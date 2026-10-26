@@ -80,6 +80,14 @@ function iconFor(a: AvailableBulkAction) {
   return <Zap className='h-3.5 w-3.5' />
 }
 
+/** Hover text in plain words: what the action does, and that it asks why. */
+function headerTip(a: AvailableBulkAction): string {
+  const what = a.summary && a.summary !== 'Built-in' ? a.summary : a.label
+  return a.require_reason
+    ? `${what}. You’ll be asked for a justification, saved as a note on the record.`
+    : `${what}.`
+}
+
 /** The header buttons. Opening one hands the action to the host, which renders
  *  RecordHeaderActionDialog OUTSIDE the header tool strip (a folded strip
  *  unmounts its children). */
@@ -98,7 +106,7 @@ export function RecordHeaderActionButtons({
           key={`${a.source}:${a.key}`}
           type='button'
           data-record-header-action={a.key}
-          data-tip={a.summary || undefined}
+          data-tip={headerTip(a)}
           onClick={() => onPick(a)}
           className={cn(
             'inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-[13px] font-medium shadow-sm transition-colors',

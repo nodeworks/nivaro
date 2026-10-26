@@ -127,6 +127,7 @@ import { useUnsavedWork } from '../lib/unsaved-work'
 import { choiceLabel, cn, formatRelative, titleCase, toLocalDateString } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { matchesVisibleWhen } from '../lib/visible-when'
+import type { AvailableBulkAction } from './bulk/BulkActionButtons'
 import { CopyAsButton } from './CopyAsButton'
 import { useHuddleFollowSurface } from './chat/huddle/huddle-follow-bus'
 import { FormWhatsNew } from './FormWhatsNew'
@@ -226,16 +227,15 @@ import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
 import {
-  invalidateRecordInsights,
-  invalidateRecordNotes,
-  RecordInsightsButton
-} from './item-edit/RecordInsights'
-import type { AvailableBulkAction } from './bulk/BulkActionButtons'
-import {
   RecordHeaderActionButtons,
   RecordHeaderActionDialog,
   useRecordHeaderActions
 } from './item-edit/RecordHeaderActions'
+import {
+  invalidateRecordInsights,
+  invalidateRecordNotes,
+  RecordInsightsButton
+} from './item-edit/RecordInsights'
 import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'

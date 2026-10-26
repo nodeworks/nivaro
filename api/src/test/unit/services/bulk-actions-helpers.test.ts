@@ -85,9 +85,13 @@ describe('normalizeGuard / summarize', () => {
     expect(normalizeGuard('not json')).toBeNull()
   })
   it('describes both kinds for hover text', () => {
-    expect(summarize('transition', { transition_label: 'Cancel' })).toBe('Transition: Cancel')
+    expect(summarize('transition', { transition_label: 'Cancel' })).toBe('Runs the “Cancel” step')
+    // Plain words: labels when the field has one, never a column name.
     expect(summarize('update_fields', { set: { is_on_hold: true, note: null } })).toBe(
-      'Set is_on_hold = true, note = empty'
+      'Sets On hold to Yes and clears Note'
     )
+    expect(
+      summarize('update_fields', { set: { is_priority: false } }, { is_priority: 'Priority' })
+    ).toBe('Sets Priority to No')
   })
 })

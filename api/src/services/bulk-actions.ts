@@ -260,15 +260,43 @@ export function formatRow(row: Record<string, unknown>): BulkActionRow {
   }
 }
 
+/** A field as people read it: its label, else its name in words ("is_on_hold"
+ *  → "On hold") — a tooltip never shows a column name (Rob 2026-10-26). */
+export function fieldWords(field: string, label?: string | null): string {
+  const l = String(label ?? '').trim()
+  if (l) return l
+  const words = field
+    .replace(/^(is|has)_/, '')
+    .replace(/_/g, ' ')
+    .trim()
+  return words ? words[0].toUpperCase() + words.slice(1) : field
+}
+
+function valueWords(v: unknown): string {
+  if (v === null || v === undefined || v === '') return 'empty'
+  if (v === true || v === 'true') return 'Yes'
+  if (v === false || v === 'false') return 'No'
+  if (v === '{{reason}}') return 'the reason you give'
+  return String(v)
+}
+
+/** What an action does, in plain words (lists, hover text). */
 export function summarize(
   kind: BulkActionKind | 'builtin',
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  labels: Record<string, string | null | undefined> = {}
 ): string {
   if (kind === 'builtin') return 'Built-in'
-  if (kind === 'transition') return `Transition: ${String(config.transition_label ?? '')}`
+  if (kind === 'transition') return `Runs the “${String(config.transition_label ?? '')}” step`
   const set = (config.set as Record<string, unknown> | undefined) ?? {}
-  const parts = Object.entries(set).map(([k, v]) => `${k} = ${v === null ? 'empty' : String(v)}`)
-  return parts.length ? `Set ${parts.join(', ')}` : 'Set fields'
+  const parts = Object.entries(set).map(([k, v]) =>
+    v === null || v === ''
+      ? `clears ${fieldWords(k, labels[k])}`
+      : `sets ${fieldWords(k, labels[k])} to ${valueWords(v)}`
+  )
+  if (!parts.length) return 'Changes fields'
+  const text = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]
+  return text[0].toUpperCase() + text.slice(1)
 }
 
 /** Does this request's user pass the action's access rule? (Admins always do.) */
@@ -388,7 +416,10 @@ function fromExtension(def: BulkActionDef, collection: string): AvailableBulkAct
   }
 }
 
-function fromRow(row: BulkActionRow): AvailableBulkAction {
+function fromRow(
+  row: BulkActionRow,
+  labels: Record<string, string | null | undefined> = {}
+): AvailableBulkAction {
   return {
     key: row.key,
     source: 'db',
@@ -401,7 +432,7 @@ function fromRow(row: BulkActionRow): AvailableBulkAction {
     confirm_text: row.confirm_text,
     guard: row.guard,
     access: row.access,
-    summary: summarize(row.kind, row.config),
+    summary: summarize(row.kind, row.config, labels),
     header: row.config?.header === true
   }
 }
@@ -427,14 +458,20 @@ function fromBuiltin(b: BuiltinState): AvailableBulkAction {
 /** Every ACTIVE action for the collection, no access filter (editor pickers):
  *  built-ins first, then custom definitions, then extension actions. */
 export async function listAllForCollection(collection: string): Promise<AvailableBulkAction[]> {
-  const [rows, builtins] = await Promise.all([
+  const [rows, builtins, fields] = await Promise.all([
     listDefinitions(collection),
-    listBuiltins(collection)
+    listBuiltins(collection),
+    (
+      db('nivaro_fields').where({ collection }).select('field', 'label') as Promise<
+        Array<{ field: string; label: string | null }>
+      >
+    ).catch(() => [] as Array<{ field: string; label: string | null }>)
   ])
+  const labels = Object.fromEntries(fields.map((f) => [f.field, f.label ?? null]))
   const ext = bulkActionRegistry.list(collection).map((d) => fromExtension(d, collection))
   return [
     ...builtins.filter((b) => b.is_active).map(fromBuiltin),
-    ...rows.filter((r) => r.is_active).map(fromRow),
+    ...rows.filter((r) => r.is_active).map((r) => fromRow(r, labels)),
     ...ext
   ]
 }
