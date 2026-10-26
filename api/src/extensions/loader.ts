@@ -959,6 +959,10 @@ export function registrationMembers(
         }
       }
     },
+    pipelines: {
+      ownedItemIds: (userId, collection) =>
+        import('../services/owned-items.js').then((m) => m.ownedItemIds(userId, collection))
+    },
     // #2613 — layouts the extension's code opens, for the layout dependency diagram.
     layouts: {
       dependsOn: (dep) => {

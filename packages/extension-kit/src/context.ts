@@ -391,6 +391,14 @@ export interface ExtensionContext {
       opts?: { label?: string }
     ): (req: Req, reply: Reply) => Promise<R>
   }
+  /** Who holds what in the pipelines. Optional: older APIs do not offer it. */
+  pipelines?: {
+    /** Record ids of `collection` whose CURRENT step `userId` owns — the My
+     *  Work / queue "mine" answer (owner groups, manual owners, teams,
+     *  delegation). Seconds on a cold call; cached a minute per person and
+     *  cleared when owners change. */
+    ownedItemIds(userId: string, collection: string): Promise<string[]>
+  }
   /** Checked-in rows of a configuration collection, applied by a task —
    *  never at boot — with a drift report as its dry run. */
   seeds: { register(def: ConfigSeedDef): void }
