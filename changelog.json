@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-25T23:54:38.914Z",
+  "generated_at": "2026-10-26T02:47:55.288Z",
   "releases": [
+    {
+      "version": "0.3.28",
+      "tag": "v0.3.28",
+      "date": "2026-10-25T22:47:36-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "army v3 round 2 — files, workspace header, people search",
+              "hash": "91eeb4287"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.27",
       "tag": "v0.3.27",
-      "date": "2026-10-25T19:54:23-04:00",
+      "date": "2026-10-25T19:54:38-04:00",
       "sections": [
         {
           "label": "Fixed",
